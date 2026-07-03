@@ -49,6 +49,7 @@ const WORK_ITEM_STAGE_MAP: Record<WorkflowState, WorkPacketStageMappingResultV0>
   reviewing: stageResult("review", "kendall", "active", ["work_item.reviewing"]),
   awaiting_audit: stageResult("review", "operator", "waiting", ["work_item.awaiting_audit"]),
   needs_rework: stageResult("shape", "kendall", "active", ["work_item.needs_rework"]),
+  operator_owned: stageResult("capture", "operator", "deferred", ["work_item.operator_owned"]),
   blocked: stageResult("human_gate", "blocked", "blocked", ["work_item.blocked"]),
   done: stageResult("deliver", "kendall", "complete", ["work_item.done"])
 };
@@ -57,6 +58,14 @@ export function mapWorkPacketStage(input: WorkPacketStageMappingInputV0): WorkPa
   const ambiguityNotes = collectAmbiguityNotes(input);
   const ambiguityReasonCodes = collectAmbiguityReasonCodes(input);
   const memoryProposalStatus = input.memoryProposalStatus ?? (input.hasMemoryProposal ? "proposed" : null);
+
+  if (input.workItemState === "operator_owned") {
+    const base = WORK_ITEM_STAGE_MAP.operator_owned;
+    return withAmbiguity(
+      stageResult(base.currentStage, base.currentOwner, base.status, base.reasonCodes.concat(ambiguityReasonCodes)),
+      ambiguityNotes
+    );
+  }
 
   if (input.workItemState === "done" && input.hasDeliveryEvidence) {
     return withAmbiguity(

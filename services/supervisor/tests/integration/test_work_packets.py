@@ -3,6 +3,7 @@ import sqlite3
 import sys
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 
 def _reset_supervisor_modules() -> None:
@@ -62,18 +63,6 @@ def _update_execution_attempt_fixture(db_path: str, attempt_id: str, **fields: o
         conn.commit()
 
 
-def _update_workflow_event_fixture(db_path: str, event_id: str, **fields: object) -> None:
-    assignments = []
-    values = []
-    for key, value in fields.items():
-        assignments.append(f"{key} = ?")
-        values.append(json.dumps(value) if key == "payload" else value)
-    values.append(event_id)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(f"update workflow_events set {', '.join(assignments)} where id = ?", values)
-        conn.commit()
-
-
 def _insert_workflow_event_fixture(
     db_path: str,
     work_item_id: str,
@@ -102,6 +91,11 @@ def _sqlite_table_columns(db_path: str, table_name: str) -> set[str]:
         return {row[1] for row in conn.execute(f"pragma table_info({table_name})").fetchall()}
 
 
+def _sqlite_tables(db_path: str) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        return {row[0] for row in conn.execute("select name from sqlite_master where type = 'table'").fetchall()}
+
+
 def _sqlite_has_unique_index(db_path: str, table_name: str, columns: tuple[str, ...]) -> bool:
     with sqlite3.connect(db_path) as conn:
         for row in conn.execute(f"pragma index_list({table_name})").fetchall():
@@ -115,18 +109,12 @@ def _sqlite_has_unique_index(db_path: str, table_name: str, columns: tuple[str, 
     return False
 
 
-def _write_obsidian_memory_config(
-    tmp_path,
-    *,
-    profile: str = "local-folder",
-    proposal_queue_folder: str = "01 Dashboard Queue",
-) -> tuple[str, object, object]:
+def _write_obsidian_memory_config(tmp_path, *, profile: str = "local-folder") -> tuple[str, object, object]:
     vault_root = tmp_path / "obsidian-vault"
     backup_root = tmp_path / "obsidian-backups"
-    draft_folder = f"{proposal_queue_folder}/AI Drafts"
     for folder in [
         "00 Inbox",
-        draft_folder,
+        "01 Dashboard Queue/AI Drafts",
         "02 Customers",
         "Private",
         "Personal",
@@ -139,14 +127,13 @@ def _write_obsidian_memory_config(
         json.dumps(
             {
                 "profile": profile,
-                "proposal_queue_folder": proposal_queue_folder,
                 "vault": {"local_path": vault_root.as_posix()},
                 "access": {
                     "read_allowlist": ["00 Inbox", "02 Customers"],
-                    "excluded": [proposal_queue_folder, "Private", "Personal", "Journal", "09 Archive"],
+                    "excluded": ["01 Dashboard Queue", "Private", "Personal", "Journal", "09 Archive"],
                 },
                 "write_policy": {
-                    "draft_folder": draft_folder,
+                    "draft_folder": "01 Dashboard Queue/AI Drafts",
                     "require_dashboard_approval": True,
                 },
                 "backup": {"destination": backup_root.as_posix()},
@@ -195,32 +182,6 @@ def _create_work_item(client: TestClient, *, title: str = "Direct active packet"
     return response.json()["data"]
 
 
-def test_pipeline_dashboard_projection_endpoint_projects_live_work_packets(tmp_path, monkeypatch) -> None:
-    db_name = "pipeline-projection.db"
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        work_item = _create_work_item(client, title="Live projection packet")
-
-        response = client.get("/pipeline-control-plane/projection")
-        assert response.status_code == 200
-        projection = response.json()["data"]
-
-        assert projection["schemaVersion"] == "pipeline-dashboard-projection/v0"
-        assert projection["sourceLabel"] == "live"
-        assert projection["freshnessState"] == "live"
-        assert projection["fixtureMode"]["enabled"] is False
-        assert projection["truthSummary"]["fixtureBacked"] is False
-        assert len(projection["stageSummaries"]) == 10
-        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{work_item['id']}")
-        assert packet["title"] == "Live projection packet"
-        assert packet["truthLabel"] == "live"
-        assert packet["metadataOnly"] is True
-        assert packet["sourceRef"]["sourceType"] == "workflow"
-        assert packet["currentStage"] in {"capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"}
-        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"])
-        assert detail["metadataOnly"] is True
-        assert detail["sourceRefs"][0]["refId"] == f"work_item:{work_item['id']}"
-
-
 def test_work_packets_include_candidate_only_work_item_only_combined_and_dangling_promoted_packets(tmp_path, monkeypatch) -> None:
     db_name = "work-packets.db"
     db_path = _db_path(tmp_path, db_name)
@@ -260,10 +221,24 @@ def test_work_packets_include_candidate_only_work_item_only_combined_and_danglin
         assert candidate_packet["taskPacket"] is None
         assert candidate_packet["routingPreview"] is None
         assert candidate_packet["executionAttempts"] == []
-        assert candidate_packet["transitionEvents"] == []
         assert candidate_packet["currentStage"] == "capture"
         assert candidate_packet["currentOwner"] == "kendall"
         assert candidate_packet["status"] == "waiting"
+        assert candidate_packet["lifecycleState"]["source"] == "candidate_work"
+        assert candidate_packet["lifecycleState"]["stage"] == "capture"
+        assert candidate_packet["lifecycleState"]["owner"] == "kendall"
+        assert candidate_packet["lifecycleState"]["status"] == "waiting"
+        assert candidate_packet["lifecycleState"]["authoritativeRef"] == f"candidate_work:{candidate_only['id']}"
+        assert candidate_packet["lifecycleState"]["derivedFromRefs"][0] == f"candidate_work:{candidate_only['id']}"
+        assert candidate_packet["lifecycleState"]["transitionEventRefs"] == []
+        assert candidate_packet["lifecycleState"]["latestTransitionEventRef"] is None
+        assert candidate_packet["lifecycleState"]["attemptRef"] is None
+        assert candidate_packet["lifecycleState"]["metadataOnly"] is True
+        assert candidate_packet["lifecycleState"]["sourceMutationAllowed"] is False
+        assert candidate_packet["lifecycleState"]["providerCallsAllowed"] is False
+        assert candidate_packet["lifecycleState"]["workerLaunchAllowed"] is False
+        assert candidate_packet["lifecycleState"]["githubMutationAllowed"] is False
+        assert candidate_packet["lifecycleState"]["cleanupAllowed"] is False
         assert candidate_packet["riskLevel"] == "medium"
         assert candidate_packet["priority"] == "high"
         assert candidate_packet["routeSummary"]["recommendation"] == "not_available"
@@ -314,6 +289,672 @@ def test_work_packets_include_candidate_only_work_item_only_combined_and_danglin
         assert client.post("/work-packets", json={}).status_code == 405
 
 
+def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_after_restart(tmp_path, monkeypatch) -> None:
+    db_name = "authoritative-work-packet-lifecycle.db"
+    db_path = _db_path(tmp_path, db_name)
+    source_ref = {
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+        "sourceType": "prd",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+        "title": "Backend-backed pipeline control plane",
+    }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-1-1",
+                "title": "Authoritative lifecycle test packet",
+                "initialStage": "capture",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "test-create-story-1-1",
+                "correlationId": "corr-create-1-1",
+                "payloadSummary": "Created from source-owned PRD metadata.",
+                "evidenceRefs": ["story:1-1"],
+            },
+        )
+        assert create_response.status_code == 200
+        packet = create_response.json()["data"]
+        assert packet["packetId"] == "packet-story-1-1"
+        assert packet["currentStage"] == "capture"
+        assert packet["history"][0]["eventType"] == "packet.created"
+        assert packet["history"][0]["correlationId"] == "corr-create-1-1"
+        assert packet["history"][0]["metadataOnly"] is True
+        current_event_id = packet["currentEventId"]
+
+        raw_evidence_create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-raw-evidence",
+                "title": "Raw evidence should be blocked",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "Attempt to store unsafe evidence metadata.",
+                "evidenceRefs": ["rawPrompt:do-not-store"],
+            },
+        )
+        assert raw_evidence_create_response.status_code == 400
+        raw_spaced_summary_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-raw-spaced-summary",
+                "title": "Raw spaced summary should be blocked",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "raw prompt retained in lifecycle metadata",
+                "evidenceRefs": ["story:raw-spaced"],
+            },
+        )
+        assert raw_spaced_summary_response.status_code == 400
+
+        stale_transition_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+            json={
+                "targetStage": "execute",
+                "expectedCurrentEventId": "event:stale",
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "Stale transition should not be accepted.",
+            },
+        )
+        assert stale_transition_response.status_code == 400
+
+        skipped_stage_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+            json={
+                "targetStage": "execute",
+                "expectedCurrentEventId": current_event_id,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "Out-of-order transition should not be accepted.",
+            },
+        )
+        assert skipped_stage_response.status_code == 400
+
+        for stage in ["classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"]:
+            transition_response = client.post(
+                "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+                json={
+                    "targetStage": stage,
+                    "expectedCurrentEventId": current_event_id,
+                    "status": "active" if stage != "learn" else "complete",
+                    "truthLabel": "source_owned",
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "idempotencyKey": f"test-transition-{stage}",
+                    "correlationId": "corr-story-1-1",
+                    "causationId": current_event_id,
+                    "payloadSummary": f"Accepted transition to {stage}.",
+                    "evidenceRefs": [f"event:{stage}"],
+                },
+            )
+            assert transition_response.status_code == 200
+            current_event_id = transition_response.json()["data"]["currentEventId"]
+            if stage == "classify":
+                duplicate_transition_conflict = client.post(
+                    "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+                    json={
+                        "targetStage": "classify",
+                        "expectedCurrentEventId": current_event_id,
+                        "status": "active",
+                        "truthLabel": "source_owned",
+                        "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                        "idempotencyKey": "test-transition-classify",
+                        "correlationId": "corr-story-1-1",
+                        "causationId": packet["currentEventId"],
+                        "payloadSummary": "Conflicting duplicate transition payload.",
+                        "evidenceRefs": ["event:classify"],
+                    },
+                )
+                assert duplicate_transition_conflict.status_code == 400
+                same_stage_blocked_response = client.post(
+                    "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+                    json={
+                        "targetStage": "classify",
+                        "expectedCurrentEventId": current_event_id,
+                        "status": "blocked",
+                        "truthLabel": "source_owned",
+                        "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                        "idempotencyKey": "test-transition-classify-blocked",
+                        "correlationId": "corr-story-1-1",
+                        "causationId": current_event_id,
+                        "payloadSummary": "Classify remains in-stage while blocked for operator evidence.",
+                        "evidenceRefs": ["event:classify-blocked"],
+                    },
+                )
+                assert same_stage_blocked_response.status_code == 200
+                same_stage_blocked = same_stage_blocked_response.json()["data"]
+                assert same_stage_blocked["currentStage"] == "classify"
+                assert same_stage_blocked["status"] == "blocked"
+                current_event_id = same_stage_blocked["currentEventId"]
+                create_retry_after_transition = client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": "packet-story-1-1",
+                        "title": "Authoritative lifecycle test packet",
+                        "initialStage": "capture",
+                        "status": "waiting",
+                        "truthLabel": "source_owned",
+                        "sourceRef": source_ref,
+                        "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                        "idempotencyKey": "test-create-story-1-1",
+                        "correlationId": "corr-create-1-1",
+                        "payloadSummary": "Created from source-owned PRD metadata.",
+                        "evidenceRefs": ["story:1-1"],
+                    },
+                )
+                assert create_retry_after_transition.status_code == 200
+                assert create_retry_after_transition.json()["data"]["currentStage"] == "classify"
+                assert create_retry_after_transition.json()["data"]["status"] == "blocked"
+
+        latest_response = client.get("/pipeline-control-plane/work-packets/packet-story-1-1")
+        assert latest_response.status_code == 200
+        latest = latest_response.json()["data"]
+        assert latest["currentStage"] == "learn"
+        assert latest["status"] == "complete"
+        assert [event["targetStage"] for event in latest["history"]] == [
+            "capture",
+            "classify",
+            "classify",
+            "route",
+            "shape",
+            "needs_approval",
+            "execute",
+            "review",
+            "promote",
+            "deliver",
+            "learn",
+        ]
+        assert all(event["sourceRef"]["refId"] == source_ref["refId"] for event in latest["history"])
+        assert all(event["metadataOnly"] is True for event in latest["history"])
+        assert latest["history"][-1]["correlationId"] == "corr-story-1-1"
+        assert latest["history"][-1]["causationId"] == latest["history"][-2]["eventId"]
+
+        blocked_raw_ref_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+            json={
+                "targetStage": "capture",
+                "expectedCurrentEventId": latest["currentEventId"],
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "Raw evidence ref should not be accepted.",
+                "evidenceRefs": ["rawPrompt:do-not-store"],
+            },
+        )
+        assert blocked_raw_ref_response.status_code == 400
+
+        reused_transition_key_create = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-1-1-second",
+                "title": "Second lifecycle packet",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "test-transition-route",
+                "payloadSummary": "Creation key may match an unrelated transition key without hijacking the packet.",
+            },
+        )
+        assert reused_transition_key_create.status_code == 200
+        assert reused_transition_key_create.json()["data"]["packetId"] == "packet-story-1-1-second"
+
+        reused_create_key_conflict = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-1-1-conflict",
+                "title": "Conflicting lifecycle packet",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "test-create-story-1-1",
+                "payloadSummary": "Create key reuse across packet ids must be rejected.",
+            },
+        )
+        assert reused_create_key_conflict.status_code == 400
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update authoritative_work_packets set current_stage = ?, status = ?, current_event_id = ? where id = ?",
+                ("capture", "waiting", "event:stale-projection", "packet-story-1-1"),
+            )
+            conn.commit()
+
+        reconstructed_response = client.get("/pipeline-control-plane/work-packets/packet-story-1-1")
+        assert reconstructed_response.status_code == 200
+        reconstructed = reconstructed_response.json()["data"]
+        assert reconstructed["currentStage"] == "learn"
+        assert reconstructed["status"] == "complete"
+        assert reconstructed["currentEventId"] == latest["history"][-1]["eventId"]
+
+    assert "authoritative_work_packets" in _sqlite_tables(db_path)
+    assert "authoritative_work_packet_lifecycle_events" in _sqlite_tables(db_path)
+
+    with _client(tmp_path, monkeypatch, db_name) as restarted_client:
+        restarted_response = restarted_client.get("/pipeline-control-plane/work-packets/packet-story-1-1")
+        assert restarted_response.status_code == 200
+        restarted = restarted_response.json()["data"]
+        assert restarted["currentStage"] == "learn"
+        assert restarted["currentEventId"] == restarted["history"][-1]["eventId"]
+        assert len(restarted["history"]) == 11
+        assert restarted["history"][4]["previousStage"] == "route"
+
+
+def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_states(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-projection.db"
+    source_ref = {
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+        "sourceType": "prd",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+        "title": "Live pipeline backend projection",
+    }
+    superseded_source_ref = {
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-02/prd.md",
+        "sourceType": "prd",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-02/prd.md",
+        "title": "Superseded pipeline backend projection",
+    }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        empty_response = client.get("/pipeline-control-plane/projection")
+        assert empty_response.status_code == 200
+        empty_projection = empty_response.json()["data"]
+        expected_keys = {
+            "schemaVersion",
+            "projectionId",
+            "generatedAt",
+            "sourceUpdatedAt",
+            "sourceLabel",
+            "freshnessState",
+            "staleAfterSeconds",
+            "backendReachability",
+            "fixtureMode",
+            "truthSummary",
+            "stageSummaries",
+            "workPackets",
+            "selectedPacketDetails",
+            "managerSummary",
+            "queueSummary",
+            "evidenceRefs",
+        }
+        assert expected_keys <= set(empty_projection)
+        assert empty_projection["staleAfterSeconds"] == 15
+        assert empty_projection["sourceLabel"] == "live"
+        assert empty_projection["freshnessState"] == "live"
+        assert empty_projection["backendReachability"]["state"] == "reachable"
+        assert empty_projection["fixtureMode"]["enabled"] is False
+        assert empty_projection["fixtureMode"]["visibleLabelRequired"] is True
+        assert empty_projection["fixtureMode"]["canSatisfyLiveProof"] is False
+        assert empty_projection["truthSummary"]["emptyReason"] == "healthy_empty"
+        assert empty_projection["truthSummary"]["backendEmpty"] is True
+        assert empty_projection["truthSummary"]["backendUnavailable"] is False
+        assert empty_projection["workPackets"] == []
+        assert empty_projection["managerSummary"]["stateSource"] == "unknown"
+        assert empty_projection["managerSummary"]["activeLeaseCount"] is None
+        assert empty_projection["managerSummary"]["activeWorkerCount"] is None
+        assert empty_projection["managerSummary"]["warmWorkerCount"] is None
+        assert empty_projection["managerSummary"]["inactivityReason"] == "healthy_empty"
+        assert empty_projection["queueSummary"]["emptyReason"] == "healthy_empty"
+        assert {stage["stage"] for stage in empty_projection["stageSummaries"]} == {
+            "capture",
+            "classify",
+            "route",
+            "shape",
+            "needs_approval",
+            "execute",
+            "review",
+            "promote",
+            "deliver",
+            "learn",
+        }
+        assert all(stage["packetCount"] == 0 for stage in empty_projection["stageSummaries"])
+
+        superseded_create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-superseded-prd-proof",
+                "title": "Superseded PRD projection packet",
+                "initialStage": "execute",
+                "status": "active",
+                "truthLabel": "source_owned",
+                "sourceRef": superseded_source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "projection-create-superseded-prd",
+                "payloadSummary": "Attempted creation from superseded PRD metadata.",
+                "evidenceRefs": ["story:superseded", "proof:pipeline-real-workpacket"],
+            },
+        )
+        assert superseded_create_response.status_code == 400
+        assert "superseded planning PRD" in superseded_create_response.text
+
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-2-4-real-proof",
+                "title": "Projection packet",
+                "initialStage": "execute",
+                "status": "active",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "projection-create-story-2-4",
+                "payloadSummary": "Created from source-owned PRD metadata.",
+                "evidenceRefs": ["story:2-4", "proof:pipeline-real-workpacket"],
+            },
+        )
+        assert create_response.status_code == 200
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["sourceLabel"] == "live"
+        assert projection["freshnessState"] == "live"
+        assert projection["fixtureMode"]["enabled"] is False
+        assert projection["fixtureMode"]["canSatisfyLiveProof"] is False
+        assert projection["truthSummary"]["emptyReason"] is None
+        assert projection["truthSummary"]["backendEmpty"] is False
+        assert projection["truthSummary"]["backendUnavailable"] is False
+        assert projection["truthSummary"]["fixtureBacked"] is False
+        assert projection["truthSummary"]["stale"] is False
+        assert projection["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["managerSummary"]["stateSource"] == "unknown"
+        assert projection["managerSummary"]["freshnessState"] == "unknown"
+        assert projection["managerSummary"]["activeLeaseCount"] is None
+        assert projection["managerSummary"]["activeWorkerCount"] is None
+        assert projection["managerSummary"]["warmWorkerCount"] is None
+        assert projection["managerSummary"]["dispatchableQueueCount"] == 1
+        assert projection["managerSummary"]["inactivityReason"] is None
+        assert {packet["packetId"] for packet in projection["workPackets"]} == {detail["packetId"] for detail in projection["selectedPacketDetails"]}
+        projected_packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
+        assert projected_packet["title"] == "Projection packet"
+        assert projected_packet["currentStage"] == "execute"
+        assert projected_packet["status"] == "active"
+        assert projected_packet["truthLabel"] == "live"
+        assert projected_packet["sourceRef"] == source_ref
+        assert projected_packet["blocker"] is None
+        assert projected_packet["nextAction"] == "Advance toward Review."
+        assert projected_packet["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
+        assert projected_packet["metadataOnly"] is True
+        selected_detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
+        assert selected_detail["sourceRefs"] == [source_ref]
+        assert selected_detail["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
+        assert selected_detail["currentStage"] == "execute"
+        assert selected_detail["status"] == "active"
+        assert selected_detail["truthLabel"] == "live"
+        assert selected_detail["blocker"] is None
+        assert selected_detail["nextAction"] == "Advance toward Review."
+        assert selected_detail["metadataOnly"] is True
+        execute_summary = next(stage for stage in projection["stageSummaries"] if stage["stage"] == "execute")
+        assert execute_summary["packetCount"] == 1
+        assert execute_summary["sourceLabel"] == "live"
+        assert execute_summary["freshnessState"] == "live"
+
+        refreshed_response = client.get("/pipeline-control-plane/projection")
+        assert refreshed_response.status_code == 200
+        refreshed_projection = refreshed_response.json()["data"]
+        refreshed_packet = next(packet for packet in refreshed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
+        refreshed_detail = next(detail for detail in refreshed_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
+        assert refreshed_projection["sourceLabel"] == "live"
+        assert refreshed_projection["freshnessState"] == "live"
+        assert refreshed_projection["fixtureMode"]["enabled"] is False
+        assert refreshed_projection["truthSummary"]["fixtureBacked"] is False
+        assert {packet["packetId"] for packet in refreshed_projection["workPackets"]} == {detail["packetId"] for detail in refreshed_projection["selectedPacketDetails"]}
+        assert refreshed_packet["truthLabel"] == "live"
+        assert refreshed_packet["metadataOnly"] is True
+        assert refreshed_packet["sourceRef"] == source_ref
+        assert refreshed_detail["sourceRefs"] == [source_ref]
+        assert refreshed_detail["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
+        assert refreshed_detail["truthLabel"] == "live"
+        assert refreshed_detail["metadataOnly"] is True
+
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute(
+                "update authoritative_work_packets set updated_at = ? where id = ?",
+                ("2026-01-01 00:00:00.000000", "packet-story-2-4-real-proof"),
+            )
+            conn.commit()
+
+        stale_response = client.get("/pipeline-control-plane/projection")
+        assert stale_response.status_code == 200
+        stale_projection = stale_response.json()["data"]
+        assert stale_projection["sourceLabel"] == "live"
+        assert stale_projection["freshnessState"] == "live"
+        assert stale_projection["truthSummary"]["stale"] is False
+        assert stale_projection["managerSummary"]["inactivityReason"] is None
+        stale_execute_summary = next(stage for stage in stale_projection["stageSummaries"] if stage["stage"] == "execute")
+        assert stale_execute_summary["sourceLabel"] == "live"
+        assert stale_execute_summary["freshnessState"] == "live"
+
+        fresh_create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-2-4-fresh",
+                "title": "Fresh projection packet",
+                "initialStage": "route",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "projection-create-story-2-4-fresh",
+                "payloadSummary": "Fresh packet should not hide older stale packet.",
+                "evidenceRefs": ["story:2-4:fresh"],
+            },
+        )
+        assert fresh_create_response.status_code == 200
+        approval_waiting_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-2-4-approval-gate",
+                "title": "Approval gated packet",
+                "initialStage": "needs_approval",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "projection-create-story-2-4-approval",
+                "payloadSummary": "Approval gated packet should not count as worker dispatchable.",
+                "evidenceRefs": ["story:2-4:approval"],
+            },
+        )
+        assert approval_waiting_response.status_code == 200
+
+        mixed_response = client.get("/pipeline-control-plane/projection")
+        assert mixed_response.status_code == 200
+        mixed_projection = mixed_response.json()["data"]
+        assert mixed_projection["sourceLabel"] == "live"
+        assert mixed_projection["freshnessState"] == "live"
+        assert mixed_projection["queueSummary"]["dispatchableCount"] == 2
+        assert mixed_projection["managerSummary"]["dispatchableQueueCount"] == 2
+        approval_summary = next(stage for stage in mixed_projection["stageSummaries"] if stage["stage"] == "needs_approval")
+        assert approval_summary["packetCount"] == 1
+        mixed_active_packet = next(packet for packet in mixed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
+        mixed_active_detail = next(detail for detail in mixed_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
+        mixed_fresh_packet = next(packet for packet in mixed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-fresh")
+        mixed_fresh_detail = next(detail for detail in mixed_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-fresh")
+        assert mixed_active_packet["truthLabel"] == "live"
+        assert mixed_active_detail["truthLabel"] == "live"
+        assert mixed_fresh_packet["truthLabel"] == "live"
+        assert mixed_fresh_detail["truthLabel"] == "live"
+        assert {packet["packetId"] for packet in mixed_projection["workPackets"]} == {detail["packetId"] for detail in mixed_projection["selectedPacketDetails"]}
+        mixed_execute_summary = next(stage for stage in mixed_projection["stageSummaries"] if stage["stage"] == "execute")
+        mixed_route_summary = next(stage for stage in mixed_projection["stageSummaries"] if stage["stage"] == "route")
+        assert mixed_execute_summary["sourceLabel"] == "live"
+        assert mixed_execute_summary["freshnessState"] == "live"
+        assert mixed_route_summary["sourceLabel"] == "live"
+        assert mixed_route_summary["freshnessState"] == "live"
+
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute("update authoritative_work_packets set status = ? where id in (?, ?)", ("blocked", "packet-story-2-4-real-proof", "packet-story-2-4-fresh"))
+            conn.execute(
+                "update authoritative_work_packet_lifecycle_events set status = ? where packet_id in (?, ?)",
+                ("blocked", "packet-story-2-4-real-proof", "packet-story-2-4-fresh"),
+            )
+            conn.commit()
+
+        blocked_response = client.get("/pipeline-control-plane/projection")
+        assert blocked_response.status_code == 200
+        blocked_projection = blocked_response.json()["data"]
+        assert blocked_projection["sourceLabel"] == "live"
+        assert blocked_projection["queueSummary"]["dispatchableCount"] == 0
+        assert blocked_projection["queueSummary"]["blockedCount"] == 2
+        assert blocked_projection["managerSummary"]["inactivityReason"] == "blocked"
+
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute("update authoritative_work_packets set updated_at = CURRENT_TIMESTAMP where id in (?, ?)", ("packet-story-2-4-real-proof", "packet-story-2-4-fresh"))
+            conn.commit()
+
+        fresh_blocked_response = client.get("/pipeline-control-plane/projection")
+        assert fresh_blocked_response.status_code == 200
+        fresh_blocked_projection = fresh_blocked_response.json()["data"]
+        assert fresh_blocked_projection["sourceLabel"] == "live"
+        assert fresh_blocked_projection["queueSummary"]["dispatchableCount"] == 0
+        assert fresh_blocked_projection["queueSummary"]["blockedCount"] == 2
+        assert fresh_blocked_projection["managerSummary"]["inactivityReason"] == "blocked"
+        assert fresh_blocked_projection["truthSummary"]["backendEmpty"] is False
+        assert fresh_blocked_projection["queueSummary"]["emptyReason"] == "blocked"
+        assert fresh_blocked_projection["managerSummary"]["sourceExhausted"] is False
+
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute("update authoritative_work_packets set status = ?, updated_at = CURRENT_TIMESTAMP where id in (?, ?)", ("failed", "packet-story-2-4-real-proof", "packet-story-2-4-fresh"))
+            conn.execute(
+                "update authoritative_work_packet_lifecycle_events set status = ? where packet_id in (?, ?)",
+                ("failed", "packet-story-2-4-real-proof", "packet-story-2-4-fresh"),
+            )
+            conn.commit()
+
+        failed_response = client.get("/pipeline-control-plane/projection")
+        assert failed_response.status_code == 200
+        failed_projection = failed_response.json()["data"]
+        assert failed_projection["queueSummary"]["dispatchableCount"] == 0
+        assert failed_projection["queueSummary"]["blockedCount"] == 2
+        assert failed_projection["queueSummary"]["closedCount"] == 0
+        assert failed_projection["queueSummary"]["emptyReason"] == "blocked"
+        failed_packet = next(packet for packet in failed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
+        assert failed_packet["blocker"] == "Packet status is failed."
+
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute(
+                "update authoritative_work_packets set status = ?, updated_at = CURRENT_TIMESTAMP where id in (?, ?, ?)",
+                ("complete", "packet-story-2-4-real-proof", "packet-story-2-4-fresh", "packet-story-2-4-approval-gate"),
+            )
+            conn.execute(
+                "update authoritative_work_packet_lifecycle_events set status = ? where packet_id in (?, ?, ?)",
+                ("complete", "packet-story-2-4-real-proof", "packet-story-2-4-fresh", "packet-story-2-4-approval-gate"),
+            )
+            conn.commit()
+
+        source_exhausted_response = client.get("/pipeline-control-plane/projection")
+        assert source_exhausted_response.status_code == 200
+        source_exhausted_projection = source_exhausted_response.json()["data"]
+        assert source_exhausted_projection["sourceLabel"] == "live"
+        assert source_exhausted_projection["freshnessState"] == "live"
+        assert source_exhausted_projection["truthSummary"]["backendEmpty"] is False
+        assert len(source_exhausted_projection["workPackets"]) == 3
+        assert source_exhausted_projection["queueSummary"]["dispatchableCount"] == 0
+        assert source_exhausted_projection["queueSummary"]["blockedCount"] == 0
+        assert source_exhausted_projection["queueSummary"]["closedCount"] == 3
+        assert source_exhausted_projection["queueSummary"]["emptyReason"] == "source_exhausted"
+        assert source_exhausted_projection["queueSummary"]["sourceExhausted"] is True
+        assert source_exhausted_projection["managerSummary"]["inactivityReason"] == "source_exhausted"
+        assert source_exhausted_projection["managerSummary"]["sourceExhausted"] is True
+        assert source_exhausted_projection["managerSummary"]["dispatchableQueueCount"] == 0
+        assert source_exhausted_projection["managerSummary"]["blockedQueueCount"] == 0
+        assert source_exhausted_projection["managerSummary"]["closedQueueCount"] == 3
+
+        from supervisor.application.service import SupervisorService
+
+        async def unavailable_authoritative_packets(self, session):  # noqa: ARG001
+            raise SQLAlchemyError("projection backend unavailable")
+
+        monkeypatch.setattr(SupervisorService, "list_authoritative_work_packets", unavailable_authoritative_packets)
+        unavailable_response = client.get("/pipeline-control-plane/projection")
+        assert unavailable_response.status_code == 200
+        unavailable_projection = unavailable_response.json()["data"]
+        assert unavailable_projection["sourceLabel"] == "unavailable"
+        assert unavailable_projection["freshnessState"] == "unavailable"
+        assert unavailable_projection["backendReachability"]["state"] == "unavailable"
+        assert unavailable_projection["backendReachability"]["reason"] == "backend_unavailable"
+        assert unavailable_projection["truthSummary"]["backendUnavailable"] is True
+        assert unavailable_projection["truthSummary"]["backendEmpty"] is False
+        assert unavailable_projection["truthSummary"]["emptyReason"] == "backend_unavailable"
+        assert unavailable_projection["managerSummary"]["stateSource"] == "unavailable"
+        assert unavailable_projection["managerSummary"]["activeLeaseCount"] is None
+        assert unavailable_projection["managerSummary"]["dispatchableQueueCount"] is None
+        assert unavailable_projection["queueSummary"]["emptyReason"] == "backend_unavailable"
+        assert unavailable_projection["queueSummary"]["dispatchableCount"] is None
+
+
+def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-legacy-work-packets.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Legacy backend packet",
+                "requestedOutcome": "Show existing backend WorkPacket source in projection.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+            },
+        )
+        assert create_response.status_code == 200
+        candidate_id = create_response.json()["data"]["id"]
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["sourceLabel"] == "live"
+        assert projection["truthSummary"]["backendEmpty"] is False
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["stageSummaries"][0]["stage"] == "capture"
+        assert projection["stageSummaries"][0]["packetCount"] == 1
+        assert projection["workPackets"] == [
+            {
+                "packetId": f"candidate_work:{candidate_id}",
+                "title": "Legacy backend packet",
+                "currentStage": "capture",
+                "status": "waiting",
+                "truthLabel": "live",
+                "sourceRef": None,
+                "blocker": None,
+                "nextAction": "Advance toward Classify.",
+                "evidenceRefs": [],
+                "updatedAt": create_response.json()["data"]["updatedAt"],
+                "metadataOnly": True,
+            }
+        ]
+        assert projection["selectedPacketDetails"][0]["sourceRefs"] == []
+
+
+def test_pipeline_dashboard_projection_blocks_legacy_packets_from_superseded_prd_sources(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-legacy-superseded-source.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Legacy stale-source packet",
+                "requestedOutcome": "Show stale source guard in legacy projection.",
+                "source": "operator",
+                "sourceArtifactPath": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+            },
+        )
+        assert create_response.status_code == 200
+        candidate_id = create_response.json()["data"]["id"]
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"candidate_work:{candidate_id}")
+        assert packet["truthLabel"] == "stale"
+        assert "superseded by the July 1 authoritative PRD" in packet["blocker"]
+        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"])
+        assert detail["truthLabel"] == "stale"
+        assert "superseded by the July 1 authoritative PRD" in detail["blocker"]
+        assert detail["sourceRefs"] == []
+
+
 def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-attempt.db"
     db_path = _db_path(tmp_path, db_name)
@@ -345,32 +986,8 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
                 {"artifactType": "missing_fixture"},
             ],
         )
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-routing-preview",
-            event_type="routing.preview_recorded",
-            summary="Routing preview recorded.",
-            payload={"selectedLane": "utility", "reasonCodes": ["task.deterministic_check"]},
-            created_at="2026-06-27 23:59:58.000000",
-        )
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-routing-outcome",
-            event_type="routing.outcome_recorded",
-            summary="Routing outcome recorded.",
-            payload={"selectedLane": "utility", "reasonCodes": ["task.deterministic_check"]},
-            created_at="2026-06-27 23:59:59.000000",
-        )
 
         before_attempts = client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"]
-        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
-        same_timestamp = "2026-06-28 00:00:00.000000"
-        planned_event = next(event for event in before_events if event["eventType"] == "execution_attempt.planned")
-        failed_event = next(event for event in before_events if event["eventType"] == "execution_attempt.failed")
-        _update_workflow_event_fixture(db_path, planned_event["id"], created_at=same_timestamp)
-        _update_workflow_event_fixture(db_path, failed_event["id"], created_at=same_timestamp)
         before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
 
         packets_response = client.get("/work-packets")
@@ -388,6 +1005,16 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert packet["currentStage"] == "execute"
         assert packet["currentOwner"] == "blocked"
         assert packet["status"] == "failed"
+        assert packet["lifecycleState"]["source"] == "execution_attempt"
+        assert packet["lifecycleState"]["stage"] == "execute"
+        assert packet["lifecycleState"]["owner"] == "blocked"
+        assert packet["lifecycleState"]["status"] == "failed"
+        assert packet["lifecycleState"]["authoritativeRef"] == f"attempt:{attempt['attemptId']}"
+        assert packet["lifecycleState"]["attemptRef"] == f"attempt:{attempt['attemptId']}"
+        assert f"attempt:{attempt['attemptId']}" in packet["lifecycleState"]["derivedFromRefs"]
+        assert all(ref.startswith("event:") for ref in packet["lifecycleState"]["transitionEventRefs"])
+        assert packet["lifecycleState"]["latestTransitionEventRef"] in packet["lifecycleState"]["transitionEventRefs"]
+        assert packet["lifecycleState"]["workerLaunchAllowed"] is False
         assert len(packet["executionAttempts"]) == 1
         attempt_summary = packet["executionAttempts"][0]
         assert attempt_summary["attemptId"] == attempt["attemptId"]
@@ -400,31 +1027,6 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert attempt_summary["evidenceRefs"]
         assert attempt_summary["artifactRefs"]
         assert all("workspaceIsolationPlan" not in summary for summary in packet["executionAttempts"])
-        transition_events = packet["transitionEvents"]
-        assert transition_events
-        event_types = [transition["eventType"] for transition in transition_events]
-        assert "execution_attempt.planned" in event_types
-        assert "execution_attempt.failed" in event_types
-        durable_event_ids = {f"event:{event['id']}" for event in before_events}
-        routing_event_ids = {
-            f"event:{event['id']}" for event in before_events if event["eventType"].startswith("routing.")
-        }
-        assert routing_event_ids
-        failed_transition = next(transition for transition in transition_events if transition["eventType"] == "execution_attempt.failed")
-        assert event_types.index("execution_attempt.planned") < event_types.index("execution_attempt.failed")
-        assert failed_transition["sourceStage"] == "shape"
-        assert failed_transition["sourceOwner"] == "kendall"
-        assert failed_transition["sourceStatus"] == "waiting"
-        assert failed_transition["targetStage"] == "execute"
-        assert failed_transition["targetOwner"] == "blocked"
-        assert failed_transition["targetStatus"] == "failed"
-        assert failed_transition["sourceEventId"] in {event["id"] for event in before_events}
-        assert failed_transition["evidenceRefs"][0] in durable_event_ids
-        assert f"attempt:{attempt['attemptId']}" in failed_transition["evidenceRefs"]
-        assert failed_transition["durable"] is True
-        assert all("workspaceIsolationPlan" not in transition for transition in transition_events)
-        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
-        assert routing_event_ids <= packet_evidence_ref_ids
         assert any(ref["evidenceType"] == "attempt" for ref in packet["evidenceRefs"])
         attempt_artifacts = [ref for ref in packet["artifactRefs"] if ref["refId"].startswith(f"artifact:attempt:{attempt['attemptId']}")]
         assert attempt_artifacts
@@ -440,360 +1042,183 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
 
 
-def test_work_packet_transition_events_replay_work_item_and_subscription_launch_events(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-transition-event-replay.db"
+def test_operator_owned_rework_exit_stops_automation_until_reenter_capture(tmp_path, monkeypatch) -> None:
+    db_name = "operator-owned-work-packet.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
-        work_item = _create_work_item(client, title="Transition replay packet")
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-work-item-ready",
-            event_type="work_item.ready",
-            summary="Work item moved to ready.",
-            payload={"state": "ready", "lane": "utility"},
-            created_at="2026-06-28 00:00:01.000000",
+        work_item = _create_work_item(client, title="Operator-owned refinement packet")
+        attempt_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts",
+            json={"taskKind": "path_scope_check", "actorLabel": "Operator"},
         )
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-recipe-ready",
-            event_type="recipe.ready",
-            summary="Recipe moved to ready.",
-            payload={"state": "ready", "lane": "local_patch_draft"},
-            created_at="2026-06-28 00:00:01.250000",
-        )
-        for event_id, event_type in [
-            ("event-work-item-assigned", "work_item.assigned"),
-            ("event-work-item-unassigned", "work_item.unassigned"),
-            ("event-work-item-escalated", "work_item.escalated"),
-        ]:
-            _insert_workflow_event_fixture(
-                db_path,
-                work_item["id"],
-                event_id=event_id,
-                event_type=event_type,
-                summary="Work item bookkeeping changed without a state transition.",
-                payload={"state": "ready", "lane": "utility", "assigneeLabel": "Operator"},
-                created_at="2026-06-28 00:00:01.500000",
-            )
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-supervised-codex-started",
-            event_type="execution_attempt.supervised_codex_launch_started",
-            summary="Supervised Codex launch started.",
-            payload={
-                "attemptId": "attempt-supervised-codex",
-                "selectedLane": "codex_cli_worker",
-                "status": "completed",
-            },
-            created_at="2026-06-28 00:00:01.750000",
-        )
-        for event_id, event_type, summary in [
-            (
-                "event-subscription-z-started",
-                "execution_attempt.subscription_launch_fixture_started",
-                "Subscription-agent artifact-only fixture started.",
-            ),
-            (
-                "event-subscription-b-timeout-policy",
-                "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
-                "Subscription-agent timeout policy recorded.",
-            ),
-            (
-                "event-subscription-c-cancellation-policy",
-                "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
-                "Subscription-agent cancellation policy recorded.",
-            ),
-            (
-                "event-subscription-d-rollback-disabled",
-                "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
-                "Subscription-agent rollback-disabled policy recorded.",
-            ),
-        ]:
-            _insert_workflow_event_fixture(
-                db_path,
-                work_item["id"],
-                event_id=event_id,
-                event_type=event_type,
-                summary=summary,
-                payload={
-                    "executionAttemptId": "attempt-subscription-fixture",
-                    "approvalBinding": {"lane": "subscription_agent"},
-                },
-                created_at="2026-06-28 00:00:02.000000",
-            )
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-subscription-completed",
-            event_type="execution_attempt.subscription_launch_fixture_completed",
-            summary="Subscription-agent artifact-only fixture completed.",
-            payload={
-                "executionAttemptId": "attempt-subscription-fixture",
-                "attemptStatus": "completed",
-                "approvalBinding": {"lane": "subscription_agent"},
-            },
-            created_at="2026-06-28 00:00:02.000000",
-        )
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        transition_by_type = {transition["eventType"]: transition for transition in packet["transitionEvents"]}
-
-        ready_transition = transition_by_type["work_item.ready"]
-        assert ready_transition["targetStage"] == "human_gate"
-        assert ready_transition["targetOwner"] == "operator"
-        assert ready_transition["targetStatus"] == "waiting"
-        assert ready_transition["evidenceRefs"] == ["event:event-work-item-ready"]
-        recipe_transition = transition_by_type["recipe.ready"]
-        assert recipe_transition["targetStage"] == "human_gate"
-        assert recipe_transition["targetOwner"] == "operator"
-        assert recipe_transition["targetStatus"] == "waiting"
-        assert recipe_transition["evidenceRefs"] == ["event:event-recipe-ready"]
-        for bookkeeping_event_type in ["work_item.assigned", "work_item.unassigned", "work_item.escalated"]:
-            assert bookkeeping_event_type not in transition_by_type
-
-        supervised_transition = transition_by_type["execution_attempt.supervised_codex_launch_started"]
-        assert supervised_transition["targetStage"] == "execute"
-        assert supervised_transition["targetOwner"] == "codex_worker"
-        assert supervised_transition["targetStatus"] == "active"
-        assert "attempt:attempt-supervised-codex" in supervised_transition["evidenceRefs"]
-
-        subscription_transition = transition_by_type["execution_attempt.subscription_launch_fixture_completed"]
-        assert subscription_transition["targetStage"] == "review"
-        assert subscription_transition["targetOwner"] == "kendall"
-        assert subscription_transition["targetStatus"] == "complete"
-        assert "event:event-subscription-completed" in subscription_transition["evidenceRefs"]
-        assert "attempt:attempt-subscription-fixture" in subscription_transition["evidenceRefs"]
-        subscription_order = [
-            transition["eventType"]
-            for transition in packet["transitionEvents"]
-            if transition["eventType"].startswith("execution_attempt.subscription_launch_fixture_")
-        ]
-        assert subscription_order == [
-            "execution_attempt.subscription_launch_fixture_started",
-            "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
-            "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
-            "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
-            "execution_attempt.subscription_launch_fixture_completed",
-        ]
-
-        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
-        assert "event:event-work-item-ready" in packet_evidence_ref_ids
-        assert "event:event-subscription-completed" in packet_evidence_ref_ids
-
-
-def test_work_packet_list_replays_gate_state_from_descending_events(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-list-event-order.db"
-    db_path = _db_path(tmp_path, db_name)
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        work_item = _create_work_item(client, title="List replay ordering packet")
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-list-triaged",
-            event_type="work_item.triaged",
-            summary="Work item moved to triaged.",
-            payload={"state": "triaged"},
-            created_at="2027-06-28 00:00:01.000000",
-        )
-        _insert_workflow_event_fixture(
-            db_path,
-            work_item["id"],
-            event_id="event-list-ready",
-            event_type="work_item.ready",
-            summary="Work item moved to ready.",
-            payload={"state": "ready"},
-            created_at="2027-06-28 00:00:02.000000",
-        )
-        _update_work_item_fixture(db_path, work_item["id"], state="ready")
-
-        list_response = client.get("/work-packets")
-        assert list_response.status_code == 200
-        list_packet = next(packet for packet in list_response.json()["data"] if packet["packetId"] == f"work_item:{work_item['id']}")
-        single_packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-
-        for packet in [list_packet, single_packet]:
-            validation = packet["gateStateValidation"]
-            assert validation["status"] == "matched"
-            assert validation["latestEventType"] == "work_item.ready"
-            assert validation["derivedStage"] == "human_gate"
-            assert validation["derivedOwner"] == "operator"
-            assert validation["derivedStatus"] == "waiting"
-            assert validation["mismatchReasons"] == []
-
-        list_event_types = [transition["eventType"] for transition in list_packet["transitionEvents"]]
-        assert list_event_types.index("work_item.triaged") < list_event_types.index("work_item.ready")
-
-
-def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-gate-replay-match.db"
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        from supervisor.api.main import service
-
-        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
-        work_item_response = client.post(
-            "/work-items",
-            json={
-                "title": "Gate replay matched packet",
-                "requestedOutcome": "Validate stored gate state against ordered events.",
-                "source": "pytest",
-                "riskLevel": "low",
-                "metadata": {
-                    "executionRecipeId": "dashboard-test-coverage",
-                    "sourceArtifactPath": "docs/gate-replay.md",
-                },
-            },
-        )
-        assert work_item_response.status_code == 200
-        work_item = work_item_response.json()["data"]
-
-        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
         assert attempt_response.status_code == 200
         attempt = attempt_response.json()["data"]
-        approval_response = client.post(
+        failed_attempt_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={
-                "status": "approved",
-                "reason": "operator gate approval",
-                "routeDecisionId": attempt["routeDecisionId"],
-                "workerId": attempt["workerId"],
-                "lane": attempt["lane"],
-                "authorityMode": attempt["authorityMode"],
-            },
+            json={"status": "failed", "reason": "Stale failed attempt before operator-owned exit."},
         )
-        assert approval_response.status_code == 200
-        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        validation = packet["gateStateValidation"]
-
-        assert validation["status"] == "matched"
-        assert validation["storedStage"] == "human_gate"
-        assert validation["derivedStage"] == "human_gate"
-        assert validation["storedOwner"] == "operator"
-        assert validation["derivedOwner"] == "operator"
-        assert validation["storedStatus"] == "waiting"
-        assert validation["derivedStatus"] == "waiting"
-        assert validation["latestEventType"] == "execution_attempt.approved"
-        assert "execution_attempt.approved" in validation["replayedEventTypes"]
-        assert validation["mismatchReasons"] == []
-        assert validation["blockedReasons"] == []
-        assert validation["readOnly"] is True
-        assert validation["sourceMutationAllowed"] is False
-        assert validation["providerCallsAllowed"] is False
-        assert validation["workerLaunchAllowed"] is False
-        assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
-
-
-def test_work_packet_gate_state_validation_blocks_mismatch_from_event_replay(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-gate-replay-mismatch.db"
-    db_path = _db_path(tmp_path, db_name)
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        from supervisor.api.main import service
-
-        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
-        work_item_response = client.post(
-            "/work-items",
-            json={
-                "title": "Gate replay mismatch packet",
-                "requestedOutcome": "Report stored gate state drift as blocked validation.",
-                "source": "pytest",
-                "riskLevel": "low",
-                "metadata": {
-                    "executionRecipeId": "dashboard-test-coverage",
-                    "sourceArtifactPath": "docs/gate-replay.md",
-                },
-            },
-        )
-        assert work_item_response.status_code == 200
-        work_item = work_item_response.json()["data"]
-        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
-        attempt = attempt_response.json()["data"]
-        approval_response = client.post(
-            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={
-                "status": "approved",
-                "reason": "operator gate approval",
-                "routeDecisionId": attempt["routeDecisionId"],
-                "workerId": attempt["workerId"],
-                "lane": attempt["lane"],
-                "authorityMode": attempt["authorityMode"],
-            },
-        )
-        assert approval_response.status_code == 200
-        _update_execution_attempt_fixture(db_path, attempt["attemptId"], status="running")
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        validation = packet_response.json()["data"]["gateStateValidation"]
-
-        assert validation["status"] == "blocked"
-        assert validation["storedStage"] == "execute"
-        assert validation["derivedStage"] == "human_gate"
-        assert validation["storedStatus"] == "active"
-        assert validation["derivedStatus"] == "waiting"
-        assert any("stored stage execute" in reason for reason in validation["mismatchReasons"])
-        assert any("stored status active" in reason for reason in validation["mismatchReasons"])
-
-
-def test_work_packet_gate_state_validation_blocks_inaccessible_refs_with_explicit_states(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-gate-replay-refs.db"
-    db_path = _db_path(tmp_path, db_name)
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        work_item = _create_work_item(client, title="Gate replay inaccessible refs packet")
+        assert failed_attempt_response.status_code == 200
         _update_work_item_fixture(
             db_path,
             work_item["id"],
-            metadata_json={
-                "sourceArtifactPath": "docs/direct-work.md",
-                "workPacketSourceRefs": [
-                    {
-                        "refId": "fixture:source:missing",
-                        "sourceType": "github",
-                        "label": "Missing GitHub evidence",
-                        "freshness": "unknown",
-                        "accessState": "missing",
-                    },
-                    {
-                        "refId": "fixture:source:excluded",
-                        "sourceType": "llm_wiki",
-                        "label": "Excluded wiki source",
-                        "pathOrUrl": "https://example.invalid/raw-source",
-                        "freshness": "unknown",
-                        "accessState": "excluded",
-                    },
-                    {
-                        "refId": "fixture:source:unsupported",
-                        "sourceType": "private_dump",
-                        "label": "Unsupported private dump",
-                        "pathOrUrl": "file:///private/raw-source.md",
-                        "freshness": "fresh",
-                        "accessState": "allowed",
-                    },
-                ],
+            state="needs_rework",
+            lane="corrective_loop",
+            status_summary="Needs operator refinement before automation continues.",
+            next_step="Operator refines the packet.",
+        )
+
+        missing_note_response = client.post(
+            f"/work-items/{work_item['id']}/actions",
+            json={"action": "operator_owned_exit"},
+        )
+        assert missing_note_response.status_code == 409
+        assert "requires an operator note" in missing_note_response.text
+
+        exit_response = client.post(
+            f"/work-items/{work_item['id']}/actions",
+            json={
+                "action": "operator_owned_exit",
+                "note": "Idea is too broad; operator will split it in Obsidian before re-entry.",
+                "actorLabel": "Operator",
             },
+        )
+        assert exit_response.status_code == 200
+        exited = exit_response.json()["data"]
+        assert exited["state"] == "operator_owned"
+        assert exited["lane"] is None
+        assert exited["blockedReason"] == "Idea is too broad; operator will split it in Obsidian before re-entry."
+        assert exited["needsAttention"] is True
+        assert exited["attentionReason"] == "Idea is too broad; operator will split it in Obsidian before re-entry."
+        assert exited["nextStep"] == "Update input and re-enter capture"
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        assert packet["currentStage"] == "capture"
+        assert packet["currentOwner"] == "operator"
+        assert packet["status"] == "deferred"
+        assert "work_item.operator_owned" in packet["routeSummary"]["reasonCodes"]
+        assert "execution_attempt.failed" not in packet["routeSummary"]["reasonCodes"]
+        assert packet["lifecycleState"]["source"] == "work_item"
+        assert packet["lifecycleState"]["stage"] == "capture"
+        assert packet["lifecycleState"]["owner"] == "operator"
+        assert packet["lifecycleState"]["status"] == "deferred"
+        assert packet["lifecycleState"]["authoritativeRef"] == f"work_item:{work_item['id']}"
+        assert packet["lifecycleState"]["attemptRef"] is None
+        assert packet["lifecycleState"]["sourceMutationAllowed"] is False
+        assert packet["lifecycleState"]["providerCallsAllowed"] is False
+        assert packet["lifecycleState"]["workerLaunchAllowed"] is False
+        assert packet["lifecycleState"]["githubMutationAllowed"] is False
+        assert packet["lifecycleState"]["cleanupAllowed"] is False
+        assert packet["learnRefill"]["operatorOwnedExits"][0]["evidenceRefs"]
+        assert packet["learnRefill"]["operatorOwnedExits"][0]["stopStateKind"] == "operator_owned_exit"
+        assert len(packet["loopStopStates"]) == 1
+        stop_state = packet["loopStopStates"][0]
+        assert stop_state["kind"] == "operator_owned"
+        assert stop_state["severity"] == "blocking"
+        assert stop_state["sourceMutationAllowed"] is False
+        assert stop_state["providerCallsAllowed"] is False
+        assert stop_state["workerLaunchAllowed"] is False
+        assert stop_state["githubMutationAllowed"] is False
+        assert stop_state["cleanupAllowed"] is False
+        assert "Do not dispatch workers" in stop_state["stopLine"]
+        assert packet["recoveryActions"] == [
+            {
+                "actionId": "reenter-capture",
+                "actionType": "reenter_capture",
+                "label": "Re-enter capture",
+                "availability": "available",
+                "consequence": "Return the operator-refined packet to Capture for normal triage without replaying stale automation.",
+                "resultingStage": "capture",
+                "resultingOwner": "kendall",
+                "evidenceRefs": [ref["refId"] for ref in packet["evidenceRefs"]],
+            }
+        ]
+        blocked_retry_response = client.post(f"/work-items/{work_item['id']}/retry")
+        assert blocked_retry_response.status_code == 409
+        assert "must re-enter Capture before retry" in blocked_retry_response.text
+
+        reenter_missing_note_response = client.post(
+            f"/work-items/{work_item['id']}/actions",
+            json={"action": "reenter_capture"},
+        )
+        assert reenter_missing_note_response.status_code == 409
+        assert "requires an operator note" in reenter_missing_note_response.text
+
+        reenter_response = client.post(
+            f"/work-items/{work_item['id']}/actions",
+            json={
+                "action": "reenter_capture",
+                "note": "Operator split the input and it is ready for capture.",
+                "actorLabel": "Operator",
+            },
+        )
+        assert reenter_response.status_code == 200
+        reentered = reenter_response.json()["data"]
+        assert reentered["state"] == "queued"
+        assert reentered["lane"] == "intake"
+        assert reentered["blockedReason"] is None
+        assert reentered["nextStep"] == "Move into triage"
+
+
+def test_done_delivery_work_packet_outranks_historical_execution_attempts(tmp_path, monkeypatch) -> None:
+    db_name = "done-delivery-attempt-precedence.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Delivered packet with old failed attempt",
+                "requestedOutcome": "Delivery state remains authoritative after old execution attempts.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "sourceArtifactPath": "docs/delivered-with-old-attempt.md",
+                    "pullRequestUrl": "https://github.com/example/repo/pull/4242",
+                    "pullRequestStatus": "ready",
+                    "ciStatus": "passed",
+                    "mergeStatus": "ready",
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+
+        attempt_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts",
+            json={"taskKind": "path_scope_check", "actorLabel": "Operator"},
+        )
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        failed_attempt_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "failed", "reason": "Historical failed attempt before delivery."},
+        )
+        assert failed_attempt_response.status_code == 200
+
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            state="done",
+            lane="review",
+            status_summary="Delivered with PR evidence.",
+            next_step=None,
         )
 
         packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
         assert packet_response.status_code == 200
         packet = packet_response.json()["data"]
-        validation = packet["gateStateValidation"]
-        ref_states = {ref["refId"]: ref for ref in validation["refStates"] if ref["refType"] == "source"}
-
-        assert validation["status"] in {"blocked", "preview_only"}
-        assert ref_states["fixture:source:missing"]["state"] == "missing"
-        assert ref_states["fixture:source:excluded"]["state"] == "excluded"
-        assert ref_states["fixture:source:unsupported"]["state"] == "blocked"
-        assert ref_states["fixture:source:excluded"]["blockingReason"]
-        assert packet["sourceRefs"][1]["accessState"] == "missing"
-        assert packet["sourceRefs"][2]["accessState"] == "excluded"
-        assert packet["sourceRefs"][2]["pathOrUrl"] is None
+        assert packet["currentStage"] == "deliver"
+        assert packet["currentOwner"] == "github"
+        assert packet["status"] == "complete"
+        assert "work_item.done" in packet["routeSummary"]["reasonCodes"]
+        assert "delivery.evidence_present" in packet["routeSummary"]["reasonCodes"]
+        assert "execution_attempt.failed" not in packet["routeSummary"]["reasonCodes"]
+        assert packet["lifecycleState"]["source"] == "delivery_evidence"
+        assert packet["lifecycleState"]["authoritativeRef"] == f"work_item:{work_item['id']}"
+        assert packet["lifecycleState"]["attemptRef"] is None
+        assert packet["executionAttempts"][0]["status"] == "failed"
 
 
 def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(tmp_path, monkeypatch) -> None:
@@ -888,8 +1313,6 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
             json={
                 "status": "approved",
                 "operatorAction": "approve",
-                "actorId": "operator:reviewer",
-                "actorLabel": "Operator Reviewer",
                 "decisionNeededContext": "Approved for a future gated draft preview only.",
                 "writeBackStatus": "approved_for_future",
             },
@@ -904,23 +1327,6 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"
         assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
-        learn_outcome = packet_after_update["learnOutcome"]
-        assert learn_outcome["outcomeId"] == f"learn-outcome:work_item:{work_item['id']}"
-        assert learn_outcome["retentionClass"] == "metadata_only"
-        assert learn_outcome["learningProposalCount"] == 1
-        assert learn_outcome["documentationProposalStatus"] == "not_present"
-        assert learn_outcome["automationAuthorityChangeStatus"] == "not_requested"
-        assert learn_outcome["blockedWriteBackState"] == "approved_for_future"
-        assert "review-gated" in learn_outcome["nextSafeAction"]
-        assert learn_outcome["canonicalMutationAllowed"] is False
-        assert learn_outcome["sourceMutationAllowed"] is False
-        assert learn_outcome["providerCallsAllowed"] is False
-        assert learn_outcome["durableWriteAllowed"] is False
-        assert learn_outcome["decisionRecords"][0]["proposalId"] == "mp-20260625T000000Z"
-        assert learn_outcome["decisionRecords"][0]["actor"] == "Operator Reviewer"
-        assert learn_outcome["decisionRecords"][0]["result"] == "approved"
-        assert learn_outcome["decisionRecords"][0]["evidenceRefs"] == ["evidence:read-only-proof"]
-        assert learn_outcome["decisionRecords"][0]["canonicalMutationAllowed"] is False
 
 
 def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, monkeypatch) -> None:
@@ -1056,11 +1462,6 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
 
 def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, monkeypatch) -> None:
-    config_path, _vault_root, _backup_root = _write_obsidian_memory_config(
-        tmp_path,
-        proposal_queue_folder="03 Operator Review Queue",
-    )
-    monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
     with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-readiness.db") as client:
         work_item_response = client.post(
             "/work-items",
@@ -1140,9 +1541,6 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
         assert "obsidian:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
         assert "evidence:read-only-proof:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
-        assert preview["derivedTargetFolder"] == "03 Operator Review Queue/LLM Wiki Derived"
-        assert preview["freshness"] == "fresh"
-        assert preview["rebuildBasis"] == ["approved-memory-proposals", "source-evidence-crosswalk"]
         assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
         assert "do not write LLM-Wiki index" in preview["stopLine"]
         assert preview["canonicalMutationAllowed"] is False
@@ -1159,9 +1557,6 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert plan["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in plan["inputRefs"]
         assert "approved-memory-proposals" in plan["plannedDerivedSections"]
-        assert plan["derivedTargetFolder"] == "03 Operator Review Queue/LLM Wiki Derived"
-        assert plan["freshness"] == "fresh"
-        assert plan["rebuildBasis"] == preview["rebuildBasis"]
         assert plan["disposableTargetNamespace"] == f"derived://llm-wiki/dry-run/work_item:{work_item['id']}"
         assert any("do not write LLM-Wiki index" in stop_line for stop_line in plan["stopLines"])
         assert "regenerate" in plan["discardRecoveryPath"]
@@ -1548,101 +1943,6 @@ def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, mo
         assert packet_proposal["writeBackAllowed"] is False
 
 
-def test_work_item_routes_user_facing_documentation_proposal_as_draft_plan_only(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal.db") as client:
-        work_item = _create_work_item(client, title="User-facing documentation proposal")
-        payload = {
-            "proposalId": "doc-proposal-20260628",
-            "label": "User-facing documentation proposal",
-            "status": "pending_human_approval",
-            "summary": "Prepare an operator-reviewed docs draft plan from approved packet evidence.",
-            "sourceRefs": ["obsidian:00 Inbox/source-summary.md", "llm_wiki:derived/source-summary"],
-            "evidenceRefs": ["evidence:documentation-draft-plan:source-summary"],
-            "targetVaultPath": "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal-doc-proposal-20260628.md",
-            "targetVaultFolder": "01 Dashboard Queue/Documentation Drafts",
-            "proposalType": "user_facing_documentation",
-            "suggestedContentSummary": "Create a user-facing source summary draft plan for operator review.",
-            "patchSummary": "Draft-plan evidence only; no canonical Obsidian note or user-facing docs page written.",
-            "sensitivity": "medium",
-            "freshness": "fresh",
-            "contradictionStatus": "none",
-            "confidence": "medium",
-            "operatorAction": "defer",
-            "decisionNeededContext": "Operator must approve this draft plan before any future documentation write-back; canonical Obsidian notes remain human-owned.",
-            "backupRecoveryPath": "No mutation performed. Discard this proposal evidence and regenerate it from source refs if stale.",
-            "writeBackStatus": "review_gated",
-            "writeBackAllowed": False,
-        }
-
-        create_response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
-
-        assert create_response.status_code == 200
-        created = create_response.json()["data"]
-        assert created["proposalType"] == "user_facing_documentation"
-        assert created["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
-        assert created["sourceRefs"] == payload["sourceRefs"]
-        assert created["evidenceRefs"] == payload["evidenceRefs"]
-        assert created["writeBackStatus"] == "review_gated"
-        assert created["writeBackAllowed"] is False
-        assert "rawContent" not in created
-
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet["currentStage"] == "learn"
-        assert packet["currentOwner"] == "memory_review"
-        assert packet["status"] == "waiting"
-        proposal = packet["memoryProposals"][0]
-        assert proposal["proposalId"] == payload["proposalId"]
-        assert proposal["proposalType"] == "user_facing_documentation"
-        assert proposal["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
-        assert proposal["writeBackAllowed"] is False
-        assert "canonical Obsidian notes remain human-owned" in proposal["decisionNeededContext"]
-
-
-def test_user_facing_documentation_proposal_rejects_unsafe_targets_and_missing_evidence(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal-rejected.db") as client:
-        work_item = _create_work_item(client, title="Unsafe user-facing documentation proposal")
-        base_payload = {
-            "proposalId": "doc-proposal-invalid",
-            "label": "User-facing documentation proposal",
-            "status": "pending_human_approval",
-            "summary": "Prepare an operator-reviewed docs draft plan from approved packet evidence.",
-            "sourceRefs": ["obsidian:00 Inbox/source-summary.md", "llm_wiki:derived/source-summary"],
-            "evidenceRefs": ["evidence:documentation-draft-plan:source-summary"],
-            "targetVaultPath": "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal-doc-proposal-invalid.md",
-            "targetVaultFolder": "01 Dashboard Queue/Documentation Drafts",
-            "proposalType": "user_facing_documentation",
-            "suggestedContentSummary": "Create a user-facing source summary draft plan for operator review.",
-            "patchSummary": "Draft-plan evidence only; no canonical Obsidian note or user-facing docs page written.",
-            "sensitivity": "medium",
-            "freshness": "fresh",
-            "contradictionStatus": "none",
-            "confidence": "medium",
-            "operatorAction": "defer",
-            "decisionNeededContext": "Operator must approve this draft plan before any future documentation write-back.",
-            "backupRecoveryPath": "No mutation performed. Discard this proposal evidence and regenerate it from source refs if stale.",
-            "writeBackStatus": "review_gated",
-            "writeBackAllowed": False,
-        }
-
-        unsafe_cases = [
-            ("canonical-target", {"targetVaultFolder": "Obsidian/Kendall_Nxt/Docs"}),
-            ("approved-too-early", {"status": "approved"}),
-            ("future-writeback", {"writeBackStatus": "approved_for_future"}),
-            ("missing-llm-wiki", {"sourceRefs": ["obsidian:00 Inbox/source-summary.md"]}),
-            ("missing-documentation-evidence", {"evidenceRefs": ["evidence:read-only-proof:source-summary"]}),
-            ("unsafe-path", {"targetVaultPath": "../Documentation Drafts/user-facing-documentation-proposal.md"}),
-        ]
-
-        for suffix, patch in unsafe_cases:
-            payload = {**base_payload, **patch, "proposalId": f"doc-proposal-invalid-{suffix}"}
-            response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
-            assert response.status_code == 409
-            assert response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
-
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet["memoryProposals"] == []
-
-
 def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-memory-proposal-legacy-schema.db"
     db_path = _db_path(tmp_path, db_name)
@@ -1898,7 +2198,7 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
             status_summary="Blocked by fixture.",
             next_step="Resolve fixture blocker.",
             metadata_json={
-                "sourceArtifactPath": "docs/direct-work.md",
+                "sourceArtifactPath": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md",
                 "workPacketSourceRefs": [
                     {
                         "refId": "fixture:source:stale",
@@ -1929,6 +2229,14 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
                         "label": "Blocked research source",
                         "freshness": "unknown",
                         "accessState": "blocked",
+                    },
+                    {
+                        "refId": "fixture:source:superseded-prd",
+                        "sourceType": "bmad_artifact",
+                        "label": "Superseded manager-control-plane PRD",
+                        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md",
+                        "freshness": "fresh",
+                        "accessState": "allowed",
                     },
                     {
                         "refId": "fixture:source:malformed-type",
@@ -1974,11 +2282,20 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert blocked_packet["status"] == "blocked"
         assert blocked_packet["recoveryActions"][0]["actionType"] == "retry_smaller"
         blocked_source_refs = {ref["refId"]: ref for ref in blocked_packet["sourceRefs"]}
+        canonical_ref = blocked_source_refs[f"work_item:{blocked_item['id']}"]
+        assert canonical_ref["accessState"] == "blocked"
+        assert canonical_ref["freshness"] == "stale"
+        assert canonical_ref["pathOrUrl"] is None
+        assert "superseded by the July 1 authoritative PRD" in canonical_ref["blockedReason"]
         assert blocked_source_refs["fixture:source:stale"]["freshness"] == "stale"
         assert blocked_source_refs["fixture:source:missing"]["accessState"] == "missing"
         assert blocked_source_refs["fixture:source:excluded"]["accessState"] == "excluded"
         assert blocked_source_refs["fixture:source:excluded"]["pathOrUrl"] is None
         assert blocked_source_refs["fixture:source:blocked"]["accessState"] == "blocked"
+        assert blocked_source_refs["fixture:source:superseded-prd"]["accessState"] == "blocked"
+        assert blocked_source_refs["fixture:source:superseded-prd"]["freshness"] == "stale"
+        assert blocked_source_refs["fixture:source:superseded-prd"]["pathOrUrl"] is None
+        assert "superseded by the July 1 authoritative PRD" in blocked_source_refs["fixture:source:superseded-prd"]["blockedReason"]
         assert blocked_source_refs["fixture:source:malformed-type"]["sourceType"] == "manual"
         assert blocked_source_refs["fixture:source:malformed-type"]["accessState"] == "blocked"
         assert "invalid source type" in blocked_source_refs["fixture:source:malformed-type"]["label"]
@@ -1989,9 +2306,9 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert blocked_source_refs["fixture:source:unavailable"]["pathOrUrl"] is None
         assert blocked_source_refs["fixture:source:missing-state"]["accessState"] == "blocked"
         assert "invalid access state" in blocked_source_refs["fixture:source:missing-state"]["label"]
-        assert blocked_source_refs["metadata_source:7"]["sourceType"] == "manual"
-        assert blocked_source_refs["metadata_source:7"]["accessState"] == "blocked"
-        assert "malformed source ref" in blocked_source_refs["metadata_source:7"]["label"]
+        assert blocked_source_refs["metadata_source:8"]["sourceType"] == "manual"
+        assert blocked_source_refs["metadata_source:8"]["accessState"] == "blocked"
+        assert "malformed source ref" in blocked_source_refs["metadata_source:8"]["label"]
         alpha_status = blocked_packet["alphaMemorySourceStatus"]
         assert alpha_status["authorityFamily"] == "memory-writeback-and-source-mutation"
         assert alpha_status["operationMode"] == "dry_run"
@@ -2009,6 +2326,8 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert "approval_metadata.missing" in alpha_status["blockedReasons"]
         assert "source_ref.invalid_or_blocked.fixture:source:malformed-type" in alpha_status["blockedReasons"]
         assert "source_ref.invalid_or_blocked.fixture:source:unavailable" in alpha_status["blockedReasons"]
+        assert "source_ref.invalid_or_blocked.fixture:source:superseded-prd" in alpha_status["blockedReasons"]
+        assert "source_ref.stale.fixture:source:superseded-prd" in alpha_status["blockedReasons"]
         assert "source_ref.stale.fixture:source:stale" in alpha_status["blockedReasons"]
         assert alpha_status["backupPath"] == "not_authorized_for_alpha_status"
         assert alpha_status["rollbackPath"] == "no_mutation_performed"
@@ -2021,27 +2340,489 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert done_packet["currentStage"] == "deliver"
         assert done_packet["currentOwner"] == "github"
         assert done_packet["status"] == "complete"
+        assert done_packet["lifecycleState"]["source"] == "delivery_evidence"
+        assert done_packet["lifecycleState"]["authoritativeRef"] == f"work_item:{done_item['id']}"
+        assert done_packet["lifecycleState"]["stage"] == "deliver"
+        assert done_packet["lifecycleState"]["owner"] == "github"
+        assert done_packet["lifecycleState"]["status"] == "complete"
+        assert f"delivery:{done_item['id']}" in done_packet["lifecycleState"]["derivedFromRefs"]
+        assert done_packet["lifecycleState"]["githubMutationAllowed"] is False
+        assert done_packet["lifecycleState"]["cleanupAllowed"] is False
         assert any(ref["evidenceType"] == "gate" and ref["refId"] == f"delivery:{done_item['id']}" for ref in done_packet["evidenceRefs"])
         assert any(
             ref["artifactType"] == "pull_request" and ref["pathOrUrl"] == "https://github.com/example/repo/pull/42"
             for ref in done_packet["artifactRefs"]
         )
-        delivery_evidence = done_packet["deliveryEvidence"]
-        assert delivery_evidence["evidenceId"] == f"delivery-evidence:{done_item['id']}"
-        assert delivery_evidence["mode"] == "metadata_only"
-        assert delivery_evidence["pullRequestUrl"] == "https://github.com/example/repo/pull/42"
-        assert delivery_evidence["ciStatus"] == "passed"
-        assert delivery_evidence["mergeStatus"] == "ready"
-        assert delivery_evidence["readyForApproval"] is True
-        assert delivery_evidence["deliveryRailsGrantAuthority"] is False
-        assert delivery_evidence["rawPayloadRetained"] is False
-        assert delivery_evidence["remoteMutationApproved"] is False
-        assert delivery_evidence["mergeApproved"] is False
-        assert delivery_evidence["cleanupApproved"] is False
-        assert f"delivery:{done_item['id']}" in delivery_evidence["evidenceRefs"]
-        assert f"artifact:delivery:{done_item['id']}:pull_request" in delivery_evidence["artifactRefs"]
 
 
+def test_pipeline_dashboard_projection_endpoint_projects_live_work_packets(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-projection.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Live projection packet")
+
+        response = client.get("/pipeline-control-plane/projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+
+        assert projection["schemaVersion"] == "pipeline-dashboard-projection/v0"
+        assert projection["sourceLabel"] == "live"
+        assert projection["freshnessState"] == "live"
+        assert projection["fixtureMode"]["enabled"] is False
+        assert projection["truthSummary"]["fixtureBacked"] is False
+        assert len(projection["stageSummaries"]) == 10
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        assert packet["title"] == "Live projection packet"
+        assert packet["truthLabel"] == "live"
+        assert packet["metadataOnly"] is True
+        assert packet["sourceRef"] is None
+        assert packet["currentStage"] in {"capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"}
+        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"])
+        assert detail["metadataOnly"] is True
+        assert detail["sourceRefs"] == []
+
+def test_work_packet_transition_events_replay_work_item_and_subscription_launch_events(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-transition-event-replay.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Transition replay packet")
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-work-item-ready",
+            event_type="work_item.ready",
+            summary="Work item moved to ready.",
+            payload={"state": "ready", "lane": "utility"},
+            created_at="2026-06-28 00:00:01.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-recipe-ready",
+            event_type="recipe.ready",
+            summary="Recipe moved to ready.",
+            payload={"state": "ready", "lane": "local_patch_draft"},
+            created_at="2026-06-28 00:00:01.250000",
+        )
+        for event_id, event_type in [
+            ("event-work-item-assigned", "work_item.assigned"),
+            ("event-work-item-unassigned", "work_item.unassigned"),
+            ("event-work-item-escalated", "work_item.escalated"),
+        ]:
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type=event_type,
+                summary="Work item bookkeeping changed without a state transition.",
+                payload={"state": "ready", "lane": "utility", "assigneeLabel": "Operator"},
+                created_at="2026-06-28 00:00:01.500000",
+            )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-supervised-codex-started",
+            event_type="execution_attempt.supervised_codex_launch_started",
+            summary="Supervised Codex launch started.",
+            payload={
+                "attemptId": "attempt-supervised-codex",
+                "selectedLane": "codex_cli_worker",
+                "status": "completed",
+            },
+            created_at="2026-06-28 00:00:01.750000",
+        )
+        for event_id, event_type, summary in [
+            (
+                "event-subscription-z-started",
+                "execution_attempt.subscription_launch_fixture_started",
+                "Subscription-agent artifact-only fixture started.",
+            ),
+            (
+                "event-subscription-b-timeout-policy",
+                "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+                "Subscription-agent timeout policy recorded.",
+            ),
+            (
+                "event-subscription-c-cancellation-policy",
+                "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+                "Subscription-agent cancellation policy recorded.",
+            ),
+            (
+                "event-subscription-d-rollback-disabled",
+                "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+                "Subscription-agent rollback-disabled policy recorded.",
+            ),
+        ]:
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type=event_type,
+                summary=summary,
+                payload={
+                    "executionAttemptId": "attempt-subscription-fixture",
+                    "approvalBinding": {"lane": "subscription_agent"},
+                },
+                created_at="2026-06-28 00:00:02.000000",
+            )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-subscription-completed",
+            event_type="execution_attempt.subscription_launch_fixture_completed",
+            summary="Subscription-agent artifact-only fixture completed.",
+            payload={
+                "executionAttemptId": "attempt-subscription-fixture",
+                "attemptStatus": "completed",
+                "approvalBinding": {"lane": "subscription_agent"},
+            },
+            created_at="2026-06-28 00:00:02.000000",
+        )
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        transition_by_type = {transition["eventType"]: transition for transition in packet["transitionEvents"]}
+
+        ready_transition = transition_by_type["work_item.ready"]
+        assert ready_transition["targetStage"] == "human_gate"
+        assert ready_transition["targetOwner"] == "operator"
+        assert ready_transition["targetStatus"] == "waiting"
+        assert ready_transition["evidenceRefs"] == ["event:event-work-item-ready"]
+        recipe_transition = transition_by_type["recipe.ready"]
+        assert recipe_transition["targetStage"] == "human_gate"
+        assert recipe_transition["targetOwner"] == "operator"
+        assert recipe_transition["targetStatus"] == "waiting"
+        assert recipe_transition["evidenceRefs"] == ["event:event-recipe-ready"]
+        for bookkeeping_event_type in ["work_item.assigned", "work_item.unassigned", "work_item.escalated"]:
+            assert bookkeeping_event_type not in transition_by_type
+
+        supervised_transition = transition_by_type["execution_attempt.supervised_codex_launch_started"]
+        assert supervised_transition["targetStage"] == "execute"
+        assert supervised_transition["targetOwner"] == "codex_worker"
+        assert supervised_transition["targetStatus"] == "active"
+        assert "attempt:attempt-supervised-codex" in supervised_transition["evidenceRefs"]
+
+        subscription_transition = transition_by_type["execution_attempt.subscription_launch_fixture_completed"]
+        assert subscription_transition["targetStage"] == "review"
+        assert subscription_transition["targetOwner"] == "kendall"
+        assert subscription_transition["targetStatus"] == "complete"
+        assert "event:event-subscription-completed" in subscription_transition["evidenceRefs"]
+        assert "attempt:attempt-subscription-fixture" in subscription_transition["evidenceRefs"]
+        subscription_order = [
+            transition["eventType"]
+            for transition in packet["transitionEvents"]
+            if transition["eventType"].startswith("execution_attempt.subscription_launch_fixture_")
+        ]
+        assert subscription_order == [
+            "execution_attempt.subscription_launch_fixture_started",
+            "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+            "execution_attempt.subscription_launch_fixture_completed",
+        ]
+
+        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
+        assert "event:event-work-item-ready" in packet_evidence_ref_ids
+        assert "event:event-subscription-completed" in packet_evidence_ref_ids
+
+def test_work_packet_list_replays_gate_state_from_descending_events(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-list-event-order.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="List replay ordering packet")
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-list-triaged",
+            event_type="work_item.triaged",
+            summary="Work item moved to triaged.",
+            payload={"state": "triaged"},
+            created_at="2027-06-28 00:00:01.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-list-ready",
+            event_type="work_item.ready",
+            summary="Work item moved to ready.",
+            payload={"state": "ready"},
+            created_at="2027-06-28 00:00:02.000000",
+        )
+        _update_work_item_fixture(db_path, work_item["id"], state="ready")
+
+        list_response = client.get("/work-packets")
+        assert list_response.status_code == 200
+        list_packet = next(packet for packet in list_response.json()["data"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        single_packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+
+        for packet in [list_packet, single_packet]:
+            validation = packet["gateStateValidation"]
+            assert validation["status"] == "matched"
+            assert validation["latestEventType"] == "work_item.ready"
+            assert validation["derivedStage"] == "human_gate"
+            assert validation["derivedOwner"] == "operator"
+            assert validation["derivedStatus"] == "waiting"
+            assert validation["mismatchReasons"] == []
+
+        list_event_types = [transition["eventType"] for transition in list_packet["transitionEvents"]]
+        assert list_event_types.index("work_item.triaged") < list_event_types.index("work_item.ready")
+
+def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-gate-replay-match.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+
+        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Gate replay matched packet",
+                "requestedOutcome": "Validate stored gate state against ordered events.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "sourceArtifactPath": "docs/gate-replay.md",
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+
+        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        approval_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "operator gate approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        assert approval_response.status_code == 200
+        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        validation = packet["gateStateValidation"]
+
+        assert validation["status"] == "matched"
+        assert validation["storedStage"] == "human_gate"
+        assert validation["derivedStage"] == "human_gate"
+        assert validation["storedOwner"] == "operator"
+        assert validation["derivedOwner"] == "operator"
+        assert validation["storedStatus"] == "waiting"
+        assert validation["derivedStatus"] == "waiting"
+        assert validation["latestEventType"] == "execution_attempt.approved"
+        assert "execution_attempt.approved" in validation["replayedEventTypes"]
+        assert validation["mismatchReasons"] == []
+        assert validation["blockedReasons"] == []
+        assert validation["readOnly"] is True
+        assert validation["sourceMutationAllowed"] is False
+        assert validation["providerCallsAllowed"] is False
+        assert validation["workerLaunchAllowed"] is False
+        assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
+
+def test_work_packet_gate_state_validation_blocks_mismatch_from_event_replay(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-gate-replay-mismatch.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+
+        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Gate replay mismatch packet",
+                "requestedOutcome": "Report stored gate state drift as blocked validation.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "sourceArtifactPath": "docs/gate-replay.md",
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        approval_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "operator gate approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        assert approval_response.status_code == 200
+        _update_execution_attempt_fixture(db_path, attempt["attemptId"], status="running")
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        validation = packet_response.json()["data"]["gateStateValidation"]
+
+        assert validation["status"] == "blocked"
+        assert validation["storedStage"] == "execute"
+        assert validation["derivedStage"] == "human_gate"
+        assert validation["storedStatus"] == "active"
+        assert validation["derivedStatus"] == "waiting"
+        assert any("stored stage execute" in reason for reason in validation["mismatchReasons"])
+        assert any("stored status active" in reason for reason in validation["mismatchReasons"])
+
+def test_work_packet_gate_state_validation_blocks_inaccessible_refs_with_explicit_states(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-gate-replay-refs.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Gate replay inaccessible refs packet")
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            metadata_json={
+                "sourceArtifactPath": "docs/direct-work.md",
+                "workPacketSourceRefs": [
+                    {
+                        "refId": "fixture:source:missing",
+                        "sourceType": "github",
+                        "label": "Missing GitHub evidence",
+                        "freshness": "unknown",
+                        "accessState": "missing",
+                    },
+                    {
+                        "refId": "fixture:source:excluded",
+                        "sourceType": "llm_wiki",
+                        "label": "Excluded wiki source",
+                        "pathOrUrl": "https://example.invalid/raw-source",
+                        "freshness": "unknown",
+                        "accessState": "excluded",
+                    },
+                    {
+                        "refId": "fixture:source:unsupported",
+                        "sourceType": "private_dump",
+                        "label": "Unsupported private dump",
+                        "pathOrUrl": "file:///private/raw-source.md",
+                        "freshness": "fresh",
+                        "accessState": "allowed",
+                    },
+                ],
+            },
+        )
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        validation = packet["gateStateValidation"]
+        ref_states = {ref["refId"]: ref for ref in validation["refStates"] if ref["refType"] == "source"}
+
+        assert validation["status"] in {"blocked", "preview_only"}
+        assert ref_states["fixture:source:missing"]["state"] == "missing"
+        assert ref_states["fixture:source:excluded"]["state"] == "excluded"
+        assert ref_states["fixture:source:unsupported"]["state"] == "blocked"
+        assert ref_states["fixture:source:excluded"]["blockingReason"]
+        assert packet["sourceRefs"][1]["accessState"] == "missing"
+        assert packet["sourceRefs"][2]["accessState"] == "excluded"
+        assert packet["sourceRefs"][2]["pathOrUrl"] is None
+
+def test_work_item_routes_user_facing_documentation_proposal_as_draft_plan_only(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal.db") as client:
+        work_item = _create_work_item(client, title="User-facing documentation proposal")
+        payload = {
+            "proposalId": "doc-proposal-20260628",
+            "label": "User-facing documentation proposal",
+            "status": "pending_human_approval",
+            "summary": "Prepare an operator-reviewed docs draft plan from approved packet evidence.",
+            "sourceRefs": ["obsidian:00 Inbox/source-summary.md", "llm_wiki:derived/source-summary"],
+            "evidenceRefs": ["evidence:documentation-draft-plan:source-summary"],
+            "targetVaultPath": "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal-doc-proposal-20260628.md",
+            "targetVaultFolder": "01 Dashboard Queue/Documentation Drafts",
+            "proposalType": "user_facing_documentation",
+            "suggestedContentSummary": "Create a user-facing source summary draft plan for operator review.",
+            "patchSummary": "Draft-plan evidence only; no canonical Obsidian note or user-facing docs page written.",
+            "sensitivity": "medium",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "decisionNeededContext": "Operator must approve this draft plan before any future documentation write-back; canonical Obsidian notes remain human-owned.",
+            "backupRecoveryPath": "No mutation performed. Discard this proposal evidence and regenerate it from source refs if stale.",
+            "writeBackStatus": "review_gated",
+            "writeBackAllowed": False,
+        }
+
+        create_response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+
+        assert create_response.status_code == 200
+        created = create_response.json()["data"]
+        assert created["proposalType"] == "user_facing_documentation"
+        assert created["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
+        assert created["sourceRefs"] == payload["sourceRefs"]
+        assert created["evidenceRefs"] == payload["evidenceRefs"]
+        assert created["writeBackStatus"] == "review_gated"
+        assert created["writeBackAllowed"] is False
+        assert "rawContent" not in created
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet["currentStage"] == "learn"
+        assert packet["currentOwner"] == "memory_review"
+        assert packet["status"] == "waiting"
+        proposal = packet["memoryProposals"][0]
+        assert proposal["proposalId"] == payload["proposalId"]
+        assert proposal["proposalType"] == "user_facing_documentation"
+        assert proposal["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
+        assert proposal["writeBackAllowed"] is False
+        assert "canonical Obsidian notes remain human-owned" in proposal["decisionNeededContext"]
+
+def test_user_facing_documentation_proposal_rejects_unsafe_targets_and_missing_evidence(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal-rejected.db") as client:
+        work_item = _create_work_item(client, title="Unsafe user-facing documentation proposal")
+        base_payload = {
+            "proposalId": "doc-proposal-invalid",
+            "label": "User-facing documentation proposal",
+            "status": "pending_human_approval",
+            "summary": "Prepare an operator-reviewed docs draft plan from approved packet evidence.",
+            "sourceRefs": ["obsidian:00 Inbox/source-summary.md", "llm_wiki:derived/source-summary"],
+            "evidenceRefs": ["evidence:documentation-draft-plan:source-summary"],
+            "targetVaultPath": "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal-doc-proposal-invalid.md",
+            "targetVaultFolder": "01 Dashboard Queue/Documentation Drafts",
+            "proposalType": "user_facing_documentation",
+            "suggestedContentSummary": "Create a user-facing source summary draft plan for operator review.",
+            "patchSummary": "Draft-plan evidence only; no canonical Obsidian note or user-facing docs page written.",
+            "sensitivity": "medium",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "decisionNeededContext": "Operator must approve this draft plan before any future documentation write-back.",
+            "backupRecoveryPath": "No mutation performed. Discard this proposal evidence and regenerate it from source refs if stale.",
+            "writeBackStatus": "review_gated",
+            "writeBackAllowed": False,
+        }
+
+        unsafe_cases = [
+            ("canonical-target", {"targetVaultFolder": "Obsidian/Kendall_Nxt/Docs"}),
+            ("approved-too-early", {"status": "approved"}),
+            ("future-writeback", {"writeBackStatus": "approved_for_future"}),
+            ("missing-llm-wiki", {"sourceRefs": ["obsidian:00 Inbox/source-summary.md"]}),
+            ("missing-documentation-evidence", {"evidenceRefs": ["evidence:read-only-proof:source-summary"]}),
+            ("unsafe-path", {"targetVaultPath": "../Documentation Drafts/user-facing-documentation-proposal.md"}),
+        ]
+
+        for suffix, patch in unsafe_cases:
+            payload = {**base_payload, **patch, "proposalId": f"doc-proposal-invalid-{suffix}"}
+            response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+            assert response.status_code == 409
+            assert response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet["memoryProposals"] == []
 
 def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-learn-refill-promotion.db"

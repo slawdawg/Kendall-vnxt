@@ -9,9 +9,15 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
+    r"\b(raw[\s_-]*(prompt|completion)|reasoning[\s_-]*trace|provider[\s_-]*payload|secret|credential)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,11 @@ class LocalProviderApprovalValidation:
 
 
 from supervisor.api.schemas import (
+    AuthoritativePacketSourceRefView,
+    AuthoritativeWorkPacketCreateRequest,
+    AuthoritativeWorkPacketLifecycleEventView,
+    AuthoritativeWorkPacketLifecycleView,
+    AuthoritativeWorkPacketTransitionRequest,
     AuditEventView,
     AuthorityReadinessFamilyView,
     AuthorityReadinessMatrixReportView,
@@ -64,6 +75,8 @@ from supervisor.api.schemas import (
     DocumentationAuthorityDocumentView,
     DocumentationAuthorityLegacyArtifactDispositionView,
     DocumentationAuthorityReportView,
+    ExecutableWorkItemActionView,
+    ExecutableWorkItemShapeView,
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
     ExecutionAttemptView,
@@ -118,6 +131,15 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
+    PipelineBackendReachabilityV0View,
+    PipelineDashboardProjectionV0View,
+    PipelineDashboardWorkPacketV0View,
+    PipelineFixtureModeV0View,
+    PipelineManagerSummaryV0View,
+    PipelineQueueSummaryV0View,
+    PipelineSelectedPacketDetailV0View,
+    PipelineStageSummaryV0View,
+    PipelineTruthSummaryV0View,
     ProviderEnablementPolicyStepView,
     RemoteCleanupSyncPolicyItemView,
     RemoteCleanupSyncReadinessReportView,
@@ -135,6 +157,7 @@ from supervisor.api.schemas import (
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceSubscriptionLaunchView,
     RunnerAssignmentDegradedInputView,
+    RunnerDispatchDecisionExplanationView,
     RunnerDispatcherContinuitySnapshotView,
     RunnerDispatcherQueueProofRowView,
     RunnerHandoffAuditEntryView,
@@ -213,11 +236,14 @@ from supervisor.api.schemas import (
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketLearnDecisionRecordV0View,
+    WorkPacketLearnFollowUpCandidateWorkRequest,
     WorkPacketLearnFollowUpCandidateV0View,
     WorkPacketLearnOutcomeV0View,
     WorkPacketLearnRefillHousekeepingV0View,
     WorkPacketLearnRefillProjectionV0View,
     WorkPacketLearnRefillSourceExhaustionV0View,
+    WorkPacketLifecycleStateV0View,
+    WorkPacketLoopStopStateV0View,
     WorkPacketOperatorOwnedExitV0View,
     WorkPacketReadyToTestV0View,
     WorkPacketRefillSourceStateV0View,
@@ -248,10 +274,33 @@ from supervisor.domain.subscription_launch import (
     SupervisedSubscriptionLaunchAdapter,
     SubscriptionLaunchRegistry,
 )
-from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkSource, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.types import (
+    AuditMode,
+    BmadLane,
+    CandidateWorkArtifactType,
+    CandidateWorkSource,
+    CandidateWorkStatus,
+    ExecutionAttemptStatus,
+    RunMode,
+    WorkItemFilterScope,
+    WorkflowAction,
+    WorkflowState,
+)
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
-from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, MemoryProposal, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
+from supervisor.infrastructure.db.models import (
+    AuditEvent,
+    AuthoritativeWorkPacket,
+    AuthoritativeWorkPacketLifecycleEvent,
+    CandidateWork,
+    ExecutionAttempt,
+    MemoryProposal,
+    OperatorView,
+    QueueLease,
+    SupervisorControl,
+    WorkItem,
+    WorkflowEvent,
+)
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
@@ -272,6 +321,39 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
 
 DEFAULT_LLM_WIKI_DERIVED_FOLDER = "01 Dashboard Queue/LLM Wiki Derived"
 LLM_WIKI_REBUILD_BASIS = ("approved-memory-proposals", "source-evidence-crosswalk")
+AUTHORITATIVE_PLANNING_SOURCE_PATH = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md"
+STALE_PLANNING_SOURCE_POLICY = (
+    "hold or flag packets, stories, and architecture notes that reference superseded PRDs; "
+    "do not silently derive downstream planning work from stale planning sources."
+)
+
+AUTHORITATIVE_PACKET_STAGE_SEQUENCE = [
+    "capture",
+    "classify",
+    "route",
+    "shape",
+    "needs_approval",
+    "execute",
+    "review",
+    "promote",
+    "deliver",
+    "learn",
+]
+
+AUTHORITATIVE_PACKET_STAGE_LABELS = {
+    "capture": "Capture",
+    "classify": "Classify",
+    "route": "Route",
+    "shape": "Shape",
+    "needs_approval": "Needs Approval",
+    "execute": "Execute",
+    "review": "Review",
+    "promote": "Promote",
+    "deliver": "Deliver",
+    "learn": "Learn",
+}
+
+PIPELINE_DASHBOARD_STALE_AFTER_SECONDS = 15
 
 
 def _slugify_memory_draft(value: str) -> str:
@@ -438,6 +520,373 @@ class SupervisorService:
             await session.commit()
             await session.refresh(control)
         return control
+
+    async def create_authoritative_work_packet(
+        self,
+        session: AsyncSession,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> AuthoritativeWorkPacketLifecycleView:
+        if payload.idempotencyKey:
+            existing_event = await self._authoritative_lifecycle_event_by_idempotency(
+                session,
+                payload.idempotencyKey,
+                event_type="packet.created",
+            )
+            if existing_event:
+                if payload.packetId and existing_event.packet_id != payload.packetId:
+                    raise ValueError("Create idempotency key already belongs to a different authoritative WorkPacket.")
+                packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
+                if packet:
+                    source_ref = self._authoritative_source_ref_payload(payload.sourceRef)
+                    payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
+                    evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
+                    if not self._authoritative_create_event_matches(
+                        existing_event,
+                        payload,
+                        source_ref=source_ref,
+                        payload_summary=payload_summary,
+                        evidence_refs=evidence_refs,
+                    ):
+                        raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
+                    return await self.to_authoritative_work_packet_view(session, packet)
+
+        packet_id = payload.packetId or f"packet-{uuid.uuid4()}"
+        existing_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if existing_packet:
+            if not self._authoritative_create_matches(existing_packet, payload):
+                raise ValueError("Authoritative WorkPacket already exists with different lifecycle metadata.")
+            return await self.to_authoritative_work_packet_view(session, existing_packet)
+
+        now = datetime.now(timezone.utc)
+        event_id = f"event-{uuid.uuid4()}"
+        source_ref = self._authoritative_source_ref_payload(payload.sourceRef)
+        actor = payload.actor.model_dump()
+        payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
+        evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
+        packet = AuthoritativeWorkPacket(
+            id=packet_id,
+            title=payload.title,
+            current_stage=payload.initialStage,
+            status=payload.status,
+            truth_label=payload.truthLabel,
+            source_ref_json=source_ref,
+            current_event_id=event_id,
+            created_at=now,
+            updated_at=now,
+        )
+        event = AuthoritativeWorkPacketLifecycleEvent(
+            id=event_id,
+            packet_id=packet_id,
+            schema_version=1,
+            event_type="packet.created",
+            previous_stage=None,
+            target_stage=payload.initialStage,
+            status=payload.status,
+            truth_label=payload.truthLabel,
+            source_ref_json=source_ref,
+            actor_json=actor,
+            correlation_id=payload.correlationId,
+            causation_id=payload.causationId,
+            idempotency_key=payload.idempotencyKey,
+            payload_summary=payload_summary,
+            evidence_refs_json=evidence_refs,
+            occurred_at=now,
+        )
+        session.add(packet)
+        session.add(event)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            if payload.idempotencyKey:
+                replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                    session,
+                    payload.idempotencyKey,
+                    event_type="packet.created",
+                )
+                if replay_event and (not payload.packetId or replay_event.packet_id == payload.packetId):
+                    replay_packet = await session.get(AuthoritativeWorkPacket, replay_event.packet_id)
+                    if replay_packet:
+                        if not self._authoritative_create_event_matches(
+                            replay_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                        ):
+                            raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
+                        return await self.to_authoritative_work_packet_view(session, replay_packet)
+            raise
+        await session.refresh(packet)
+        return await self.to_authoritative_work_packet_view(session, packet)
+
+    async def list_authoritative_work_packets(self, session: AsyncSession) -> list[AuthoritativeWorkPacketLifecycleView]:
+        result = await session.execute(select(AuthoritativeWorkPacket).order_by(AuthoritativeWorkPacket.updated_at.desc()))
+        packets = list(result.scalars())
+        return [await self.to_authoritative_work_packet_view(session, packet) for packet in packets]
+
+    async def get_authoritative_work_packet(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+    ) -> AuthoritativeWorkPacketLifecycleView | None:
+        packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if not packet:
+            return None
+        return await self.to_authoritative_work_packet_view(session, packet)
+
+    async def transition_authoritative_work_packet(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+        payload: AuthoritativeWorkPacketTransitionRequest,
+    ) -> AuthoritativeWorkPacketLifecycleView | None:
+        packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if not packet:
+            return None
+        if payload.idempotencyKey:
+            existing_event = await self._authoritative_lifecycle_event_by_idempotency(session, payload.idempotencyKey, packet_id=packet_id)
+            if existing_event:
+                payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
+                evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
+                if not self._authoritative_transition_event_matches(
+                    existing_event,
+                    payload,
+                    payload_summary=payload_summary,
+                    evidence_refs=evidence_refs,
+                ):
+                    raise ValueError("Transition idempotency key already belongs to a different lifecycle transition.")
+                return await self.to_authoritative_work_packet_view(session, packet)
+        if packet.current_event_id != payload.expectedCurrentEventId:
+            raise ValueError("Authoritative WorkPacket transition rejected because current event changed.")
+        self._validate_authoritative_stage_transition(packet.current_stage, payload.targetStage)
+
+        now = datetime.now(timezone.utc)
+        event_id = f"event-{uuid.uuid4()}"
+        payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
+        evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
+        event = AuthoritativeWorkPacketLifecycleEvent(
+            id=event_id,
+            packet_id=packet_id,
+            schema_version=1,
+            event_type="packet.stage_transitioned",
+            previous_stage=packet.current_stage,
+            target_stage=payload.targetStage,
+            status=payload.status,
+            truth_label=payload.truthLabel,
+            source_ref_json=packet.source_ref_json,
+            actor_json=payload.actor.model_dump(),
+            correlation_id=payload.correlationId,
+            causation_id=payload.causationId,
+            idempotency_key=payload.idempotencyKey,
+            payload_summary=payload_summary,
+            evidence_refs_json=evidence_refs,
+            occurred_at=now,
+        )
+        session.add(event)
+        update_result = await session.execute(
+            update(AuthoritativeWorkPacket)
+            .where(AuthoritativeWorkPacket.id == packet_id, AuthoritativeWorkPacket.current_event_id == payload.expectedCurrentEventId)
+            .values(
+                current_stage=payload.targetStage,
+                status=payload.status,
+                truth_label=payload.truthLabel,
+                current_event_id=event_id,
+                updated_at=now,
+            )
+        )
+        if update_result.rowcount != 1:
+            await session.rollback()
+            raise ValueError("Authoritative WorkPacket transition rejected because current event changed.")
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            if payload.idempotencyKey:
+                replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                    session,
+                    payload.idempotencyKey,
+                    packet_id=packet_id,
+                )
+                if replay_event:
+                    replay_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+                    if replay_packet:
+                        if not self._authoritative_transition_event_matches(
+                            replay_event,
+                            payload,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                        ):
+                            raise ValueError("Transition idempotency key already belongs to a different lifecycle transition.")
+                        return await self.to_authoritative_work_packet_view(session, replay_packet)
+            raise
+        updated_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if not updated_packet:
+            return None
+        return await self.to_authoritative_work_packet_view(session, updated_packet)
+
+    def _validate_authoritative_stage_transition(self, current_stage: str, target_stage: str) -> None:
+        try:
+            current_index = AUTHORITATIVE_PACKET_STAGE_SEQUENCE.index(current_stage)
+            target_index = AUTHORITATIVE_PACKET_STAGE_SEQUENCE.index(target_stage)
+        except ValueError as exc:
+            raise ValueError("Unknown authoritative WorkPacket stage.") from exc
+        if target_index == current_index:
+            return
+        if target_index != current_index + 1:
+            raise ValueError("Authoritative WorkPacket transitions must advance to the next canonical stage.")
+
+    async def to_authoritative_work_packet_view(
+        self,
+        session: AsyncSession,
+        packet: AuthoritativeWorkPacket,
+    ) -> AuthoritativeWorkPacketLifecycleView:
+        event_result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent)
+            .where(AuthoritativeWorkPacketLifecycleEvent.packet_id == packet.id)
+            .order_by(AuthoritativeWorkPacketLifecycleEvent.occurred_at.asc(), AuthoritativeWorkPacketLifecycleEvent.id.asc())
+        )
+        events = list(event_result.scalars())
+        latest_event = events[-1] if events else None
+        return AuthoritativeWorkPacketLifecycleView(
+            packetId=packet.id,
+            title=packet.title,
+            currentStage=latest_event.target_stage if latest_event else packet.current_stage,
+            status=latest_event.status if latest_event else packet.status,
+            truthLabel=latest_event.truth_label if latest_event else packet.truth_label,
+            sourceRef=packet.source_ref_json,
+            createdAt=packet.created_at,
+            updatedAt=packet.updated_at,
+            currentEventId=latest_event.id if latest_event else packet.current_event_id,
+            history=[self._authoritative_lifecycle_event_view(event) for event in events],
+            metadataOnly=True,
+        )
+
+    async def _authoritative_lifecycle_event_by_idempotency(
+        self,
+        session: AsyncSession,
+        idempotency_key: str,
+        *,
+        packet_id: str | None = None,
+        event_type: str | None = None,
+    ) -> AuthoritativeWorkPacketLifecycleEvent | None:
+        statement = select(AuthoritativeWorkPacketLifecycleEvent).where(
+            AuthoritativeWorkPacketLifecycleEvent.idempotency_key == idempotency_key
+        )
+        if packet_id:
+            statement = statement.where(AuthoritativeWorkPacketLifecycleEvent.packet_id == packet_id)
+        if event_type:
+            statement = statement.where(AuthoritativeWorkPacketLifecycleEvent.event_type == event_type)
+        result = await session.execute(statement)
+        return result.scalars().first()
+
+    def _authoritative_source_ref_payload(self, source_ref: AuthoritativePacketSourceRefView) -> dict:
+        source_payload = source_ref.model_dump()
+        planning_authority = self._planning_source_authority(source_payload.get("pathOrUrl"))
+        if planning_authority["status"] == "superseded":
+            raise ValueError(
+                "Authoritative WorkPacket sourceRef uses a superseded planning PRD; "
+                f"use the authoritative PRD at {planning_authority['superseded_by']} or route this packet for source inspection."
+            )
+        return source_payload
+
+    def _authoritative_create_matches(
+        self,
+        packet: AuthoritativeWorkPacket,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> bool:
+        return (
+            packet.title == payload.title
+            and packet.current_stage == payload.initialStage
+            and packet.status == payload.status
+            and packet.truth_label == payload.truthLabel
+            and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef)
+        )
+
+    def _authoritative_create_event_matches(
+        self,
+        event: AuthoritativeWorkPacketLifecycleEvent,
+        payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        source_ref: dict,
+        payload_summary: str,
+        evidence_refs: list[str],
+    ) -> bool:
+        return (
+            event.event_type == "packet.created"
+            and (not payload.packetId or event.packet_id == payload.packetId)
+            and event.target_stage == payload.initialStage
+            and event.status == payload.status
+            and event.truth_label == payload.truthLabel
+            and event.source_ref_json == source_ref
+            and event.actor_json == payload.actor.model_dump()
+            and event.correlation_id == payload.correlationId
+            and event.causation_id == payload.causationId
+            and event.payload_summary == payload_summary
+            and list(event.evidence_refs_json or []) == evidence_refs
+        )
+
+    def _authoritative_transition_event_matches(
+        self,
+        event: AuthoritativeWorkPacketLifecycleEvent,
+        payload: AuthoritativeWorkPacketTransitionRequest,
+        *,
+        payload_summary: str,
+        evidence_refs: list[str],
+    ) -> bool:
+        return (
+            event.target_stage == payload.targetStage
+            and event.status == payload.status
+            and event.truth_label == payload.truthLabel
+            and event.actor_json == payload.actor.model_dump()
+            and event.correlation_id == payload.correlationId
+            and event.causation_id == payload.causationId
+            and event.payload_summary == payload_summary
+            and list(event.evidence_refs_json or []) == evidence_refs
+        )
+
+    def _authoritative_lifecycle_event_view(
+        self,
+        event: AuthoritativeWorkPacketLifecycleEvent,
+    ) -> AuthoritativeWorkPacketLifecycleEventView:
+        return AuthoritativeWorkPacketLifecycleEventView(
+            eventId=event.id,
+            packetId=event.packet_id,
+            schemaVersion=1,
+            eventType=event.event_type,
+            previousStage=event.previous_stage,
+            targetStage=event.target_stage,
+            status=event.status,
+            truthLabel=event.truth_label,
+            sourceRef=event.source_ref_json,
+            actor=event.actor_json,
+            occurredAt=event.occurred_at,
+            correlationId=event.correlation_id,
+            causationId=event.causation_id,
+            idempotencyKey=event.idempotency_key,
+            payloadSummary=event.payload_summary,
+            evidenceRefs=list(event.evidence_refs_json or []),
+            metadataOnly=True,
+        )
+
+    def _safe_lifecycle_summary(self, summary: str) -> str:
+        value = (summary or "Metadata-only lifecycle event.").strip()
+        if UNSAFE_LIFECYCLE_TEXT_RE.search(value):
+            raise ValueError("Lifecycle event summaries must not retain raw prompt, provider payload, or secret content.")
+        return value[:500]
+
+    def _safe_lifecycle_refs(self, refs: list[str]) -> list[str]:
+        safe_refs = []
+        for ref in refs:
+            value = str(ref).strip()
+            if not value:
+                raise ValueError("Lifecycle evidence refs must not be blank.")
+            if len(value) > 255:
+                raise ValueError("Lifecycle evidence refs must be 255 characters or fewer.")
+            if UNSAFE_LIFECYCLE_TEXT_RE.search(value):
+                raise ValueError("Lifecycle evidence refs must not retain raw prompt, provider payload, or secret content.")
+            safe_refs.append(value)
+        return safe_refs
 
     async def create_work_item(self, session: AsyncSession, payload: WorkItemCreate) -> WorkItem:
         item = WorkItem(
@@ -1241,6 +1690,26 @@ class SupervisorService:
     async def import_bmad_candidate_work(self, session: AsyncSession, payload: CandidateWorkBmadImportRequest) -> CandidateWork:
         repo_root = Path(self._repo_root() or Path(__file__).resolve().parents[5])
         package = parse_bmad_import_package(repo_root, payload.artifactPath)
+        source_ref = f"bmad:{package.source_artifact_path}"
+        source_label = f"Approved BMAD story: {package.artifact_title}"
+        source_summary = {
+            "label": source_label,
+            "summary": (
+                f"{package.artifact_title} is represented by approved BMAD metadata only; "
+                "raw artifact content was not copied."
+            ),
+            "sourceType": "bmad",
+            "sourceRef": source_ref,
+            "sourceArtifactPath": package.source_artifact_path,
+            "freshness": "fresh",
+            "accessState": "allowed",
+            "retentionPolicy": "metadata_only_no_raw_artifact_content",
+            "boundarySummary": "Local BMAD work products remain planning state until rewritten as source-owned repo artifacts.",
+            "evidenceRefs": [f"artifact:{package.source_artifact_path}"],
+            "approvalStatus": "approved_source_metadata",
+            "approvedBy": "bmad-import-gate",
+            "approvedAt": "not_applicable",
+        }
         return await self.create_candidate_work(
             session,
             CandidateWorkCreate(
@@ -1261,6 +1730,17 @@ class SupervisorService:
                     "allowedScope": package.allowed_scope,
                     "notes": list(package.notes),
                     "retentionPolicy": "metadata_only_no_raw_artifact_content",
+                    "userFacingSourceSummary": source_summary,
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": source_ref,
+                            "sourceType": "bmad_artifact",
+                            "label": source_label,
+                            "pathOrUrl": package.source_artifact_path,
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                        }
+                    ],
                 },
             ),
         )
@@ -1333,179 +1813,304 @@ class SupervisorService:
 
         return packet_views
 
-    async def get_pipeline_dashboard_projection(self, session: AsyncSession) -> dict:
-        packets = await self.list_work_packets(session)
-        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        projected_packets = [self._pipeline_dashboard_work_packet(packet, generated_at) for packet in packets]
-        selected_packet_details = [self._pipeline_dashboard_selected_packet_detail(packet, generated_at) for packet in packets]
-        stage_counts = {stage: 0 for stage in self._pipeline_dashboard_stages()}
-        for packet in projected_packets:
-            stage_counts[packet["currentStage"]] += 1
-        dispatchable_count = sum(1 for packet in projected_packets if packet["status"] in {"active", "waiting"})
-        blocked_count = sum(1 for packet in projected_packets if packet["status"] in {"blocked", "failed"})
-        closed_count = sum(1 for packet in projected_packets if packet["status"] in {"complete", "deferred"})
-        empty_reason = "healthy_empty" if not projected_packets else None
-        evidence_refs = sorted({ref for packet in projected_packets for ref in packet["evidenceRefs"]})
-        return {
-            "schemaVersion": "pipeline-dashboard-projection/v0",
-            "projectionId": f"pipeline-dashboard-projection:{uuid.uuid4()}",
-            "generatedAt": generated_at,
-            "sourceUpdatedAt": generated_at,
-            "sourceLabel": "live",
-            "freshnessState": "live",
-            "staleAfterSeconds": 60,
-            "backendReachability": {
-                "state": "reachable",
-                "checkedAt": generated_at,
-                "reason": None,
-                "summary": "Supervisor projection endpoint reachable.",
-            },
-            "fixtureMode": {
-                "enabled": False,
-                "reason": None,
-                "allowedForEnvironment": False,
-                "visibleLabelRequired": True,
-                "canSatisfyLiveProof": False,
-            },
-            "truthSummary": {
-                "label": "live",
-                "emptyReason": empty_reason,
-                "backendEmpty": not projected_packets,
-                "backendUnavailable": False,
-                "fixtureBacked": False,
-                "stale": False,
-                "summary": "Live supervisor WorkPacket projection." if projected_packets else "Live supervisor projection has no WorkPackets.",
-            },
-            "stageSummaries": [
-                {
-                    "stage": stage,
-                    "label": self._pipeline_dashboard_stage_labels()[stage],
-                    "packetCount": stage_counts[stage],
-                    "sourceLabel": "live",
-                    "freshnessState": "live",
-                    "emptyReason": empty_reason if stage_counts[stage] == 0 else None,
-                }
-                for stage in self._pipeline_dashboard_stages()
-            ],
-            "workPackets": projected_packets,
-            "selectedPacketDetails": selected_packet_details,
-            "managerSummary": {
-                "stateSource": "supervisor_projection",
-                "freshnessState": "live",
-                "activeLeaseCount": None,
-                "activeWorkerCount": None,
-                "warmWorkerCount": None,
-                "blockedQueueCount": blocked_count,
-                "dispatchableQueueCount": dispatchable_count,
-                "closedQueueCount": closed_count,
-                "sourceExhausted": False,
-                "inactivityReason": empty_reason,
-                "summary": "Supervisor projected queue state from live WorkPackets.",
-                "metadataOnly": True,
-            },
-            "queueSummary": {
-                "dispatchableCount": dispatchable_count,
-                "blockedCount": blocked_count,
-                "closedCount": closed_count,
-                "emptyReason": empty_reason,
-                "sourceExhausted": False,
-                "summary": "Live WorkPacket queue projection." if projected_packets else "Live queue is empty.",
-            },
-            "evidenceRefs": evidence_refs,
-        }
+    async def get_pipeline_dashboard_projection(self, session: AsyncSession) -> PipelineDashboardProjectionV0View:
+        generated_at = datetime.now(timezone.utc)
+        stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
+        try:
+            authoritative_packets = await self.list_authoritative_work_packets(session)
+            legacy_packets = await self.list_work_packets(session)
+        except SQLAlchemyError:
+            return self._unavailable_pipeline_dashboard_projection(generated_at, stale_after_seconds)
 
-    def _pipeline_dashboard_work_packet(self, packet: WorkPacketV0View, generated_at: str) -> dict:
-        source_refs = [self._pipeline_dashboard_source_ref(ref) for ref in packet.sourceRefs]
-        evidence_refs = [ref.refId for ref in packet.evidenceRefs]
-        return {
-            "packetId": packet.packetId,
-            "title": packet.title,
-            "currentStage": self._pipeline_dashboard_stage(packet.currentStage),
-            "status": packet.status,
-            "truthLabel": "live",
-            "sourceRef": source_refs[0] if source_refs else None,
-            "blocker": self._pipeline_dashboard_blocker(packet),
-            "nextAction": self._pipeline_dashboard_next_action(packet),
-            "evidenceRefs": evidence_refs,
-            "updatedAt": generated_at,
-            "metadataOnly": True,
-        }
+        authoritative_ids = {packet.packetId for packet in authoritative_packets}
+        legacy_projection_packets = [packet for packet in legacy_packets if packet.packetId not in authoritative_ids]
+        source_timestamps = [self._ensure_aware(packet.updatedAt) for packet in authoritative_packets]
+        source_timestamps.extend(self._ensure_aware(self._legacy_work_packet_updated_at(packet, generated_at)) for packet in legacy_projection_packets)
+        source_updated_at = max(source_timestamps, default=generated_at)
+        projected_stage_statuses = [(packet.currentStage, packet.status) for packet in authoritative_packets]
+        projected_stage_statuses.extend((packet.currentStage, packet.status) for packet in legacy_projection_packets)
+        has_open_packet = any(status in {"active", "waiting", "blocked", "failed"} for _stage, status in projected_stage_statuses)
+        is_stale = (generated_at - source_updated_at).total_seconds() > stale_after_seconds and not has_open_packet
+        freshness_state = "stale" if is_stale else "live"
+        source_label = "stale" if is_stale else "live"
+        projected_packet_count = len(authoritative_packets) + len(legacy_projection_packets)
+        empty_reason = None if projected_packet_count else ("projection_stale" if is_stale else "healthy_empty")
+        stage_counts = {stage: 0 for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE}
+        stage_source_labels = {stage: [] for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE}
+        dashboard_packets: list[PipelineDashboardWorkPacketV0View] = []
+        selected_packet_details: list[PipelineSelectedPacketDetailV0View] = []
+        evidence_refs: list[str] = []
 
-    def _pipeline_dashboard_selected_packet_detail(self, packet: WorkPacketV0View, generated_at: str) -> dict:
-        source_refs = [self._pipeline_dashboard_source_ref(ref) for ref in packet.sourceRefs]
-        return {
-            "packetId": packet.packetId,
-            "sourceRefs": source_refs,
-            "evidenceRefs": [ref.refId for ref in packet.evidenceRefs],
-            "currentStage": self._pipeline_dashboard_stage(packet.currentStage),
-            "status": packet.status,
-            "truthLabel": "live",
-            "blocker": self._pipeline_dashboard_blocker(packet),
-            "nextAction": self._pipeline_dashboard_next_action(packet),
-            "metadataOnly": True,
-        }
+        for packet in authoritative_packets:
+            stage_counts[packet.currentStage] = stage_counts.get(packet.currentStage, 0) + 1
+            packet_evidence = sorted({evidence_ref for event in packet.history for evidence_ref in event.evidenceRefs})
+            evidence_refs.extend(packet_evidence)
+            next_action = self._pipeline_projection_next_action(packet.currentStage, packet.status)
+            blocker = "Packet status is blocked." if packet.status == "blocked" else None
+            if packet.status == "failed":
+                blocker = "Packet status is failed."
+            planning_authority = self._planning_source_authority(getattr(packet.sourceRef, "pathOrUrl", None))
+            packet_source_label = self._pipeline_projection_packet_source_label(
+                generated_at,
+                self._ensure_aware(packet.updatedAt),
+                stale_after_seconds,
+                source_label,
+                packet.status,
+            )
+            if planning_authority["status"] == "superseded":
+                packet_source_label = "stale"
+                blocker = (
+                    f"Packet source PRD is superseded by {planning_authority['superseded_by']}; "
+                    "hold downstream work until the source is inspected."
+                )
+            stage_source_labels.setdefault(packet.currentStage, []).append(packet_source_label)
+            dashboard_packets.append(
+                PipelineDashboardWorkPacketV0View(
+                    packetId=packet.packetId,
+                    title=packet.title,
+                    currentStage=packet.currentStage,
+                    status=packet.status,
+                    truthLabel=packet_source_label,
+                    sourceRef=packet.sourceRef,
+                    blocker=blocker,
+                    nextAction=next_action,
+                    evidenceRefs=packet_evidence,
+                    updatedAt=packet.updatedAt,
+                    metadataOnly=True,
+                )
+            )
+            selected_packet_details.append(
+                PipelineSelectedPacketDetailV0View(
+                    packetId=packet.packetId,
+                    sourceRefs=[packet.sourceRef],
+                    evidenceRefs=packet_evidence,
+                    currentStage=packet.currentStage,
+                    status=packet.status,
+                    truthLabel=packet_source_label,
+                    blocker=blocker,
+                    nextAction=next_action,
+                    metadataOnly=True,
+                )
+            )
 
-    def _pipeline_dashboard_source_ref(self, ref: SourceRefV0View) -> dict:
-        source_type = {
-            "candidate_work": "operator_input",
-            "work_item": "workflow",
-            "bmad_artifact": "bmad_story",
-            "obsidian": "operator_input",
-            "llm_wiki": "repo_doc",
-            "github": "workflow",
-            "research": "repo_doc",
-            "manual": "operator_input",
-        }.get(ref.sourceType, "workflow")
-        return {
-            "refId": ref.refId,
-            "sourceType": source_type,
-            "pathOrUrl": ref.pathOrUrl,
-            "title": ref.label,
-        }
+        for packet in legacy_projection_packets:
+            current_stage = self._legacy_pipeline_projection_stage(packet.currentStage)
+            stage_counts[current_stage] = stage_counts.get(current_stage, 0) + 1
+            packet_evidence = self._legacy_work_packet_evidence_refs(packet)
+            evidence_refs.extend(packet_evidence)
+            next_action = self._pipeline_projection_next_action(current_stage, packet.status)
+            blocker = "Packet status is blocked." if packet.status == "blocked" else None
+            updated_at = self._legacy_work_packet_updated_at(packet, generated_at)
+            source_refs = list(packet.sourceRefs)
+            packet_source_label = self._pipeline_projection_packet_source_label(
+                generated_at,
+                self._ensure_aware(updated_at),
+                stale_after_seconds,
+                source_label,
+                packet.status,
+            )
+            blocked_source_ref = next((ref for ref in source_refs if ref.accessState == "blocked" or ref.freshness == "stale"), None)
+            if blocked_source_ref:
+                packet_source_label = "stale"
+                blocker = blocked_source_ref.blockedReason or "Packet source is stale or blocked; inspect source before downstream work."
+            stage_source_labels.setdefault(current_stage, []).append(packet_source_label)
+            dashboard_packets.append(
+                PipelineDashboardWorkPacketV0View(
+                    packetId=packet.packetId,
+                    title=packet.title,
+                    currentStage=current_stage,
+                    status=packet.status,
+                    truthLabel=packet_source_label,
+                    sourceRef=None,
+                    blocker=blocker,
+                    nextAction=next_action,
+                    evidenceRefs=packet_evidence,
+                    updatedAt=updated_at,
+                    metadataOnly=True,
+                )
+            )
+            selected_packet_details.append(
+                PipelineSelectedPacketDetailV0View(
+                    packetId=packet.packetId,
+                    sourceRefs=[],
+                    evidenceRefs=packet_evidence,
+                    currentStage=current_stage,
+                    status=packet.status,
+                    truthLabel=packet_source_label,
+                    blocker=blocker,
+                    nextAction=next_action,
+                    metadataOnly=True,
+                )
+            )
 
-    def _pipeline_dashboard_stage(self, stage: str) -> str:
-        return "needs_approval" if stage == "human_gate" else stage
+        stage_summaries = [
+            PipelineStageSummaryV0View(
+                stage=stage,
+                label=AUTHORITATIVE_PACKET_STAGE_LABELS[stage],
+                packetCount=stage_counts.get(stage, 0),
+                sourceLabel=self._pipeline_projection_stage_source_label(stage_source_labels.get(stage, []), source_label),
+                freshnessState=self._pipeline_projection_stage_freshness_state(stage_source_labels.get(stage, []), freshness_state),
+                emptyReason=empty_reason if stage_counts.get(stage, 0) == 0 else None,
+            )
+            for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE
+        ]
+        dispatchable_count = len(
+            [
+                1
+                for stage, status in projected_stage_statuses
+                if status in {"active", "waiting"} and stage != "needs_approval"
+            ]
+        )
+        blocked_count = len([1 for _stage, status in projected_stage_statuses if status in {"blocked", "failed"}])
+        closed_count = len([1 for _stage, status in projected_stage_statuses if status in {"complete", "deferred"}])
+        inactivity_reason = self._pipeline_projection_inactivity_reason(
+            authoritative_packet_count=projected_packet_count,
+            dispatchable_count=dispatchable_count,
+            blocked_count=blocked_count,
+            closed_count=closed_count,
+            empty_reason=empty_reason,
+            is_stale=is_stale,
+        )
+        summary_text = (
+            "No backend WorkPackets are present."
+            if not projected_packet_count
+            else f"{projected_packet_count} backend WorkPacket(s) projected from supervisor state."
+        )
+        queue_empty_reason = inactivity_reason if not dispatchable_count else None
 
-    def _pipeline_dashboard_stages(self) -> list[str]:
-        return ["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"]
+        return PipelineDashboardProjectionV0View(
+            projectionId=f"pipeline-projection:{generated_at.isoformat()}",
+            generatedAt=generated_at,
+            sourceUpdatedAt=source_updated_at,
+            sourceLabel=source_label,
+            freshnessState=freshness_state,
+            staleAfterSeconds=stale_after_seconds,
+            backendReachability=PipelineBackendReachabilityV0View(
+                state="reachable",
+                checkedAt=generated_at,
+                reason=None,
+                summary="Supervisor projection endpoint is reachable.",
+            ),
+            fixtureMode=PipelineFixtureModeV0View(
+                enabled=False,
+                reason=None,
+                allowedForEnvironment=False,
+                visibleLabelRequired=True,
+                canSatisfyLiveProof=False,
+            ),
+            truthSummary=PipelineTruthSummaryV0View(
+                label=source_label,
+                emptyReason=empty_reason,
+                backendEmpty=not projected_packet_count,
+                backendUnavailable=False,
+                fixtureBacked=False,
+                stale=is_stale,
+                summary=summary_text,
+            ),
+            stageSummaries=stage_summaries,
+            workPackets=dashboard_packets,
+            selectedPacketDetails=selected_packet_details,
+            managerSummary=PipelineManagerSummaryV0View(
+                stateSource="unknown",
+                freshnessState="unknown",
+                activeLeaseCount=None,
+                activeWorkerCount=None,
+                warmWorkerCount=None,
+                blockedQueueCount=blocked_count,
+                dispatchableQueueCount=dispatchable_count,
+                closedQueueCount=closed_count,
+                sourceExhausted=inactivity_reason == "source_exhausted",
+                inactivityReason=inactivity_reason,
+                summary=(
+                    "Manager runtime lease and worker counts are not connected; "
+                    f"queue counts are projected from {projected_packet_count} backend WorkPacket(s)."
+                ),
+                metadataOnly=True,
+            ),
+            queueSummary=PipelineQueueSummaryV0View(
+                dispatchableCount=dispatchable_count,
+                blockedCount=blocked_count,
+                closedCount=closed_count,
+                emptyReason=queue_empty_reason,
+                sourceExhausted=inactivity_reason == "source_exhausted",
+                summary=summary_text,
+            ),
+            evidenceRefs=sorted(set(evidence_refs)),
+        )
 
-    def _pipeline_dashboard_stage_labels(self) -> dict[str, str]:
-        return {
-            "capture": "Capture",
-            "classify": "Classify",
-            "route": "Route",
-            "shape": "Shape",
-            "needs_approval": "Needs Approval",
-            "execute": "Execute",
-            "review": "Review",
-            "promote": "Promote",
-            "deliver": "Deliver",
-            "learn": "Learn",
-        }
-
-    def _pipeline_dashboard_blocker(self, packet: WorkPacketV0View) -> str | None:
-        if packet.status not in {"blocked", "failed"}:
-            return None
-        if packet.loopStopStates:
-            return packet.loopStopStates[0].summary
-        if packet.gateStateValidation and packet.gateStateValidation.blockers:
-            return packet.gateStateValidation.blockers[0]
-        if packet.recoveryActions:
-            return packet.recoveryActions[0].label
-        return "WorkPacket is blocked or failed."
-
-    def _pipeline_dashboard_next_action(self, packet: WorkPacketV0View) -> str | None:
-        if packet.humanGateActionRequests:
-            return packet.humanGateActionRequests[0].summary
-        if packet.recoveryActions:
-            return packet.recoveryActions[0].consequence
-        if packet.status == "waiting" and packet.currentStage == "human_gate":
-            return "Review the approval gate."
-        if packet.status in {"active", "waiting"}:
-            return "Continue the current pipeline stage."
-        if packet.status == "complete":
-            return "Review completion evidence and next stage."
-        return None
+    def _unavailable_pipeline_dashboard_projection(
+        self,
+        generated_at: datetime,
+        stale_after_seconds: int,
+    ) -> PipelineDashboardProjectionV0View:
+        stage_summaries = [
+            PipelineStageSummaryV0View(
+                stage=stage,
+                label=AUTHORITATIVE_PACKET_STAGE_LABELS[stage],
+                packetCount=0,
+                sourceLabel="unavailable",
+                freshnessState="unavailable",
+                emptyReason="backend_unavailable",
+            )
+            for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE
+        ]
+        summary = "Backend WorkPacket projection is unavailable."
+        return PipelineDashboardProjectionV0View(
+            projectionId=f"pipeline-projection:unavailable:{generated_at.isoformat()}",
+            generatedAt=generated_at,
+            sourceUpdatedAt=generated_at,
+            sourceLabel="unavailable",
+            freshnessState="unavailable",
+            staleAfterSeconds=stale_after_seconds,
+            backendReachability=PipelineBackendReachabilityV0View(
+                state="unavailable",
+                checkedAt=generated_at,
+                reason="backend_unavailable",
+                summary=summary,
+            ),
+            fixtureMode=PipelineFixtureModeV0View(
+                enabled=False,
+                reason=None,
+                allowedForEnvironment=False,
+                visibleLabelRequired=True,
+                canSatisfyLiveProof=False,
+            ),
+            truthSummary=PipelineTruthSummaryV0View(
+                label="unavailable",
+                emptyReason="backend_unavailable",
+                backendEmpty=False,
+                backendUnavailable=True,
+                fixtureBacked=False,
+                stale=False,
+                summary=summary,
+            ),
+            stageSummaries=stage_summaries,
+            workPackets=[],
+            selectedPacketDetails=[],
+            managerSummary=PipelineManagerSummaryV0View(
+                stateSource="unavailable",
+                freshnessState="unavailable",
+                activeLeaseCount=None,
+                activeWorkerCount=None,
+                warmWorkerCount=None,
+                blockedQueueCount=None,
+                dispatchableQueueCount=None,
+                closedQueueCount=None,
+                sourceExhausted=False,
+                inactivityReason="backend_unavailable",
+                summary="Manager runtime state is unavailable because backend projection failed.",
+                metadataOnly=True,
+            ),
+            queueSummary=PipelineQueueSummaryV0View(
+                dispatchableCount=None,
+                blockedCount=None,
+                closedCount=None,
+                emptyReason="backend_unavailable",
+                sourceExhausted=False,
+                summary=summary,
+            ),
+            evidenceRefs=[],
+        )
 
     async def get_work_packet(self, session: AsyncSession, packet_id: str) -> WorkPacketV0View | None:
         if packet_id.startswith("work_item:"):
@@ -1526,6 +2131,211 @@ class SupervisorService:
                     return await self._assemble_work_packet(session, candidate=candidate, item=item)
             return await self._assemble_work_packet(session, candidate=candidate, item=None)
         return None
+
+    async def create_work_packet_learn_follow_up_candidate_work(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+        payload: WorkPacketLearnFollowUpCandidateWorkRequest,
+    ) -> CandidateWork | None:
+        packet = await self.get_work_packet(session, packet_id)
+        authoritative_packet = None
+        if packet is None:
+            authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
+        if packet is None and authoritative_packet is None:
+            return None
+
+        safe_evidence_refs = list(dict.fromkeys(ref.strip()[:256] for ref in payload.evidenceRefs if isinstance(ref, str) and ref.strip()))[:20]
+        if not safe_evidence_refs:
+            raise ValueError("At least one non-empty evidence ref is required for Learn follow-up Candidate Work.")
+
+        if packet is not None:
+            source_packet_ref = packet.packetId
+            source_packet_stage = packet.currentStage
+            source_packet_status = packet.status
+            source_packet_owner = packet.currentOwner
+            source_packet_title = packet.title
+            source_ref_type = "work_item" if source_packet_ref.startswith("work_item:") else "candidate_work"
+            source_path = None
+        else:
+            source_packet_ref = authoritative_packet.packetId
+            source_packet_stage = authoritative_packet.currentStage
+            source_packet_status = authoritative_packet.status
+            source_packet_owner = "kendall"
+            source_packet_title = authoritative_packet.title
+            source_ref_type = "manual"
+            source_ref = authoritative_packet.sourceRef
+            source_path = source_ref.pathOrUrl if isinstance(getattr(source_ref, "pathOrUrl", None), str) else None
+
+        work_packet_source_refs = [
+            {
+                "refId": source_packet_ref,
+                "sourceType": source_ref_type,
+                "label": source_packet_title,
+                "pathOrUrl": source_path,
+                "freshness": "fresh",
+                "accessState": "allowed",
+                "canonical": True,
+                "summaryOnly": True,
+                "blockedReason": None,
+            }
+        ]
+        operator_feedback_length = len(payload.operatorFeedback) if payload.operatorFeedback else 0
+        operator_feedback_summary = (
+            "Operator feedback was provided and redacted before metadata retention."
+            if payload.operatorFeedback
+            else None
+        )
+        import_metadata = {
+            "learnTriggerKind": payload.triggerKind,
+            "sourcePacketId": source_packet_ref,
+            "sourcePacketStage": source_packet_stage,
+            "sourcePacketStatus": source_packet_status,
+            "sourcePacketOwner": source_packet_owner,
+            "sourcePacketTitle": source_packet_title,
+            "operatorFeedbackRetained": False,
+            "operatorFeedbackSummary": operator_feedback_summary,
+            "operatorFeedbackLength": operator_feedback_length,
+            "evidenceRefs": safe_evidence_refs,
+            "workPacketSourceRefs": work_packet_source_refs,
+            "retentionPolicy": "metadata_only_no_raw_packet_or_provider_payload",
+            "rawPayloadRetained": False,
+            "providerCallsAllowed": False,
+            "sourceMutationAllowed": False,
+            "canonicalMutationAllowed": False,
+            "notes": [
+                "Learn-stage follow-up created as proposed Candidate Work.",
+                "Review and approve before promotion into active work.",
+            ],
+            "userFacingSourceSummary": {
+                "label": "Learn-stage follow-up",
+                "summary": f"Follow-up Candidate Work created from {source_packet_ref} with metadata-only evidence.",
+                "sourceType": "supervisor",
+                "sourceRef": source_packet_ref,
+                "sourceArtifactPath": f"learn-follow-up:{source_packet_ref}",
+                "freshness": "fresh",
+                "accessState": "allowed",
+                "retentionPolicy": "metadata_only_no_raw_packet_or_provider_payload",
+                "boundarySummary": "No raw prompts, completions, provider payloads, secrets, or source copies retained.",
+                "evidenceRefs": safe_evidence_refs,
+                "approvalStatus": "proposed",
+                "approvedBy": "not_approved",
+                "approvedAt": "not_approved",
+            },
+        }
+        return await self.create_candidate_work(
+            session,
+            CandidateWorkCreate(
+                title=payload.title,
+                requestedOutcome=payload.requestedOutcome,
+                source=CandidateWorkSource.SUPERVISOR,
+                sourceArtifactPath=f"learn-follow-up:{source_packet_ref}",
+                sourceArtifactType=CandidateWorkArtifactType.MANUAL_NOTE,
+                riskLevel=payload.riskLevel,
+                priority=payload.priority,
+                sortOrder=payload.sortOrder,
+                importMetadata=import_metadata,
+            ),
+        )
+
+    def _ensure_aware(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    def _legacy_pipeline_projection_stage(self, stage: str) -> str:
+        if stage == "human_gate":
+            return "needs_approval"
+        if stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE:
+            return stage
+        return "capture"
+
+    def _legacy_work_packet_updated_at(self, packet: WorkPacketV0View, default: datetime) -> datetime:
+        if packet.workItem:
+            return packet.workItem.updatedAt
+        if packet.candidateWork:
+            return packet.candidateWork.updatedAt
+        return default
+
+    def _legacy_work_packet_evidence_refs(self, packet: WorkPacketV0View) -> list[str]:
+        return [ref.refId for ref in packet.evidenceRefs]
+
+    def _pipeline_projection_packet_source_label(
+        self,
+        generated_at: datetime,
+        packet_updated_at: datetime,
+        stale_after_seconds: int,
+        projection_source_label: str,
+        status: str,
+    ) -> str:
+        if projection_source_label != "live":
+            return projection_source_label
+        if status in {"active", "waiting", "blocked", "failed"}:
+            return "live"
+        if (generated_at - packet_updated_at).total_seconds() > stale_after_seconds:
+            return "stale"
+        return "live"
+
+    def _pipeline_projection_stage_source_label(
+        self,
+        packet_source_labels: list[str],
+        projection_source_label: str,
+    ) -> str:
+        if not packet_source_labels:
+            return projection_source_label
+        if any(label == "live" for label in packet_source_labels):
+            return "live"
+        if all(label == "stale" for label in packet_source_labels):
+            return "stale"
+        return packet_source_labels[0]
+
+    def _pipeline_projection_stage_freshness_state(
+        self,
+        packet_source_labels: list[str],
+        projection_freshness_state: str,
+    ) -> str:
+        stage_source_label = self._pipeline_projection_stage_source_label(packet_source_labels, projection_freshness_state)
+        if stage_source_label in {"live", "stale", "unavailable", "unknown"}:
+            return stage_source_label
+        return projection_freshness_state
+
+    def _pipeline_projection_next_action(self, stage: str, status: str) -> str | None:
+        if status == "blocked":
+            return "Clear the packet blocker before advancing."
+        if status in {"complete", "deferred", "failed"}:
+            return None
+        try:
+            index = AUTHORITATIVE_PACKET_STAGE_SEQUENCE.index(stage)
+        except ValueError:
+            return "Inspect packet stage."
+        if index + 1 >= len(AUTHORITATIVE_PACKET_STAGE_SEQUENCE):
+            return "Complete learn-stage handoff."
+        next_stage = AUTHORITATIVE_PACKET_STAGE_LABELS[AUTHORITATIVE_PACKET_STAGE_SEQUENCE[index + 1]]
+        return f"Advance toward {next_stage}."
+
+    def _pipeline_projection_inactivity_reason(
+        self,
+        *,
+        authoritative_packet_count: int,
+        dispatchable_count: int,
+        blocked_count: int,
+        closed_count: int,
+        empty_reason: str | None,
+        is_stale: bool,
+    ) -> str | None:
+        if dispatchable_count:
+            return None
+        if is_stale:
+            return "projection_stale"
+        if empty_reason:
+            return empty_reason
+        if blocked_count:
+            return "blocked"
+        if authoritative_packet_count and closed_count == authoritative_packet_count:
+            return "source_exhausted"
+        if authoritative_packet_count:
+            return "unknown"
+        return "healthy_empty"
 
     async def update_candidate_work(self, session: AsyncSession, candidate_work_id: str, payload: CandidateWorkUpdate) -> CandidateWork | None:
         candidate = await session.get(CandidateWork, candidate_work_id)
@@ -2472,6 +3282,116 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-manager-control-plane",
+                label="Manager control plane tests",
+                command="pnpm run test:manager-control-plane",
+                status="required",
+                requiredFor=["manager control plane changes", "worker dispatch orchestration changes", "safe backlog lifecycle changes"],
+                evidence=[
+                    "Validates manager control-plane orchestration behavior, safe backlog refill, worker lifecycle, and evidence summaries.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-manager-control-plane-dispatcher-port",
+                label="Manager control plane dispatcher port tests",
+                command="pnpm run test:manager-control-plane-dispatcher-port",
+                status="required",
+                requiredFor=["manager control plane changes", "dispatcher port contract changes", "safe backlog lease loop changes"],
+                evidence=[
+                    "Validates the backend dispatcher port contract, in-memory adapter, lease claiming, recovery, evidence, and summary behavior.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-manager-control-plane-contract",
+                label="Manager control plane contract tests",
+                command="pnpm run test:manager-control-plane-contract",
+                status="required",
+                requiredFor=["manager control plane changes", "implementation run contract changes", "authority ledger changes"],
+                evidence=[
+                    "Validates manager control-plane contract namespace exports, schema metadata, authority decision fields, and type-only package boundaries.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-manager-control-plane-forbidden-boundary",
+                label="Manager control plane forbidden-boundary tests",
+                command="pnpm run test:manager-control-plane-forbidden-boundary",
+                status="required",
+                requiredFor=["manager control plane changes", "backend proof boundary changes", "verification command changes"],
+                evidence=[
+                    "Validates backend-proof forbidden-operation classification, source import boundaries, and real/fake/forbidden evidence metadata.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-manager-control-plane-run-contract",
+                label="Manager control plane run-contract tests",
+                command="pnpm run test:manager-control-plane-run-contract",
+                status="required",
+                requiredFor=["manager control plane changes", "implementation run contract changes", "authority ledger changes"],
+                evidence=[
+                    "Validates Implementation Run Contract schema, default backend-proof run contract, and authority operation classification.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-manager-throughput",
+                label="Manager throughput harness tests",
+                command="pnpm run test:manager-throughput",
+                status="required",
+                requiredFor=["manager control plane changes", "worker throughput changes", "safe backlog lease loop changes"],
+                evidence=[
+                    "Validates six-worker fake-adapter throughput, dispatcher refill behavior, lifecycle classification, pause gates, and failure modes.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-manager-live-worker-proof",
+                label="Manager live-worker proof readiness tests",
+                command="pnpm run test:manager-live-worker-proof",
+                status="required",
+                requiredFor=["manager control plane changes", "live worker proof readiness changes", "worker throughput changes"],
+                evidence=[
+                    "Validates persisted throughput proof, live-worker readiness blockers, dispatcher-pull policy, and metadata-only safeguards without live tmux/provider side effects.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-manager-throughput",
+                label="Manager throughput harness drift",
+                command="pnpm run check:manager-throughput",
+                status="required",
+                requiredFor=["manager control plane changes", "worker throughput changes", "verification command changes"],
+                evidence=[
+                    "Runs the deterministic six-worker, ten-cycle backend harness without live tmux/provider side effects.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-manager-live-worker-proof",
+                label="Manager live-worker proof readiness drift",
+                command="pnpm run check:manager-live-worker-proof",
+                status="required",
+                requiredFor=["manager control plane changes", "live worker proof readiness changes", "verification command changes"],
+                evidence=[
+                    "Writes a compact fixture throughput proof and runs the live-worker readiness gate with fixture worker/posture metadata only.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-manager-control-plane",
+                label="Manager control plane drift",
+                command="pnpm run check:manager-control-plane",
+                status="required",
+                requiredFor=["manager control plane changes", "manager skill contract changes", "verification command changes"],
+                evidence=[
+                    "Validates manager control-plane package scripts, skill/runbook wiring, source boundaries, and aggregate check inclusion stay aligned.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-mise-workflow",
                 label="Mise workflow readiness drift",
                 command="pnpm run check:mise-workflow",
@@ -2970,6 +3890,16 @@ class SupervisorService:
                     "check-workspace-coordination",
                     "test-tmux-orientation-report",
                     "check-tmux-orientation-report",
+                    "test-manager-control-plane",
+                    "test-manager-control-plane-contract",
+                    "test-manager-control-plane-dispatcher-port",
+                    "test-manager-control-plane-forbidden-boundary",
+                    "test-manager-control-plane-run-contract",
+                    "test-manager-throughput",
+                    "test-manager-live-worker-proof",
+                    "check-manager-throughput",
+                    "check-manager-live-worker-proof",
+                    "check-manager-control-plane",
                     "check-mise-workflow",
                     "check-linux-install-lane",
                     "check-bmad-work-products",
@@ -4368,6 +5298,99 @@ class SupervisorService:
         rollup.sourceBacklogItemIds = source_backlog_item_ids
         return rollup
 
+    def _runner_dispatch_decision_explanations(
+        self,
+        summary: RunnerAssignmentStatusSummaryView,
+        selected_backlog: RunnerAssignmentStatusRowView | None,
+        blocker_codes: list[str],
+        degraded_inputs: list[RunnerAssignmentDegradedInputView],
+    ) -> list[RunnerDispatchDecisionExplanationView]:
+        packet_ref = "runner-assignment-status-report-v1"
+        queryable_by = ["packet", "work_item", "runner_assignment_status_report"]
+        selected_item_id = selected_backlog.backlogItemId if selected_backlog else None
+        selected_branch = selected_backlog.branch if selected_backlog else None
+        next_action = selected_backlog.nextSafeAction if selected_backlog else "Resolve blockers before dispatch; do not infer work from chat-only state."
+        degraded_summary = ", ".join(input.inputKind for input in degraded_inputs) if degraded_inputs else "none"
+        policy_inputs = {
+            "usage": "local Codex usage not fetched by this report; dispatcher must use live usage fetcher before mutation",
+            "resource": f"state root evidence with {len(degraded_inputs)} degraded inputs",
+            "authority": "manager-owned dispatch requires delegated owner and explicit authority gates",
+            "queue": f"{summary.assignable} assignable, {summary.blocked} blocked, {summary.ambiguous} ambiguous, {summary.closed} closed",
+            "quality": "closed and degraded evidence remain non-dispatchable proof",
+            "context": f"degraded inputs: {degraded_summary}",
+            "workerReadiness": f"{summary.active} active workers, {summary.stale} stale, {summary.missing} missing",
+            "queueDepth": f"{summary.assignable} assignable backlog candidates",
+            "risk": "metadata-only projection; no worker launch or mutation performed",
+            "recentFailureHistory": "blocked, ambiguous, stale, missing, and closed rows are preserved as routing inputs",
+            "qualityGateCapacity": "runner assignment report preserves quality-gate capacity as a dispatch policy input",
+        }
+        hold_count = summary.blocked + summary.ambiguous + summary.stale + summary.missing
+        hold_active = hold_count > 0
+        backpressure_active = hold_active or bool(degraded_inputs)
+        inactivity_state = "explained" if summary.active == 0 else "not_applicable"
+        inactivity_reason = (
+            "No active workers because no claimed or active lane records were found; inspect queue, usage, authority, provider, and source exhaustion before dispatch."
+            if summary.active == 0
+            else f"Workers are active ({summary.active}); inactivity explanation is not applied."
+        )
+        return [
+            RunnerDispatchDecisionExplanationView(
+                decisionId="dispatch-ready-candidate",
+                decisionKind="dispatch",
+                decisionState="ready" if selected_backlog else "held",
+                packetRef=packet_ref,
+                workItemRef=selected_item_id,
+                oneSentenceReason=(
+                    f"Selected assignable backlog lane {selected_item_id} on {selected_branch} from queue proof."
+                    if selected_backlog
+                    else "No assignable backlog lane is available from queue proof."
+                ),
+                policyInputs=policy_inputs,
+                queryableBy=queryable_by,
+                nextAction=next_action,
+            ),
+            RunnerDispatchDecisionExplanationView(
+                decisionId="hold-blocked-or-ambiguous",
+                decisionKind="hold",
+                decisionState="held" if hold_active else "not_applicable",
+                packetRef=packet_ref,
+                workItemRef=selected_item_id,
+                oneSentenceReason=(
+                    f"{hold_count} blocked, ambiguous, stale, or missing routing inputs are held before dispatch; blocker codes: {', '.join(blocker_codes) or 'none'}."
+                    if hold_active
+                    else "No blocked, ambiguous, stale, or missing routing inputs are currently held before dispatch."
+                ),
+                policyInputs=policy_inputs,
+                queryableBy=queryable_by,
+                nextAction="Resolve blockers before dispatch; do not infer work from chat-only state." if hold_active else next_action,
+            ),
+            RunnerDispatchDecisionExplanationView(
+                decisionId="backpressure-queue-quality",
+                decisionKind="backpressure",
+                decisionState="applied" if backpressure_active else "not_applicable",
+                packetRef=packet_ref,
+                workItemRef=selected_item_id,
+                oneSentenceReason=f"Backpressure {'applies' if backpressure_active else 'does not apply'} from {hold_count} held routing inputs and {len(degraded_inputs)} degraded inputs; {summary.closed} closed rows remain lineage evidence only.",
+                policyInputs=policy_inputs,
+                queryableBy=queryable_by,
+                lineageSummary=f"{summary.closed} closed completion evidence rows remain lineage proof and are not requeued.",
+                remediationRoute="Use remediation routes from blocked, ambiguous, stale, missing, and degraded rows before selecting new work.",
+                failureBudgetState="failure budget inputs are represented by held, degraded, stale, missing, and closed queue evidence.",
+                nextAction=next_action,
+            ),
+            RunnerDispatchDecisionExplanationView(
+                decisionId="startup-inactivity",
+                decisionKind="inactivity",
+                decisionState=inactivity_state,
+                packetRef=packet_ref,
+                workItemRef=selected_item_id,
+                oneSentenceReason=inactivity_reason,
+                policyInputs=policy_inputs,
+                queryableBy=queryable_by,
+                nextAction=next_action,
+            ),
+        ]
+
     def _runner_assignment_row(
         self,
         record: dict,
@@ -4689,6 +5712,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "setup-churn-handoff-hardening",
             "queue-zero-runway-relay-refresh",
             "queue-zero-runway-carryover-refresh",
             "queue-zero-runway-spillover-refresh",
@@ -4780,6 +5804,7 @@ class SupervisorService:
             queueProofRows=queue_proof_rows,
             nextAction=selected_backlog.nextSafeAction if selected_backlog else "Resolve blockers before dispatch; do not infer work from chat-only state.",
         )
+        dispatch_decision_explanations = self._runner_dispatch_decision_explanations(summary, selected_backlog, blocker_codes, degraded_inputs)
         partial = bool(degraded_inputs) or any(row.degraded for row in all_rows)
         report_status = "partial" if partial else "ok"
         if state_root_status == "available" and partial:
@@ -4796,6 +5821,7 @@ class SupervisorService:
             summary=summary,
             sourceCompletionRollup=source_completion_rollup,
             dispatcherContinuity=dispatcher_continuity,
+            dispatchDecisionExplanations=dispatch_decision_explanations,
             workspaceAssignments=workspace_rows,
             laneAssignments=lane_rows,
             backlogCandidates=backlog_rows,
@@ -7903,8 +8929,63 @@ class SupervisorService:
                 "Do not claim a second active lane from the same session while this story lane is active.",
             ],
         )
+        setup_churn_hardening_lane = self._safe_backlog_next_lane(
+            lane_slug="setup-churn-handoff-hardening",
+            lane_title="Setup churn and worker handoff hardening",
+            scope=[
+                "source-owned live Codex usage visibility from agent-usage-tmux instead of pane scrollback",
+                "literal-safe tmux handoff transport for long worker instructions",
+                "warm-worker preflight and stale-pane detection before assigning managed lanes",
+                "sandbox-boundary routing for managed-worktree verification commands",
+            ],
+            verification_commands=[
+                "node ./scripts/check-safe-development-backlog.mjs",
+                "node ./scripts/check-runner-assignment-status-report.mjs",
+                "node ./scripts/test-codex-workspace.mjs",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not launch or mutate live worker sessions from this planning slice.",
+                "Do not add provider calls, paid usage, credentials, deployment automation, destructive cleanup, or broad source-boundary changes.",
+                "Keep the first implementation source-owned and fixture-backed; real worker launch automation needs separate approval.",
+            ],
+        )
         # END BMAD pipeline-default story lanes
         items = [
+            SafeDevelopmentBacklogItemView(
+                itemId="setup-churn-handoff-hardening",
+                label="Setup churn and worker handoff hardening",
+                priority="P0",
+                status="ready",
+                summary="Make the overnight lessons durable across worker-pool management workflows before more multi-session dispatcher runs.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "AGENTS.md now records live 5h-window usage source, 2% pause threshold, literal-safe handoff, warm-worker preflight, and sandbox-boundary routing.",
+                    "Overnight worker management hit repeated setup churn: stale pane status, malformed handoffs, blocked goal resumes, and managed-worktree pnpm sandbox EROFS.",
+                    "The next source-owned slice should convert this policy into dispatcher-visible checks, runbook assertions, and handoff/preflight helpers.",
+                ],
+                sourceEvidenceLabels=[
+                    "AGENTS.md#setup-churn-and-worker-handoff-hygiene",
+                    "overnight-prd-manager-log-2026-06-28.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "AGENTS.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/tool-churn-rca.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#runner-assignment-status",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=setup_churn_hardening_lane,
+                nextAction="Dispatch this control-plane hardening slice before expanding worker count again; implement fixture-backed checks and literal-safe handoff/preflight guidance without launching workers.",
+            ),
             # BEGIN BMAD pipeline-default story backlog items
             SafeDevelopmentBacklogItemView(
                 itemId="bmad-1-1-validate-the-pipeline-work-packet-read-contract",
@@ -14499,15 +15580,93 @@ class SupervisorService:
                     ],
                 ),
             ],
+            promoteReadinessPolicy=[
+                DeliveryReadinessPolicyItemView(
+                    itemId="promote-required-evidence",
+                    label="Promote evidence gate",
+                    status="required",
+                    summary="Promote readiness can be marked only when required evidence, authority, and quality gates are satisfied.",
+                    evidence=[
+                        "Completed work must retain changed-file, verification, review-risk, and next-action evidence before Promote.",
+                        "Attempts without evidence remain in Review or remediation instead of silently advancing.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="promote-authority-and-quality",
+                    label="Promote authority and quality",
+                    status="required",
+                    summary="Promote readiness requires authority evidence plus passing quality gate evidence for the current reviewed head.",
+                    evidence=[
+                        "Failed quality gates block Promote and create a remediation path.",
+                        "Authority records must name the bounded operation, scope, evidence, and recovery path.",
+                    ],
+                ),
+            ],
+            deliverReadinessPolicy=[
+                DeliveryReadinessPolicyItemView(
+                    itemId="deliver-required-evidence",
+                    label="Deliver evidence gate",
+                    status="required",
+                    summary="Deliver readiness requires proof that failed checks cannot be delivered as successful.",
+                    evidence=[
+                        "Local verification, review-thread state, exact-head status checks, diff-surface review, and rollback path evidence are delivery inputs.",
+                        "Delivery remains blocked when required evidence is missing, failed, stale, or ambiguous.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="deliver-github-state",
+                    label="GitHub delivery state",
+                    status="record_only",
+                    summary="GitHub/PR/check state is delivery evidence or blocker state, never hidden state.",
+                    evidence=[
+                        "PR URL, expected head revision, PR head revision, CI status, review state, merge state, and cleanup readiness stay metadata-only.",
+                        "Remote delivery automation remains blocked unless an exact approval packet authorizes it.",
+                    ],
+                ),
+            ],
+            blockerRoutingPolicy=[
+                DeliveryReadinessPolicyItemView(
+                    itemId="failed-checks-route-remediation",
+                    label="Failed checks route to remediation",
+                    status="required",
+                    summary="Delivery blockers route to remediation when quality gates, CI, local verification, or review-thread checks fail.",
+                    evidence=[
+                        "Failed checks cannot be reclassified as delivered-successful evidence.",
+                        "The next safe action is to fix, rerun verification, or attach explicit waiver evidence when policy allows.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="missing-authority-route-approval",
+                    label="Missing authority routes to approval",
+                    status="required",
+                    summary="Missing promote, delivery, merge, cleanup, or remote-write authority routes to an approval checkpoint.",
+                    evidence=[
+                        "Approval checkpoints must bind to the current head, operation, scope, stop lines, and recovery path.",
+                        "Generic continue language does not approve delivery, merge, cleanup, or remote mutation.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="github-blockers-route-delivery-remediation",
+                    label="GitHub blockers route to delivery remediation",
+                    status="required",
+                    summary="Delivery blockers route to remediation when PR, check, review-thread, merge, or cleanup evidence is blocked.",
+                    evidence=[
+                        "Blocked GitHub state remains visible as delivery evidence or blocker state.",
+                        "Retry only after exact-head evidence and thread-aware review evidence have been refreshed.",
+                    ],
+                ),
+            ],
             stopLines=[
                 "This report is not approval for remote delivery automation, GitHub writes, worker execution, provider calls, or process launch.",
                 "Do not treat a local-only waiver as proof that remote PR, CI, or merge evidence exists.",
                 "Record delivery readiness only through the work-item delivery readiness checkpoint form.",
+                "Do not mark work ready for Promote or Deliver when required evidence, authority, or quality gates are missing, failed, stale, or ambiguous.",
             ],
             nextSafeActions=[
                 "Use this report to review delivery-readiness rules before changing the work-item delivery gate.",
                 "Keep delivery readiness dashboard controls, supervisor tests, and report catalog references aligned.",
                 "Use the GitHub workflow policy report for Git/GCM and connector posture before remote delivery work.",
+                "Route failed checks, missing authority, and blocked GitHub state to remediation before Promote or Deliver.",
             ],
             readOnly=True,
             executionAuthorityApproved=False,
@@ -15770,6 +16929,11 @@ class SupervisorService:
         preview = await self.get_routing_preview(session, work_item_id, preview_payload)
         if not preview:
             return None
+        if payload.routeDecisionId and payload.routeDecisionId != preview.decision.decisionId:
+            raise ValueError(
+                "Execution attempt route decision is stale; "
+                f"expected {preview.decision.decisionId}, received {payload.routeDecisionId}."
+            )
         worker = self._worker_for_execution_attempt(preview)
         status, rejection_reason = self._execution_attempt_initial_status(preview, worker)
         now = datetime.now(timezone.utc)
@@ -17025,14 +18189,89 @@ class SupervisorService:
             if isinstance(verification_summary, str) and verification_summary
             else "No verification summary recorded yet.",
         )
+        executable_work_item = await self._executable_work_item_shape(session, item, preview)
         return TaskPacketPreviewView(
             packet=packet,
             route=preview.decision,
+            executableWorkItem=executable_work_item,
             whyThisPath=preview.decision.humanExplanation,
             previewOnly=True,
             executionAttemptCreated=False,
             providerCallsAllowed=False,
             commandExecutionAllowed=False,
+        )
+
+    async def _executable_work_item_shape(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        preview: RoutingPreviewView,
+    ) -> ExecutableWorkItemShapeView:
+        active_attempt = await self._active_execution_attempt(session, item.id)
+        worker: WorkerRegistryEntry | None = None
+        initial_status = ExecutionAttemptStatus.REJECTED
+        rejection_reason: str | None = None
+        try:
+            worker = self._worker_for_execution_attempt(preview)
+            initial_status, rejection_reason = self._execution_attempt_initial_status(preview, worker)
+        except ValueError as exc:
+            rejection_reason = str(exc)
+
+        attempt_payload = WorkItemExecutionAttemptCreateRequest(
+            stepId=preview.profile.stepId,
+            taskKind=preview.profile.taskKind,
+            routeDecisionId=preview.decision.decisionId,
+        )
+        action_status = "available" if not active_attempt and initial_status == ExecutionAttemptStatus.PLANNED else "blocked"
+        if active_attempt:
+            action_reason = f"Work item already has active execution attempt {active_attempt.id}."
+        elif initial_status != ExecutionAttemptStatus.PLANNED:
+            action_reason = (
+                f"Create execution attempt would be rejected: {rejection_reason}."
+                if rejection_reason
+                else "Create execution attempt would be rejected by the current execution gate."
+            )
+        else:
+            action_reason = "Create a metadata-only execution attempt record from this bounded packet."
+
+        workspace_isolation_plan = self._workspace_isolation_plan(
+            f"preview-{preview.decision.decisionId}",
+            preview,
+        )
+        return ExecutableWorkItemShapeView(
+            workItemId=item.id,
+            routeDecisionId=preview.decision.decisionId,
+            workerId=worker.worker_id if worker else "unavailable",
+            lane=preview.decision.selectedLane,
+            authorityMode=preview.decision.authorityMode,
+            taskKind=preview.profile.taskKind,
+            workspaceIsolationPlan=workspace_isolation_plan,
+            createAttemptAction=ExecutableWorkItemActionView(
+                actionId=f"create-execution-attempt:{item.id}:{preview.decision.decisionId}",
+                label="Create execution attempt record",
+                method="POST",
+                endpoint=f"/work-items/{item.id}/execution-attempts",
+                payload=attempt_payload,
+                status=action_status,
+                reason=action_reason,
+            ),
+            executionAllowed=False,
+            processLaunchAllowed=False,
+            providerCallsAllowed=False,
+            commandExecutionAllowed=False,
+            sourceMutationAllowed=False,
+            credentialAccessAllowed=False,
+            requiredEvidence=[
+                f"routing-decision:{preview.decision.decisionId}",
+                f"task-packet:{item.id}",
+                "human approval is required before any future execution authority expansion",
+            ],
+            stopLines=[
+                "Do not launch workers, providers, shell commands, or subscription agents from this packet preview.",
+                "Do not mutate source, GitHub, Obsidian, credentials, branches, worktrees, or cleanup state from this packet preview.",
+                "Create only the supervisor execution-attempt record unless a later approval packet grants bounded execution authority.",
+            ],
+            recoveryPath="Re-run task-packet preview, inspect execution attempts, or reject stale attempts before retrying.",
         )
 
     async def get_subscription_handoff_package(
@@ -19614,6 +20853,8 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
+        if item.state == WorkflowState.OPERATOR_OWNED.value:
+            raise ValueError("Operator-owned work must re-enter Capture before retry.")
         item.state = WorkflowState.READY.value
         item.blocked_reason = None
         item.status_summary = default_status_summary(WorkflowState.READY)
@@ -20619,6 +21860,40 @@ class SupervisorService:
             )
             return
 
+        if action == WorkflowAction.OPERATOR_OWNED_EXIT and current in {
+            WorkflowState.NEEDS_REWORK,
+            WorkflowState.BLOCKED,
+            WorkflowState.REVIEWING,
+            WorkflowState.AWAITING_AUDIT,
+            WorkflowState.VALIDATING,
+        }:
+            item.blocked_reason = clean_note
+            await self._transition(
+                session,
+                item,
+                WorkflowState.OPERATOR_OWNED,
+                "workflow.operator_owned",
+                clean_note or default_status_summary(WorkflowState.OPERATOR_OWNED),
+                payload_overrides={
+                    "note": clean_note,
+                    "operatorOwnedReason": clean_note,
+                    "retentionClass": "metadata_only",
+                    "canonicalMutationAllowed": False,
+                    "sourceMutationAllowed": False,
+                    "providerCallsAllowed": False,
+                    "workerLaunchAllowed": False,
+                    "githubMutationAllowed": False,
+                    "cleanupAllowed": False,
+                    "reentryAction": WorkflowAction.REENTER_CAPTURE.value,
+                    "nextSafeAction": "Operator updates the input, then re-enters Capture for normal triage.",
+                },
+                actor_type="operator",
+                actor_id=actor_id,
+                actor_label=actor_label,
+                lane_override=None,
+            )
+            return
+
         if action == WorkflowAction.RESTART_IMPLEMENTATION and current == WorkflowState.NEEDS_REWORK:
             if self._repo_is_dirty():
                 item.blocked_reason = "Repository is dirty. Clean the working tree before implementation restarts."
@@ -20804,13 +22079,40 @@ class SupervisorService:
             )
             return
 
+        if action == WorkflowAction.REENTER_CAPTURE and current == WorkflowState.OPERATOR_OWNED:
+            item.blocked_reason = None
+            await self._transition(
+                session,
+                item,
+                WorkflowState.QUEUED,
+                "work_item.queued",
+                clean_note or default_status_summary(WorkflowState.QUEUED),
+                payload_overrides={
+                    "note": clean_note,
+                    "reenteredFrom": WorkflowState.OPERATOR_OWNED.value,
+                    "retentionClass": "metadata_only",
+                    "sourceMutationAllowed": False,
+                    "providerCallsAllowed": False,
+                    "workerLaunchAllowed": False,
+                    "githubMutationAllowed": False,
+                    "cleanupAllowed": False,
+                },
+                actor_type="operator",
+                actor_id=actor_id,
+                actor_label=actor_label,
+                lane_override=BmadLane.INTAKE.value,
+            )
+            return
+
         raise ValueError(f"Action {action.value} is not valid from state {current.value}")
 
     def _enforce_action_policy(self, item: WorkItem, action: WorkflowAction, note: str | None) -> None:
         note_required_actions = {
             WorkflowAction.VALIDATION_FAILED,
             WorkflowAction.REQUEST_REWORK,
+            WorkflowAction.OPERATOR_OWNED_EXIT,
             WorkflowAction.RETURN_TO_READY,
+            WorkflowAction.REENTER_CAPTURE,
             WorkflowAction.COMPLETE_AUDIT_REVIEW,
         }
 
@@ -21419,6 +22721,9 @@ class SupervisorService:
         if item.state == WorkflowState.BLOCKED.value:
             return True, item.blocked_reason or "Blocked item needs operator attention."
 
+        if item.state == WorkflowState.OPERATOR_OWNED.value:
+            return True, item.blocked_reason or "Operator-owned item is waiting for operator rework."
+
         if item.state == WorkflowState.AWAITING_AUDIT.value and age_minutes >= 10:
             return True, "Audit lane is aging and needs review."
 
@@ -21939,6 +23244,16 @@ class SupervisorService:
                 operatorCheckpoint="rework-review",
                 allowedActor="operator",
             )
+        if state == WorkflowState.OPERATOR_OWNED:
+            return WorkItemManagedActionView(
+                actionId=WorkflowAction.REENTER_CAPTURE.value,
+                label="Re-enter capture",
+                status="available",
+                reason="Operator-owned rework is outside the active automation loop until the operator updates the input.",
+                requiredGate="scope",
+                operatorCheckpoint="operator-owned-reentry",
+                allowedActor="operator",
+            )
         if state == WorkflowState.BLOCKED:
             return WorkItemManagedActionView(
                 actionId="resolve_blocked_work_item",
@@ -22241,6 +23556,18 @@ class SupervisorService:
 
         packet_id = self._work_packet_id(candidate_view, item_view)
         source_refs = self._work_packet_source_refs(candidate_view, item_view)
+        lifecycle_state = self._work_packet_lifecycle_state(
+            stage=stage,
+            owner=owner,
+            status=status,
+            reason_codes=mapping_reason_codes,
+            candidate=candidate_view,
+            item=item_view,
+            attempts=attempts,
+            memory_proposals=memory_proposal_views,
+            source_refs=source_refs,
+            evidence_refs=evidence_refs,
+        )
 
         return WorkPacketV0View(
             packetId=packet_id,
@@ -22255,6 +23582,7 @@ class SupervisorService:
             currentStage=stage,
             currentOwner=owner,
             status=status,
+            lifecycleState=lifecycle_state,
             riskLevel=item_view.riskLevel if item_view else candidate_view.riskLevel if candidate_view else "low",
             priority=self._work_packet_priority(candidate_view, item_view),
             candidateWork=candidate_view,
@@ -22291,8 +23619,84 @@ class SupervisorService:
                 evidence_refs=evidence_refs,
                 events=workflow_events,
             ),
+            loopStopStates=self._work_packet_loop_stop_states(item_view, evidence_refs),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
-            recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
+            recoveryActions=self._work_packet_recovery_actions(item_view, status, evidence_refs),
+        )
+
+    def _work_packet_lifecycle_state(
+        self,
+        *,
+        stage: str,
+        owner: str,
+        status: str,
+        reason_codes: list[str],
+        candidate: CandidateWorkView | None,
+        item: WorkItemView | None,
+        attempts: list[ExecutionAttemptView],
+        memory_proposals: list[MemoryProposalV0View],
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+    ) -> WorkPacketLifecycleStateV0View:
+        source = "source_missing"
+        authoritative_ref = "source:missing"
+        attempt_ref: str | None = None
+
+        if item and item.state == WorkflowState.OPERATOR_OWNED:
+            source = "work_item"
+            authoritative_ref = f"work_item:{item.id}"
+        elif item and item.state == WorkflowState.DONE:
+            source = "delivery_evidence" if item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl else "work_item"
+            authoritative_ref = f"work_item:{item.id}"
+        elif attempts:
+            latest_attempt = attempts[0]
+            source = "execution_attempt"
+            authoritative_ref = f"attempt:{latest_attempt.attemptId}"
+            attempt_ref = authoritative_ref
+        elif memory_proposals and any(
+            proposal.status not in {"not_applicable", "rejected", "deferred"} for proposal in memory_proposals
+        ):
+            source = "memory_proposal"
+            authoritative_ref = f"memory_proposal:{memory_proposals[0].proposalId}"
+        elif item and item.state.value == "done":
+            source = "delivery_evidence" if item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl else "work_item"
+            authoritative_ref = f"work_item:{item.id}"
+        elif item:
+            source = "work_item"
+            authoritative_ref = f"work_item:{item.id}"
+        elif candidate:
+            source = "candidate_work"
+            authoritative_ref = f"candidate_work:{candidate.id}"
+
+        transition_event_refs = [ref.refId for ref in evidence_refs if ref.refId.startswith("event:")]
+        derived_from_refs = list(
+            dict.fromkeys(
+                [
+                    authoritative_ref,
+                    *[ref.refId for ref in source_refs],
+                    *[ref.refId for ref in evidence_refs],
+                    *transition_event_refs,
+                ]
+            )
+        )
+
+        return WorkPacketLifecycleStateV0View(
+            source=source,
+            stage=stage,
+            owner=owner,
+            status=status,
+            reasonCodes=list(dict.fromkeys(reason_codes)),
+            authoritativeRef=authoritative_ref,
+            derivedFromRefs=derived_from_refs,
+            transitionEventRefs=list(dict.fromkeys(transition_event_refs)),
+            latestTransitionEventRef=transition_event_refs[-1] if transition_event_refs else None,
+            attemptRef=attempt_ref,
+            metadataOnly=True,
+            sourceMutationAllowed=False,
+            providerCallsAllowed=False,
+            workerLaunchAllowed=False,
+            githubMutationAllowed=False,
+            cleanupAllowed=False,
         )
 
     def _work_packet_delivery_evidence(
@@ -22558,7 +23962,7 @@ class SupervisorService:
         has_projection_metadata = bool(raw_projection)
         has_learn_evidence = bool(memory_proposals)
         has_operator_exit = self._metadata_bool(raw_projection, "operatorOwnedExit") or any(
-            event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned"}
+            event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned", "workflow.operator_owned"}
             for event in workflow_events
         )
         has_ready_to_test = isinstance(raw_projection.get("readyToTest"), dict) or self._metadata_bool(metadata, "readyToTest")
@@ -22692,7 +24096,7 @@ class SupervisorService:
                     )
                 )
         if not exits and has_operator_exit:
-            event_ref = next((event.id for event in workflow_events if event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned"}), None)
+            event_ref = next((event.id for event in workflow_events if event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned", "workflow.operator_owned"}), None)
             exits.append(
                 WorkPacketOperatorOwnedExitV0View(
                     exitId=f"operator-owned-exit:{packet_id}",
@@ -22980,6 +24384,16 @@ class SupervisorService:
         attempts: list[ExecutionAttemptView],
         memory_proposals: list[MemoryProposalV0View] | None = None,
     ) -> tuple[str, str, str, list[str]]:
+        if item:
+            if item.state.value == "operator_owned":
+                return "capture", "operator", "deferred", ["work_item.operator_owned"]
+            if item.state.value == "done":
+                delivery_ready = item.deliveryReadiness.readyForApproval if item.deliveryReadiness else False
+                if delivery_ready or (item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl):
+                    owner = "github" if item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl else "kendall"
+                    return "deliver", owner, "complete", ["work_item.done", "delivery.evidence_present"]
+                return "deliver", "kendall", "complete", ["work_item.done", "delivery.evidence_missing"]
+
         if attempts:
             latest = attempts[0]
             owner = self._owner_for_lane(latest.lane)
@@ -23006,12 +24420,6 @@ class SupervisorService:
                 return "learn", "memory_review", "waiting", ["memory_proposal.review_required"]
 
         if item:
-            delivery_ready = item.deliveryReadiness.readyForApproval if item.deliveryReadiness else False
-            if item.state.value == "done":
-                if delivery_ready or (item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl):
-                    owner = "github" if item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl else "kendall"
-                    return "deliver", owner, "complete", ["work_item.done", "delivery.evidence_present"]
-                return "deliver", "kendall", "complete", ["work_item.done", "delivery.evidence_missing"]
             if item.state.value == "triaged" and routing_preview:
                 return "route", "kendall", "active", ["work_item.triaged", "routing_preview.present"]
             state_map = {
@@ -23023,6 +24431,7 @@ class SupervisorService:
                 "reviewing": ("review", "kendall", "active"),
                 "awaiting_audit": ("review", "operator", "waiting"),
                 "needs_rework": ("shape", "kendall", "active"),
+                "operator_owned": ("capture", "operator", "deferred"),
                 "blocked": ("human_gate", "blocked", "blocked"),
             }
             if item.state.value in state_map:
@@ -23428,16 +24837,11 @@ class SupervisorService:
         refs: list[SourceRefV0View] = []
         if candidate:
             refs.append(
-                SourceRefV0View(
+                self._canonical_work_packet_source_ref(
                     refId=f"candidate_work:{candidate.id}",
                     sourceType="candidate_work",
                     label=f"Candidate Work: {candidate.title}",
-                    pathOrUrl=candidate.sourceArtifactPath,
-                    freshness="fresh",
-                    accessState="allowed",
-                    canonical=True,
-                    summaryOnly=True,
-                    blockedReason=None,
+                    path_or_url=candidate.sourceArtifactPath,
                 )
             )
             if item is None:
@@ -23447,26 +24851,93 @@ class SupervisorService:
             metadata = item.metadata if isinstance(item.metadata, dict) else {}
             path = metadata.get("sourceArtifactPath")
             refs.append(
-                SourceRefV0View(
+                self._canonical_work_packet_source_ref(
                     refId=f"work_item:{item.id}",
                     sourceType="work_item",
                     label=f"Work Item: {item.title}",
-                    pathOrUrl=path if isinstance(path, str) and path else None,
-                    freshness="fresh",
-                    accessState="allowed",
-                    canonical=True,
-                    summaryOnly=True,
-                    blockedReason=None,
+                    path_or_url=path if isinstance(path, str) and path else None,
                 )
             )
             refs.extend(self._work_packet_metadata_source_refs(metadata))
         return refs
 
+    def _canonical_work_packet_source_ref(
+        self,
+        *,
+        refId: str,
+        sourceType: str,
+        label: str,
+        path_or_url: str | None,
+    ) -> SourceRefV0View:
+        planning_authority = self._planning_source_authority(path_or_url)
+        if planning_authority["status"] == "superseded":
+            return SourceRefV0View(
+                refId=refId,
+                sourceType=sourceType,
+                label=label,
+                pathOrUrl=None,
+                freshness="stale",
+                accessState="blocked",
+                canonical=True,
+                summaryOnly=True,
+                blockedReason=(
+                    f"{label} is superseded by the July 1 authoritative PRD at "
+                    f"{planning_authority['superseded_by']}; hold or flag this packet for inspection before downstream planning."
+                ),
+            )
+        return SourceRefV0View(
+            refId=refId,
+            sourceType=sourceType,
+            label=label,
+            pathOrUrl=path_or_url if isinstance(path_or_url, str) and path_or_url else None,
+            freshness="fresh",
+            accessState="allowed",
+            canonical=True,
+            summaryOnly=True,
+            blockedReason=None,
+        )
+
+    def _planning_source_authority(self, path_or_url: object) -> dict[str, object]:
+        path = self._normalized_planning_source_path(path_or_url)
+        if path == AUTHORITATIVE_PLANNING_SOURCE_PATH:
+            return {
+                "status": "authoritative",
+                "superseded_by": None,
+                "downstream_use_allowed": True,
+                "operator_explanation": "This is the July 1 PRD and is authoritative for pipeline and manager/control-plane planning.",
+            }
+        if path.startswith("_bmad-output/planning-artifacts/prds/") and path.endswith("/prd.md"):
+            return {
+                "status": "superseded",
+                "superseded_by": AUTHORITATIVE_PLANNING_SOURCE_PATH,
+                "downstream_use_allowed": False,
+                "operator_explanation": (
+                    "This draft PRD is superseded by the July 1 PRD. Treat it as historical and hold or flag downstream planning references for inspection."
+                ),
+            }
+        return {
+            "status": "not_planning_source",
+            "superseded_by": None,
+            "downstream_use_allowed": True,
+            "operator_explanation": "No planning-source authority decision applies to this artifact.",
+        }
+
+    def _normalized_planning_source_path(self, path_or_url: object) -> str:
+        if not isinstance(path_or_url, str):
+            return ""
+        normalized = path_or_url.strip().replace("\\", "/")
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        marker = "_bmad-output/planning-artifacts/prds/"
+        if marker in normalized:
+            return normalized[normalized.index(marker) :]
+        return normalized
+
     def _work_packet_metadata_source_refs(self, metadata: dict) -> list[SourceRefV0View]:
         raw_refs = metadata.get("workPacketSourceRefs")
         if not isinstance(raw_refs, list):
             return []
-        allowed_source_types = {"bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual"}
+        allowed_source_types = {"bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual", "candidate_work", "work_item"}
         allowed_freshness = {"fresh", "stale", "unknown", "not_applicable"}
         allowed_access = {"allowed", "excluded", "missing", "blocked"}
         refs: list[SourceRefV0View] = []
@@ -23522,6 +24993,14 @@ class SupervisorService:
             if invalid_reasons:
                 safe_label = f"{safe_label} ({', '.join(invalid_reasons)})"
             safe_blocked_reason = "; ".join(invalid_reasons) if invalid_reasons else None
+            planning_authority = self._planning_source_authority(path_or_url)
+            if planning_authority["status"] == "superseded":
+                safe_freshness = "stale"
+                safe_access_state = "blocked"
+                safe_blocked_reason = (
+                    f"{safe_label} is superseded by the July 1 authoritative PRD at "
+                    f"{planning_authority['superseded_by']}; hold or flag this packet for inspection before downstream planning."
+                )
             if safe_access_state != "allowed" and not safe_blocked_reason:
                 safe_blocked_reason = (
                     blocked_reason
@@ -24296,14 +25775,65 @@ class SupervisorService:
             )
         ]
 
+    def _work_packet_loop_stop_states(
+        self,
+        item: WorkItemView | None,
+        evidence_refs: list[EvidenceRefV0View],
+    ) -> list[WorkPacketLoopStopStateV0View]:
+        if not item or item.state != WorkflowState.OPERATOR_OWNED:
+            return []
+
+        evidence_ids = [ref.refId for ref in evidence_refs]
+        summary = (
+            item.blockedReason
+            or item.statusSummary
+            or "Operator-owned rework requires manual refinement before automation resumes."
+        )
+        return [
+            WorkPacketLoopStopStateV0View(
+                stopStateId=f"operator-owned:{item.id}",
+                kind="operator_owned",
+                label="Operator-owned rework exit",
+                phase="capture",
+                severity="blocking",
+                summary=summary,
+                stopLine=(
+                    "Do not dispatch workers, call providers, mutate source, create or update GitHub delivery, "
+                    "or run cleanup for this packet until the operator re-enters Capture."
+                ),
+                nextSafeAction="Operator updates the input, then applies reenter_capture to return the packet to Capture.",
+                evidenceRefs=evidence_ids,
+                metadataOnly=True,
+                sourceMutationAllowed=False,
+                providerCallsAllowed=False,
+                workerLaunchAllowed=False,
+                githubMutationAllowed=False,
+                cleanupAllowed=False,
+            )
+        ]
+
     def _work_packet_recovery_actions(
         self,
+        item: WorkItemView | None,
         status: str,
         evidence_refs: list[EvidenceRefV0View],
     ) -> list[RecoveryActionV0View]:
+        evidence_ids = [ref.refId for ref in evidence_refs]
+        if item and item.state == WorkflowState.OPERATOR_OWNED:
+            return [
+                RecoveryActionV0View(
+                    actionId="reenter-capture",
+                    actionType="reenter_capture",
+                    label="Re-enter capture",
+                    availability="available",
+                    consequence="Return the operator-refined packet to Capture for normal triage without replaying stale automation.",
+                    resultingStage="capture",
+                    resultingOwner="kendall",
+                    evidenceRefs=evidence_ids,
+                )
+            ]
         if status not in {"blocked", "failed"}:
             return []
-        evidence_ids = [ref.refId for ref in evidence_refs]
         return [
             RecoveryActionV0View(
                 actionId="retry-smaller",

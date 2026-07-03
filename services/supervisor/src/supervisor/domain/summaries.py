@@ -11,6 +11,7 @@ def default_status_summary(state: WorkflowState) -> str:
         WorkflowState.REVIEWING: "The latest result is under review.",
         WorkflowState.AWAITING_AUDIT: "Audit review is required before this item can complete.",
         WorkflowState.NEEDS_REWORK: "More work is needed before the item can complete.",
+        WorkflowState.OPERATOR_OWNED: "This item is out of the active automation loop for operator-owned rework.",
         WorkflowState.BLOCKED: "This item is blocked and needs attention before it can continue.",
         WorkflowState.DONE: "This item has completed the current workflow.",
     }[state]
@@ -26,6 +27,7 @@ def next_step_summary(state: WorkflowState) -> str | None:
         WorkflowState.REVIEWING: "Approve, request audit, or send to rework",
         WorkflowState.AWAITING_AUDIT: "Complete audit review or request rework",
         WorkflowState.NEEDS_REWORK: "Restart implementation",
+        WorkflowState.OPERATOR_OWNED: "Update input and re-enter capture",
         WorkflowState.BLOCKED: "Return to ready",
         WorkflowState.DONE: None,
     }[state]

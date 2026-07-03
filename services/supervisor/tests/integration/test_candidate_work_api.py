@@ -473,6 +473,34 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert candidate["importMetadata"]["artifactTitle"] == "Update Dev Console Label Copy"
         assert "Proposed Work labels use plain language." in candidate["importMetadata"]["acceptanceCriteria"]
         assert "Import this artifact as Candidate Work." in candidate["importMetadata"]["verificationSummary"]
+        assert candidate["sourceSummary"] == {
+            "label": "Approved BMAD story: Update Dev Console Label Copy",
+            "summary": "Update Dev Console Label Copy is represented by approved BMAD metadata only; raw artifact content was not copied.",
+            "sourceType": "bmad",
+            "sourceRef": f"bmad:{SYNTHETIC_BMAD_ARTIFACT_PATH}",
+            "sourceArtifactPath": SYNTHETIC_BMAD_ARTIFACT_PATH,
+            "freshness": "fresh",
+            "accessState": "allowed",
+            "retentionPolicy": "metadata_only_no_raw_artifact_content",
+            "boundarySummary": "Local BMAD work products remain planning state until rewritten as source-owned repo artifacts.",
+            "evidenceRefs": [f"artifact:{SYNTHETIC_BMAD_ARTIFACT_PATH}"],
+            "approvalStatus": "approved_source_metadata",
+            "approvedBy": "bmad-import-gate",
+            "approvedAt": "not_applicable",
+        }
+        assert candidate["importMetadata"]["userFacingSourceSummary"] == candidate["sourceSummary"]
+        assert candidate["importMetadata"]["workPacketSourceRefs"] == [
+            {
+                "refId": f"bmad:{SYNTHETIC_BMAD_ARTIFACT_PATH}",
+                "sourceType": "bmad_artifact",
+                "label": "Approved BMAD story: Update Dev Console Label Copy",
+                "pathOrUrl": SYNTHETIC_BMAD_ARTIFACT_PATH,
+                "freshness": "fresh",
+                "accessState": "allowed",
+            }
+        ]
+        assert "rawContent" not in candidate["importMetadata"]
+        assert "content" not in candidate["importMetadata"]
 
         assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
         promote_response = client.post(f"/candidate-work/{candidate_id}/promote")

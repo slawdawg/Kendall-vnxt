@@ -32,6 +32,10 @@ function PolicyItemCard({ item }: { item: DeliveryReadinessPolicyItemView }) {
 }
 
 export function DeliveryReadinessPolicyReportPanel({ report }: { report: DeliveryReadinessPolicyReportView }) {
+  const promoteReadinessPolicy = report.promoteReadinessPolicy ?? [];
+  const deliverReadinessPolicy = report.deliverReadinessPolicy ?? [];
+  const blockerRoutingPolicy = report.blockerRoutingPolicy ?? [];
+
   return (
     <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -77,9 +81,36 @@ export function DeliveryReadinessPolicyReportPanel({ report }: { report: Deliver
               ))}
             </div>
           </div>
+
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Promote readiness policy</h4>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {promoteReadinessPolicy.map((item) => (
+                <PolicyItemCard key={item.itemId} item={item} />
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Deliver readiness policy</h4>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {deliverReadinessPolicy.map((item) => (
+                <PolicyItemCard key={item.itemId} item={item} />
+              ))}
+            </div>
+          </div>
         </div>
 
         <div className="space-y-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Blocker routing policy</h4>
+            <div className="mt-3 grid gap-3">
+              {blockerRoutingPolicy.map((item) => (
+                <PolicyItemCard key={item.itemId} item={item} />
+              ))}
+            </div>
+          </div>
+
           <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">

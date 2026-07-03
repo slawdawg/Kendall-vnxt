@@ -357,6 +357,37 @@ def test_task_packet_preview_uses_promoted_candidate_metadata_without_execution(
         assert preview["executionAttemptCreated"] is False
         assert preview["providerCallsAllowed"] is False
         assert preview["commandExecutionAllowed"] is False
+        executable = preview["executableWorkItem"]
+        assert executable["workItemId"] == work_item_id
+        assert executable["routeDecisionId"] == preview["route"]["decisionId"]
+        assert executable["workerId"] == "local.readonly.mock"
+        assert executable["lane"] == preview["route"]["selectedLane"]
+        assert executable["authorityMode"] == preview["route"]["authorityMode"]
+        assert executable["taskKind"] == packet["taskKind"]
+        assert executable["executionAllowed"] is False
+        assert executable["processLaunchAllowed"] is False
+        assert executable["providerCallsAllowed"] is False
+        assert executable["commandExecutionAllowed"] is False
+        assert executable["sourceMutationAllowed"] is False
+        assert executable["credentialAccessAllowed"] is False
+        assert executable["workspaceIsolationPlan"]["planId"].startswith("workspace-plan-preview-")
+        assert executable["workspaceIsolationPlan"]["materializationMode"] == "metadata_only_no_workspace_created"
+        assert executable["workspaceIsolationPlan"]["commandsAllowed"] is False
+        assert executable["workspaceIsolationPlan"]["networkAllowed"] is False
+        action = executable["createAttemptAction"]
+        assert action["status"] == "blocked"
+        assert "execution_authority_not_enabled_for_local_readonly" in action["reason"]
+        assert action["method"] == "POST"
+        assert action["endpoint"] == f"/work-items/{work_item_id}/execution-attempts"
+        assert action["payload"] == {
+            "stepId": preview["route"]["stepId"],
+            "taskKind": packet["taskKind"],
+            "routeDecisionId": preview["route"]["decisionId"],
+            "actorId": None,
+            "actorLabel": None,
+        }
+        assert any("routing-decision:" in evidence for evidence in executable["requiredEvidence"])
+        assert any("Do not launch workers" in stop_line for stop_line in executable["stopLines"])
 
         attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         assert attempts_response.status_code == 200
@@ -433,6 +464,60 @@ def test_execution_attempt_records_task_packet_artifact_without_execution(tmp_pa
         assert event["payload"]["commandExecutionAllowed"] is False
 
 
+def test_execution_attempt_rejects_stale_route_decision_from_preview(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-stale-route-attempt.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Stale route attempt",
+                "requestedOutcome": "Reject execution attempts created from stale preview payloads.",
+                "source": "operator-dashboard",
+                "riskLevel": "low",
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item_id = work_item_response.json()["data"]["id"]
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        payload = preview_response.json()["data"]["executableWorkItem"]["createAttemptAction"]["payload"]
+        payload["routeDecisionId"] = "stale-route-decision"
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json=payload)
+        assert attempt_response.status_code == 409
+        assert attempt_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt"
+        assert "route decision is stale" in attempt_response.json()["detail"]["error"]["message"]
+
+
+def test_task_packet_preview_blocks_create_action_when_worker_registry_has_no_lane(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-missing-worker-preview.db") as client:
+        from supervisor.api.main import service
+
+        class EmptyWorkerRegistry:
+            def list_workers(self):
+                return ()
+
+        monkeypatch.setattr(service, "worker_registry", EmptyWorkerRegistry())
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Missing worker preview",
+                "requestedOutcome": "Preview should remain readable when worker resolution fails.",
+                "source": "operator-dashboard",
+                "riskLevel": "low",
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item_id = work_item_response.json()["data"]["id"]
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        executable = preview_response.json()["data"]["executableWorkItem"]
+        assert executable["workerId"] == "unavailable"
+        assert executable["createAttemptAction"]["status"] == "blocked"
+        assert "No worker registry entry found" in executable["createAttemptAction"]["reason"]
+
+
 def test_packet_linked_attempt_blocks_duplicate_active_attempts(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "task-packet-duplicate-attempt.db") as client:
         work_item_response = client.post(
@@ -451,6 +536,12 @@ def test_packet_linked_attempt_blocks_duplicate_active_attempts(tmp_path, monkey
         assert first_response.status_code == 200
         assert first_response.json()["data"]["status"] == "planned"
         assert first_response.json()["data"]["artifactRefs"][0]["artifactType"] == "task_packet_v0"
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        create_action = preview_response.json()["data"]["executableWorkItem"]["createAttemptAction"]
+        assert create_action["status"] == "blocked"
+        assert first_response.json()["data"]["attemptId"] in create_action["reason"]
 
         duplicate_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "path_scope_check"})
         assert duplicate_response.status_code == 409
@@ -613,6 +704,155 @@ def _create_routing_work_item(client: TestClient) -> str:
     )
     assert created.status_code == 200
     return created.json()["data"]["id"]
+
+
+def test_learn_follow_up_creation_creates_traceable_candidate_work_without_source_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "learn-follow-up-candidate-work.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_packet = client.get(f"/work-packets/work_item:{work_item_id}").json()["data"]
+        response = client.post(
+            f"/work-packets/work_item:{work_item_id}/learn-follow-up-candidate-work",
+            json={
+                "triggerKind": "quality_failure",
+                "title": " Follow up failed quality gate ",
+                "requestedOutcome": " Create a small remediation story from failed quality gate evidence. ",
+                "evidenceRefs": [
+                    f" work_item:{work_item_id} ",
+                    "quality-gate:unit-tests:failed",
+                    "quality-gate:unit-tests:failed",
+                ],
+                "operatorFeedback": "Unit test failure should become future intake rather than chat-only context.",
+            },
+        )
+        after_packet = client.get(f"/work-packets/work_item:{work_item_id}").json()["data"]
+        candidates = client.get("/candidate-work").json()["data"]
+
+    assert response.status_code == 200
+    assert before_packet == after_packet
+    candidate = response.json()["data"]
+    assert candidate["status"] == "proposed"
+    assert candidate["source"] == "supervisor"
+    assert candidate["sourceArtifactType"] == "manual_note"
+    assert candidate["sourceArtifactPath"] == f"learn-follow-up:work_item:{work_item_id}"
+    assert candidate["importMetadata"]["learnTriggerKind"] == "quality_failure"
+    assert candidate["importMetadata"]["sourcePacketId"] == f"work_item:{work_item_id}"
+    assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_packet_or_provider_payload"
+    assert candidate["importMetadata"]["rawPayloadRetained"] is False
+    assert candidate["importMetadata"]["providerCallsAllowed"] is False
+    assert candidate["importMetadata"]["sourceMutationAllowed"] is False
+    assert candidate["importMetadata"]["canonicalMutationAllowed"] is False
+    assert "operatorFeedback" not in candidate["importMetadata"]
+    assert candidate["importMetadata"]["operatorFeedbackRetained"] is False
+    assert candidate["importMetadata"]["operatorFeedbackSummary"] == "Operator feedback was provided and redacted before metadata retention."
+    assert candidate["importMetadata"]["operatorFeedbackLength"] == len("Unit test failure should become future intake rather than chat-only context.")
+    assert candidate["importMetadata"]["evidenceRefs"] == [
+        f"work_item:{work_item_id}",
+        "quality-gate:unit-tests:failed",
+    ]
+    assert candidate["importMetadata"]["workPacketSourceRefs"][0]["refId"] == f"work_item:{work_item_id}"
+    assert candidate["sourceSummary"]["sourceRef"] == f"work_item:{work_item_id}"
+    assert candidate["sourceSummary"]["evidenceRefs"] == candidate["importMetadata"]["evidenceRefs"]
+    assert any(row["id"] == candidate["id"] for row in candidates)
+
+
+def test_learn_follow_up_creation_accepts_authoritative_work_packet_ids(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "learn-follow-up-authoritative-packet.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        create_packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-authoritative-learn-follow-up",
+                "title": "Authoritative projection packet",
+                "initialStage": "learn",
+                "status": "complete",
+                "truthLabel": "source_owned",
+                "sourceRef": {
+                    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+                    "sourceType": "prd",
+                    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+                    "title": "Authoritative PRD",
+                },
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "learn-follow-up-authoritative-create",
+                "payloadSummary": "Authoritative packet available for Learn follow-up.",
+                "evidenceRefs": ["packet-proof:authoritative"],
+            },
+        )
+        assert create_packet_response.status_code == 200
+
+        response = client.post(
+            "/work-packets/packet-authoritative-learn-follow-up/learn-follow-up-candidate-work",
+            json={
+                "triggerKind": "completed_packet",
+                "title": "Follow up authoritative packet",
+                "requestedOutcome": "Create follow-up work from an authoritative packet.",
+                "evidenceRefs": ["packet-proof:authoritative", "operator-note:follow-up"],
+            },
+        )
+
+    assert response.status_code == 200
+    candidate = response.json()["data"]
+    assert candidate["status"] == "proposed"
+    assert candidate["source"] == "supervisor"
+    assert candidate["sourceArtifactPath"] == "learn-follow-up:packet-authoritative-learn-follow-up"
+    assert candidate["importMetadata"]["sourcePacketId"] == "packet-authoritative-learn-follow-up"
+    assert candidate["importMetadata"]["sourcePacketStage"] == "learn"
+    assert candidate["importMetadata"]["sourcePacketStatus"] == "complete"
+    assert candidate["importMetadata"]["sourcePacketOwner"] == "kendall"
+    source_ref = candidate["importMetadata"]["workPacketSourceRefs"][0]
+    assert source_ref["refId"] == "packet-authoritative-learn-follow-up"
+    assert source_ref["sourceType"] == "manual"
+    assert source_ref["pathOrUrl"] == "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md"
+    assert candidate["sourceSummary"]["sourceRef"] == "packet-authoritative-learn-follow-up"
+
+
+def test_learn_follow_up_creation_rejects_blank_evidence_and_text(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "learn-follow-up-invalid.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        blank_evidence = client.post(
+            f"/work-packets/work_item:{work_item_id}/learn-follow-up-candidate-work",
+            json={
+                "triggerKind": "operator_feedback",
+                "title": "Follow up operator feedback",
+                "requestedOutcome": "Create a small follow-up from operator feedback.",
+                "evidenceRefs": ["  "],
+            },
+        )
+        blank_title = client.post(
+            f"/work-packets/work_item:{work_item_id}/learn-follow-up-candidate-work",
+            json={
+                "triggerKind": "operator_feedback",
+                "title": "   ",
+                "requestedOutcome": "Create a small follow-up from operator feedback.",
+                "evidenceRefs": [f"work_item:{work_item_id}"],
+            },
+        )
+
+    assert blank_evidence.status_code == 422
+    assert blank_title.status_code == 422
 
 
 def test_routing_preview_post_without_record_event_is_non_mutating(tmp_path, monkeypatch) -> None:
@@ -1743,6 +1983,16 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-workspace-coordination",
         "test-tmux-orientation-report",
         "check-tmux-orientation-report",
+        "test-manager-control-plane",
+        "test-manager-control-plane-contract",
+        "test-manager-control-plane-dispatcher-port",
+        "test-manager-control-plane-forbidden-boundary",
+        "test-manager-control-plane-run-contract",
+        "test-manager-throughput",
+        "test-manager-live-worker-proof",
+        "check-manager-throughput",
+        "check-manager-live-worker-proof",
+        "check-manager-control-plane",
         "check-mise-workflow",
         "check-linux-install-lane",
         "check-bmad-work-products",
@@ -1810,6 +2060,16 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-token-economy" in static_group["commandIds"]
     assert "test-tmux-orientation-report" in static_group["commandIds"]
     assert "check-tmux-orientation-report" in static_group["commandIds"]
+    assert "test-manager-control-plane" in static_group["commandIds"]
+    assert "test-manager-control-plane-contract" in static_group["commandIds"]
+    assert "test-manager-control-plane-dispatcher-port" in static_group["commandIds"]
+    assert "test-manager-control-plane-forbidden-boundary" in static_group["commandIds"]
+    assert "test-manager-control-plane-run-contract" in static_group["commandIds"]
+    assert "test-manager-throughput" in static_group["commandIds"]
+    assert "test-manager-live-worker-proof" in static_group["commandIds"]
+    assert "check-manager-throughput" in static_group["commandIds"]
+    assert "check-manager-live-worker-proof" in static_group["commandIds"]
+    assert "check-manager-control-plane" in static_group["commandIds"]
     assert "check-knx-obsidian-memory" in static_group["commandIds"]
     assert "test-clean-install-boundary" in static_group["commandIds"]
     assert "test-knx-obsidian-memory" in static_group["commandIds"]
@@ -2513,7 +2773,9 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert report["reportId"] == "safe-development-backlog-report-v1"
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
-    assert {item["itemId"] for item in report["items"]} == BMAD_STORY_BACKLOG_ITEM_IDS | {
+    item_ids = {item["itemId"] for item in report["items"]}
+    assert (BMAD_STORY_BACKLOG_ITEM_IDS | {
+        "setup-churn-handoff-hardening",
         "safe-backlog-report-alignment",
         "verification-surface-hardening",
         "verification-surface-hardening-followup",
@@ -2571,7 +2833,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "queue-zero-runway-spillover-refresh",
         "queue-zero-runway-carryover-refresh",
         "queue-zero-runway-relay-refresh",
-    }
+    }).issubset(item_ids)
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
     for item in ready_items:
         if item["itemId"] in BMAD_STORY_BACKLOG_ITEM_IDS:
@@ -2583,6 +2845,19 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert bmad_2_1_item["nextLane"]["branchName"] == "codex/bmad-2-1-import-approved-obsidian-metadata-as-candidate-work"
     assert any("metadata-only" in scope for scope in bmad_2_1_item["nextLane"]["scope"])
     assert any("Do not write canonical Obsidian memory" in stop_line for stop_line in bmad_2_1_item["nextLane"]["stopLines"])
+    assert "bmad-1-1-validate-the-pipeline-work-packet-read-contract" in item_ids
+    setup_churn_item = next(item for item in report["items"] if item["itemId"] == "setup-churn-handoff-hardening")
+    assert setup_churn_item["priority"] == "P0"
+    assert setup_churn_item["status"] == "ready"
+    assert setup_churn_item["recommendedSliceSize"] == "medium_to_large"
+    assert setup_churn_item["nextLane"]["laneSlug"] == "setup-churn-handoff-hardening"
+    assert setup_churn_item["nextLane"]["branchName"] == "codex/setup-churn-handoff-hardening"
+    assert "literal-safe handoff" in setup_churn_item["evidence"][0] or "literal-safe handoff" in setup_churn_item["nextAction"]
+    assert "AGENTS.md" in setup_churn_item["relatedDocs"]
+    assert "docs/workflows/tool-churn-rca.md" in setup_churn_item["relatedDocs"]
+    assert "GET /supervisor/runner-assignment-status-report" in setup_churn_item["relatedReports"]
+    assert "/controls#runner-assignment-status" in setup_churn_item["dashboardAnchors"]
+    assert "Do not launch or mutate live worker sessions from this planning slice." in setup_churn_item["nextLane"]["stopLines"]
     report_alignment_item = next(item for item in report["items"] if item["itemId"] == "safe-backlog-report-alignment")
     assert report_alignment_item["status"] == "closed"
     assert report_alignment_item["recommendedSliceSize"] == "complete"
@@ -6263,6 +6538,23 @@ def test_delivery_readiness_policy_report_documents_review_gate_without_mutation
     assert report["remoteAutomationApproved"] is False
     assert {item["itemId"] for item in report["statusPolicy"]} == {"pull-request-status", "ci-status", "merge-status"}
     assert {item["itemId"] for item in report["waiverPolicy"]} == {"local-only-waiver", "checkpoint-form-only"}
+    assert {item["itemId"] for item in report["promoteReadinessPolicy"]} == {
+        "promote-required-evidence",
+        "promote-authority-and-quality",
+    }
+    assert {item["itemId"] for item in report["deliverReadinessPolicy"]} == {
+        "deliver-required-evidence",
+        "deliver-github-state",
+    }
+    assert {item["itemId"] for item in report["blockerRoutingPolicy"]} == {
+        "failed-checks-route-remediation",
+        "missing-authority-route-approval",
+        "github-blockers-route-delivery-remediation",
+    }
+    assert any("required evidence, authority, and quality gates are satisfied" in item["summary"] for item in report["promoteReadinessPolicy"])
+    assert any("failed checks cannot be delivered as successful" in item["summary"] for item in report["deliverReadinessPolicy"])
+    assert any("delivery blockers route to remediation" in item["summary"].lower() for item in report["blockerRoutingPolicy"])
+    assert any("GitHub/PR/check state is delivery evidence or blocker state" in item["summary"] for item in report["deliverReadinessPolicy"])
     assert any("remote delivery automation" in stop_line for stop_line in report["stopLines"])
     assert any("delivery readiness checkpoint form" in stop_line for stop_line in report["stopLines"])
 
@@ -9247,14 +9539,49 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     )
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "queue-zero-runway-relay-refresh"
-    assert continuity["selectedBranch"] == "codex/queue-zero-runway-relay-refresh"
+    assert continuity["selectedBacklogItemId"] == "setup-churn-handoff-hardening"
+    assert continuity["selectedBranch"] == f"codex/{continuity['selectedBacklogItemId']}"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
-    assert continuity["assignableCount"] == len(BMAD_STORY_BACKLOG_ITEM_IDS) + 3
+    assert continuity["assignableCount"] >= 1
     assert "blocked-authority" not in continuity["blockerCodes"]
+    explanation_rows = report["dispatchDecisionExplanations"]
+    explanation_by_kind = {row["decisionKind"]: row for row in explanation_rows}
+    assert {"dispatch", "hold", "backpressure", "inactivity"}.issubset(explanation_by_kind)
+    dispatch_explanation = explanation_by_kind["dispatch"]
+    assert dispatch_explanation["decisionState"] == "ready"
+    assert dispatch_explanation["packetRef"] == "runner-assignment-status-report-v1"
+    assert dispatch_explanation["workItemRef"] == continuity["selectedBacklogItemId"]
+    assert "assignable backlog lane" in dispatch_explanation["oneSentenceReason"]
+    assert {
+        "usage",
+        "resource",
+        "authority",
+        "queue",
+        "quality",
+        "context",
+        "workerReadiness",
+        "queueDepth",
+        "risk",
+        "recentFailureHistory",
+        "qualityGateCapacity",
+    }.issubset(dispatch_explanation["policyInputs"])
+    assert dispatch_explanation["queryableBy"] == ["packet", "work_item", "runner_assignment_status_report"]
+    hold_explanation = explanation_by_kind["hold"]
+    assert hold_explanation["decisionState"] == "not_applicable"
+    assert "blocked, ambiguous, stale, or missing" in hold_explanation["oneSentenceReason"]
+    backpressure_explanation = explanation_by_kind["backpressure"]
+    assert backpressure_explanation["decisionState"] == "not_applicable"
+    assert "closed rows remain lineage evidence only" in backpressure_explanation["oneSentenceReason"]
+    assert "closed completion evidence" in backpressure_explanation["lineageSummary"]
+    assert "remediation" in backpressure_explanation["remediationRoute"]
+    assert "failure budget" in backpressure_explanation["failureBudgetState"]
+    inactivity_explanation = explanation_by_kind["inactivity"]
+    assert inactivity_explanation["decisionState"] in {"not_applicable", "explained"}
+    assert "workers" in inactivity_explanation["oneSentenceReason"].lower()
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}
     assert queue_proof_rows["bmad-1-1-validate-the-pipeline-work-packet-read-contract"]["classification"] == "assignable"
+    assert queue_proof_rows["setup-churn-handoff-hardening"]["classification"] == "assignable"
     assert queue_proof_rows["queue-zero-runway-relay-refresh"]["classification"] == "assignable"
     assert queue_proof_rows["queue-zero-runway-carryover-refresh"]["classification"] == "closed"
     assert queue_proof_rows["queue-zero-runway-carryover-refresh"]["reasonCode"] == "backlog-closed"

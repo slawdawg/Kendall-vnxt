@@ -53,6 +53,7 @@ import type {
   WorkItemExecutionRecipeView,
   WorkItemManagedActionPayload,
   WorkItemRecipeGateAuditView,
+  WorkPacketLearnFollowUpCandidateWorkPayload,
   WorkPacketV0View,
   VerificationReadinessReportView,
   WorkflowEventView,
@@ -168,6 +169,23 @@ export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]
 
 export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {
   return requestJson<WorkPacketV0View>(`/work-packets/${encodeURIComponent(packetId)}`);
+}
+
+export async function createLearnFollowUpCandidateWork(
+  packetId: string,
+  payload: WorkPacketLearnFollowUpCandidateWorkPayload,
+): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/work-packets/${encodeURIComponent(packetId)}/learn-follow-up-candidate-work`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to create Learn follow-up Candidate Work: ${response.status}`);
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
 }
 
 export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
@@ -286,7 +304,16 @@ function isProjectionFreshnessConsistent(projection: Partial<PipelineDashboardPr
     return false;
   }
   const ageMs = Date.parse(generatedAt) - Date.parse(sourceUpdatedAt);
-  return !(ageMs > staleAfterSeconds * 1000 && projection.freshnessState === "live");
+  if (ageMs <= staleAfterSeconds * 1000 || projection.freshnessState !== "live") {
+    return true;
+  }
+  return Array.isArray(projection.workPackets) && projection.workPackets.some((packet) => {
+    if (!packet || typeof packet !== "object") {
+      return false;
+    }
+    const candidate = packet as Partial<PipelineDashboardProjectionV0["workPackets"][number]>;
+    return candidate.truthLabel === "live" && typeof candidate.status === "string" && ["active", "waiting", "blocked", "failed"].includes(candidate.status);
+  });
 }
 
 function isProjectionFixtureTruthConsistent(projection: Partial<PipelineDashboardProjectionV0>) {
@@ -313,15 +340,38 @@ function selectedPacketDetailsMatchWorkPackets(
   workPackets: PipelineDashboardProjectionV0["workPackets"],
   selectedPacketDetails: PipelineDashboardProjectionV0["selectedPacketDetails"]
 ) {
-  const packetIds = new Set(workPackets.map((packet) => packet.packetId));
+  if (workPackets.length !== selectedPacketDetails.length) {
+    return false;
+  }
+  const packetsById = new Map(workPackets.map((packet) => [packet.packetId, packet]));
   const detailIds = new Set<string>();
   for (const detail of selectedPacketDetails) {
-    if (!packetIds.has(detail.packetId) || detailIds.has(detail.packetId)) {
+    if (detailIds.has(detail.packetId)) {
       return false;
     }
     detailIds.add(detail.packetId);
+    const packet = packetsById.get(detail.packetId);
+    if (!packet) {
+      return false;
+    }
+    if (
+      detail.currentStage !== packet.currentStage ||
+      detail.status !== packet.status ||
+      detail.truthLabel !== packet.truthLabel ||
+      detail.blocker !== packet.blocker ||
+      detail.nextAction !== packet.nextAction
+    ) {
+      return false;
+    }
+    const detailEvidence = new Set(detail.evidenceRefs);
+    if (
+      packet.evidenceRefs.length !== detail.evidenceRefs.length ||
+      packet.evidenceRefs.some((ref) => !detailEvidence.has(ref))
+    ) {
+      return false;
+    }
   }
-  return true;
+  return detailIds.size === packetsById.size;
 }
 
 function isEmptyReason(value: unknown) {
