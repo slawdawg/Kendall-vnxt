@@ -7,6 +7,7 @@ export const WORKFLOW_STATES = [
   "reviewing",
   "awaiting_audit",
   "needs_rework",
+  "operator_owned",
   "blocked",
   "done"
 ] as const;
@@ -67,8 +68,10 @@ export const WORKFLOW_ACTIONS = [
   "approve_review",
   "complete_audit_review",
   "request_rework",
+  "operator_owned_exit",
   "restart_implementation",
-  "return_to_ready"
+  "return_to_ready",
+  "reenter_capture"
 ] as const;
 
 export type WorkflowAction = (typeof WORKFLOW_ACTIONS)[number];

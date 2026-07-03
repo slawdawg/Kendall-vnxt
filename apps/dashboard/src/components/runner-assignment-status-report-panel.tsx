@@ -600,6 +600,8 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
 }
 
 export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAssignmentStatusReportView }) {
+  const dispatchDecisionExplanations = report.dispatchDecisionExplanations ?? [];
+
   const [classificationFilter, setClassificationFilter] = useState<AssignmentClassificationFilter>("attention");
   const [sourceFilter, setSourceFilter] = useState<AssignmentSourceFilter>("all");
   const [sourceCompletionFilter, setSourceCompletionFilter] = useState<SourceCompletionFilter>("all");
@@ -734,6 +736,33 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
           </div>
         </div>
         <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{report.dispatcherContinuity.nextAction}</p>
+      </div>
+
+      <div className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Dispatch decision explanations</p>
+        <div className="mt-2 grid gap-3 text-xs leading-5 text-[var(--muted)]">
+          {dispatchDecisionExplanations.map((decision) => (
+            <div key={decision.decisionId} className="border-t pt-2 first:border-t-0 first:pt-0">
+              <p className="font-semibold text-[var(--foreground)]">
+                {decision.decisionKind}: {decision.decisionState}
+              </p>
+              <p className="break-words">{decision.oneSentenceReason}</p>
+              <p className="break-all">Work item: {decision.workItemRef ?? "none"}</p>
+              <p className="break-all">Queryable by: {decision.queryableBy.join(", ")}</p>
+              <p className="break-words">Lineage: {decision.lineageSummary}</p>
+              <p className="break-words">Remediation: {decision.remediationRoute}</p>
+              <p className="break-words">Failure budget: {decision.failureBudgetState}</p>
+              <p className="break-words">Next: {decision.nextAction}</p>
+              <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                {Object.entries(decision.policyInputs).map(([input, value]) => (
+                  <p key={`${decision.decisionId}:${input}`} className="break-words">
+                    {input}: {value}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {closedAssignmentEvidenceRows.length > 0 ? (

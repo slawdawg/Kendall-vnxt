@@ -35,6 +35,7 @@ test("Work Packet stage mapper covers canonical source states and review guardra
     "reviewing",
     "awaiting_audit",
     "needs_rework",
+    "operator_owned",
     "blocked",
     "done"
   ]) {
@@ -125,6 +126,16 @@ test("Work Packet stage mapper handles precedence and ambiguous source state beh
         currentOwner: "kendall",
         status: "complete",
         reasonCodes: ["delivery.evidence_present"]
+      }
+    },
+    {
+      name: "operator-owned work outranks stale failed execution attempt",
+      input: { workItemState: "operator_owned", executionAttemptStatus: "failed", hasRoutingPreview: true },
+      expected: {
+        currentStage: "capture",
+        currentOwner: "operator",
+        status: "deferred",
+        reasonCodes: ["work_item.operator_owned"]
       }
     },
     {

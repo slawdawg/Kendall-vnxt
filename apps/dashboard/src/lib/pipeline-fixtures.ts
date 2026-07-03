@@ -547,6 +547,7 @@ const recoveryActionTypes: RecoveryActionTypeV0[] = [
   "preserve_evidence",
   "reopen_human_gate",
   "mark_blocked",
+  "reenter_capture",
   "send_back_to_shape",
   "send_back_to_research",
 ];
@@ -2230,6 +2231,28 @@ function packetFixture(input: {
     currentStage: input.currentStage,
     currentOwner: input.currentOwner,
     status: input.status,
+    lifecycleState: {
+      source: governedWorkerAttempt ? "execution_attempt" : "workflow_event",
+      stage: input.currentStage,
+      owner: input.currentOwner,
+      status: input.status,
+      reasonCodes: input.matrixRowIds,
+      authoritativeRef: governedWorkerAttempt ? `attempt:${governedWorkerAttempt.attemptId}` : `${input.packetId}:evidence:fixture`,
+      derivedFromRefs: [
+        ...sourceRefs.map((ref) => ref.refId),
+        ...evidenceRefs.map((ref) => ref.refId),
+        ...artifactRefs.map((ref) => ref.refId),
+      ],
+      transitionEventRefs: recoveryFixtureEvents.map((event) => event.eventId),
+      latestTransitionEventRef: recoveryFixtureEvents.at(-1)?.eventId ?? null,
+      attemptRef: governedWorkerAttempt ? `attempt:${governedWorkerAttempt.attemptId}` : null,
+      metadataOnly: true,
+      sourceMutationAllowed: false,
+      providerCallsAllowed: false,
+      workerLaunchAllowed: false,
+      githubMutationAllowed: false,
+      cleanupAllowed: false,
+    },
     riskLevel: input.riskLevel,
     priority: input.priority,
     candidateWork: null,
@@ -3871,6 +3894,16 @@ function recoveryActionFixtureMetadata(
         consequence: "Keep the packet blocked with evidence and rationale preserved.",
         resultingStage: input.currentStage,
         resultingOwner: "blocked",
+        requiresHumanGate: false,
+        humanGateActionType: null,
+      };
+    case "reenter_capture":
+      return {
+        label: "Re-enter Capture",
+        availability: "available",
+        consequence: "Return operator-refined work to Capture without replaying stale automation.",
+        resultingStage: "capture",
+        resultingOwner: "kendall",
         requiresHumanGate: false,
         humanGateActionType: null,
       };

@@ -363,11 +363,11 @@ function projectionCanShowLiveActiveWork(projection: PipelineDashboardProjection
     && projection.truthSummary.stale === false
     && projection.truthSummary.backendUnavailable === false
     && projection.fixtureMode.enabled === false
-    && !projectionAgeExceedsStaleAfter(projection);
+    && (!projectionAgeExceedsStaleAfter(projection) || projectionHasOpenLivePacket(projection));
 }
 
 function projectionShouldBeTreatedAsStale(projection: PipelineDashboardProjectionV0) {
-  return projection.freshnessState === "stale" || projectionAgeExceedsStaleAfter(projection);
+  return projection.freshnessState === "stale" || (projectionAgeExceedsStaleAfter(projection) && !projectionHasOpenLivePacket(projection));
 }
 
 function projectionAgeExceedsStaleAfter(projection: PipelineDashboardProjectionV0) {
@@ -377,6 +377,12 @@ function projectionAgeExceedsStaleAfter(projection: PipelineDashboardProjectionV
     return true;
   }
   return generatedTime - sourceTime > projection.staleAfterSeconds * 1000;
+}
+
+function projectionHasOpenLivePacket(projection: PipelineDashboardProjectionV0) {
+  return projection.workPackets.some((packet) => {
+    return packet.truthLabel === "live" && visibleActiveStatuses.has(packet.status);
+  });
 }
 
 function operatorCanAct(packet: PipelineDashboardWorkPacketV0) {

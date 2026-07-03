@@ -10,6 +10,7 @@ class WorkflowState(StrEnum):
     REVIEWING = "reviewing"
     AWAITING_AUDIT = "awaiting_audit"
     NEEDS_REWORK = "needs_rework"
+    OPERATOR_OWNED = "operator_owned"
     BLOCKED = "blocked"
     DONE = "done"
 
@@ -86,8 +87,10 @@ class WorkflowAction(StrEnum):
     APPROVE_REVIEW = "approve_review"
     COMPLETE_AUDIT_REVIEW = "complete_audit_review"
     REQUEST_REWORK = "request_rework"
+    OPERATOR_OWNED_EXIT = "operator_owned_exit"
     RESTART_IMPLEMENTATION = "restart_implementation"
     RETURN_TO_READY = "return_to_ready"
+    REENTER_CAPTURE = "reenter_capture"
 
 
 class ExecutionAttemptStatus(StrEnum):

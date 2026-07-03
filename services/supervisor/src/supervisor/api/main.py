@@ -11,6 +11,8 @@ from supervisor.api.schemas import (
     ApiEnvelope,
     ApiErrorEnvelope,
     ApiErrorShape,
+    AuthoritativeWorkPacketCreateRequest,
+    AuthoritativeWorkPacketTransitionRequest,
     CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
     CandidateWorkObsidianMetadataImportRequest,
@@ -34,6 +36,7 @@ from supervisor.api.schemas import (
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
     WorkItemPremiumApprovalRequest,
+    WorkPacketLearnFollowUpCandidateWorkRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
     WorkItemSupervisedCodexLaunchRequest,
@@ -153,6 +156,63 @@ async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_se
     packet = await service.get_work_packet(session, packet_id)
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Work Packet not found.", "work_packet_not_found").model_dump())
+    return ApiEnvelope(data=packet)
+
+
+@app.post("/work-packets/{packet_id}/learn-follow-up-candidate-work", response_model=ApiEnvelope)
+async def create_work_packet_learn_follow_up_candidate_work(
+    packet_id: str,
+    payload: WorkPacketLearnFollowUpCandidateWorkRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    candidate = await service.create_work_packet_learn_follow_up_candidate_work(session, packet_id, payload)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=error_response("Work Packet not found.", "work_packet_not_found").model_dump())
+    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+
+
+@app.post("/pipeline-control-plane/work-packets", response_model=ApiEnvelope)
+async def create_authoritative_work_packet(
+    payload: AuthoritativeWorkPacketCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        packet = await service.create_authoritative_work_packet(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_authoritative_work_packet").model_dump()) from exc
+    return ApiEnvelope(data=packet)
+
+
+@app.get("/pipeline-control-plane/work-packets", response_model=ApiEnvelope)
+async def list_authoritative_work_packets(session: AsyncSession = Depends(get_session)):
+    return ApiEnvelope(data=await service.list_authoritative_work_packets(session))
+
+
+@app.get("/pipeline-control-plane/projection", response_model=ApiEnvelope)
+async def get_pipeline_dashboard_projection(session: AsyncSession = Depends(get_session)):
+    return ApiEnvelope(data=await service.get_pipeline_dashboard_projection(session))
+
+
+@app.get("/pipeline-control-plane/work-packets/{packet_id}", response_model=ApiEnvelope)
+async def get_authoritative_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
+    packet = await service.get_authoritative_work_packet(session, packet_id)
+    if not packet:
+        raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
+    return ApiEnvelope(data=packet)
+
+
+@app.post("/pipeline-control-plane/work-packets/{packet_id}/transitions", response_model=ApiEnvelope)
+async def transition_authoritative_work_packet(
+    packet_id: str,
+    payload: AuthoritativeWorkPacketTransitionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        packet = await service.transition_authoritative_work_packet(session, packet_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_authoritative_work_packet_transition").model_dump()) from exc
+    if not packet:
+        raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
     return ApiEnvelope(data=packet)
 
 
@@ -604,7 +664,10 @@ async def get_work_item_local_worktree_plan(work_item_id: str, session: AsyncSes
 
 @app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
 async def retry_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
-    item = await service.retry_item(session, work_item_id)
+    try:
+        item = await service.retry_item(session, work_item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "work_item_retry_blocked").model_dump()) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=service.to_work_item_view(item))

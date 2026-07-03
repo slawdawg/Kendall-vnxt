@@ -91,6 +91,7 @@ export interface CreateAuthoritativeWorkPacketRequest {
 
 export interface TransitionAuthoritativeWorkPacketRequest {
   targetStage: AuthoritativePacketStage;
+  expectedCurrentEventId: string;
   status?: AuthoritativePacketStatus;
   truthLabel?: AuthoritativePacketTruthLabel;
   actor: AuthoritativePacketActor;

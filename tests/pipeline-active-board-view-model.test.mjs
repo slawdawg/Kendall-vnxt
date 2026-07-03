@@ -354,13 +354,28 @@ test("fixture, unavailable, and stale-only projections cannot satisfy live or re
         nextAction: "Ready to test in /pipeline.",
         evidenceRefs: ["aged:evidence"],
       }),
+      packetFixture({
+        packetId: "aged-closed-live-labeled-packet",
+        truthLabel: "live",
+        currentStage: "learn",
+        status: "complete",
+        nextAction: "Historical completion.",
+      }),
+    ],
+    selectedPacketDetails: [
+      detailFixture({
+        packetId: "aged-live-labeled-packet",
+        evidenceRefs: ["aged:evidence"],
+        nextAction: "Ready to test in /pipeline.",
+      }),
     ],
   });
   const agedModel = buildPipelineActiveBoardViewModel(agedProjection);
-  assert.equal(agedModel.summary.activePacketCount, 0);
-  assert.equal(agedModel.summary.readyToTestCount, 0);
-  assert.equal(agedModel.summary.staleHistoryCount, 1);
-  assert.equal(agedModel.staleHistory.items[0]?.packetId, "aged-live-labeled-packet");
+  assert.equal(derivePacketPlacement(agedProjection.workPackets[0], agedProjection), "active_board");
+  assert.equal(derivePacketPlacement(agedProjection.workPackets[1], agedProjection), "hidden");
+  assert.equal(agedModel.summary.activePacketCount, 1);
+  assert.equal(agedModel.summary.readyToTestCount, 1);
+  assert.equal(agedModel.summary.staleHistoryCount, 0);
 
   const staleProjection = projectionFixture({
     freshnessState: "stale",

@@ -83,6 +83,50 @@ class WorkflowEvent(Base):
     work_item: Mapped[WorkItem] = relationship(back_populates="events")
 
 
+class AuthoritativeWorkPacket(Base):
+    __tablename__ = "authoritative_work_packets"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    current_stage: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32))
+    truth_label: Mapped[str] = mapped_column(String(32), default="source_owned")
+    source_ref_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    current_event_id: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    lifecycle_events: Mapped[list["AuthoritativeWorkPacketLifecycleEvent"]] = relationship(
+        back_populates="packet",
+        cascade="all, delete-orphan",
+        order_by="AuthoritativeWorkPacketLifecycleEvent.occurred_at",
+    )
+
+
+class AuthoritativeWorkPacketLifecycleEvent(Base):
+    __tablename__ = "authoritative_work_packet_lifecycle_events"
+    __table_args__ = (UniqueConstraint("packet_id", "idempotency_key", name="uq_authoritative_work_packet_event_idempotency"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    packet_id: Mapped[str] = mapped_column(ForeignKey("authoritative_work_packets.id"))
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    event_type: Mapped[str] = mapped_column(String(64))
+    previous_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_stage: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32))
+    truth_label: Mapped[str] = mapped_column(String(32), default="source_owned")
+    source_ref_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    actor_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    correlation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    causation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    payload_summary: Mapped[str] = mapped_column(Text, default="")
+    evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    packet: Mapped[AuthoritativeWorkPacket] = relationship(back_populates="lifecycle_events")
+
+
 class ExecutionAttempt(Base):
     __tablename__ = "execution_attempts"
 

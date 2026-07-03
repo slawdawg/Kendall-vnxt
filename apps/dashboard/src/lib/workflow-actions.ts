@@ -5,17 +5,27 @@ export const actionsByState: Partial<Record<WorkflowState, Array<{ action: Workf
   validating: [
     { action: "validation_passed", label: "Validation passed" },
     { action: "validation_failed", label: "Send to rework" },
+    { action: "operator_owned_exit", label: "Operator-owned exit" },
   ],
   reviewing: [
     { action: "approve_review", label: "Approve work" },
     { action: "request_rework", label: "Request rework" },
+    { action: "operator_owned_exit", label: "Operator-owned exit" },
   ],
   awaiting_audit: [
     { action: "complete_audit_review", label: "Complete audit review" },
     { action: "request_rework", label: "Request rework" },
+    { action: "operator_owned_exit", label: "Operator-owned exit" },
   ],
-  needs_rework: [{ action: "restart_implementation", label: "Restart implementation" }],
-  blocked: [{ action: "return_to_ready", label: "Return to ready" }],
+  needs_rework: [
+    { action: "restart_implementation", label: "Restart implementation" },
+    { action: "operator_owned_exit", label: "Operator-owned exit" },
+  ],
+  operator_owned: [{ action: "reenter_capture", label: "Re-enter capture" }],
+  blocked: [
+    { action: "return_to_ready", label: "Return to ready" },
+    { action: "operator_owned_exit", label: "Operator-owned exit" },
+  ],
 };
 
 export function messageForWorkflowAction(action: WorkflowAction): string {
@@ -26,8 +36,10 @@ export function messageForWorkflowAction(action: WorkflowAction): string {
     approve_review: "Review approved. Work item is complete.",
     complete_audit_review: "Audit gate cleared. Work item is complete.",
     request_rework: "Review requested another implementation pass.",
+    operator_owned_exit: "Work item moved to operator-owned rework.",
     restart_implementation: "Corrective loop sent back to implementation.",
     return_to_ready: "Blocked item returned to the ready queue.",
+    reenter_capture: "Operator-refined work item returned to capture.",
   }[action];
 }
 
@@ -38,8 +50,11 @@ export function policyHintForState(state: WorkflowState, requiresAudit: boolean)
   if (state === "awaiting_audit") {
     return "Audit completion requires a note before the item can finish.";
   }
-  if (state === "validating" || state === "blocked" || state === "needs_rework") {
-    return "Rework and unblock decisions require an operator note.";
+  if (state === "validating" || state === "reviewing" || state === "blocked" || state === "needs_rework") {
+    return "Rework, review exit, and unblock decisions require an operator note.";
+  }
+  if (state === "operator_owned") {
+    return "Re-entry requires an operator note describing the updated input.";
   }
   return null;
 }

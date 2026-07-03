@@ -821,6 +821,7 @@ function projectionToCockpitPackets(
     }));
     const summary = card.nextActionLabel ?? packet.blocker ?? projection.truthSummary.summary;
     const nextAction = card.nextActionLabel ?? packet.nextAction ?? packet.blocker ?? "";
+    const lifecycleEvidenceRefs = evidenceRefs.map((ref) => ref.refId);
     return {
       packetId: packet.packetId,
       title: packet.title,
@@ -828,6 +829,24 @@ function projectionToCockpitPackets(
       currentStage,
       currentOwner,
       status: packet.status,
+      lifecycleState: {
+        source: "workflow_event",
+        stage: currentStage,
+        owner: currentOwner,
+        status: packet.status,
+        reasonCodes: [packetSourceLabel, packetFreshness],
+        authoritativeRef: `projection:${packet.packetId}`,
+        derivedFromRefs: lifecycleEvidenceRefs,
+        transitionEventRefs: lifecycleEvidenceRefs,
+        latestTransitionEventRef: lifecycleEvidenceRefs.at(-1) ?? null,
+        attemptRef: null,
+        metadataOnly: true,
+        sourceMutationAllowed: false,
+        providerCallsAllowed: false,
+        workerLaunchAllowed: false,
+        githubMutationAllowed: false,
+        cleanupAllowed: false,
+      },
       riskLevel: packet.status === "blocked" || packet.status === "failed" ? "medium" : "low",
       priority: packet.status === "blocked" || currentStage === "human_gate" ? "high" : "normal",
       candidateWork: null,
@@ -893,6 +912,7 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
   projection: PipelineDashboardProjectionV0 | null
 ): ActiveBoardCockpitPacket {
   const stage = activeBoardStageToCockpitStage(packet.currentStage);
+  const currentOwner = stage === "human_gate" ? "operator" : "kendall";
   const sourceLabel = packet.truthLabel === "live" ? projection?.sourceLabel ?? "live" : packet.truthLabel;
   const freshnessState = packet.truthLabel === "stale" ? "stale" : projection?.freshnessState ?? "unknown";
   const sourceTrustState = projectionSourceTrustState(sourceLabel, freshnessState);
@@ -908,13 +928,32 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     retentionClass: "metadata_only" as const,
     rawPayloadRetained: false as const,
   }));
+  const lifecycleEvidenceRefs = evidenceRefs.map((ref) => ref.refId);
   return {
     packetId: packet.packetId,
     title: packet.title,
     requestedOutcome: packet.nextAction ?? packet.blocker ?? "Inspect this backend WorkPacket.",
     currentStage: stage,
-    currentOwner: stage === "human_gate" ? "operator" : "kendall",
+    currentOwner,
     status: packet.status,
+    lifecycleState: {
+      source: "workflow_event",
+      stage,
+      owner: currentOwner,
+      status: packet.status,
+      reasonCodes: [sourceLabel, freshnessState, "detail-only"],
+      authoritativeRef: `projection-detail:${packet.packetId}`,
+      derivedFromRefs: lifecycleEvidenceRefs,
+      transitionEventRefs: lifecycleEvidenceRefs,
+      latestTransitionEventRef: lifecycleEvidenceRefs.at(-1) ?? null,
+      attemptRef: null,
+      metadataOnly: true,
+      sourceMutationAllowed: false,
+      providerCallsAllowed: false,
+      workerLaunchAllowed: false,
+      githubMutationAllowed: false,
+      cleanupAllowed: false,
+    },
     riskLevel: packet.status === "blocked" || packet.status === "failed" ? "medium" : "low",
     priority: packet.status === "blocked" || packet.status === "failed" ? "high" : "normal",
     candidateWork: null,

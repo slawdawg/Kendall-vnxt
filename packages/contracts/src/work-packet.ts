@@ -613,6 +613,7 @@ export type RecoveryActionTypeV0 =
   | "preserve_evidence"
   | "reopen_human_gate"
   | "mark_blocked"
+  | "reenter_capture"
   | "send_back_to_shape"
   | "send_back_to_research";
 
@@ -896,10 +897,42 @@ export type WorkPacketLoopStopStateKindV0 =
   | "operator_approval"
   | "review_thread"
   | "failed_check"
+  | "setup_churn"
+  | "token_window"
+  | "resource_pressure"
   | "tool_churn"
   | "unsafe_cleanup"
   | "scope_boundary"
-  | "owner_conflict";
+  | "owner_conflict"
+  | "operator_owned";
+
+export type WorkPacketLifecycleSourceV0 =
+  | "candidate_work"
+  | "work_item"
+  | "execution_attempt"
+  | "workflow_event"
+  | "memory_proposal"
+  | "delivery_evidence"
+  | "source_missing";
+
+export interface WorkPacketLifecycleStateV0 {
+  source: WorkPacketLifecycleSourceV0;
+  stage: PipelineStage;
+  owner: WorkPacketOwner;
+  status: WorkPacketStatus;
+  reasonCodes: string[];
+  authoritativeRef: WorkPacketRefIdV0;
+  derivedFromRefs: WorkPacketRefIdV0[];
+  transitionEventRefs: WorkPacketRefIdV0[];
+  latestTransitionEventRef?: WorkPacketRefIdV0 | null;
+  attemptRef?: WorkPacketRefIdV0 | null;
+  metadataOnly: true;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubMutationAllowed: false;
+  cleanupAllowed: false;
+}
 
 export interface WorkPacketLoopStopStateV0 {
   stopStateId: string;
@@ -926,6 +959,7 @@ export interface WorkPacketV0View {
   currentStage: PipelineStage;
   currentOwner: WorkPacketOwner;
   status: WorkPacketStatus;
+  lifecycleState: WorkPacketLifecycleStateV0;
   riskLevel: RiskLevel;
   priority: CandidateWorkPriority;
   candidateWork?: CandidateWorkView | null;

@@ -76,6 +76,8 @@ export interface CandidateWorkSourceSummaryView {
   approvedAt: string;
 }
 
+export type NonEmptyArray<T> = [T, ...T[]];
+
 export interface CandidateWorkView {
   id: string;
   title: string;
@@ -93,6 +95,17 @@ export interface CandidateWorkView {
   promotedWorkItemId?: string | null;
   sourceSummary?: CandidateWorkSourceSummaryView | null;
   importMetadata: Record<string, unknown>;
+}
+
+export interface WorkPacketLearnFollowUpCandidateWorkPayload {
+  triggerKind: "completed_packet" | "failed_attempt" | "rejected_approval" | "quality_failure" | "operator_feedback";
+  title: string;
+  requestedOutcome: string;
+  evidenceRefs: NonEmptyArray<string>;
+  operatorFeedback?: string | null;
+  priority?: CandidateWorkPriority;
+  riskLevel?: RiskLevel;
+  sortOrder?: number;
 }
 
 export interface CandidateWorkPromotionView {
@@ -132,6 +145,7 @@ export interface TaskPacketV0View {
 export interface TaskPacketPreviewView {
   packet: TaskPacketV0View;
   route: RoutingDecisionView;
+  executableWorkItem: ExecutableWorkItemShapeView;
   whyThisPath: string;
   previewOnly: boolean;
   executionAttemptCreated: boolean;
@@ -236,8 +250,39 @@ export type ExecutionAttemptStatus =
 export interface ExecutionAttemptCreateRequest {
   stepId?: string | null;
   taskKind?: string | null;
+  routeDecisionId?: string | null;
   actorId?: string | null;
   actorLabel?: string | null;
+}
+
+export interface ExecutableWorkItemActionView {
+  actionId: string;
+  label: string;
+  method: "POST";
+  endpoint: string;
+  payload: ExecutionAttemptCreateRequest;
+  status: "available" | "blocked";
+  reason: string;
+}
+
+export interface ExecutableWorkItemShapeView {
+  workItemId: string;
+  routeDecisionId: string;
+  workerId: string;
+  lane: string;
+  authorityMode: string;
+  taskKind: string;
+  workspaceIsolationPlan: WorkspaceIsolationPlanView;
+  createAttemptAction: ExecutableWorkItemActionView;
+  executionAllowed: boolean;
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  credentialAccessAllowed: boolean;
+  requiredEvidence: string[];
+  stopLines: string[];
+  recoveryPath: string;
 }
 
 export interface ExecutionAttemptTransitionRequest {
@@ -2013,6 +2058,9 @@ export interface DeliveryReadinessPolicyReportView {
   summary: string;
   statusPolicy: DeliveryReadinessPolicyItemView[];
   waiverPolicy: DeliveryReadinessPolicyItemView[];
+  promoteReadinessPolicy: DeliveryReadinessPolicyItemView[];
+  deliverReadinessPolicy: DeliveryReadinessPolicyItemView[];
+  blockerRoutingPolicy: DeliveryReadinessPolicyItemView[];
   stopLines: string[];
   nextSafeActions: string[];
   readOnly: boolean;
@@ -2361,6 +2409,21 @@ export interface RunnerDispatcherContinuitySnapshotView {
   nextAction: string;
 }
 
+export interface RunnerDispatchDecisionExplanationView {
+  decisionId: string;
+  decisionKind: "dispatch" | "hold" | "pause" | "throttle" | "reroute" | "backpressure" | "inactivity";
+  decisionState: string;
+  packetRef: string;
+  workItemRef?: string | null;
+  oneSentenceReason: string;
+  policyInputs: Record<string, string>;
+  queryableBy: string[];
+  lineageSummary: string;
+  remediationRoute: string;
+  failureBudgetState: string;
+  nextAction: string;
+}
+
 export interface RunnerHandoffAuditEntryView {
   sequence: number;
   lane?: string | null;
@@ -2470,6 +2533,7 @@ export interface RunnerAssignmentStatusReportView {
   summary: RunnerAssignmentStatusSummaryView;
   sourceCompletionRollup: RunnerSourceCompletionRollupView;
   dispatcherContinuity: RunnerDispatcherContinuitySnapshotView;
+  dispatchDecisionExplanations: RunnerDispatchDecisionExplanationView[];
   workspaceAssignments: RunnerWorkspaceAssignmentView[];
   laneAssignments: RunnerLaneAssignmentView[];
   backlogCandidates: RunnerBacklogCandidateView[];

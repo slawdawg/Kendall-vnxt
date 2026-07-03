@@ -5,11 +5,13 @@ import test from "node:test";
 const workPacketPath = new URL("../packages/contracts/src/work-packet.ts", import.meta.url);
 const apiPath = new URL("../packages/contracts/src/api.ts", import.meta.url);
 const indexPath = new URL("../packages/contracts/src/index.ts", import.meta.url);
+const pipelineControlPlanePath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 
 test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", async () => {
-  const [workPacketSource, indexSource] = await Promise.all([
+  const [workPacketSource, indexSource, pipelineControlPlaneSource] = await Promise.all([
     readFile(workPacketPath, "utf8"),
-    readFile(indexPath, "utf8")
+    readFile(indexPath, "utf8"),
+    readFile(pipelineControlPlanePath, "utf8")
   ]);
   const rebuildPreviewContract = workPacketSource.match(/export interface LlmWikiRebuildPreviewV0 \{[\s\S]*?\n\}/)?.[0] ?? "";
   const rebuildDryRunPlanContract = workPacketSource.match(/export interface LlmWikiRebuildDryRunPlanV0 \{[\s\S]*?\n\}/)?.[0] ?? "";
@@ -37,6 +39,8 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "WorkPacketOperatorOwnedExitV0",
     "WorkPacketRefillSourceStateV0",
     "WorkPacketReadyToTestV0",
+    "WorkPacketLifecycleSourceV0",
+    "WorkPacketLifecycleStateV0",
     "WorkPacketLaneCardV0",
     "MODEL_ROLES_V0",
     "MODEL_ROLE_POLICIES_V0",
@@ -49,6 +53,8 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "ModelResultPacketV0",
     "MemoryProposalV0",
     "RecoveryActionV0",
+    "WorkPacketLoopStopStateKindV0",
+    "WorkPacketLoopStopStateV0",
     "LlmWikiRebuildPreviewV0"
   ]) {
     assert.match(workPacketSource, new RegExp(`export (const|type|interface) ${exportedName}\\b`));
@@ -91,6 +97,9 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /resultingOwner:\s*WorkPacketOwner;/);
   assert.match(workPacketSource, /auditEventType:\s*string;/);
   assert.match(workPacketSource, /disabledReason\?:\s*string;/);
+  const transitionPacketRequestBlock =
+    pipelineControlPlaneSource.match(/export interface TransitionAuthoritativeWorkPacketRequest \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(transitionPacketRequestBlock, /expectedCurrentEventId:\s*string;/);
   const humanGateActionBlock = workPacketSource.match(/export interface HumanGateActionV0 \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.doesNotMatch(humanGateActionBlock, /actionType:/);
   assert.doesNotMatch(humanGateActionBlock, /availability:/);
@@ -192,6 +201,19 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /cleanupAllowed:\s*false;/);
   assert.match(workPacketSource, /humanGateActionRequests:\s*HumanGateActionRequestV0\[\];/);
   assert.doesNotMatch(workPacketSource, /executionAttempts:\s*ExecutionAttemptView\[\];/);
+  assert.match(workPacketSource, /lifecycleState:\s*WorkPacketLifecycleStateV0;/);
+  assert.match(workPacketSource, /source:\s*WorkPacketLifecycleSourceV0;/);
+  assert.match(workPacketSource, /authoritativeRef:\s*WorkPacketRefIdV0;/);
+  assert.match(workPacketSource, /derivedFromRefs:\s*WorkPacketRefIdV0\[\];/);
+  assert.match(workPacketSource, /transitionEventRefs:\s*WorkPacketRefIdV0\[\];/);
+  assert.match(workPacketSource, /latestTransitionEventRef\?:\s*WorkPacketRefIdV0 \| null;/);
+  assert.match(workPacketSource, /attemptRef\?:\s*WorkPacketRefIdV0 \| null;/);
+  assert.match(workPacketSource, /loopStopStates:\s*WorkPacketLoopStopStateV0\[\];/);
+  assert.match(workPacketSource, /"operator_owned"/);
+  assert.match(workPacketSource, /actionType:\s*RecoveryActionTypeV0;/);
+  assert.match(workPacketSource, /"reenter_capture"/);
+  assert.match(workPacketSource, /githubMutationAllowed:\s*false;/);
+  assert.match(workPacketSource, /cleanupAllowed:\s*false;/);
   assert.match(workPacketSource, /accessState:\s*"allowed";/);
   assert.match(workPacketSource, /accessState:\s*"excluded" \| "missing" \| "blocked";/);
   assert.match(workPacketSource, /summaryOnly:\s*true;/);
@@ -281,6 +303,11 @@ test("Candidate Work contracts expose metadata-only source summaries", async () 
   assert.match(apiSource, /retentionPolicy:\s*string;/);
   assert.match(apiSource, /boundarySummary:\s*string;/);
   assert.match(apiSource, /evidenceRefs:\s*string\[\];/);
+  assert.match(apiSource, /export interface ExecutableWorkItemActionView/);
+  assert.match(apiSource, /payload:\s*ExecutionAttemptCreateRequest;/);
+  assert.match(apiSource, /export interface ExecutableWorkItemShapeView/);
+  assert.match(apiSource, /createAttemptAction:\s*ExecutableWorkItemActionView;/);
+  assert.match(apiSource, /executableWorkItem:\s*ExecutableWorkItemShapeView;/);
   assert.doesNotMatch(apiSource, /rawContent|noteContent|sourceContent/);
 });
 

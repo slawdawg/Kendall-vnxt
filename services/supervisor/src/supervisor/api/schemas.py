@@ -121,6 +121,39 @@ class CandidateWorkObsidianMetadataImportRequest(BaseModel):
     sortOrder: int = 0
 
 
+class WorkPacketLearnFollowUpCandidateWorkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    triggerKind: Literal["completed_packet", "failed_attempt", "rejected_approval", "quality_failure", "operator_feedback"]
+    title: str = Field(min_length=1, max_length=200)
+    requestedOutcome: str = Field(min_length=1, max_length=1000)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=20)
+    operatorFeedback: str | None = Field(default=None, max_length=2000)
+    priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
+    riskLevel: RiskLevel = RiskLevel.LOW
+    sortOrder: int = 0
+
+    @field_validator("title", "requestedOutcome", "operatorFeedback", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("evidenceRefs", mode="before")
+    @classmethod
+    def normalize_evidence_refs(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        normalized: list[str] = []
+        for ref in value:
+            if isinstance(ref, str):
+                trimmed = ref.strip()
+                if trimmed and trimmed not in normalized:
+                    normalized.append(trimmed[:256])
+        return normalized
+
+
 class WorkItemActionRequest(BaseModel):
     action: WorkflowAction
     note: str | None = None
@@ -339,6 +372,7 @@ class WorkItemRoutingOverrideRequest(BaseModel):
 class WorkItemExecutionAttemptCreateRequest(BaseModel):
     stepId: str | None = None
     taskKind: str | None = None
+    routeDecisionId: str | None = None
     actorId: str | None = None
     actorLabel: str | None = None
 
@@ -449,6 +483,36 @@ class ExecutionAttemptView(BaseModel):
     eventRefs: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ExecutableWorkItemActionView(BaseModel):
+    actionId: str
+    label: str
+    method: Literal["POST"]
+    endpoint: str
+    payload: WorkItemExecutionAttemptCreateRequest
+    status: Literal["available", "blocked"]
+    reason: str
+
+
+class ExecutableWorkItemShapeView(BaseModel):
+    workItemId: str
+    routeDecisionId: str
+    workerId: str
+    lane: str
+    authorityMode: str
+    taskKind: str
+    workspaceIsolationPlan: WorkspaceIsolationPlanView
+    createAttemptAction: ExecutableWorkItemActionView
+    executionAllowed: bool = False
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    credentialAccessAllowed: bool = False
+    requiredEvidence: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+    recoveryPath: str
+
+
 class RoutingProfileView(BaseModel):
     workItemId: str
     stepId: str
@@ -513,6 +577,7 @@ class TaskPacketV0View(BaseModel):
 class TaskPacketPreviewView(BaseModel):
     packet: TaskPacketV0View
     route: RoutingDecisionView
+    executableWorkItem: ExecutableWorkItemShapeView
     whyThisPath: str
     previewOnly: bool = True
     executionAttemptCreated: bool = False
@@ -1000,6 +1065,7 @@ class RecoveryActionV0View(BaseModel):
         "preserve_evidence",
         "reopen_human_gate",
         "mark_blocked",
+        "reenter_capture",
         "send_back_to_shape",
         "send_back_to_research",
     ]
@@ -1058,6 +1124,248 @@ class WorkPacketGateStateValidationV0View(BaseModel):
     sourceMutationAllowed: Literal[False] = False
     providerCallsAllowed: Literal[False] = False
     workerLaunchAllowed: Literal[False] = False
+
+
+AuthoritativePacketStage = Literal[
+    "capture",
+    "classify",
+    "route",
+    "shape",
+    "needs_approval",
+    "execute",
+    "review",
+    "promote",
+    "deliver",
+    "learn",
+]
+
+
+AuthoritativePacketStatus = Literal["active", "waiting", "blocked", "failed", "complete", "deferred"]
+AuthoritativePacketTruthLabel = Literal["source_owned", "derived_projection", "operator_asserted"]
+
+
+class AuthoritativePacketActorView(BaseModel):
+    actorType: Literal["system", "operator", "manager", "worker"] = "system"
+    actorId: str | None = Field(default=None, max_length=100)
+    actorLabel: str | None = Field(default=None, max_length=120)
+
+
+class AuthoritativePacketSourceRefView(BaseModel):
+    refId: str = Field(min_length=1, max_length=255)
+    sourceType: Literal["prd", "bmad_story", "operator_input", "workflow", "repo_doc"]
+    pathOrUrl: str | None = Field(default=None, max_length=500)
+    title: str | None = Field(default=None, max_length=255)
+
+    @field_validator("refId")
+    @classmethod
+    def _source_ref_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("source ref id must not be blank")
+        return value
+
+
+class AuthoritativeWorkPacketCreateRequest(BaseModel):
+    packetId: str | None = Field(default=None, max_length=80)
+    title: str = Field(min_length=1, max_length=255)
+    initialStage: AuthoritativePacketStage = "capture"
+    status: AuthoritativePacketStatus = "waiting"
+    truthLabel: AuthoritativePacketTruthLabel = "source_owned"
+    sourceRef: AuthoritativePacketSourceRefView
+    actor: AuthoritativePacketActorView = Field(default_factory=AuthoritativePacketActorView)
+    idempotencyKey: str | None = Field(default=None, max_length=120)
+    correlationId: str | None = Field(default=None, max_length=80)
+    causationId: str | None = Field(default=None, max_length=80)
+    payloadSummary: str = Field(default="Metadata-only lifecycle creation.", min_length=1, max_length=500)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
+
+    @field_validator("packetId", "title", "idempotencyKey", "correlationId", "causationId", "payloadSummary")
+    @classmethod
+    def _optional_text_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+
+class AuthoritativeWorkPacketTransitionRequest(BaseModel):
+    targetStage: AuthoritativePacketStage
+    expectedCurrentEventId: str = Field(min_length=1, max_length=80)
+    status: AuthoritativePacketStatus = "active"
+    truthLabel: AuthoritativePacketTruthLabel = "source_owned"
+    actor: AuthoritativePacketActorView = Field(default_factory=AuthoritativePacketActorView)
+    idempotencyKey: str | None = Field(default=None, max_length=120)
+    correlationId: str | None = Field(default=None, max_length=80)
+    causationId: str | None = Field(default=None, max_length=80)
+    payloadSummary: str = Field(default="Metadata-only lifecycle transition.", min_length=1, max_length=500)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
+
+    @field_validator("expectedCurrentEventId", "idempotencyKey", "correlationId", "causationId", "payloadSummary")
+    @classmethod
+    def _optional_text_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+
+class AuthoritativeWorkPacketLifecycleEventView(BaseModel):
+    eventId: str
+    packetId: str
+    schemaVersion: Literal[1] = 1
+    eventType: Literal["packet.created", "packet.stage_transitioned"]
+    previousStage: AuthoritativePacketStage | None = None
+    targetStage: AuthoritativePacketStage
+    status: AuthoritativePacketStatus
+    truthLabel: AuthoritativePacketTruthLabel
+    sourceRef: AuthoritativePacketSourceRefView
+    actor: AuthoritativePacketActorView
+    occurredAt: datetime
+    correlationId: str | None = None
+    causationId: str | None = None
+    idempotencyKey: str | None = None
+    payloadSummary: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
+class AuthoritativeWorkPacketLifecycleView(BaseModel):
+    packetId: str
+    title: str
+    currentStage: AuthoritativePacketStage
+    status: AuthoritativePacketStatus
+    truthLabel: AuthoritativePacketTruthLabel
+    sourceRef: AuthoritativePacketSourceRefView
+    createdAt: datetime
+    updatedAt: datetime
+    currentEventId: str
+    history: list[AuthoritativeWorkPacketLifecycleEventView] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
+PipelineProjectionSourceLabelV0 = Literal["live", "stale", "fixture", "simulated", "dry_run", "unavailable", "unknown"]
+PipelineProjectionFreshnessStateV0 = Literal["live", "stale", "unavailable", "unknown"]
+PipelineProjectionEmptyReasonV0 = Literal[
+    "healthy_empty",
+    "source_exhausted",
+    "blocked",
+    "refilling",
+    "usage_limited",
+    "resource_limited",
+    "cleanup_gated",
+    "approval_required",
+    "failure_budget_hit",
+    "backend_unavailable",
+    "projection_stale",
+    "unknown",
+]
+
+
+class PipelineBackendReachabilityV0View(BaseModel):
+    state: Literal["reachable", "unavailable", "unknown"]
+    checkedAt: datetime
+    reason: PipelineProjectionEmptyReasonV0 | None = None
+    summary: str
+
+
+class PipelineFixtureModeV0View(BaseModel):
+    enabled: bool
+    reason: str | None = None
+    allowedForEnvironment: bool
+    visibleLabelRequired: Literal[True] = True
+    canSatisfyLiveProof: Literal[False] = False
+
+
+class PipelineTruthSummaryV0View(BaseModel):
+    label: PipelineProjectionSourceLabelV0
+    emptyReason: PipelineProjectionEmptyReasonV0 | None = None
+    backendEmpty: bool
+    backendUnavailable: bool
+    fixtureBacked: bool
+    stale: bool
+    summary: str
+
+
+class PipelineStageSummaryV0View(BaseModel):
+    stage: AuthoritativePacketStage
+    label: str
+    packetCount: int
+    sourceLabel: PipelineProjectionSourceLabelV0
+    freshnessState: PipelineProjectionFreshnessStateV0
+    emptyReason: PipelineProjectionEmptyReasonV0 | None = None
+
+
+class PipelineDashboardWorkPacketV0View(BaseModel):
+    packetId: str
+    title: str
+    currentStage: AuthoritativePacketStage
+    status: AuthoritativePacketStatus
+    truthLabel: PipelineProjectionSourceLabelV0
+    sourceRef: AuthoritativePacketSourceRefView | None = None
+    blocker: str | None = None
+    nextAction: str | None = None
+    evidenceRefs: list[str] = Field(default_factory=list)
+    updatedAt: datetime
+    metadataOnly: Literal[True] = True
+
+
+class PipelineSelectedPacketDetailV0View(BaseModel):
+    packetId: str
+    sourceRefs: list[AuthoritativePacketSourceRefView] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    currentStage: AuthoritativePacketStage
+    status: AuthoritativePacketStatus
+    truthLabel: PipelineProjectionSourceLabelV0
+    blocker: str | None = None
+    nextAction: str | None = None
+    metadataOnly: Literal[True] = True
+
+
+class PipelineManagerSummaryV0View(BaseModel):
+    stateSource: Literal["supervisor_projection", "manager_summary", "unavailable", "unknown"]
+    freshnessState: PipelineProjectionFreshnessStateV0
+    activeLeaseCount: int | None = None
+    activeWorkerCount: int | None = None
+    warmWorkerCount: int | None = None
+    blockedQueueCount: int | None = None
+    dispatchableQueueCount: int | None = None
+    closedQueueCount: int | None = None
+    sourceExhausted: bool
+    inactivityReason: PipelineProjectionEmptyReasonV0 | None = None
+    summary: str
+    metadataOnly: Literal[True] = True
+
+
+class PipelineQueueSummaryV0View(BaseModel):
+    dispatchableCount: int | None = None
+    blockedCount: int | None = None
+    closedCount: int | None = None
+    emptyReason: PipelineProjectionEmptyReasonV0 | None = None
+    sourceExhausted: bool
+    summary: str
+
+
+class PipelineDashboardProjectionV0View(BaseModel):
+    schemaVersion: Literal["pipeline-dashboard-projection/v0"] = "pipeline-dashboard-projection/v0"
+    projectionId: str
+    generatedAt: datetime
+    sourceUpdatedAt: datetime
+    sourceLabel: PipelineProjectionSourceLabelV0
+    freshnessState: PipelineProjectionFreshnessStateV0
+    staleAfterSeconds: int
+    backendReachability: PipelineBackendReachabilityV0View
+    fixtureMode: PipelineFixtureModeV0View
+    truthSummary: PipelineTruthSummaryV0View
+    stageSummaries: list[PipelineStageSummaryV0View] = Field(default_factory=list)
+    workPackets: list[PipelineDashboardWorkPacketV0View] = Field(default_factory=list)
+    selectedPacketDetails: list[PipelineSelectedPacketDetailV0View] = Field(default_factory=list)
+    managerSummary: PipelineManagerSummaryV0View
+    queueSummary: PipelineQueueSummaryV0View
+    evidenceRefs: list[str] = Field(default_factory=list)
 
 
 class WorkPacketRouteSummaryV0View(BaseModel):
@@ -1173,7 +1481,6 @@ class WorkPacketExecutionAttemptSummaryV0View(BaseModel):
     evidenceRefs: list[str] = Field(default_factory=list)
     artifactRefs: list[str] = Field(default_factory=list)
 
-
 class WorkPacketStageTransitionEventV0View(BaseModel):
     eventId: str
     eventType: str
@@ -1212,6 +1519,43 @@ class WorkPacketStageTransitionEventV0View(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkPacketLifecycleStateV0View(BaseModel):
+    source: Literal[
+        "candidate_work",
+        "work_item",
+        "execution_attempt",
+        "workflow_event",
+        "memory_proposal",
+        "delivery_evidence",
+        "source_missing",
+    ]
+    stage: Literal["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"]
+    owner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ]
+    status: Literal["active", "waiting", "blocked", "failed", "complete", "deferred"]
+    reasonCodes: list[str] = Field(default_factory=list)
+    authoritativeRef: str
+    derivedFromRefs: list[str] = Field(default_factory=list)
+    transitionEventRefs: list[str] = Field(default_factory=list)
+    latestTransitionEventRef: str | None = None
+    attemptRef: str | None = None
+    metadataOnly: Literal[True] = True
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubMutationAllowed: Literal[False] = False
+    cleanupAllowed: Literal[False] = False
+
+
 class WorkPacketLoopStopStateV0View(BaseModel):
     stopStateId: str
     kind: Literal[
@@ -1219,10 +1563,14 @@ class WorkPacketLoopStopStateV0View(BaseModel):
         "operator_approval",
         "review_thread",
         "failed_check",
+        "setup_churn",
+        "token_window",
+        "resource_pressure",
         "tool_churn",
         "unsafe_cleanup",
         "scope_boundary",
         "owner_conflict",
+        "operator_owned",
     ]
     label: str
     phase: str
@@ -1256,6 +1604,7 @@ class WorkPacketV0View(BaseModel):
         "blocked",
     ]
     status: Literal["active", "waiting", "blocked", "failed", "complete", "deferred"]
+    lifecycleState: WorkPacketLifecycleStateV0View
     riskLevel: RiskLevel
     priority: CandidateWorkPriority
     candidateWork: CandidateWorkView | None = None
@@ -1971,6 +2320,21 @@ class RunnerDispatcherContinuitySnapshotView(BaseModel):
     nextAction: str
 
 
+class RunnerDispatchDecisionExplanationView(BaseModel):
+    decisionId: str
+    decisionKind: Literal["dispatch", "hold", "pause", "throttle", "reroute", "backpressure", "inactivity"]
+    decisionState: str
+    packetRef: str
+    workItemRef: str | None = None
+    oneSentenceReason: str
+    policyInputs: dict[str, str] = Field(default_factory=dict)
+    queryableBy: list[str] = Field(default_factory=list)
+    lineageSummary: str = "not_applicable"
+    remediationRoute: str = "not_applicable"
+    failureBudgetState: str = "not_applicable"
+    nextAction: str
+
+
 class RunnerHandoffAuditEntryView(BaseModel):
     sequence: int
     lane: str | None = None
@@ -2083,6 +2447,7 @@ class RunnerAssignmentStatusReportView(BaseModel):
     summary: RunnerAssignmentStatusSummaryView
     sourceCompletionRollup: RunnerSourceCompletionRollupView = Field(default_factory=RunnerSourceCompletionRollupView)
     dispatcherContinuity: RunnerDispatcherContinuitySnapshotView
+    dispatchDecisionExplanations: list[RunnerDispatchDecisionExplanationView] = Field(default_factory=list)
     workspaceAssignments: list[RunnerWorkspaceAssignmentView] = Field(default_factory=list)
     laneAssignments: list[RunnerLaneAssignmentView] = Field(default_factory=list)
     backlogCandidates: list[RunnerBacklogCandidateView] = Field(default_factory=list)
@@ -3083,6 +3448,9 @@ class DeliveryReadinessPolicyReportView(BaseModel):
     summary: str
     statusPolicy: list[DeliveryReadinessPolicyItemView]
     waiverPolicy: list[DeliveryReadinessPolicyItemView]
+    promoteReadinessPolicy: list[DeliveryReadinessPolicyItemView] = Field(default_factory=list)
+    deliverReadinessPolicy: list[DeliveryReadinessPolicyItemView] = Field(default_factory=list)
+    blockerRoutingPolicy: list[DeliveryReadinessPolicyItemView] = Field(default_factory=list)
     stopLines: list[str]
     nextSafeActions: list[str]
     readOnly: bool = True

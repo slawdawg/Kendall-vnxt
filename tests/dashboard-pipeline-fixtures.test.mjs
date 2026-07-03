@@ -1006,6 +1006,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(supervisorLibSource, /Invalid projection payload/);
   assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
   assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);
+  assert.match(supervisorLibSource, /projection\.workPackets\)\s*&&\s*projection\.workPackets\.some/);
+  assert.match(supervisorLibSource, /\["active", "waiting", "blocked", "failed"\]\.includes\(candidate\.status\)/);
   assert.match(supervisorLibSource, /isProjectionStage\(packet\.currentStage\)/);
   assert.match(supervisorLibSource, /Array\.isArray\(packet\.evidenceRefs\)/);
   assert.match(supervisorLibSource, /packet\.metadataOnly === true/);
@@ -1015,6 +1017,10 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(supervisorLibSource, /isQueueSummary\(projection\.queueSummary\)/);
   assert.match(supervisorLibSource, /fixtureMode\.visibleLabelRequired === true/);
   assert.match(supervisorLibSource, /managerSummary\.metadataOnly === true/);
+  assert.match(supervisorLibSource, /const detailIds = new Set<string>\(\)/);
+  assert.match(supervisorLibSource, /detailIds\.has\(detail\.packetId\)/);
+  assert.match(supervisorLibSource, /detail\.currentStage !== packet\.currentStage/);
+  assert.match(supervisorLibSource, /packet\.evidenceRefs\.some\(\(ref\) => !detailEvidence\.has\(ref\)\)/);
 
   for (const regionName of [
     "Refined pipeline cockpit frame",
@@ -1393,7 +1399,6 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.equal(routeUnsafeFeedbackProjection.feedbackRouteRows[0]?.retention, "metadata_only");
   assert.equal(routeUnsafeFeedbackProjection.feedbackRouteRows[0]?.rawPayloadRetained, false);
 
-  assert.doesNotMatch(supervisorLibSource, /workPackets.length !== selectedPacketDetails.length/);
   assert.match(supervisorLibSource, /detailIds\.has\(detail\.packetId\)/);
   assert.doesNotMatch(cockpitSource, /Pipeline workflow strip|Pipeline mobile workflow strip|Idea captured|Review ready|Promote candidate/);
   assert.match(cockpitSource, /InfoTooltip/);
@@ -1620,6 +1625,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "preserve_evidence",
     "reopen_human_gate",
     "mark_blocked",
+    "reenter_capture",
     "send_back_to_shape",
     "send_back_to_research",
   ]) {
