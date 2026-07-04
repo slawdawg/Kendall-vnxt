@@ -1930,7 +1930,7 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
       worktreePath: repoRoot,
       lastHeartbeatAt: new Date().toISOString(),
       heartbeat: { status: "recorded", source: "manager-worker-warm", lastHeartbeatAt: new Date().toISOString() },
-      lastPreflight: { status: "ready", source: "manager-cycle-packet" },
+      lastPreflight: { status: "passed", source: "manager-cycle-packet" },
       failureCount: existingRecord?.failureCount || 0,
       recoveryState: recoverExisting ? "missing_session_restarted_needs_handoff" : "none",
       recoveryAction: recoverExisting ? "repair_missing_session_then_pull_dispatcher_lease" : "await_dispatcher_lease_pull",
@@ -2088,7 +2088,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
         {
           code: "worker-handoff-apply-ready",
           summary: `Hand off ${pairings.length} lane(s) to warm manager-owned worker(s).`,
-          nextAction: `node ./scripts/manager-worker-handoff.mjs --summary-json --limit ${pairings.length} --apply`,
+          nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-handoff.mjs --summary-json --limit ${pairings.length} --apply`, runOptions),
         },
       ],
     });
@@ -2398,6 +2398,7 @@ function buildWorkerHandoffPairing(worker = {}, lane = {}, paths = {}) {
     sessionName: worker.sessionName,
     owner: worker.owner,
     runId: paths.runId,
+    stateRoot: paths.proof?.state?.root || "",
     assignmentId: lane.assignmentId,
     taskId: lane.taskId,
     branch: lane.branch,
@@ -2417,6 +2418,7 @@ function renderWorkerHandoffFile(pairing = {}) {
   const checkpointCommand = [
     "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
     `--run-id ${shellSingleQuote(pairing.runId)}`,
+    ...(pairing.stateRoot ? [`--state-root ${shellSingleQuote(pairing.stateRoot)}`] : []),
     `--worker-id ${shellSingleQuote(pairing.workerId)}`,
     `--summary ${shellSingleQuote("replace with compact progress, verification, or user-facing checkpoint")}`,
     `--authority-basis ${shellSingleQuote("manager-owned-worker-checkpoint")}`,
@@ -2427,6 +2429,7 @@ function renderWorkerHandoffFile(pairing = {}) {
   const questionCommand = [
     "node ./scripts/manager-ledger.mjs append-question --summary-json",
     `--run-id ${shellSingleQuote(pairing.runId)}`,
+    ...(pairing.stateRoot ? [`--state-root ${shellSingleQuote(pairing.stateRoot)}`] : []),
     `--worker-id ${shellSingleQuote(pairing.workerId)}`,
     "--material-decision",
     `--summary ${shellSingleQuote("replace with the compact blocking question and options considered")}`,
@@ -2570,7 +2573,7 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
       source: "manager-workers-checkpoints-questions-assignment-heartbeats",
     },
     warnings: attentionWorkers.length > 0 ? [{ code: "worker-progress-attention", message: `${attentionWorkers.length} active worker(s) need progress signal or question handling.` }] : [],
-    nextActions: buildWorkerProgressNextActions(attentionWorkers),
+    nextActions: buildWorkerProgressNextActions(attentionWorkers, runOptions),
   });
 }
 
@@ -2652,7 +2655,7 @@ export function buildLaneAdvancementPlan(options = {}, context = {}) {
         reason: "lane_owner_missing",
         nextAction: "Refresh assignment-report or assignment fallback metadata before applying lane advancement for this lane.",
       }));
-    const results = applyReadyLanes.map((lane) => applyLaneAdvancementHeartbeat(lane, context));
+    const results = applyReadyLanes.map((lane) => applyLaneAdvancementHeartbeat(lane, context, runOptions));
     const failed = results.filter((result) => !result.ok);
     const advancedCount = results.filter((result) => result.ok).length;
     const status = failed.length > 0 ? "blocked" : advancedCount > 0 ? "ready" : "attention";
@@ -2696,7 +2699,7 @@ export function buildLaneAdvancementPlan(options = {}, context = {}) {
           {
             code: "manager-lane-advance-ready",
             summary: `Advance ${applyReadyLanes.length} owner-proven review-ready lane(s) into manager review/delivery metadata gates instead of pinging completed workers.`,
-            nextAction: `node ./scripts/manager-lane-advance.mjs --summary-json --limit ${applyReadyLanes.length}`,
+            nextAction: appendManagerCommandScope(`node ./scripts/manager-lane-advance.mjs --summary-json --limit ${applyReadyLanes.length}`, runOptions),
           },
         ]
       : ownerlessReadyLanes.length > 0
@@ -2740,7 +2743,7 @@ function buildLaneAdvancementCandidate(worker = {}, context = {}) {
   };
 }
 
-function applyLaneAdvancementHeartbeat(lane = {}, context = {}) {
+function applyLaneAdvancementHeartbeat(lane = {}, context = {}, options = {}) {
   if (!isSafeCommandIdentifier(lane.assignmentId)) {
     return {
       ok: false,
@@ -2764,7 +2767,7 @@ function applyLaneAdvancementHeartbeat(lane = {}, context = {}) {
     sanitizeLedgerField(lane.evidenceSummary || "lane ready for manager review", "lane ready for manager review", 180),
     "--json",
   ];
-  const result = runWorkspaceJson(args, context);
+  const result = runWorkspaceJson(workspaceJsonArgs(args, options), context);
   if (result?.ok === false || result?.error) {
     return {
       ok: false,
@@ -2811,7 +2814,7 @@ function classifyWorkerCheckpointBlockerSummary(summary = "") {
   return { blocked: false, reason: "" };
 }
 
-function buildWorkerProgressNextActions(workers = []) {
+function buildWorkerProgressNextActions(workers = [], options = {}) {
   const attentionWorkers = Array.isArray(workers) ? workers : [];
   const signalableStates = new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"]);
   const questionWorkers = attentionWorkers.filter((worker) => ["blocked_question", "checkpoint_blocked"].includes(worker.progressState));
@@ -2822,7 +2825,7 @@ function buildWorkerProgressNextActions(workers = []) {
   let questionActionAdded = false;
   const actions = [];
   if (questionWorkers.length > 0) {
-    actions.push(buildWorkerQuestionAnswerNextAction(questionWorkers));
+    actions.push(buildWorkerQuestionAnswerNextAction(questionWorkers, options));
     questionActionAdded = true;
   }
   for (const worker of attentionWorkers) {
@@ -2831,19 +2834,19 @@ function buildWorkerProgressNextActions(workers = []) {
     }
     if (needsPendingSubmitRepair(worker)) {
       if (!pendingSubmitActionAdded) {
-        actions.push(buildWorkerSubmitPendingNextAction(pendingSubmitWorkers));
+        actions.push(buildWorkerSubmitPendingNextAction(pendingSubmitWorkers, options));
         pendingSubmitActionAdded = true;
       }
       continue;
     }
     if (signalableStates.has(worker.progressState)) {
       if (!signalActionAdded) {
-        actions.push(buildWorkerProgressSignalNextAction(signalableWorkers));
+        actions.push(buildWorkerProgressSignalNextAction(signalableWorkers, options));
         signalActionAdded = true;
       }
       continue;
     }
-    actions.push(buildWorkerProgressNextAction(worker));
+    actions.push(buildWorkerProgressNextAction(worker, options));
   }
   return actions;
 }
@@ -2860,36 +2863,36 @@ function needsPendingSubmitRepair(worker = {}) {
   return receiptNeedsSubmit || progressSignalNeedsSubmit || recoveryInspectionNeedsSubmit;
 }
 
-function buildWorkerSubmitPendingNextAction(workers = []) {
+function buildWorkerSubmitPendingNextAction(workers = [], options = {}) {
   const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
   return {
     code: "worker-submit-pending-progress-signal",
     summary: `Submit pending prompts for ${selected.length || 1} manager-owned worker(s).`,
-    nextAction: `node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit ${selected.length || 1}`,
+    nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit ${selected.length || 1}`, options),
   };
 }
 
-function buildWorkerQuestionAnswerNextAction(workers = []) {
+function buildWorkerQuestionAnswerNextAction(workers = [], options = {}) {
   const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
   return {
     code: "worker-progress-blocked_question",
     summary: `Answer ${selected.length || 1} compact worker question(s).`,
-    nextAction: `node ./scripts/manager-worker-answer-question.mjs --summary-json --limit ${selected.length || 1}`,
+    nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-answer-question.mjs --summary-json --limit ${selected.length || 1}`, options),
   };
 }
 
-function buildWorkerProgressSignalNextAction(workers = []) {
+function buildWorkerProgressSignalNextAction(workers = [], options = {}) {
   const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
   const first = selected[0] || {};
   if (selected.length <= 1) {
-    return buildWorkerProgressNextAction(first, { limit: 1 });
+    return buildWorkerProgressNextAction(first, { ...options, limit: 1 });
   }
   const states = [...new Set(selected.map((worker) => String(worker.progressState || "attention")).filter(Boolean))];
   const promptIdle = states.includes("prompt_idle_handoff");
   return {
     code: states.length === 1 ? `worker-progress-${states[0]}` : "worker-progress-signal-batch",
     summary: `Signal ${selected.length} active worker(s) for compact metadata progress.`,
-    nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${promptIdle ? " --prompt-idle" : ""}`,
+    nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${promptIdle ? " --prompt-idle" : ""}`, options),
   };
 }
 
@@ -2901,14 +2904,14 @@ function buildWorkerProgressNextAction(worker = {}, context = {}) {
     return {
       code,
       summary,
-      nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${limit}${worker.progressState === "prompt_idle_handoff" ? " --prompt-idle" : ""}`,
+      nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${limit}${worker.progressState === "prompt_idle_handoff" ? " --prompt-idle" : ""}`, context),
     };
   }
   if (worker.progressState === "progress_signal_unanswered") {
     return {
       code,
       summary,
-      nextAction: "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json",
+      nextAction: appendManagerCommandScope("node ./scripts/manager-worker-recovery-inspection.mjs --summary-json", context),
     };
   }
   if (worker.progressState === "recovery_submit_unanswered") {
@@ -2916,7 +2919,7 @@ function buildWorkerProgressNextAction(worker = {}, context = {}) {
     return {
       code,
       summary,
-      nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json --limit ${limit}`,
+      nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-retire.mjs --summary-json --limit ${limit}`, context),
     };
   }
   return {
@@ -3654,6 +3657,7 @@ function buildWorkerQuestionAnswerRequest(question = {}, workers = [], paths = {
     workerId: sanitizeLedgerField(worker.workerId || "worker", "worker", 80),
     sessionName: sanitizeLedgerField(worker.sessionName || worker.workerId || "worker", "worker", 80),
     runId: paths.runId,
+    stateRoot: paths.proof?.state?.root || "",
     assignmentId: sanitizeLedgerField(assignmentId || worker.assignmentId || "", "", 140),
     taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
     questionType: sanitizeLedgerField(question.questionType || question.type || "worker_question", "worker_question", 80),
@@ -3772,6 +3776,7 @@ function buildWorkerOwnerDelegationRequest(worker = {}, paths = {}) {
     workerId,
     sessionName: sanitizeLedgerField(worker.sessionName || workerId, workerId, 80),
     runId: paths.runId,
+    stateRoot: paths.proof?.state?.root || "",
     assignmentId,
     taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
     laneOwner: sanitizeLedgerField(worker.laneOwner || "", "", 160),
@@ -3828,6 +3833,7 @@ function renderWorkerProgressSignalFile(request = {}) {
   const checkpointCommand = [
     "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
     `--run-id ${shellSingleQuote(request.runId)}`,
+    ...(request.stateRoot ? [`--state-root ${shellSingleQuote(request.stateRoot)}`] : []),
     `--worker-id ${shellSingleQuote(request.workerId)}`,
     `--summary ${shellSingleQuote("replace with compact current progress, blocker-free heartbeat, verification, or checkpoint")}`,
     `--authority-basis ${shellSingleQuote("manager-owned-worker-progress-signal-response")}`,
@@ -13072,7 +13078,7 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
   const resume = context.resumeState || buildResumeState(runOptions, context);
   const targets = Array.isArray(resume.summary?.takeoverInspection?.targets) ? resume.summary.takeoverInspection.targets : [];
   const limit = runOptions.limit === null || runOptions.limit === undefined ? targets.length : Math.max(0, Number(runOptions.limit) || 0);
-  const inspections = targets.slice(0, limit).map((target) => inspectStaleOwnerTarget(target, context));
+  const inspections = targets.slice(0, limit).map((target) => inspectStaleOwnerTarget(target, context, runOptions));
   const failed = inspections.filter((inspection) => !inspection.ok);
   const cleanupCandidates = inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate");
   const dirtyWorkspaces = inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required");
@@ -13105,13 +13111,14 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
   });
 }
 
-function inspectStaleOwnerTarget(target = {}, context = {}) {
+function inspectStaleOwnerTarget(target = {}, context = {}, options = {}) {
   const id = sanitizeLedgerField(target.id || "", "", 140);
   if (!id) {
     return { ok: false, id: "", classification: "invalid_target", error: "stale owner target id is missing", nextAction: "Refresh manager resume state." };
   }
   const reason = `manager dogfood stale owner inspection for ${id}`;
-  const result = context.takeoverResults?.[id] || runWorkspaceJson(["takeover", id, "--dry-run", "--summary-json", "--takeover-reason", reason], context);
+  const takeoverArgs = workspaceJsonArgs(["takeover", id, "--dry-run", "--summary-json", "--takeover-reason", reason], options);
+  const result = context.takeoverResults?.[id] || runWorkspaceJson(takeoverArgs, context);
   if (!result || result.ok === false || result.error) {
     return {
       ok: false,
@@ -13119,7 +13126,7 @@ function inspectStaleOwnerTarget(target = {}, context = {}) {
       id,
       classification: "inspection_failed",
       error: result?.error || "takeover dry-run did not return a usable packet",
-      nextAction: target.dryRunCommand || `node ./scripts/codex-workspace.mjs takeover ${shellSingleQuote(id)} --dry-run --summary-json --takeover-reason ${shellSingleQuote(reason)}`,
+      nextAction: target.dryRunCommand || appendWorkspaceCommandScope(`node ./scripts/codex-workspace.mjs takeover ${shellSingleQuote(id)} --dry-run --summary-json --takeover-reason ${shellSingleQuote(reason)}`, options),
     };
   }
   const classification = classifyStaleOwnerTakeoverResult(result);
@@ -13200,6 +13207,31 @@ function staleOwnerInspectionNextActions({ cleanupCandidates = [], dirtyWorkspac
 
 function shellSingleQuote(value = "") {
   return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+function appendManagerCommandScope(command = "", options = {}) {
+  let next = String(command || "").trim();
+  const runId = sanitizeLedgerField(options.runId || "", "", 120);
+  if (runId && !/\s--run-id(?:=|\s)/.test(next)) {
+    next += ` --run-id ${shellSingleQuote(runId)}`;
+  }
+  return appendWorkspaceCommandScope(next, options);
+}
+
+function appendWorkspaceCommandScope(command = "", options = {}) {
+  let next = String(command || "").trim();
+  const stateRoot = sanitizeLedgerField(options.stateRoot || "", "", 260);
+  if (stateRoot && !/\s--state-root(?:=|\s)/.test(next)) {
+    next += ` --state-root ${shellSingleQuote(stateRoot)}`;
+  }
+  return next;
+}
+
+function cycleRunScope(cycle = {}) {
+  return {
+    runId: cycle.summary?.run?.runId || "",
+    stateRoot: cycle.summary?.run?.stateRoot || "",
+  };
 }
 
 export function classifyAutoApply(operation, context = {}) {
@@ -13874,7 +13906,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     ok: status !== "blocked",
     status,
     summary: {
-      run: { runId: runOptions.runId, state: status },
+      run: { runId: runOptions.runId, stateRoot: runOptions.stateRoot || "", state: status },
       usage: sanitizeCyclePacketValue(usage.summary),
       resources: sanitizeCyclePacketValue(resources.summary),
       dispatcher: sanitizeCyclePacketValue(dispatcherState.dispatcher),
@@ -14098,9 +14130,9 @@ function buildPromptIdleLoadActions(cycle = {}, promptProbe = {}) {
   const actions = [];
   if (completedRows.length > 0 && laneAdvanceReady) {
     actions.push({
-      code: "manager-lane-advance-ready",
+    code: "manager-lane-advance-ready",
       summary: `Advance ${completedRows.length} prompt-idle completed worker lane(s) so workers can be reused.`,
-      nextAction: `node ./scripts/manager-lane-advance.mjs --summary-json --limit ${Math.min(6, completedRows.length)}`,
+      nextAction: appendManagerCommandScope(`node ./scripts/manager-lane-advance.mjs --summary-json --limit ${Math.min(6, completedRows.length)}`, cycleRunScope(cycle)),
     });
   }
   const signalRows = [...handoffIdleRows, ...checkpointIdleRows, ...answeredQuestionIdleRows];
@@ -14108,7 +14140,7 @@ function buildPromptIdleLoadActions(cycle = {}, promptProbe = {}) {
     actions.push({
       code: signalRows.length === 1 ? `worker-progress-${signalRows[0].progressState}` : "worker-progress-prompt_idle",
       summary: `Signal ${signalRows.length} prompt-idle worker(s) for compact progress so idle panes do not wait for operator observation.`,
-      nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${Math.min(6, signalRows.length)} --prompt-idle`,
+      nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${Math.min(6, signalRows.length)} --prompt-idle`, cycleRunScope(cycle)),
     });
   }
   return actions;

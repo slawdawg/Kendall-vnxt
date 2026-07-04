@@ -5392,7 +5392,7 @@ test("worker warm gate records complete warm pool metadata without raw retention
     assert.equal(workers[0].assignmentState, "warm");
     assert.deepEqual(workers[0].currentLease, null);
     assert.equal(workers[0].modelRoute.policy, "task-fit");
-    assert.equal(workers[0].lastPreflight.status, "ready");
+    assert.equal(workers[0].lastPreflight.status, "passed");
     assert.equal(workers[0].heartbeat.status, "recorded");
     assert.equal(workers[0].recoveryAction, "await_dispatcher_lease_pull");
     assert.equal(workers[0].rawPayloadRetained, false);
@@ -5792,7 +5792,10 @@ test("worker handoff gate previews durable handoff files for warm workers", () =
     assert.match(preview.summary.pairings[0].handoffPath, /manager-runs\/manager-test\/handoffs\/codex-1-lane-3\.md$/);
     assert.match(preview.summary.pairings[0].pasteText, /Please read and follow this manager handoff file/);
     assert.deepEqual(preview.summary.stopLines, ["no takeover", "no dispatch apply", "no worker kill", "no unknown session mutation", "no raw provider payload retention"]);
-    assert.ok(preview.nextActions.some((action) => action.code === "worker-handoff-apply-ready"));
+    const handoffAction = preview.nextActions.find((action) => action.code === "worker-handoff-apply-ready");
+    assert.ok(handoffAction);
+    assert.match(handoffAction.nextAction, /--run-id 'manager-test'/);
+    assert.match(handoffAction.nextAction, /--state-root '/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -6492,6 +6495,7 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
     assert.match(handoffText, /do not take over fresh owners/);
     assert.match(handoffText, /manager-ledger\.mjs append-checkpoint/);
     assert.match(handoffText, /manager-ledger\.mjs append-question/);
+    assert.match(handoffText, /--state-root '/);
     assert.match(handoffText, /--material-decision/);
     assert.match(handoffText, /assignment:lane-1/);
     assert.match(readFileSync(pastePath, "utf8"), /Please read and follow this manager handoff file/);
@@ -8818,7 +8822,7 @@ test("worker owner delegation gate sends delegated owner override without takeov
     );
     assert.equal(progressAfterRepeatedSignals.summary.workerProgress[0].progressState, "progress_signal_unanswered");
     assert.equal(progressAfterRepeatedSignals.summary.workerProgress[0].progressSignalCount, 2);
-    assert.equal(progressAfterRepeatedSignals.nextActions[0].nextAction, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json");
+    assert.equal(progressAfterRepeatedSignals.nextActions[0].nextAction, `node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test' --state-root '${stateRoot}'`);
     const inspection = buildWorkerRecoveryInspection(
       { runId: "manager-test", stateRoot, apply: true },
       { progressStatus: progressAfterRepeatedSignals },
@@ -8875,7 +8879,7 @@ test("worker owner delegation gate sends delegated owner override without takeov
     assert.equal(progressAfterInspection.summary.workerProgress[0].recoveryInspectionAfterProgressSignal, true);
     assert.equal(progressAfterInspection.summary.workerProgress[0].submitPendingAfterRecoveryInspection, false);
     assert.equal(progressAfterInspection.nextActions[0].code, "worker-submit-pending-progress-signal");
-    assert.equal(progressAfterInspection.nextActions[0].nextAction, "node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit 1");
+    assert.equal(progressAfterInspection.nextActions[0].nextAction, `node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit 1 --run-id 'manager-test' --state-root '${stateRoot}'`);
     const progressAfterRecoverySubmit = buildWorkerProgressStatus(
       { runId: "manager-test", stateRoot, progressStaleMinutes: 1 },
       {
@@ -8946,7 +8950,7 @@ test("worker owner delegation gate sends delegated owner override without takeov
     );
     assert.equal(progressAfterStaleRecoverySubmit.status, "attention");
     assert.equal(progressAfterStaleRecoverySubmit.summary.workerProgress[0].progressState, "recovery_submit_unanswered");
-    assert.equal(progressAfterStaleRecoverySubmit.nextActions[0].nextAction, "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1");
+    assert.equal(progressAfterStaleRecoverySubmit.nextActions[0].nextAction, `node ./scripts/manager-worker-retire.mjs --summary-json --limit 1 --run-id 'manager-test' --state-root '${stateRoot}'`);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -9106,8 +9110,8 @@ test("continuous prompt-idle handoff action uses prompt-idle signal gate", () =>
   );
 
   assert.equal(plan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
-  assert.equal(plan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle");
-  assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --apply");
+  assert.equal(plan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-review-request-plan'");
+  assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-review-request-plan' --apply");
 });
 
 test("continuous dispatcher truth beats prompt-idle handoff repair", () => {
@@ -9224,7 +9228,7 @@ test("prompt-idle after submitted progress signal routes to recovery inspection"
   );
 
   assert.equal(progress.summary.workerProgress[0].progressState, "progress_signal_unanswered");
-  assert.equal(progress.nextActions[0].nextAction, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json");
+  assert.equal(progress.nextActions[0].nextAction, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test'");
 });
 
 test("ledger append blocks missing evidence and malformed checkpoint preservation", () => {
@@ -10689,59 +10693,65 @@ test("lane advancement does not advance in-progress checkpoint just because a fo
 });
 
 test("lane advancement apply uses owner-checked heartbeat metadata only", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-lane-advance-state-root-"));
   const calls = [];
-  const plan = buildLaneAdvancementPlan(
-    { runId: "manager-test", apply: true, limit: 1 },
-    {
-      workerStatus: {
-        summary: {
-          workers: [
-            {
-              workerId: "codex-2",
-              owner: "manager-test/codex-2",
-              runId: "manager-test",
-              sessionName: "codex-2",
-              state: "active",
-              assignmentId: "lane-2",
-              taskId: "task-2",
-              lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
-            },
-          ],
+  try {
+    const plan = buildLaneAdvancementPlan(
+      { runId: "manager-test", stateRoot, apply: true, limit: 1 },
+      {
+        workerStatus: {
+          summary: {
+            workers: [
+              {
+                workerId: "codex-2",
+                owner: "manager-test/codex-2",
+                runId: "manager-test",
+                sessionName: "codex-2",
+                state: "active",
+                assignmentId: "lane-2",
+                taskId: "task-2",
+                lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [{ assignmentId: "lane-2", taskId: "task-2", owner: "owner-1", phase: "handoff" }],
+          },
+        },
+        checkpoints: [
+          {
+            checkpointId: "checkpoint-1",
+            timestamp: "2026-06-29T00:05:00.000Z",
+            actor: "codex-2",
+            assignmentId: "lane-2",
+            summary: "Implemented and verified. Ready for manager review; staged implementation unchanged.",
+            sourceRefs: ["assignment:lane-2"],
+          },
+        ],
+        workspaceRunner(args) {
+          calls.push(args);
+          return {
+            target: "lane-2",
+            phase: "review_ready",
+            ownerMatches: true,
+            lastHeartbeatAt: "2026-06-29T00:06:00.000Z",
+          };
         },
       },
-      assignmentSummary: {
-        summary: {
-          laneAssignments: [{ assignmentId: "lane-2", taskId: "task-2", owner: "owner-1", phase: "handoff" }],
-        },
-      },
-      checkpoints: [
-        {
-          checkpointId: "checkpoint-1",
-          timestamp: "2026-06-29T00:05:00.000Z",
-          actor: "codex-2",
-          assignmentId: "lane-2",
-          summary: "Implemented and verified. Ready for manager review; staged implementation unchanged.",
-          sourceRefs: ["assignment:lane-2"],
-        },
-      ],
-      workspaceRunner(args) {
-        calls.push(args);
-        return {
-          target: "lane-2",
-          phase: "review_ready",
-          ownerMatches: true,
-          lastHeartbeatAt: "2026-06-29T00:06:00.000Z",
-        };
-      },
-    },
-  );
+    );
 
-  assert.equal(plan.status, "ready");
-  assert.equal(plan.summary.mutationMode, "assignment_heartbeat_metadata_only");
-  assert.equal(plan.summary.advancedLaneCount, 1);
-  assert.deepEqual(calls[0].slice(0, 5), ["heartbeat", "lane-2", "--owner", "owner-1", "--phase"]);
-  assert.equal(calls[0][5], "review_ready");
-  assert.ok(calls[0].includes("--json"));
+    assert.equal(plan.status, "ready");
+    assert.equal(plan.summary.mutationMode, "assignment_heartbeat_metadata_only");
+    assert.equal(plan.summary.advancedLaneCount, 1);
+    assert.deepEqual(calls[0].slice(0, 5), ["heartbeat", "lane-2", "--owner", "owner-1", "--phase"]);
+    assert.equal(calls[0][5], "review_ready");
+    assert.ok(calls[0].includes("--json"));
+    assert.deepEqual(calls[0].slice(-2), ["--state-root", stateRoot]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("lane advancement dedupes workers by assignment and preserves command identifiers", () => {
@@ -11839,7 +11849,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(promptIdleCompletedPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
-  assert.equal(promptIdleCompletedPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --apply");
+  assert.equal(promptIdleCompletedPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id 'manager-test' --apply");
 
   const promptIdleCheckpointPlan = buildContinuousRunPlan(
     {},
@@ -11879,7 +11889,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(promptIdleCheckpointPlan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
-  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --apply");
+  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-test' --apply");
 
   const refillPlan = buildContinuousRunPlan(
     {},
@@ -16636,6 +16646,48 @@ test("stale owner inspection aggregates dry-run takeover evidence into cleanup a
   assert.equal(inspection.nextActions[0].code, "stale-owner-cleanup-inspection");
   assert.equal(inspection.nextActions[0].nextAction, "node ./scripts/manager-cleanup-plan.mjs --summary-json");
   assert.doesNotMatch(JSON.stringify(inspection), /--apply|capture-pane|provider payload|reasoning trace|raw prompt/i);
+});
+
+test("stale owner inspection forwards explicit state root to takeover dry-runs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-stale-owner-state-root-"));
+  try {
+    const resumeState = {
+      summary: {
+        ledger: { runId: "manager-test" },
+        takeoverInspection: {
+          targets: [
+            { kind: "lane_assignment", id: "apply-lane", owner: "old-owner", branch: "codex/apply-lane" },
+          ],
+        },
+      },
+    };
+    const calls = [];
+    const inspection = buildStaleOwnerInspection(
+      { runId: "manager-test", stateRoot },
+      {
+        resumeState,
+        workspaceRunner(args) {
+          calls.push(args);
+          return {
+            decision: "allowed",
+            allowed: true,
+            worktree: { exists: true, status: "clean" },
+            branch: { branch: "codex/apply-lane", localSha: "def456", remoteSha: "def456" },
+            pr: { status: "open", pr_number: 12 },
+            dirtyState: { dirty: false },
+            blockers: [],
+          };
+        },
+      },
+    );
+
+    assert.equal(inspection.status, "attention");
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].slice(0, 4), ["takeover", "apply-lane", "--dry-run", "--summary-json"]);
+    assert.deepEqual(calls[0].slice(-2), ["--state-root", stateRoot]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("resume blocks assignment and tmux ownership ambiguity instead of guessing", () => {
