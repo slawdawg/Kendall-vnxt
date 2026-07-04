@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,8 +25,8 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
 
   for (const stage of ["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"]) {
     assert.match(contractSource, new RegExp(`"${stage}"`));
-    assert.match(coreSource, new RegExp(`"${stage}"`));
   }
+  assert.match(coreSource, /AUTHORITATIVE_STAGE_SEQUENCE:\s*readonly AuthoritativePacketStage\[\]\s*=\s*AUTHORITATIVE_PACKET_STAGES/);
 
   for (const exportedName of [
     "AuthoritativePacketStage",
@@ -65,6 +65,8 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
     "failure_budget_hit",
     "backend_unavailable",
     "projection_stale",
+    "healthy_idle",
+    "waiting_for_approval",
   ]) {
     assert.match(contractSource, new RegExp(`"${projectionLiteral}"`), `missing projection literal ${projectionLiteral}`);
   }
@@ -74,16 +76,34 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(contractSource, /activeLeaseCount:\s*number \| null;/);
   assert.match(contractSource, /activeWorkerCount:\s*number \| null;/);
   assert.match(contractSource, /warmWorkerCount:\s*number \| null;/);
+  assert.match(contractSource, /reliabilityState:/);
+  assert.match(contractSource, /evidenceRefs:\s*string\[\];/);
+  assert.match(contractSource, /PipelineWorkerSummaryV0/);
+  assert.match(contractSource, /workerSummary:\s*PipelineWorkerSummaryV0;/);
+  assert.match(contractSource, /PipelineReliabilityProblemV0/);
+  assert.match(contractSource, /reliabilityProblems:\s*PipelineReliabilityProblemV0\[\];/);
+  assert.match(contractSource, /PipelineGatedControlV0/);
+  assert.match(contractSource, /gatedControls:\s*PipelineGatedControlV0\[\];/);
+  assert.match(contractSource, /kill_worker/);
+  assert.match(contractSource, /github_mutation/);
+  assert.match(contractSource, /terminal_access/);
+  assert.match(contractSource, /raw_payload_retention/);
+  assert.match(contractSource, /activeCount:\s*number \| null;/);
   assert.match(contractSource, /dispatchableCount:\s*number \| null;/);
   assert.match(contractSource, /blockedCount:\s*number \| null;/);
+  assert.match(contractSource, /gatedCount:\s*number \| null;/);
   assert.match(contractSource, /closedCount:\s*number \| null;/);
+  assert.match(contractSource, /staleCount:\s*number \| null;/);
+  assert.match(contractSource, /refillingCount:\s*number \| null;/);
+  assert.match(contractSource, /unknownCount:\s*number \| null;/);
   assert.match(contractSource, /needs_approval:\s*"Needs Approval"/);
   assert.match(contractSource, /metadataOnly:\s*true;/);
   assert.match(coreSource, /LEGACY_TO_AUTHORITATIVE_STAGE/);
   assert.match(coreSource, /human_gate:\s*"needs_approval"/);
   assert.match(coreSource, /createWorkPacketCreatedEvent/);
   assert.match(coreSource, /createWorkPacketTransitionEvent/);
-  assert.match(coreSource, /rawPrompt\|rawCompletion\|reasoningTrace\|providerPayload\|secret\|credential/);
+  assert.match(coreSource, /raw\[\\s_-\]\*\(\?:prompts\?\|completions\?\|transcripts\?\)/);
+  assert.match(coreSource, /\(\?:terminal\|tmux\|pane\)\[\\s_-\]\*\(\?:scrollbacks\?\|texts\?\|outputs\?\|stdouts\?\|stderrs\?\)/);
   assert.doesNotMatch(contractSource, /\brawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential\b/);
   assert.match(contractsIndex, /export \* from "\.\/pipeline-control-plane";/);
   assert.match(workflowCoreIndex, /export \* from "\.\/pipeline-control-plane";/);
@@ -149,6 +169,172 @@ test("authoritative lifecycle rules create metadata-only creation and transition
     }),
     /must not retain raw prompt/,
   );
+
+  const unsafeMarkers = [
+    ["raw-completion", "raw completion must not be stored"],
+    ["raw-prompts-plural", "raw prompts must not be stored"],
+    ["provider-payload", "provider payload must not be stored"],
+    ["provider-payloads-plural", "provider payloads must not be stored"],
+    ["reasoning-trace", "reasoning trace must not be stored"],
+    ["reasoning-traces-plural", "reasoning traces must not be stored"],
+    ["secret", "secret must not be stored"],
+    ["secret-key", "secret_key must not be stored"],
+    ["credential", "credential must not be stored"],
+    ["credential-id", "credential_id must not be stored"],
+    ["terminal-scrollback", "terminal scrollback must not be stored"],
+    ["terminal-scrollback-plural", "terminal scrollbacks must not be stored"],
+    ["terminal-output", "terminal output must not be stored"],
+    ["terminal-stdout", "terminal stdout must not be stored"],
+    ["terminal-stderr", "terminal stderr must not be stored"],
+    ["tmux-scrollback", "tmux scrollback must not be stored"],
+    ["tmux-output", "tmux output must not be stored"],
+    ["tmux-underscore-scrollback", "tmux_scrollback must not be stored"],
+    ["pane-scrollback", "pane scrollback must not be stored"],
+    ["pane-text", "pane text must not be stored"],
+    ["raw-transcript", "raw transcript must not be stored"],
+  ];
+
+  for (const [caseId, payloadSummary] of unsafeMarkers) {
+    assert.throws(
+      () => createWorkPacketTransitionEvent({
+        packetId: "packet-story-1-1",
+        previousStage: "capture",
+        targetStage: "classify",
+        eventId: `event-unsafe-${caseId}`,
+        occurredAt: "2026-07-02T00:02:00.000Z",
+        sourceRef,
+        actor,
+        payloadSummary,
+      }),
+      /must not retain raw prompt/,
+      caseId,
+    );
+  }
+
+  for (const [caseId, marker] of unsafeMarkers) {
+    const evidenceRef = `evidence:${marker.replaceAll(" ", "-")}`;
+    assert.throws(
+      () => createWorkPacketTransitionEvent({
+        packetId: "packet-story-1-1",
+        previousStage: "capture",
+        targetStage: "classify",
+        eventId: `event-unsafe-ref-${caseId}`,
+        occurredAt: "2026-07-02T00:03:00.000Z",
+        sourceRef,
+        actor,
+        evidenceRefs: [evidenceRef],
+      }),
+      /must not retain raw prompt/,
+      `evidence ref ${caseId}`,
+    );
+  }
+
+  assert.throws(
+    () => createWorkPacketCreatedEvent({
+      packetId: "packet-story-1-1",
+      eventId: "event-unsafe-ref",
+      occurredAt: "2026-07-02T00:00:00.000Z",
+      sourceRef,
+      actor,
+      evidenceRefs: ["tmux-pane-scrollback:do-not-store"],
+    }),
+    /must not retain raw prompt/,
+  );
+
+  assert.throws(
+    () => createWorkPacketCreatedEvent({
+      packetId: "packet-story-1-1",
+      eventId: "event-non-string-ref",
+      occurredAt: "2026-07-02T00:00:00.000Z",
+      sourceRef,
+      actor,
+      evidenceRefs: [42],
+    }),
+    /evidence refs must be strings/,
+  );
+
+  assert.equal(
+    createWorkPacketCreatedEvent({
+      packetId: "packet-story-1-1",
+      eventId: "event-blank-summary",
+      occurredAt: "2026-07-02T00:00:00.000Z",
+      sourceRef,
+      actor,
+      payloadSummary: "   ",
+    }).payloadSummary,
+    "Metadata-only lifecycle event.",
+  );
+});
+
+test("authoritative lifecycle stage contract maps PRD semantics and blocks non-dispatchable states", async () => {
+  const {
+    AUTHORITATIVE_PACKET_STAGES,
+    AUTHORITATIVE_PACKET_STATUSES,
+    AUTHORITATIVE_PACKET_STAGE_PRD_SEMANTICS,
+    PIPELINE_LIFECYCLE_STAGE_TO_AUTHORITATIVE,
+    isDispatchableAuthoritativePacketState,
+    isKnownAuthoritativePacketStage,
+    isLiveProgressAuthoritativePacketState,
+  } = await loadCompiledLifecycleModule();
+
+  assert.deepEqual(AUTHORITATIVE_PACKET_STAGES, [
+    "capture",
+    "classify",
+    "route",
+    "shape",
+    "needs_approval",
+    "execute",
+    "review",
+    "promote",
+    "deliver",
+    "learn",
+  ]);
+  assert.deepEqual(AUTHORITATIVE_PACKET_STATUSES, ["active", "waiting", "blocked", "failed", "complete", "deferred"]);
+
+  assert.deepEqual(PIPELINE_LIFECYCLE_STAGE_TO_AUTHORITATIVE, {
+    intake: "capture",
+    route: "route",
+    shape: "shape",
+    approval: "needs_approval",
+    execute: "execute",
+    review: "review",
+    promote: "promote",
+    deliver: "deliver",
+    learn: "learn",
+    terminal: "terminal",
+    deferred: "deferred",
+    unknown: "unknown",
+  });
+
+  assert.equal(AUTHORITATIVE_PACKET_STAGE_PRD_SEMANTICS.capture, "intake");
+  assert.equal(AUTHORITATIVE_PACKET_STAGE_PRD_SEMANTICS.classify, "intake");
+  assert.equal(AUTHORITATIVE_PACKET_STAGE_PRD_SEMANTICS.needs_approval, "approval");
+  assert.equal(isKnownAuthoritativePacketStage("execute"), true);
+  assert.equal(isKnownAuthoritativePacketStage("unknown"), false);
+
+  assert.equal(isDispatchableAuthoritativePacketState({ currentStage: "route", status: "waiting" }), true);
+  assert.equal(isLiveProgressAuthoritativePacketState({ currentStage: "execute", status: "active" }), true);
+  assert.equal(isLiveProgressAuthoritativePacketState({ currentStage: "needs_approval", status: "active" }), false);
+
+  for (const state of [
+    null,
+    undefined,
+    { currentStage: "unknown", status: "waiting" },
+    { currentStage: "terminal", status: "active" },
+    { currentStage: "terminal", status: "waiting" },
+    { currentStage: "deferred", status: "waiting" },
+    { currentStage: "learn", status: "complete" },
+    { currentStage: "route", status: "complete" },
+    { currentStage: "execute", status: "deferred" },
+    { currentStage: "execute", status: "failed" },
+    { currentStage: "route", status: "unknown" },
+    { targetStage: "execute", status: "active" },
+    { targetStage: "execute", status: "waiting" },
+    { currentStage: "route", targetStage: "execute", status: "waiting" },
+  ]) {
+    assert.equal(isDispatchableAuthoritativePacketState(state), false, `${JSON.stringify(state)} must not dispatch`);
+    assert.equal(isLiveProgressAuthoritativePacketState(state), false, `${JSON.stringify(state)} must not count as live progress`);
+  }
 });
 
 test("dashboard projection contract validator accepts explicit states and rejects bad labels", async () => {
@@ -158,6 +344,69 @@ test("dashboard projection contract validator accepts explicit states and reject
   const liveProjection = projectionContractFixture();
   setProjectionPayload(liveProjection);
   assert.deepEqual(await getPipelineDashboardProjection(), liveProjection);
+
+  const legacySelectedDetail = { ...liveProjection.selectedPacketDetails[0] };
+  delete legacySelectedDetail.latestTransitionEventRef;
+  delete legacySelectedDetail.recentTransitionEventRefs;
+  delete legacySelectedDetail.latestMovementSummary;
+  delete legacySelectedDetail.canSatisfyLiveMovementProof;
+  const legacyCompatibleProjection = projectionContractFixture({
+    selectedPacketDetails: [legacySelectedDetail],
+  });
+  setProjectionPayload(legacyCompatibleProjection);
+  assert.deepEqual(await getPipelineDashboardProjection(), legacyCompatibleProjection);
+
+  const legacyAdditiveManagerProjection = projectionContractFixture({
+    managerSummary: { ...liveProjection.managerSummary, reliabilityState: "ready" },
+  });
+  delete legacyAdditiveManagerProjection.managerSummary.evidenceRefs;
+  delete legacyAdditiveManagerProjection.managerSummary.healthySourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.exhaustedSourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.blockedSourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.gatedSourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.staleSourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.unavailableSourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.refillingSourceCount;
+  delete legacyAdditiveManagerProjection.managerSummary.unknownSourceCount;
+  setProjectionPayload(legacyAdditiveManagerProjection);
+  const normalizedLegacyManagerProjection = await getPipelineDashboardProjection();
+  assert.equal(normalizedLegacyManagerProjection.managerSummary.reliabilityState, "ready");
+  assert.equal(normalizedLegacyManagerProjection.managerSummary.evidenceRefs.length, 0);
+  assert.equal(normalizedLegacyManagerProjection.managerSummary.healthySourceCount, null);
+
+  const legacyWorkerProjection = projectionContractFixture();
+  delete legacyWorkerProjection.workerSummary;
+  delete legacyWorkerProjection.reliabilityProblems;
+  setProjectionPayload(legacyWorkerProjection);
+  const normalizedLegacyWorkerProjection = await getPipelineDashboardProjection();
+  assert.equal(normalizedLegacyWorkerProjection.workerSummary.stateSource, "unknown");
+  assert.equal(normalizedLegacyWorkerProjection.workerSummary.warmCount, null);
+  assert.equal(normalizedLegacyWorkerProjection.workerSummary.evidenceRefs.length, 0);
+  assert.equal(normalizedLegacyWorkerProjection.reliabilityProblems.length, 0);
+
+  const partialWorkerProjection = projectionContractFixture({
+    workerSummary: {
+      warmCount: 1,
+      activeCount: 0,
+      workerRefs: ["worker:codex-2"],
+      evidenceRefs: ["worker:codex-2"],
+    },
+  });
+  delete partialWorkerProjection.workerSummary.waitingCount;
+  delete partialWorkerProjection.workerSummary.stalledCount;
+  delete partialWorkerProjection.workerSummary.failedCount;
+  delete partialWorkerProjection.workerSummary.drainingCount;
+  delete partialWorkerProjection.workerSummary.killedCount;
+  delete partialWorkerProjection.workerSummary.completeCount;
+  delete partialWorkerProjection.workerSummary.unavailableCount;
+  delete partialWorkerProjection.workerSummary.unknownCount;
+  delete partialWorkerProjection.workerSummary.summary;
+  delete partialWorkerProjection.workerSummary.metadataOnly;
+  setProjectionPayload(partialWorkerProjection);
+  const normalizedPartialWorkerProjection = await getPipelineDashboardProjection();
+  assert.equal(normalizedPartialWorkerProjection.workerSummary.warmCount, 1);
+  assert.equal(normalizedPartialWorkerProjection.workerSummary.stalledCount, null);
+  assert.equal(normalizedPartialWorkerProjection.workerSummary.summary, "Worker runtime state is not connected to the supervisor projection.");
 
   const fixtureEnabledProjection = projectionContractFixture({
     sourceLabel: "fixture",
@@ -199,15 +448,22 @@ test("dashboard projection contract validator accepts explicit states and reject
       metadataOnly: true,
     },
     queueSummary: {
+      activeCount: null,
       dispatchableCount: null,
       blockedCount: null,
+      gatedCount: null,
       closedCount: null,
+      staleCount: null,
+      refillingCount: null,
+      unknownCount: null,
       emptyReason: "unknown",
       sourceExhausted: false,
       summary: "Fixture projection has no live queue authority.",
     },
     workPackets: [],
     selectedPacketDetails: [],
+    sourceStates: [],
+    reliabilityProblems: [],
     evidenceRefs: ["fixture:projection-contract"],
   });
   setProjectionPayload(fixtureEnabledProjection);
@@ -227,16 +483,111 @@ test("dashboard projection contract validator accepts explicit states and reject
     },
     queueSummary: {
       ...liveProjection.queueSummary,
+      activeCount: 0,
       dispatchableCount: 0,
+      gatedCount: 0,
       emptyReason: "healthy_empty",
       summary: "Queue is healthy and empty.",
     },
+    managerSummary: {
+      ...liveProjection.managerSummary,
+      reliabilityState: "healthy_idle",
+      dispatchableQueueCount: 0,
+      inactivityReason: "healthy_empty",
+    },
     workPackets: [],
     selectedPacketDetails: [],
+    sourceStates: [],
+    reliabilityProblems: [],
     evidenceRefs: ["supervisor:healthy-empty"],
   });
   setProjectionPayload(healthyEmptyLiveProjection);
   assert.deepEqual(await getPipelineDashboardProjection(), healthyEmptyLiveProjection);
+
+  const sourceExhaustedProjection = projectionContractFixture({
+    truthSummary: {
+      ...liveProjection.truthSummary,
+      summary: "Closed packets remain visible while approved source work is exhausted.",
+    },
+    managerSummary: {
+      ...liveProjection.managerSummary,
+      reliabilityState: "source_exhausted",
+      sourceExhausted: true,
+      inactivityReason: "source_exhausted",
+      dispatchableQueueCount: 0,
+      summary: "Manager has no dispatchable work because approved source is exhausted.",
+    },
+    queueSummary: {
+      ...liveProjection.queueSummary,
+      activeCount: 0,
+      dispatchableCount: 0,
+      closedCount: 1,
+      emptyReason: "source_exhausted",
+      sourceExhausted: true,
+      summary: "Queue is exhausted for the approved source.",
+    },
+    sourceStates: [
+      {
+        ...liveProjection.sourceStates[0],
+        state: "exhausted",
+        summary: "Approved source work is exhausted.",
+        evidenceRefs: ["evidence:source-exhausted"],
+      },
+    ],
+    workPackets: [{ ...liveProjection.workPackets[0], status: "complete" }],
+    selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], status: "complete", canSatisfyLiveMovementProof: false }],
+    reliabilityProblems: [],
+    evidenceRefs: ["evidence:source-exhausted"],
+  });
+  setProjectionPayload(sourceExhaustedProjection);
+  assert.deepEqual(await getPipelineDashboardProjection(), sourceExhaustedProjection);
+
+  const zeroPacketSourceExhaustedProjection = projectionContractFixture({
+    truthSummary: {
+      ...liveProjection.truthSummary,
+      emptyReason: "source_exhausted",
+      backendEmpty: true,
+      summary: "No backend WorkPackets are present; approved source work is exhausted.",
+    },
+    managerSummary: {
+      ...liveProjection.managerSummary,
+      reliabilityState: "source_exhausted",
+      sourceExhausted: true,
+      inactivityReason: "source_exhausted",
+      dispatchableQueueCount: 0,
+      blockedQueueCount: 0,
+      closedQueueCount: 0,
+      summary: "Manager has no dispatchable work because approved source is exhausted.",
+    },
+    queueSummary: {
+      ...liveProjection.queueSummary,
+      activeCount: 0,
+      dispatchableCount: 0,
+      blockedCount: 0,
+      gatedCount: 0,
+      closedCount: 0,
+      staleCount: 0,
+      refillingCount: 0,
+      unknownCount: 0,
+      emptyReason: "source_exhausted",
+      sourceExhausted: true,
+      summary: "Queue is exhausted for the approved source.",
+    },
+    sourceStates: [
+      {
+        ...liveProjection.sourceStates[0],
+        state: "exhausted",
+        summary: "Approved source work is exhausted.",
+        evidenceRefs: ["evidence:source-exhausted"],
+      },
+    ],
+    workPackets: [],
+    selectedPacketDetails: [],
+    reliabilityProblems: [],
+    evidenceRefs: ["evidence:source-exhausted"],
+  });
+  setProjectionPayload(zeroPacketSourceExhaustedProjection);
+  assert.deepEqual(await getPipelineDashboardProjection(), zeroPacketSourceExhaustedProjection);
 
   const staleOpenLiveProjection = projectionContractFixture({
     sourceUpdatedAt: "2026-07-02T16:59:00.000Z",
@@ -261,9 +612,91 @@ test("dashboard projection contract validator accepts explicit states and reject
     ["missing-stage-summary", { stageSummaries: liveProjection.stageSummaries.slice(1) }],
     ["duplicate-stage-summary", { stageSummaries: [liveProjection.stageSummaries[0], ...liveProjection.stageSummaries.slice(0, -1)] }],
     ["mismatched-selected-detail", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], packetId: "packet-other" }] }],
+    ["bad-source-states", { sourceStates: [{ ...liveProjection.sourceStates[0], state: "empty" }] }],
+    [
+      "source-exhausted-without-source-state",
+      {
+        truthSummary: { ...liveProjection.truthSummary, emptyReason: "source_exhausted" },
+        queueSummary: { ...liveProjection.queueSummary, sourceExhausted: true, emptyReason: "source_exhausted" },
+        sourceStates: [{ ...liveProjection.sourceStates[0], state: "healthy" }],
+      },
+    ],
+    ["bad-gated-count", { queueSummary: { ...liveProjection.queueSummary, gatedCount: -1 } }],
+    ["bad-active-count", { queueSummary: { ...liveProjection.queueSummary, activeCount: -1 } }],
+    [
+      "source-exhausted-without-evidence",
+      {
+        managerSummary: { ...liveProjection.managerSummary, sourceExhausted: true, inactivityReason: "source_exhausted" },
+        queueSummary: { ...liveProjection.queueSummary, sourceExhausted: true, emptyReason: "source_exhausted" },
+        sourceStates: [{ ...liveProjection.sourceStates[0], state: "exhausted", evidenceRefs: [] }],
+      },
+    ],
+    [
+      "source-exhausted-reliability-without-evidence",
+      {
+        managerSummary: { ...liveProjection.managerSummary, reliabilityState: "source_exhausted" },
+        sourceStates: [{ ...liveProjection.sourceStates[0], state: "healthy", evidenceRefs: ["evidence:source-healthy"] }],
+      },
+    ],
+    [
+      "source-exhausted-with-open-packet",
+      {
+        managerSummary: { ...liveProjection.managerSummary, sourceExhausted: true, inactivityReason: "source_exhausted" },
+        queueSummary: { ...liveProjection.queueSummary, sourceExhausted: true, emptyReason: "source_exhausted" },
+        sourceStates: [{ ...liveProjection.sourceStates[0], state: "exhausted", evidenceRefs: ["evidence:source-exhausted"] }],
+      },
+    ],
+    ["bad-latest-transition-event-ref", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], latestTransitionEventRef: 42 }] }],
+    ["bad-recent-transition-event-refs", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], recentTransitionEventRefs: ["event:ok", 42] }] }],
+    ["bad-latest-movement-summary", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], latestMovementSummary: 42 }] }],
+    ["bad-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], canSatisfyLiveMovementProof: "true" }] }],
+    ["stale-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], truthLabel: "stale", canSatisfyLiveMovementProof: true }] }],
+    ["fixture-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], truthLabel: "fixture", canSatisfyLiveMovementProof: true }] }],
+    ["simulated-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], truthLabel: "simulated", canSatisfyLiveMovementProof: true }] }],
+    ["dry-run-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], truthLabel: "dry_run", canSatisfyLiveMovementProof: true }] }],
+    ["unknown-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], truthLabel: "unknown", canSatisfyLiveMovementProof: true }] }],
+    ["complete-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], status: "complete", canSatisfyLiveMovementProof: true }] }],
+    ["learn-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], currentStage: "learn", canSatisfyLiveMovementProof: true }] }],
+    ["missing-latest-ref-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], latestTransitionEventRef: null, canSatisfyLiveMovementProof: true }] }],
+    ["missing-recent-ref-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], recentTransitionEventRefs: [], canSatisfyLiveMovementProof: true }] }],
+    ["blank-summary-live-movement-proof", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], latestMovementSummary: "   ", canSatisfyLiveMovementProof: true }] }],
     ["bad-packet-updated-at", { workPackets: [{ ...liveProjection.workPackets[0], updatedAt: "not-a-date" }] }],
     ["manager-raw-count", { managerSummary: { ...liveProjection.managerSummary, activeWorkerCount: -1 } }],
+    ["manager-bad-reliability-state", { managerSummary: { ...liveProjection.managerSummary, reliabilityState: "tmux_running" } }],
+    ["manager-bad-evidence-refs", { managerSummary: { ...liveProjection.managerSummary, evidenceRefs: ["manager:evidence", 42] } }],
+    ["manager-unsafe-evidence-refs", { managerSummary: { ...liveProjection.managerSummary, evidenceRefs: ["tmux-pane-scrollback:must-not-render"] } }],
+    ["worker-bad-count", { workerSummary: { ...liveProjection.workerSummary, warmCount: -1 } }],
+    ["worker-bad-state-source", { workerSummary: { ...liveProjection.workerSummary, stateSource: "tmux" } }],
+    ["worker-bad-worker-refs", { workerSummary: { ...liveProjection.workerSummary, workerRefs: ["worker:codex-1", 42] } }],
+    ["worker-non-worker-ref", { workerSummary: { ...liveProjection.workerSummary, workerRefs: ["evidence:codex-1"] } }],
+    ["worker-terminal-output-ref", { workerSummary: { ...liveProjection.workerSummary, evidenceRefs: ["terminal-output:codex-1"] } }],
+    ["worker-unsafe-worker-refs", { workerSummary: { ...liveProjection.workerSummary, workerRefs: ["tmux-pane-scrollback:must-not-render"] } }],
+    ["worker-unsafe-evidence-refs", { workerSummary: { ...liveProjection.workerSummary, evidenceRefs: ["provider-payload:must-not-render"] } }],
+    ["bad-reliability-problem-kind", { reliabilityProblems: [{ ...liveProjection.reliabilityProblems[0], kind: "idle" }] }],
+    ["bad-reliability-problem-evidence", { reliabilityProblems: [{ ...liveProjection.reliabilityProblems[0], evidenceRefs: ["terminal-output:must-not-render"] }] }],
+    ["bad-gated-control-operation", { gatedControls: [{ ...liveProjection.gatedControls[0], operation: "run_shell" }] }],
+    ["bad-gated-control-status", { gatedControls: [{ ...liveProjection.gatedControls[0], status: "running" }] }],
+    ["bad-gated-control-worker-ref", { gatedControls: [{ ...liveProjection.gatedControls[0], workerRefs: ["evidence:codex-1"] }] }],
+    ["bad-gated-control-evidence", { gatedControls: [{ ...liveProjection.gatedControls[0], evidenceRefs: ["provider-payload:must-not-render"] }] }],
+    ["bad-gated-control-stop-line", { gatedControls: [{ ...liveProjection.gatedControls[0], stopLine: "   " }] }],
+    ["executable-gated-control-command", { gatedControls: [{ ...liveProjection.gatedControls[0], command: "tmux kill-session" }] }],
+    ["executable-gated-control-script", { gatedControls: [{ ...liveProjection.gatedControls[0], script: "tmux kill-session" }] }],
+    ["executable-gated-control-text", { gatedControls: [{ ...liveProjection.gatedControls[0], nextAction: "Run tmux kill-session now." }] }],
+    ["idle-problem-with-active-worker", { workerSummary: { ...liveProjection.workerSummary, activeCount: 1 } }],
+    ["idle-problem-with-draining-worker", { workerSummary: { ...liveProjection.workerSummary, drainingCount: 1 } }],
+    [
+      "idle-problem-with-fixture-projection",
+      {
+        sourceLabel: "fixture",
+        fixtureMode: { ...liveProjection.fixtureMode, enabled: true, canSatisfyLiveProof: false },
+        truthSummary: { ...liveProjection.truthSummary, label: "fixture", fixtureBacked: true },
+      },
+    ],
+    ["source-state-unsafe-evidence-refs", { sourceStates: [{ ...liveProjection.sourceStates[0], evidenceRefs: ["provider-payload:must-not-render"] }] }],
+    ["packet-unsafe-evidence-refs", { workPackets: [{ ...liveProjection.workPackets[0], evidenceRefs: ["raw-prompt:must-not-render"] }] }],
+    ["detail-unsafe-evidence-refs", { selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], evidenceRefs: ["secret_key:must-not-render"] }] }],
     ["bad-evidence-refs", { evidenceRefs: [42] }],
+    ["unsafe-evidence-refs", { evidenceRefs: ["terminal-scrollback:must-not-render"] }],
   ]) {
     setProjectionPayload(projectionContractFixture(override));
     await assert.rejects(
@@ -307,12 +740,11 @@ async function loadCompiledLifecycleModule() {
           rootDir: repoRoot,
           outDir: join(outDir, "dist"),
           paths: {
-            "@kendall/contracts": ["packages/contracts/src/index.ts"],
+            "@kendall/contracts": ["packages/contracts/src/pipeline-control-plane/index.ts"],
           },
         },
         include: [
           join(repoRoot, "packages/contracts/src/pipeline-control-plane/index.ts"),
-          join(repoRoot, "packages/contracts/src/index.ts"),
           join(repoRoot, "packages/workflow-core/src/pipeline-control-plane/index.ts"),
         ],
       },
@@ -320,8 +752,22 @@ async function loadCompiledLifecycleModule() {
       2,
     ),
   );
-  const result = spawnSync("apps/dashboard/node_modules/.bin/tsc", ["-p", tsconfigPath], { encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const result = spawnSync("node", ["apps/dashboard/node_modules/typescript/bin/tsc", "-p", tsconfigPath], { encoding: "utf8" });
+  assert.equal(
+    result.status,
+    0,
+    result.stderr || result.stdout || result.error?.message || `tsc exited with status ${result.status} signal ${result.signal}`,
+  );
+  const distRoot = join(outDir, "dist");
+  await writeFile(join(distRoot, "package.json"), JSON.stringify({ type: "module" }));
+  const packageScope = join(distRoot, "node_modules", "@kendall");
+  await mkdir(packageScope, { recursive: true });
+  await mkdir(join(packageScope, "contracts"), { recursive: true });
+  await writeFile(
+    join(packageScope, "contracts", "package.json"),
+    JSON.stringify({ type: "module", exports: { ".": "./index.js" } }),
+  );
+  await writeFile(join(packageScope, "contracts", "index.js"), "export * from '../../../packages/contracts/src/pipeline-control-plane/index.js';\n");
   const modulePath = join(outDir, "dist/packages/workflow-core/src/pipeline-control-plane/index.js");
   return import(pathToFileURL(modulePath).href);
 }
@@ -359,6 +805,18 @@ function projectionContractFixture(overrides = {}) {
       summary: "Live projection.",
     },
     stageSummaries: projectionStageSummaryFixtures(),
+    sourceStates: [
+      {
+        sourceId: "story:3-2",
+        sourceRef: "story:3-2",
+        sourceKind: "bmad_story",
+        state: "healthy",
+        summary: "Source is available for projection contract testing.",
+        evidenceRefs: ["story:3-2"],
+        updatedAt: now,
+        metadataOnly: true,
+      },
+    ],
     workPackets: [
       {
         packetId: "packet-contract-live",
@@ -396,11 +854,16 @@ function projectionContractFixture(overrides = {}) {
         truthLabel: "live",
         blocker: null,
         nextAction: "Advance toward Review.",
+        latestTransitionEventRef: "event:event-contract-transition",
+        recentTransitionEventRefs: ["event:event-contract-created", "event:event-contract-transition"],
+        latestMovementSummary: "Accepted transition to execute for live projection proof.",
+        canSatisfyLiveMovementProof: true,
         metadataOnly: true,
       },
     ],
     managerSummary: {
       stateSource: "supervisor_projection",
+      reliabilityState: "ready",
       freshnessState: "live",
       activeLeaseCount: 0,
       activeWorkerCount: 0,
@@ -408,15 +871,72 @@ function projectionContractFixture(overrides = {}) {
       blockedQueueCount: 0,
       dispatchableQueueCount: 1,
       closedQueueCount: 0,
+      healthySourceCount: 0,
+      exhaustedSourceCount: 0,
+      blockedSourceCount: 0,
+      gatedSourceCount: 0,
+      staleSourceCount: 0,
+      unavailableSourceCount: 0,
+      refillingSourceCount: 0,
+      unknownSourceCount: 0,
       sourceExhausted: false,
       inactivityReason: null,
+      evidenceRefs: ["manager:projection-contract"],
       summary: "Projection contract manager summary.",
       metadataOnly: true,
     },
+    workerSummary: {
+      stateSource: "manager_summary",
+      freshnessState: "live",
+      warmCount: 1,
+      activeCount: 0,
+      waitingCount: 0,
+      stalledCount: 0,
+      failedCount: 0,
+      drainingCount: 0,
+      killedCount: 0,
+      completeCount: 0,
+      unavailableCount: 0,
+      unknownCount: 0,
+      workerRefs: ["worker:codex-2", "worker:codex-3"],
+      evidenceRefs: ["worker:codex-2", "worker:codex-3"],
+      summary: "Projection contract worker summary.",
+      metadataOnly: true,
+    },
+    reliabilityProblems: [
+      {
+        problemId: "problem:idle-with-ready-work",
+        kind: "idle_with_ready_work",
+        severity: "attention",
+        likelyIssue: "manager",
+        summary: "Ready work exists but no worker is progressing it.",
+        evidenceRefs: ["queue:dispatchable", "worker:no-live-progress"],
+        metadataOnly: true,
+      },
+    ],
+    gatedControls: [
+      {
+        controlId: "control:kill-worker",
+        operation: "kill_worker",
+        status: "gated",
+        authorityFamily: "worker-process-control",
+        stopLine: "Do not kill workers from pipeline reliability metadata.",
+        nextAction: "Request explicit worker-control approval before any kill action.",
+        packetId: null,
+        workerRefs: ["worker:codex-2"],
+        evidenceRefs: ["control:kill-worker", "worker:codex-2"],
+        metadataOnly: true,
+      },
+    ],
     queueSummary: {
+      activeCount: 0,
       dispatchableCount: 1,
       blockedCount: 0,
+      gatedCount: 0,
       closedCount: 0,
+      staleCount: 0,
+      refillingCount: 0,
+      unknownCount: 0,
       emptyReason: null,
       sourceExhausted: false,
       summary: "Projection contract queue summary.",
@@ -430,8 +950,12 @@ function projectionContractFixture(overrides = {}) {
     fixtureMode: { ...base.fixtureMode, ...(overrides.fixtureMode ?? {}) },
     truthSummary: { ...base.truthSummary, ...(overrides.truthSummary ?? {}) },
     managerSummary: { ...base.managerSummary, ...(overrides.managerSummary ?? {}) },
+    workerSummary: { ...base.workerSummary, ...(overrides.workerSummary ?? {}) },
+    reliabilityProblems: overrides.reliabilityProblems ?? base.reliabilityProblems,
+    gatedControls: overrides.gatedControls ?? base.gatedControls,
     queueSummary: { ...base.queueSummary, ...(overrides.queueSummary ?? {}) },
     stageSummaries: overrides.stageSummaries ?? base.stageSummaries,
+    sourceStates: overrides.sourceStates ?? base.sourceStates,
     workPackets: overrides.workPackets ?? base.workPackets,
     selectedPacketDetails: overrides.selectedPacketDetails ?? base.selectedPacketDetails,
     evidenceRefs: overrides.evidenceRefs ?? base.evidenceRefs,

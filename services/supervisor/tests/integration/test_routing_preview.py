@@ -782,10 +782,10 @@ def test_learn_follow_up_creation_accepts_authoritative_work_packet_ids(tmp_path
                 "status": "complete",
                 "truthLabel": "source_owned",
                 "sourceRef": {
-                    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+                    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
                     "sourceType": "prd",
-                    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
-                    "title": "Authoritative PRD",
+                    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+                    "title": "Authoritative pipeline execution-loop PRD",
                 },
                 "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
                 "idempotencyKey": "learn-follow-up-authoritative-create",
@@ -817,8 +817,74 @@ def test_learn_follow_up_creation_accepts_authoritative_work_packet_ids(tmp_path
     source_ref = candidate["importMetadata"]["workPacketSourceRefs"][0]
     assert source_ref["refId"] == "packet-authoritative-learn-follow-up"
     assert source_ref["sourceType"] == "manual"
-    assert source_ref["pathOrUrl"] == "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md"
+    assert source_ref["pathOrUrl"] == "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md"
+    assert source_ref["freshness"] == "fresh"
+    assert source_ref["accessState"] == "allowed"
     assert candidate["sourceSummary"]["sourceRef"] == "packet-authoritative-learn-follow-up"
+
+
+def test_learn_follow_up_creation_marks_superseded_authoritative_packet_sources_stale(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "learn-follow-up-stale-authoritative-packet.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        create_packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-stale-authoritative-learn-follow-up",
+                "title": "Stale authoritative projection packet",
+                "initialStage": "learn",
+                "status": "complete",
+                "truthLabel": "source_owned",
+                "sourceRef": {
+                    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+                    "sourceType": "prd",
+                    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+                    "title": "Authoritative pipeline execution-loop PRD",
+                },
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "learn-follow-up-stale-authoritative-create",
+                "payloadSummary": "Authoritative packet available for Learn follow-up.",
+                "evidenceRefs": ["packet-proof:authoritative"],
+            },
+        )
+        assert create_packet_response.status_code == 200
+
+        stale_source_ref = create_packet_response.json()["data"]["sourceRef"] | {
+            "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+            "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+            "title": "Superseded PRD",
+        }
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update authoritative_work_packets set source_ref_json = ? where id = ?",
+                (json.dumps(stale_source_ref), "packet-stale-authoritative-learn-follow-up"),
+            )
+            conn.commit()
+
+        response = client.post(
+            "/work-packets/packet-stale-authoritative-learn-follow-up/learn-follow-up-candidate-work",
+            json={
+                "triggerKind": "completed_packet",
+                "title": "Follow up stale authoritative packet",
+                "requestedOutcome": "Create follow-up work with stale source metadata flagged.",
+                "evidenceRefs": ["packet-proof:authoritative", "operator-note:follow-up"],
+            },
+        )
+
+    assert response.status_code == 200
+    candidate = response.json()["data"]
+    source_ref = candidate["importMetadata"]["workPacketSourceRefs"][0]
+    assert source_ref["refId"] == "packet-stale-authoritative-learn-follow-up"
+    assert source_ref["freshness"] == "stale"
+    assert source_ref["accessState"] == "blocked"
+    assert source_ref["pathOrUrl"] is None
+    assert "superseded by" in source_ref["blockedReason"]
 
 
 def test_learn_follow_up_creation_rejects_blank_evidence_and_text(tmp_path, monkeypatch) -> None:

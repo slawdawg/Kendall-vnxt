@@ -1,0 +1,213 @@
+{
+  "schemaVersion": "pipeline-execution-loop-reliability-proof/v0",
+  "slice": "pipeline-execution-loop-reliability",
+  "prd": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+  "architecture": "_bmad-output/planning-artifacts/architecture-pipeline-execution-loop-reliability-2026-07-04.md",
+  "stories": [
+    "_bmad-output/implementation-artifacts/5-1-run-representative-execution-loop-proof.md",
+    "_bmad-output/implementation-artifacts/5-2-record-metadata-only-reliability-proof-artifact.md"
+  ],
+  "verifiedAt": "2026-07-04T15:32:00Z",
+  "verifiedAtMeaning": "Metadata artifact recording time for Story 5.2; command results are retained as command summaries, not as a single authoritative runtime instant.",
+  "backendEndpoint": "/pipeline-control-plane/projection",
+  "authoritativeCreateEndpoint": "/pipeline-control-plane/work-packets",
+  "authoritativeTransitionEndpoint": "/pipeline-control-plane/work-packets/{packet_id}/transitions",
+  "packetId": "packet-story-1-4-multi-stage-proof",
+  "packetTitle": "Multi-stage backend movement proof",
+  "sourceRef": {
+    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+    "sourceType": "prd",
+    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+    "title": "Pipeline execution loop reliability"
+  },
+  "lifecycleStagesTraversed": [
+    "capture",
+    "classify",
+    "route",
+    "shape",
+    "needs_approval",
+    "execute",
+    "review"
+  ],
+  "terminalStagesChecked": [
+    "promote",
+    "deliver",
+    "learn"
+  ],
+  "projectionTruth": {
+    "projectionSourceLabel": "live",
+    "projectionFreshnessState": "live",
+    "backendReachabilityState": "reachable",
+    "fixtureMode": {
+      "enabled": false,
+      "canSatisfyLiveProof": false
+    },
+    "truthSummary": {
+      "fixtureBacked": false,
+      "backendUnavailable": false,
+      "stale": false
+    }
+  },
+  "selectedPacketDetails": {
+    "source": "PipelineDashboardProjectionV0.selectedPacketDetails",
+    "currentStage": "review",
+    "status": "active",
+    "truthLabel": "live",
+    "latestMovementSummary": "Accepted transition from execute to review.",
+    "canSatisfyLiveMovementProof": true,
+    "terminalOnlyCanSatisfyLiveMovementProof": false,
+    "metadataOnly": true
+  },
+  "dashboardProof": {
+    "route": "/pipeline",
+    "renderedSurface": "PipelineCockpit",
+    "movementSource": "PipelineDashboardProjectionV0.selectedPacketDetails",
+    "fixtureFallbackDisplayedAsLive": false,
+    "terminalOnlyDisplayedAsLive": false,
+    "compactCardsExposeRawMovementRefs": false,
+    "packetInspectionExposesLatestMovement": true
+  },
+  "evidenceRefs": [
+    "story:1-4",
+    "story:5-1",
+    "proof:multi-stage-backend-movement",
+    "proof:representative-execution-loop",
+    "stage:capture",
+    "stage:route",
+    "stage:execute",
+    "stage:review"
+  ],
+  "artifactPaths": [
+    "tests/fixtures/pipeline/pipeline-execution-loop-reliability-proof-2026-07-04.json",
+    "services/supervisor/tests/integration/test_work_packets.py",
+    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
+    "tests/dashboard-pipeline-fixtures.test.mjs",
+    "tests/pipeline-active-board-view-model.test.mjs",
+    "_bmad-output/implementation-artifacts/5-1-run-representative-execution-loop-proof.md",
+    "_bmad-output/implementation-artifacts/5-2-record-metadata-only-reliability-proof-artifact.md"
+  ],
+  "codeReviewOutcome": {
+    "workflow": "bmad-code-review",
+    "blindHunter": "no findings",
+    "acceptanceAuditor": "no findings",
+    "edgeCaseHunter": "three patch findings fixed",
+    "resolvedFindings": [
+      "Selected detail must satisfy live movement proof before cockpit labels packet as live proof.",
+      "Selected-detail evidence refs must not masquerade as movement refs when movement refs are absent.",
+      "Projection detail-only packets must be treated as backend-backed in inspection."
+    ]
+  },
+  "verificationCommands": [
+    "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q",
+    "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+    "node --test tests/pipeline-active-board-view-model.test.mjs tests/pipeline-control-plane-lifecycle.test.mjs tests/dashboard-pipeline-fixtures.test.mjs tests/work-packet-fixtures.test.mjs tests/work-packet-contracts.test.mjs",
+    "pnpm run build:dashboard"
+  ],
+  "verificationResults": [
+    {
+      "command": "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "provenance": "Story 5.1 review follow-up verification",
+      "currentStoryRun": false,
+      "summary": "39 passed, 1 existing aiosqlite warning"
+    },
+    {
+      "command": "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace",
+      "provenance": "Story 5.2 artifact validation",
+      "currentStoryRun": true
+    },
+    {
+      "command": "node --test tests/pipeline-active-board-view-model.test.mjs tests/pipeline-control-plane-lifecycle.test.mjs tests/dashboard-pipeline-fixtures.test.mjs tests/work-packet-fixtures.test.mjs tests/work-packet-contracts.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace",
+      "provenance": "Story 5.2 artifact validation",
+      "currentStoryRun": true,
+      "summary": "5 passed"
+    },
+    {
+      "command": "pnpm run build:dashboard",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "provenance": "Story 5.1 review follow-up verification",
+      "currentStoryRun": false
+    }
+  ],
+  "sandboxBoundaryEvidence": [
+    {
+      "command": "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q",
+      "boundary": "uv-cache-outside-workspace",
+      "reason": "uv needs cache temp-file access outside sandbox writable roots.",
+      "rerunPolicy": "rerun exact read-only command outside sandbox"
+    },
+    {
+      "command": "pnpm run build:dashboard",
+      "boundary": "turbopack-process-port",
+      "reason": "Next/Turbopack needs worker process and internal port behavior blocked inside sandbox.",
+      "rerunPolicy": "rerun exact build command outside sandbox"
+    }
+  ],
+  "retention": {
+    "metadataOnly": true,
+    "rawProviderPayloadsRetained": false,
+    "rawPromptsRetained": false,
+    "rawCompletionsRetained": false,
+    "reasoningTracesRetained": false,
+    "secretsRetained": false,
+    "credentialsRetained": false,
+    "terminalScrollbackRetained": false,
+    "tmuxScrollbackRetained": false,
+    "paneScrollbackRetained": false,
+    "rawTranscriptsRetained": false,
+    "unnecessarySourceCopiesRetained": false
+  },
+  "liveProofCannotUseFixtures": true,
+  "nonLiveProofInputs": [
+    {
+      "state": "fixture",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    },
+    {
+      "state": "stale",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    },
+    {
+      "state": "simulated",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    },
+    {
+      "state": "dry-run",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    },
+    {
+      "state": "unknown",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    },
+    {
+      "state": "terminal-only",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    },
+    {
+      "state": "backend-unavailable",
+      "canSatisfyLiveProof": false,
+      "canSatisfyLiveMovementProof": false
+    }
+  ],
+  "nonLiveStatesCannotSatisfyProof": [
+    "fixture",
+    "stale",
+    "simulated",
+    "dry-run",
+    "unknown",
+    "terminal-only",
+    "backend-unavailable"
+  ]
+}

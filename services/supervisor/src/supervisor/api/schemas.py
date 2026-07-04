@@ -1,4 +1,5 @@
-﻿from datetime import datetime
+﻿import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_validator
@@ -18,6 +19,30 @@ from supervisor.domain.types import (
     WorkflowAction,
     WorkflowState,
 )
+
+UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
+    r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
+    re.IGNORECASE,
+)
+EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
+    r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_safe_pipeline_evidence_ref(value: str) -> bool:
+    ref = value.strip()
+    return bool(ref) and len(ref) <= 255 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+
+
+def _is_safe_pipeline_control_text(value: str) -> bool:
+    text = value.strip()
+    return (
+        bool(text)
+        and len(text) <= 500
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+        and not EXECUTABLE_PIPELINE_CONTROL_TEXT_RE.search(text)
+    )
 
 
 class WorkItemCreate(BaseModel):
@@ -1299,6 +1324,36 @@ class PipelineStageSummaryV0View(BaseModel):
     emptyReason: PipelineProjectionEmptyReasonV0 | None = None
 
 
+PipelineSourceStateValueV0 = Literal["healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown"]
+PipelineSourceKindV0 = Literal[
+    "prd",
+    "bmad_story",
+    "operator_input",
+    "workflow",
+    "repo_doc",
+    "candidate_work",
+    "work_item",
+    "bmad_artifact",
+    "obsidian",
+    "llm_wiki",
+    "github",
+    "research",
+    "manual",
+    "unknown",
+]
+
+
+class PipelineSourceStateV0View(BaseModel):
+    sourceId: str
+    sourceRef: str
+    sourceKind: PipelineSourceKindV0
+    state: PipelineSourceStateValueV0
+    summary: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    updatedAt: datetime
+    metadataOnly: Literal[True] = True
+
+
 class PipelineDashboardWorkPacketV0View(BaseModel):
     packetId: str
     title: str
@@ -1308,6 +1363,7 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
     sourceRef: AuthoritativePacketSourceRefView | None = None
     blocker: str | None = None
     nextAction: str | None = None
+    readyToTest: WorkPacketReadyToTestV0View | None = None
     evidenceRefs: list[str] = Field(default_factory=list)
     updatedAt: datetime
     metadataOnly: Literal[True] = True
@@ -1322,11 +1378,28 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     truthLabel: PipelineProjectionSourceLabelV0
     blocker: str | None = None
     nextAction: str | None = None
+    readyToTest: WorkPacketReadyToTestV0View | None = None
+    latestTransitionEventRef: str | None = None
+    recentTransitionEventRefs: list[str] = Field(default_factory=list)
+    latestMovementSummary: str | None = None
+    canSatisfyLiveMovementProof: bool = False
     metadataOnly: Literal[True] = True
 
 
 class PipelineManagerSummaryV0View(BaseModel):
     stateSource: Literal["supervisor_projection", "manager_summary", "unavailable", "unknown"]
+    reliabilityState: Literal[
+        "ready",
+        "running",
+        "healthy_idle",
+        "source_exhausted",
+        "waiting_for_approval",
+        "blocked",
+        "refilling",
+        "degraded",
+        "unavailable",
+        "unknown",
+    ] = "unknown"
     freshnessState: PipelineProjectionFreshnessStateV0
     activeLeaseCount: int | None = None
     activeWorkerCount: int | None = None
@@ -1334,19 +1407,140 @@ class PipelineManagerSummaryV0View(BaseModel):
     blockedQueueCount: int | None = None
     dispatchableQueueCount: int | None = None
     closedQueueCount: int | None = None
+    healthySourceCount: int | None = None
+    exhaustedSourceCount: int | None = None
+    blockedSourceCount: int | None = None
+    gatedSourceCount: int | None = None
+    staleSourceCount: int | None = None
+    unavailableSourceCount: int | None = None
+    refillingSourceCount: int | None = None
+    unknownSourceCount: int | None = None
     sourceExhausted: bool
     inactivityReason: PipelineProjectionEmptyReasonV0 | None = None
+    evidenceRefs: list[str] = Field(default_factory=list)
     summary: str
     metadataOnly: Literal[True] = True
 
 
 class PipelineQueueSummaryV0View(BaseModel):
+    activeCount: int | None = None
     dispatchableCount: int | None = None
     blockedCount: int | None = None
+    gatedCount: int | None = None
     closedCount: int | None = None
+    staleCount: int | None = None
+    refillingCount: int | None = None
+    unknownCount: int | None = None
     emptyReason: PipelineProjectionEmptyReasonV0 | None = None
     sourceExhausted: bool
     summary: str
+
+
+class PipelineWorkerSummaryV0View(BaseModel):
+    stateSource: Literal["supervisor_projection", "manager_summary", "unavailable", "unknown"]
+    freshnessState: PipelineProjectionFreshnessStateV0
+    warmCount: int | None = None
+    activeCount: int | None = None
+    waitingCount: int | None = None
+    stalledCount: int | None = None
+    failedCount: int | None = None
+    drainingCount: int | None = None
+    killedCount: int | None = None
+    completeCount: int | None = None
+    unavailableCount: int | None = None
+    unknownCount: int | None = None
+    workerRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    summary: str
+    metadataOnly: Literal[True] = True
+
+
+class PipelineReliabilityProblemV0View(BaseModel):
+    problemId: str
+    kind: Literal[
+        "idle_with_ready_work",
+        "stalled_worker",
+        "stale_projection",
+        "backend_unavailable",
+        "source_blocked",
+        "approval_required",
+        "usage_limited",
+        "resource_limited",
+        "unknown",
+    ]
+    severity: Literal["info", "attention", "blocked"]
+    likelyIssue: Literal["manager", "worker", "source", "approval", "usage", "resource", "unknown"]
+    summary: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Reliability problem evidence refs must be safe metadata refs.")
+        return refs
+
+
+class PipelineGatedControlV0View(BaseModel):
+    controlId: str
+    operation: Literal[
+        "kill_worker",
+        "drain_worker",
+        "cleanup_workspace",
+        "takeover_workspace",
+        "provider_call",
+        "github_mutation",
+        "worker_launch",
+        "lease_mutation",
+        "source_mutation",
+        "terminal_access",
+        "raw_payload_retention",
+        "unknown",
+    ]
+    status: Literal["gated", "action_needed", "blocked"]
+    authorityFamily: str
+    stopLine: str
+    nextAction: str
+    packetId: str | None = None
+    workerRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+    @field_validator("controlId")
+    @classmethod
+    def control_id_is_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_evidence_ref(value):
+            raise ValueError("Gated control id must be a safe metadata ref.")
+        return value
+
+    @field_validator("packetId")
+    @classmethod
+    def packet_id_is_safe(cls, value: str | None) -> str | None:
+        if value is not None and not _is_safe_pipeline_evidence_ref(value):
+            raise ValueError("Gated control packet id must be a safe metadata ref.")
+        return value
+
+    @field_validator("authorityFamily", "stopLine", "nextAction")
+    @classmethod
+    def text_is_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_control_text(value):
+            raise ValueError("Gated control text must be safe metadata text.")
+        return value
+
+    @field_validator("workerRefs")
+    @classmethod
+    def worker_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if not all(ref.startswith("worker:") and _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Gated control worker refs must be safe worker metadata refs.")
+        return refs
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def gated_control_evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Gated control evidence refs must be safe metadata refs.")
+        return refs
 
 
 class PipelineDashboardProjectionV0View(BaseModel):
@@ -1361,9 +1555,13 @@ class PipelineDashboardProjectionV0View(BaseModel):
     fixtureMode: PipelineFixtureModeV0View
     truthSummary: PipelineTruthSummaryV0View
     stageSummaries: list[PipelineStageSummaryV0View] = Field(default_factory=list)
+    sourceStates: list[PipelineSourceStateV0View] = Field(default_factory=list)
     workPackets: list[PipelineDashboardWorkPacketV0View] = Field(default_factory=list)
     selectedPacketDetails: list[PipelineSelectedPacketDetailV0View] = Field(default_factory=list)
     managerSummary: PipelineManagerSummaryV0View
+    workerSummary: PipelineWorkerSummaryV0View
+    reliabilityProblems: list[PipelineReliabilityProblemV0View] = Field(default_factory=list)
+    gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)
     queueSummary: PipelineQueueSummaryV0View
     evidenceRefs: list[str] = Field(default_factory=list)
 

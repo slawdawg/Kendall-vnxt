@@ -935,6 +935,17 @@ textarea::placeholder {
   width: 1rem;
 }
 
+.pipeline-mini-packet-action-needed {
+  gap: 0.18rem;
+  min-width: 2.45rem;
+  padding: 0 0.32rem;
+  width: auto;
+}
+
+.pipeline-mini-packet-action-needed-text {
+  color: color-mix(in srgb, var(--review) 78%, var(--muted));
+}
+
 .pipeline-inspection-panel {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 74%, transparent), color-mix(in srgb, #04101b 86%, transparent));

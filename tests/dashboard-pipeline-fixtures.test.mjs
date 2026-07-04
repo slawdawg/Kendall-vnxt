@@ -27,6 +27,7 @@ const pipelineEvidenceSourcePath = new URL("../apps/dashboard/src/lib/pipeline-e
 const pipelinePacketLoaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
 const managerExecutionLaneSummaryPath = new URL("../apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts", import.meta.url);
 const realWorkPacketProofPath = new URL("../tests/fixtures/pipeline/pipeline-real-workpacket-proof-2026-07-02.json", import.meta.url);
+const executionLoopReliabilityProofPath = new URL("../tests/fixtures/pipeline/pipeline-execution-loop-reliability-proof-2026-07-04.json", import.meta.url);
 const globalsPath = new URL("../apps/dashboard/src/app/globals.css", import.meta.url);
 const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.meta.url);
 const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
@@ -139,6 +140,24 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function findNonLiveProofClaims(value, path = []) {
+  const nonLiveStates = new Set(["fixture", "stale", "simulated", "dry-run", "unknown", "terminal-only", "backend-unavailable", "unavailable"]);
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => findNonLiveProofClaims(item, [...path, String(index)]));
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const entries = Object.entries(value);
+  const hasNonLiveState = entries.some(([, entryValue]) => typeof entryValue === "string" && nonLiveStates.has(entryValue.toLowerCase()));
+  const hasLiveProofClaim = entries.some(([key, entryValue]) => (
+    entryValue === true
+    && /canSatisfyLive(?:Movement)?Proof|displayedAsLive|satisfiesLiveProof|liveProofSatisfied/i.test(key)
+  ));
+  const current = hasNonLiveState && hasLiveProofClaim ? [path.join(".") || "<root>"] : [];
+  return current.concat(entries.flatMap(([key, entryValue]) => findNonLiveProofClaims(entryValue, [...path, key])));
+}
+
 function sourceBetween(source, startMarker, endMarker) {
   assert.equal(
     [...source.matchAll(new RegExp(escapeRegExp(startMarker), "g"))].length,
@@ -212,6 +231,7 @@ function projectionFixture(overrides = {}) {
     selectedPacketDetails: [],
     managerSummary: {
       stateSource: "supervisor_projection",
+      reliabilityState: "ready",
       freshnessState: "live",
       activeLeaseCount: 0,
       activeWorkerCount: 0,
@@ -219,15 +239,49 @@ function projectionFixture(overrides = {}) {
       blockedQueueCount: 0,
       dispatchableQueueCount: 1,
       closedQueueCount: 0,
+      healthySourceCount: 0,
+      exhaustedSourceCount: 0,
+      blockedSourceCount: 0,
+      gatedSourceCount: 0,
+      staleSourceCount: 0,
+      unavailableSourceCount: 0,
+      refillingSourceCount: 0,
+      unknownSourceCount: 0,
       sourceExhausted: false,
       inactivityReason: null,
+      evidenceRefs: ["manager:fixture"],
       summary: "Manager metadata only.",
       metadataOnly: true,
     },
+    workerSummary: {
+      stateSource: "unknown",
+      freshnessState: "unknown",
+      warmCount: null,
+      activeCount: null,
+      waitingCount: null,
+      stalledCount: null,
+      failedCount: null,
+      drainingCount: null,
+      killedCount: null,
+      completeCount: null,
+      unavailableCount: null,
+      unknownCount: null,
+      workerRefs: [],
+      evidenceRefs: [],
+      summary: "Worker metadata is unavailable to the projection.",
+      metadataOnly: true,
+    },
+    reliabilityProblems: [],
+    gatedControls: [],
     queueSummary: {
+      activeCount: 0,
       dispatchableCount: 1,
       blockedCount: 0,
+      gatedCount: 0,
       closedCount: 0,
+      staleCount: 0,
+      refillingCount: 0,
+      unknownCount: 0,
       emptyReason: null,
       sourceExhausted: false,
       summary: "Queue metadata only.",
@@ -241,6 +295,9 @@ function projectionFixture(overrides = {}) {
     fixtureMode: { ...base.fixtureMode, ...(overrides.fixtureMode ?? {}) },
     truthSummary: { ...base.truthSummary, ...(overrides.truthSummary ?? {}) },
     managerSummary: { ...base.managerSummary, ...(overrides.managerSummary ?? {}) },
+    workerSummary: { ...base.workerSummary, ...(overrides.workerSummary ?? {}) },
+    reliabilityProblems: overrides.reliabilityProblems ?? base.reliabilityProblems,
+    gatedControls: overrides.gatedControls ?? base.gatedControls,
     queueSummary: { ...base.queueSummary, ...(overrides.queueSummary ?? {}) },
     workPackets: overrides.workPackets ?? base.workPackets,
   };
@@ -372,6 +429,105 @@ test("real WorkPacket projection proof artifact is metadata-only and non-fixture
   assert.doesNotMatch(proofSource, /sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9]|authorization:\s*[^",}\]]|password\s*[:=]|secret\s*[:=]/i);
 });
 
+test("execution-loop reliability proof artifact is current metadata-only evidence", async () => {
+  const proofSource = await readFile(executionLoopReliabilityProofPath, "utf8");
+  const proof = JSON.parse(proofSource);
+
+  assert.equal(proof.schemaVersion, "pipeline-execution-loop-reliability-proof/v0");
+  assert.equal(proof.slice, "pipeline-execution-loop-reliability");
+  assert.equal(proof.prd, "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md");
+  assert.equal(proof.architecture, "_bmad-output/planning-artifacts/architecture-pipeline-execution-loop-reliability-2026-07-04.md");
+  assert.ok(proof.stories.includes("_bmad-output/implementation-artifacts/5-1-run-representative-execution-loop-proof.md"));
+  assert.ok(proof.stories.includes("_bmad-output/implementation-artifacts/5-2-record-metadata-only-reliability-proof-artifact.md"));
+  assert.equal(proof.backendEndpoint, "/pipeline-control-plane/projection");
+  assert.equal(proof.packetId, "packet-story-1-4-multi-stage-proof");
+  assert.deepEqual(proof.lifecycleStagesTraversed, ["capture", "classify", "route", "shape", "needs_approval", "execute", "review"]);
+  assert.deepEqual(proof.terminalStagesChecked, ["promote", "deliver", "learn"]);
+  assert.equal(proof.projectionTruth.projectionSourceLabel, "live");
+  assert.equal(proof.projectionTruth.projectionFreshnessState, "live");
+  assert.equal(proof.projectionTruth.backendReachabilityState, "reachable");
+  assert.equal(proof.projectionTruth.fixtureMode.enabled, false);
+  assert.equal(proof.projectionTruth.fixtureMode.canSatisfyLiveProof, false);
+  assert.equal(proof.projectionTruth.truthSummary.fixtureBacked, false);
+  assert.equal(proof.projectionTruth.truthSummary.backendUnavailable, false);
+  assert.equal(proof.projectionTruth.truthSummary.stale, false);
+  assert.equal(proof.selectedPacketDetails.source, "PipelineDashboardProjectionV0.selectedPacketDetails");
+  assert.equal(proof.selectedPacketDetails.currentStage, "review");
+  assert.equal(proof.selectedPacketDetails.status, "active");
+  assert.equal(proof.selectedPacketDetails.truthLabel, "live");
+  assert.equal(proof.selectedPacketDetails.canSatisfyLiveMovementProof, true);
+  assert.equal(proof.selectedPacketDetails.terminalOnlyCanSatisfyLiveMovementProof, false);
+  assert.equal(proof.dashboardProof.movementSource, "PipelineDashboardProjectionV0.selectedPacketDetails");
+  assert.equal(proof.dashboardProof.fixtureFallbackDisplayedAsLive, false);
+  assert.equal(proof.dashboardProof.terminalOnlyDisplayedAsLive, false);
+  assert.equal(proof.dashboardProof.compactCardsExposeRawMovementRefs, false);
+  for (const requiredRef of [
+    "story:5-1",
+    "proof:representative-execution-loop",
+    "proof:multi-stage-backend-movement",
+    "stage:execute",
+    "stage:review",
+  ]) {
+    assert.ok(proof.evidenceRefs.includes(requiredRef), `${requiredRef} should be retained as metadata evidence`);
+  }
+  assert.ok(proof.artifactPaths.includes("tests/fixtures/pipeline/pipeline-execution-loop-reliability-proof-2026-07-04.json"));
+  assert.equal(proof.codeReviewOutcome.workflow, "bmad-code-review");
+  assert.equal(proof.codeReviewOutcome.blindHunter, "no findings");
+  assert.equal(proof.codeReviewOutcome.acceptanceAuditor, "no findings");
+  assert.equal(proof.codeReviewOutcome.edgeCaseHunter, "three patch findings fixed");
+  assert.ok(proof.verificationCommands.includes("uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q"));
+  assert.ok(proof.verificationCommands.includes("node --test tests/dashboard-pipeline-fixtures.test.mjs"));
+  assert.ok(proof.verificationCommands.includes("pnpm run build:dashboard"));
+  assert.ok(proof.verificationResults.every((result) => result.status === "passed"));
+  for (const command of proof.verificationCommands) {
+    assert.ok(
+      proof.verificationResults.some((result) => result.command === command && result.status === "passed"),
+      `${command} must have matching passed verification evidence`,
+    );
+  }
+  for (const result of proof.verificationResults) {
+    assert.equal(typeof result.provenance, "string");
+    assert.notEqual(result.provenance.trim(), "");
+    assert.equal(typeof result.currentStoryRun, "boolean");
+  }
+  assert.ok(proof.verificationResults.some((result) => result.command === "node --test tests/dashboard-pipeline-fixtures.test.mjs" && result.currentStoryRun === true));
+  assert.ok(proof.verificationResults.some((result) => result.command === "pnpm run build:dashboard" && result.currentStoryRun === false && /Story 5\.1/.test(result.provenance)));
+  assert.ok(proof.verificationResults.some((result) => result.command === "pnpm run build:dashboard" && result.sandbox === "outside-sandbox"));
+  assert.ok(proof.verificationResults.some((result) => result.command.includes("pytest tests/integration/test_work_packets.py") && result.sandbox === "outside-sandbox"));
+  assert.ok(proof.sandboxBoundaryEvidence.some((item) => item.boundary === "uv-cache-outside-workspace"));
+  assert.ok(proof.sandboxBoundaryEvidence.some((item) => item.boundary === "turbopack-process-port"));
+  assert.equal(proof.retention.metadataOnly, true);
+  for (const retentionKey of [
+    "rawProviderPayloadsRetained",
+    "rawPromptsRetained",
+    "rawCompletionsRetained",
+    "reasoningTracesRetained",
+    "secretsRetained",
+    "credentialsRetained",
+    "terminalScrollbackRetained",
+    "tmuxScrollbackRetained",
+    "paneScrollbackRetained",
+    "rawTranscriptsRetained",
+    "unnecessarySourceCopiesRetained",
+  ]) {
+    assert.equal(proof.retention[retentionKey], false, `${retentionKey} must be false`);
+  }
+  assert.equal(proof.liveProofCannotUseFixtures, true);
+  for (const nonLiveState of ["fixture", "stale", "simulated", "dry-run", "unknown", "terminal-only", "backend-unavailable"]) {
+    assert.ok(proof.nonLiveStatesCannotSatisfyProof.includes(nonLiveState), `${nonLiveState} must be named as non-live`);
+    const proofInput = proof.nonLiveProofInputs.find((item) => item.state === nonLiveState);
+    assert.ok(proofInput, `${nonLiveState} must have a denied proof input`);
+    assert.equal(proofInput.canSatisfyLiveProof, false);
+    assert.equal(proofInput.canSatisfyLiveMovementProof, false);
+  }
+  assert.equal(findNonLiveProofClaims(proof).length, 0);
+  assert.doesNotMatch(proofSource, /"(rawPrompt|rawCompletion|reasoningTrace|providerPayload|rawProviderPayload|sourceContent)"\s*:/i);
+  assert.doesNotMatch(proofSource, /"(raw[_-]?prompt|raw[_-]?completion|reasoning[_-]?trace|provider[_-]?payload|raw[_-]?provider[_-]?payload|source[_-]?content)"\s*:/i);
+  assert.doesNotMatch(proofSource, /"(password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|credential|credentials)"\s*:/i);
+  assert.doesNotMatch(proofSource, /sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9]|authorization:\s*[^",}\]]/i);
+  assert.doesNotMatch(proofSource, /raw prompt|raw completion|provider payload|reasoning trace|terminal scrollback|tmux scrollback|pane scrollback|raw transcript/i);
+});
+
 test("fixture-as-live regressions are blocked by explicit projection truth predicates", async () => {
   const cockpitSource = await readFile(cockpitPath, "utf8");
   const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
@@ -486,8 +642,16 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
       summary: "Live backend projection has no WorkPackets.",
     },
     queueSummary: {
+      activeCount: 0,
       dispatchableCount: 0,
+      blockedCount: 0,
+      gatedCount: 0,
+      closedCount: 0,
+      staleCount: 0,
+      refillingCount: 0,
+      unknownCount: 0,
       emptyReason: "healthy_empty",
+      sourceExhausted: false,
       summary: "No ready work.",
     },
   });
@@ -612,9 +776,14 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
           dispatchableQueueCount: 99,
         },
         queueSummary: {
+          activeCount: 0,
           dispatchableCount: 99,
           blockedCount: 0,
+          gatedCount: 0,
           closedCount: 0,
+          staleCount: 0,
+          refillingCount: 0,
+          unknownCount: 0,
         },
       }),
       sourceLabel: "live",
@@ -721,6 +890,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     extractFunctionSource(cockpitSource, "RouteStation"),
     extractFunctionSource(cockpitSource, "PacketMiniCard"),
   ].join("\n");
+  const packetMiniCardSource = extractFunctionSource(cockpitSource, "PacketMiniCard");
+  const packetInspectionSource = extractFunctionSource(cockpitSource, "PacketInspection");
   const pipelinePacketLoaderSource = await readFile(pipelinePacketLoaderPath, "utf8");
   const pipelineImportGraph = await collectRelativeImportGraph(routePath, { terminalUrls: [shellPath, supervisorLibPath] });
 
@@ -779,10 +950,31 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   ]) {
     assert.doesNotMatch(defaultDashboardSurfaceSource, bannedDefaultSurfacePattern);
   }
-  assert.match(defaultDashboardSurfaceSource, /Ready to test packet/);
+  assert.match(defaultDashboardSurfaceSource, /Ready to test: \$\{packet\.title\}/);
   assert.match(defaultDashboardSurfaceSource, /pipeline-mini-packet-ready/);
   assert.match(defaultDashboardSurfaceSource, /Stale history/);
   assert.match(defaultDashboardSurfaceSource, /Diagnostics/);
+  for (const bannedMiniCardPattern of [
+    /packetCardEvidenceLabel/,
+    /packet\.evidenceRefs/,
+    /packet\.sourceRefs/,
+    /packet\.executionAttempts/,
+    /packet\.laneCards/,
+    /packet\.routeFork/,
+    /packet\.routeSummary/,
+    /latestMovementSummary/,
+    /latestTransitionEventRef/,
+    /recentTransitionEventRefs/,
+    /rawPayloadRetained/,
+  ]) {
+    assert.doesNotMatch(packetMiniCardSource, bannedMiniCardPattern);
+  }
+  assert.match(packetInspectionSource, /RefList title="Source refs"/);
+  assert.match(packetInspectionSource, /RefList title="Evidence refs"/);
+  assert.match(packetInspectionSource, /Latest movement/);
+  assert.match(packetInspectionSource, /Five whys/);
+  assert.match(packetInspectionSource, /Execution attempts/);
+  assert.match(packetInspectionSource, /Manager lane details/);
   assert.match(cockpitSource, /buildPipelineActiveBoardViewModel/);
   assert.match(cockpitSource, /activeBoardViewModel\.activeBoard\.stageLanes/);
   assert.match(cockpitSource, /activeBoardCard/);
@@ -793,6 +985,18 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
   assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, packets, currentProjectionError, activeBoardViewModel\)/);
+  assert.match(cockpitSource, /selectedDetailByPacketId = new Map\(projection\.selectedPacketDetails\.map/);
+  assert.match(cockpitSource, /selectedDetailByPacketId\.get\(packet\.packetId\)/);
+  assert.match(cockpitSource, /projectionDetailSourceRefs = detail\?\.sourceRefs \?\? \[\]/);
+  assert.match(cockpitSource, /projectionDetailEvidenceRefs = detail\?\.evidenceRefs \?\? \[\]/);
+  assert.match(cockpitSource, /projectionDetailMovementRefs = detail\?\.recentTransitionEventRefs \?\? \[\]/);
+  assert.match(cockpitSource, /detailCanSatisfyLiveMovementProof = detail\?\.canSatisfyLiveMovementProof \?\? false/);
+  assert.match(cockpitSource, /packetIsLive = projectionIsLive && packet\.truthLabel === "live" && detailCanSatisfyLiveMovementProof/);
+  assert.match(cockpitSource, /movementEventRefs = detail[\s\S]{0,80}\? projectionDetailMovementRefs[\s\S]{0,80}: lifecycleEvidenceRefs/);
+  assert.match(cockpitSource, /detail\?\.latestTransitionEventRef \?\? movementEventRefs\.at\(-1\) \?\? null/);
+  assert.match(cockpitSource, /lastEvent: detail\?\.latestMovementSummary \?\? `projection updated \$\{packet\.updatedAt\}`/);
+  assert.match(cockpitSource, /packet\.fixtureId\.startsWith\("projection:"\) \|\| packet\.fixtureId\.startsWith\("projection-detail:"\)/);
+  assert.doesNotMatch(cockpitSource, /latestTransitionEventRef: lifecycleEvidenceRefs\.at\(-1\) \?\? null/);
   assert.match(activeBoardViewModelSource, /derivePacketPlacement/);
   assert.match(activeBoardViewModelSource, /derivePacketActionability/);
   assert.match(cockpitSource, /refreshUnavailable = Boolean\(projectionError\)/);
@@ -1010,7 +1214,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(supervisorLibSource, /function projectionHasOpenPacket/);
   assert.match(supervisorLibSource, /\["active", "waiting", "blocked", "failed"\]\.includes\(\(candidate as \{ status\?: string \}\)\.status \|\| ""\)/);
   assert.match(supervisorLibSource, /projection\.truthSummary\?\.backendEmpty === true/);
-  assert.match(supervisorLibSource, /projection\.truthSummary\.emptyReason === "healthy_empty"/);
+  assert.match(supervisorLibSource, /\["healthy_empty", "blocked", "refilling"\]\.includes\(projection\.truthSummary\.emptyReason \|\| ""\)/);
+  assert.match(supervisorLibSource, /projection\.queueSummary\?\.emptyReason === projection\.truthSummary\.emptyReason/);
   assert.match(supervisorLibSource, /isProjectionStage\(packet\.currentStage\)/);
   assert.match(supervisorLibSource, /Array\.isArray\(packet\.evidenceRefs\)/);
   assert.match(supervisorLibSource, /packet\.metadataOnly === true/);
@@ -1719,11 +1924,19 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /selectedPacketInStage/);
   assert.match(cockpitSource, /expanded \? sortedPackets : sortedPackets\.slice\(0, visibleLimit\)/);
   assert.match(cockpitSource, /packet\.activeBoardCard\?\.attention/);
+  assert.match(cockpitSource, /aria-label="Action needed packet"/);
+  assert.match(cockpitSource, /Action needed: \$\{packet\.title\}/);
+  assert.match(cockpitSource, /pipeline-mini-packet-action-needed/);
+  assert.match(cockpitSource, /<span aria-hidden="true">!<\/span>/);
+  assert.match(cockpitSource, /<span>Need<\/span>/);
+  assert.match(cockpitSource, /packetCardAttentionReasonLabel/);
+  assert.match(cockpitSource, /packetCardOperatorActionLabel/);
   assert.match(cockpitSource, /stageKnownTotalCount = stageRenderedCount/);
   assert.match(cockpitSource, /return packet\.nextAction/);
   assert.match(cockpitSource, /plainStageLabel/);
   assert.match(cockpitSource, /onSelectStage/);
-  assert.match(cockpitSource, /aria-label=\{`Inspect packet: \$\{packet\.title\}`\}/);
+  assert.match(cockpitSource, /aria-label=\{packet\.activeBoardCard\?\.attention/);
+  assert.match(cockpitSource, /: `Inspect packet: \$\{packet\.title\}`/);
   assert.match(pipelineComponentSource, /\/pipeline\/packets\/\$\{encodeURIComponent\(packet\.packetId\)\}/);
   assert.match(packetDetailRouteSource, /decodeURIComponent\(packetId\)/);
   assert.match(pipelineComponentSource, /onSelectPacket/);
@@ -1807,10 +2020,17 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /packet\.activeBoardCard\?\.title\.trim\(\) \|\| packet\.title\.trim\(\) \|\| "untitled packet"/);
   assert.match(cockpitSource, /packet\.activeBoardCard\?\.statusLabel/);
   assert.match(cockpitSource, /packet\.activeBoardCard\?\.nextActionLabel/);
-  assert.match(cockpitSource, /aria-label="Ready to test packet"/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.attentionReasonLabel/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.nextOperatorActionLabel/);
+  assert.match(cockpitSource, /detailBlocker !== "blocker not named"/);
+  assert.match(cockpitSource, /detailNextAction !== "next action not named"/);
+  assert.match(cockpitSource, /aria-label=\{`Ready to test: \$\{packet\.title\}`\}/);
   assert.match(cockpitSource, /pipeline-mini-packet-ready/);
   assert.doesNotMatch(cockpitSource, /packetCardNextLabel\(packet\)}; \{packetCardTestabilityLabel\(packet\)/);
   assert.match(cockpitSource, /Testing and risk/);
+  assert.match(cockpitSource, /projectionDetailMovementSummary/);
+  assert.match(cockpitSource, /Latest movement/);
+  assert.match(cockpitSource, /movement proof not present in projection detail/);
   assert.match(cockpitSource, /packetTestTargetLabel/);
   assert.match(cockpitSource, /packetChecksRunLabel/);
   assert.match(cockpitSource, /packetResidualRiskLabel/);

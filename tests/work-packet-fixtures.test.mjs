@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -535,30 +535,45 @@ function isForbiddenRawRetentionKey(key) {
 
 async function loadCompiledPipelineControlPlane() {
   const outDir = await mkdtemp(join(tmpdir(), "pipeline-control-plane-"));
-  await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
-  const result = spawnSync(
-    "apps/dashboard/node_modules/.bin/tsc",
-    [
-      "--target",
-      "ES2022",
-      "--module",
-      "ESNext",
-      "--moduleResolution",
-      "Bundler",
-      "--strict",
-      "--verbatimModuleSyntax",
-      "--rootDir",
-      "packages/workflow-core/src",
-      "--outDir",
-      outDir,
-      "packages/workflow-core/src/pipeline-control-plane/index.ts"
-    ],
-    { cwd: new URL("..", import.meta.url), encoding: "utf8" }
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const tsconfigPath = join(outDir, "tsconfig.json");
+  await writeFile(
+    tsconfigPath,
+    JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          strict: true,
+          verbatimModuleSyntax: true,
+          baseUrl: repoRoot,
+          rootDir: repoRoot,
+          outDir: join(outDir, "dist"),
+          paths: {
+            "@kendall/contracts": ["packages/contracts/src/pipeline-control-plane/index.ts"],
+          },
+        },
+        include: [
+          join(repoRoot, "packages/contracts/src/pipeline-control-plane/index.ts"),
+          join(repoRoot, "packages/workflow-core/src/pipeline-control-plane/index.ts"),
+        ],
+      },
+      null,
+      2,
+    ),
   );
+  const result = spawnSync("node", ["apps/dashboard/node_modules/typescript/bin/tsc", "-p", tsconfigPath], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
   if (result.status !== 0) {
-    throw new Error("Unable to compile pipeline-control-plane: " + (result.stderr || result.stdout));
+    throw new Error("Unable to compile pipeline-control-plane: " + (result.stderr || result.stdout || result.error?.message));
   }
-  return import(pathToFileURL(join(outDir, "pipeline-control-plane/index.js")).href);
+  const distRoot = join(outDir, "dist");
+  await writeFile(join(distRoot, "package.json"), JSON.stringify({ type: "module" }));
+  const packageRoot = join(distRoot, "node_modules", "@kendall", "contracts");
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ type: "module", exports: { ".": "./index.js" } }));
+  await writeFile(join(packageRoot, "index.js"), "export * from '../../../packages/contracts/src/pipeline-control-plane/index.js';\n");
+  return import(pathToFileURL(join(distRoot, "packages/workflow-core/src/pipeline-control-plane/index.js")).href);
 }
 
 async function loadCompiledMapper() {
