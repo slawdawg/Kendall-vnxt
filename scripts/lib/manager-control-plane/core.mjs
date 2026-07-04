@@ -1,0 +1,15917 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { cpus, freemem, loadavg, totalmem } from "node:os";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { assertWorkspaceStateStorage, workspaceState } from "../codex-workspace-state.mjs";
+import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-routing.mjs";
+import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
+
+const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+export const agentUsageRelativePath = ".tmux/plugins/agent-usage-tmux/scripts/agent_usage.sh";
+export const codexUsageFetcherFile = "fetch_codex_usage.py";
+
+export const MANAGER_WORKER_LIFECYCLE_STATES = Object.freeze([
+  "busy",
+  "valid_idle_completed",
+  "pulling_next_work",
+  "waiting_for_dispatcher",
+  "waiting_after_signal",
+  "recovery_required",
+  "blocked_gated",
+  "paused_usage",
+  "paused_resources",
+  "retired",
+]);
+
+export function classifyManagerWorkerLifecycle(worker = {}, context = {}) {
+  const gate = context.gate || {};
+  const cycle = Number.isFinite(Number(context.cycle)) ? Number(context.cycle) : 0;
+  if (worker.retired) {
+    return managerWorkerLifecycle("retired", "worker retired after bounded recovery policy", worker, cycle, "none", "worker is no longer eligible for dispatch");
+  }
+  if (gate.usagePaused) {
+    return managerWorkerLifecycle("paused_usage", "usage window is manager-only", worker, cycle, "hold_worker_truth", "do not dispatch new work while usage is paused");
+  }
+  if (gate.resourcePaused) {
+    return managerWorkerLifecycle("paused_resources", "CPU/load or RAM pressure pauses new dispatch", worker, cycle, "hold_worker_truth", "do not dispatch new work under pressured resources");
+  }
+  if (worker.recoveryRequired) {
+    return managerWorkerLifecycle("recovery_required", "prompt-idle repair attempts exhausted", worker, cycle, "inspect_or_retire_worker", "no repeated progress-signal churn");
+  }
+  if (worker.promptIdle) {
+    if ((worker.pointerSubmitAttempts || 0) < (context.maxPointerSubmits || 0)) {
+      return managerWorkerLifecycle("waiting_after_signal", "visible pointer text submitted with return verification", worker, cycle, "submit_visible_pointer_text", "verify receipt before further signaling");
+    }
+    if ((worker.progressSignalAttempts || 0) < (context.maxProgressSignals || 0)) {
+      return managerWorkerLifecycle("waiting_after_signal", "compact progress request sent with return verification", worker, cycle, "send_compact_progress_request", "cap prompt-idle progress requests");
+    }
+    return managerWorkerLifecycle("recovery_required", "prompt-idle signal cap reached", worker, cycle, "inspect_or_retire_worker", "no repeated progress-signal churn");
+  }
+  if (worker.currentWorkItem) {
+    return managerWorkerLifecycle("busy", "worker has an active dispatcher lease", worker, cycle, "continue_worker_cycle", "no manager-pushed handoff on normal path");
+  }
+  if ((worker.cleanCycles || 0) >= (context.requiredCycles || Number.POSITIVE_INFINITY)) {
+    return managerWorkerLifecycle("valid_idle_completed", "worker reached required clean cycles", worker, cycle, "none", "stable worker needs no new work");
+  }
+  if (context.dispatcherState === "refilling") {
+    return managerWorkerLifecycle("waiting_for_dispatcher", "dispatcher refill is active", worker, cycle, "wait_for_refill", "do not duplicate refill jobs");
+  }
+  if (context.dispatcherState === "empty" || context.dispatcherState === "blocked") {
+    return managerWorkerLifecycle("blocked_gated", context.dispatcherReason || "dispatcher cannot issue source-owned safe work", worker, cycle, "inspect_dispatcher_no_work_state", "do not fabricate unsafe work");
+  }
+  return managerWorkerLifecycle("pulling_next_work", "worker is pulling next work from dispatcher", worker, cycle, "dispatcher_next_work", "worker-pull is normal path");
+}
+
+function managerWorkerLifecycle(state, reason, worker, cycle, nextAllowedAction, stopLine) {
+  return {
+    state,
+    reason,
+    evidenceSource: "manager-control-plane-lifecycle",
+    age: cycle,
+    cycle,
+    nextAllowedAction,
+    retryCount: worker.retryCount || 0,
+    pointerSubmitAttempts: worker.pointerSubmitAttempts || 0,
+    progressSignalAttempts: worker.progressSignalAttempts || 0,
+    stopLine,
+  };
+}
+
+export function defaultAgentUsageScript(env = process.env) {
+  return env.HOME ? join(env.HOME, agentUsageRelativePath) : "";
+}
+
+export function defaultCodexUsageFetcher(usagePath = defaultAgentUsageScript()) {
+  return usagePath ? join(dirname(usagePath), codexUsageFetcherFile) : "";
+}
+
+export function parseCommonArgs(argv = []) {
+  const options = {
+    summaryJson: false,
+    runId: "",
+    desiredWorkers: 6,
+    stateRoot: "",
+    command: "",
+    eventType: "manager.event",
+    summary: "",
+    workerId: "",
+    authorityBasis: "",
+    recoveryPath: "",
+    sourceRefs: [],
+    evidenceRefs: [],
+    materialDecision: false,
+    recordPolicy: "",
+    assignmentSummaryFile: "",
+    resourceState: "",
+    usageState: "",
+    steeringInstruction: "",
+    operatorFeedback: "",
+    apply: false,
+    limit: null,
+    workerCommand: "",
+    progressStaleMinutes: null,
+    promptIdle: false,
+    answer: "",
+    operatorVisiblePrompt: false,
+    maxIterations: null,
+    intervalMs: 60000,
+    heartbeatEvery: 1,
+    sprintStatusPath: "",
+    storyKey: "",
+  };
+  const positionals = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--summary-json") {
+      options.summaryJson = true;
+    } else if (arg === "--run-id") {
+      options.runId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--run-id=")) {
+      options.runId = arg.slice("--run-id=".length);
+    } else if (arg === "--desired-workers") {
+      options.desiredWorkers = parseDesiredWorkers(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--desired-workers=")) {
+      options.desiredWorkers = parseDesiredWorkers(arg.slice("--desired-workers=".length));
+    } else if (arg === "--state-root") {
+      options.stateRoot = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--state-root=")) {
+      options.stateRoot = arg.slice("--state-root=".length);
+    } else if (arg === "--type") {
+      options.eventType = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--type=")) {
+      options.eventType = arg.slice("--type=".length);
+    } else if (arg === "--summary") {
+      options.summary = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--summary=")) {
+      options.summary = arg.slice("--summary=".length);
+    } else if (arg === "--worker-id") {
+      options.workerId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--worker-id=")) {
+      options.workerId = arg.slice("--worker-id=".length);
+    } else if (arg === "--authority-basis") {
+      options.authorityBasis = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--authority-basis=")) {
+      options.authorityBasis = arg.slice("--authority-basis=".length);
+    } else if (arg === "--recovery-path") {
+      options.recoveryPath = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--recovery-path=")) {
+      options.recoveryPath = arg.slice("--recovery-path=".length);
+    } else if (arg === "--source-ref") {
+      options.sourceRefs.push(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--source-ref=")) {
+      options.sourceRefs.push(arg.slice("--source-ref=".length));
+    } else if (arg === "--source-refs") {
+      options.sourceRefs.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--source-refs=")) {
+      options.sourceRefs.push(...arg.slice("--source-refs=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--evidence-ref") {
+      options.evidenceRefs.push(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--evidence-ref=")) {
+      options.evidenceRefs.push(arg.slice("--evidence-ref=".length));
+    } else if (arg === "--evidence-refs") {
+      options.evidenceRefs.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--evidence-refs=")) {
+      options.evidenceRefs.push(...arg.slice("--evidence-refs=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--material-decision") {
+      options.materialDecision = true;
+    } else if (arg === "--record-policy") {
+      options.recordPolicy = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--record-policy=")) {
+      options.recordPolicy = arg.slice("--record-policy=".length);
+    } else if (arg === "--assignment-summary-file") {
+      options.assignmentSummaryFile = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--assignment-summary-file=")) {
+      options.assignmentSummaryFile = arg.slice("--assignment-summary-file=".length);
+    } else if (arg === "--resource-state") {
+      options.resourceState = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--resource-state=")) {
+      options.resourceState = arg.slice("--resource-state=".length);
+    } else if (arg === "--usage-state") {
+      options.usageState = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--usage-state=")) {
+      options.usageState = arg.slice("--usage-state=".length);
+    } else if (arg === "--steering" || arg === "--operator-instruction") {
+      options.steeringInstruction = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--steering=")) {
+      options.steeringInstruction = arg.slice("--steering=".length);
+    } else if (arg.startsWith("--operator-instruction=")) {
+      options.steeringInstruction = arg.slice("--operator-instruction=".length);
+    } else if (arg === "--feedback" || arg === "--operator-feedback") {
+      options.operatorFeedback = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--feedback=")) {
+      options.operatorFeedback = arg.slice("--feedback=".length);
+    } else if (arg.startsWith("--operator-feedback=")) {
+      options.operatorFeedback = arg.slice("--operator-feedback=".length);
+    } else if (arg === "--apply") {
+      options.apply = true;
+    } else if (arg === "--dry-run") {
+      options.apply = false;
+    } else if (arg === "--limit") {
+      options.limit = nonNegativeInteger(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--limit=")) {
+      options.limit = nonNegativeInteger(arg.slice("--limit=".length));
+    } else if (arg === "--worker-command") {
+      options.workerCommand = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--worker-command=")) {
+      options.workerCommand = arg.slice("--worker-command=".length);
+    } else if (arg === "--progress-stale-minutes") {
+      options.progressStaleMinutes = nonNegativeInteger(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--progress-stale-minutes=")) {
+      options.progressStaleMinutes = nonNegativeInteger(arg.slice("--progress-stale-minutes=".length));
+    } else if (arg === "--prompt-idle") {
+      options.promptIdle = true;
+    } else if (arg === "--answer") {
+      options.answer = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--answer=")) {
+      options.answer = arg.slice("--answer=".length);
+    } else if (arg === "--operator-visible-prompt") {
+      options.operatorVisiblePrompt = true;
+    } else if (arg === "--max-iterations") {
+      options.maxIterations = nonNegativeInteger(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--max-iterations=")) {
+      options.maxIterations = nonNegativeInteger(arg.slice("--max-iterations=".length));
+    } else if (arg === "--once") {
+      options.maxIterations = 1;
+    } else if (arg === "--interval-ms") {
+      options.intervalMs = nonNegativeInteger(requiredValue(argv, ++index, arg)) ?? options.intervalMs;
+    } else if (arg.startsWith("--interval-ms=")) {
+      options.intervalMs = nonNegativeInteger(arg.slice("--interval-ms=".length)) ?? options.intervalMs;
+    } else if (arg === "--heartbeat-every") {
+      options.heartbeatEvery = Math.max(1, nonNegativeInteger(requiredValue(argv, ++index, arg)) ?? options.heartbeatEvery);
+    } else if (arg.startsWith("--heartbeat-every=")) {
+      options.heartbeatEvery = Math.max(1, nonNegativeInteger(arg.slice("--heartbeat-every=".length)) ?? options.heartbeatEvery);
+    } else if (arg === "--sprint-status-path") {
+      options.sprintStatusPath = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--sprint-status-path=")) {
+      options.sprintStatusPath = arg.slice("--sprint-status-path=".length);
+    } else if (arg === "--story-key") {
+      options.storyKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--story-key=")) {
+      options.storyKey = arg.slice("--story-key=".length);
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
+    } else {
+      positionals.push(arg);
+    }
+  }
+  options.command = positionals[0] || "";
+  return options;
+}
+
+function parseDesiredWorkers(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function boundedDesiredWorkers(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 6;
+  return Math.max(0, Math.min(6, Math.trunc(parsed)));
+}
+
+function validRunId(runId) {
+  return /^[a-z0-9][a-z0-9-]{0,80}$/i.test(String(runId || ""));
+}
+
+function safeRunId(runId) {
+  const value = String(runId || defaultRunId());
+  if (!validRunId(value)) {
+    throw new Error(`Invalid manager run id: ${value}`);
+  }
+  return value;
+}
+
+function resolveManagerRunId(options = {}, context = {}) {
+  if (options.runId || context.runId) {
+    return safeRunId(options.runId || context.runId);
+  }
+  return latestExistingManagerRunId(options, context) || defaultRunId();
+}
+
+function latestExistingManagerRunId(options = {}, context = {}) {
+  const proof = getWorkspaceProof(options, context);
+  const managerRoot = join(proof.state.root, "manager-runs");
+  if (!existsSync(managerRoot)) return "";
+  const candidates = readdirSync(managerRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && validRunId(entry.name))
+    .map((entry) => {
+      const root = join(managerRoot, entry.name);
+      const missionPath = join(root, "mission.json");
+      return {
+        runId: entry.name,
+        ready: existsSync(missionPath),
+      };
+    })
+    .filter((entry) => entry.ready)
+    .sort((a, b) => b.runId.localeCompare(a.runId));
+  return candidates[0]?.runId || "";
+}
+
+function isInsideOrSame(child, parent) {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (!!rel && !rel.startsWith("..") && !rel.startsWith("/") && rel !== "..");
+}
+
+function nonNegativeInteger(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.trunc(parsed);
+}
+
+function dispatchPreviewSummary(value) {
+  if (!value) return {};
+  return value.summary || value;
+}
+
+function dispatchPreviewCount(value, key) {
+  const summary = dispatchPreviewSummary(value);
+  const counts = summary.counts || {};
+  const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
+  if (key === "dispatchable") {
+    return nonNegativeInteger(counts.dispatchable ?? counts.assignable ?? candidateStateCounts.assignable);
+  }
+  if (key === "closed") {
+    return nonNegativeInteger(counts.closed ?? candidateStateCounts.closed);
+  }
+  if (key === "active") {
+    return dispatchPreviewActiveLeaseCount(summary);
+  }
+  return null;
+}
+
+function dispatchPreviewActiveLeaseCount(summary = {}) {
+  const counts = summary.counts || {};
+  const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
+  const explicit = nonNegativeInteger(
+    counts.activeLeases ??
+      counts.activeLeaseCount ??
+      counts.active_lease_count ??
+      counts.active_leases ??
+      counts.leased ??
+      counts.active ??
+      summary.activeLeases ??
+      summary.activeLeaseCount ??
+      summary.active_lease_count ??
+      summary.active_leases ??
+      summary.leased ??
+      candidateStateCounts.activeLeases ??
+      candidateStateCounts.activeLeaseCount ??
+      candidateStateCounts.active_lease_count ??
+      candidateStateCounts.active_leases,
+  );
+  if (explicit !== null) return explicit;
+  const dispatch = summary.dispatch || {};
+  const selectedLane = summary.selectedLane || summary.selected_lane || dispatch.selectedLane || dispatch.selected_lane;
+  const allowed = summary.allowed ?? dispatch.allowed;
+  const hasCountEvidence = Object.keys(counts).length > 0 || Object.keys(candidateStateCounts).length > 0;
+  if (!selectedLane && hasCountEvidence && (allowed === false || nonNegativeInteger(candidateStateCounts.active) === 0)) return 0;
+  return null;
+}
+
+function requiredValue(argv, index, option) {
+  const value = argv[index];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${option} requires a value`);
+  }
+  return value;
+}
+
+export function packet({ ok = true, status = "ready", summary = {}, blockers = [], warnings = [], nextActions = [] } = {}) {
+  return { ok, status, summary, blockers, warnings, nextActions };
+}
+
+export function printPacket(result, options = {}) {
+  if (options.summaryJson) {
+    console.log(JSON.stringify(result, null, 2));
+    if (result?.ok === false) process.exitCode = 1;
+    return;
+  }
+  console.log(renderBrief(result));
+  if (result?.ok === false) process.exitCode = 1;
+}
+
+export function renderBrief(result) {
+  const action = result.nextActions?.[0]?.summary || result.nextActions?.[0]?.nextAction || "no action needed";
+  return `Manager: ${result.status} | action: ${action}`;
+}
+
+export function getWorkspaceProof(options = {}, context = {}) {
+  const stateOptions = options.stateRoot ? { stateRoot: options.stateRoot } : {};
+  try {
+    const { state, proof } = assertWorkspaceStateStorage(stateOptions, { repoRoot, ...context });
+    return { ok: true, state, proof };
+  } catch (error) {
+    const state = workspaceState(stateOptions, { repoRoot, ...context });
+    return {
+      ok: false,
+      state,
+      error: error instanceof Error ? error.message : String(error),
+      code: error?.code || "WORKSPACE_STATE_ERROR",
+    };
+  }
+}
+
+export function managerRunPaths(runId = defaultRunId(), options = {}, context = {}) {
+  const safeId = safeRunId(runId);
+  const proof = getWorkspaceProof(options, context);
+  const managerRoot = join(proof.state.root, "manager-runs");
+  const root = join(managerRoot, safeId);
+  if (!isInsideOrSame(root, managerRoot)) {
+    throw new Error(`Invalid manager run path for run id: ${safeId}`);
+  }
+  return {
+    runId: safeId,
+    proof,
+    root,
+    mission: join(root, "mission.json"),
+    workers: join(root, "workers.json"),
+    throughputProof: join(root, "throughput-proof.json"),
+    dispatcherSummary: join(root, "dispatcher-summary.json"),
+    events: join(root, "events.ndjson"),
+    checkpoints: join(root, "checkpoints.json"),
+    questions: join(root, "questions.ndjson"),
+    resourceSnapshots: join(root, "resource-snapshots.ndjson"),
+    usageSnapshots: join(root, "usage-snapshots.ndjson"),
+  };
+}
+
+export function defaultRunId(date = new Date()) {
+  return `manager-${date.toISOString().slice(0, 10).replaceAll("-", "")}-001`;
+}
+
+export function buildResourceStatus(context = {}) {
+  const injectedCpuCount = Number(context.cpuCount);
+  const cpuCount = Number.isFinite(injectedCpuCount) && injectedCpuCount > 0 ? injectedCpuCount : cpus().length || 1;
+  const free = context.freeMemory ?? freemem();
+  const total = context.totalMemory ?? totalmem();
+  const loads = context.loadAverage || loadavg();
+  const freeRatio = total > 0 ? free / total : 0;
+  const usedRatio = total > 0 ? Math.max(0, Math.min(1, 1 - freeRatio)) : 1;
+  const loadRatio = cpuCount > 0 ? (loads[0] || 0) / cpuCount : 0;
+  const state = classifyResourceState({ loadRatio, usedRatio });
+  const sampledAt = sanitizeLedgerField(
+    context.sampledAt || context.timestamp || context.now || new Date().toISOString(),
+    new Date(0).toISOString(),
+    80,
+  );
+  return packet({
+    status: state,
+    summary: {
+      state,
+      sampledAt,
+      timestamp: sampledAt,
+      cpuCount,
+      load1: Number((loads[0] || 0).toFixed(2)),
+      loadRatio: Number(loadRatio.toFixed(2)),
+      freeMemoryBytes: free,
+      totalMemoryBytes: total,
+      freeMemoryRatio: Number(freeRatio.toFixed(3)),
+      usedMemoryRatio: Number(usedRatio.toFixed(3)),
+      loadPolicy: resourceLoadPolicy(state),
+      ramPolicy: resourceRamPolicy(state),
+      leaseIssuancePolicy: resourceLeaseIssuancePolicy(state),
+      workerLifecyclePolicy: resourceWorkerLifecyclePolicy(state),
+      modelQualityPolicy: "preserve_task_fit_quality",
+      recoveryPath: state === "critical" ? "terminate_manager_owned_idle_or_warm_workers_before_active_workers" : "wait for CPU/RAM posture to recover or reduce active worker target",
+      rawPayloadRetained: false,
+    },
+    warnings: state === "normal" ? [] : [{ code: "resource-pressure", message: `Host resource state is ${state}.` }],
+  });
+}
+
+function classifyResourceState({ loadRatio = 0, usedRatio = 0 } = {}) {
+  if (loadRatio > 1 || usedRatio > 0.92) return "critical";
+  if (loadRatio >= 0.85 || usedRatio >= 0.85) return "pressured";
+  if (loadRatio >= 0.70 || usedRatio >= 0.75) return "warm";
+  return "normal";
+}
+
+function resourceLoadPolicy(state = "unknown") {
+  if (state === "critical") return "one_minute_load_above_logical_cpu_count";
+  if (state === "pressured") return "one_minute_load_85_to_100_percent_of_logical_cpu_count";
+  if (state === "warm") return "one_minute_load_70_to_85_percent_of_logical_cpu_count";
+  if (state === "normal") return "one_minute_load_below_70_percent_of_logical_cpu_count";
+  return "resource_load_unknown";
+}
+
+function resourceRamPolicy(state = "unknown") {
+  if (state === "critical") return "ram_used_above_92_percent";
+  if (state === "pressured") return "ram_used_85_to_92_percent";
+  if (state === "warm") return "ram_used_75_to_85_percent";
+  if (state === "normal") return "ram_used_below_75_percent";
+  return "resource_ram_unknown";
+}
+
+function resourceLeaseIssuancePolicy(state = "unknown") {
+  if (state === "critical") return "stop_new_leases_and_restore_host_responsiveness";
+  if (state === "pressured") return "stop_or_reduce_new_leases_resource_pressure";
+  if (state === "warm") return "limit_new_worker_expansion_resource_warm";
+  if (state === "normal") return "normal_new_lease_policy";
+  return "resource_unknown_conservative_new_lease_policy";
+}
+
+function resourceWorkerLifecyclePolicy(state = "unknown") {
+  if (state === "critical") return "terminate_manager_owned_idle_or_warm_workers_before_active_workers";
+  if (state === "pressured") return "hold_warm_expansion_keep_active_workers_observable";
+  if (state === "warm") return "limit_expansion_keep_current_workers_observable";
+  if (state === "normal") return "normal_worker_lifecycle_policy";
+  return "monitor_only_until_resource_known";
+}
+
+export function parseCodexUsageOutput(output = "") {
+  const percentMatch = String(output).match(/>_\s*(\d{1,3})%/);
+  const resetMatch = String(output).match(/\b(\d{1,2}:\d{2})\b/);
+  if (!percentMatch) {
+    return null;
+  }
+  const remainingPercent = boundedPercent(percentMatch[1]);
+  return {
+    source: "agent-usage-tmux",
+    state: classifyUsageState(remainingPercent),
+    remainingPercent,
+    resetTime: resetMatch?.[1] || null,
+  };
+}
+
+export function parseCodexFetcherUsage(percentOutput = "", resetInOutput = "") {
+  const percentMatch = String(percentOutput).trim().match(/^(\d{1,3})$/);
+  const resetMatch = String(resetInOutput).trim().match(/^(\d+)$/);
+  if (!percentMatch) {
+    return null;
+  }
+  const remainingPercent = boundedPercent(percentMatch[1]);
+  return {
+    source: "fetch-codex-usage",
+    state: classifyUsageState(remainingPercent),
+    remainingPercent,
+    resetTime: resetMatch ? formatResetDuration(Number(resetMatch[1])) : null,
+    resetInSeconds: resetMatch ? Number(resetMatch[1]) : null,
+  };
+}
+
+function boundedPercent(value) {
+  return Math.max(0, Math.min(100, Number(value)));
+}
+
+function classifyUsageState(remainingPercent) {
+  if (remainingPercent <= 2) {
+    return "manager_only";
+  }
+  if (remainingPercent < 10) {
+    return "drain";
+  }
+  if (remainingPercent <= 25) {
+    return "conserve";
+  }
+  return "normal";
+}
+
+function formatResetDuration(seconds) {
+  const bounded = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const hours = Math.floor(bounded / 3600);
+  const minutes = Math.floor((bounded % 3600) / 60);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function buildUsageGovernorSummary(parsed = {}, context = {}) {
+  const state = ["normal", "conserve", "drain", "manager_only"].includes(parsed.state) ? parsed.state : "unknown";
+  const weekly = selectWeeklyUsagePressure(context.weeklyUsage, context.weeklyUsageContext, context.weeklyUsagePressure);
+  const managerOnly = state === "manager_only";
+  const sampledAt = sanitizeLedgerField(
+    context.sampledAt || context.timestamp || context.now || new Date().toISOString(),
+    new Date(0).toISOString(),
+    80,
+  );
+  return {
+    source: sanitizeLedgerField(parsed.source || "fetch-codex-usage", "fetch-codex-usage", 80),
+    state,
+    remainingPercent: Number.isFinite(parsed.remainingPercent) ? boundedPercent(parsed.remainingPercent) : null,
+    sampledAt,
+    timestamp: sampledAt,
+    resetTime: sanitizeLedgerField(parsed.resetTime || "", "", 40) || null,
+    resetInSeconds: Number.isFinite(parsed.resetInSeconds) ? Math.max(0, Math.floor(parsed.resetInSeconds)) : null,
+    weekly,
+    leaseIssuancePolicy: usageLeaseIssuancePolicy(state, weekly),
+    activeWorkPolicy: usageActiveWorkPolicy(state),
+    modelQualityPolicy: "preserve_task_fit_quality",
+    managerOnlyReason: managerOnly ? "five_hour_usage_at_or_below_2_percent" : "",
+    resumeTrigger: managerOnly ? usageResumeTrigger(parsed) : "",
+    rawPayloadRetained: false,
+  };
+}
+
+function usageGovernorWarnings(summary = {}) {
+  const warnings = [];
+  if (summary.state && summary.state !== "normal") {
+    warnings.push({ code: "usage-pressure", message: `Codex usage state is ${summary.state}.` });
+  }
+  if (summary.weekly?.state === "pressured") {
+    warnings.push({ code: "weekly-usage-pressure", message: "Reliable weekly usage pressure can reduce new leases or defer optional work." });
+  } else if (summary.weekly?.state === "unknown" && summary.weekly?.source !== "not_configured") {
+    warnings.push({ code: "weekly-usage-unknown", message: "Weekly usage source is unavailable or unreliable; do not infer weekly pressure." });
+  }
+  return warnings;
+}
+
+function usageResumeTrigger(parsed = {}) {
+  if (parsed.resetTime) return `5h_reset_at_${sanitizeLedgerField(parsed.resetTime, "unknown", 40)}`;
+  if (Number.isFinite(parsed.resetInSeconds)) return `5h_reset_in_${Math.max(0, Math.floor(parsed.resetInSeconds))}s`;
+  return "wait_for_5h_reset";
+}
+
+function usageLeaseIssuancePolicy(state = "unknown", weekly = {}) {
+  if (state === "manager_only") return "stop_new_leases_manager_only";
+  if (state === "drain") return "stop_new_leases_drain_active_safe_work";
+  if (state === "conserve") return "reduce_new_leases_conserve_usage";
+  if (weekly.state === "pressured") return "reduce_new_leases_or_defer_optional_work";
+  if (state === "normal") return "normal_new_lease_policy";
+  return "usage_unknown_conservative_new_lease_policy";
+}
+
+function usageActiveWorkPolicy(state = "unknown") {
+  if (state === "manager_only") return "preserve_resume_state_and_pause_new_worker_issuance";
+  if (state === "drain") return "allow_active_workers_finish_safe_current_steps";
+  if (state === "conserve") return "continue_active_work_reduce_new_leases";
+  if (state === "normal") return "continue_active_work";
+  return "monitor_only_until_usage_known";
+}
+
+function normalizeWeeklyUsagePressure(value = null) {
+  if (!value) {
+    return {
+      state: "unknown",
+      source: "not_configured",
+      reliable: false,
+      leasePolicy: "weekly_usage_source_unavailable",
+      optionalWorkPolicy: "do_not_claim_weekly_pressure",
+      modelQualityPolicy: "preserve_task_fit_quality",
+      rawPayloadRetained: false,
+    };
+  }
+  const input = isPlainObject(value) ? value : { state: value };
+  const source = sanitizeLedgerField(input.source || input.sourceName || input.sourceRef || "unknown", "unknown", 120);
+  const reliable = input.reliable === true || input.sourceReliable === true || input.status === "reliable";
+  const rawState = firstMeaningfulUsagePressureValue(input.state, input.pressure, input.status);
+  const pressureState = /^(pressured|pressure|conserve|drain|manager_only|manager-only|limited|low|exhausted)$/.test(rawState)
+    ? "pressured"
+    : rawState === "normal"
+      ? "normal"
+      : "unknown";
+  const unsupportedSource = unsupportedWeeklyUsageSource(source);
+  if (!reliable || !["normal", "pressured"].includes(pressureState) || unsupportedSource) {
+    return {
+      state: "unknown",
+      source: unsupportedSource ? "unsupported_weekly_usage_source" : source,
+      reliable: false,
+      leasePolicy: "weekly_usage_source_unavailable",
+      optionalWorkPolicy: "do_not_claim_weekly_pressure",
+      modelQualityPolicy: "preserve_task_fit_quality",
+      rawPayloadRetained: false,
+    };
+  }
+  return {
+    state: pressureState,
+    source,
+    reliable: true,
+    resetTime: sanitizeLedgerField(input.resetTime || input.resetAt || "", "", 80),
+    leasePolicy: pressureState === "pressured" ? "reduce_new_leases_or_defer_optional_work" : "normal_new_lease_policy",
+    optionalWorkPolicy: pressureState === "pressured" ? "defer_optional_work" : "allow_optional_work",
+    modelQualityPolicy: "preserve_task_fit_quality",
+    rawPayloadRetained: false,
+  };
+}
+
+function selectWeeklyUsagePressure(...values) {
+  const candidates = values
+    .map((value) => normalizeWeeklyUsagePressure(value))
+    .filter(Boolean);
+  return candidates.find((candidate) => candidate.reliable === true && candidate.state === "pressured") ||
+    candidates.find((candidate) => candidate.reliable === true && candidate.state === "normal") ||
+    candidates.find((candidate) => candidate.source !== "not_configured") ||
+    candidates[0] ||
+    normalizeWeeklyUsagePressure(null);
+}
+
+function firstMeaningfulUsagePressureValue(...values) {
+  for (const value of values) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized && !["unknown", "missing", "none", "unavailable", "not_configured", "not-configured"].includes(normalized)) {
+      return normalized;
+    }
+  }
+  return "unknown";
+}
+
+function unsupportedWeeklyUsageSource(source = "") {
+  const normalized = String(source || "").trim().toLowerCase();
+  return normalized.startsWith("tmux:") ||
+    normalized.startsWith("pane:") ||
+    normalized.startsWith("scrollback:") ||
+    normalized.startsWith("transcript:") ||
+    normalized.includes("pane-scrollback") ||
+    normalized.includes("raw-transcript") ||
+    normalized.includes("raw_transcript");
+}
+
+export function buildUsageStatus(context = {}) {
+  const runner = context.runner || spawnSync;
+  const usagePath = context.usagePath || defaultAgentUsageScript(context.env || process.env);
+  const fetcherPath = context.fetcherPath || defaultCodexUsageFetcher(usagePath);
+  const agentUsage = readAgentCodexUsage(usagePath, runner, context);
+  if (agentUsage.packet) {
+    return agentUsage.packet;
+  }
+  const directUsage = readDirectCodexUsage(fetcherPath, runner, context);
+  if (directUsage.packet) {
+    return directUsage.packet;
+  }
+  const weekly = selectWeeklyUsagePressure(context.weeklyUsage, context.weeklyUsageContext, context.weeklyUsagePressure);
+  return packet({
+    ok: false,
+    status: "unknown",
+    summary: {
+      state: "unknown",
+      source: "agent-usage-tmux",
+      available: false,
+      usagePath,
+      fetcherPath,
+      weekly,
+      leaseIssuancePolicy: usageLeaseIssuancePolicy("unknown", weekly),
+      activeWorkPolicy: usageActiveWorkPolicy("unknown"),
+      modelQualityPolicy: "preserve_task_fit_quality",
+      rawPayloadRetained: false,
+    },
+    warnings: [...agentUsage.warnings, ...directUsage.warnings].length > 0
+      ? [...agentUsage.warnings, ...directUsage.warnings]
+      : [{ code: "usage-source-unavailable", message: "Codex usage source is unavailable." }],
+    nextActions: [{ code: "usage-conservative", summary: "Use conservative worker target until Codex usage source succeeds." }],
+  });
+}
+
+function readAgentCodexUsage(usagePath, runner, context = {}) {
+  if (!usagePath || !existsSync(usagePath)) {
+    return {
+      packet: null,
+      warnings: usagePath ? [{ code: "usage-agent-script-missing", message: `Codex usage script not found: ${usagePath}` }] : [],
+    };
+  }
+  const options = { encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 3000 };
+  const result = runner(usagePath, ["codex"], options);
+  if ((result.status ?? 1) === 0) {
+    const parsed = parseCodexUsageOutput(result.stdout || "");
+    if (parsed) {
+      const summary = buildUsageGovernorSummary(parsed, context);
+      return {
+        packet: packet({
+          status: parsed.state,
+          summary: { ...summary, available: true, usagePath },
+          warnings: usageGovernorWarnings(summary),
+        }),
+        warnings: [],
+      };
+    }
+    return {
+      packet: null,
+      warnings: [{ code: "usage-agent-script-unparsed", message: "Could not parse agent_usage.sh codex output." }],
+    };
+  }
+  return {
+    packet: null,
+    warnings: [{
+      code: "usage-agent-script-failed",
+      message: (result.stderr || result.error?.message || "agent_usage.sh codex failed").trim(),
+    }],
+  };
+}
+
+function readDirectCodexUsage(fetcherPath, runner, context = {}) {
+  if (!fetcherPath || !existsSync(fetcherPath)) {
+    return {
+      packet: null,
+      fetcherAvailable: false,
+      warnings: fetcherPath ? [{ code: "usage-fetcher-missing", message: `Codex usage fetcher not found: ${fetcherPath}` }] : [],
+    };
+  }
+  const options = { encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 3000 };
+  const percent = runner("python3", [fetcherPath, "--field", "percent"], options);
+  const reset = runner("python3", [fetcherPath, "--field", "reset_in"], options);
+  if ((percent.status ?? 1) === 0) {
+    const resetOk = (reset.status ?? 1) === 0;
+    const parsed = parseCodexFetcherUsage(percent.stdout || "", resetOk ? reset.stdout || "" : "");
+    if (parsed) {
+      const summary = buildUsageGovernorSummary(parsed, context);
+      const warnings = usageGovernorWarnings(summary);
+      if (!resetOk) {
+        warnings.push({
+          code: "usage-reset-fetcher-failed",
+          message: "Could not read Codex usage reset time; preserving percent-based usage state.",
+        });
+      }
+      return {
+        packet: packet({
+          status: parsed.state,
+          summary: { ...summary, available: true, fetcherPath },
+          warnings,
+        }),
+        fetcherAvailable: true,
+        warnings: [],
+      };
+    }
+    return {
+      packet: null,
+      fetcherAvailable: true,
+      warnings: [{ code: "usage-fetcher-unparsed", message: "Could not parse direct Codex usage fetcher output." }],
+    };
+  }
+  return {
+    packet: null,
+    fetcherAvailable: true,
+    warnings: [{
+      code: "usage-fetcher-failed",
+      message: (percent.stderr || reset.stderr || percent.error?.message || reset.error?.message || "direct Codex usage fetch failed").trim(),
+    }],
+  };
+}
+
+export function buildWorkerStatus(options = {}, context = {}) {
+  const runId = resolveManagerRunId(options, context);
+  const paths = managerRunPaths(runId, options, context);
+  const workerRead = readJsonArray(paths.workers);
+  const rawWorkerRecords = Array.isArray(context.workerRecords)
+    ? context.workerRecords
+    : Array.isArray(context.worker_records)
+      ? context.worker_records
+      : Array.isArray(workerRead.value)
+        ? workerRead.value
+        : [];
+  const invalidWorkers = rawWorkerRecords.filter((worker) => !isPlainObject(worker));
+  let workers = rawWorkerRecords.filter((worker) => isPlainObject(worker)).map(projectWorker);
+  const assignmentArgs = ["assignment-report", "--summary-json"];
+  if (options.stateRoot) assignmentArgs.push("--state-root", options.stateRoot);
+  const assignment = context.assignmentSummary || readAssignmentSummaryFile(options.assignmentSummaryFile) || runWorkspaceJson(assignmentArgs, context);
+  workers = overlayWorkerAssignmentEvidence(workers, assignment, options, context);
+  const explicitUsageState = normalizePosture(options.usageState || context.usageState || context.usage, "");
+  const explicitResourceState = normalizePosture(options.resourceState || context.resourceState || context.resource, "");
+  const usageInput = isPlainObject(context.usageContext) ? context.usageContext : {};
+  const usagePacket = explicitUsageState
+    ? packet({
+        status: explicitUsageState,
+        summary: {
+          state: explicitUsageState,
+          source: "explicit_worker_status_posture",
+          rawPayloadRetained: false,
+        },
+      })
+    : usageInput && (usageInput.status || usageInput.state)
+    ? normalizeUsagePacketContext(usageInput, context)
+    : buildUsageStatus({
+        ...usageInput,
+        weeklyUsage: context.weeklyUsage,
+        weeklyUsageContext: context.weeklyUsageContext,
+        weeklyUsagePressure: context.weeklyUsagePressure,
+      });
+  const resourcePacket = explicitResourceState
+    ? packet({
+        status: explicitResourceState,
+        summary: {
+          state: explicitResourceState,
+          source: "explicit_worker_status_posture",
+          rawPayloadRetained: false,
+        },
+      })
+    : context.resourceContext && (context.resourceContext.status || context.resourceContext.state) ? context.resourceContext : buildResourceStatus(context.resourceContext || {});
+  const usage = normalizePosture(usagePacket, "unknown");
+  const resource = normalizePosture(resourcePacket, "unknown");
+  const explicitFakeWorkerHarness = context.fakeWorkerHarness || context.fake_worker_harness;
+  const persistedThroughputProof = explicitFakeWorkerHarness
+    ? null
+    : validatePersistedThroughputProof(readThroughputProof({ ...options, runId }, context), {
+        runId,
+        now: context.now,
+        maxProofAgeMs: options.maxProofAgeMs ?? context.maxProofAgeMs,
+      });
+  const fakeWorkerHarness = explicitFakeWorkerHarness || persistedThroughputProof?.fakeWorkerHarness || {};
+  const target = buildWorkerTargetStatus(options, {
+    assignment,
+    usage,
+    usageSummary: usagePacket.summary || {},
+    resource,
+    workers,
+    refillPlan: context.refillPlan,
+    dispatchPreview: context.dispatchPreview,
+    failureRate: context.failureRate || context.failure_rate,
+    failureLoops: context.failureLoops || context.failure_loops,
+    fakeWorkerHarness,
+  });
+  const tmux = context.tmuxSummary ? { summary: context.tmuxSummary, warnings: [], blockers: [] } : buildTmuxOrientationStatus({ ...options, runId }, context.tmuxContext || {});
+  const tmuxSummary = tmux.summary || {};
+  const tmuxBlockers = buildWorkerTmuxBlockers(tmuxSummary);
+  const lifecycle = buildWorkerLifecyclePlan({ ...options, runId }, {
+    workers,
+    targets: target.summary,
+    usageState: usage,
+    resourceState: resource,
+    resourceSummary: resourcePacket.summary || {},
+    tmuxSummary,
+  });
+  const counts = lifecycle.summary?.liveWorkerCounts || countWorkerStates(workers);
+  const warmPool = buildWarmWorkerPoolSummary({
+    runId,
+    workers,
+    targets: target.summary,
+    lifecyclePlan: lifecycle.summary,
+    usageState: usage,
+    resourceState: resource,
+    blockers: [...target.blockers, ...tmuxBlockers],
+  });
+  return packet({
+    ok: target.blockers.length + tmuxBlockers.length === 0,
+    status: target.blockers.length + tmuxBlockers.length > 0 ? "blocked" : "ready",
+    summary: {
+      runId,
+      stateRoot: paths.proof.state.root,
+      workerCounts: counts,
+      workers,
+      unknownSessions: Number.isInteger(tmuxSummary.unmanagedPanes) ? tmuxSummary.unmanagedPanes : null,
+      unknownSessionStatus: Number.isInteger(tmuxSummary.unmanagedPanes) ? "metadata-only" : tmux.status === "unavailable" ? "unavailable" : "not-inspected",
+      activeAssignments: target.activeAssignments,
+      targets: target.summary,
+      targetReasons: target.reasons,
+      lifecyclePlan: lifecycle.summary,
+      warmPool,
+    },
+    blockers: [...target.blockers, ...tmuxBlockers],
+    warnings: [
+      ...(workerRead.warning ? [workerRead.warning] : []),
+      ...(invalidWorkers.length > 0 ? [{ code: "worker-state-malformed-records", message: `${invalidWorkers.length} worker records are not objects.` }] : []),
+      ...(tmux.warnings || []),
+      ...buildWorkerTmuxWarnings(tmuxSummary),
+      ...(usagePacket?.warnings || []),
+      ...(resourcePacket?.warnings || []),
+      ...(target.warnings || []),
+    ],
+  });
+}
+
+export function readThroughputProof(options = {}, context = {}) {
+  const runId = resolveManagerRunId(options, context);
+  const paths = managerRunPaths(runId, options, context);
+  const proofRead = readJsonStrict(paths.throughputProof);
+  return {
+    runId,
+    path: paths.throughputProof,
+    ...proofRead,
+  };
+}
+
+export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
+  const runId = resolveManagerRunId(options, context);
+  const paths = managerRunPaths(runId, options, context);
+  const proofRead = readThroughputProof({ ...options, runId }, context);
+  const proofValidation = validatePersistedThroughputProof(proofRead, {
+    runId,
+    now: context.now,
+    maxProofAgeMs: options.maxProofAgeMs ?? context.maxProofAgeMs,
+  });
+  const fakeWorkerHarness = proofValidation.fakeWorkerHarness || context.fakeWorkerHarness || context.fake_worker_harness;
+  const workerStatus = context.workerStatus || buildWorkerStatus(
+    { ...options, runId },
+    {
+      ...context,
+      fakeWorkerHarness,
+    },
+  );
+  const usageState = normalizePosture(context.usageContext || workerStatus.summary?.targets?.usageState, workerStatus.summary?.targets?.usageState || "unknown");
+  const resourceState = normalizePosture(context.resourceContext || workerStatus.summary?.targets?.resourceState, workerStatus.summary?.targets?.resourceState || "unknown");
+  const warmPool = workerStatus.summary?.warmPool || {};
+  const nextWorkPolicy = options.nextWorkPolicyOverride || context.nextWorkPolicyOverride || warmPool.nextWorkPolicy || {};
+  const warmWorkers = Array.isArray(warmPool.workers) ? warmPool.workers : [];
+  const rawDesiredWorkers = options.desiredWorkers ?? context.desiredWorkers ?? 6;
+  const desiredWorkers = boundedDesiredWorkers(rawDesiredWorkers);
+  const workerHeartbeatNow = context.now || new Date().toISOString();
+  const maxWorkerHeartbeatAgeMs = nonNegativeInteger(options.maxWorkerHeartbeatAgeMs ?? context.maxWorkerHeartbeatAgeMs) ?? 5 * 60 * 1000;
+  const readyWorkers = warmWorkers.filter((worker) => {
+    const state = String(worker.state || "");
+    return state === "warm" &&
+      worker.ownerProof &&
+      worker.runId === runId &&
+      workerHeartbeatReady(worker, { now: workerHeartbeatNow, maxAgeMs: maxWorkerHeartbeatAgeMs }) &&
+      workerPreflightReady(worker);
+  });
+  const tmuxSummary = context.tmuxSummary || workerStatus.summary?.tmuxSummary || {};
+  const blockers = [...proofValidation.blockers];
+  const warnings = [...(proofValidation.warnings || []), ...(workerStatus.warnings || [])];
+
+  if (!Number.isFinite(Number(rawDesiredWorkers)) || Number(rawDesiredWorkers) < 1 || desiredWorkers < 1) {
+    blockers.push({
+      code: "desired-workers-invalid",
+      message: `Desired workers must be at least 1 for live worker proof; received ${rawDesiredWorkers}.`,
+      nextAction: "Rerun manager-live-worker-proof with --desired-workers between 1 and 6.",
+    });
+  }
+
+  if (["manager_only", "drain"].includes(String(usageState || ""))) {
+    blockers.push({
+      code: "usage-not-normal",
+      message: `Usage posture is ${usageState}; live worker proof must wait for normal usage.`,
+      nextAction: "Run manager-usage-status and stay in manager-only/drain mode until the window recovers.",
+    });
+  } else if (!["normal"].includes(String(usageState || ""))) {
+    blockers.push({
+      code: "usage-unknown",
+      message: `Usage posture is ${usageState || "unknown"}; live worker proof requires a current normal usage packet.`,
+      nextAction: "Run manager-usage-status --summary-json.",
+    });
+  }
+
+  if (["critical"].includes(String(resourceState || ""))) {
+    blockers.push({
+      code: "resource-not-normal",
+      message: "Host resource posture is critical; live worker proof must not start.",
+      nextAction: "Run manager-resource-status and restore CPU/load/RAM headroom.",
+    });
+  } else if (["pressured"].includes(String(resourceState || ""))) {
+    blockers.push({
+      code: "resource-not-normal",
+      message: "Host resources are pressured; pause live worker proof until resources normalize.",
+      nextAction: "Run manager-resource-status and wait or reduce active workers.",
+    });
+  } else if (String(resourceState || "") !== "normal") {
+    blockers.push({
+      code: "resource-unknown",
+      message: `Resource posture is ${resourceState || "unknown"}; live worker proof requires a current normal resource packet.`,
+      nextAction: "Run manager-resource-status --summary-json.",
+    });
+  }
+
+  const unmanagedPanes = nonNegativeInteger(tmuxSummary.unmanagedPanes ?? tmuxSummary.unmanaged_panes) ?? 0;
+  const takeoverRequiredPanes = nonNegativeInteger(tmuxSummary.takeoverRequiredPanes ?? tmuxSummary.takeover_required_panes) ?? 0;
+  if (unmanagedPanes > 0 || takeoverRequiredPanes > 0) {
+    blockers.push({
+      code: "tmux-orientation-blocked",
+      message: `Tmux orientation has ${unmanagedPanes} unmanaged pane(s) and ${takeoverRequiredPanes} takeover-required pane(s).`,
+      nextAction: "Run tmux orientation/preflight and only use manager-owned Codex sessions.",
+    });
+  }
+
+  if (readyWorkers.length < desiredWorkers) {
+    blockers.push({
+      code: "manager-owned-workers-not-ready",
+      message: `${readyWorkers.length}/${desiredWorkers} manager-owned warm workers are ready for live proof.`,
+      nextAction: "Run manager-worker-warm after proof, usage, resource, and tmux blockers are clear.",
+    });
+  }
+
+  if (nextWorkPolicy.primary !== "dispatcher_lease_pull") {
+    blockers.push({
+      code: "next-work-policy-not-dispatcher-pull",
+      message: `Next-work primary policy is ${nextWorkPolicy.primary || "unknown"}; live proof requires dispatcher lease pull.`,
+      nextAction: "Run manager-worker-submit-pending --summary-json or manager-worker-handoff --summary-json after receipt repair; then rerun manager-worker-status.",
+    });
+  }
+
+  if (workerStatus.ok === false) {
+    for (const blocker of workerStatus.blockers || []) {
+      blockers.push({
+        code: blocker.code || "worker-status-blocked",
+        message: blocker.message || "Worker status is blocked.",
+        nextAction: blocker.nextAction || "Run manager-worker-status --summary-json and resolve blockers.",
+      });
+    }
+  }
+
+  const criticalResourceBlocked = blockers.some((blocker) => blocker.code === "resource-not-normal" && String(resourceState) === "critical");
+  const paused = blockers.some((blocker) => blocker.code === "usage-not-normal" || (blocker.code === "resource-not-normal" && !criticalResourceBlocked));
+  const status = blockers.length === 0 ? "ready" : paused && !criticalResourceBlocked ? "paused" : "blocked";
+  return packet({
+    ok: blockers.length === 0,
+    status,
+    summary: {
+      runId,
+      stateRoot: paths.proof.state.root,
+      authorityStage: "live_worker_readiness",
+      mutation: "none",
+      throughputProof: proofValidation.summary,
+      workerReadiness: {
+        desiredWorkers,
+        readyWorkerCount: readyWorkers.length,
+        readyWorkers: readyWorkers.map((worker) => ({
+          workerId: worker.workerId,
+          state: worker.state,
+          owner: worker.owner,
+          nextWork: worker.nextWork,
+        })),
+      },
+      usageState,
+      resourceState,
+      tmuxOrientation: {
+        unmanagedPanes,
+        takeoverRequiredPanes,
+        source: context.tmuxSummary ? "provided-context" : "worker-status",
+      },
+      nextWorkPolicy,
+      handoffTransport: {
+        literalSafe: true,
+        primary: "dispatcher_lease_pull",
+        fallback: "durable pointer via tmux buffer paste plus explicit return-key receipt verification",
+        longPromptHandoff: "forbidden",
+      },
+      receiptVerification: {
+        required: true,
+        method: "tmux capture-pane after C-m submit",
+        failureRoute: "manager-worker-submit-pending or pointer receipt repair before more text is sent",
+      },
+      nextLiveDogfoodCommand: `node ./scripts/manager-run-loop.mjs --run-id ${runId} --interval-ms 60000 --max-iterations 10 --summary-json`,
+      stopLines: [
+        "readiness only",
+        "no live tmux mutation",
+        "no provider usage",
+        "no GitHub mutation",
+        "no delivery or cleanup mutation",
+        "no live workspace mutation",
+      ],
+      rawPayloadRetained: false,
+      sideEffects: [],
+    },
+    blockers,
+    warnings,
+    nextActions: blockers.length === 0
+      ? [{
+          code: "start-live-worker-proof",
+          summary: "Live worker proof readiness passed.",
+          nextAction: `Run bounded live proof with ${desiredWorkers} manager-owned workers after confirming live-worker authority.`,
+        }]
+      : [{
+          code: "resolve-live-worker-readiness-blockers",
+          summary: "Live worker proof readiness is not clear.",
+          nextAction: blockers[0]?.nextAction || "Resolve readiness blockers and rerun manager-live-worker-proof.",
+        }],
+  });
+}
+
+function validatePersistedThroughputProof(proofRead = {}, context = {}) {
+  const blockers = [];
+  const warnings = [];
+  const proof = proofRead.value;
+  const baseSummary = {
+    path: proofRead.path,
+    readStatus: proofRead.status,
+    status: "missing",
+    twoWorker: { status: "missing" },
+    sixWorker: { status: "missing" },
+    authorityStage: "",
+    sourceCommand: "",
+    stopLines: [],
+    rawPayloadRetained: null,
+  };
+  if (proofRead.status === "missing") {
+    blockers.push({ code: "throughput-proof-missing", message: "Persisted throughput proof is missing.", nextAction: "Run manager-throughput-harness with --write-proof." });
+    return { summary: baseSummary, blockers, warnings, fakeWorkerHarness: null };
+  }
+  if (proofRead.status === "malformed") {
+    blockers.push({ code: "throughput-proof-malformed", message: `Persisted throughput proof is malformed: ${proofRead.message}`, nextAction: "Regenerate throughput proof with manager-throughput-harness --write-proof." });
+    return { summary: { ...baseSummary, status: "malformed" }, blockers, warnings, fakeWorkerHarness: null };
+  }
+  if (!isPlainObject(proof) || proof.kind !== "manager-throughput-proof") {
+    blockers.push({ code: "throughput-proof-malformed", message: "Persisted throughput proof has an unexpected shape.", nextAction: "Regenerate throughput proof with manager-throughput-harness --write-proof." });
+    return { summary: { ...baseSummary, status: "malformed" }, blockers, warnings, fakeWorkerHarness: null };
+  }
+  const two = isPlainObject(proof.twoWorkerProof) ? proof.twoWorkerProof : {};
+  const six = isPlainObject(proof.sixWorkerProof) ? proof.sixWorkerProof : {};
+  const dispatcher = isPlainObject(proof.dispatcher) ? proof.dispatcher : {};
+  const sideEffects = Array.isArray(proof.sideEffects) ? proof.sideEffects : [];
+  const stopLines = Array.isArray(proof.stopLines) ? proof.stopLines : [];
+  const sourceCommand = String(proof.sourceCommand || "");
+  const proofRunId = String(proof.runId || "");
+  const expectedRunId = String(context.runId || proofRead.runId || "");
+  const createdAtMs = Date.parse(String(proof.createdAt || ""));
+  const nowMs = Number.isFinite(Date.parse(String(context.now || ""))) ? Date.parse(String(context.now)) : Date.now();
+  const maxProofAgeMs = nonNegativeInteger(context.maxProofAgeMs) ?? 24 * 60 * 60 * 1000;
+  const insufficient = [];
+  const stale = [];
+  if (!proofRunId || (expectedRunId && proofRunId !== expectedRunId)) stale.push("run-id-mismatch");
+  if (!Number.isFinite(createdAtMs)) stale.push("missing-created-at");
+  if (Number.isFinite(createdAtMs) && createdAtMs > nowMs + 60_000) stale.push("created-at-in-future");
+  if (Number.isFinite(createdAtMs) && nowMs - createdAtMs > maxProofAgeMs) stale.push("created-at-too-old");
+  if (proof.status !== "passed") insufficient.push("status-not-passed");
+  if (two.status !== "passed" || (nonNegativeInteger(two.workerCount) ?? 0) < 2 || (nonNegativeInteger(two.cleanCyclesPerWorker) ?? 0) < 10) insufficient.push("two-worker-proof");
+  if (six.status !== "passed" || (nonNegativeInteger(six.workerCount) ?? 0) < 6 || (nonNegativeInteger(six.cleanCyclesPerWorker) ?? 0) < 10) insufficient.push("six-worker-proof");
+  if ((nonNegativeInteger(dispatcher.duplicateLeaseCount) ?? 0) !== 0) insufficient.push("duplicate-lease-evidence");
+  if ((nonNegativeInteger(dispatcher.refillJobCount) ?? 0) < 1) insufficient.push("refill-proof");
+  if ((nonNegativeInteger(dispatcher.leaseCount) ?? 0) < 60) insufficient.push("lease-count-proof");
+  if (proof.rawPayloadRetained !== false) insufficient.push("raw-payload-retention");
+  if (sideEffects.length > 0) insufficient.push("side-effects");
+  if (proof.authorityStage !== "backend_proof") insufficient.push("authority-stage");
+  if (!sourceCommand.includes("manager-throughput-harness.mjs")) insufficient.push("source-command");
+  for (const requiredStopLine of ["fake adapters only", "no live tmux inspection", "no provider usage", "metadata-only evidence"]) {
+    if (!stopLines.includes(requiredStopLine)) insufficient.push(`stop-line:${requiredStopLine}`);
+  }
+  if (proof.status === "failed") {
+    blockers.push({ code: "throughput-proof-failed", message: "Persisted throughput proof is failed.", nextAction: "Inspect throughput harness evidence and rerun after fixing blockers." });
+  } else if (stale.length > 0) {
+    blockers.push({ code: "throughput-proof-stale", message: `Persisted throughput proof is stale: ${stale.join(", ")}.`, nextAction: "Regenerate throughput proof for the current manager run." });
+  } else if (insufficient.length > 0) {
+    blockers.push({ code: "throughput-proof-insufficient", message: `Persisted throughput proof is insufficient: ${insufficient.join(", ")}.`, nextAction: "Rerun manager-throughput-harness with six workers and ten cycles." });
+  }
+  const summary = {
+    path: proofRead.path,
+    readStatus: proofRead.status,
+    status: blockers.length === 0 ? "passed" : "blocked",
+    runId: proof.runId || proofRead.runId,
+    authorityStage: proof.authorityStage || "",
+    sourceCommand,
+    stopLines,
+    twoWorker: {
+      status: two.status || "missing",
+      workerCount: nonNegativeInteger(two.workerCount) ?? null,
+      cleanCyclesPerWorker: nonNegativeInteger(two.cleanCyclesPerWorker) ?? null,
+      source: two.source || "",
+    },
+    sixWorker: {
+      status: six.status || "missing",
+      workerCount: nonNegativeInteger(six.workerCount) ?? null,
+      cleanCyclesPerWorker: nonNegativeInteger(six.cleanCyclesPerWorker) ?? null,
+      source: six.source || "",
+    },
+    dispatcher: {
+      duplicateLeaseCount: nonNegativeInteger(dispatcher.duplicateLeaseCount) ?? null,
+      refillJobCount: nonNegativeInteger(dispatcher.refillJobCount) ?? null,
+      leaseCount: nonNegativeInteger(dispatcher.leaseCount) ?? null,
+    },
+    rawPayloadRetained: proof.rawPayloadRetained,
+    sideEffectCount: sideEffects.length,
+  };
+  return {
+    summary,
+    blockers,
+    warnings,
+    fakeWorkerHarness: blockers.length === 0
+      ? {
+          twoWorkerProof: {
+            status: "passed",
+            workerCount: summary.twoWorker.workerCount,
+            cleanCyclesPerWorker: summary.twoWorker.cleanCyclesPerWorker,
+            source: summary.twoWorker.source,
+          },
+          sixWorkerProof: {
+            status: "passed",
+            workerCount: summary.sixWorker.workerCount,
+            cleanCyclesPerWorker: summary.sixWorker.cleanCyclesPerWorker,
+            source: summary.sixWorker.source,
+          },
+        }
+      : null,
+  };
+}
+
+function workerHeartbeatReady(worker = {}, { now = new Date().toISOString(), maxAgeMs = 5 * 60 * 1000 } = {}) {
+  const heartbeat = isPlainObject(worker.heartbeat) ? worker.heartbeat : {};
+  if (heartbeat.status !== "recorded") return false;
+  const lastHeartbeatAt = Date.parse(String(heartbeat.lastHeartbeatAt || ""));
+  const nowMs = Date.parse(String(now || ""));
+  if (!Number.isFinite(lastHeartbeatAt) || !Number.isFinite(nowMs)) return false;
+  return lastHeartbeatAt <= nowMs + 60_000 && nowMs - lastHeartbeatAt <= maxAgeMs;
+}
+
+function workerPreflightReady(worker = {}) {
+  const preflight = isPlainObject(worker.lastPreflight) ? worker.lastPreflight : {};
+  return preflight.status === "passed";
+}
+
+function overlayWorkerAssignmentEvidence(workers = [], assignment = {}, options = {}, context = {}) {
+  const summary = assignment.summary || assignment || {};
+  const reported = Array.isArray(summary.laneAssignments) ? summary.laneAssignments : [];
+  const fallback = readAssignmentFileLaneEvidence(options.stateRoot || managerRunPaths(resolveManagerRunId(options, context), options, context).proof.state?.root || "", summary.currentOwner);
+  const lanes = fallback.length > 0 ? mergeLaneEvidence(reported, fallback) : reported;
+  if (lanes.length === 0) return workers;
+  const lanesByAssignment = new Map(lanes.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
+  return workers.map((worker) => {
+    const lane = lanesByAssignment.get(worker.assignmentId || "");
+    if (!lane) return worker;
+    const status = String(lane.status || "").toLowerCase();
+    const phase = String(lane.phase || "").toLowerCase();
+    if (status === "reassignable" || phase === "reassignable") {
+      return {
+        ...worker,
+        state: "warm",
+        assignmentState: "reassignable",
+        currentLease: null,
+        laneOwner: sanitizeLedgerField(lane.owner || worker.laneOwner || "", "", 160),
+        recoveryState: "released",
+        recoveryAction: "await_dispatcher_lease_pull",
+      };
+    }
+    if (["closed", "done", "merged"].includes(status) || ["closed", "done", "merged"].includes(phase)) {
+      return {
+        ...worker,
+        state: "warm",
+        assignmentState: "closed",
+        currentLease: null,
+        laneOwner: sanitizeLedgerField(lane.owner || worker.laneOwner || "", "", 160),
+        recoveryState: "released",
+        recoveryAction: "await_dispatcher_lease_pull",
+      };
+    }
+    return worker;
+  });
+}
+
+function normalizePosture(value, fallback = "unknown") {
+  if (!value) return fallback;
+  if (typeof value === "string") return value;
+  return value.status || value.state || value.summary?.state || fallback;
+}
+
+function countWorkerStates(workers = [], total = workers.length) {
+  const projected = Array.isArray(workers) ? workers.filter(isPlainObject).map(projectWorker) : [];
+  return {
+    active: projected.filter((worker) => worker.state === "active").length,
+    warm: projected.filter((worker) => worker.state === "warm").length,
+    paused: projected.filter((worker) => String(worker.state || "").startsWith("paused")).length,
+    total,
+  };
+}
+
+function buildWarmWorkerPoolSummary({ runId = defaultRunId(), workers = [], targets = {}, lifecyclePlan = {}, usageState = "unknown", resourceState = "unknown", blockers = [] } = {}) {
+  const dispatchableCount = nonNegativeInteger(targets.dispatchableCount) ?? 0;
+  const activeLeaseCount = nonNegativeInteger(targets.activeLeaseCount) ?? 0;
+  const poolBlocked = blockers.length > 0 ||
+    ["drain", "manager_only", "unknown"].includes(String(usageState || "")) ||
+    ["pressured", "critical", "unknown"].includes(String(resourceState || "")) ||
+    ["blocked", "manager_only", "paused"].includes(String(targets.dispatcherState || ""));
+  const warmWorkers = Array.isArray(workers) ? workers.filter(isPlainObject).map(projectWorker).filter((worker) => isManagerOwnedWorker(worker, runId)) : [];
+  return {
+    runId,
+    source: "dispatcher_lease_state",
+    nextWorkPolicy: {
+      primary: "dispatcher_lease_pull",
+      fallback: "durable_handoff_pointer",
+      longPromptHandoff: "forbidden",
+      dispatcherState: targets.dispatcherState || "unknown",
+      dispatchableCount,
+      activeLeaseCount,
+    },
+    desiredWarmCount: nonNegativeInteger(targets.startTarget ?? targets.allowedTarget) ?? 0,
+    startWarmCandidates: Array.isArray(lifecyclePlan.startWarmCandidates) ? lifecyclePlan.startWarmCandidates.length : 0,
+    workers: warmWorkers.map((worker) => projectWarmPoolWorker(worker, { dispatchableCount, activeLeaseCount, poolBlocked })),
+    rawPayloadRetained: false,
+  };
+}
+
+function projectWarmPoolWorker(worker = {}, context = {}) {
+  const assignmentState = String(worker.assignmentState || worker.state || "").trim().toLowerCase();
+  const leaseReleased = ["reassignable", "closed", "done", "merged", "warm", "idle", "released", "completed", "failed", "stale", "retired", "terminated", "none"].includes(assignmentState);
+  const currentLease = worker.currentLease || (!leaseReleased && worker.assignmentId
+    ? {
+        assignmentId: sanitizeLedgerField(worker.assignmentId, "", 140),
+        taskId: worker.taskId ? sanitizeLedgerField(worker.taskId, "", 140) : null,
+        source: "dispatcher_lease_state",
+      }
+    : null);
+  const nextWork = classifyWarmWorkerNextWork(worker, context);
+  return {
+    workerId: worker.workerId,
+    owner: worker.owner,
+    ownerProof: worker.owner && worker.workerId && worker.owner.endsWith(`/${worker.workerId}`) ? "manager_run_scoped" : "manager_owned_record",
+    runId: worker.runId,
+    sessionName: worker.sessionName,
+    state: worker.state,
+    assignmentState: worker.assignmentState || worker.state,
+    currentLease,
+    heartbeat: worker.heartbeat || {
+      status: worker.lastHeartbeatAt ? "recorded" : "missing",
+      lastHeartbeatAt: worker.lastHeartbeatAt || null,
+      source: "manager-worker-heartbeat",
+    },
+    lastPreflight: worker.lastPreflight || { status: "unknown", source: "not_recorded" },
+    modelRoute: worker.modelRoute || { policy: worker.modelPolicy || "task-fit", source: "worker_record" },
+    recoveryAction: worker.recoveryAction || recoveryActionForWorker(worker, nextWork),
+    nextWork,
+    rawPayloadRetained: false,
+  };
+}
+
+function classifyWarmWorkerNextWork(worker = {}, context = {}) {
+  if (hasActiveWorkerLease(worker)) {
+    return {
+      posture: "lease_active",
+      primary: "continue_current_dispatcher_lease",
+      fallback: "durable_handoff_pointer",
+      reason: "worker_has_active_lease",
+    };
+  }
+  if (context.poolBlocked) {
+    return {
+      posture: "blocked",
+      primary: "dispatcher_lease_pull",
+      fallback: "durable_handoff_pointer",
+      reason: "warm_pool_expansion_blocked",
+    };
+  }
+  if (["handoff_sent", "prompt_idle_handoff", "pointer_receipt_unverified"].includes(worker.recoveryState)) {
+    return {
+      posture: "handoff_pointer_fallback",
+      primary: "dispatcher_lease_pull",
+      fallback: "durable_handoff_pointer",
+      reason: "handoff_recovery_state",
+    };
+  }
+  if (String(worker.state || "") === "warm" && context.dispatchableCount > 0) {
+    return {
+      posture: "lease_pull_ready",
+      primary: "dispatcher_lease_pull",
+      fallback: "durable_handoff_pointer",
+      reason: "dispatchable_work_available",
+    };
+  }
+  return {
+    posture: "waiting_for_dispatcher",
+    primary: "dispatcher_lease_pull",
+    fallback: "durable_handoff_pointer",
+    reason: "no_dispatchable_work",
+  };
+}
+
+function hasActiveWorkerLease(worker = {}) {
+  if (isPlainObject(worker.currentLease) && worker.currentLease.assignmentId) return true;
+  if (!worker.assignmentId) return false;
+  const assignmentState = String(worker.assignmentState || worker.state || "").trim().toLowerCase();
+  if (!assignmentState) return false;
+  return !["warm", "idle", "paused", "reassignable", "released", "completed", "closed", "done", "merged", "failed", "stale", "retired", "terminated", "none"].includes(assignmentState);
+}
+
+function recoveryActionForWorker(worker = {}, nextWork = {}) {
+  if (worker.recoveryAction) return worker.recoveryAction;
+  if (nextWork.posture === "lease_pull_ready") return "await_dispatcher_lease_pull";
+  if (nextWork.posture === "lease_active") return "monitor_active_lease";
+  if (nextWork.posture === "handoff_pointer_fallback") return "verify_handoff_pointer_or_repair";
+  if (nextWork.posture === "blocked") return "hold_until_governor_allows";
+  return "wait_for_dispatcher_work";
+}
+
+function buildWorkerTargetStatus(options = {}, context = {}) {
+  const malformedDesiredWorkers = Object.hasOwn(options, "desiredWorkers") && options.desiredWorkers !== undefined && options.desiredWorkers !== "" && !Number.isFinite(Number(options.desiredWorkers));
+  const malformedMaxWorkers = Object.hasOwn(options, "maxWorkers") && options.maxWorkers !== undefined && options.maxWorkers !== "" && !Number.isFinite(Number(options.maxWorkers));
+  const maxTarget = malformedMaxWorkers ? 0 : boundedDesiredWorkers(options.maxWorkers ?? 6);
+  const configuredDesired = malformedDesiredWorkers ? 0 : boundedDesiredWorkers(options.desiredWorkers);
+  const assignment = context.assignment;
+  const assignmentSummary = assignment?.summary || assignment || {};
+  const activeLaneEvidence = summarizeActiveLaneEvidence(assignment, { stateRoot: options.stateRoot });
+  const backlogCounts = assignmentSummary.backlogStatusCounts || {};
+  const dispatcherPacket = context.dispatchPreview?.summary || context.dispatchPreview || {};
+  const dispatcherCounts = dispatcherPacket.counts || {};
+  const candidateStateCounts = dispatcherPacket.candidateStateCounts || dispatcherPacket.candidate_state_counts || {};
+  const dispatcherDispatchable = nonNegativeInteger(
+    dispatcherCounts.dispatchable ??
+    dispatcherCounts.assignable ??
+    dispatcherCounts.queued ??
+    candidateStateCounts.assignable ??
+    candidateStateCounts.queued,
+  );
+  const assignmentDispatchable = nonNegativeInteger(backlogCounts.assignable ?? assignmentSummary.assignableCount ?? assignment?.assignableCount);
+  const dispatchable = dispatcherDispatchable ?? assignmentDispatchable ?? dispatchPreviewCount(context.dispatchPreview, "dispatchable");
+  const dispatcherActiveLeases = nonNegativeInteger(
+    dispatcherCounts.active ??
+    dispatcherCounts.activeLeases ??
+    dispatcherCounts.active_leases ??
+    candidateStateCounts.active ??
+    candidateStateCounts.activeLeases ??
+    candidateStateCounts.active_leases,
+  );
+  const assignmentActive =
+    activeLaneEvidence.hasDetailedLaneAssignments && activeLaneEvidence.workerEligibleCount !== null
+      ? activeLaneEvidence.workerEligibleCount
+      : countActiveAssignments(assignmentSummary.laneAssignmentStatusCounts || assignmentSummary.assignmentStatusCounts || {});
+  const activeAssignments = dispatcherActiveLeases ?? assignmentActive;
+  const refillSummary = context.refillPlan?.summary || {};
+  const sourceWorkEligibility = refillSummary.sourceWorkEligibility || refillSummary.source_work_eligibility || {};
+  const sourceEligibleCount = nonNegativeInteger(sourceWorkEligibility.eligibleCount ?? sourceWorkEligibility.eligible_count) ?? 0;
+  const sourceBlockedCount = nonNegativeInteger(
+    sourceWorkEligibility.blockedCount ??
+    sourceWorkEligibility.blocked_count ??
+    dispatcherCounts.blocked ??
+    candidateStateCounts.blocked,
+  ) ?? 0;
+  const sourceExhausted = refillSummary.refillWatermark?.summary?.sourceExhausted === true ||
+    refillSummary.refillWatermark?.summary?.source_exhausted === true ||
+    refillSummary.sourceExhausted === true ||
+    refillSummary.source_exhausted === true;
+  const refillCandidates = Array.isArray(refillSummary.candidateLanes)
+    ? refillSummary.candidateLanes.length
+    : Array.isArray(refillSummary.candidate_lanes)
+      ? refillSummary.candidate_lanes.length
+      : 0;
+  const refillableWorkCount = refillCandidates > 0 ? refillCandidates : sourceEligibleCount;
+  const runwaySafeWorkSupply = nonNegativeInteger(context.refillPlan?.summary?.safeWorkSupply);
+  const sourceUnavailable = (sourceExhausted || sourceBlockedCount > 0) && (dispatchable ?? 0) === 0 && activeAssignments === 0 && refillableWorkCount === 0;
+  const inventorySafeWorkSupply = sourceUnavailable
+    ? 0
+    : dispatchable === null
+      ? (activeAssignments > 0 ? activeAssignments : null)
+      : dispatchable + refillableWorkCount + activeAssignments;
+  const safeWorkSupply = runwaySafeWorkSupply ?? (inventorySafeWorkSupply === null ? null : Math.min(maxTarget, inventorySafeWorkSupply));
+  const reasons = [];
+  const blockers = [];
+  const warnings = [];
+  if (malformedDesiredWorkers || malformedMaxWorkers) {
+    blockers.push({ code: "worker-target-count-malformed", message: "Worker target count must be a finite number from zero to six.", nextAction: "Provide a valid desired/max worker count before changing worker target." });
+  }
+  if (dispatchable === null && activeAssignments === 0) {
+    blockers.push({ code: "assignment-inventory-unavailable", message: "Worker target requires dispatchable safe backlog inventory.", nextAction: "Restore assignment inventory before changing worker target." });
+  }
+  const dispatcherUnavailable = dispatcherPacket.available === false || dispatcherPacket.mutation === "none; preview unavailable";
+  const dispatchBlocked = !dispatcherUnavailable && (
+    dispatcherPacket.status === "blocked" ||
+    context.dispatchPreview?.status === "blocked" ||
+    context.dispatchPreview?.ok === false ||
+    (dispatcherPacket.dispatch?.allowed === false && Array.isArray(dispatcherPacket.dispatch?.blockers) && dispatcherPacket.dispatch.blockers.length > 0)
+  );
+  const dispatcherState = classifyWorkerDispatcherState({
+    usage: context.usage,
+    resource: context.resource,
+    dispatchable,
+    activeAssignments,
+    refillableWorkCount,
+    dispatchBlocked,
+    sourceBlockedCount,
+    sourceExhausted,
+  });
+  let desiredTarget = safeWorkSupply === null ? Math.min(configuredDesired, maxTarget) : Math.min(configuredDesired, safeWorkSupply);
+  if (safeWorkSupply !== null && desiredTarget < configuredDesired) {
+    reasons.push({ code: "safe-work-supply-limited", message: `Safe work supply limits desired workers to ${desiredTarget}.` });
+  }
+  const usage = context.usage || "unknown";
+  const weeklyUsage = normalizeWeeklyUsagePressure(context.usageSummary?.weekly || context.weeklyUsage || context.weeklyUsageContext);
+  const resource = context.resource || "unknown";
+  let allowedTarget = desiredTarget;
+  let startExpansionBlocked = false;
+  if (usage === "manager_only" || resource === "critical") {
+    allowedTarget = 0;
+    startExpansionBlocked = true;
+    blockers.push({ code: "worker-target-stop-line", message: "Usage manager-only or critical resource posture blocks worker target.", nextAction: "Do not dispatch or warm workers until posture recovers." });
+  } else if (malformedDesiredWorkers || malformedMaxWorkers) {
+    allowedTarget = 0;
+    startExpansionBlocked = true;
+  } else {
+    if (usage === "drain") {
+      allowedTarget = Math.min(allowedTarget, activeAssignments);
+      startExpansionBlocked = true;
+      reasons.push({ code: "usage-drain", message: "Usage drain posture stops new dispatch and lowers worker target." });
+    } else if (usage === "conserve") {
+      allowedTarget = Math.min(allowedTarget, Math.max(3, activeAssignments));
+      reasons.push({ code: "usage-conserve", message: "Usage conserve posture lowers worker target." });
+    } else if (usage === "unknown") {
+      warnings.push({ code: "usage-target-unknown", message: "Usage posture unavailable; worker target should remain conservative." });
+    }
+    if (weeklyUsage.state === "pressured") {
+      allowedTarget = Math.min(allowedTarget, activeAssignments);
+      startExpansionBlocked = true;
+      reasons.push({ code: "weekly-usage-pressure", message: "Reliable weekly usage pressure reduces new lease issuance or defers optional work without reducing model quality." });
+    }
+    if (resource === "pressured") {
+      allowedTarget = Math.min(allowedTarget, activeAssignments);
+      startExpansionBlocked = true;
+      reasons.push({ code: "resource-pressured", message: "CPU/RAM pressure lowers worker target." });
+    } else if (resource === "warm") {
+      allowedTarget = Math.min(allowedTarget, Math.max(4, activeAssignments));
+      reasons.push({ code: "resource-warm", message: "Warm resource posture limits worker expansion." });
+    } else if (resource === "unknown") {
+      warnings.push({ code: "resource-target-unknown", message: "Resource posture unavailable; worker target should remain conservative." });
+    }
+    allowedTarget = Math.max(Math.min(activeAssignments, maxTarget), allowedTarget);
+  }
+  const failurePressure = workerFailurePressure(context.failureRate, context.failureLoops);
+  if (failurePressure.pressured && usage !== "manager_only" && resource !== "critical") {
+    allowedTarget = Math.min(allowedTarget, activeAssignments);
+    startExpansionBlocked = true;
+    reasons.push({ code: "failure-pressure", message: "Repeated failure pressure stops worker expansion until the lane is repaired or narrowed." });
+  }
+  if (sourceExhausted) {
+    allowedTarget = Math.min(allowedTarget, activeAssignments);
+    startExpansionBlocked = true;
+    reasons.push({ code: "source-exhausted", message: "Source exhaustion stops new worker expansion while existing active leases remain observable." });
+  }
+  if (dispatcherState === "blocked") {
+    allowedTarget = Math.min(allowedTarget, activeAssignments);
+    startExpansionBlocked = true;
+  }
+  if (["empty", "blocked"].includes(dispatcherState) && activeAssignments === 0) {
+    allowedTarget = 0;
+    startExpansionBlocked = true;
+  }
+  allowedTarget = Math.max(0, Math.min(maxTarget, allowedTarget));
+  const fakeWorkerHarness = buildWorkerGovernorHarnessSummary(context.fakeWorkerHarness);
+  if (fakeWorkerHarness.liveWorkerGate !== "still_gated_until_live_authority") {
+    startExpansionBlocked = true;
+    reasons.push({ code: "fake-worker-harness-gate", message: "Fake-worker harness proof is required before worker warm/start planning." });
+  }
+  const startTarget = startExpansionBlocked ? 0 : Math.max(0, Math.min(maxTarget, desiredTarget, allowedTarget));
+  const targetDecision = classifyWorkerTargetDecision({ dispatcherState, allowedTarget, desiredTarget, activeAssignments });
+  return {
+    summary: {
+      maxTarget,
+      configuredDesired,
+      dispatcherState,
+      dispatchableCount: dispatchable ?? null,
+      activeLeaseCount: activeAssignments,
+      refillableWorkCount,
+      sourceEligibleCount,
+      sourceBlockedCount,
+      sourceExhausted,
+      safeWorkSupply,
+      activeAssignments,
+      desiredTarget,
+      allowedTarget,
+      startTarget,
+      targetDecision,
+      usageState: usage,
+      weeklyUsage,
+      resourceState: resource,
+      fakeWorkerHarness,
+      rawPayloadRetained: false,
+    },
+    activeAssignments,
+    reasons,
+    blockers,
+    warnings,
+  };
+}
+
+function classifyWorkerDispatcherState({
+  usage = "unknown",
+  resource = "unknown",
+  dispatchable = null,
+  activeAssignments = 0,
+  refillableWorkCount = 0,
+  dispatchBlocked = false,
+  sourceBlockedCount = 0,
+  sourceExhausted = false,
+} = {}) {
+  if (usage === "manager_only") return "manager_only";
+  if (usage === "drain") return "paused";
+  if (resource === "critical") return "blocked";
+  if (activeAssignments > 0) return "ready";
+  if (dispatchBlocked) return "blocked";
+  if (sourceExhausted || sourceBlockedCount > 0) return "blocked";
+  if ((dispatchable ?? 0) === 0 && activeAssignments === 0 && refillableWorkCount > 0) return "refilling";
+  if ((dispatchable ?? 0) === 0 && activeAssignments === 0) return "empty";
+  return "ready";
+}
+
+function classifyWorkerTargetDecision({ dispatcherState = "ready", allowedTarget = 0, desiredTarget = 0, activeAssignments = 0 } = {}) {
+  if (dispatcherState === "manager_only") return "manager_only";
+  if (dispatcherState === "paused") return "pause_new_workers";
+  if (dispatcherState === "blocked") return "blocked";
+  if (dispatcherState === "empty") return "hold_no_safe_work";
+  if (dispatcherState === "refilling") return "refill_then_scale";
+  if (allowedTarget < desiredTarget || allowedTarget < activeAssignments) return "drain_or_reduce_workers";
+  if (allowedTarget > 0) return "start_or_keep_workers";
+  return "steady";
+}
+
+function workerFailurePressure(failureRate = null, failureLoops = []) {
+  const recentFailures = nonNegativeInteger(failureRate?.recentFailures ?? failureRate?.recent_failures ?? failureRate?.failures) ?? 0;
+  const windowAttempts = nonNegativeInteger(failureRate?.windowAttempts ?? failureRate?.window_attempts ?? failureRate?.attempts) ?? 0;
+  const repeatedLoop = Array.isArray(failureLoops) && failureLoops.some((loop) => ["park_lane", "narrow_slice", "reassign_lane"].includes(loop?.action));
+  const ratePressured = recentFailures >= 3 && (windowAttempts === 0 || recentFailures / Math.max(windowAttempts, 1) >= 0.5);
+  return { pressured: repeatedLoop || ratePressured, recentFailures, windowAttempts };
+}
+
+function buildWorkerGovernorHarnessSummary(harness = {}) {
+  const twoWorker = classifyFakeWorkerProof(harness.twoWorkerProof || harness.two_worker_proof, 2);
+  const sixWorkerInput = harness.sixWorkerProof || harness.six_worker_proof;
+  const sixWorker = twoWorker.status === "passed"
+    ? classifyFakeWorkerProof(sixWorkerInput, 6, "eligible_not_attempted")
+    : {
+        status: "blocked_waiting_for_two_worker_proof",
+        expectedWorkers: 6,
+        workerCount: nonNegativeInteger(sixWorkerInput?.workerCount ?? sixWorkerInput?.worker_count) ?? null,
+        cleanCyclesPerWorker: nonNegativeInteger(sixWorkerInput?.cleanCyclesPerWorker ?? sixWorkerInput?.clean_cycles_per_worker) ?? null,
+      };
+  const liveWorkerGate = twoWorker.status === "passed" && sixWorker.status === "passed"
+    ? "still_gated_until_live_authority"
+    : "blocked_pending_fake_harness";
+  return {
+    mode: "fixture_only",
+    twoWorker,
+    sixWorker,
+    liveWorkerGate,
+    rawPayloadRetained: false,
+  };
+}
+
+function classifyFakeWorkerProof(proof = null, expectedWorkers = 0, missingStatus = "missing") {
+  if (!isPlainObject(proof)) {
+    return { status: missingStatus, expectedWorkers, workerCount: null, cleanCyclesPerWorker: null };
+  }
+  const workerCount = nonNegativeInteger(proof.workerCount ?? proof.worker_count) ?? 0;
+  const cleanCyclesPerWorker = nonNegativeInteger(proof.cleanCyclesPerWorker ?? proof.clean_cycles_per_worker) ?? 0;
+  const passed = (proof.status === "passed" || proof.passed === true) && workerCount === expectedWorkers && cleanCyclesPerWorker > 0;
+  return {
+    status: passed ? "passed" : "failed",
+    expectedWorkers,
+    workerCount,
+    cleanCyclesPerWorker,
+  };
+}
+
+export function buildWorkerLifecyclePlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const maxTarget = boundedDesiredWorkers(options.maxWorkers ?? 6);
+  const allowedTarget = Math.max(0, Math.min(maxTarget, nonNegativeInteger(context.targets?.startTarget ?? context.startTarget ?? context.targets?.allowedTarget ?? context.allowedTarget) ?? 0));
+  const workers = Array.isArray(context.workers) ? context.workers.filter(isPlainObject).map(projectWorker) : [];
+  const usageState = normalizePosture(context.usageState || context.usage, "unknown");
+  const resourceState = normalizePosture(context.resourceState || context.resource, "unknown");
+  const tmuxSummary = context.tmuxSummary || {};
+  const tmuxBlockers = buildWorkerTmuxBlockers(tmuxSummary);
+  const tmuxWarnings = buildWorkerTmuxWarnings(tmuxSummary);
+  const workerEligibility = classifyLifecycleWorkers(workers, runId, tmuxSummary);
+  const managerOwned = workerEligibility.eligible;
+  const lifecycleBlocksAction = tmuxBlockers.length > 0 ||
+    usageState === "manager_only" ||
+    usageState === "drain" ||
+    usageState === "unknown" ||
+    resourceState === "pressured" ||
+    resourceState === "critical" ||
+    resourceState === "unknown";
+  const startWarmNeeded = lifecycleBlocksAction ? 0 : Math.max(0, allowedTarget - managerOwned.length);
+  const recoverableMissingSessions = workerEligibility.excluded
+    .filter((worker) => worker.reason === "missing-live-tmux-session")
+    .slice(0, startWarmNeeded);
+  const startWarmCandidates = [];
+  for (let index = 0; index < startWarmNeeded; index += 1) {
+    const recoveryCandidate = recoverableMissingSessions[index];
+    const workerId = recoveryCandidate?.workerId || nextWorkerId(runId, workers, index - recoverableMissingSessions.length);
+    const sessionName = recoveryCandidate?.sessionName || workerId;
+    startWarmCandidates.push({
+      action: recoveryCandidate ? "recover_missing_manager_owned_worker" : "record_start_or_warm",
+      workerId,
+      sessionName,
+      owner: `${runId}/${workerId}`,
+      runId,
+      assignmentState: "warm",
+      previousState: recoveryCandidate?.state || null,
+      previousAssignmentId: recoveryCandidate?.assignmentId || null,
+      previousTaskId: recoveryCandidate?.taskId || null,
+      heartbeat: { status: "required_before_assignment", source: "manager-worker-heartbeat" },
+      authority: "manager-owned-worker-record",
+    });
+  }
+  const terminationPlan = buildWorkerTerminationPlan(managerOwned, workerEligibility.excluded, resourceState, tmuxBlockers, context.resourceSummary || context.resourceSnapshot || {});
+  const lifecycleState = resourceState === "critical"
+    ? "critical_drain"
+    : resourceState === "pressured"
+      ? "pressured_hold"
+      : usageState === "drain"
+        ? "drain"
+        : startWarmCandidates.length > 0
+          ? "warm_needed"
+          : "steady";
+  return packet({
+    ok: tmuxBlockers.length === 0,
+    status: tmuxBlockers.length > 0 ? "blocked" : "ready",
+    summary: {
+      runId,
+      mutationMode: "plan_only_existing_gates_required",
+      lifecycleState,
+      recordRequirements: {
+        visibleSessionName: true,
+        ownerId: true,
+        runId,
+        assignmentState: true,
+        heartbeat: "required",
+      },
+      handoffTransport: {
+        primary: "durable_handoff_file",
+        secondary: "literal_safe_tmux_buffer",
+        retention: "metadata_only_handoff_path_and_summary",
+        prohibited: ["fragile_long_key_injection"],
+      },
+      startWarmCandidates,
+      liveWorkerCounts: countWorkerStates(managerOwned, workers.length),
+      workerEligibility: {
+        eligibleCount: managerOwned.length,
+        excludedCount: workerEligibility.excluded.length,
+        missingLiveSessionCount: workerEligibility.excluded.filter((worker) => worker.reason === "missing-live-tmux-session").length,
+      },
+      terminationPlan,
+    },
+    blockers: tmuxBlockers,
+    warnings:
+      [
+        ...tmuxWarnings,
+        ...(resourceState === "critical"
+          ? [{ code: "critical-resource-lifecycle-plan", message: "Critical resource posture permits only manager-owned idle or warm workers before active workers." }]
+          : []),
+        ...(resourceState === "pressured"
+          ? [{ code: "pressured-resource-lifecycle-hold", message: "Pressured resource posture holds warm expansion while active manager-owned workers remain observable." }]
+          : []),
+      ],
+  });
+}
+
+export function buildWorkerWarmPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const apply = options.apply === true;
+  const cycle = context.cyclePacket || buildCyclePacket(runOptions, context);
+  const continuation = cycle.summary?.continuation || {};
+  const candidates = Array.isArray(cycle.summary?.workers?.lifecyclePlan?.startWarmCandidates)
+    ? cycle.summary.workers.lifecyclePlan.startWarmCandidates
+    : [];
+  const limit = nonNegativeInteger(options.limit) ?? candidates.length;
+  const selected = candidates.slice(0, Math.max(0, Math.min(6, limit)));
+  const blockers = [];
+  if (!paths.proof.ok) {
+    blockers.push({ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." });
+  }
+  if (continuation.workerStartAllowed !== true) {
+    blockers.push({
+      code: "worker-warm-not-authorized",
+      message: "Cycle continuation has not authorized manager-owned warm starts.",
+      nextAction: "Run manager-cycle and resolve usage, resource, tmux, or worker target blockers first.",
+    });
+  }
+  if (selected.length === 0) {
+    blockers.push({
+      code: "worker-warm-no-candidates",
+      message: "No manager-owned warm worker candidates are available.",
+      nextAction: "Refresh worker lifecycle status or reduce requested warm count.",
+    });
+  }
+  if (blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply, requested: limit, planned: selected.length, mutation: "none" },
+      blockers,
+    });
+  }
+
+  const planned = selected.map((candidate) => buildWarmWorkerAction(candidate, paths, options));
+  if (!apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        planned: planned.length,
+        actions: planned,
+        stopLines: ["no takeover", "no dispatch apply", "no worker kill", "no unknown session mutation"],
+      },
+      nextActions: [
+        {
+          code: "worker-warm-apply-ready",
+          summary: `Warm ${planned.length} manager-owned worker(s).`,
+          nextAction: "Run manager-worker-warm with --apply after reviewing the dry-run packet.",
+        },
+      ],
+    });
+  }
+
+  mkdirSync(paths.root, { recursive: true });
+  writeJsonIfMissing(paths.workers, []);
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "none" },
+      blockers: [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before warming workers." }],
+    });
+  }
+  const existingWorkers = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const existingIds = new Set(existingWorkers.map((worker) => worker.workerId));
+  const existingSessions = new Set(existingWorkers.map((worker) => worker.sessionName).filter(Boolean));
+  const results = [];
+  for (const action of planned) {
+    const existingIndex = existingWorkers.findIndex((worker) => worker.workerId === action.workerId || worker.sessionName === action.sessionName);
+    const existingRecord = existingIndex >= 0 ? existingWorkers[existingIndex] : null;
+    const recoverExisting =
+      action.recoveryMode === "missing-live-tmux-session" &&
+      existingRecord &&
+      isManagerOwnedWorker(existingRecord, runId) &&
+      existingRecord.workerId === action.workerId &&
+      existingRecord.sessionName === action.sessionName &&
+      !["retired", "terminated", "failed"].includes(existingRecord.state);
+    if ((existingIds.has(action.workerId) || existingSessions.has(action.sessionName)) && !recoverExisting) {
+      results.push({ ...action, status: "skipped_existing_record" });
+      continue;
+    }
+    const launch = runTmuxWorkerWarm(action, context);
+    results.push({ ...action, status: launch.ok ? (recoverExisting ? "recovered_started" : "started") : "failed", launch });
+    if (!launch.ok) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "partial", results },
+        blockers: [{ code: "worker-warm-launch-failed", message: launch.error || `Failed to start ${action.sessionName}.`, nextAction: "Inspect tmux launch result before retrying worker warm apply." }],
+      });
+    }
+    const nextWorkerRecord = {
+      workerId: action.workerId,
+      owner: action.owner,
+      runId,
+      sessionName: action.sessionName,
+      provider: "codex",
+      modelPolicy: "task-fit",
+      modelRoute: { policy: "task-fit", source: "warm_worker_policy" },
+      state: "warm",
+      assignmentState: "warm",
+      assignmentId: null,
+      taskId: null,
+      currentLease: null,
+      worktreePath: repoRoot,
+      lastHeartbeatAt: new Date().toISOString(),
+      heartbeat: { status: "recorded", source: "manager-worker-warm", lastHeartbeatAt: new Date().toISOString() },
+      lastPreflight: { status: "ready", source: "manager-cycle-packet" },
+      failureCount: existingRecord?.failureCount || 0,
+      recoveryState: recoverExisting ? "missing_session_restarted_needs_handoff" : "none",
+      recoveryAction: recoverExisting ? "repair_missing_session_then_pull_dispatcher_lease" : "await_dispatcher_lease_pull",
+      rawPayloadRetained: false,
+      previousAssignmentId: recoverExisting ? action.previousAssignmentId || existingRecord.assignmentId || null : null,
+      previousTaskId: recoverExisting ? action.previousTaskId || existingRecord.taskId || null : null,
+    };
+    if (recoverExisting) {
+      existingWorkers[existingIndex] = nextWorkerRecord;
+    } else {
+      existingWorkers.push(nextWorkerRecord);
+    }
+    existingIds.add(action.workerId);
+    existingSessions.add(action.sessionName);
+  }
+  writeFileSync(paths.workers, `${JSON.stringify(existingWorkers, null, 2)}\n`);
+  const warmedCount = results.filter((result) => result.status === "started" || result.status === "recovered_started").length;
+  const event = ledgerRecord({
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: "worker_warm_apply",
+    eventName: "worker_warm_apply",
+    fallbackSummary: `Warmed ${warmedCount} manager-owned worker(s).`,
+    options: {
+      authorityBasis: "manager-owned-worker-warm-existing-gates",
+      summary: `Warmed ${warmedCount} manager-owned worker(s).`,
+      sourceRefs: ["manager-cycle-packet", "kendall-manager-control-plane"],
+      evidenceRefs: [paths.workers],
+      recoveryPath: "inspect tmux sessions and manager workers.json before retrying",
+      result: "ready",
+      idempotencyKey: `worker_warm_apply:${runId}:${results.map((result) => result.workerId).join(",")}`,
+    },
+  });
+  appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-session-and-record",
+      results,
+      workerRecordPath: paths.workers,
+    },
+  });
+}
+
+export function buildWorkerHandoffPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const apply = options.apply === true;
+  const limit = nonNegativeInteger(options.limit) ?? 6;
+  const now = context.now || runOptions.now || "";
+  const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
+  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(["assignment-report", "--summary-json"], context);
+  const assignmentSummary = assignmentPacket.summary || assignmentPacket || {};
+  const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
+  const storyStatuses = managerHandoffStoryStatuses(runOptions, context);
+  const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
+  const fallbackHandoffWorkerIds = fallbackHandoffWorkerIdsFromWorkerStatus(workerPacket);
+  const missingLiveWorkerIds = missingLiveWorkerIdsFromWorkerStatus(workerPacket);
+  const reportedLaneAssignments = Array.isArray(assignmentSummary.laneAssignments) ? assignmentSummary.laneAssignments : [];
+  const fallbackLaneAssignments = readAssignmentFileLaneEvidence(paths.proof.state.root, assignmentSummary.currentOwner);
+  const laneAssignments = fallbackLaneAssignments.length > 0
+    ? mergeLaneEvidence(reportedLaneAssignments, fallbackLaneAssignments)
+    : reportedLaneAssignments;
+  const lanesByAssignment = new Map(laneAssignments.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
+  const idleWarmWorkers = workers
+    .filter((worker) => worker.state === "warm" && isManagerOwnedWorker(worker, runId) && worker.sessionName && !worker.assignmentId && !missingLiveWorkerIds.has(worker.workerId));
+  const reusableCompletedWorkers = workers
+    .filter((worker) => {
+      if (worker.state !== "active" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || !worker.assignmentId || missingLiveWorkerIds.has(worker.workerId)) return false;
+      const lane = lanesByAssignment.get(String(worker.assignmentId)) || {};
+      if (isDoneSprintStory(worker.assignmentId, storyStatuses)) return true;
+      if (!isNonWorkerLanePhase(lane.phase || lane.status || "")) return false;
+      return isFallbackHandoffWorker(worker, fallbackHandoffWorkerIds) || workerHasReusableCompletedLaneEvidence(worker, lane, checkpoints);
+    })
+    .sort((left, right) => (parseTimeMs(left.lastHeartbeatAt) || 0) - (parseTimeMs(right.lastHeartbeatAt) || 0) || left.workerId.localeCompare(right.workerId, undefined, { numeric: true }));
+  const warmWorkers = [...idleWarmWorkers, ...reusableCompletedWorkers]
+    .slice(0, Math.max(0, Math.min(6, limit)));
+  const activeAssignmentIds = new Set(
+    workers
+      .filter((worker) => {
+        if (worker.state !== "active" || !isManagerOwnedWorker(worker, runId) || !worker.assignmentId || missingLiveWorkerIds.has(worker.workerId)) return false;
+        const lane = lanesByAssignment.get(String(worker.assignmentId)) || {};
+        return !isNonWorkerLanePhase(lane.phase || lane.status || "");
+      })
+      .map((worker) => String(worker.assignmentId)),
+  );
+  const summaryLanes = managerHandoffLaneCandidates(assignmentSummary, { excludeAssignmentIds: activeAssignmentIds, storyStatuses });
+  const fallbackLanes =
+    summaryLanes.length < warmWorkers.length
+      ? readAssignmentFileHandoffCandidates(paths.proof.state.root, { excludeAssignmentIds: activeAssignmentIds, currentOwner: assignmentSummary.currentOwner, now, storyStatuses })
+      : [];
+  const seenLaneIds = new Set();
+  const lanes = [...summaryLanes, ...fallbackLanes]
+    .filter((lane) => {
+      if (seenLaneIds.has(lane.assignmentId)) return false;
+      seenLaneIds.add(lane.assignmentId);
+      return true;
+    })
+    .map((lane) => ({
+      ...lane,
+      worktreePath: lane.worktreePath || taskManifestWorktreePath(paths.proof.state.root, lane.taskId),
+    }))
+    .slice(0, warmWorkers.length);
+  const blockers = [];
+  if (!paths.proof.ok) {
+    blockers.push({ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." });
+  }
+  if (workerPacket.ok === false && warmWorkers.length === 0) {
+    blockers.push({ code: "worker-status-unavailable", message: "No fallback manager-owned workers are available for handoff.", nextAction: "Warm manager-owned workers or free reusable completed workers before handoff." });
+  }
+  if (assignmentPacket.ok === false && lanes.length === 0) {
+    blockers.push({ code: "assignment-report-unavailable", message: assignmentPacket.error || "Assignment report unavailable.", nextAction: "Restore assignment report before handoff." });
+  }
+  if (warmWorkers.length === 0) {
+    blockers.push({ code: "worker-handoff-no-fallback-workers", message: "No manager-owned fallback workers are available for handoff.", nextAction: "Warm manager-owned workers or free reusable completed workers before handoff." });
+  }
+  if (lanes.length === 0) {
+    blockers.push({ code: "worker-handoff-no-lanes", message: "No claimed handoff lanes are available for worker handoff.", nextAction: "Dispatch or prepare source-owned lanes before worker handoff." });
+  }
+  const pairCount = Math.min(warmWorkers.length, lanes.length);
+  const pairings = Array.from({ length: pairCount }, (_, index) => buildWorkerHandoffPairing(warmWorkers[index], lanes[index], paths));
+  blockers.push(...buildWorkerHandoffGovernorBlockers(workerPacket.summary?.targets || {}));
+  if (blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply, mutation: "none", warmWorkers: idleWarmWorkers.length, reusableWorkers: reusableCompletedWorkers.length, lanes: lanes.length, pairings },
+      blockers,
+    });
+  }
+  if (!apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        pairings,
+        warmWorkers: idleWarmWorkers.length,
+        reusableWorkers: reusableCompletedWorkers.length,
+        handoffDirectory: join(paths.root, "handoffs"),
+        transport: {
+          primary: "durable_handoff_file",
+          secondary: "tmux_load_buffer_and_paste_buffer",
+          pastedText: "read_handoff_file_path_only",
+        },
+        stopLines: ["no takeover", "no dispatch apply", "no worker kill", "no unknown session mutation", "no raw provider payload retention"],
+      },
+      nextActions: [
+        {
+          code: "worker-handoff-apply-ready",
+          summary: `Hand off ${pairings.length} lane(s) to warm manager-owned worker(s).`,
+          nextAction: `node ./scripts/manager-worker-handoff.mjs --summary-json --limit ${pairings.length} --apply`,
+        },
+      ],
+    });
+  }
+
+  mkdirSync(join(paths.root, "handoffs"), { recursive: true });
+  writeJsonIfMissing(paths.workers, []);
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "none" },
+      blockers: [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before handoff." }],
+    });
+  }
+  const workerRecords = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const results = [];
+  for (const pairing of pairings) {
+    const handoffBody = renderWorkerHandoffFile(pairing);
+    writeFileSync(pairing.handoffPath, handoffBody);
+    writeFileSync(pairing.pastePath, `${pairing.pasteText}\n`);
+    const paste = pasteWorkerHandoff(pairing, context);
+    const statusUpdate = paste.ok ? markManagerHandoffStoryInProgress(pairing, runOptions, context) : null;
+    results.push({ ...pairing, status: paste.ok ? "handoff_sent" : "failed", paste, statusUpdate });
+    if (!paste.ok) {
+      recordPointerReceiptFailure({ ...runOptions, runId }, results[results.length - 1], context, "handoff");
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "partial", results },
+        blockers: [{ code: "worker-handoff-paste-failed", message: paste.error || `Failed to paste handoff to ${pairing.sessionName}.`, nextAction: "Inspect tmux handoff result before retrying." }],
+      });
+    }
+    const target = workerRecords.find((worker) => worker.workerId === pairing.workerId && worker.owner === pairing.owner);
+    if (target) {
+      const timestamp = new Date().toISOString();
+      target.state = "active";
+      target.assignmentState = "active";
+      target.assignmentId = pairing.assignmentId;
+      target.taskId = pairing.taskId;
+      target.currentLease = {
+        assignmentId: pairing.assignmentId,
+        taskId: pairing.taskId,
+        source: "dispatcher_lease_state",
+      };
+      target.worktreePath = pairing.worktreePath || target.worktreePath || repoRoot;
+      target.lastHeartbeatAt = timestamp;
+      target.heartbeat = { status: "recorded", source: "manager-worker-handoff", lastHeartbeatAt: timestamp };
+      target.lastPreflight = target.lastPreflight || { status: "ready", source: "manager-worker-handoff" };
+      target.modelRoute = target.modelRoute || { policy: target.modelPolicy && target.modelPolicy !== "unknown" ? target.modelPolicy : "task-fit", source: "worker_record" };
+      target.recoveryState = "handoff_sent";
+      target.recoveryAction = "monitor_active_lease";
+      target.rawPayloadRetained = false;
+    }
+  }
+  writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+  const sentCount = results.filter((result) => result.status === "handoff_sent").length;
+  const event = ledgerRecord({
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: "worker_handoff_apply",
+    eventName: "worker_handoff_apply",
+    fallbackSummary: `Sent ${sentCount} manager-owned worker handoff(s).`,
+    options: {
+      authorityBasis: "manager-owned-worker-handoff-existing-gates",
+      summary: `Sent ${sentCount} manager-owned worker handoff(s).`,
+      sourceRefs: ["assignment-report", "manager-workers", ...results.flatMap((result) => receiptSourceRefs(result))],
+      evidenceRefs: [paths.workers, ...results.map((result) => result.handoffPath).filter(Boolean)],
+      recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
+      result: "ready",
+      idempotencyKey: `worker_handoff_apply:${runId}:${results.map((result) => result.workerId).join(",")}:${results.map((result) => result.assignmentId).join(",")}`,
+    },
+  });
+  appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-handoff-file-and-tmux-buffer",
+      results,
+      workerRecordPath: paths.workers,
+    },
+  });
+}
+
+function buildWorkerHandoffGovernorBlockers(targets = {}) {
+  const blockers = [];
+  const usageState = String(targets.usageState || "").trim().toLowerCase();
+  const resourceState = String(targets.resourceState || "").trim().toLowerCase();
+  const dispatcherState = String(targets.dispatcherState || "").trim().toLowerCase();
+  const sourceBlockedCount = nonNegativeInteger(targets.sourceBlockedCount) ?? 0;
+  const activeLeaseCount = nonNegativeInteger(targets.activeLeaseCount ?? targets.activeAssignments) ?? 0;
+  if (["drain", "manager_only", "unknown"].includes(usageState)) {
+    blockers.push({ code: "worker-handoff-usage-stop-line", message: "Usage posture blocks worker handoff recovery.", nextAction: "Wait for normal usage posture before handing work to manager-owned workers." });
+  }
+  if (["pressured", "critical", "unknown"].includes(resourceState)) {
+    blockers.push({ code: "worker-handoff-resource-stop-line", message: "CPU/RAM posture blocks worker handoff recovery.", nextAction: "Wait for resource posture to recover before handing work to manager-owned workers." });
+  }
+  if (["blocked", "manager_only", "paused"].includes(dispatcherState) || (targets.sourceExhausted === true && activeLeaseCount === 0) || (sourceBlockedCount > 0 && activeLeaseCount === 0)) {
+    blockers.push({ code: "worker-handoff-dispatcher-stop-line", message: "Dispatcher/source posture blocks worker handoff recovery.", nextAction: "Repair dispatcher/source posture before handing work to manager-owned workers." });
+  }
+  return blockers;
+}
+
+function managerHandoffLaneCandidates(assignmentSummary = {}, options = {}) {
+  const lanes = Array.isArray(assignmentSummary.laneAssignments) ? assignmentSummary.laneAssignments : [];
+  const excludeAssignmentIds = options.excludeAssignmentIds instanceof Set ? options.excludeAssignmentIds : new Set();
+  const storyStatuses = isPlainObject(options.storyStatuses) ? options.storyStatuses : {};
+  return lanes
+    .filter((lane) => lane && lane.status === "claimed" && ["handoff", "claimed", "active"].includes(String(lane.phase || "claimed")))
+    .map((lane) => ({
+      assignmentId: sanitizeLedgerField(lane.assignmentId || lane.assignment_id || "", "", 140),
+      taskId: sanitizeLedgerField(lane.taskId || lane.task_id || "", "", 140),
+      branch: sanitizeLedgerField(lane.branch || "", "", 160),
+      laneOwner: sanitizeLedgerField(lane.owner || "", "", 160),
+      phase: sanitizeLedgerField(lane.phase || "", "", 80),
+      heartbeat: sanitizeLedgerField(lane.heartbeat || "", "", 80),
+      nextAction: sanitizeLedgerField(lane.nextAction || "", "", 180),
+      worktreePath: sanitizeLedgerField(lane.worktreePath || lane.worktree_path || "", "", 240),
+    }))
+    .filter((lane) => lane.assignmentId && lane.taskId && lane.branch && !excludeAssignmentIds.has(lane.assignmentId) && !isDoneSprintStory(lane.assignmentId, storyStatuses));
+}
+
+function readAssignmentFileHandoffCandidates(stateRoot = "", options = {}) {
+  const assignmentsRoot = resolve(stateRoot || "", "assignments");
+  const excludeAssignmentIds = options.excludeAssignmentIds instanceof Set ? options.excludeAssignmentIds : new Set();
+  const currentOwner = sanitizeLedgerField(options.currentOwner || "", "", 180);
+  const storyStatuses = isPlainObject(options.storyStatuses) ? options.storyStatuses : {};
+  const nowMs = parseTimeMs(options.now) || Date.now();
+  const staleAfterSeconds = Math.max(60, nonNegativeInteger(options.staleAfterSeconds) ?? 86400);
+  if (!stateRoot || !isInsideOrSame(assignmentsRoot, resolve(stateRoot)) || !existsSync(assignmentsRoot)) return [];
+  return readdirSync(assignmentsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .slice(0, 250)
+    .map((entry) => {
+      try {
+        return JSON.parse(readFileSync(join(assignmentsRoot, entry.name), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter(isPlainObject)
+    .filter((record) => {
+      const assignmentId = String(record.assignment_id || record.assignmentId || "");
+      if (!assignmentId || excludeAssignmentIds.has(assignmentId)) return false;
+      if (isDoneSprintStory(assignmentId, storyStatuses)) return false;
+      const owner = String(record.owner || "");
+      if (currentOwner && owner && owner !== currentOwner && !assignmentRecordFreshEnough(record, nowMs, staleAfterSeconds)) return false;
+      return ["claimed", "active"].includes(String(record.status || "").toLowerCase()) && ["handoff", "claimed", "active"].includes(String(record.phase || "claimed").toLowerCase());
+    })
+    .sort((left, right) => String(left.updated_at || left.updatedAt || left.assigned_at || "").localeCompare(String(right.updated_at || right.updatedAt || right.assigned_at || "")))
+    .map((record) => ({
+      assignmentId: sanitizeLedgerField(record.assignment_id || record.assignmentId || "", "", 140),
+      taskId: sanitizeLedgerField(record.task_id || record.taskId || "", "", 140),
+      branch: sanitizeLedgerField(record.branch || "", "", 160),
+      laneOwner: sanitizeLedgerField(record.owner || "", "", 160),
+      phase: sanitizeLedgerField(record.phase || "", "", 80),
+      heartbeat: sanitizeLedgerField(record.last_heartbeat_at || record.lastHeartbeatAt || "", "", 80),
+      nextAction: sanitizeLedgerField(record.current_command || record.nextAction || "", "", 180),
+      worktreePath: sanitizeLedgerField(record.worktree_path || record.worktreePath || "", "", 240),
+    }))
+    .filter((lane) => lane.assignmentId && lane.taskId && lane.branch);
+}
+
+function managerHandoffStoryStatuses(options = {}, context = {}) {
+  const explicit = context.storyStatuses || context.sourcePlanning?.sprintStatus?.storyStatuses || context.sourcePlanningState?.sprintStatus?.storyStatuses;
+  if (isPlainObject(explicit)) return explicit;
+  const sprintPath = sanitizeRelativeBmadOutputPath(
+    context.sprintStatusPath ||
+    options.sprintStatusPath ||
+    context.sourcePlanning?.sprintStatus?.path ||
+    context.sourcePlanningState?.sprintStatus?.path ||
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  if (!sprintPath) return {};
+  const absolute = resolve(repoRoot, sprintPath);
+  if (!existsSync(absolute)) return {};
+  return countSprintStories(readFileSync(absolute, "utf8"), { artifactDir: dirname(absolute) }).storyStatuses;
+}
+
+function markManagerHandoffStoryInProgress(pairing = {}, options = {}, context = {}) {
+  const storyKey = sanitizeLedgerField(pairing.assignmentId || "", "", 140);
+  if (!storyKey || !/^\d+-\d+-[a-z0-9-]+$/i.test(storyKey)) {
+    return { storyKey, skipped: true, reason: "not-a-bmad-story-id" };
+  }
+  const sprintPath = sanitizeRelativeBmadOutputPath(
+    context.sprintStatusPath ||
+    options.sprintStatusPath ||
+    context.sourcePlanning?.sprintStatus?.path ||
+    context.sourcePlanningState?.sprintStatus?.path ||
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  if (!sprintPath) {
+    return { storyKey, skipped: true, reason: "sprint-status-path-invalid" };
+  }
+  const absoluteSprintPath = resolve(repoRoot, sprintPath);
+  if (!existsSync(absoluteSprintPath)) {
+    return { storyKey, skipped: true, reason: "sprint-status-missing" };
+  }
+  const now = new Date().toISOString();
+  const result = { storyKey, sprintStatusPath: sprintPath, sprintStatusUpdated: false, storyFileUpdated: false };
+  const sprintSource = readFileSync(absoluteSprintPath, "utf8");
+  const statusPattern = new RegExp(`^(\\s*${escapeRegExp(storyKey)}:\\s*)ready-for-dev(\\s*)$`, "mi");
+  let updatedSprint = sprintSource.replace(statusPattern, (_match, prefix, suffix) => {
+    result.sprintStatusUpdated = true;
+    return `${prefix}in-progress${suffix}`;
+  });
+  if (result.sprintStatusUpdated) {
+    updatedSprint = updateSprintTimestampLine(updatedSprint, "last_updated", now);
+    updatedSprint = updateSprintTimestampLine(updatedSprint, "# last_updated", now);
+    writeFileSync(absoluteSprintPath, updatedSprint);
+  }
+  const storyPath = resolve(dirname(absoluteSprintPath), `${storyKey}.md`);
+  if (existsSync(storyPath)) {
+    const storySource = readFileSync(storyPath, "utf8");
+    const updatedStory = replaceStoryMarkdownStatus(storySource, "ready-for-dev", "in-progress");
+    if (updatedStory !== storySource) {
+      writeFileSync(storyPath, updatedStory);
+      result.storyFileUpdated = true;
+    }
+  }
+  return result;
+}
+
+function updateSprintTimestampLine(source, key, timestamp) {
+  return String(source || "").replace(new RegExp(`^(${escapeRegExp(key)}:\\s*).*$`, "m"), `$1${timestamp}`);
+}
+
+function replaceStoryMarkdownStatus(source, fromStatus, toStatus) {
+  const blockPattern = new RegExp(`(^## Status\\s*\\r?\\n\\s*)${escapeRegExp(fromStatus)}(\\s*)`, "mi");
+  const linePattern = new RegExp(`^(Status:\\s*)${escapeRegExp(fromStatus)}(\\s*)$`, "mi");
+  if (blockPattern.test(source)) {
+    return source.replace(blockPattern, `$1${toStatus}$2`);
+  }
+  return source.replace(linePattern, `$1${toStatus}$2`);
+}
+
+function isDoneSprintStory(assignmentId = "", storyStatuses = {}) {
+  const rawId = String(assignmentId || "").trim();
+  const safeId = sanitizeLedgerField(rawId, "", 140);
+  if (!rawId || !isPlainObject(storyStatuses)) return false;
+  if (String(storyStatuses[rawId] || storyStatuses[safeId] || "").toLowerCase() === "done") return true;
+  return Object.entries(storyStatuses).some(([storyId, status]) =>
+    String(status || "").toLowerCase() === "done" &&
+    sanitizeLedgerField(storyId, "", 140) === safeId
+  );
+}
+
+function assignmentRecordFreshEnough(record = {}, nowMs = Date.now(), staleAfterSeconds = 86400) {
+  const timestampMs = parseTimeMs(record.last_heartbeat_at || record.lastHeartbeatAt || record.updated_at || record.updatedAt || record.assigned_at || record.assignedAt);
+  if (!timestampMs) return false;
+  return nowMs - timestampMs <= staleAfterSeconds * 1000;
+}
+
+function taskManifestWorktreePath(stateRoot = "", taskId = "") {
+  const safeTaskId = sanitizeLedgerField(taskId || "", "", 160);
+  if (!stateRoot || !safeTaskId || !/^[a-z0-9._-]+$/i.test(safeTaskId)) return "";
+  const root = resolve(stateRoot);
+  const manifestPath = resolve(root, "tasks", `${safeTaskId}.json`);
+  if (!isInsideOrSame(manifestPath, root) || !existsSync(manifestPath)) return "";
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const fromManifest = manifest.worktree_path || manifest.worktreePath || "";
+    const fromHandoff = Array.isArray(manifest.dispatch_handoffs) && manifest.dispatch_handoffs.length > 0
+      ? manifest.dispatch_handoffs.findLast?.((handoff) => handoff?.worktree_path || handoff?.worktreePath)?.worktree_path ||
+        manifest.dispatch_handoffs.findLast?.((handoff) => handoff?.worktree_path || handoff?.worktreePath)?.worktreePath ||
+        ""
+      : "";
+    return sanitizeLedgerField(fromManifest || fromHandoff, "", 260);
+  } catch {
+    return "";
+  }
+}
+
+function buildWorkerHandoffPairing(worker = {}, lane = {}, paths = {}) {
+  const handoffPath = join(paths.root, "handoffs", `${worker.workerId}-${lane.assignmentId}.md`);
+  const pastePath = join(paths.root, "handoffs", `${worker.workerId}-${lane.assignmentId}.paste.txt`);
+  return {
+    workerId: worker.workerId,
+    sessionName: worker.sessionName,
+    owner: worker.owner,
+    runId: paths.runId,
+    assignmentId: lane.assignmentId,
+    taskId: lane.taskId,
+    branch: lane.branch,
+    laneOwner: lane.laneOwner || "",
+    phase: lane.phase || "handoff",
+    worktreePath: lane.worktreePath || "",
+    handoffPath,
+    pastePath,
+    pasteText: `Please read and follow this manager handoff file: ${handoffPath}`,
+    retention: "handoff_path_and_summary",
+  };
+}
+
+function renderWorkerHandoffFile(pairing = {}) {
+  const ownerFlag = pairing.laneOwner ? ` --owner ${shellSingleQuote(pairing.laneOwner)}` : "";
+  const sourceContextLines = workerHandoffSourceContextLines(pairing);
+  const checkpointCommand = [
+    "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
+    `--run-id ${shellSingleQuote(pairing.runId)}`,
+    `--worker-id ${shellSingleQuote(pairing.workerId)}`,
+    `--summary ${shellSingleQuote("replace with compact progress, verification, or user-facing checkpoint")}`,
+    `--authority-basis ${shellSingleQuote("manager-owned-worker-checkpoint")}`,
+    `--recovery-path ${shellSingleQuote("manager can rerun manager-worker-progress and inspect assignment metadata")}`,
+    `--source-ref ${shellSingleQuote(`assignment:${pairing.assignmentId}`)}`,
+    `--source-ref ${shellSingleQuote(`task:${pairing.taskId}`)}`,
+  ].join(" ");
+  const questionCommand = [
+    "node ./scripts/manager-ledger.mjs append-question --summary-json",
+    `--run-id ${shellSingleQuote(pairing.runId)}`,
+    `--worker-id ${shellSingleQuote(pairing.workerId)}`,
+    "--material-decision",
+    `--summary ${shellSingleQuote("replace with the compact blocking question and options considered")}`,
+    `--authority-basis ${shellSingleQuote("manager-owned-worker-material-question")}`,
+    `--recovery-path ${shellSingleQuote("manager answers or routes the compact question; worker resumes after answer")}`,
+    `--source-ref ${shellSingleQuote(`assignment:${pairing.assignmentId}`)}`,
+    `--source-ref ${shellSingleQuote(`task:${pairing.taskId}`)}`,
+  ].join(" ");
+  return [
+    "# Manager Worker Handoff",
+    "",
+    `workerId: ${pairing.workerId}`,
+    `sessionName: ${pairing.sessionName}`,
+    `assignmentId: ${pairing.assignmentId}`,
+    `taskId: ${pairing.taskId}`,
+    `branch: ${pairing.branch}`,
+    `laneOwner: ${pairing.laneOwner || "(none)"}`,
+    `phase: ${pairing.phase}`,
+    "",
+    "## Source Context",
+    "",
+    ...sourceContextLines,
+    "",
+    "## Instructions",
+    "",
+    "1. Stay within the assigned lane and repository/workspace gates.",
+    "2. Inspect the assignment/worktree state before editing.",
+    "3. Use BMAD/story instructions already attached to the lane when needed.",
+    "4. Run focused verification for the changed surface.",
+    "5. Report blockers, testable checkpoints, PR/delivery status, and risky decisions.",
+    "6. Publish compact progress through the manager ledger, not raw pane output.",
+    "7. Use the delegated lane owner shown above for workspace commands; do not take over fresh owners.",
+    "8. Do not take over stale lanes, kill processes, access secrets, force-push, merge, or clean up without the existing gate and authority evidence.",
+    "",
+    "## Progress Metadata",
+    "",
+    "Use this command after meaningful progress, verification, a user-testable checkpoint, or before waiting on the manager:",
+    "",
+    "```bash",
+    checkpointCommand,
+    "```",
+    "",
+    "Use this command only for a material blocking question that needs manager/operator judgment:",
+    "",
+    "```bash",
+    questionCommand,
+    "```",
+    "",
+    "## Start",
+    "",
+    `Run: node ./scripts/codex-workspace.mjs resume ${shellSingleQuote(pairing.assignmentId)}${ownerFlag}`,
+    "",
+  ].join("\n");
+}
+
+function workerHandoffSourceContextLines(pairing = {}) {
+  const assignmentId = sanitizeLedgerField(pairing.assignmentId || "", "", 140);
+  const lines = [];
+  if (pairing.worktreePath) {
+    lines.push(`worktreePath: ${pairing.worktreePath}`);
+  }
+  if (assignmentId) {
+    lines.push(`storyArtifact: ${resolve(repoRoot, "_bmad-output", "implementation-artifacts", `${assignmentId}.md`)}`);
+  }
+  lines.push(`sprintStatus: ${resolve(repoRoot, "_bmad-output", "implementation-artifacts", "sprint-status.yaml")}`);
+  lines.push(`latestPrd: ${resolve(repoRoot, "_bmad-output", "planning-artifacts", "prds", "prd-Kendall_Nxt-2026-07-01", "prd.md")}`);
+  lines.push("If an ignored BMAD artifact is absent from the managed worktree, read the absolute source artifact above from the main repo root and keep source refs in compact checkpoints.");
+  return lines;
+}
+
+function pasteWorkerHandoff(pairing = {}, context = {}) {
+  const runner = context.tmuxRunner || spawnSync;
+  const load = runner("tmux", ["load-buffer", "-b", `${pairing.workerId}-handoff`, pairing.pastePath], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (load?.error) return { ok: false, error: load.error.message || "tmux load-buffer failed" };
+  if ((load?.status ?? 0) !== 0) return { ok: false, error: String(load?.stderr || load?.stdout || "tmux load-buffer failed").trim(), status: load?.status };
+  const target = resolveTmuxPaneTarget(pairing.sessionName, runner, context);
+  if (!target.ok) return target;
+  const paste = runner("tmux", ["paste-buffer", "-b", `${pairing.workerId}-handoff`, "-t", target.target], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (paste?.error) return { ok: false, error: paste.error.message || "tmux paste-buffer failed" };
+  if ((paste?.status ?? 0) !== 0) return { ok: false, error: String(paste?.stderr || paste?.stdout || "tmux paste-buffer failed").trim(), status: paste?.status };
+  const enter = sendTmuxEnterToTarget(target.target, runner, context);
+  if (!enter.ok) return enter;
+  const receipt = verifyTmuxPointerSubmitted(pairing, target.target, runner, context);
+  if (!receipt.ok) return { ...receipt, sessionName: pairing.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName: `${pairing.workerId}-handoff`, receipt };
+  return { ok: true, sessionName: pairing.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName: `${pairing.workerId}-handoff`, receipt };
+}
+
+export function buildWorkerProgressStatus(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
+  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(["assignment-report", "--summary-json"], context);
+  const assignmentSummary = assignmentPacket.summary || assignmentPacket || {};
+  const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
+  const questions = Array.isArray(context.questions) ? context.questions : readNdjsonStrict(paths.questions).value;
+  const events = Array.isArray(context.events) ? context.events : readNdjsonStrict(paths.events).value;
+  const answeredQuestionIds = answeredQuestionIdSet(events);
+  const nowMs = context.now ? Date.parse(context.now) : Date.now();
+  const staleSignalMs = Math.max(60_000, (nonNegativeInteger(options.progressStaleMinutes) ?? 3) * 60_000);
+  const promptIdleGraceMs = Math.max(15_000, nonNegativeInteger(options.promptIdleGraceMs ?? context.promptIdleGraceMs) ?? 15_000);
+  const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
+  const missingLiveWorkerIds = missingLiveWorkerIdsFromWorkerStatus(workerPacket);
+  const activeWorkers = workers.filter((worker) => worker.state === "active" && isManagerOwnedWorker(worker, runId) && !missingLiveWorkerIds.has(worker.workerId));
+  const reportedLaneAssignments = Array.isArray(assignmentSummary.laneAssignments) ? assignmentSummary.laneAssignments : [];
+  const fallbackLaneAssignments = readAssignmentFileLaneEvidence(runOptions.stateRoot || paths.proof.state?.root || "", assignmentSummary.currentOwner);
+  const laneAssignments = fallbackLaneAssignments.length > 0
+    ? mergeLaneEvidence(reportedLaneAssignments, fallbackLaneAssignments)
+    : reportedLaneAssignments;
+  const lanesByAssignment = new Map(laneAssignments.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
+  const promptProbe = options.promptIdle || context.promptProbe ? (context.promptProbe || buildWorkerPromptProbePlan({ ...runOptions, limit: 6 }, context)) : null;
+  const promptIdleWorkerIds = new Set(
+    (Array.isArray(promptProbe?.summary?.probes) ? promptProbe.summary.probes : [])
+      .filter((probe) => probe.promptDetected === true && probe.inputHasManagerPointer !== true)
+      .map((probe) => String(probe.workerId || ""))
+      .filter(Boolean),
+  );
+  const workerProgress = activeWorkers.map((worker) => buildWorkerProgressRecord(worker, {
+    lane: lanesByAssignment.get(worker.assignmentId || "") || null,
+    checkpoints,
+    questions,
+    events,
+    answeredQuestionIds,
+    nowMs,
+    staleSignalMs,
+    promptIdleGraceMs,
+    promptIdle: promptIdleWorkerIds.has(worker.workerId),
+  }));
+  const attentionWorkers = workerProgress.filter((worker) => (
+    ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "blocked_question", "checkpoint_blocked", "owner_delegation_stale", "progress_signal_unanswered", "recovery_submit_unanswered", "pointer_receipt_unverified"].includes(worker.progressState)
+    || needsPendingSubmitRepair(worker)
+  ));
+  return packet({
+    status: attentionWorkers.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      activeWorkers: activeWorkers.length,
+      warmWorkers: workers.filter((worker) => worker.state === "warm" && isManagerOwnedWorker(worker, runId)).length,
+      workerProgress,
+      retention: "metadata_only_worker_progress",
+      source: "manager-workers-checkpoints-questions-assignment-heartbeats",
+    },
+    warnings: attentionWorkers.length > 0 ? [{ code: "worker-progress-attention", message: `${attentionWorkers.length} active worker(s) need progress signal or question handling.` }] : [],
+    nextActions: buildWorkerProgressNextActions(attentionWorkers),
+  });
+}
+
+export function buildLaneAdvancementPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const apply = options.apply === true;
+  const limit = Math.max(1, Math.min(6, nonNegativeInteger(options.limit ?? context.limit) ?? 6));
+  const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
+  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(["assignment-report", "--summary-json"], context);
+  const assignmentSummary = assignmentPacket.summary || assignmentPacket || {};
+  const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
+  const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
+  const reportedLaneAssignments = Array.isArray(assignmentSummary.laneAssignments) ? assignmentSummary.laneAssignments : [];
+  const fallbackLaneAssignments = readAssignmentFileLaneEvidence(runOptions.stateRoot || paths.proof.state?.root || "", assignmentSummary.currentOwner);
+  const laneAssignments = fallbackLaneAssignments.length > 0
+    ? mergeLaneEvidence(reportedLaneAssignments, fallbackLaneAssignments)
+    : reportedLaneAssignments;
+  const lanesByAssignment = new Map(laneAssignments.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
+  const activeWorkers = workers.filter((worker) => worker.state === "active" && isManagerOwnedWorker(worker, runId));
+  const seenReadyAssignmentIds = new Set();
+  const readyLanes = activeWorkers
+    .map((worker) => buildLaneAdvancementCandidate(worker, {
+      lane: lanesByAssignment.get(worker.assignmentId || "") || null,
+      checkpoints,
+    }))
+    .filter(Boolean)
+    .filter((lane) => {
+      if (!isSafeCommandIdentifier(lane.assignmentId)) return false;
+      if (seenReadyAssignmentIds.has(lane.assignmentId)) return false;
+      seenReadyAssignmentIds.add(lane.assignmentId);
+      return true;
+    })
+    .slice(0, limit);
+  const applyReadyLanes = readyLanes.filter((lane) => lane.laneOwner);
+  const ownerlessReadyLanes = readyLanes.filter((lane) => !lane.laneOwner);
+  const blockers = [];
+  if (!paths.proof.ok) {
+    blockers.push({ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." });
+  }
+  if (blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        apply,
+        readyLaneCount: readyLanes.length,
+        readyLanes,
+        mutationMode: "none",
+        retention: "metadata_only_lane_advancement_summary",
+      },
+      blockers,
+    });
+  }
+  if (apply) {
+    if (readyLanes.length === 0) {
+      return packet({
+        status: "ready",
+        summary: {
+          runId,
+          apply: true,
+          advancedLaneCount: 0,
+          skippedLaneCount: 0,
+          results: [],
+          skippedLanes: [],
+          mutationMode: "none; no ready lane at apply time",
+          retention: "metadata_only_lane_advancement_apply_summary",
+        },
+        warnings: [{ code: "lane-advance-no-ready-lanes", message: "No active manager-owned lanes are ready for manager review or delivery advancement; treated as a no-op." }],
+        nextActions: [{ code: "lane-advance-noop", summary: "No lane advancement was needed at apply time.", nextAction: "Continue worker progress monitoring." }],
+      });
+    }
+    const skippedLanes = ownerlessReadyLanes
+      .map((lane) => ({
+        ...lane,
+        status: "skipped",
+        reason: "lane_owner_missing",
+        nextAction: "Refresh assignment-report or assignment fallback metadata before applying lane advancement for this lane.",
+      }));
+    const results = applyReadyLanes.map((lane) => applyLaneAdvancementHeartbeat(lane, context));
+    const failed = results.filter((result) => !result.ok);
+    const advancedCount = results.filter((result) => result.ok).length;
+    const status = failed.length > 0 ? "blocked" : advancedCount > 0 ? "ready" : "attention";
+    return packet({
+      ok: failed.length === 0,
+      status,
+      summary: {
+        runId,
+        apply: true,
+        advancedLaneCount: advancedCount,
+        skippedLaneCount: skippedLanes.length,
+        results,
+        skippedLanes,
+        mutationMode: "assignment_heartbeat_metadata_only",
+        retention: "metadata_only_lane_advancement_apply_summary",
+      },
+      blockers: failed.map((result) => ({
+        code: "lane-advance-heartbeat-failed",
+        message: result.error || `Failed to advance ${result.assignmentId || "(unknown assignment)"}.`,
+        nextAction: "Inspect owner-checked codex-workspace heartbeat evidence before retrying lane advancement.",
+      })),
+    });
+  }
+  return packet({
+    status: readyLanes.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      apply: false,
+      readyLaneCount: readyLanes.length,
+      readyLanes,
+      mutationMode: "report_only_existing_delivery_gates_required",
+      retention: "metadata_only_lane_advancement_summary",
+      source: "manager-workers-checkpoints-assignment-metadata",
+    },
+    warnings: [
+      ...(applyReadyLanes.length > 0 ? [{ code: "manager-lane-advance-ready", message: `${applyReadyLanes.length} active lane(s) appear ready for manager review or delivery.` }] : []),
+      ...(ownerlessReadyLanes.length > 0 ? [{ code: "manager-lane-advance-owner-missing", message: `${ownerlessReadyLanes.length} review-ready lane(s) are missing owner metadata and cannot be auto-advanced.` }] : []),
+    ],
+    nextActions: applyReadyLanes.length > 0
+      ? [
+          {
+            code: "manager-lane-advance-ready",
+            summary: `Advance ${applyReadyLanes.length} owner-proven review-ready lane(s) into manager review/delivery metadata gates instead of pinging completed workers.`,
+            nextAction: `node ./scripts/manager-lane-advance.mjs --summary-json --limit ${applyReadyLanes.length}`,
+          },
+        ]
+      : ownerlessReadyLanes.length > 0
+        ? [
+            {
+              code: "manager-lane-advance-owner-missing",
+              summary: `${ownerlessReadyLanes.length} review-ready lane(s) need owner metadata before lane advancement can apply.`,
+              nextAction: "Refresh assignment-report or assignment fallback metadata; continue other manager-owned worker actions.",
+            },
+          ]
+        : [],
+  });
+}
+
+function buildLaneAdvancementCandidate(worker = {}, context = {}) {
+  const assignmentId = sanitizeIdentifierField(worker.assignmentId || "", "", 140);
+  if (!assignmentId) return null;
+  const lane = context.lane || {};
+  const lanePhase = sanitizeLedgerField(lane.phase || lane.status || "", "", 80);
+  if (["waiting_review", "reassignable", "closed"].includes(lanePhase)) return null;
+  const lastHeartbeatMs = parseTimeMs(worker.lastHeartbeatAt);
+  const checkpoints = filterWorkerProgressRecords(context.checkpoints, worker, assignmentId)
+    .filter((record) => recordIsInWorkerAssignmentWindow(record, lastHeartbeatMs))
+    .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0));
+  const checkpoint = checkpoints.find((record) => classifyLaneAdvancementSummary(record.summary).state !== "not_ready");
+  if (!checkpoint) return null;
+  const readiness = classifyLaneAdvancementSummary(checkpoint.summary);
+  const targetPhase = readiness.state === "delivery_gate_ready" ? "delivery_ready" : "review_ready";
+  return {
+    assignmentId,
+    taskId: sanitizeIdentifierField(worker.taskId || lane.taskId || lane.task_id || "", "", 140),
+    workerId: sanitizeLedgerField(worker.workerId || "worker", "worker", 80),
+    laneOwner: sanitizeLedgerField(lane.owner || worker.laneOwner || "", "", 160),
+    lanePhase,
+    targetPhase,
+    readinessState: readiness.state,
+    checkpointId: sanitizeLedgerField(checkpoint.checkpointId || checkpoint.id || "", "", 120),
+    checkpointAt: sanitizeLedgerField(checkpoint.timestamp || "", "", 80),
+    evidenceSummary: sanitizeLedgerField(checkpoint.summary || readiness.evidence, readiness.evidence, 220),
+    nextAction: "Run manager review, verification, delivery, finish-pr, merge, or cleanup only through existing codex-workspace and review gates.",
+  };
+}
+
+function applyLaneAdvancementHeartbeat(lane = {}, context = {}) {
+  if (!isSafeCommandIdentifier(lane.assignmentId)) {
+    return {
+      ok: false,
+      assignmentId: lane.assignmentId,
+      targetPhase: lane.targetPhase,
+      error: "lane advancement assignment id is not safe for workspace command routing",
+    };
+  }
+  const args = [
+    "heartbeat",
+    lane.assignmentId,
+    "--owner",
+    lane.laneOwner,
+    "--phase",
+    lane.targetPhase || "review_ready",
+    "--runner-kind",
+    "manager-control-plane",
+    "--current-command",
+    "manager review/delivery queued",
+    "--last-result",
+    sanitizeLedgerField(lane.evidenceSummary || "lane ready for manager review", "lane ready for manager review", 180),
+    "--json",
+  ];
+  const result = runWorkspaceJson(args, context);
+  if (result?.ok === false || result?.error) {
+    return {
+      ok: false,
+      assignmentId: lane.assignmentId,
+      targetPhase: lane.targetPhase,
+      error: result.error || "codex-workspace heartbeat failed",
+    };
+  }
+  return {
+    ok: true,
+    assignmentId: lane.assignmentId,
+    taskId: lane.taskId,
+    workerId: lane.workerId,
+    targetPhase: lane.targetPhase,
+    mutation: "assignment heartbeat metadata only",
+    heartbeat: {
+      target: result.target || null,
+      phase: result.phase || null,
+      ownerMatches: result.ownerMatches === true,
+      lastHeartbeatAt: result.lastHeartbeatAt || null,
+    },
+  };
+}
+
+function classifyLaneAdvancementSummary(summary = "") {
+  const text = String(summary || "").toLowerCase();
+  if (!text.trim()) return { state: "not_ready", evidence: "" };
+  if (/\b(question|blocked|waiting|needs operator|failed|cannot proceed|error|in progress|still working|ongoing|partial|not complete|not ready)\b/.test(text)) {
+    return { state: "not_ready", evidence: "checkpoint reports unresolved blocker" };
+  }
+  if (/\b(review[- ]ready|ready for manager review|ready for review|manager review|ready for delivery|verified and idle|verified,? ready|complete,? verified|complete and verified|lane remains complete|remains complete|complete,? verified,? and blocker-free|verified,? and blocker-free|implementation (?:is )?complete|implemented and verified|implemented\b.*\b(?:verification|tests?|checks?)\b.*\bpassed\b|(?:verification|tests?|checks?)\b.*\bpassed\b|staged implementation (?:remains )?unchanged|remains ready|ready for manager)\b/.test(text)) {
+    const deliveryReady = /\b(ready for delivery|delivery[- ]ready|delivery gate ready)\b/.test(text);
+    return { state: deliveryReady ? "delivery_gate_ready" : "manager_review_ready", evidence: "checkpoint indicates work is complete or review-ready" };
+  }
+  return { state: "not_ready", evidence: "" };
+}
+
+function classifyWorkerCheckpointBlockerSummary(summary = "") {
+  const text = String(summary || "").toLowerCase();
+  if (!text.trim()) return { blocked: false, reason: "" };
+  if (/\b(blocked|blocking|cannot proceed|can't proceed|failed|failure|error|needs operator|waiting on|missing story|missing source|missing context|blocked_missing_story_context)\b/.test(text)) {
+    return { blocked: true, reason: "checkpoint reports blocked or missing context" };
+  }
+  return { blocked: false, reason: "" };
+}
+
+function buildWorkerProgressNextActions(workers = []) {
+  const attentionWorkers = Array.isArray(workers) ? workers : [];
+  const signalableStates = new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"]);
+  const questionWorkers = attentionWorkers.filter((worker) => ["blocked_question", "checkpoint_blocked"].includes(worker.progressState));
+  const signalableWorkers = attentionWorkers.filter((worker) => signalableStates.has(worker.progressState));
+  const pendingSubmitWorkers = attentionWorkers.filter(needsPendingSubmitRepair);
+  let signalActionAdded = false;
+  let pendingSubmitActionAdded = false;
+  let questionActionAdded = false;
+  const actions = [];
+  if (questionWorkers.length > 0) {
+    actions.push(buildWorkerQuestionAnswerNextAction(questionWorkers));
+    questionActionAdded = true;
+  }
+  for (const worker of attentionWorkers) {
+    if (["blocked_question", "checkpoint_blocked"].includes(worker.progressState) && questionActionAdded) {
+      continue;
+    }
+    if (needsPendingSubmitRepair(worker)) {
+      if (!pendingSubmitActionAdded) {
+        actions.push(buildWorkerSubmitPendingNextAction(pendingSubmitWorkers));
+        pendingSubmitActionAdded = true;
+      }
+      continue;
+    }
+    if (signalableStates.has(worker.progressState)) {
+      if (!signalActionAdded) {
+        actions.push(buildWorkerProgressSignalNextAction(signalableWorkers));
+        signalActionAdded = true;
+      }
+      continue;
+    }
+    actions.push(buildWorkerProgressNextAction(worker));
+  }
+  return actions;
+}
+
+function needsPendingSubmitRepair(worker = {}) {
+  const receiptNeedsSubmit = worker.progressState === "pointer_receipt_unverified";
+  const progressSignalNeedsSubmit = worker.progressState === "progress_signal_sent"
+    && Number(worker.latestProgressSignalAgeSeconds || 0) >= 120
+    && worker.submitPendingAfterProgressSignal !== true
+    && Number(worker.questionCount || 0) === 0;
+  const recoveryInspectionNeedsSubmit = worker.progressState === "recovery_inspected"
+    && worker.submitPendingAfterRecoveryInspection !== true
+    && Number(worker.questionCount || 0) === 0;
+  return receiptNeedsSubmit || progressSignalNeedsSubmit || recoveryInspectionNeedsSubmit;
+}
+
+function buildWorkerSubmitPendingNextAction(workers = []) {
+  const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
+  return {
+    code: "worker-submit-pending-progress-signal",
+    summary: `Submit pending prompts for ${selected.length || 1} manager-owned worker(s).`,
+    nextAction: `node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit ${selected.length || 1}`,
+  };
+}
+
+function buildWorkerQuestionAnswerNextAction(workers = []) {
+  const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
+  return {
+    code: "worker-progress-blocked_question",
+    summary: `Answer ${selected.length || 1} compact worker question(s).`,
+    nextAction: `node ./scripts/manager-worker-answer-question.mjs --summary-json --limit ${selected.length || 1}`,
+  };
+}
+
+function buildWorkerProgressSignalNextAction(workers = []) {
+  const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
+  const first = selected[0] || {};
+  if (selected.length <= 1) {
+    return buildWorkerProgressNextAction(first, { limit: 1 });
+  }
+  const states = [...new Set(selected.map((worker) => String(worker.progressState || "attention")).filter(Boolean))];
+  const promptIdle = states.includes("prompt_idle_handoff");
+  return {
+    code: states.length === 1 ? `worker-progress-${states[0]}` : "worker-progress-signal-batch",
+    summary: `Signal ${selected.length} active worker(s) for compact metadata progress.`,
+    nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${promptIdle ? " --prompt-idle" : ""}`,
+  };
+}
+
+function buildWorkerProgressNextAction(worker = {}, context = {}) {
+  const code = `worker-progress-${worker.progressState}`;
+  const summary = `${worker.workerId} ${String(worker.progressState || "attention").replaceAll("_", " ")} for ${worker.assignmentId || "unassigned"}.`;
+  if (["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"].includes(worker.progressState)) {
+    const limit = Math.max(1, Number(context.limit || 0) || Number(context.index || 0) + 1);
+    return {
+      code,
+      summary,
+      nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${limit}${worker.progressState === "prompt_idle_handoff" ? " --prompt-idle" : ""}`,
+    };
+  }
+  if (worker.progressState === "progress_signal_unanswered") {
+    return {
+      code,
+      summary,
+      nextAction: "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json",
+    };
+  }
+  if (worker.progressState === "recovery_submit_unanswered") {
+    const limit = Math.max(1, Number(context.limit || 0) || Number(context.index || 0) + 1);
+    return {
+      code,
+      summary,
+      nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json --limit ${limit}`,
+    };
+  }
+  return {
+    code,
+    summary,
+    nextAction: worker.nextAction,
+  };
+}
+
+export function buildWorkerRecoveryInspection(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const workerProgress = Array.isArray(progress.summary?.workerProgress) ? progress.summary.workerProgress : [];
+  const unanswered = workerProgress.filter((worker) => worker.progressState === "progress_signal_unanswered");
+  const inspections = unanswered.map((worker) => ({
+    workerId: worker.workerId,
+    sessionName: worker.sessionName,
+    assignmentId: worker.assignmentId,
+    taskId: worker.taskId,
+    laneOwner: worker.laneOwner,
+    recoveryState: worker.recoveryState,
+    progressSignalCount: worker.progressSignalCount,
+    latestProgressSignalAgeSeconds: worker.latestProgressSignalAgeSeconds,
+    latestCheckpointAgeSeconds: worker.latestCheckpointAgeSeconds,
+    checkpointCount: worker.checkpointCount,
+    questionCount: worker.questionCount,
+    eventCount: worker.eventCount,
+    diagnosis: "progress signal was sent repeatedly without a newer manager checkpoint",
+    nextAction: "Do not send another progress request. Use the repaired C-m submit path for future sends, then choose a bounded manager-owned repair, retire, or restart action if this worker remains silent.",
+  }));
+  if (runOptions.apply && inspections.length > 0) {
+    ledgerCommand({
+      command: "append-event",
+      runId,
+      stateRoot: runOptions.stateRoot,
+      eventType: "worker_recovery_inspection",
+      authorityBasis: "metadata-only-worker-recovery-inspection",
+      summary: `Inspected ${inspections.length} unanswered manager-owned worker progress signal(s).`,
+      sourceRefs: inspections.flatMap((inspection) => [
+        `assignment:${inspection.assignmentId}`,
+        `worker:${inspection.workerId}`,
+      ]),
+      evidenceRefs: inspections.map((inspection) => `worker-recovery-inspection:${inspection.workerId}`),
+      recoveryPath: "choose bounded manager-owned repair, retire, restart, or wait for checkpoint; do not send another progress request",
+    }, context);
+  }
+  return packet({
+    status: inspections.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      apply: Boolean(runOptions.apply),
+      mutation: runOptions.apply && inspections.length > 0 ? "manager-ledger-worker-recovery-inspection-event" : "none",
+      inspectedWorkers: inspections.length,
+      activeWorkers: progress.summary?.activeWorkers || 0,
+      warmWorkers: progress.summary?.warmWorkers || 0,
+      inspections,
+      retention: "metadata_only_worker_recovery_inspection",
+      source: "manager-worker-progress-status",
+    },
+    warnings: inspections.length > 0
+      ? [{ code: "worker-recovery-inspection-needed", message: `${inspections.length} active worker(s) have unanswered progress signals.` }]
+      : [],
+    nextActions: inspections.length > 0
+      ? [{
+          code: "worker-submit-path-repaired",
+          summary: "The tmux submit transport now sends explicit C-m; avoid more signal churn until workers produce checkpoints or a bounded repair lane is chosen.",
+          nextAction: "Run node ./scripts/manager-worker-progress.mjs --summary-json after the next worker checkpoint window.",
+        }]
+      : [{ code: "worker-recovery-clear", summary: "No unanswered worker progress signal requires recovery inspection.", nextAction: "Continue metadata-only worker monitoring." }],
+  });
+}
+
+export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const signalableStates = runOptions.promptIdle
+    ? ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"]
+    : ["needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"];
+  const candidates = Array.isArray(progress.summary?.workerProgress)
+    ? progress.summary.workerProgress.filter((worker) => signalableStates.includes(worker.progressState))
+    : [];
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
+  const selected = candidates.slice(0, limit).map((worker) => buildWorkerProgressSignalRequest(worker, paths));
+  if (progress.status !== "attention" || selected.length === 0) {
+    return packet({
+      status: "ready",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", staleWorkers: candidates.length, requests: [] },
+      nextActions: [{ code: "worker-progress-signal-not-needed", summary: "No stale manager-owned worker progress signal is needed.", nextAction: "Continue metadata-only monitoring." }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        staleWorkers: candidates.length,
+        planned: selected.length,
+        requests: selected,
+        transport: { primary: "durable_progress_request_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_progress_request_file_path_only" },
+      },
+      nextActions: [{ code: "worker-progress-signal-apply-ready", summary: `Signal ${selected.length} stale active worker(s) for compact metadata progress.`, nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${runOptions.promptIdle ? " --prompt-idle" : ""} --apply` }],
+    });
+  }
+  mkdirSync(join(paths.root, "progress-requests"), { recursive: true });
+  const results = [];
+  for (const request of selected) {
+    writeFileSync(request.requestPath, renderWorkerProgressSignalFile(request));
+    writeFileSync(request.pastePath, `${request.pasteText}\n`);
+    const paste = pasteWorkerProgressSignal(request, context);
+    results.push({ ...request, status: paste.ok ? "progress_signal_sent" : "failed", paste });
+  }
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) {
+    recordPointerReceiptFailure(runOptions, failed, context, "progress-signal");
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "partial", results },
+      blockers: [{ code: "worker-progress-signal-paste-failed", message: failed.paste?.error || `Failed to paste progress signal to ${failed.sessionName}.`, nextAction: "Inspect manager progress request files and tmux paste result before retrying." }],
+    });
+  }
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_progress_signal_apply",
+    authorityBasis: "manager-owned-worker-progress-signal-existing-gates",
+    summary: `Sent ${results.length} manager-owned worker progress signal(s).`,
+    sourceRefs: results.flatMap((result) => [`assignment:${result.assignmentId}`, `worker:${result.workerId}`, ...receiptSourceRefs(result)]),
+    evidenceRefs: results.map((result) => `progress-request:${result.requestPath || result.workerId || result.assignmentId}`),
+    recoveryPath: "rerun manager-worker-progress and inspect progress request files before retrying",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-progress-request-file-and-tmux-buffer",
+      results,
+      retention: "progress_request_path_and_summary",
+    },
+  });
+}
+
+export function buildWorkerSubmitPendingPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const pendingStates = new Set(["handoff_sent", "progress_signal_sent", "recovery_inspected", "owner_delegation_sent", "owner_delegation_stale", "pointer_receipt_unverified"]);
+  const candidates = Array.isArray(progress.summary?.workerProgress)
+    ? progress.summary.workerProgress
+      .filter((worker) => runOptions.operatorVisiblePrompt || pendingStates.has(worker.progressState))
+      .filter((worker) => runOptions.operatorVisiblePrompt || worker.progressState !== "handoff_sent" || worker.submitPendingAfterHandoff !== true)
+      .filter((worker) => runOptions.operatorVisiblePrompt || Number(worker.checkpointCount || 0) === 0 || needsPendingSubmitRepair(worker))
+      .filter((worker) => Number(worker.questionCount || 0) === 0)
+      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
+    : [];
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
+  const selected = candidates.slice(0, limit).map((worker) => ({
+    workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
+    sessionName: sanitizeLedgerField(worker.sessionName || worker.workerId || "", "", 80),
+    assignmentId: sanitizeLedgerField(worker.assignmentId || "", "", 140),
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    progressState: sanitizeLedgerField(worker.progressState || "unknown", "unknown", 80),
+    action: "send_enter_only_to_active_tmux_pane",
+    basis: runOptions.operatorVisiblePrompt ? "operator_visible_prompt" : "metadata_pending_prompt",
+  }));
+  if (selected.length === 0) {
+    return packet({
+      status: "ready",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", pendingWorkers: candidates.length, requests: [] },
+      nextActions: [{ code: "worker-submit-pending-not-needed", summary: "No pending manager-owned worker prompt submit is needed.", nextAction: "Continue metadata-only monitoring." }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        pendingWorkers: candidates.length,
+        planned: selected.length,
+        requests: selected,
+        transport: {
+          primary: "tmux_send_c_m_only",
+          pastedText: "none",
+          submitKey: "C-m",
+          basis: runOptions.operatorVisiblePrompt ? "operator_visible_prompt" : "metadata_pending_prompt",
+        },
+      },
+      nextActions: [{ code: "worker-submit-pending-apply-ready", summary: `Submit pending prompts for ${selected.length} manager-owned worker(s).`, nextAction: `node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit ${selected.length}${runOptions.operatorVisiblePrompt ? " --operator-visible-prompt" : ""} --apply` }],
+    });
+  }
+  const runner = context.tmuxRunner || spawnSync;
+  const results = selected.map((request) => {
+    const submit = sendTmuxEnterToSession(request.sessionName, runner, context);
+    if (!submit.ok) return { ...request, status: "failed", submit };
+    const receipt = verifyTmuxEnterOnlySubmitted(request, submit, runner, context);
+    return { ...request, status: receipt.verified === false ? "receipt_unverified" : "submitted", submit, receipt };
+  });
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) {
+    recordPointerReceiptFailure(runOptions, failed, context, "owner-delegation");
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "partial", results },
+      blockers: [{ code: "worker-submit-pending-failed", message: failed.submit?.error || `Failed to submit C-m to ${failed.sessionName}.`, nextAction: "Refresh worker progress and retry only if the prompt is still pending." }],
+    });
+  }
+  const unverified = results.filter((result) => result.status === "receipt_unverified");
+  if (unverified.length > 0) {
+    for (const result of unverified) {
+      recordPointerReceiptFailure(runOptions, result, context, "submit-pending");
+    }
+    return packet({
+      status: "attention",
+      summary: {
+        runId,
+        apply: true,
+        mutation: "manager-owned-worker-enter-only-submit-receipt-unverified",
+        results,
+        retention: "submit_path_and_bounded_receipt_summary",
+      },
+      warnings: [{
+        code: "worker-submit-pending-receipt-unverified",
+        message: `${unverified.length} submit-pending repair(s) still show manager pointer text after C-m.`,
+        nextAction: "Rerun manager-worker-progress and route through recovery before sending more worker text.",
+      }],
+      nextActions: [{
+        code: "worker-submit-pending-receipt-unverified",
+        summary: "Submit-pending C-m was sent, but bounded receipt proof is still unverified.",
+        nextAction: "Run node ./scripts/manager-worker-progress.mjs --summary-json before any further worker mutation.",
+      }],
+    });
+  }
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_submit_pending_apply",
+    authorityBasis: "manager-owned-worker-enter-only-repair-existing-gates",
+    summary: `Submitted pending prompt(s) for ${results.length} manager-owned worker(s).`,
+    sourceRefs: results.flatMap((result) => [`assignment:${result.assignmentId}`, `worker:${result.workerId}`]),
+    evidenceRefs: results.map((result) => `submit-pending:${result.workerId || result.assignmentId}`),
+    recoveryPath: "rerun manager-worker-progress and inspect compact checkpoints before retrying",
+    recordPolicy: runOptions.operatorVisiblePrompt ? "operator_visible_enter_only_repair" : "",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-enter-only-submit",
+      results,
+      retention: "submit_path_and_summary",
+    },
+  });
+}
+
+export function buildWorkerPromptProbePlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
+  const workers = Array.isArray(workerPacket.summary?.workers)
+    ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker)
+    : [];
+  const missingLiveWorkerIds = missingLiveWorkerIdsFromWorkerStatus(workerPacket);
+  const activeWorkers = workers
+    .filter((worker) => worker.state === "active" && isManagerOwnedWorker(worker, runId) && !missingLiveWorkerIds.has(worker.workerId))
+    .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId);
+  const runner = context.tmuxRunner || spawnSync;
+  const probes = activeWorkers.map((worker) => probeWorkerInputRegion(worker, runner, { ...context, receiptScanLines: 10 }));
+  const stuck = probes.filter((probe) => probe.inputHasManagerPointer);
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? stuck.length : Math.max(0, Number(runOptions.limit) || 0);
+  const selected = stuck.slice(0, limit);
+  if (selected.length === 0) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: Boolean(runOptions.apply),
+        mutation: "none",
+        probedWorkers: probes.length,
+        promptPointerWorkers: 0,
+        probes,
+        retention: "metadata_only_prompt_region_probe",
+      },
+      nextActions: [{ code: "worker-prompt-probe-clear", summary: "No manager pointer text is visible in worker input regions.", nextAction: "Continue metadata-only monitoring." }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "attention",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        probedWorkers: probes.length,
+        promptPointerWorkers: stuck.length,
+        planned: selected.length,
+        probes,
+        requests: selected.map(promptProbeRequestSummary),
+        transport: { primary: "tmux_send_c_m_only", pastedText: "none", submitKey: "C-m", basis: "bounded_prompt_region_probe" },
+        retention: "metadata_only_prompt_region_probe",
+      },
+      warnings: [{ code: "worker-prompt-pointer-visible", message: `${stuck.length} manager-owned worker input region(s) contain manager pointer text.` }],
+      nextActions: [{ code: "worker-prompt-probe-submit-ready", summary: `Submit visible manager pointers for ${selected.length} worker input region(s).`, nextAction: `node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit ${selected.length} --apply` }],
+    });
+  }
+  const results = selected.map((probe) => {
+    const submit = sendTmuxEnterToTarget(probe.paneTarget, runner, context);
+    waitForReceiptSettle(runner, context);
+    const after = probeWorkerInputRegion(probe, runner, { ...context, receiptScanLines: 10 });
+    return {
+      ...promptProbeRequestSummary(probe),
+      status: submit.ok && after.inputHasManagerPointer !== true ? "submitted_and_cleared" : submit.ok ? "submitted_still_visible" : "failed",
+      submit,
+      verifiedClear: submit.ok && after.inputHasManagerPointer !== true,
+      after: {
+        promptDetected: after.promptDetected,
+        inputHasManagerPointer: after.inputHasManagerPointer,
+      },
+    };
+  });
+  const failed = results.filter((result) => result.status === "failed");
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_prompt_region_submit_apply",
+    authorityBasis: "manager-owned-worker-enter-only-repair-existing-gates",
+    summary: `Submitted visible manager pointer prompt(s) for ${results.length} manager-owned worker(s).`,
+    sourceRefs: results.flatMap((result) => [`assignment:${result.assignmentId}`, `worker:${result.workerId}`, result.verifiedClear ? "prompt-region:cleared" : "prompt-region:still-visible"]),
+    evidenceRefs: results.map((result) => `prompt-probe:${result.workerId || result.assignmentId}`),
+    recoveryPath: "rerun manager-worker-prompt-probe and inspect compact worker checkpoints before retrying",
+    recordPolicy: "metadata_only_prompt_region_probe",
+  }, context);
+  return packet({
+    ok: failed.length === 0,
+    status: failed.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-enter-only-submit",
+      probedWorkers: probes.length,
+      promptPointerWorkers: stuck.length,
+      results,
+      retention: "metadata_only_prompt_region_probe",
+    },
+    warnings: results.some((result) => result.verifiedClear !== true)
+      ? [{ code: "worker-prompt-pointer-still-visible", message: "At least one manager pointer remained visible after C-m-only submit; continue bounded prompt-region probing." }]
+      : [],
+  });
+}
+
+export function buildWorkerRetirePlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const resourceState = normalizePosture(runOptions.resourceState || context.resourceState || context.resourceContext, "unknown");
+  const resourceContext = context.resourceContext || (resourceState !== "unknown" ? { status: resourceState } : undefined);
+  const progress = resourceState === "critical" ? null : context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, { ...context, resourceContext });
+  const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
+  const workersById = new Map(workers.map((worker) => [worker.workerId, worker]));
+  const criticalKillOrder = Array.isArray(workerPacket.summary?.lifecyclePlan?.terminationPlan?.killOrder)
+    ? workerPacket.summary.lifecyclePlan.terminationPlan.killOrder
+    : [];
+  const candidates = resourceState === "critical"
+    ? criticalKillOrder
+      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
+      .map((worker) => ({ ...worker, progressState: "critical_resource_pressure", record: workersById.get(worker.workerId) || null }))
+      .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.sessionName)
+    : Array.isArray(progress.summary?.workerProgress)
+      ? progress.summary.workerProgress
+      .filter((worker) => worker.progressState === "recovery_submit_unanswered")
+      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
+      .map((worker) => ({ ...worker, record: workersById.get(worker.workerId) || null }))
+      .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.state === "active" && worker.record.sessionName)
+      : [];
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
+  const selected = candidates.slice(0, Math.max(0, Math.min(6, limit))).map((worker) => ({
+    workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
+    sessionName: sanitizeLedgerField(worker.sessionName || worker.record?.sessionName || "", "", 80),
+    assignmentId: sanitizeLedgerField(worker.assignmentId || worker.record?.assignmentId || "", "", 140),
+    taskId: sanitizeLedgerField(worker.taskId || worker.record?.taskId || "", "", 140),
+    leaseId: sanitizeLedgerField(worker.leaseId || worker.record?.leaseId || worker.record?.currentLease?.leaseId || "", "", 140) || null,
+    leaseState: sanitizeLedgerField(worker.leaseState?.state || worker.leaseState || worker.record?.leaseState || worker.record?.currentLease?.state || "", "", 80) || null,
+    progressState: sanitizeLedgerField(worker.progressState || "unknown", "unknown", 80),
+    action: "retire_manager_owned_worker_session",
+    basis: resourceState === "critical" ? "critical_resource_pressure" : "recovery_submit_unanswered",
+    resourceSnapshot: resourceState === "critical" ? worker.resourceSnapshot || workerPacket.summary?.lifecyclePlan?.terminationPlan?.resourceSnapshot || null : null,
+    affectedLease: resourceState === "critical" ? worker.affectedLease || buildTerminationAffectedLease(worker.record || worker) : null,
+    recoveryAction: resourceState === "critical" ? "mark_lease_recovery_required_before_work_resumes" : "retire_recovery_stuck_worker",
+  }));
+  const blockers = [];
+  if (!paths.proof.ok) {
+    blockers.push({ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." });
+  }
+  if (selected.length === 0) {
+    blockers.push({
+      code: resourceState === "critical" ? "worker-retire-no-critical-resource-candidates" : "worker-retire-no-candidates",
+      message: resourceState === "critical" ? "No manager-owned worker is eligible for critical resource termination." : "No manager-owned recovery-submit-unanswered worker is eligible for retire.",
+      nextAction: resourceState === "critical" ? "Refresh manager-resource-status and worker-status before retrying critical resource termination." : "Refresh manager-worker-progress before retrying retire.",
+    });
+  }
+  if (blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", candidates: candidates.length, planned: selected.length, requests: selected },
+      blockers,
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        candidates: candidates.length,
+        planned: selected.length,
+        resourceState,
+        requests: selected,
+        stopLines: ["manager-owned-session-only", "no unknown session mutation", "no assignment takeover", "no dispatch apply", "no provider payload retention"],
+      },
+      nextActions: [{ code: "worker-retire-apply-ready", summary: resourceState === "critical" ? `Terminate ${selected.length} manager-owned worker(s) for critical resource pressure.` : `Retire ${selected.length} recovery-stuck manager-owned worker(s).`, nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json --limit ${selected.length}${resourceState === "critical" ? " --resource-state critical" : ""} --apply` }],
+    });
+  }
+  writeJsonIfMissing(paths.workers, []);
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "none" },
+      blockers: [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before retiring workers." }],
+    });
+  }
+  const runner = context.tmuxRunner || spawnSync;
+  const workerRecords = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const results = [];
+  for (const request of selected) {
+    const record = workerRecords.find((worker) => worker.workerId === request.workerId && isManagerOwnedWorker(worker, runId));
+    if (!record || !record.sessionName || (resourceState !== "critical" && record.state !== "active")) {
+      results.push({ ...request, status: "skipped_not_active_manager_owned" });
+      continue;
+    }
+    const retiredAt = new Date().toISOString();
+    const kill = runner("tmux", ["kill-session", "-t", record.sessionName], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+    const killOk = !kill?.error && (kill?.status ?? 0) === 0;
+    results.push({ ...request, status: killOk ? "retired" : "failed", sessionName: record.sessionName, kill: killOk ? { ok: true, sessionName: record.sessionName } : { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status } });
+    if (!killOk) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "partial", results },
+        blockers: [{ code: "worker-retire-kill-failed", message: results.at(-1).kill.error || `Failed to retire ${record.sessionName}.`, nextAction: "Inspect tmux session state and retry only if the worker remains manager-owned and stuck." }],
+      });
+    }
+    record.state = "retired";
+    record.lastHeartbeatAt = retiredAt;
+    record.failureCount = Number(record.failureCount || 0) + 1;
+    if (resourceState === "critical" && (record.assignmentId || record.currentLease?.assignmentId)) {
+      record.assignmentState = "recovery_required";
+      record.leaseState = "recovery_required";
+      if (record.currentLease) record.currentLease = { ...record.currentLease, state: "recovery_required" };
+      record.recoveryAction = "reconcile_dispatcher_lease_before_resuming_work";
+    }
+    record.recoveryState = resourceState === "critical" ? "retired_for_critical_resource_pressure" : "retired_after_recovery_submit_unanswered";
+  }
+  writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_retire_apply",
+    authorityBasis: resourceState === "critical" ? "manager-owned-worker-critical-resource-existing-gates" : "manager-owned-worker-retire-after-recovery-existing-gates",
+    summary: resourceState === "critical" ? `Terminated ${results.filter((result) => result.status === "retired").length} manager-owned worker(s) for critical resource pressure.` : `Retired ${results.filter((result) => result.status === "retired").length} recovery-stuck manager-owned worker(s).`,
+    sourceRefs: results.map((result) => `assignment:${result.assignmentId}`),
+    evidenceRefs: results.map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
+    recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the still-active source-owned lane through existing gates",
+    recordPolicy: resourceState === "critical" ? "metadata_only_critical_resource_worker_retire" : "metadata_only_worker_retire",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-retire-session-and-record",
+      resourceState,
+      results,
+      retention: "retire_session_and_summary",
+    },
+  });
+}
+
+export function buildWorkerQuestionAnswerPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
+  const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
+  const activeWorkers = workers.filter((worker) => worker.state === "active" && isManagerOwnedWorker(worker, runId));
+  const questions = Array.isArray(context.questions) ? context.questions : readNdjsonStrict(paths.questions).value;
+  const events = Array.isArray(context.events) ? context.events : readNdjsonStrict(paths.events).value;
+  const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
+  const answeredQuestionIds = answeredQuestionIdSet(events);
+  const syntheticQuestions = buildBlockedCheckpointAnswerQuestions(activeWorkers, checkpoints, answeredQuestionIds);
+  const evaluatedRequests = [...questions, ...syntheticQuestions]
+    .filter(isPlainObject)
+    .filter((question) => !answeredQuestionIds.has(normalizeQuestionIdentity(question.questionId || question.id || "")))
+    .map((question) => buildWorkerQuestionAnswerRequest(question, activeWorkers, paths, runOptions))
+    .filter(Boolean)
+    .filter((request) => !runOptions.workerId || request.workerId === runOptions.workerId);
+  const blockedQuestions = evaluatedRequests
+    .filter((request) => !questionDecisionAllowsAnswer(request.policyDecision))
+    .map((request) => compactBlockedQuestionDecision(request.policyDecision));
+  const blockedWorkerIds = new Set(blockedQuestions.map((question) => question.workerId).filter(Boolean));
+  let candidates = evaluatedRequests.filter((request) => questionDecisionAllowsAnswer(request.policyDecision));
+  candidates = candidates.filter((request) => !blockedWorkerIds.has(request.workerId));
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
+  const selected = candidates.slice(0, limit);
+  if (selected.length === 0) {
+    if (blockedQuestions.length > 0) {
+      return packet({
+        status: "attention",
+        summary: {
+          runId,
+          apply: Boolean(runOptions.apply),
+          mutation: "none; unsafe questions blocked before answer transport",
+          answerableQuestions: candidates.length,
+          planned: 0,
+          requests: [],
+          blockedQuestions,
+          retention: "metadata_only_question_policy",
+        },
+        blockers: [{
+          code: "worker-question-answer-policy-blocked",
+          message: `${blockedQuestions.length} worker question(s) require source context or operator authority before a worker can continue.`,
+          nextAction: "Review compact blocked question decisions; answer only after source context or operator authority is available.",
+        }],
+      });
+    }
+    return packet({
+      status: "ready",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", answerableQuestions: candidates.length, planned: 0, requests: [] },
+      nextActions: [{ code: "worker-question-answer-not-needed", summary: "No unanswered manager-owned worker question is ready for answer routing.", nextAction: "Continue metadata-only monitoring." }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        answerableQuestions: candidates.length,
+        planned: selected.length,
+        requests: selected,
+        blockedQuestions,
+        transport: { primary: "durable_question_answer_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_question_answer_file_path_only" },
+      },
+      blockers: blockedQuestions.length > 0 ? [{
+        code: "worker-question-answer-policy-blocked",
+        message: `${blockedQuestions.length} worker question(s) require source context or operator authority before a worker can continue.`,
+        nextAction: "Review compact blocked question decisions while allowed source-backed answers proceed.",
+      }] : [],
+      nextActions: [{ code: "worker-question-answer-apply-ready", summary: `Answer ${selected.length} compact worker question(s).`, nextAction: `node ./scripts/manager-worker-answer-question.mjs --summary-json --limit ${selected.length} --apply` }],
+    });
+  }
+  mkdirSync(join(paths.root, "question-answers"), { recursive: true });
+  const results = [];
+  for (const request of selected) {
+    writeFileSync(request.answerPath, renderWorkerQuestionAnswerFile(request));
+    writeFileSync(request.pastePath, `${request.pasteText}\n`);
+    const paste = pasteWorkerPointer(request, `${request.workerId}-answer`, context);
+    results.push({ ...request, status: paste.ok ? "answer_sent" : "failed", paste });
+  }
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "partial", results },
+      blockers: [{ code: "worker-question-answer-paste-failed", message: failed.paste?.error || `Failed to paste question answer to ${failed.sessionName}.`, nextAction: "Inspect manager question answer files and tmux paste result before retrying." }],
+    });
+  }
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_question_answer_apply",
+    authorityBasis: "manager-owned-worker-question-answer-existing-gates",
+    summary: `Answered ${results.length} compact worker question(s).`,
+    sourceRefs: results.flatMap((result) => [`question:${result.questionId}`, `assignment:${result.assignmentId}`]),
+    evidenceRefs: results.map((result) => `question-answer:${result.answerPath || result.questionId || result.assignmentId}`),
+    recoveryPath: "rerun manager-worker-progress and inspect compact checkpoints before answering again",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-question-answer-file-and-tmux-buffer",
+      results,
+      blockedQuestions,
+      retention: "question_answer_path_and_summary",
+    },
+    warnings: blockedQuestions.length > 0 ? [{ code: "worker-question-answer-policy-blocked", message: `${blockedQuestions.length} unsafe or source-blocked question(s) were not answered.` }] : [],
+  });
+}
+
+export function buildWorkerOwnerDelegationPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const candidates = Array.isArray(progress.summary?.workerProgress)
+    ? progress.summary.workerProgress.filter((worker) => worker.assignmentId && worker.laneOwner)
+    : [];
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
+  const selected = candidates.slice(0, limit).map((worker) => buildWorkerOwnerDelegationRequest(worker, paths));
+  if (selected.length === 0) {
+    return packet({
+      status: "ready",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", requests: [] },
+      nextActions: [{ code: "worker-owner-delegation-not-needed", summary: "No active worker has delegated lane owner evidence.", nextAction: "Continue metadata-only monitoring." }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        planned: selected.length,
+        requests: selected,
+        transport: { primary: "durable_owner_delegation_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_owner_delegation_file_path_only" },
+      },
+      nextActions: [{ code: "worker-owner-delegation-apply-ready", summary: `Send delegated owner guidance to ${selected.length} active worker(s).`, nextAction: `node ./scripts/manager-worker-owner-delegation.mjs --summary-json --limit ${selected.length} --apply` }],
+    });
+  }
+  mkdirSync(join(paths.root, "owner-delegations"), { recursive: true });
+  const results = [];
+  for (const request of selected) {
+    writeFileSync(request.requestPath, renderWorkerOwnerDelegationFile(request));
+    writeFileSync(request.pastePath, `${request.pasteText}\n`);
+    const paste = pasteWorkerPointer(request, `${request.workerId}-owner`, context);
+    results.push({ ...request, status: paste.ok ? "owner_delegation_sent" : "failed", paste });
+  }
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "partial", results },
+      blockers: [{ code: "worker-owner-delegation-paste-failed", message: failed.paste?.error || `Failed to paste owner delegation to ${failed.sessionName}.`, nextAction: "Inspect manager owner delegation files and tmux paste result before retrying." }],
+    });
+  }
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_owner_delegation_apply",
+    authorityBasis: "manager-owned-worker-delegated-lane-owner-existing-gates",
+    summary: `Sent ${results.length} manager-owned worker owner delegation(s).`,
+    sourceRefs: results.flatMap((result) => [`assignment:${result.assignmentId}`, `worker:${result.workerId}`, ...receiptSourceRefs(result)]),
+    evidenceRefs: results.map((result) => `owner-delegation:${result.requestPath || result.workerId || result.assignmentId}`),
+    recoveryPath: "rerun manager-worker-progress and inspect checkpoints before retrying",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-owner-delegation-file-and-tmux-buffer",
+      results,
+      retention: "owner_delegation_path_and_summary",
+    },
+  });
+}
+
+function buildWorkerQuestionAnswerRequest(question = {}, workers = [], paths = {}, options = {}) {
+  const questionId = sanitizeLedgerField(question.questionId || question.id || "question", "question", 100);
+  const sourceRefs = compactSanitizedRefs([...sourceRefList(question.sourceRefs), ...sourceRefList(question.sourceRef)]);
+  const assignmentId = assignmentIdFromSourceRefs(sourceRefs);
+  const worker = workers.find((candidate) =>
+    (question.actor && candidate.workerId === question.actor) ||
+    (question.workerId && candidate.workerId === question.workerId) ||
+    (assignmentId && candidate.assignmentId === assignmentId),
+  );
+  if (!worker) return null;
+  const policyDecision = buildQuestionDecision({ ...question, sourceRefs });
+  const answerPolicyDecision = options.answer ? buildQuestionDecision({
+    questionId,
+    workerId: worker.workerId,
+    type: question.questionType || question.type || "implementation",
+    summary: options.answer,
+    sourceRefs,
+    materialDecision: true,
+  }) : null;
+  const effectivePolicyDecision = answerPolicyDecision && !questionDecisionAllowsAnswer(answerPolicyDecision) ? answerPolicyDecision : policyDecision;
+  const answer = sanitizeLedgerField(options.answer || effectivePolicyDecision.compactAnswer || compactQuestionAnswer(question), "Apply source context and repo policy with best judgment.", 500);
+  const safeQuestionId = questionId.replace(/[^a-z0-9_.-]/gi, "-").slice(0, 100);
+  const answerPath = join(paths.root, "question-answers", `${worker.workerId}-${safeQuestionId}.md`);
+  const pastePath = join(paths.root, "question-answers", `${worker.workerId}-${safeQuestionId}.paste.txt`);
+  return {
+    questionId,
+    workerId: sanitizeLedgerField(worker.workerId || "worker", "worker", 80),
+    sessionName: sanitizeLedgerField(worker.sessionName || worker.workerId || "worker", "worker", 80),
+    runId: paths.runId,
+    assignmentId: sanitizeLedgerField(assignmentId || worker.assignmentId || "", "", 140),
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    questionType: sanitizeLedgerField(question.questionType || question.type || "worker_question", "worker_question", 80),
+    questionSummary: sanitizeLedgerField(question.summary || "worker question", "worker question", 240),
+    compactAnswer: answer,
+    policyDecision: effectivePolicyDecision,
+    decision: effectivePolicyDecision.decision,
+    leaseContinuation: effectivePolicyDecision.leaseContinuation,
+    recordPolicy: effectivePolicyDecision.recordPolicy,
+    reasonCodes: effectivePolicyDecision.reasonCodes,
+    sourceRefs,
+    answerPath,
+    pastePath,
+    pasteText: `Please read and follow this manager answer file: ${answerPath}`,
+    retention: "question_answer_path_and_summary",
+  };
+}
+
+function buildBlockedCheckpointAnswerQuestions(workers = [], checkpoints = [], answeredQuestionIds = new Set()) {
+  return (Array.isArray(workers) ? workers : [])
+    .filter(isPlainObject)
+    .flatMap((worker) => {
+      const assignmentId = sanitizeLedgerField(worker.assignmentId || "", "", 140);
+      if (!assignmentId) return [];
+      const latestBlocked = filterWorkerProgressRecords(checkpoints, worker, assignmentId)
+        .filter((checkpoint) => classifyWorkerCheckpointBlockerSummary(checkpoint.summary || "").blocked)
+        .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0))[0];
+      if (!latestBlocked) return [];
+      const checkpointId = sanitizeLedgerField(latestBlocked.checkpointId || latestBlocked.id || "blocked-checkpoint", "blocked-checkpoint", 120);
+      const questionId = blockedCheckpointQuestionId(latestBlocked);
+      if (answeredQuestionIds.has(normalizeQuestionIdentity(questionId))) return [];
+      return [{
+        questionId,
+        actor: worker.workerId,
+        workerId: worker.workerId,
+        questionType: "source_context",
+        summary: sanitizeLedgerField(latestBlocked.summary || "blocked worker checkpoint needs source context", "blocked worker checkpoint needs source context", 240),
+        sourceRefs: [
+          `assignment:${assignmentId}`,
+          `task:${worker.taskId || ""}`,
+          `checkpoint:${checkpointId}`,
+        ].filter((ref) => !ref.endsWith(":")),
+      }];
+    });
+}
+
+function blockedCheckpointQuestionId(checkpoint = {}) {
+  const checkpointId = sanitizeLedgerField(checkpoint.checkpointId || checkpoint.id || "blocked-checkpoint", "blocked-checkpoint", 120);
+  return `checkpoint-blocker-${checkpointId}`.replace(/[^a-z0-9_.-]/gi, "-").slice(0, 100);
+}
+
+function assignmentIdFromSourceRefs(sourceRefs = []) {
+  const assignmentRef = sourceRefs.find((ref) => /^assignment:/.test(String(ref || "")));
+  if (assignmentRef) return String(assignmentRef).replace(/^assignment:/, "");
+  return "";
+}
+
+function answeredQuestionIdSet(events = []) {
+  return new Set(
+    (Array.isArray(events) ? events : [])
+      .filter((event) => event?.eventType === "worker_question_answer_apply")
+      .flatMap((event) => sourceRefList(event.sourceRefs || []))
+      .map((ref) => String(ref || ""))
+      .filter((ref) => ref.startsWith("question:"))
+      .map((ref) => normalizeQuestionIdentity(ref))
+      .filter(Boolean),
+  );
+}
+
+function normalizeQuestionIdentity(value) {
+  return sanitizeLedgerField(String(value || "").replace(/^question:/, ""), "", 100)
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 100);
+}
+
+function renderWorkerQuestionAnswerFile(request = {}) {
+  return [
+    "# Manager Worker Question Answer",
+    "",
+    `runId: ${request.runId}`,
+    `workerId: ${request.workerId}`,
+    `assignmentId: ${request.assignmentId}`,
+    `taskId: ${request.taskId}`,
+    `questionId: ${request.questionId}`,
+    `questionType: ${request.questionType}`,
+    `retention: ${request.retention}`,
+    "",
+    "## Question Summary",
+    "",
+    request.questionSummary,
+    "",
+    "## Answer",
+    "",
+    request.compactAnswer,
+    "",
+    "## Source References",
+    "",
+    ...(request.sourceRefs.length > 0 ? request.sourceRefs.map((ref) => `- ${ref}`) : ["- none"]),
+    "",
+    "## Resume",
+    "",
+    "Continue the assigned lane using the answer above. Record a compact checkpoint or a new material question through the manager ledger; do not inspect or retain raw provider output.",
+    "",
+  ].join("\n");
+}
+
+function buildWorkerOwnerDelegationRequest(worker = {}, paths = {}) {
+  const workerId = sanitizeLedgerField(worker.workerId || "worker", "worker", 80);
+  const assignmentId = sanitizeLedgerField(worker.assignmentId || "unassigned", "unassigned", 140);
+  const requestPath = join(paths.root, "owner-delegations", `${workerId}-${assignmentId}.md`);
+  const pastePath = join(paths.root, "owner-delegations", `${workerId}-${assignmentId}.paste.txt`);
+  return {
+    workerId,
+    sessionName: sanitizeLedgerField(worker.sessionName || workerId, workerId, 80),
+    runId: paths.runId,
+    assignmentId,
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    laneOwner: sanitizeLedgerField(worker.laneOwner || "", "", 160),
+    requestPath,
+    pastePath,
+    pasteText: `Please read and follow this manager owner delegation file: ${requestPath}`,
+    retention: "owner_delegation_path_and_summary",
+  };
+}
+
+function renderWorkerOwnerDelegationFile(request = {}) {
+  const ownerFlag = request.laneOwner ? ` --owner ${shellSingleQuote(request.laneOwner)}` : "";
+  return [
+    "# Manager Owner Delegation",
+    "",
+    `workerId: ${request.workerId}`,
+    `assignmentId: ${request.assignmentId}`,
+    `taskId: ${request.taskId}`,
+    `laneOwner: ${request.laneOwner}`,
+    "",
+    "The manager already owns this lane and is delegating execution to this manager-owned worker. Use the lane owner override for workspace commands. Do not run takeover for this fresh manager-owned lane.",
+    "",
+    "```bash",
+    `node ./scripts/codex-workspace.mjs resume ${shellSingleQuote(request.assignmentId)}${ownerFlag}`,
+    "```",
+    "",
+    "After resuming, continue the assigned story and write compact checkpoints through manager-ledger.",
+    "",
+  ].join("\n");
+}
+
+function buildWorkerProgressSignalRequest(worker = {}, paths = {}) {
+  const workerId = sanitizeLedgerField(worker.workerId || "worker", "worker", 80);
+  const assignmentId = sanitizeLedgerField(worker.assignmentId || "unassigned", "unassigned", 140);
+  const requestPath = join(paths.root, "progress-requests", `${workerId}-${assignmentId}.md`);
+  const pastePath = join(paths.root, "progress-requests", `${workerId}-${assignmentId}.paste.txt`);
+  return {
+    workerId,
+    sessionName: sanitizeLedgerField(worker.sessionName || workerId, workerId, 80),
+    runId: paths.runId,
+    assignmentId,
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    laneOwner: sanitizeLedgerField(worker.laneOwner || "", "", 160),
+    progressState: sanitizeLedgerField(worker.progressState || "", "", 80),
+    requestPath,
+    pastePath,
+    pasteText: `Please read and follow this manager progress request file: ${requestPath}`,
+    retention: "progress_request_path_and_summary",
+  };
+}
+
+function renderWorkerProgressSignalFile(request = {}) {
+  const ownerLine = request.laneOwner ? `Use delegated owner for workspace commands: --owner ${shellSingleQuote(request.laneOwner)}` : "";
+  const checkpointCommand = [
+    "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
+    `--run-id ${shellSingleQuote(request.runId)}`,
+    `--worker-id ${shellSingleQuote(request.workerId)}`,
+    `--summary ${shellSingleQuote("replace with compact current progress, blocker-free heartbeat, verification, or checkpoint")}`,
+    `--authority-basis ${shellSingleQuote("manager-owned-worker-progress-signal-response")}`,
+    `--recovery-path ${shellSingleQuote("manager can rerun manager-worker-progress and inspect assignment metadata")}`,
+    `--source-ref ${shellSingleQuote(`assignment:${request.assignmentId}`)}`,
+    `--source-ref ${shellSingleQuote(`task:${request.taskId}`)}`,
+  ].join(" ");
+  return [
+    "# Manager Progress Request",
+    "",
+    `workerId: ${request.workerId}`,
+    `assignmentId: ${request.assignmentId}`,
+    `taskId: ${request.taskId}`,
+    `laneOwner: ${request.laneOwner || "(none)"}`,
+    `progressState: ${request.progressState || "(none)"}`,
+    "",
+    "Write one compact manager checkpoint now. Do not include raw prompts, completions, reasoning traces, provider payloads, secrets, or broad source copies.",
+    ownerLine,
+    "",
+    "```bash",
+    checkpointCommand,
+    "```",
+    "",
+  ].join("\n");
+}
+
+function pasteWorkerProgressSignal(request = {}, context = {}) {
+  return pasteWorkerPointer(request, `${request.workerId}-progress`, context);
+}
+
+function pasteWorkerPointer(request = {}, bufferName = "manager-pointer", context = {}) {
+  const runner = context.tmuxRunner || spawnSync;
+  const load = runner("tmux", ["load-buffer", "-b", bufferName, request.pastePath], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (load?.error) return { ok: false, error: load.error.message || "tmux load-buffer failed" };
+  if ((load?.status ?? 0) !== 0) return { ok: false, error: String(load?.stderr || load?.stdout || "tmux load-buffer failed").trim(), status: load?.status };
+  const target = resolveTmuxPaneTarget(request.sessionName, runner, context);
+  if (!target.ok) return target;
+  const paste = runner("tmux", ["paste-buffer", "-b", bufferName, "-t", target.target], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (paste?.error) return { ok: false, error: paste.error.message || "tmux paste-buffer failed" };
+  if ((paste?.status ?? 0) !== 0) return { ok: false, error: String(paste?.stderr || paste?.stdout || "tmux paste-buffer failed").trim(), status: paste?.status };
+  const enter = sendTmuxEnterToTarget(target.target, runner, context);
+  if (!enter.ok) return enter;
+  const receipt = verifyTmuxPointerSubmitted(request, target.target, runner, context);
+  if (!receipt.ok) return { ...receipt, sessionName: request.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName, receipt };
+  return { ok: true, sessionName: request.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName, receipt };
+}
+
+function sendTmuxEnterToSession(sessionName = "", runner = spawnSync, context = {}) {
+  const target = resolveTmuxPaneTarget(sessionName, runner, context);
+  if (!target.ok) return target;
+  const submit = sendTmuxEnterToTarget(target.target, runner, context);
+  if (!submit.ok) return submit;
+  return { ...submit, sessionName, paneTarget: target.target };
+}
+
+function sendTmuxEnterToTarget(target = "", runner = spawnSync, context = {}) {
+  const enter = runner("tmux", ["send-keys", "-t", target, "C-m"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (enter?.error) return { ok: false, error: enter.error.message || "tmux send enter failed" };
+  if ((enter?.status ?? 0) !== 0) return { ok: false, error: String(enter?.stderr || enter?.stdout || "tmux send enter failed").trim(), status: enter?.status };
+  return { ok: true, paneTarget: target, submitKey: "C-m" };
+}
+
+function verifyTmuxEnterOnlySubmitted(request = {}, submit = {}, runner = spawnSync, context = {}) {
+  if (context.receiptCheck === false) {
+    return { ok: true, checked: false, verified: true, reason: "disabled" };
+  }
+  if (!submit.paneTarget) {
+    return { ok: true, checked: false, verified: true, reason: "missing-pane-target" };
+  }
+  waitForReceiptSettle(runner, context);
+  const probe = probeWorkerInputRegion({ ...request, paneTarget: submit.paneTarget }, runner, { ...context, receiptScanLines: 10 });
+  if (!probe.captureOk) {
+    return { ok: true, checked: true, verified: false, error: probe.error || "tmux receipt capture failed", probe };
+  }
+  return {
+    ok: true,
+    checked: true,
+    verified: probe.inputHasManagerPointer !== true,
+    promptDetected: probe.promptDetected === true,
+    inputHasManagerPointer: probe.inputHasManagerPointer === true,
+    paneTarget: probe.paneTarget,
+  };
+}
+
+function verifyTmuxPointerSubmitted(request = {}, target = "", runner = spawnSync, context = {}) {
+  if (context.receiptCheck === false) {
+    return { ok: true, checked: false, reason: "disabled" };
+  }
+  const expectedNeedles = receiptNeedles(request);
+  if (!target || expectedNeedles.length === 0) {
+    return { ok: true, checked: false, reason: "missing-target-or-expected-pointer" };
+  }
+  waitForReceiptSettle(runner, context);
+  const first = captureTmuxBottomPane(target, runner, context);
+  if (!first.ok) return first;
+  if (!paneBottomContainsAnyPointer(first.visibleTail, expectedNeedles)) {
+    waitForReceiptSettle(runner, { ...context, receiptSettleMs: nonNegativeInteger(context.receiptConfirmSettleMs) ?? 1000 });
+    const confirm = captureTmuxBottomPane(target, runner, context);
+    if (!confirm.ok) return confirm;
+    if (!paneBottomContainsAnyPointer(confirm.visibleTail, expectedNeedles)) {
+      return { ok: true, checked: true, verified: true, pendingBeforeRepair: false, repaired: false };
+    }
+  }
+  const repair = sendTmuxEnterToTarget(target, runner, context);
+  if (!repair.ok) return { ...repair, checked: true, verified: false, pendingBeforeRepair: true, repaired: false };
+  waitForReceiptSettle(runner, context);
+  const second = captureTmuxBottomPane(target, runner, context);
+  if (!second.ok) return second;
+  const stillPending = paneBottomContainsAnyPointer(second.visibleTail, expectedNeedles);
+  if (stillPending) {
+    return {
+      ok: true,
+      checked: true,
+      verified: false,
+      pendingBeforeRepair: true,
+      repaired: true,
+      nextAction: "Record unverified receipt metadata and route the next manager cycle through C-m-only submit-pending repair before sending more pointer text.",
+    };
+  }
+  return { ok: true, checked: true, verified: true, pendingBeforeRepair: true, repaired: true };
+}
+
+function captureTmuxBottomPane(target = "", runner = spawnSync, context = {}) {
+  const start = `-${Math.max(2, Math.min(10, nonNegativeInteger(context.receiptScanLines) ?? 10))}`;
+  const capture = runner("tmux", ["capture-pane", "-J", "-p", "-t", target, "-S", start], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (capture?.error) return { ok: false, error: capture.error.message || "tmux receipt capture failed" };
+  if ((capture?.status ?? 0) !== 0) return { ok: false, error: String(capture?.stderr || capture?.stdout || "tmux receipt capture failed").trim(), status: capture?.status };
+  return { ok: true, visibleTail: String(capture?.stdout || "") };
+}
+
+function sanitizeReceiptNeedle(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function receiptNeedles(request = {}) {
+  const values = [
+    request.pasteText,
+    request.handoffPath,
+    request.requestPath,
+    request.answerPath,
+    request.pastePath,
+  ];
+  for (const value of [request.handoffPath, request.requestPath, request.answerPath, request.pastePath]) {
+    if (value) values.push(basename(String(value)));
+  }
+  return [...new Set(values.map(sanitizeReceiptNeedle).filter(Boolean))];
+}
+
+function paneBottomContainsAnyPointer(visibleTail = "", expectedNeedles = []) {
+  const haystack = sanitizeReceiptNeedle(paneInputRegion(visibleTail));
+  return managerPointerPattern().test(haystack) || expectedNeedles.some((expected) => expected && haystack.includes(expected));
+}
+
+function paneInputRegion(visibleTail = "") {
+  const lines = String(visibleTail || "").split(/\r?\n/);
+  const promptIndex = lines.findLastIndex((line) => /^\s*›/.test(line));
+  if (promptIndex < 0) return visibleTail;
+  return lines.slice(promptIndex).join("\n");
+}
+
+function probeWorkerInputRegion(worker = {}, runner = spawnSync, context = {}) {
+  const target = worker.paneTarget
+    ? { ok: true, target: worker.paneTarget }
+    : resolveTmuxPaneTarget(worker.sessionName, runner, context);
+  const base = {
+    workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
+    sessionName: sanitizeLedgerField(worker.sessionName || worker.workerId || "", "", 80),
+    assignmentId: sanitizeLedgerField(worker.assignmentId || "", "", 140),
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    paneTarget: target.target || "",
+    promptDetected: false,
+    inputHasManagerPointer: false,
+    captureOk: false,
+  };
+  if (!target.ok) return { ...base, error: target.error || "tmux pane target unavailable" };
+  const capture = captureTmuxBottomPane(target.target, runner, context);
+  if (!capture.ok) return { ...base, captureOk: false, error: capture.error || "tmux prompt-region capture failed" };
+  const inputRegion = paneInputRegion(capture.visibleTail);
+  const promptDetected = inputRegion !== capture.visibleTail || /^\s*›/.test(inputRegion);
+  return {
+    ...base,
+    paneTarget: target.target,
+    captureOk: true,
+    promptDetected,
+    inputHasManagerPointer: promptDetected && managerPointerPattern().test(sanitizeReceiptNeedle(inputRegion)),
+  };
+}
+
+function managerPointerPattern() {
+  return /Please read and follow this manager|manager-runs\/.*\.(md|txt)|progress-requests|handoffs|answer-requests|owner-delegations/;
+}
+
+function promptProbeRequestSummary(probe = {}) {
+  return {
+    workerId: sanitizeLedgerField(probe.workerId || "", "", 80),
+    sessionName: sanitizeLedgerField(probe.sessionName || probe.workerId || "", "", 80),
+    assignmentId: sanitizeLedgerField(probe.assignmentId || "", "", 140),
+    taskId: sanitizeLedgerField(probe.taskId || "", "", 140),
+    paneTarget: sanitizeLedgerField(probe.paneTarget || "", "", 40),
+    promptDetected: probe.promptDetected === true,
+    inputHasManagerPointer: probe.inputHasManagerPointer === true,
+    action: "send_enter_only_to_active_tmux_pane",
+    basis: "bounded_prompt_region_probe",
+  };
+}
+
+function waitForReceiptSettle(runner = spawnSync, context = {}) {
+  if (runner !== spawnSync) return;
+  const delayMs = Math.max(0, Math.min(1000, nonNegativeInteger(context.receiptSettleMs) ?? 150));
+  if (delayMs <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+
+function receiptSourceRefs(result = {}) {
+  const receipt = result.paste?.receipt || result.receipt || {};
+  if (!receipt || receipt.checked !== true) return ["receipt:unchecked"];
+  return [
+    "receipt:checked",
+    receipt.verified === true ? "receipt:verified" : "receipt:unverified",
+    receipt.pendingBeforeRepair === true ? "receipt:pending-before-repair" : "",
+    receipt.repaired === true ? "receipt:repaired" : "",
+  ].filter(Boolean);
+}
+
+function recordPointerReceiptFailure(options = {}, result = {}, context = {}, pointerKind = "pointer") {
+  const receipt = result.paste?.receipt || result.receipt || {};
+  if (receipt.checked !== true || receipt.verified === true) return null;
+  return ledgerCommand({
+    command: "append-event",
+    runId: options.runId,
+    stateRoot: options.stateRoot,
+    eventType: "worker_pointer_receipt_unverified",
+    authorityBasis: "manager-owned-worker-pointer-receipt-metadata",
+    summary: `Pointer submit receipt was unverified for ${result.workerId || result.sessionName || "worker"}.`,
+    sourceRefs: [
+      `assignment:${result.assignmentId || ""}`,
+      `worker:${result.workerId || ""}`,
+      `pointer:${pointerKind}`,
+      ...receiptSourceRefs(result),
+    ].filter((ref) => !/:$/.test(ref)),
+    evidenceRefs: [`pointer-receipt:${result.workerId || result.sessionName || pointerKind}`],
+    recoveryPath: "run manager-worker-submit-pending for the affected manager-owned worker before sending more pointer text",
+    recordPolicy: "metadata_only_pointer_receipt",
+  }, context);
+}
+
+function eventHasUnverifiedPointerReceipt(event = {}) {
+  const type = String(event.eventType || "");
+  const refs = sourceRefList(event.sourceRefs || []);
+  return type.includes("worker_pointer_receipt_unverified")
+    || (refs.includes("receipt:unverified") && !refs.includes("receipt:verified"));
+}
+
+function resolveTmuxPaneTarget(sessionName = "", runner = spawnSync, context = {}) {
+  const list = runner("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_active}:#{pane_id}"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (list?.error) return { ok: false, error: list.error.message || "tmux list-panes failed" };
+  if ((list?.status ?? 0) !== 0) return { ok: false, error: String(list?.stderr || list?.stdout || "tmux list-panes failed").trim(), status: list?.status };
+  const panes = String(list?.stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [active, ...targetParts] = line.split(":");
+      return { active: active === "1", target: targetParts.join(":") };
+    })
+    .filter((pane) => pane.target);
+  const paneTarget = (panes.find((pane) => pane.active) || panes[0])?.target;
+  if (!paneTarget) return { ok: false, error: `No tmux pane resolved for ${sessionName}` };
+  return { ok: true, target: paneTarget };
+}
+
+function buildWorkerProgressRecord(worker = {}, context = {}) {
+  const assignmentId = sanitizeLedgerField(worker.assignmentId || "", "", 140);
+  const workerId = sanitizeLedgerField(worker.workerId || "worker", "worker", 80);
+  const lastHeartbeatMs = parseTimeMs(worker.lastHeartbeatAt);
+  const ageSeconds = lastHeartbeatMs ? Math.max(0, Math.floor((context.nowMs - lastHeartbeatMs) / 1000)) : null;
+  const checkpointMatches = filterWorkerProgressRecords(context.checkpoints, worker, assignmentId)
+    .filter((record) => recordIsInWorkerAssignmentWindow(record, lastHeartbeatMs));
+  const questionMatches = filterWorkerProgressRecords(context.questions, worker, assignmentId)
+    .filter((record) => recordIsInWorkerAssignmentWindow(record, lastHeartbeatMs))
+    .filter((question) => !context.answeredQuestionIds?.has(normalizeQuestionIdentity(question.questionId || question.id || "")));
+  const eventMatches = filterWorkerProgressRecords(context.events, worker, assignmentId)
+    .filter((record) => recordIsInWorkerAssignmentWindow(record, lastHeartbeatMs));
+  const hasProgressSignal = eventMatches.some((event) => String(event.eventType || "").includes("worker_progress_signal"));
+  const hasOwnerDelegation = eventMatches.some((event) => String(event.eventType || "").includes("worker_owner_delegation"));
+  const progressSignalCount = eventMatches.filter((event) => String(event.eventType || "").includes("worker_progress_signal")).length;
+  const latestCheckpointMs = latestRecordTimestampMs(checkpointMatches);
+  const latestOwnerDelegationMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_owner_delegation")));
+  const latestProgressSignalMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_progress_signal")));
+  const latestSubmitPendingMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_submit_pending")));
+  const latestPointerReceiptUnverifiedMs = latestRecordTimestampMs(eventMatches.filter(eventHasUnverifiedPointerReceipt));
+  const latestRecoveryInspectionMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_recovery_inspection")));
+  const latestQuestionAnswerMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_question_answer")));
+  const latestOwnerDelegationAgeSeconds = latestOwnerDelegationMs ? Math.max(0, Math.floor((context.nowMs - latestOwnerDelegationMs) / 1000)) : null;
+  const latestProgressSignalAgeSeconds = latestProgressSignalMs ? Math.max(0, Math.floor((context.nowMs - latestProgressSignalMs) / 1000)) : null;
+  const latestSubmitPendingAgeSeconds = latestSubmitPendingMs ? Math.max(0, Math.floor((context.nowMs - latestSubmitPendingMs) / 1000)) : null;
+  const latestPointerReceiptUnverifiedAgeSeconds = latestPointerReceiptUnverifiedMs ? Math.max(0, Math.floor((context.nowMs - latestPointerReceiptUnverifiedMs) / 1000)) : null;
+  const latestRecoveryInspectionAgeSeconds = latestRecoveryInspectionMs ? Math.max(0, Math.floor((context.nowMs - latestRecoveryInspectionMs) / 1000)) : null;
+  const latestQuestionAnswerAgeSeconds = latestQuestionAnswerMs ? Math.max(0, Math.floor((context.nowMs - latestQuestionAnswerMs) / 1000)) : null;
+  const latestCheckpointAgeSeconds = latestCheckpointMs ? Math.max(0, Math.floor((context.nowMs - latestCheckpointMs) / 1000)) : null;
+  const sortedCheckpoints = checkpointMatches
+    .slice()
+    .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0));
+  const latestCheckpoint = sortedCheckpoints[0] || null;
+  const latestCheckpointBlocker = classifyWorkerCheckpointBlockerSummary(latestCheckpoint?.summary || "");
+  const latestCheckpointBlockerQuestionId = latestCheckpoint ? blockedCheckpointQuestionId(latestCheckpoint) : "";
+  const latestCheckpointBlockerAnswered = latestCheckpointBlocker.blocked
+    && latestCheckpointBlockerQuestionId
+    && context.answeredQuestionIds?.has(normalizeQuestionIdentity(latestCheckpointBlockerQuestionId))
+    && latestQuestionAnswerMs >= (latestCheckpointMs || 0);
+  const latestReadyCheckpoint = sortedCheckpoints.find((record) => classifyLaneAdvancementSummary(record.summary).state !== "not_ready") || null;
+  const readyCheckpointReadiness = classifyLaneAdvancementSummary(latestReadyCheckpoint?.summary || "");
+  const laneStatus = String(context.lane?.status || "").toLowerCase();
+  const lanePhase = String(context.lane?.phase || "").toLowerCase();
+  const laneReassignable = laneStatus === "reassignable" || lanePhase === "reassignable";
+  const laneClosed = ["closed", "done", "merged"].includes(laneStatus) || ["closed", "done", "merged"].includes(lanePhase);
+  const submitPendingAfterProgressSignal = latestSubmitPendingMs > 0 && latestSubmitPendingMs >= (latestProgressSignalMs || 0);
+  const submitPendingAfterHandoff = latestSubmitPendingMs > 0
+    && worker.recoveryState === "handoff_sent"
+    && latestSubmitPendingMs >= Math.max(lastHeartbeatMs || 0, latestOwnerDelegationMs || 0, latestProgressSignalMs || 0);
+  const recoveryInspectionAfterProgressSignal = latestRecoveryInspectionMs > 0 && latestRecoveryInspectionMs >= (latestProgressSignalMs || 0);
+  const submitPendingAfterRecoveryInspection = latestSubmitPendingMs > 0 && latestRecoveryInspectionMs > 0 && latestSubmitPendingMs >= latestRecoveryInspectionMs;
+  const pointerReceiptUnverifiedNeedsSubmit = latestPointerReceiptUnverifiedMs > Math.max(latestCheckpointMs || 0, latestSubmitPendingMs || 0);
+  const laneHeartbeat = sanitizeLedgerField(context.lane?.heartbeat || "", "", 80);
+  const hasCheckpoint = checkpointMatches.length > 0 && latestCheckpointMs >= Math.max(latestOwnerDelegationMs || 0, latestProgressSignalMs || 0);
+  const hasReadyCheckpoint = Boolean(latestReadyCheckpoint) && readyCheckpointReadiness.state !== "not_ready";
+  const hasOpenQuestion = questionMatches.length > 0;
+  const promptIdleAfterHandoff = context.promptIdle === true
+    && worker.recoveryState === "handoff_sent"
+    && !hasCheckpoint
+    && ageSeconds !== null
+    && ageSeconds * 1000 >= context.promptIdleGraceMs;
+  const promptIdleAfterProgressSignal = context.promptIdle === true
+    && hasProgressSignal
+    && latestProgressSignalMs > (latestOwnerDelegationMs || 0)
+    && !hasCheckpoint
+    && latestProgressSignalAgeSeconds !== null
+    && latestProgressSignalAgeSeconds * 1000 >= context.promptIdleGraceMs;
+  const staleAfterHandoff = worker.recoveryState === "handoff_sent" && !hasCheckpoint && ageSeconds !== null && ageSeconds * 1000 >= context.staleSignalMs;
+  const staleCheckpoint = hasCheckpoint && latestCheckpointAgeSeconds !== null && latestCheckpointAgeSeconds * 1000 >= context.staleSignalMs;
+  const staleQuestionAnswer = latestCheckpointBlockerAnswered
+    && latestQuestionAnswerAgeSeconds !== null
+    && latestQuestionAnswerAgeSeconds * 1000 >= context.staleSignalMs;
+  const staleRecoverySubmit = recoveryInspectionAfterProgressSignal
+    && submitPendingAfterRecoveryInspection
+    && latestSubmitPendingAgeSeconds !== null
+    && latestSubmitPendingAgeSeconds * 1000 >= context.staleSignalMs;
+  let progressState = "monitoring";
+  let nextAction = "Continue monitoring manager-owned checkpoint, question, and heartbeat metadata.";
+  if (laneClosed) {
+    progressState = "assignment_closed";
+    nextAction = "Worker assignment is already closed; reuse or close the manager-owned worker through existing worker gates.";
+  } else if (laneReassignable) {
+    progressState = "assignment_reassignable";
+    nextAction = "Worker assignment is reassignable; reuse or close the manager-owned worker through existing worker gates.";
+  } else if (hasOpenQuestion) {
+    progressState = "blocked_question";
+    nextAction = "Route the compact worker question through manager feedback handling.";
+  } else if (latestCheckpointBlocker.blocked && !latestCheckpointBlockerAnswered) {
+    progressState = "checkpoint_blocked";
+    nextAction = "Route the compact blocked checkpoint through manager source-context answer handling.";
+  } else if (staleQuestionAnswer) {
+    progressState = "question_answer_stale";
+    nextAction = "Ask worker for a compact checkpoint after the manager source-context answer; do not repeat the answer.";
+  } else if (latestCheckpointBlockerAnswered) {
+    progressState = "question_answer_sent";
+    nextAction = "Wait for a newer compact checkpoint after the manager source-context answer.";
+  } else if (hasReadyCheckpoint) {
+    progressState = readyCheckpointReadiness.state;
+    nextAction = "Advance lane through manager review/delivery gates instead of pinging completed worker for more progress.";
+  } else if (pointerReceiptUnverifiedNeedsSubmit) {
+    progressState = "pointer_receipt_unverified";
+    nextAction = "Submit C-m-only repair for the last manager pointer before sending more pointer text.";
+  } else if (staleCheckpoint) {
+    progressState = "checkpoint_stale";
+    nextAction = "Ask worker for a compact fresh checkpoint via manager-owned metadata; do not inspect raw pane scrollback.";
+  } else if (hasCheckpoint) {
+    progressState = "checkpoint_seen";
+    nextAction = "Surface checkpoint if it is user-facing, safety-relevant, or operator-actionable.";
+  } else if (staleRecoverySubmit) {
+    progressState = "recovery_submit_unanswered";
+    nextAction = "Choose bounded manager-owned restart or retire gate; C-m-only repair has already been submitted without a newer checkpoint.";
+  } else if (recoveryInspectionAfterProgressSignal && progressSignalCount >= 2) {
+    progressState = "recovery_inspected";
+    nextAction = "Choose a bounded manager-owned repair, retire, restart, or wait for checkpoint; do not send another progress request.";
+  } else if (promptIdleAfterProgressSignal) {
+    progressState = "progress_signal_unanswered";
+    nextAction = "Visible Codex prompt after a submitted progress signal means the worker is idle; run bounded recovery inspection now.";
+  } else if (hasProgressSignal && latestProgressSignalMs > (latestOwnerDelegationMs || 0) && progressSignalCount >= 2 && latestProgressSignalAgeSeconds !== null && latestProgressSignalAgeSeconds * 1000 >= context.staleSignalMs) {
+    progressState = "progress_signal_unanswered";
+    nextAction = "Run bounded worker recovery inspection; do not send another progress signal until the missing checkpoint cause is known.";
+  } else if (hasProgressSignal && latestProgressSignalMs > (latestOwnerDelegationMs || 0)) {
+    progressState = "progress_signal_sent";
+    nextAction = "Wait briefly for a compact checkpoint or question before sending another progress signal.";
+  } else if (hasOwnerDelegation && latestOwnerDelegationAgeSeconds !== null && latestOwnerDelegationAgeSeconds * 1000 >= context.staleSignalMs) {
+    progressState = "owner_delegation_stale";
+    nextAction = "Ask worker for a compact checkpoint after delegated owner guidance; do not assume progress from older checkpoints.";
+  } else if (hasOwnerDelegation) {
+    progressState = "owner_delegation_sent";
+    nextAction = "Wait for a compact checkpoint after delegated owner guidance before declaring progress.";
+  } else if (hasProgressSignal) {
+    progressState = "progress_signal_sent";
+    nextAction = "Wait briefly for a compact checkpoint or question before sending another progress signal.";
+  } else if (promptIdleAfterHandoff) {
+    progressState = "prompt_idle_handoff";
+    nextAction = "Visible Codex prompt after handoff means the worker is idle; send a compact progress/checkpoint request now.";
+  } else if (staleAfterHandoff) {
+    progressState = "needs_progress_signal";
+    nextAction = "Ask worker for a compact heartbeat/checkpoint via manager-owned metadata; do not inspect raw pane scrollback.";
+  } else if (worker.recoveryState === "handoff_sent") {
+    progressState = "handoff_sent";
+    nextAction = "Allow worker time to read handoff and produce first metadata checkpoint.";
+  }
+  return {
+    workerId,
+    sessionName: sanitizeLedgerField(worker.sessionName || "", "", 80),
+    assignmentId,
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    laneOwner: sanitizeLedgerField(context.lane?.owner || "", "", 160),
+    recoveryState: sanitizeLedgerField(worker.recoveryState || "none", "none", 80),
+    progressState,
+    ageSeconds,
+    latestCheckpointAgeSeconds,
+    latestOwnerDelegationAgeSeconds,
+    latestProgressSignalAgeSeconds,
+    latestSubmitPendingAgeSeconds,
+    latestPointerReceiptUnverifiedAgeSeconds,
+    latestRecoveryInspectionAgeSeconds,
+    recoveryInspectionAfterProgressSignal,
+    pointerReceiptUnverifiedNeedsSubmit,
+    submitPendingAfterRecoveryInspection,
+    submitPendingAfterProgressSignal,
+    submitPendingAfterHandoff,
+    laneHeartbeat,
+    checkpointCount: checkpointMatches.length,
+    questionCount: questionMatches.length,
+    eventCount: eventMatches.length,
+    progressSignalCount,
+    nextAction,
+  };
+}
+
+function filterWorkerProgressRecords(records = [], worker = {}, assignmentId = "") {
+  const workerId = String(worker.workerId || "");
+  const normalizedAssignmentId = String(assignmentId || "");
+  return (Array.isArray(records) ? records : [])
+    .filter(isPlainObject)
+    .filter((record) => {
+      const actor = String(record.actor || "");
+      if (workerId && (actor === workerId || String(record.workerId || "") === workerId)) return true;
+      if (normalizedAssignmentId && String(record.assignmentId || "") === normalizedAssignmentId) return true;
+      const sourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : [];
+      return sourceRefs.some((ref) => {
+        const text = String(ref || "");
+        return text === normalizedAssignmentId || text === `assignment:${normalizedAssignmentId}`;
+      });
+    })
+    .slice(-6);
+}
+
+function recordIsInWorkerAssignmentWindow(record = {}, workerStartMs = 0) {
+  if (!workerStartMs) return true;
+  const recordMs = parseTimeMs(record.timestamp);
+  return !recordMs || recordMs >= workerStartMs;
+}
+
+function parseTimeMs(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestRecordTimestampMs(records = []) {
+  return Math.max(0, ...(Array.isArray(records) ? records : []).map((record) => parseTimeMs(record.timestamp)).filter(Boolean));
+}
+
+function buildWarmWorkerAction(candidate = {}, paths = {}, options = {}) {
+  const sessionName = sanitizeLedgerField(candidate.sessionName || candidate.workerId, "codex-worker", 80);
+  const workerId = sanitizeLedgerField(candidate.workerId || sessionName, sessionName, 80);
+  const owner = sanitizeLedgerField(candidate.owner || `${paths.runId}/${workerId}`, `${paths.runId}/${workerId}`, 120);
+  const launchCommand = String(options.workerCommand || defaultWarmWorkerCommand(paths.proof?.state?.root || "")).trim();
+  const action = {
+    action: "tmux_new_manager_owned_warm_worker",
+    workerId,
+    sessionName,
+    owner,
+    runId: paths.runId,
+    recoveryMode: candidate.action === "recover_missing_manager_owned_worker" ? "missing-live-tmux-session" : "none",
+    previousState: candidate.previousState || null,
+    previousAssignmentId: candidate.previousAssignmentId || null,
+    previousTaskId: candidate.previousTaskId || null,
+    cwd: repoRoot,
+    env: {
+      CODEX_WORKSPACE_OWNER: sessionName,
+      CODEX_THREAD_ID: `tmux-${sessionName}`,
+    },
+    command: sanitizeWarmWorkerCommand(launchCommand),
+    retention: "bootstrap_prompt_redacted",
+  };
+  Object.defineProperty(action, "launchCommand", { value: launchCommand, enumerable: false });
+  return action;
+}
+
+function defaultWarmWorkerCommand(stateRoot = "") {
+  const addDir = stateRoot ? ` --add-dir ${shellQuote(stateRoot)}` : "";
+  return [
+    "codex",
+    "--no-alt-screen",
+    "--cd",
+    shellQuote(repoRoot),
+    addDir.trim(),
+    "--sandbox workspace-write",
+    "--ask-for-approval on-request",
+    shellQuote("You are a manager-owned warm Kendall_Nxt Codex worker. Wait for a durable handoff file or manager instruction before changing files."),
+  ].filter(Boolean).join(" ");
+}
+
+function runTmuxWorkerWarm(action, context = {}) {
+  const runner = context.tmuxRunner || spawnSync;
+  const existing = runner("tmux", ["has-session", "-t", action.sessionName], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if ((existing?.status ?? 1) === 0) {
+    return { ok: false, error: `tmux session already exists: ${action.sessionName}`, status: existing?.status };
+  }
+  const args = [
+    "new-session",
+    "-d",
+    "-s",
+    action.sessionName,
+    "-c",
+    action.cwd,
+    "env",
+    `CODEX_WORKSPACE_OWNER=${action.env.CODEX_WORKSPACE_OWNER}`,
+    `CODEX_THREAD_ID=${action.env.CODEX_THREAD_ID}`,
+    "bash",
+    "-lc",
+    action.launchCommand || action.command,
+  ];
+  const result = runner("tmux", args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (result?.error) return { ok: false, error: result.error.message || "tmux launch failed" };
+  if ((result?.status ?? 0) !== 0) return { ok: false, error: String(result?.stderr || result?.stdout || "tmux launch failed").trim(), status: result?.status };
+  return { ok: true, sessionName: action.sessionName };
+}
+
+function sanitizeWarmWorkerCommand(command = "") {
+  return String(command).replace(/'You are a manager-owned warm Kendall_Nxt Codex worker\.[^']*'/, "'[bootstrap-prompt-redacted]'");
+}
+
+export function buildWorkerFrictionPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const failureBudget = Math.max(1, nonNegativeInteger(options.failureBudget ?? context.failureBudget ?? 3) ?? 3);
+  const usageState = normalizePosture(context.usageState || context.usage, "unknown");
+  const questions = Array.isArray(context.questions) ? context.questions.filter(isPlainObject).slice(0, 12) : [];
+  const failureSignals = [
+    ...(Array.isArray(context.failureSignals) ? context.failureSignals.filter(isPlainObject) : []),
+    ...deriveQuestionLoopSignals(questions),
+  ].slice(0, 24);
+  const questionHandling = questions.map((question) => buildQuestionDecision(question));
+  const reviewResourcePolicy = buildReviewResourceHumanAttentionPolicy(questionHandling);
+  const failureLoops = failureSignals.map((signal) => buildFailureLoopDecision(signal, failureBudget, { runId })).filter(Boolean);
+  const modelRouting = buildModelRoutingDecision(context.taskRisk || {}, { usageState, failureLoops, failureSignals });
+  const dependencyLoops = buildDependencyLoopSummary({
+    questionHandling,
+    failureLoops,
+    safeWorkers: context.safeWorkers || context.unrelatedWork || context.safeWork,
+    excludeWorkers: [
+      ...questionHandling.map((decision) => decision.workerId),
+      ...failureLoops.map((loop) => loop.workerId),
+    ],
+    excludeLanes: [
+      ...questionHandling.map((decision) => decision.affectedLane),
+      ...failureLoops.map((loop) => loop.affectedLane),
+    ],
+  });
+  const blockedQuestionDecisions = questionHandling.filter((decision) =>
+    decision.operatorInterruption ||
+    ["blocked_pending_operator", "blocked_pending_source_context", "parked"].includes(decision.leaseContinuation),
+  );
+  return packet({
+    status: failureLoops.some((loop) => loop.action === "park_lane") || blockedQuestionDecisions.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      mutationMode: "plan_only_metadata_recording",
+      failureBudget,
+      questionHandling,
+      reviewResourcePolicy,
+      failureLoops,
+      dependencyLoops,
+      modelRouting,
+      retention: "metadata_only_redacted_decision_records",
+    },
+    warnings: [
+      ...(failureLoops.length > 0 ? [{ code: "worker-friction-loop-detected", message: `${failureLoops.length} worker friction loop(s) exceeded budget.` }] : []),
+      ...(blockedQuestionDecisions.length > 0 ? [{ code: "worker-question-policy-attention", message: `${blockedQuestionDecisions.length} worker question decision(s) require source context or operator authority.` }] : []),
+    ],
+    nextActions: failureLoops.map((loop) => ({ code: `worker-loop-${loop.action}`, summary: loop.summary, nextAction: loop.nextAction })),
+  });
+}
+
+export function buildSteeringPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const instruction = normalizeSteeringInstruction(options.steeringInstruction ?? options.operatorInstruction ?? context.steeringInstruction ?? context.operatorInstruction);
+  if (!instruction.raw) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        mutationMode: "plan_only_metadata_recording",
+        instruction: { command: "none", supported: true },
+        record: null,
+        futureDispatch: {
+          action: "keep_current_dispatch",
+          newDispatchAllowed: true,
+          scope: "current",
+        },
+        activeWorkerPolicy: {
+          defaultAction: "keep_healthy_work_running",
+          killHealthyWorkersByDefault: false,
+        },
+        operatorReport: null,
+        retention: "metadata_only_steering_record",
+      },
+    });
+  }
+
+  const command = classifySteeringCommand(instruction);
+  const targetWorkers = command === "reduce_worker_count" ? steeringTargetWorkers(instruction, options, context) : null;
+  const focusSurface = command === "focus_surface" ? steeringFocusSurface(instruction) : "";
+  const supported =
+    command !== "unknown" &&
+    command !== "unsupported" &&
+    (command !== "reduce_worker_count" || targetWorkers !== null) &&
+    (command !== "focus_surface" || Boolean(focusSurface));
+  const effectiveCommand = supported ? command : "unsupported";
+  const futureDispatch = buildSteeringDispatch(effectiveCommand, { targetWorkers, focusSurface });
+  const activeWorkerPolicy = buildSteeringWorkerPolicy(effectiveCommand, { focusSurface, targetWorkers });
+  const operatorReport = buildSteeringOperatorReport(effectiveCommand, futureDispatch, activeWorkerPolicy, { targetWorkers, focusSurface, raw: instruction.raw });
+  const createdAt = options.createdAt || context.now || new Date().toISOString();
+  const affectedScope = sanitizeLedgerField(instruction.affectedScope || instruction.scope || futureDispatch.scope || "current", "current", 120);
+  const nextAction = steeringWhatHappensNext(effectiveCommand, activeWorkerPolicy, { targetWorkers, focusSurface, raw: instruction.raw });
+  const controlState = steeringControlState(effectiveCommand);
+  return packet({
+    status: supported ? "ready" : "attention",
+    summary: {
+      runId,
+      mutationMode: "plan_only_metadata_recording",
+      controlState,
+      instruction: {
+        command: effectiveCommand,
+        supported,
+        rawSummary: sanitizeLedgerField(instruction.raw, "operator steering instruction", 180),
+        targetWorkers,
+        focusSurface,
+      },
+      record: {
+        eventType: "manager.steering",
+        recordPolicy: "manager_ledger_event",
+        materialDecision: !["status", "show_testable_work"].includes(command),
+        authorityBasis: "operator-live-steering",
+        affectedScope,
+        nextAction,
+        createdAt,
+        retention: "metadata_only",
+      },
+      futureDispatch,
+      activeWorkerPolicy,
+      operatorReport,
+      retention: "metadata_only_steering_record",
+    },
+    blockers: supported
+      ? []
+      : [
+          {
+            code: "steering-instruction-unsupported",
+            message: "Steering instruction is unsupported or missing required target evidence.",
+            nextAction: "Ask operator for a supported steering instruction or worker target.",
+          },
+        ],
+    nextActions:
+      command === "show_testable_work"
+        ? [{ code: "show-testable-work", nextAction: "Report user-facing checkpoints and test locations without changing dispatch." }]
+        : command === "status"
+          ? [{ code: "report-status", nextAction: "Report current manager status without changing dispatch." }]
+          : [],
+  });
+}
+
+function normalizeSteeringInstruction(value) {
+  if (!value) return { raw: "" };
+  if (typeof value === "string") return { raw: value.trim() };
+  if (!isPlainObject(value)) return { raw: String(value).trim() };
+  const raw = sanitizeLedgerField(value.text || value.instruction || value.command || value.action || "", "", 240);
+  return {
+    ...value,
+    raw,
+  };
+}
+
+function classifySteeringCommand(instruction = {}) {
+  const explicit = String(instruction.command || instruction.action || "").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
+  if (["pause", "resume", "quiet_mode", "status"].includes(explicit)) return explicit;
+  if (["stop_after_current_lanes", "stop_after_current", "drain_and_stop"].includes(explicit)) return "stop_after_current_lanes";
+  if (["reduce_worker_count", "worker_count", "reduce_workers"].includes(explicit)) return "reduce_worker_count";
+  if (["focus_surface", "focus"].includes(explicit)) return "focus_surface";
+  if (["show_testable_work", "testable_work"].includes(explicit)) return "show_testable_work";
+  const text = String(instruction.raw || "").toLowerCase();
+  if (/\bshow\b.*\btestable\b|\btestable work\b/.test(text)) return "show_testable_work";
+  if (/\bstop\b.*\b(current|lane|after)|\bdrain\b.*\bstop\b/.test(text)) return "stop_after_current_lanes";
+  if (/\breduce\b.*\b(worker|count)|\bworker count\b|\bworkers?\s*[:=]?\s*\d\b/.test(text)) return "reduce_worker_count";
+  if (/\bfocus\b|\bshift\b.*\b(surface|area|work)\b/.test(text)) return "focus_surface";
+  if (/\bquiet\b|\breduce\b.*\b(report|heartbeat|beacon|update)/.test(text)) return "quiet_mode";
+  if (/\bresume\b|\bunpause\b/.test(text)) return "resume";
+  if (/\bpause\b|\bhold\b/.test(text)) return "pause";
+  if (/\bstatus\b|\bstate\b/.test(text)) return "status";
+  return "unknown";
+}
+
+function steeringTargetWorkers(instruction = {}, options = {}, context = {}) {
+  const rawExplicit = instruction.targetWorkers ?? instruction.workerCount ?? instruction.maxWorkers;
+  if (rawExplicit !== undefined && rawExplicit !== null && rawExplicit !== "") {
+    const numeric = Number(rawExplicit);
+    return Number.isInteger(numeric) && numeric >= 0 ? Math.min(6, numeric) : null;
+  }
+  const match = String(instruction.raw || "").match(/\b([0-6])\b/);
+  if (match) return Number(match[1]);
+  const currentTarget = nonNegativeInteger(context.targets?.allowedTarget ?? context.allowedTarget ?? context.currentWorkerTarget ?? options.currentWorkerTarget ?? options.desiredWorkers);
+  return Math.max(0, Math.min(6, (currentTarget ?? 6) - 1));
+}
+
+function steeringFocusSurface(instruction = {}) {
+  const explicit = sanitizeLedgerField(instruction.surface || instruction.focusSurface || instruction.targetSurface || "", "", 120);
+  if (explicit) return explicit;
+  const text = String(instruction.raw || "").trim();
+  const match = text.match(/\bfocus(?:\s+(?:on|to|around))?\s+(.+)$/i);
+  return match ? sanitizeLedgerField(match[1], "", 120) : "";
+}
+
+function buildSteeringDispatch(command, details = {}) {
+  if (command === "pause") {
+    return { action: "pause_new_dispatch", newDispatchAllowed: false, scope: "all-new-work", runState: "operator_paused" };
+  }
+  if (command === "resume") {
+    return { action: "resume_dispatch_when_governors_allow", newDispatchAllowed: true, scope: "governed-safe-work", runState: "active" };
+  }
+  if (command === "stop_after_current_lanes") {
+    return { action: "drain_and_stop", newDispatchAllowed: false, scope: "no-new-lanes", runState: "drain" };
+  }
+  if (command === "reduce_worker_count") {
+    return { action: "reduce_worker_target", newDispatchAllowed: true, scope: "bounded-worker-pool", targetWorkers: details.targetWorkers, runState: "active" };
+  }
+  if (command === "focus_surface") {
+    return { action: "drain_and_shift_focus", newDispatchAllowed: true, scope: "focused-surface", focusSurface: details.focusSurface, runState: "active" };
+  }
+  if (command === "quiet_mode") {
+    return { action: "reduce_progress_beacon_frequency", newDispatchAllowed: true, scope: "reporting-cadence", runState: "active" };
+  }
+  if (command === "status") {
+    return { action: "report_current_status", newDispatchAllowed: true, scope: "report-only", runState: "unchanged" };
+  }
+  if (command === "show_testable_work") {
+    return { action: "report_testable_work", newDispatchAllowed: true, scope: "report-only", runState: "unchanged" };
+  }
+  return { action: "request_supported_steering_instruction", newDispatchAllowed: true, scope: "clarification-only", runState: "attention" };
+}
+
+function steeringControlState(command) {
+  if (command === "pause") return "operator_paused";
+  if (command === "stop_after_current_lanes") return "drain";
+  if (command === "quiet_mode") return "quiet";
+  if (command === "status" || command === "show_testable_work") return "status_only";
+  if (command === "unsupported") return "needs_review";
+  return "active";
+}
+
+function buildSteeringWorkerPolicy(command, details = {}) {
+  if (command === "focus_surface") {
+    return {
+      defaultAction: "drain_current_safe_work_then_shift",
+      activeWorkHandling: "drain_current_safe_work",
+      newDispatchHandling: "shift_to_focus_surface",
+      focusSurface: details.focusSurface,
+      killHealthyWorkersByDefault: false,
+    };
+  }
+  if (command === "reduce_worker_count") {
+    return {
+      defaultAction: "drain_to_target_worker_count",
+      targetWorkers: details.targetWorkers,
+      activeWorkHandling: "let_safe_current_steps_checkpoint_before_reducing",
+      killHealthyWorkersByDefault: false,
+    };
+  }
+  if (command === "pause" || command === "stop_after_current_lanes") {
+    return {
+      defaultAction: "drain_active_safe_work",
+      activeWorkHandling: "let_safe_current_steps_checkpoint",
+      killHealthyWorkersByDefault: false,
+    };
+  }
+  return {
+    defaultAction: "keep_healthy_work_running",
+    activeWorkHandling: "no_worker_interruption",
+    killHealthyWorkersByDefault: false,
+  };
+}
+
+function buildSteeringOperatorReport(command, futureDispatch, activeWorkerPolicy, details = {}) {
+  const whatChanged = steeringWhatChanged(command, futureDispatch, details);
+  return {
+    whatChanged,
+    whyItMatters: steeringWhyItMatters(command),
+    whatHappensNext: steeringWhatHappensNext(command, activeWorkerPolicy, details),
+  };
+}
+
+function steeringWhatChanged(command, futureDispatch, details = {}) {
+  if (command === "focus_surface") return `New dispatch will focus on ${details.focusSurface}; active safe work will drain first.`;
+  if (command === "reduce_worker_count") return `Worker target will be reduced to ${details.targetWorkers}.`;
+  if (command === "pause") return "New dispatch is paused by operator instruction.";
+  if (command === "resume") return "New dispatch may resume when usage, resources, and source gates allow it.";
+  if (command === "stop_after_current_lanes") return "The run will stop after current safe lanes reach checkpoints.";
+  if (command === "quiet_mode") return "Progress beacons will use a quieter cadence.";
+  if (command === "status") return "The manager will report current run state.";
+  if (command === "show_testable_work") return "The manager will report user-facing work ready to test.";
+  return "The steering instruction needs clarification.";
+}
+
+function steeringWhyItMatters(command) {
+  if (command === "focus_surface") return "Priority changes do not require killing healthy active work.";
+  if (command === "reduce_worker_count") return "Worker pressure can be lowered without sacrificing task-fit quality.";
+  if (command === "pause") return "The operator can stop new work while preserving recovery state.";
+  if (command === "resume") return "The manager can continue progress through existing safety governors.";
+  if (command === "stop_after_current_lanes") return "The run can wind down cleanly without abandoning safe checkpoints.";
+  if (command === "quiet_mode") return "The operator still sees liveness without noisy backend details.";
+  if (command === "status" || command === "show_testable_work") return "The operator gets visibility without changing active work.";
+  return "Unsupported steering should not silently change dispatch.";
+}
+
+function steeringWhatHappensNext(command, activeWorkerPolicy, details = {}) {
+  if (command === "focus_surface") return `Drain current safe work, then dispatch new lanes only for ${details.focusSurface}.`;
+  if (command === "reduce_worker_count") return `Let current safe steps checkpoint, then keep at most ${details.targetWorkers} active workers.`;
+  if (command === "pause") return "Record the instruction, stop new dispatch, and let active safe checkpoints finish.";
+  if (command === "resume") return "Re-evaluate usage, resources, and safe backlog before dispatching new work.";
+  if (command === "stop_after_current_lanes") return "Drain active lanes, summarize progress, perform housekeeping, and stop.";
+  if (command === "quiet_mode") return "Send only heartbeat, blocker, decision, or daily-use checkpoint reports.";
+  if (command === "status") return "Return the current cycle report.";
+  if (command === "show_testable_work") return "Return daily-use checkpoints and where to test them.";
+  return "Ask for a supported steering command before changing dispatch.";
+}
+
+export function buildProgressBeaconPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const workerCounts = isPlainObject(context.workerCounts) ? context.workerCounts : {};
+  const active = nonNegativeInteger(workerCounts.active) ?? 0;
+  const warm = nonNegativeInteger(workerCounts.warm) ?? 0;
+  const paused = nonNegativeInteger(workerCounts.paused) ?? 0;
+  const usageState = normalizeHeartbeatUsageState(context.usageState || context.usage || "unknown");
+  const resourceState = normalizeHeartbeatResourceState(context.resourceState || context.resource || "unknown");
+  const currentSource = sanitizeLedgerField(context.currentSource || "none", "none", 160);
+  const operatorActionState = sanitizeLedgerField(context.operatorActionState || context.actionNeeded || "none", "none", 220);
+  const runState = sanitizeLedgerField(context.runState || context.status || "ready", "ready", 60);
+  const queueLeasePosture = normalizeQueueLeasePosture(context.queueLeaseSummary || context.queueLeasePosture || context.dispatcherSummary || context.dispatchPosture || {});
+  const hasStateOrActionChange = positiveBoolean(context.stateChanged) || operatorActionState !== "none";
+  const materialChange = hasStateOrActionChange || (context.materialChange === false ? false : positiveBoolean(context.materialChange));
+  const materialChangeSummary = materialChange
+    ? sanitizeLedgerField(context.materialChangeSummary || context.changeSummary || operatorActionState, "state changed", 220)
+    : "no material change";
+  const checkpoints = [
+    ...(Array.isArray(context.checkpoints) ? context.checkpoints.filter(isPlainObject) : []),
+    ...(Array.isArray(context.checkpointCandidates) ? context.checkpointCandidates.filter(isPlainObject) : []),
+    ...verifiedActiveLaneCheckpointCandidates(context.activeLaneEvidence),
+  ];
+  const checkpointViews = checkpoints.map((checkpoint) => buildCheckpointReport(checkpoint, context));
+  const checkpointReports = checkpointViews.filter((checkpoint) => checkpoint.visibility === "daily_use_checkpoint").slice(0, 12);
+  const heartbeatOnly = checkpointViews.filter((checkpoint) => checkpoint.visibility === "heartbeat_only").slice(0, 12);
+  const finalReport = buildFinalProgressReport({ checkpointReports, heartbeatOnly }, context);
+  const cadence = buildHeartbeatCadence({ runState, usageState, resourceState, operatorActionState }, context);
+  const heartbeat = {
+    runState,
+    workerCounts: { active, warm, paused },
+    usageState,
+    resourceState,
+    currentSource,
+    operatorActionState,
+    queueLeasePosture,
+    materialChange,
+    materialChangeSummary,
+    cadence,
+    text: compactHeartbeatText({ runState, active, warm, paused, usageState, resourceState, currentSource, operatorActionState, queueLeasePosture, cadence }),
+  };
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      mutationMode: "plan_only_reporting",
+      heartbeat,
+      checkpointReports,
+      heartbeatOnly,
+      finalReport,
+      reportingPolicy: {
+        detailedCheckpointOnlyFor: ["daily-use", "safety", "testing", "operator-action", "visible-unblocker", "active-risk-reduction"],
+        backendOnlyDefault: "heartbeat_only",
+        finalReportTriggers: ["source_exhausted", "housekeeping_complete"],
+        retention: "metadata_only_checkpoint_summary",
+      },
+    },
+  });
+}
+
+function normalizeQueueLeasePosture(input = {}) {
+  const summary = isPlainObject(input.summary) ? input.summary : input;
+  const counts = isPlainObject(summary.counts) ? summary.counts : {};
+  const queued = nonNegativeInteger(
+    summary.queued ??
+      summary.queueDepth ??
+      summary.dispatchable ??
+      summary.dispatchableCount ??
+      summary.availableCount ??
+      summary.available_count ??
+      counts.queued ??
+      counts.ready ??
+      counts.assignable ??
+      counts.dispatchable ??
+      counts.available,
+  ) ?? 0;
+  const leased = nonNegativeInteger(summary.leased ?? summary.activeLeases ?? summary.activeLeaseCount ?? summary.activeCount ?? counts.leased ?? counts.activeLeases ?? counts.active_leases ?? counts.active) ?? 0;
+  const runningCount = nonNegativeInteger(
+    summary.running ??
+      summary.runningCount ??
+      summary.running_count ??
+      summary.inProgress ??
+      summary.in_progress ??
+      counts.running ??
+      counts.runningCount ??
+      counts.running_count ??
+      counts.in_progress,
+  );
+  const runningKnown = runningCount !== null;
+  const running = runningCount ?? 0;
+  const blocked = nonNegativeInteger(summary.blocked ?? summary.gated ?? counts.blocked ?? counts.failed) ?? 0;
+  return {
+    queued,
+    leased,
+    running,
+    runningKnown,
+    blocked,
+    refilling: positiveBoolean(summary.refilling ?? summary.refillActive ?? summary.refill_active),
+    nextAction: sanitizeLedgerField(summary.nextAction || summary.next_action || "none", "none", 160),
+    freshness: sanitizeLedgerField(summary.freshness || summary.stateFreshness || "unknown", "unknown", 80),
+  };
+}
+
+function normalizeHeartbeatUsageState(value) {
+  const normalized = normalizeCleanupText(normalizePosture(value, "unknown"));
+  for (const state of ["manager_only", "normal", "conserve", "drain", "waiting"]) {
+    if (normalized === state) return state;
+  }
+  return "unknown";
+}
+
+function normalizeHeartbeatResourceState(value) {
+  const normalized = normalizeCleanupText(normalizePosture(value, "unknown"));
+  for (const state of ["normal", "warm", "pressured", "critical"]) {
+    if (normalized === state) return state;
+  }
+  return "unknown";
+}
+
+function compactHeartbeatText({ runState, active, warm, paused, usageState, resourceState, currentSource, operatorActionState, queueLeasePosture, cadence }) {
+  const resume = cadence?.resumeCondition && cadence.resumeCondition !== "continue while usage and resources remain normal"
+    ? ` | resume ${cadence.resumeCondition}`
+    : "";
+  const runningText = queueLeasePosture.runningKnown === false ? "unknown running" : `${queueLeasePosture.running} running`;
+  return `Manager: ${runState} | workers ${active} active / ${warm} warm / ${paused} paused | queue ${queueLeasePosture.queued} queued / ${queueLeasePosture.leased} leased / ${runningText} / ${queueLeasePosture.blocked} blocked | usage ${usageState} | CPU/RAM ${resourceState} | current source ${currentSource} | action needed: ${operatorActionState}${resume}`;
+}
+
+export function buildManagerRunStartPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const paths = managerRunPaths(runId, options, context);
+  const explicitRefs = sourceRefList(options.sourceRefs);
+  const inferredRefs = [
+    ...sourceRefList(context.sourceRefs),
+    ...sourceRefList(context.sourceEvidence),
+    ...defaultSourceRefs({ ...context, discoverDefaultSources: context.discoverDefaultSources !== false }),
+    ...defaultBacklogSourceRefs({ ...context, discoverDefaultBacklogSources: context.discoverDefaultBacklogSources !== false }),
+  ];
+  const explicitEvidence = normalizeSourceEvidence(explicitRefs);
+  const inferredEvidence = normalizeSourceEvidence(inferredRefs);
+  const hasExplicitSourceInput = explicitRefs.length > 0;
+  const sourceSlice = explicitEvidence.valid[0] || inferredEvidence.valid[0] || null;
+  const sourceSelection = explicitEvidence.valid[0] ? "explicit" : "inferred_assumption";
+  const rejectedCount = explicitEvidence.rejected.length + inferredEvidence.rejected.length;
+  const warnings =
+    rejectedCount > 0
+      ? [
+          {
+            code: "manager-run-source-evidence-rejected",
+            message: `Rejected ${rejectedCount} manager run source reference(s).`,
+          },
+        ]
+      : [];
+
+  if (hasExplicitSourceInput && explicitEvidence.valid.length === 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        sourceRef: null,
+        sourceSelection: "none",
+        runtimeStatePath: paths.root,
+        controlState: "blocked",
+        mutationMode: "blocked_explicit_source_not_source_owned",
+      },
+      blockers: [
+        {
+          code: "manager-run-source-evidence-ambiguous",
+          message: "Explicit manager run source evidence is ambiguous or not source-owned.",
+          nextAction: "Provide a source-owned PRD, runway, story, or repo doc reference before starting the run.",
+        },
+      ],
+      warnings,
+    });
+  }
+
+  if (!sourceSlice) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        sourceRef: null,
+        sourceSelection: "none",
+        runtimeStatePath: paths.root,
+        controlState: "blocked",
+        mutationMode: "blocked_no_source_owned_evidence",
+      },
+      blockers: [
+        {
+          code: "manager-run-source-evidence-missing",
+          message: "No source-owned PRD, runway, story, or repo doc evidence exists for manager run startup.",
+          nextAction: "Provide source-owned evidence or create the next BMAD source artifact before starting the run.",
+        },
+      ],
+      warnings,
+    });
+  }
+
+  const desiredWorkers = Math.max(0, Math.min(6, nonNegativeInteger(options.desiredWorkers ?? context.desiredWorkers) ?? 6));
+  const maxWorkers = Math.max(0, Math.min(6, nonNegativeInteger(options.maxWorkers ?? context.maxWorkers) ?? 6));
+  const targetWorkers = Math.min(desiredWorkers, maxWorkers);
+  const sourceRef = {
+    sourceRefId: `source-${sourceSlice.type}-${safeRunId(runId)}`,
+    sourceType: scriptSourceTypeToContractSourceType(sourceSlice.type),
+    label:
+      sourceSelection === "inferred_assumption" && !sourceSlice.label.startsWith("[ASSUMPTION]")
+        ? `[ASSUMPTION] ${sourceSlice.label}`
+        : sourceSlice.label,
+    pathOrUrl: sourceSlice.ref.replace(/^(prd|runway|story|doc):/i, ""),
+    sourceSpan: null,
+    summaryOnly: true,
+  };
+  const createdAt = options.createdAt || context.now || new Date().toISOString();
+
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      sourceRef,
+      sourceSelection,
+      sourceSelectionReason: sourceSelection === "explicit" ? "operator supplied source-owned evidence" : "[ASSUMPTION] selected best available source-owned evidence",
+      evidenceRefs: ["manager-run-start-source"],
+      targetWorkerPolicy: {
+        desiredWorkers: targetWorkers,
+        maxWorkers,
+        activeWorkHandling: "drain_current_safe_work_before_target_changes",
+        killHealthyWorkersByDefault: false,
+      },
+      authorityProfile: "backend_proof",
+      authorityStage: "backend_proof",
+      runtimeStatePath: paths.root,
+      controlState: "starting",
+      createdAt,
+      updatedAt: createdAt,
+      mutationMode: "plan_only_metadata_recording",
+      retention: "metadata_only",
+    },
+    warnings,
+    nextActions: [
+      {
+        code: "manager-run-start-ready",
+        summary: "Manager run start state is ready.",
+        nextAction: "Record local runtime control state before any live execution surface is touched.",
+      },
+    ],
+  });
+}
+
+function scriptSourceTypeToContractSourceType(type) {
+  if (type === "story") return "bmad_artifact";
+  if (type === "doc" || type === "runway") return "repo_source";
+  if (type === "prd") return "prd";
+  return "repo_source";
+}
+
+function verifiedActiveLaneCheckpointCandidates(activeLaneEvidence = {}) {
+  if (!isPlainObject(activeLaneEvidence) || !Array.isArray(activeLaneEvidence.lanes)) return [];
+  return activeLaneEvidence.lanes
+    .filter((lane) => String(lane?.phase || "") === "verified")
+    .map((lane) => {
+      const assignmentId = sanitizeLedgerField(lane.assignmentId || "verified-lane", "verified-lane", 80);
+      const branch = sanitizeLedgerField(lane.branch || "", "", 140);
+      const taskId = sanitizeLedgerField(lane.taskId || "", "", 120);
+      const heartbeat = sanitizeLedgerField(lane.heartbeat || "", "", 80);
+      return {
+        checkpointId: `verified-${assignmentId}`,
+        category: "operator-action",
+        operatorActionRequired: true,
+        unblocksVisibleWork: true,
+        whatChanged: `Lane ${assignmentId} reached verified state.`,
+        whereToTest: branch ? `Inspect branch ${branch} and assignment ${assignmentId}.` : `Inspect assignment ${assignmentId}.`,
+        verificationEvidence: compactSanitizedRefs([
+          `assignment:${assignmentId}`,
+          branch ? `branch:${branch}` : "",
+          taskId ? `task:${taskId}` : "",
+          heartbeat ? `heartbeat:${heartbeat}` : "",
+        ]),
+        workContinues: true,
+      };
+    })
+    .slice(0, 6);
+}
+
+function buildCheckpointReport(checkpoint = {}, context = {}) {
+  const visibility = shouldPromoteCheckpoint(checkpoint) ? "daily_use_checkpoint" : "heartbeat_only";
+  const verificationInputs = checkpoint.verificationEvidence ?? checkpoint.verification_evidence ?? checkpoint.verification ?? [];
+  const evidenceInputs = checkpoint.evidenceRefs ?? checkpoint.evidence_refs ?? checkpoint.evidenceRef ?? checkpoint.evidence_ref ?? checkpoint.evidence ?? [];
+  const sourceInputs = checkpoint.sourceRefs ?? checkpoint.source_refs ?? [];
+  const verificationEvidence = compactCheckpointVerificationEvidence(verificationInputs);
+  const directEvidenceRefs = compactCheckpointEvidenceRefs([...sourceRefList(evidenceInputs), ...sourceRefList(sourceInputs)]);
+  const evidenceRefs = directEvidenceRefs.length > 0 ? directEvidenceRefs : compactCheckpointEvidenceRefs(verificationEvidence);
+  const changedSurfaces = compactCheckpointMetadataList(checkpoint.changedSurfaces || checkpoint.changed_surfaces || checkpoint.surfaces || checkpoint.files || checkpoint.routes || []);
+  const knownLimits = compactCheckpointMetadataList(checkpoint.knownLimits || checkpoint.known_limits || checkpoint.limits || checkpoint.limitations || []);
+  const nextSource = sanitizeLedgerField(checkpoint.nextSource || context.nextSource || context.currentSource || "none", "none", 160);
+  const finalReportReady = finalReportRequested(context);
+  const workContinues = normalizeCheckpointWorkContinues(checkpoint, context, finalReportReady);
+  return {
+    checkpointId: sanitizeLedgerField(checkpoint.checkpointId || checkpoint.id || "checkpoint", "checkpoint", 80),
+    visibility,
+    category: sanitizeLedgerField(checkpoint.category || checkpoint.kind || "work", "work", 80),
+    whatChanged: sanitizeLedgerField(checkpoint.whatChanged || checkpoint.summary || "Work checkpoint reached.", "Work checkpoint reached.", 220),
+    whereToTest: visibility === "daily_use_checkpoint" ? sanitizeCheckpointWhereToTest(checkpoint.whereToTest || checkpoint.testLocation || checkpoint.where_to_test || checkpoint.test_location || "") : "",
+    verificationEvidence: visibility === "daily_use_checkpoint" ? verificationEvidence : [],
+    evidenceRefs: visibility === "daily_use_checkpoint" ? evidenceRefs : [],
+    changedSurfaces: visibility === "daily_use_checkpoint" ? changedSurfaces : [],
+    knownLimits: visibility === "daily_use_checkpoint" ? knownLimits : [],
+    workContinues,
+    workContinuation: buildCheckpointWorkContinuation({ workContinues, nextSource }),
+    nextSource,
+    reason: checkpointVisibilityReason(checkpoint, visibility),
+    retention: "metadata_only",
+  };
+}
+
+function compactCheckpointVerificationEvidence(value = []) {
+  return compactSanitizedRefs(value)
+    .filter((ref) => /^(cmd|command|test|check|verification|evidence|artifact|assignment|branch|task|heartbeat):/i.test(ref))
+    .filter((ref) => !checkpointUnsafeRef(ref))
+    .filter((ref) => !/\[redacted-(retention-term|token)\]/i.test(ref))
+    .slice(0, 8);
+}
+
+function compactCheckpointEvidenceRefs(value = []) {
+  return compactSanitizedRefs(value)
+    .map((ref) => (/^(cmd|command|test|check):/i.test(ref) ? `verification:${ref}` : ref))
+    .filter((ref) => /^(evidence|checkpoint|assignment|branch|task|heartbeat|verification|story|prd|architecture|ux|source|work-item|run-contract|contract):/i.test(ref))
+    .filter((ref) => !checkpointUnsafeRef(ref))
+    .filter((ref) => !/\[redacted-(retention-term|token)\]/i.test(ref))
+    .slice(0, 8);
+}
+
+function compactCheckpointMetadataList(value = []) {
+  return sourceRefList(value)
+    .map((entry) => sanitizeLedgerField(entry, "", 180))
+    .filter((entry) => entry && !/\[redacted-(retention-term|token)\]/i.test(entry))
+    .slice(0, 8);
+}
+
+function buildCheckpointWorkContinuation({ workContinues = true, nextSource = "none" } = {}) {
+  const continuationSource = nextSource && nextSource !== "none" ? nextSource : "the next safe source";
+  return {
+    continues: Boolean(workContinues),
+    nextSource,
+    summary: workContinues
+      ? `Work continues with ${continuationSource}.`
+      : "Work is checkpointed and no further work continues from this checkpoint.",
+  };
+}
+
+function checkpointUnsafeRef(ref = "") {
+  return /\b(token|bearer|authorization|api[-_ ]?key|credential|password|secret)\b/i.test(String(ref || ""));
+}
+
+function sanitizeCheckpointWhereToTest(value = "") {
+  const sanitized = sanitizeLedgerField(value, "", 220);
+  if (!sanitized || /\[redacted-(retention-term|token)\]/i.test(sanitized)) return "";
+  return sanitized;
+}
+
+function finalReportRequested(context = {}) {
+  const cleanupState = sanitizeLedgerField(context.cleanupState || context.cleanup?.state || context.cleanup?.cleanupState || context.cleanup?.status || "unknown", "unknown", 120);
+  return (
+    positiveBoolean(context.sourceExhausted ?? context.source_exhausted ?? context.runway?.sourceExhausted ?? context.runway?.source_exhausted) ||
+    positiveBoolean(context.housekeepingCompleted ?? context.housekeeping_complete) ||
+    ["housekeeping_complete", "complete", "completed", "done"].includes(normalizeCleanupText(cleanupState)) ||
+    positiveBoolean(context.finalReport ?? context.final_report)
+  );
+}
+
+function checkpointBoolean(value, fallback = undefined) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 0) return false;
+    if (value === 1) return true;
+  }
+  if (typeof value === "string") {
+    const normalized = normalizeCleanupText(value);
+    if (["false", "no", "off", "0", "done", "complete", "completed", "stopped", "stop"].includes(normalized)) return false;
+    if (["true", "yes", "on", "1", "continue", "continues", "continuing"].includes(normalized)) return true;
+  }
+  return fallback;
+}
+
+function normalizeCheckpointWorkContinues(checkpoint = {}, context = {}, finalReportReady = false) {
+  const checkpointValue = checkpointBoolean(checkpoint.workContinues ?? checkpoint.work_continues, undefined);
+  const contextValue = checkpointBoolean(context.workContinues ?? context.work_continues, undefined);
+  if (checkpointValue === false || contextValue === false) return false;
+  if (checkpointValue === true) return true;
+  if (contextValue === true && !finalReportReady) return true;
+  return finalReportReady ? false : true;
+}
+
+function buildFinalProgressReport({ checkpointReports = [], heartbeatOnly = [] } = {}, context = {}) {
+  const cleanupState = sanitizeLedgerField(context.cleanupState || context.cleanup?.state || context.cleanup?.cleanupState || context.cleanup?.status || "unknown", "unknown", 120);
+  const sourceExhausted = positiveBoolean(context.sourceExhausted ?? context.source_exhausted ?? context.runway?.sourceExhausted ?? context.runway?.source_exhausted);
+  const housekeepingComplete = positiveBoolean(context.housekeepingCompleted ?? context.housekeeping_complete) || ["housekeeping_complete", "complete", "completed", "done"].includes(normalizeCleanupText(cleanupState));
+  const explicitFinal = positiveBoolean(context.finalReport ?? context.final_report);
+  const ready = sourceExhausted || housekeepingComplete || explicitFinal;
+  const trigger = sourceExhausted ? "source_exhausted" : housekeepingComplete ? "housekeeping_complete" : explicitFinal ? "explicit_final_report" : "not_final";
+  const completedUserFacingCheckpoints = checkpointReports.slice(0, 12).map((checkpoint) => ({
+    checkpointId: checkpoint.checkpointId,
+    whatChanged: checkpoint.whatChanged,
+    whereToTest: checkpoint.whereToTest,
+    verificationEvidence: checkpoint.verificationEvidence,
+    evidenceRefs: checkpoint.evidenceRefs,
+    changedSurfaces: checkpoint.changedSurfaces,
+    knownLimits: checkpoint.knownLimits,
+    workContinues: checkpoint.workContinues,
+    workContinuation: checkpoint.workContinuation,
+  }));
+  return {
+    status: ready ? "ready" : "not_final",
+    trigger,
+    completedCheckpointCount: completedUserFacingCheckpoints.length,
+    completedUserFacingCheckpoints,
+    heartbeatOnlyCount: heartbeatOnly.length,
+    openLanes: compactCheckpointLaneList(context.openLanes || context.open_lanes || []),
+    parkedLanes: compactCheckpointLaneList(context.parkedLanes || context.parked_lanes || []),
+    cleanupState,
+    nextProductDecision: sanitizeLedgerField(context.nextProductDecision || context.next_product_decision || (ready ? "Ask operator for the next product decision." : "none"), "none", 240),
+    retention: "metadata_only_final_checkpoint_summary",
+  };
+}
+
+function compactCheckpointLaneList(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .filter(isPlainObject)
+    .slice(0, 8)
+    .map((lane) => ({
+      assignmentId: sanitizeLedgerField(lane.assignmentId || lane.assignment_id || lane.id || "", "", 120),
+      branch: sanitizeLedgerField(lane.branch || "", "", 160),
+      state: sanitizeLedgerField(lane.state || lane.status || lane.phase || "", "", 80),
+      reason: sanitizeLedgerField(lane.reason || lane.summary || "", "", 180),
+    }))
+    .filter((lane) => lane.assignmentId)
+    .map((lane) => Object.fromEntries(Object.entries(lane).filter(([, value]) => value !== "")));
+}
+
+function shouldPromoteCheckpoint(checkpoint = {}) {
+  const category = String(checkpoint.category || checkpoint.kind || "").trim().toLowerCase();
+  const internalCategories = new Set(["backend", "internal", "fixture", "fixtures", "plumbing", "test", "tests", "test-only"]);
+  const testOnly = positiveBoolean(checkpoint.testOnly) || category === "test" || category === "tests" || category === "test-only";
+  const backendOnly = positiveBoolean(checkpoint.backendOnly) || internalCategories.has(category);
+  const verificationInputs = checkpoint.verificationEvidence ?? checkpoint.verification_evidence ?? checkpoint.verification ?? [];
+  const evidenceInputs = checkpoint.evidenceRefs ?? checkpoint.evidence_refs ?? checkpoint.evidenceRef ?? checkpoint.evidence_ref ?? checkpoint.evidence ?? [];
+  const sourceInputs = checkpoint.sourceRefs ?? checkpoint.source_refs ?? [];
+  const whereToTest = sanitizeCheckpointWhereToTest(checkpoint.whereToTest || checkpoint.testLocation || checkpoint.where_to_test || checkpoint.test_location || "");
+  const verificationEvidence = compactCheckpointVerificationEvidence(verificationInputs);
+  const directEvidenceRefs = compactCheckpointEvidenceRefs([...sourceRefList(evidenceInputs), ...sourceRefList(sourceInputs)]);
+  const evidenceRefs = directEvidenceRefs.length > 0 ? directEvidenceRefs : compactCheckpointEvidenceRefs(verificationEvidence);
+  const hasUsefulCheckpointDetails =
+    Boolean(whereToTest) &&
+    verificationEvidence.length > 0 &&
+    evidenceRefs.length > 0;
+  if (!hasUsefulCheckpointDetails) return false;
+  if ((testOnly || backendOnly) && !positiveBoolean(checkpoint.unblocksVisibleWork) && !positiveBoolean(checkpoint.reducesActiveRisk)) return false;
+  return (
+    positiveBoolean(checkpoint.dailyUseImpact) ||
+    positiveBoolean(checkpoint.userFacing) ||
+    positiveBoolean(checkpoint.safetyRelevant) ||
+    positiveBoolean(checkpoint.testingRelevant) ||
+    positiveBoolean(checkpoint.operatorActionRequired) ||
+    positiveBoolean(checkpoint.unblocksVisibleWork) ||
+    positiveBoolean(checkpoint.reducesActiveRisk)
+  );
+}
+
+function checkpointVisibilityReason(checkpoint = {}, visibility = "heartbeat_only") {
+  if (visibility === "heartbeat_only") return "backend_or_test_only_no_visible_unblock_or_risk_reduction";
+  if (positiveBoolean(checkpoint.dailyUseImpact) || positiveBoolean(checkpoint.userFacing)) return "daily_use_or_user_facing";
+  if (positiveBoolean(checkpoint.safetyRelevant)) return "safety_relevant";
+  if (positiveBoolean(checkpoint.testingRelevant)) return "testing_relevant";
+  if (positiveBoolean(checkpoint.operatorActionRequired)) return "operator_action_required";
+  if (positiveBoolean(checkpoint.unblocksVisibleWork)) return "unblocks_visible_work";
+  if (positiveBoolean(checkpoint.reducesActiveRisk)) return "reduces_active_risk";
+  return "daily_use_checkpoint";
+}
+
+function buildHeartbeatCadence(posture = {}, context = {}) {
+  const stateChanged = positiveBoolean(context.stateChanged) || posture.operatorActionState !== "none";
+  const resumeCondition = sanitizeLedgerField(
+    context.resumeCondition || context.usageSummary?.resumeTrigger || context.usageContext?.summary?.resumeTrigger || "",
+    "",
+    180,
+  );
+  const troubleshooting = positiveBoolean(context.troubleshooting) || positiveBoolean(context.troubleshootingMode);
+  if (troubleshooting) {
+    const requestedSeconds = nonNegativeInteger(context.heartbeatSeconds ?? context.troubleshootingHeartbeatSeconds) ?? 15;
+    const intervalSeconds = Math.max(15, Math.min(300, requestedSeconds));
+    return {
+      mode: "troubleshooting",
+      reportNow: true,
+      intervalSeconds,
+      minIntervalMinutes: null,
+      maxIntervalMinutes: null,
+      trigger: "troubleshooting",
+      resumeCondition: "return to default continuous-run cadence after troubleshooting clears",
+      reason: "operator troubleshooting cadence can be as low as 15 seconds without changing the default continuous-run cadence",
+      defaultContinuousRunUnchanged: true,
+    };
+  }
+  if (posture.usageState === "unknown" || posture.resourceState === "unknown") {
+    return {
+      mode: "conservative_unknown",
+      reportNow: true,
+      intervalMinutes: 3,
+      minIntervalMinutes: 3,
+      maxIntervalMinutes: 5,
+      trigger: stateChanged ? "state_change" : "unknown_signal",
+      signalGap: "usage_or_resource_unknown",
+      resumeCondition: "restore reliable usage and resource signals",
+      reason: "unknown usage or resource posture reports conservatively and names the missing signal",
+    };
+  }
+  if (posture.resourceState === "critical" || posture.resourceState === "pressured") {
+    const critical = posture.resourceState === "critical";
+    return {
+      mode: "resource_pressure",
+      reportNow: critical || stateChanged || context.forceHeartbeat === true,
+      intervalMinutes: critical ? 3 : 10,
+      minIntervalMinutes: critical ? 3 : 10,
+      maxIntervalMinutes: critical ? 5 : 15,
+      trigger: stateChanged ? "state_change" : critical ? "resource_critical" : "resource_pressure_routine",
+      resumeCondition: "CPU/RAM returns to normal or warm",
+      reason: "resource pressure changes heartbeat cadence and prevents reporting the run as healthy active",
+    };
+  }
+  if (posture.usageState === "manager_only" || posture.usageState === "waiting" || /waiting|manager_only/i.test(posture.runState)) {
+    return {
+      mode: "state_change_or_hourly",
+      reportNow: stateChanged,
+      intervalMinutes: 60,
+      minIntervalMinutes: 60,
+      maxIntervalMinutes: 60,
+      trigger: stateChanged ? "state_change" : "hourly_liveness",
+      resumeCondition: resumeCondition || (posture.usageState === "manager_only" ? "wait for usage reset before dispatching new work" : "waiting condition clears"),
+      reason: "manager-only or waiting mode reports on state change and at least hourly",
+    };
+  }
+  if (posture.usageState === "drain" || posture.usageState === "conserve") {
+    return {
+      mode: "reduced_pressure",
+      reportNow: stateChanged || context.forceHeartbeat === true,
+      intervalMinutes: 10,
+      minIntervalMinutes: 10,
+      maxIntervalMinutes: 15,
+      trigger: stateChanged ? "state_change" : "pressure_routine",
+      resumeCondition: "usage returns to normal or operator changes run mode",
+      reason: "drain/conserve mode reports every 10-15 minutes unless state changes",
+    };
+  }
+  return {
+    mode: "healthy_active",
+    reportNow: true,
+    intervalMinutes: 3,
+    minIntervalMinutes: 3,
+    maxIntervalMinutes: 5,
+    trigger: stateChanged ? "state_change" : "routine_liveness",
+    resumeCondition: "continue while usage and resources remain normal",
+    reason: "healthy active runs report every 3-5 minutes by default",
+  };
+}
+
+export function buildFeedbackPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const feedbackItems = normalizeFeedbackItems(options.feedback ?? options.operatorFeedback ?? context.feedback ?? context.operatorFeedback);
+  const routes = feedbackItems.map((feedback) => buildFeedbackRoute(feedback, context));
+  const blockingRoutes = routes.filter((route) => route.classification === "blocking");
+  const blockers = blockingRoutes.map((route) => ({
+    code: "feedback-blocking-delivery",
+    message: "Blocking operator feedback pauses affected downstream delivery and prevents affected PR merge.",
+    nextAction: route.nextAction,
+  }));
+  return packet({
+    ok: blockers.length === 0,
+    status: blockingRoutes.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      mutationMode: "plan_only_feedback_routing",
+      feedbackRoutes: routes,
+      affectedDeliveryGates: blockingRoutes.map((route) => route.affectedDeliveryGate),
+      unrelatedLanePolicy: "continue_unrelated_safe_lanes",
+      recordPolicy: "metadata_only_feedback_record",
+      retention: "metadata_only",
+    },
+    blockers,
+    nextActions: routes.map((route) => ({ code: `feedback-${route.classification}`, nextAction: route.nextAction })),
+    warnings:
+      blockingRoutes.length > 0
+        ? [{ code: "blocking-feedback-delivery-gate", message: "Blocking feedback pauses affected downstream delivery and prevents affected PR merge." }]
+        : [],
+  });
+}
+
+function normalizeFeedbackItems(value) {
+  if (!value) return [];
+  const items = Array.isArray(value) ? value : [value];
+  const deduped = [];
+  const seen = new Set();
+  for (const item of items) {
+    if (item === null || item === undefined || item === "") continue;
+    const normalized = isPlainObject(item) ? { ...item } : { text: String(item) };
+    const key = sanitizeLedgerField(normalized.feedbackId || normalized.id || normalized.text || normalized.summary || normalized.feedback || "", "", 160).toLowerCase();
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    deduped.push(normalized);
+  }
+  return deduped
+    .sort((left, right) => feedbackPriority(right) - feedbackPriority(left))
+    .filter((item) => item !== null && item !== undefined && item !== "")
+    .map((item, index) => {
+      if (isPlainObject(item)) return { ...item, feedbackId: item.feedbackId || item.id || `feedback-${index + 1}` };
+      return { feedbackId: `feedback-${index + 1}`, text: String(item) };
+    })
+    .slice(0, 12);
+}
+
+function feedbackPriority(feedback = {}) {
+  const classification = classifyFeedback(feedback);
+  if (classification === "blocking") return 4;
+  if (classification === "correction") return 3;
+  if (classification === "polish") return 2;
+  return 1;
+}
+
+function buildFeedbackRoute(feedback = {}, context = {}) {
+  const classification = classifyFeedback(feedback);
+  const rawAffectedLane = feedback.affectedLane || feedback.laneId || feedback.assignmentId || "";
+  const affectedLane = sanitizeLedgerField(rawAffectedLane || (classification === "blocking" ? "all_affected_delivery" : "affected-lane"), classification === "blocking" ? "all_affected_delivery" : "affected-lane", 120);
+  const targetSurface = sanitizeLedgerField(feedback.surface || feedback.targetSurface || feedback.whereToTest || feedback.testLocation || "unspecified-surface", "unspecified-surface", 160);
+  const summary = feedbackSummary(feedback, classification);
+  const sourceRefs = compactSanitizedRefs([...(sourceRefList(feedback.sourceRefs || feedback.sourceRef)), ...(sourceRefList(feedback.checkpointRef || feedback.checkpointRefs))]);
+  const base = {
+    feedbackId: sanitizeLedgerField(feedback.feedbackId || feedback.id || "feedback", "feedback", 80),
+    classification,
+    summary,
+    targetSurface,
+    affectedLane,
+    sourceRefs,
+    recordPolicy: "metadata_only_feedback_record",
+    unrelatedLanePolicy: "continue_unrelated_safe_lanes",
+    retention: "metadata_only",
+    rawPayloadRetained: false,
+    authorityImpact: feedbackAuthorityImpact(classification),
+    dependencyImpact: feedbackDependencyImpact(classification),
+  };
+  if (classification === "blocking") {
+    return {
+      ...base,
+      affectedDeliveryGate: {
+        action: "pause_affected_delivery_and_prevent_merge",
+        affectedLane,
+        scope: rawAffectedLane ? "targeted_lane" : "all_affected_delivery",
+        mergePolicy: "prevent_affected_pr_merge",
+        downstreamPolicy: "pause_downstream_lanes",
+        recoveryPath: "route blocking feedback to affected lane before delivery resumes",
+      },
+      route: "pause_delivery_and_route_to_affected_lane",
+      nextAction: "Pause affected delivery, prevent affected PR merge, and route the issue to the affected lane.",
+    };
+  }
+  if (classification === "correction") {
+    const targetWorkerId = sanitizeLedgerField(feedback.activeWorkerId || feedback.workerId || "", "", 80);
+    return {
+      ...base,
+      affectedDeliveryGate: rawAffectedLane
+        ? {
+            action: "hold_affected_delivery_until_correction_resolved",
+            affectedLane,
+            mergePolicy: "hold_until_correction_resolved",
+            downstreamPolicy: "continue_unrelated_safe_lanes",
+            recoveryPath: "route correction feedback before affected delivery is marked merge-ready",
+          }
+        : null,
+      route: targetWorkerId ? "route_to_active_worker" : "create_correction_lane",
+      targetWorkerId,
+      nextAction: targetWorkerId ? "Route correction to the active worker while unrelated lanes continue." : "Create or queue a correction lane while unrelated lanes continue.",
+    };
+  }
+  if (classification === "polish") {
+    return {
+      ...base,
+      route: "batch_polish_feedback",
+      nextAction: "Batch polish feedback without stopping unrelated safe lanes.",
+    };
+  }
+  return {
+    ...base,
+    route: "record_future_work",
+    nextAction: "Record future work without stopping the current run.",
+  };
+}
+
+function feedbackAuthorityImpact(classification) {
+  if (classification === "blocking") return "delivery merge is blocked for affected work until feedback is resolved";
+  if (classification === "correction") return "affected delivery is held until correction feedback is routed";
+  return "no authority expansion; feedback is recorded metadata-only";
+}
+
+function feedbackDependencyImpact(classification) {
+  if (classification === "blocking") return "pause affected downstream lanes; continue unrelated safe lanes";
+  if (classification === "correction") return "route correction while unrelated safe lanes continue";
+  return "no dependency stop line for unrelated lanes";
+}
+
+function classifyFeedback(feedback = {}) {
+  const explicit = String(feedback.classification || feedback.type || feedback.kind || "").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
+  if (["blocking", "correction", "polish", "future_work"].includes(explicit)) return explicit;
+  if (explicit === "future") return "future_work";
+  const text = String(feedback.text || feedback.summary || feedback.feedback || "").toLowerCase();
+  const nonBlocking = /\b(non-blocking|not blocking|no longer blocking|not a blocker)\b/.test(text);
+  if (nonBlocking && /\b(polish|nice to have|minor|copy|spacing|style|later tweak)\b/.test(text)) return "polish";
+  if (nonBlocking) return "correction";
+  if (/\b(blocking|blocker|cannot test|breaks|broken|regression|must fix|merge blocker|stop merge)\b/.test(text)) return "blocking";
+  if (/\b(correction|fix|bug|wrong|error|issue|fails|failed)\b/.test(text)) return "correction";
+  if (/\b(polish|nice to have|minor|copy|spacing|style|later tweak)\b/.test(text)) return "polish";
+  return "future_work";
+}
+
+function feedbackSummary(feedback = {}, classification = "future_work") {
+  const explicit = sanitizeLedgerField(feedback.summary || "", "", 160);
+  if (explicit) return explicit;
+  const surface = sanitizeLedgerField(feedback.surface || feedback.targetSurface || feedback.whereToTest || feedback.testLocation || "", "", 80);
+  return surface ? `${classification} feedback for ${surface}` : `${classification} feedback`;
+}
+
+function buildQuestionDecision(question = {}) {
+  const rawSourceRefs = [...sourceRefList(question.sourceRefs), ...sourceRefList(question.sourceRef)];
+  const sourceEvidence = dependencyLoopSourceRefs(rawSourceRefs);
+  const sourceRefs = sourceEvidence.refs;
+  const questionId = sanitizeLedgerField(question.questionId || question.id || "question", "question", 80);
+  const workerId = sanitizeLedgerField(question.workerId || question.actor || "unknown-worker", "unknown-worker", 80);
+  const laneId = sanitizeLedgerField(question.laneId || question.assignmentId || question.workItemId || "", "", 140) || null;
+  const leaseId = sanitizeLedgerField(question.leaseId || question.lease || question.currentLease?.id || "", "", 140) || null;
+  const type = normalizeQuestionType(question.type || question.questionType || "implementation");
+  const materialDecision = normalizeQuestionMateriality(question);
+  const requestedAction = sanitizeLedgerField(question.requestedAction || question.action || question.intent || "", "", 100);
+  const authorityFamily = sanitizeLedgerField(question.authorityFamily || question.authority || "", "", 100);
+  const risk = sanitizeLedgerField(question.risk || question.riskLevel || "", "", 80);
+  const freshness = sanitizeLedgerField(question.freshness || question.evidenceFreshness || "fresh", "fresh", 80);
+  const unsafeStopLines = unsafeQuestionStopLines({ ...question, type, requestedAction, authorityFamily, risk });
+  const productDirection = productDirectionQuestion({ ...question, type, requestedAction, authorityFamily });
+  const broad = broadQuestion(question);
+  const routine = routineQuestionType(type);
+  const sourceBacked = sourceBackedQuestionRefs(sourceRefs);
+  const base = {
+    questionId,
+    workerId,
+    type,
+    requestedAction: requestedAction || "none",
+    authorityFamily: authorityFamily || "none",
+    materialDecision,
+    retention: "metadata_only",
+    rawPayloadRetained: false,
+    sourceRefs,
+    affectedLane: laneId,
+    affectedLease: leaseId,
+    dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "allowed" }),
+  };
+  if (freshness !== "fresh") {
+    const continuation = "blocked_pending_source_context";
+    return {
+      ...base,
+      decision: "park_lane",
+      compactAnswer: "",
+      answerPolicy: "fresh_source_context_required_before_answer",
+      recordPolicy: "material_decision_only",
+      leaseContinuation: continuation,
+      operatorInterruption: false,
+      reasonCodes: ["stale_source_context"],
+      stopLines: ["fresh_source_context_required_before_answer"],
+      dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation }),
+    };
+  }
+  if (unsafeStopLines.length > 0) {
+    return {
+      ...base,
+      decision: "block_unsafe_continuation",
+      compactAnswer: "",
+      answerPolicy: "operator_authority_required_before_worker_continues",
+      recordPolicy: "material_decision_only",
+      leaseContinuation: "blocked_pending_operator",
+      operatorInterruption: true,
+      reasonCodes: ["unsafe_authority_request"],
+      stopLines: unsafeStopLines,
+      dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "blocked_pending_operator" }),
+      blockerPacket: workerQuestionBlockerPacket(question, { questionId, workerId, laneId, leaseId, stopLines: unsafeStopLines, blockerType: "operator_interruption_required" }),
+    };
+  }
+  if (productDirection) {
+    return {
+      ...base,
+      decision: "escalate_to_operator",
+      compactAnswer: "",
+      answerPolicy: "operator_direction_required",
+      recordPolicy: "material_decision_only",
+      leaseContinuation: "blocked_pending_operator",
+      operatorInterruption: true,
+      reasonCodes: ["ambiguous_product_direction"],
+      stopLines: ["ambiguous_product_direction_requires_operator"],
+      dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "blocked_pending_operator" }),
+      blockerPacket: workerQuestionBlockerPacket(question, { questionId, workerId, laneId, leaseId, stopLines: ["ambiguous_product_direction_requires_operator"], blockerType: "operator_interruption_required" }),
+    };
+  }
+  if (sourceRefs.length === 0 || !sourceBacked) {
+    const continuation = "blocked_pending_source_context";
+    const missingSourceContext = rawSourceRefs.length === 0 || sourceRefs.length === 0 && !sourceEvidence.unsupported && !sourceEvidence.structured;
+    return {
+      ...base,
+      decision: "park_lane",
+      compactAnswer: "",
+      answerPolicy: "do_not_fabricate_without_source_context",
+      recordPolicy: "material_decision_only",
+      leaseContinuation: continuation,
+      operatorInterruption: false,
+      reasonCodes: [missingSourceContext ? "missing_source_context" : "unsupported_source_context"],
+      stopLines: [missingSourceContext ? "source_context_required_before_answer" : "source_owned_context_required_before_answer"],
+      dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation }),
+    };
+  }
+  if (broad) {
+    return {
+      ...base,
+      decision: "narrow_question",
+      compactAnswer: compactNarrowQuestionAnswer(type, sourceRefs),
+      answerPolicy: "narrow_to_cited_source_context",
+      recordPolicy: materialDecision ? "material_decision_only" : "do_not_record_non_material",
+      leaseContinuation: "allowed",
+      operatorInterruption: false,
+      reasonCodes: ["broad_question_narrowed_to_source_refs"],
+      stopLines: [],
+      dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "allowed" }),
+    };
+  }
+  if (routine && sourceRefs.length > 0) {
+    return {
+      ...base,
+      decision: "answer_with_best_judgment",
+      compactAnswer: compactQuestionAnswer({ ...question, type, sourceRefs }),
+      answerPolicy: "use_source_context_and_repo_policy",
+      recordPolicy: materialDecision ? "material_decision_only" : "do_not_record_non_material",
+      leaseContinuation: "allowed",
+      operatorInterruption: false,
+      reasonCodes: ["routine_source_backed"],
+      stopLines: [],
+      dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "allowed" }),
+    };
+  }
+  return {
+    ...base,
+    decision: "park_lane",
+    compactAnswer: "",
+    answerPolicy: "do_not_fabricate_without_source_context",
+    recordPolicy: "material_decision_only",
+    leaseContinuation: "parked",
+    operatorInterruption: false,
+    reasonCodes: ["unknown_question_type"],
+    stopLines: ["source_or_policy_classification_required"],
+    dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "parked" }),
+  };
+}
+
+function buildReviewResourceHumanAttentionPolicy(questionHandling = []) {
+  const rawDecisions = Array.isArray(questionHandling) ? questionHandling : [];
+  const decisions = rawDecisions.filter(isPlainObject);
+  const invalidDecisionCount = rawDecisions.length - decisions.length;
+  const decisionRoutes = decisions.map((decision) => reviewResourceHumanAttentionDecision(decision));
+  const operatorInterruptionCount = decisionRoutes.filter((decision) => decision.action === "interrupt_operator").length;
+  const suppressedCount = decisionRoutes.filter((decision) => decision.action === "suppress_operator_interrupt").length;
+  const heldWithoutInterruptionCount = decisionRoutes.filter((decision) => decision.action === "hold_without_operator_interrupt").length;
+  const triggerIds = compactReasonCodes(decisionRoutes.flatMap((decision) => decision.interruptTriggers || []));
+  const suppressReasonIds = compactReasonCodes(decisionRoutes.flatMap((decision) => decision.suppressWhen || []));
+  return {
+    attentionId: "human_attention_review_routing_policy",
+    label: "Human attention policy",
+    summary: "Interrupt the operator only for authority, safety, scope, scarce external review, or ambiguous product-direction decisions; otherwise continue with compact checkpoint evidence.",
+    interruptTriggers: [
+      "operator_approval_required",
+      "residual_high_risk_after_mitigation",
+      "review_thread_or_exact_head_ambiguity",
+      "scarce_external_review_budget_needed",
+      "scope_or_authority_expansion",
+      "unsafe_or_secret_adjacent_request",
+    ],
+    suppressWhen: [
+      "routine_low_risk_local_change",
+      "focused_verification_can_continue",
+      "bounded_bmad_review_within_standard_delivery_allowance",
+      "metadata_only_checkpoint_is_sufficient",
+    ],
+    evidenceRequired: [
+      "policy basis for interrupting or suppressing human attention",
+      "selected review route ids or explicit skip reason",
+      "verification command and result reference",
+      "next safe manager action",
+    ],
+    managerLoopBinding: {
+      source: "buildWorkerFrictionPlan.questionHandling",
+      operatorInterruptionCount,
+      suppressedCount,
+      heldWithoutInterruptionCount,
+      invalidDecisionCount,
+      triggerIds,
+      suppressReasonIds,
+      nextManagerAction:
+        invalidDecisionCount > 0
+          ? "Hold affected lanes without interrupting the operator until malformed attention-policy input is repaired."
+          : decisionRoutes.length === 0
+          ? "No worker questions require human attention; continue normal manager monitoring."
+          : operatorInterruptionCount > 0
+            ? "Record the attention decision in a compact checkpoint and interrupt only for the affected worker or lane."
+            : heldWithoutInterruptionCount > 0
+              ? "Hold affected lanes without interrupting the operator until source context or verification evidence is available."
+            : suppressedCount > 0
+              ? "Continue manager-owned worker routing with compact checkpoint evidence and no operator interruption."
+              : "No worker questions require human attention; continue normal manager monitoring.",
+      rawPayloadRetained: false,
+    },
+    decisions: decisionRoutes,
+    rawPayloadRetained: false,
+  };
+}
+
+function reviewResourceHumanAttentionDecision(decision = {}) {
+  const operatorInterruption = decision.operatorInterruption === true || decision.leaseContinuation === "blocked_pending_operator";
+  const allowed = decision.leaseContinuation === "allowed";
+  const sourceParked = ["blocked_pending_source_context", "parked"].includes(decision.leaseContinuation);
+  const interruptTriggers = operatorInterruption ? reviewResourceInterruptTriggers(decision) : [];
+  const suppressWhen = !operatorInterruption ? reviewResourceSuppressReasons(decision, { allowed, sourceParked }) : [];
+  return {
+    questionId: sanitizeLedgerField(decision.questionId || "question", "question", 80),
+    workerId: sanitizeLedgerField(decision.workerId || "unknown-worker", "unknown-worker", 80),
+    action: operatorInterruption
+      ? "interrupt_operator"
+      : allowed
+        ? "suppress_operator_interrupt"
+        : "hold_without_operator_interrupt",
+    policyBasis: operatorInterruption
+      ? "operator_attention_required_by_authority_or_safety_policy"
+      : allowed
+        ? "operator_attention_suppressed_by_source_backed_manager_judgment"
+        : "operator_attention_suppressed_until_source_context_or_verification_evidence_exists",
+    interruptTriggers,
+    suppressWhen,
+    evidenceRequired: [
+      "policy basis for interrupting or suppressing human attention",
+      "selected review route ids or explicit skip reason",
+      "verification command and result reference",
+      "next safe manager action",
+    ],
+    nextManagerAction: operatorInterruption
+      ? "Record compact attention checkpoint and block only the affected worker or lane pending operator decision."
+      : allowed
+        ? "Continue with source-backed best judgment and compact checkpoint evidence."
+        : "Park the affected lane without paging the operator; refresh source context or verification evidence.",
+    rawPayloadRetained: false,
+  };
+}
+
+function reviewResourceInterruptTriggers(decision = {}) {
+  const triggers = new Set(["operator_approval_required"]);
+  const stopLines = Array.isArray(decision.stopLines) ? decision.stopLines : [];
+  const reasonCodes = Array.isArray(decision.reasonCodes) ? decision.reasonCodes : [];
+  const joined = [...stopLines, ...reasonCodes, decision.authorityFamily || "", decision.requestedAction || ""].join(" ").toLowerCase();
+  if (/secret|credential/.test(joined)) triggers.add("unsafe_or_secret_adjacent_request");
+  if (/authority|delivery|cleanup|provider|model_policy|ownership|recovery/.test(joined)) triggers.add("scope_or_authority_expansion");
+  if (/extreme_risk|high_risk|unsafe/.test(joined)) triggers.add("residual_high_risk_after_mitigation");
+  if (/review_thread|exact_head|merge/.test(joined)) triggers.add("review_thread_or_exact_head_ambiguity");
+  if (/scarce|claude|external_review/.test(joined)) triggers.add("scarce_external_review_budget_needed");
+  if (/ambiguous_product_direction/.test(joined)) triggers.add("scope_or_authority_expansion");
+  return compactReasonCodes([...triggers]);
+}
+
+function reviewResourceSuppressReasons(decision = {}, context = {}) {
+  const suppressions = new Set();
+  const reasonCodes = Array.isArray(decision.reasonCodes) ? decision.reasonCodes : [];
+  if (context.allowed) suppressions.add("metadata_only_checkpoint_is_sufficient");
+  if (reasonCodes.includes("routine_source_backed") || decision.recordPolicy === "do_not_record_non_material") {
+    suppressions.add("routine_low_risk_local_change");
+  }
+  if (reasonCodes.includes("broad_question_narrowed_to_source_refs") || decision.answerPolicy === "narrow_to_cited_source_context") {
+    suppressions.add("focused_verification_can_continue");
+  }
+  if (context.sourceParked) suppressions.add("metadata_only_checkpoint_is_sufficient");
+  if (suppressions.size === 0) suppressions.add("metadata_only_checkpoint_is_sufficient");
+  return compactReasonCodes([...suppressions]);
+}
+
+function workerDependencyImpact({ laneId = null, leaseId = null, workerId = "", continuation = "allowed" } = {}) {
+  return {
+    affectedWorker: sanitizeLedgerField(workerId || "unknown-worker", "unknown-worker", 80),
+    affectedLane: laneId || null,
+    affectedLease: leaseId || null,
+    continuation,
+    scope: continuation === "allowed" ? "worker_can_continue" : "dependent_worker_or_lane",
+    rawPayloadRetained: false,
+  };
+}
+
+function workerQuestionBlockerPacket(question = {}, context = {}) {
+  const stopLines = Array.isArray(context.stopLines) ? context.stopLines : [];
+  const evidence = dependencyLoopSourceRefs(question.sourceRefs || question.sourceRef || []);
+  const authorityText = stopLines.includes("delivery_requires_delivery_phase_authority")
+    ? "Operator decision for delivery authority is required before the worker continues."
+    : stopLines.includes("cleanup_requires_cleanup_authority")
+      ? "Operator decision for cleanup authority is required before the worker continues."
+      : stopLines.includes("provider_calls_require_operator_approval")
+      ? "Operator decision for provider/model authority is required before the worker continues."
+      : stopLines.includes("secrets_require_operator_approval")
+        ? "Operator decision for secret or credential authority is required before the worker continues."
+        : stopLines.includes("model_policy_requires_operator_approval")
+          ? "Operator decision for model policy is required before the worker continues."
+          : stopLines.includes("recovery_or_ownership_requires_operator_approval")
+            ? "Operator decision for recovery or ownership authority is required before the worker continues."
+            : "Operator decision is required before the worker continues.";
+  return {
+    blockerType: sanitizeLedgerField(context.blockerType || "operator_interruption_required", "operator_interruption_required", 80),
+    questionId: sanitizeLedgerField(context.questionId || "question", "question", 80),
+    affectedWorker: sanitizeLedgerField(context.workerId || "unknown-worker", "unknown-worker", 80),
+    affectedLane: context.laneId || null,
+    affectedLease: context.leaseId || null,
+    evidenceRefs: evidence.refs,
+    blockedEvidenceReasons: [
+      ...(evidence.structured ? [] : ["source-ref-not-structured"]),
+      ...(evidence.unsupported ? ["unsupported-source-context"] : []),
+    ],
+    completedWorkSummary: sanitizeLedgerField(question.completedWorkSummary || question.completedSummary || "", "", 180),
+    unrunWorkSummary: sanitizeLedgerField(question.unrunWorkSummary || question.remainingWorkSummary || "", "", 180),
+    dependencyImpact: "dependent work blocked; unrelated safe workers may continue under dispatcher/lease governors",
+    requiredOperatorAction: authorityText,
+    resumeCriteria: "Resume after explicit operator decision is recorded with source refs and affected lease evidence.",
+    resumeCommand: "record compact operator decision, then rerun manager worker friction plan",
+    rawPayloadRetained: false,
+  };
+}
+
+function workerQuestionOperatorBlockers(questionHandling = []) {
+  return questionHandling
+    .filter((decision) => decision?.operatorInterruption === true && isPlainObject(decision.blockerPacket))
+    .map((decision) => {
+      const packet = decision.blockerPacket;
+      const affectedWorker = sanitizeLedgerField(packet.affectedWorker || decision.workerId || "unknown-worker", "unknown-worker", 80);
+      const affectedLane = sanitizeLedgerField(packet.affectedLane || decision.affectedLane || "", "", 140);
+      const affectedLease = sanitizeLedgerField(packet.affectedLease || decision.affectedLease || "", "", 140);
+      const action = sanitizeLedgerField(packet.requiredOperatorAction || "Operator decision is required before the worker continues.", "Operator decision is required before the worker continues.", 180);
+      const resume = sanitizeLedgerField(packet.resumeCriteria || "Resume after operator decision is recorded.", "Resume after operator decision is recorded.", 180);
+      return {
+        code: "worker-question-operator-interruption",
+        message: `${action} Affected worker ${affectedWorker}${affectedLane ? `, lane ${affectedLane}` : ""}${affectedLease ? `, lease ${affectedLease}` : ""}.`,
+        nextAction: `${action} ${resume}`,
+        affectedWorker,
+        affectedLane: affectedLane || null,
+        affectedLease: affectedLease || null,
+        blockerPacket: {
+          blockerType: sanitizeLedgerField(packet.blockerType || "operator_interruption_required", "operator_interruption_required", 80),
+          evidenceRefs: compactSanitizedRefs(packet.evidenceRefs || []),
+          blockedEvidenceReasons: compactReasonCodes(packet.blockedEvidenceReasons || []),
+          dependencyImpact: sanitizeLedgerField(packet.dependencyImpact || "", "", 180),
+          rawPayloadRetained: false,
+        },
+      };
+    })
+    .slice(0, 8);
+}
+
+function questionDecisionAllowsAnswer(decision = {}) {
+  return ["answer_with_best_judgment", "narrow_question"].includes(decision.decision);
+}
+
+function compactBlockedQuestionDecision(decision = {}) {
+  return {
+    questionId: sanitizeLedgerField(decision.questionId || "question", "question", 80),
+    workerId: sanitizeLedgerField(decision.workerId || "unknown-worker", "unknown-worker", 80),
+    type: sanitizeLedgerField(decision.type || "worker_question", "worker_question", 60),
+    decision: sanitizeLedgerField(decision.decision || "park_lane", "park_lane", 80),
+    leaseContinuation: sanitizeLedgerField(decision.leaseContinuation || "parked", "parked", 80),
+    operatorInterruption: Boolean(decision.operatorInterruption),
+    reasonCodes: compactReasonCodes(decision.reasonCodes),
+    stopLines: compactReasonCodes(decision.stopLines),
+    recordPolicy: sanitizeLedgerField(decision.recordPolicy || "material_decision_only", "material_decision_only", 80),
+    sourceRefs: compactSanitizedRefs(decision.sourceRefs || []),
+    retention: "metadata_only",
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeQuestionType(value) {
+  return sanitizeLedgerField(value || "implementation", "implementation", 60).toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+}
+
+function normalizeQuestionMateriality(question = {}) {
+  if (question.materialDecision === false || question.materiality === "non_material" || question.recordPolicy === "do_not_record_non_material") return false;
+  if (question.materialDecision === true || question.materiality === "material") return true;
+  const text = questionSignalText(question);
+  return /\b(scope|authority|delivery|recovery|model|checkpoint|product|behavior|cleanup|merge|provider|secret|credential)\b/i.test(text);
+}
+
+function routineQuestionType(type = "") {
+  return /^(implementation|verification|test|copy|file_local|file-local|policy|source|source_context|worker_question)$/i.test(type);
+}
+
+function questionSignalText(question = {}) {
+  return [
+    question.summary,
+    question.questionSummary,
+    question.requestedAction,
+    question.action,
+    question.intent,
+    question.authorityFamily,
+    question.authority,
+    question.risk,
+    question.riskLevel,
+    question.type,
+    question.questionType,
+  ].map((value) => String(value || "")).join(" ");
+}
+
+function unsafeQuestionStopLines(question = {}) {
+  const text = questionSignalText(question);
+  const stopLines = [];
+  if (/\b(extreme-risk|extreme risk|extreme_risk|critical risk)\b/i.test(text)) stopLines.push("extreme_risk_requires_operator_approval");
+  if (/\b(provider|openai|claude|ollama|model api|api call|live output|provider_call)\b/i.test(text)) stopLines.push("provider_calls_require_operator_approval");
+  if (/\b(model policy|model_policy|model routing|model_routing|model selection|model_selection|reasoning effort|reasoning_effort|downgrade model|quality downgrade|change model|switch model|route model)\b/i.test(text)) stopLines.push("model_policy_requires_operator_approval");
+  if (/\b(secret|credential|password|token|api key|sk-[a-z0-9_-]+)\b/i.test(text)) stopLines.push("secrets_require_operator_approval");
+  if (/\b(cleanup apply|cleanup_apply|apply cleanup|delete branch|delete-remote|remove worktree|run cleanup|perform cleanup)\b/i.test(text)) stopLines.push("cleanup_requires_cleanup_authority");
+  if (/\b(open pr|open pull request|create pr|create pull request|merge|push|release|delivery mutation|deliver changes|ship changes)\b/i.test(text)) stopLines.push("delivery_requires_delivery_phase_authority");
+  if (/\b(live execution|live worker|launch codex|start tmux|tmux mutation|provider execution)\b/i.test(text)) stopLines.push("live_execution_requires_operator_approval");
+  if (/\b(source mutation|canonical write|writeback|write-back)\b/i.test(text)) stopLines.push("source_mutation_requires_operator_approval");
+  if (/\b(recovery|takeover|owner|ownership|lease|reassign|reassignment|handoff|arbitration)\b/i.test(text)) stopLines.push("recovery_or_ownership_requires_operator_approval");
+  return [...new Set(stopLines)].slice(0, 6);
+}
+
+function sourceBackedQuestionRefs(sourceRefs = []) {
+  const refs = compactSanitizedRefs(sourceRefs);
+  if (refs.length === 0) return false;
+  return refs.some((ref) => /^(story|prd|architecture|ux|source|evidence|task|work-item|assignment|checkpoint|run-contract|contract):/i.test(ref));
+}
+
+function productDirectionQuestion(question = {}) {
+  const type = normalizeQuestionType(question.type || question.questionType || "");
+  const text = questionSignalText(question);
+  return /product_direction|product-direction|strategy|roadmap/.test(type) || /\b(product behavior|product direction|change scope|change the scope|scope for all|all manager runs)\b/i.test(text);
+}
+
+function broadQuestion(question = {}) {
+  const text = questionSignalText(question);
+  return /\b(whole|entire|all manager|all runs|architecture|broad|global|system-wide)\b/i.test(text) && /\b(or only|instead|should i|can i)\b/i.test(text);
+}
+
+function compactReasonCodes(value = []) {
+  return sourceRefList(value)
+    .map((code) => sanitizeLedgerField(code, "", 100).toLowerCase().replace(/[^a-z0-9_-]+/g, "_"))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function compactNarrowQuestionAnswer(type = "implementation", sourceRefs = []) {
+  const refs = compactSanitizedRefs(sourceRefs).slice(0, 3).join(", ");
+  const scope = refs ? `Limit the answer to cited source refs: ${refs}.` : "Limit the answer to the smallest cited source context.";
+  if (/verification|test/.test(type)) return `${scope} Run only the smallest source-specified verification command for the touched surface and record compact evidence.`;
+  return `${scope} Do not broaden scope, authority, or product behavior; continue the smallest safe implementation step and record a compact checkpoint if material.`;
+}
+
+function compactQuestionAnswer(input = "implementation") {
+  const type = isPlainObject(input) ? String(input.questionType || input.type || "implementation") : String(input || "implementation");
+  const summary = isPlainObject(input) ? String(input.summary || "") : "";
+  const sourceRefs = isPlainObject(input) ? compactSanitizedRefs(input.sourceRefs || []) : [];
+  const assignmentId = assignmentIdFromSourceRefs(sourceRefs);
+  if (/missing|no _bmad-output|no .*story|story context|sprint-status|source context/i.test(summary)) {
+    const storyPath = assignmentId ? `_bmad-output/implementation-artifacts/${assignmentId}.md` : "_bmad-output/implementation-artifacts/<assignment-id>.md";
+    return [
+      "Use source context from the main repo root, not only the assigned worktree.",
+      `Story: <repo-root>/${storyPath}.`,
+      "Sprint tracker: <repo-root>/_bmad-output/implementation-artifacts/sprint-status.yaml.",
+      "PRD: <repo-root>/_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md.",
+      "Do not block solely because ignored BMAD artifacts are absent from the worktree; record a compact checkpoint after using these source refs.",
+    ].join(" ");
+  }
+  if (/verification|test/i.test(type)) return "Use the smallest source-specified verification command for the touched surface, then record only the result and material decision.";
+  if (/policy|source/i.test(type)) return "Follow the cited source policy and preserve the source reference in the manager ledger if the decision is material.";
+  return "Apply source context and repo policy with best judgment; record only material decisions and recovery evidence.";
+}
+
+function deriveQuestionLoopSignals(questions = []) {
+  const counts = new Map();
+  for (const question of questions) {
+    const workerId = sanitizeLedgerField(question.workerId || "unknown-worker", "unknown-worker", 80);
+    const type = sanitizeLedgerField(question.type || question.questionType || "implementation", "implementation", 60);
+    const laneId = sanitizeLedgerField(question.laneId || question.assignmentId || "", "", 140) || null;
+    const leaseId = sanitizeLedgerField(question.leaseId || question.lease || "", "", 140) || null;
+    const key = `${workerId}:${type}`;
+    const existing = counts.get(key) || {
+      workerId,
+      laneId,
+      leaseId,
+      failureKind: "repeated-question",
+      questionCount: 0,
+      sourceRefs: [],
+      laneIds: [],
+      leaseIds: [],
+    };
+    existing.questionCount += 1;
+    existing.sourceRefs.push(...sourceRefList(question.sourceRefs), ...sourceRefList(question.sourceRef));
+    if (laneId) existing.laneIds.push(laneId);
+    if (leaseId) existing.leaseIds.push(leaseId);
+    existing.crossLaneAmbiguous = new Set(existing.laneIds).size > 1 || new Set(existing.leaseIds).size > 1;
+    counts.set(key, existing);
+  }
+  return [...counts.values()].filter((signal) => signal.questionCount > 1);
+}
+
+function buildFailureLoopDecision(signal = {}, failureBudget = 3, options = {}) {
+  const failureCount = nonNegativeInteger(signal.failureCount ?? signal.count) ?? 0;
+  const questionCount = nonNegativeInteger(signal.questionCount) ?? 0;
+  const count = Math.max(failureCount, questionCount);
+  if (count < failureBudget) return null;
+  const failureKind = sanitizeLedgerField(signal.failureKind || signal.kind || "repeated-failure", "repeated-failure", 80);
+  const allSourceRefs = dependencyLoopSourceRefs([...sourceRefList(signal.sourceRefs), ...sourceRefList(signal.sourceRef)]);
+  const sourceRefs = allSourceRefs.refs.slice(0, 8);
+  const laneId = sanitizeLedgerField(signal.laneId || signal.assignmentId || signal.workItemId || "", "", 140) || null;
+  const leaseId = sanitizeLedgerField(signal.leaseId || signal.lease || signal.currentLease?.id || "", "", 140) || null;
+  const priorAttemptCount = nonNegativeInteger(signal.priorAttemptCount ?? signal.attemptCount) ?? (Array.isArray(signal.priorAttempts) ? signal.priorAttempts.length : count);
+  const freshness = sanitizeLedgerField(signal.freshness || signal.evidenceFreshness || "fresh", "fresh", 80);
+  const blockedReasons = [];
+  if (freshness !== "fresh") blockedReasons.push("fresh-evidence-required");
+  if (sourceRefs.length === 0) blockedReasons.push("source-evidence-missing");
+  if (!allSourceRefs.structured) blockedReasons.push("source-ref-not-structured");
+  if (allSourceRefs.unsupported) blockedReasons.push("unsupported-source-context");
+  if (signal.authorityExpanding === true || signal.requiresNewAuthority === true) blockedReasons.push("authority-expanding-loop");
+  if (signal.crossLaneAmbiguous === true) blockedReasons.push("cross-lane-ambiguous");
+  if (assignmentSourceRefMismatch(sourceRefs, laneId)) blockedReasons.push("cross-lane-ambiguous");
+  if (!leaseId) blockedReasons.push("affected-lease-missing");
+  if (!laneId) blockedReasons.push("affected-lane-missing");
+  let action = "escalate_model_reasoning";
+  if (sourceRefs.length === 0) {
+    action = "park_lane";
+  } else if (/same-check|verification|test/i.test(failureKind)) {
+    action = /ambiguous-verification/i.test(failureKind) ? "escalate_model_reasoning" : "narrow_slice";
+  } else if (/reassign|ownership|blocked-owner/i.test(failureKind)) {
+    action = "reassign_lane";
+  } else if (/question|unknown|ambiguous/i.test(failureKind)) {
+    action = "park_lane";
+  }
+  if (action === "reassign_lane" && !freshManagerOwnerProof(signal.ownerEvidence || signal.ownershipProof, { ...signal, runId: options.runId })) {
+    blockedReasons.push("reassignment-evidence-missing");
+  }
+  const blocked = blockedReasons.length > 0;
+  const finalAction = blocked ? "park_lane" : action;
+  const leaseContinuation = blocked
+    ? "blocked_until_evidence_complete"
+    : finalAction === "reassign_lane"
+      ? "blocked_until_reassignment_evidence"
+      : finalAction === "park_lane"
+        ? "parked"
+        : "allowed_with_route_recorded";
+  return {
+    workerId: sanitizeLedgerField(signal.workerId || "unknown-worker", "unknown-worker", 80),
+    checkId: sanitizeLedgerField(signal.checkId || signal.commandId || "", "", 120),
+    affectedLane: laneId,
+    affectedLease: leaseId,
+    loopPattern: normalizeDependencyLoopPattern(failureKind),
+    failureKind,
+    count,
+    priorAttemptCount,
+    budget: failureBudget,
+    action: finalAction,
+    intendedAction: action,
+    likelyCause: dependencyLoopLikelyCause(failureKind, finalAction),
+    decisionAuthority: dependencyLoopDecisionAuthority(finalAction),
+    riskClass: dependencyLoopRiskClass(failureKind, finalAction),
+    leaseContinuation,
+    blockedReasons,
+    stopLines: dependencyLoopStopLines(finalAction, blocked),
+    oneNextSafeAction: failureLoopNextAction(finalAction),
+    resumeCriteria: dependencyLoopResumeCriteria(finalAction, blocked),
+    summary: `Worker dependency loop budget exceeded; ${finalAction.replaceAll("_", " ")}.`,
+    nextAction: failureLoopNextAction(finalAction),
+    sourceRefs,
+    rawPayloadRetained: false,
+  };
+}
+
+function dependencyLoopSourceRefs(value = []) {
+  const refs = sourceRefList(value)
+    .map((ref) => sanitizeLedgerField(ref, "", 180))
+    .filter(Boolean);
+  const refIsStructured = (ref) => {
+    if (/\[redacted-(retention-term|token)\]/i.test(ref)) return false;
+    if (/(^|[\\/])\.\.([\\/]|$)|\\/.test(ref)) return false;
+    if (/\b(stdout|stderr|stack|stacktrace|traceback|transcript|scrollback|provider[-_ ]?payload|raw[-_ ]?(prompt|output|log|text|payload)|completion|reasoning[-_ ]?trace|secret|token)\b/i.test(ref)) return false;
+    return /^(story|prd|architecture|ux|source|evidence|task|work-item|assignment|checkpoint|run-contract|contract|events|ledger|workers|verification|recovery)[\w./:-]*(?:\.json|\.ndjson|\.md|:[\w./-]+)?$/i.test(ref);
+  };
+  const structured = refs.length > 0 && refs.every(refIsStructured);
+  const unsupported = refs.some((ref) => /^(tmux|transcript|scrollback|pane):/i.test(ref));
+  return { refs: refs.filter(refIsStructured).slice(0, 8), structured, unsupported };
+}
+
+function normalizeDependencyLoopPattern(failureKind = "") {
+  const text = String(failureKind || "").toLowerCase();
+  if (/same-check|verification|test/.test(text)) return /ambiguous/.test(text) ? "ambiguous-verification" : "same-check";
+  if (/question/.test(text)) return "repeated-question";
+  if (/arbitration|wait/.test(text)) return "arbitration-wait";
+  if (/reassign|ownership|blocked-owner/.test(text)) return "ownership-reassignment";
+  return sanitizeLedgerField(failureKind || "repeated-failure", "repeated-failure", 80);
+}
+
+function dependencyLoopLikelyCause(failureKind = "", action = "") {
+  const text = String(failureKind || "").toLowerCase();
+  if (/ambiguous-verification/.test(text)) return "ambiguous verification risk needs higher reasoning before retry";
+  if (/same-check|verification|test/.test(text)) return "verification loop or oversized slice needs narrowed work";
+  if (/question/.test(text)) return "repeated worker question needs source-bounded decision or parking";
+  if (/reassign|ownership|blocked-owner/.test(text)) return "ownership or lease mismatch requires reassignment evidence";
+  if (action === "park_lane") return "missing or unsafe dependency evidence";
+  return "underfit reasoning or unresolved arbitration loop";
+}
+
+function dependencyLoopDecisionAuthority(action = "") {
+  if (action === "narrow_slice") return "manager-source-bounded-slice-narrowing";
+  if (action === "reassign_lane") return "manager-owned-lease-reassignment";
+  if (action === "park_lane") return "manager-recovery-parking-policy";
+  return "task-fit-model-escalation-policy";
+}
+
+function dependencyLoopRiskClass(failureKind = "", action = "") {
+  if (action === "park_lane") return "blocked_until_evidence_complete";
+  if (/ambiguous-verification|architecture|model|reasoning/i.test(failureKind) || action === "escalate_model_reasoning") return "high_reasoning_or_ambiguous_verification";
+  if (action === "reassign_lane") return "ownership_or_assignment_risk";
+  return "source_bounded_worker_loop";
+}
+
+function dependencyLoopStopLines(action = "", blocked = false) {
+  if (blocked) return ["do_not_continue_dependent_work_until_loop_evidence_is_complete"];
+  if (action === "narrow_slice") return ["do_not_repeat_broad_check_without_narrowed_slice"];
+  if (action === "reassign_lane") return ["do_not_reassign_without_owner_and_lease_evidence"];
+  if (action === "park_lane") return ["do_not_continue_dependent_work_until_resume_criteria_are_met"];
+  return ["do_not_continue_dependent_work_without_escalation_record"];
+}
+
+function dependencyLoopResumeCriteria(action = "", blocked = false) {
+  if (blocked) return "Resume after fresh source, lease, lane, and authority evidence is recorded.";
+  if (action === "narrow_slice") return "Resume after narrowed slice and focused verification plan are recorded.";
+  if (action === "reassign_lane") return "Resume after reassignment evidence and owner handoff are recorded.";
+  if (action === "park_lane") return "Resume after source context or operator decision clears the parked lane.";
+  return "Resume after task-fit model escalation decision is recorded.";
+}
+
+function assignmentSourceRefMismatch(sourceRefs = [], laneId = null) {
+  if (!laneId) return false;
+  const assignmentRefs = sourceRefs
+    .map((ref) => String(ref || ""))
+    .filter((ref) => /^assignment:/i.test(ref))
+    .map((ref) => ref.replace(/^assignment:/i, ""));
+  if (assignmentRefs.length === 0) return false;
+  const expected = sanitizeLedgerField(laneId, "", 140);
+  return new Set(assignmentRefs).size !== 1 || assignmentRefs[0] !== expected;
+}
+
+function freshManagerOwnerProof(value = "", context = {}) {
+  const proof = sanitizeLedgerField(value || "", "", 160);
+  if (!proof) return false;
+  const freshness = sanitizeLedgerField(context.ownerEvidenceFreshness || context.ownershipFreshness || context.freshness || "fresh", "fresh", 80);
+  if (freshness !== "fresh") return false;
+  const runId = sanitizeLedgerField(context.runId || "", "", 120);
+  const workerId = sanitizeLedgerField(context.workerId || "", "", 80);
+  if (runId && workerId && proof.includes(`${runId}/${workerId}`)) return true;
+  return /\bmanager-owned\b|\bowner prefix matches manager run id\b/i.test(proof);
+}
+
+function buildDependencyLoopSummary({ questionHandling = [], failureLoops = [], safeWorkers = {}, excludeWorkers = [], excludeLanes = [] } = {}) {
+  const unrelatedWork = normalizeUnrelatedWorkerWork(safeWorkers, { excludeWorkers, excludeLanes });
+  return {
+    loopCount: failureLoops.length,
+    blockedQuestionCount: questionHandling.filter((decision) => decision.leaseContinuation && decision.leaseContinuation !== "allowed").length,
+    operatorInterruptionCount: questionHandling.filter((decision) => decision.operatorInterruption === true).length,
+    unrelatedWork,
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeUnrelatedWorkerWork(input = {}, options = {}) {
+  const source = isPlainObject(input) ? input : {};
+  const sourceText = sanitizeLedgerField(source.source || "dispatcher-lease-truth", "dispatcher-lease-truth", 120);
+  const freshness = sanitizeLedgerField(source.freshness || source.evidenceFreshness || (Object.keys(source).length > 0 ? "fresh" : "unknown"), "unknown", 80);
+  const excludeWorkers = new Set(sourceRefList(options.excludeWorkers || []).map((worker) => sanitizeLedgerField(worker, "", 80)).filter(Boolean));
+  const excludeLanes = new Set(sourceRefList(options.excludeLanes || []).map((lane) => sanitizeLedgerField(lane, "", 120)).filter(Boolean));
+  const workers = sourceRefList(source.workers || source.workerIds || [])
+    .map((worker) => sanitizeLedgerField(worker, "", 80))
+    .filter(Boolean)
+    .filter((worker) => !excludeWorkers.has(worker))
+    .slice(0, 8);
+  const lanes = sourceRefList(source.lanes || source.laneIds || [])
+    .map((lane) => sanitizeLedgerField(lane, "", 120))
+    .filter(Boolean)
+    .filter((lane) => !excludeLanes.has(lane))
+    .slice(0, 8);
+  const sourceTrusted = /dispatcher|lease|assignment/i.test(sourceText) && freshness === "fresh" && source.authorityExpanding !== true && source.requiresNewAuthority !== true;
+  const requestedCount = nonNegativeInteger(source.eligibleCount ?? source.count ?? workers.length) ?? workers.length;
+  const eligibleCount = sourceTrusted ? (workers.length > 0 ? Math.min(requestedCount, workers.length) : requestedCount) : 0;
+  return {
+    eligibleCount,
+    workers: sourceTrusted ? workers : [],
+    lanes: sourceTrusted ? lanes : [],
+    source: sourceText,
+    freshness,
+    provenance: sourceTrusted ? "dispatcher-lease-truth" : "unproven",
+    mutationPerformed: false,
+  };
+}
+
+function compactSanitizedRefs(value = []) {
+  return sourceRefList(value)
+    .map((ref) => sanitizeLedgerField(ref, "", 180))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function compactModelRoutingSourceRefs(value = []) {
+  return compactSanitizedRefs(value)
+    .filter((ref) => /^(story|prd|architecture|ux|source|evidence|task|work-item):/i.test(ref))
+    .filter((ref) => !/\[redacted-(retention-term|token)\]/i.test(ref))
+    .slice(0, 8);
+}
+
+function failureLoopNextAction(action) {
+  if (action === "narrow_slice") return "Narrow the slice and rerun the failing check with preserved evidence.";
+  if (action === "reassign_lane") return "Reassign the lane after preserving worker state and source evidence.";
+  if (action === "park_lane") return "Park the lane and surface the missing source context or decision to the manager.";
+  return "Escalate reasoning effort for the same task-fit model class before retrying.";
+}
+
+function buildModelRoutingDecision(taskRisk = {}, context = {}) {
+  const usage = normalizeModelRoutingUsageState(context.usageState);
+  const usageState = usage.state;
+  const normalized = normalizeModelRoutingRisk(taskRisk);
+  const signals = [];
+  if (highReasoningTaskType(normalized.taskType)) signals.push("task-type-high-reasoning");
+  if (positiveRiskValue(normalized.ambiguity, ["high", "ambiguous"])) signals.push("high-ambiguity");
+  if (positiveRiskValue(normalized.blastRadius, ["broad", "high", "large"])) signals.push("broad-blast-radius");
+  if (positiveBoolean(normalized.crossCuttingDesign)) signals.push("cross-cutting-design");
+  if (positiveBoolean(normalized.repeatedFailure) || (context.failureLoops || []).length > 0) signals.push("repeated-failure");
+  if (hasAmbiguousVerificationSignal(context.failureSignals || [])) signals.push("ambiguous-verification-failure");
+  if (positiveRiskValue(normalized.expectedReworkCost, ["high", "expensive", "large"])) signals.push("high-expected-rework-cost");
+  if (positiveRiskValue(normalized.verificationDifficulty, ["high", "hard", "ambiguous"])) signals.push("high-verification-difficulty");
+  if (normalized.unknownValues.length > 0) signals.push("unknown-task-risk-input");
+  const highRisk = signals.length > 0;
+  const constrainedUsage = usageState !== "normal";
+  const sourceRefs = compactModelRoutingSourceRefs([
+    ...(sourceRefList(taskRisk?.sourceRefs)),
+    ...(sourceRefList(context.sourceRefs)),
+  ]);
+  return {
+    routing: highRisk ? "high_effort_task_fit" : "standard_task_fit",
+    reasoningEffort: highRisk ? "high" : "medium",
+    modelClass: highRisk ? "best_available_for_task_complexity" : "appropriate_for_bounded_implementation",
+    qualityPolicy: "preserve_task_fit_quality",
+    usageState,
+    usageAdjustment: constrainedUsage ? "reduce_dispatch_not_model_quality" : "none",
+    leasePolicy: constrainedUsage ? "usage_pressure_limits_new_leases_before_quality" : "normal_lease_policy",
+    usageInputStatus: usage.inputStatus,
+    riskSignals: signals,
+    routeReason: highRisk ? "quality_risk_expected_rework_or_verification_cost" : "routine_bounded_task_expected_correct",
+    escalationRule: highRisk ? "escalate_for_quality_risk" : "none",
+    expectedVerificationBoundary: highRisk ? "focused_plus_integration_verification" : "focused_verification",
+    costPosture: highRisk ? "avoid_underfit_rework" : "cheapest_expected_correct",
+    taskType: normalized.taskType,
+    inputStatus: normalized.unknownValues.length > 0 ? "unknown_values_ignored" : "recognized",
+    ignoredInputs: normalized.unknownValues,
+    sourceRefs,
+    rawPayloadRetained: false,
+  };
+}
+
+function positiveRiskValue(value, allowed = []) {
+  const text = String(value || "").trim().toLowerCase();
+  return allowed.includes(text);
+}
+
+function positiveBoolean(value) {
+  if (value === true) return true;
+  if (value === false || value === null || value === undefined) return false;
+  return /^(true|yes|1)$/i.test(String(value).trim());
+}
+
+function normalizeModelRoutingUsageState(value) {
+  const text = String(value || "unknown").trim().toLowerCase();
+  const normalized = text.replace(/[-\s]+/g, "_");
+  if (["normal", "conserve", "drain", "manager_only", "unknown"].includes(normalized)) {
+    return { state: normalized, inputStatus: "recognized" };
+  }
+  return { state: "unknown", inputStatus: "unknown_values_ignored" };
+}
+
+function highReasoningTaskType(taskType = "") {
+  return /^(architecture|design|planning|recovery|security|migration|cross-cutting|cross_cutting|delivery|cleanup)$/.test(String(taskType || "").trim().toLowerCase());
+}
+
+function hasAmbiguousVerificationSignal(signals = []) {
+  return (Array.isArray(signals) ? signals : [])
+    .filter(isPlainObject)
+    .some((signal) => /ambiguous.*verification|verification.*ambiguous|unknown-verification|unclear-verification/i.test(String(signal.failureKind || signal.kind || signal.summary || "")));
+}
+
+function normalizeModelRoutingRisk(taskRisk = {}) {
+  const risk = isPlainObject(taskRisk) ? taskRisk : {};
+  const unknownValues = [];
+  const taskType = normalizedModelRoutingText(risk.taskType || risk.type || "implementation", "implementation", 60, unknownValues, "taskType");
+  const ambiguity = normalizedEnumRisk(risk.ambiguity, ["low", "medium", "high", "ambiguous"], "low", unknownValues, "ambiguity");
+  const blastRadius = normalizedEnumRisk(risk.blastRadius || risk.blast_radius, ["low", "medium", "broad", "high", "large"], "low", unknownValues, "blastRadius");
+  const expectedReworkCost = normalizedEnumRisk(risk.expectedReworkCost || risk.expected_rework_cost || risk.reworkCost, ["low", "medium", "high", "expensive", "large"], "low", unknownValues, "expectedReworkCost");
+  const verificationDifficulty = normalizedEnumRisk(risk.verificationDifficulty || risk.verification_difficulty, ["low", "medium", "high", "hard", "ambiguous"], "low", unknownValues, "verificationDifficulty");
+  const crossCuttingDesign = normalizedBooleanRisk(risk.crossCuttingDesign || risk.cross_cutting_design, false, unknownValues, "crossCuttingDesign");
+  const repeatedFailure = normalizedBooleanRisk(risk.repeatedFailure || risk.repeated_failure, false, unknownValues, "repeatedFailure");
+  return {
+    taskType,
+    ambiguity,
+    blastRadius,
+    expectedReworkCost,
+    verificationDifficulty,
+    crossCuttingDesign,
+    repeatedFailure,
+    unknownValues,
+  };
+}
+
+function normalizedModelRoutingText(value, fallback, maxLength, unknownValues, fieldName) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (Array.isArray(value) || isPlainObject(value)) {
+    unknownValues.push(fieldName);
+    return fallback;
+  }
+  return sanitizeLedgerField(value, fallback, maxLength).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || fallback;
+}
+
+function normalizedEnumRisk(value, allowed, fallback, unknownValues, fieldName) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (Array.isArray(value) || isPlainObject(value)) {
+    unknownValues.push(fieldName);
+    return fallback;
+  }
+  const text = String(value).trim().toLowerCase().replace(/_/g, "-");
+  if (allowed.includes(text)) return text;
+  if (/^not\b|false|none|no\b/.test(text)) return fallback;
+  unknownValues.push(fieldName);
+  return fallback;
+}
+
+function normalizedBooleanRisk(value, fallback, unknownValues, fieldName) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value) || isPlainObject(value)) {
+    unknownValues.push(fieldName);
+    return fallback;
+  }
+  const text = String(value).trim().toLowerCase();
+  if (/^(true|yes|1)$/.test(text)) return true;
+  if (/^(false|no|0)$/.test(text)) return false;
+  unknownValues.push(fieldName);
+  return fallback;
+}
+
+function classifyLifecycleWorkers(workers = [], runId = "", tmuxSummary = {}) {
+  const liveTmux = liveManagerTmuxSessions(tmuxSummary);
+  const eligible = [];
+  const excluded = [];
+  for (const worker of workers) {
+    const base = {
+      workerId: worker.workerId,
+      sessionName: worker.sessionName,
+      owner: worker.owner,
+      state: worker.state,
+      assignmentId: worker.assignmentId || null,
+      taskId: worker.taskId || null,
+      worktreePath: worker.worktreePath || null,
+    };
+    if (!isManagerOwnedWorker(worker, runId)) {
+      excluded.push({ ...base, reason: worker.owner === "unknown" ? "unknown-owner" : "not-manager-owned" });
+    } else if (!worker.sessionName) {
+      excluded.push({ ...base, reason: "missing-visible-session-name" });
+    } else if (["retired", "terminated", "failed"].includes(worker.state)) {
+      excluded.push({ ...base, reason: "not-live-manager-owned" });
+    } else if (!worker.lastHeartbeatAt) {
+      excluded.push({ ...base, reason: "missing-heartbeat" });
+    } else if (liveTmux.enforced && !liveTmux.sessionNames.has(worker.sessionName)) {
+      excluded.push({ ...base, reason: "missing-live-tmux-session" });
+    } else {
+      eligible.push(worker);
+    }
+  }
+  return { eligible, excluded };
+}
+
+function liveManagerTmuxSessions(tmuxSummary = {}) {
+  if (!isPlainObject(tmuxSummary)) return { enforced: false, sessionNames: new Set() };
+  const evidence = Array.isArray(tmuxSummary.managerOwnedPaneEvidence) ? tmuxSummary.managerOwnedPaneEvidence : null;
+  const available = tmuxSummary.available === true || Number.isInteger(tmuxSummary.paneCount);
+  const explicitEmptyManagerSet = available && Number(tmuxSummary.managerOwnedPanes || 0) === 0;
+  if (evidence === null && !explicitEmptyManagerSet) return { enforced: false, sessionNames: new Set() };
+  const sessionNames = new Set(
+    (evidence || [])
+      .map((pane) => sanitizeLedgerField(pane?.sessionName || pane?.session || "", "", 80))
+      .filter(Boolean),
+  );
+  return { enforced: true, sessionNames };
+}
+
+function missingLiveWorkerIdsFromWorkerStatus(workerPacket = {}) {
+  const excluded = workerPacket.summary?.lifecyclePlan?.terminationPlan?.excludedSessions;
+  if (!Array.isArray(excluded)) return new Set();
+  return new Set(
+    excluded
+      .filter((worker) => worker?.reason === "missing-live-tmux-session")
+      .map((worker) => sanitizeLedgerField(worker.workerId || "", "", 80))
+      .filter(Boolean),
+  );
+}
+
+function fallbackHandoffWorkerIdsFromWorkerStatus(workerPacket = {}) {
+  const warmPoolWorkers = workerPacket.summary?.warmPool?.workers;
+  if (!Array.isArray(warmPoolWorkers)) return new Set();
+  return new Set(
+    warmPoolWorkers
+      .filter((worker) => worker?.nextWork?.posture === "handoff_pointer_fallback")
+      .map((worker) => sanitizeLedgerField(worker.workerId || "", "", 80))
+      .filter(Boolean),
+  );
+}
+
+function isFallbackHandoffWorker(worker = {}, fallbackWorkerIds = new Set()) {
+  const pendingHandoffStates = new Set(["handoff_sent", "prompt_idle_handoff", "pointer_receipt_unverified"]);
+  if (fallbackWorkerIds.has(worker.workerId) && !pendingHandoffStates.has(worker.recoveryState)) return true;
+  return ["completed_lane_reusable", "missing_session_restarted_needs_handoff"].includes(worker.recoveryState);
+}
+
+function workerHasReusableCompletedLaneEvidence(worker = {}, lane = {}, checkpoints = []) {
+  const assignmentId = sanitizeIdentifierField(worker.assignmentId || lane.assignmentId || lane.assignment_id || "", "", 140);
+  if (!assignmentId || !isNonWorkerLanePhase(lane.phase || lane.status || "")) return false;
+  const lastHeartbeatMs = parseTimeMs(worker.lastHeartbeatAt);
+  const matching = filterWorkerProgressRecords(checkpoints, worker, assignmentId)
+    .filter((record) => recordIsInWorkerAssignmentWindow(record, lastHeartbeatMs))
+    .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0));
+  return matching.some((record) => classifyLaneAdvancementSummary(record.summary).state !== "not_ready");
+}
+
+function buildWorkerTerminationPlan(managerOwnedWorkers = [], excludedSessions = [], resourceState = "unknown", tmuxBlockers = [], resourceSnapshot = {}) {
+  const compactResourceSnapshot = compactTerminationResourceSnapshot(resourceState, resourceSnapshot);
+  const evidenceGaps = resourceState === "critical" ? resourceTerminationEvidenceGaps(compactResourceSnapshot) : [];
+  if (tmuxBlockers.length > 0) {
+    return {
+      state: "blocked",
+      managerOwnedOnly: true,
+      orderPolicy: "idle_warm_before_active",
+      resourceSnapshot: compactResourceSnapshot,
+      killOrder: [],
+      excludedSessions,
+      blockers: tmuxBlockers,
+      rawPayloadRetained: false,
+    };
+  }
+  if (evidenceGaps.length > 0) {
+    return {
+      state: "blocked",
+      managerOwnedOnly: true,
+      orderPolicy: "idle_warm_before_active",
+      resourceSnapshot: compactResourceSnapshot,
+      killOrder: [],
+      excludedSessions,
+      blockers: evidenceGaps.map((gap) => ({
+        code: `resource-termination-${gap}-missing`,
+        message: `Critical resource termination requires compact ${gap} evidence before killing a worker.`,
+        nextAction: "Refresh manager-resource-status and worker-status before applying resource termination.",
+      })),
+      rawPayloadRetained: false,
+    };
+  }
+  if (resourceState !== "critical") {
+    return {
+      state: "not_needed",
+      managerOwnedOnly: true,
+      orderPolicy: "idle_warm_before_active",
+      resourceSnapshot: compactResourceSnapshot,
+      killOrder: [],
+      excludedSessions,
+      rawPayloadRetained: false,
+    };
+  }
+  const priority = new Map([
+    ["idle", 0],
+    ["warm", 1],
+    ["paused", 2],
+    ["paused-drain", 2],
+    ["draining", 2],
+    ["active", 3],
+  ]);
+  const killOrder = [...managerOwnedWorkers]
+    .sort((left, right) => (priority.get(left.state) ?? 2) - (priority.get(right.state) ?? 2) || left.workerId.localeCompare(right.workerId))
+    .map((worker, index) => ({
+      order: index + 1,
+      workerId: worker.workerId,
+      sessionName: worker.sessionName,
+      owner: worker.owner,
+      state: worker.state,
+      managerOwned: true,
+      ownershipProof: {
+        owner: worker.owner,
+        runId: worker.runId || runIdFromOwner(worker.owner),
+        managerOwned: true,
+      },
+      resourceSnapshot: compactResourceSnapshot,
+      leaseState: compactTerminationLeaseState(worker),
+      command: `tmux kill-session -t ${sanitizeLedgerField(worker.sessionName || worker.workerId || "", "", 80)}`,
+      result: "planned",
+      action: "planned-manager-owned-termination",
+      reason: index === 0 ? "recover-host-responsiveness" : "continue-critical-pressure-drain",
+      recoveryAction: "mark_lease_recovery_required_before_work_resumes",
+      affectedLease: buildTerminationAffectedLease(worker),
+      rawPayloadRetained: false,
+    }));
+  return {
+    state: killOrder.length > 0 ? "planned" : "no-manager-owned-workers",
+    managerOwnedOnly: true,
+    orderPolicy: "idle_warm_before_active",
+    resourceSnapshot: compactResourceSnapshot,
+    killOrder,
+    excludedSessions,
+    recoveryRequiredBeforeResume: killOrder
+      .map((entry) => entry.affectedLease)
+      .filter((lease) => lease.recoveryRequired === true),
+    rawPayloadRetained: false,
+  };
+}
+
+function resourceTerminationEvidenceGaps(snapshot = {}) {
+  const gaps = [];
+  if (snapshot.state !== "critical") gaps.push("critical-state");
+  const hasLoadMetric = snapshot.loadRatio !== null && snapshot.loadRatio !== undefined && Number.isFinite(Number(snapshot.loadRatio));
+  const hasRamMetric = snapshot.usedMemoryRatio !== null && snapshot.usedMemoryRatio !== undefined && Number.isFinite(Number(snapshot.usedMemoryRatio));
+  if (!hasLoadMetric && !hasRamMetric) gaps.push("pressure-metric");
+  if (!snapshot.sampledAt) gaps.push("sampled-at");
+  return gaps;
+}
+
+function runIdFromOwner(owner = "") {
+  return sanitizeLedgerField(String(owner).split("/")[0] || "", "", 80);
+}
+
+function compactTerminationResourceSnapshot(resourceState = "unknown", snapshot = {}) {
+  const source = isPlainObject(snapshot) ? snapshot : {};
+  return {
+    state: sanitizeLedgerField(source.state || resourceState || "unknown", "unknown", 40),
+    sampledAt: sanitizeLedgerField(source.sampledAt || source.timestamp || "", "", 80) || null,
+    cpuCount: nonNegativeInteger(source.cpuCount) ?? null,
+    load1: Number.isFinite(Number(source.load1)) ? Number(source.load1) : null,
+    loadRatio: Number.isFinite(Number(source.loadRatio)) ? Number(source.loadRatio) : null,
+    freeMemoryBytes: Number.isFinite(Number(source.freeMemoryBytes)) ? Number(source.freeMemoryBytes) : null,
+    totalMemoryBytes: Number.isFinite(Number(source.totalMemoryBytes)) ? Number(source.totalMemoryBytes) : null,
+    freeMemoryRatio: Number.isFinite(Number(source.freeMemoryRatio)) ? Number(source.freeMemoryRatio) : null,
+    usedMemoryRatio: Number.isFinite(Number(source.usedMemoryRatio)) ? Number(source.usedMemoryRatio) : null,
+    rawPayloadRetained: false,
+  };
+}
+
+function compactTerminationLeaseState(worker = {}) {
+  const active = hasActiveWorkerLease(worker);
+  return {
+    assignmentId: sanitizeLedgerField(worker.assignmentId || worker.currentLease?.assignmentId || "", "", 140) || null,
+    taskId: sanitizeLedgerField(worker.taskId || worker.currentLease?.taskId || "", "", 140) || null,
+    leaseId: sanitizeLedgerField(worker.leaseId || worker.currentLease?.leaseId || "", "", 140) || null,
+    state: sanitizeLedgerField(worker.leaseState || worker.currentLease?.state || worker.assignmentState || (active ? "active" : "none"), "unknown", 80),
+    active,
+    rawPayloadRetained: false,
+  };
+}
+
+function buildTerminationAffectedLease(worker = {}) {
+  const leaseState = compactTerminationLeaseState(worker);
+  const recoveryRequired = Boolean(leaseState.assignmentId || leaseState.leaseId || leaseState.active);
+  return {
+    assignmentId: leaseState.assignmentId,
+    taskId: leaseState.taskId,
+    leaseId: leaseState.leaseId,
+    state: recoveryRequired ? "recovery_required" : "none",
+    recoveryRequired,
+    recoveryAction: recoveryRequired ? "reconcile_dispatcher_lease_before_resuming_work" : "no_active_lease_to_mark",
+    rawPayloadRetained: false,
+  };
+}
+
+function isManagerOwnedWorker(worker, runId) {
+  if (!worker?.owner || !runId) return false;
+  if (worker.runId && worker.runId !== runId) return false;
+  return String(worker.owner).startsWith(`${runId}/`);
+}
+
+function nextWorkerId(runId, workers = [], offset = 0) {
+  const used = new Set(workers.map((worker) => worker.workerId));
+  const usedSessions = new Set(workers.map((worker) => worker.sessionName).filter(Boolean));
+  const usedOwners = new Set(workers.map((worker) => worker.owner).filter(Boolean));
+  let candidateNumber = 1;
+  let skipped = 0;
+  while (candidateNumber <= 9999) {
+    const workerId = `codex-${candidateNumber}`;
+    if (!used.has(workerId) && !usedSessions.has(workerId) && !usedOwners.has(`${runId}/${workerId}`)) {
+      if (skipped === offset) return workerId;
+      skipped += 1;
+    }
+    candidateNumber += 1;
+  }
+  throw new Error("No available manager worker id in codex-1..codex-9999");
+}
+
+function buildWorkerTmuxBlockers(tmuxSummary = {}) {
+  const blockers = [];
+  if ((tmuxSummary.takeoverRequiredPanes || 0) > 0) {
+    blockers.push({ code: "tmux-takeover-required", message: `${tmuxSummary.takeoverRequiredPanes} tmux pane(s) require explicit ownership takeover before worker mutation.`, nextAction: "Get takeover approval or park those panes before worker target changes." });
+  }
+  return blockers;
+}
+
+function buildWorkerTmuxWarnings(tmuxSummary = {}) {
+  const warnings = [];
+  if ((tmuxSummary.unmanagedPanes || 0) > 0) {
+    warnings.push({
+      code: "tmux-unmanaged-orientation-evidence",
+      message: `${tmuxSummary.unmanagedPanes} unmanaged tmux pane(s) observed as orientation evidence; they do not block manager-owned warm starts.`,
+    });
+  }
+  return warnings;
+}
+
+function countActiveAssignments(counts = {}) {
+  return Object.entries(counts).reduce((total, [status, count]) => {
+    if (!/\b(active|assigned|claimed|in_progress|in-progress|review)\b/i.test(status)) return total;
+    return total + (nonNegativeInteger(count) || 0);
+  }, 0);
+}
+
+export function buildTmuxOrientationStatus(options = {}, context = {}) {
+  try {
+    const reportOptions = {
+      json: true,
+      allowMissingTmux: true,
+      stateRoot: options.stateRoot || "",
+      owner: options.owner || "",
+    };
+    const { report } = runTmuxOrientationReport(reportOptions, context);
+    const reconciledPanes = reconcileManagerOwnedTmuxPanes(report.panes || [], options, context);
+    const summary = summarizeManagerTmuxPanes(reconciledPanes, report.summary || {});
+    const workspaceErrorCount = report.workspaceErrors?.length || 0;
+    return packet({
+      status: report.tmux?.available ? "ready" : "unavailable",
+      summary: {
+        orientation: "metadata-only",
+        mutation: "not-allowed",
+        available: Boolean(report.tmux?.available),
+        paneCount: summary.total ?? report.panes?.length ?? 0,
+        mappedPanes: summary.mapped ?? 0,
+        managerOwnedPanes: summary.managerOwnedPanes ?? summary.currentOwnerPanes ?? 0,
+        takeoverRequiredPanes: summary.takeoverRequired ?? 0,
+        unmanagedPanes: summary.unmanaged ?? 0,
+        missingWorktrees: summary.missingWorktrees ?? 0,
+        dirtyPanes: summary.dirty ?? 0,
+        unknownDirtyPanes: summary.unknownDirty ?? 0,
+        malformedPaneMetadata: summary.malformedPaneMetadata ?? 0,
+        workspaceErrorCount,
+        managerOwnedPaneEvidence: summarizeTmuxPaneEvidence(reconciledPanes, "manager-owned"),
+        unmanagedPaneEvidence: summarizeTmuxPaneEvidence(reconciledPanes, "unmanaged"),
+        takeoverRequiredPaneEvidence: summarizeTmuxPaneEvidence(reconciledPanes, "takeover"),
+        error: report.tmux?.error || "",
+      },
+      warnings: [
+        ...(report.tmux?.available ? [] : [{ code: "tmux-orientation-unavailable", message: report.tmux?.error || "tmux unavailable" }]),
+        ...(workspaceErrorCount > 0 ? [{ code: "tmux-workspace-errors", message: `${workspaceErrorCount} workspace orientation errors.` }] : []),
+      ],
+    });
+  } catch (error) {
+    return packet({
+      ok: false,
+      status: "unavailable",
+      summary: {
+        orientation: "metadata-only",
+        mutation: "not-allowed",
+        available: false,
+        paneCount: 0,
+        managerOwnedPanes: 0,
+        takeoverRequiredPanes: 0,
+        unmanagedPanes: 0,
+        missingWorktrees: 0,
+        dirtyPanes: 0,
+        unknownDirtyPanes: 0,
+        malformedPaneMetadata: 0,
+        workspaceErrorCount: 0,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      warnings: [{ code: "tmux-orientation-failed", message: error instanceof Error ? error.message : String(error) }],
+    });
+  }
+}
+
+function reconcileManagerOwnedTmuxPanes(panes = [], options = {}, context = {}) {
+  if (!Array.isArray(panes) || panes.length === 0) return [];
+  const runId = options.runId || context.runId || "";
+  if (!runId) return panes;
+  const workers = context.managerWorkers || context.workers || readJsonArray(managerRunPaths(runId, options, context).workers).value;
+  const managerSessions = new Map(
+    workers
+      .filter((worker) => isPlainObject(worker))
+      .map(projectWorker)
+      .filter((worker) => worker.runId === runId)
+      .filter((worker) => worker.owner === `${runId}/${worker.workerId}`)
+      .filter((worker) => ["active", "warm"].includes(worker.state))
+      .filter((worker) => worker.sessionName)
+      .map((worker) => [worker.sessionName, worker]),
+  );
+  if (managerSessions.size === 0) return panes;
+  return panes.map((pane) => {
+    const worker = managerSessions.get(String(pane.sessionName || ""));
+    if (!worker || pane.classification !== "unmanaged-path") return pane;
+    return {
+      ...pane,
+      workerId: worker.workerId,
+      workerState: worker.state,
+      assignmentId: worker.assignmentId || null,
+      taskId: pane.taskId || worker.taskId || null,
+      classification: "manager-worker-owned",
+      stopLine: "Manager-owned worker pane; mutate only through manager worker gates.",
+    };
+  });
+}
+
+function summarizeManagerTmuxPanes(panes = [], fallback = {}) {
+  if (!Array.isArray(panes) || panes.length === 0) {
+    return {
+      total: fallback.total ?? 0,
+      mapped: fallback.mapped ?? 0,
+      managerOwnedPanes: 0,
+      takeoverRequired: fallback.takeoverRequired ?? 0,
+      unmanaged: fallback.unmanaged ?? 0,
+      missingWorktrees: fallback.missingWorktrees ?? 0,
+      dirty: fallback.dirty ?? 0,
+      unknownDirty: fallback.unknownDirty ?? 0,
+      malformedPaneMetadata: fallback.malformedPaneMetadata ?? 0,
+    };
+  }
+  return {
+    total: panes.length,
+    mapped: panes.filter((pane) => pane.taskId).length,
+    managerOwnedPanes: panes.filter((pane) => pane.classification === "manager-worker-owned" || pane.classification === "current-runner-owned").length,
+    takeoverRequired: panes.filter((pane) => pane.classification === "takeover-required").length,
+    unmanaged: panes.filter((pane) => pane.classification === "unmanaged-path").length,
+    missingWorktrees: panes.filter((pane) => pane.worktreeExists === false).length,
+    dirty: panes.filter((pane) => pane.dirtyState?.dirty).length,
+    unknownDirty: panes.filter((pane) => pane.dirtyState?.status === "unknown").length,
+    malformedPaneMetadata: panes.filter((pane) => pane.metadataState === "malformed").length,
+  };
+}
+
+function summarizeTmuxPaneEvidence(panes = [], mode = "unmanaged") {
+  if (!Array.isArray(panes)) return [];
+  const matcher =
+    mode === "takeover"
+      ? (pane) => String(pane?.classification || "").includes("takeover")
+      : mode === "manager-owned"
+        ? (pane) => String(pane?.classification || "") === "manager-worker-owned" || String(pane?.classification || "") === "current-runner-owned"
+      : (pane) => String(pane?.classification || "").startsWith("unmanaged");
+  return panes
+    .filter(matcher)
+    .map((pane) => ({
+      sessionName: sanitizeLedgerField(pane.sessionName || "", "", 80),
+      windowIndex: sanitizeLedgerField(pane.windowIndex || "", "", 20),
+      windowName: sanitizeLedgerField(pane.windowName || "", "", 80),
+      paneIndex: sanitizeLedgerField(pane.paneIndex || "", "", 20),
+      paneId: sanitizeLedgerField(pane.paneId || "", "", 40),
+      currentPath: sanitizeLedgerField(pane.currentPath || "", "", 180),
+      currentCommand: sanitizeLedgerField(pane.currentCommand || "", "", 80),
+      classification: sanitizeLedgerField(pane.classification || "", "", 80),
+      stopLine: sanitizeLedgerField(pane.stopLine || "", "", 180),
+    }))
+    .slice(0, 8);
+}
+
+const DEFAULT_REFILL_LOW_WATERMARK = 2;
+const DEFAULT_REFILL_HIGH_WATERMARK = 6;
+const REFILL_STOP_LINES = [
+  "no_live_worker_mutation",
+  "no_tmux_mutation",
+  "no_provider_calls",
+  "no_github_mutation",
+  "no_durable_queue_infrastructure",
+  "no_delivery_or_cleanup_apply",
+];
+
+export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
+  const lowWatermark = nonNegativeInteger(options.lowWatermark ?? context.lowWatermark) ?? DEFAULT_REFILL_LOW_WATERMARK;
+  const requestedHighWatermark = nonNegativeInteger(options.highWatermark ?? context.highWatermark) ?? DEFAULT_REFILL_HIGH_WATERMARK;
+  const highWatermark = Math.max(lowWatermark, requestedHighWatermark);
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const triggerReason = refillTriggerReason(options.triggerReason || context.triggerReason || "low_watermark");
+  const dispatchPreviewQueueDepth = dispatchPreviewCount(context.dispatchPreview, "dispatchable");
+  const dispatchPreviewActiveLeases = dispatchPreviewCount(context.dispatchPreview, "active");
+  const currentEligibleQueueDepth =
+    nonNegativeInteger(context.currentEligibleQueueDepth) ??
+    dispatchPreviewQueueDepth ??
+    nonNegativeInteger(context.queueDepth ?? options.queueDepth) ??
+    nonNegativeInteger(context.dispatchPreview?.summary?.queuedCount ?? context.dispatchPreview?.queuedCount);
+  const activeLeaseCount =
+    nonNegativeInteger(context.activeLeaseCount) ??
+    dispatchPreviewActiveLeases ??
+    nonNegativeInteger(context.activeLeases ?? options.activeLeases) ??
+    0;
+  const sourceRefs = refillSourceRefs(options, context);
+  const sourceKey = refillSourceKey(sourceRefs);
+  const lockId = sanitizeLedgerField(
+    context.lockId || options.lockId || `refill:${runId}:${sourceKey}:${triggerReason}`,
+    `refill:${runId}:${sourceKey}:${triggerReason}`,
+    180,
+  );
+  const timestamp = sanitizeLedgerField(options.now || context.now || new Date().toISOString(), new Date().toISOString(), 80);
+  const baseSummary = {
+    runId,
+    sourceRefs,
+    triggerReason,
+    lowWatermark,
+    highWatermark,
+    lockId,
+    currentEligibleQueueDepth,
+    activeLeaseCount,
+    targetQueueDepth: highWatermark,
+    refillNeeded: currentEligibleQueueDepth === null ? null : currentEligibleQueueDepth <= lowWatermark,
+    rawPayloadRetained: false,
+    stopLines: REFILL_STOP_LINES,
+  };
+
+  if (currentEligibleQueueDepth === null) {
+    const blockers = [{ code: "dispatcher-refill-queue-count-missing", message: "Dispatcher refill watermarks require a current eligible queue count.", nextAction: "Refresh dispatcher queue summary before starting refill." }];
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        ...baseSummary,
+        refillJob: refillJobSummary({ runId, sourceRefs, triggerReason, lowWatermark, highWatermark, lockId, timestamp, state: "blocked", result: "blocked", blockers }),
+        candidateCount: 0,
+        queuedCount: 0,
+        needsReviewCount: 0,
+        blockedCount: 0,
+        dedupe: refillDedupeSummary([]),
+        eligibleCandidates: [],
+        needsReviewCandidates: [],
+        blockedCandidates: [],
+      },
+      blockers,
+    });
+  }
+
+  const activeRefillJob = findActiveRefillJob(context.activeRefillJobs || context.refillJobs, lockId);
+  if (activeRefillJob && currentEligibleQueueDepth < highWatermark) {
+    return packet({
+      status: "refilling",
+      summary: {
+        ...baseSummary,
+        duplicateRefillSuppressed: true,
+        refillJob: normalizeRefillJobForSummary(activeRefillJob, { runId, sourceRefs, triggerReason, lowWatermark, highWatermark, lockId, timestamp }),
+        candidateCount: nonNegativeInteger(activeRefillJob.candidateCount ?? activeRefillJob.candidate_count) ?? 0,
+        queuedCount: nonNegativeInteger(activeRefillJob.queuedCount ?? activeRefillJob.queued_count) ?? 0,
+        needsReviewCount: nonNegativeInteger(activeRefillJob.needsReviewCount ?? activeRefillJob.needs_review_count) ?? 0,
+        blockedCount: nonNegativeInteger(activeRefillJob.blockedCount ?? activeRefillJob.blocked_count) ?? 0,
+        dedupe: refillDedupeSummary([]),
+        eligibleCandidates: [],
+        needsReviewCandidates: [],
+        blockedCandidates: [],
+      },
+      warnings: [{ code: "dispatcher-refill-duplicate-suppressed", message: "An active refill job already owns this run/source/reason lock." }],
+      nextActions: [{ code: "dispatcher-refill-wait-active", summary: "Existing refill job remains authoritative.", nextAction: "Wait for the active refill job to complete or refresh dispatcher refill state." }],
+    });
+  }
+
+  if (currentEligibleQueueDepth >= highWatermark) {
+    const nextActions = [{ code: "dispatcher-refill-not-needed", summary: "Eligible queue depth is above the low watermark.", nextAction: "Continue dispatcher monitoring." }];
+    return packet({
+      status: "ready",
+      summary: {
+        ...baseSummary,
+        refillNeeded: false,
+        duplicateRefillSuppressed: false,
+        sourceExhausted: false,
+        refillJob: refillJobSummary({ runId, sourceRefs, triggerReason, lowWatermark, highWatermark, lockId, timestamp, state: "completed", result: "no_safe_work", nextActions }),
+        candidateCount: 0,
+        queuedCount: 0,
+        needsReviewCount: 0,
+        blockedCount: 0,
+        dedupe: refillDedupeSummary([]),
+        eligibleCandidates: [],
+        needsReviewCandidates: [],
+        blockedCandidates: [],
+      },
+      nextActions,
+    });
+  }
+
+  if (currentEligibleQueueDepth > lowWatermark) {
+    const nextActions = [{ code: "dispatcher-refill-monitor", summary: "Eligible queue depth is between refill watermarks and no active refill job owns the lock.", nextAction: "Continue dispatcher monitoring until the low watermark is reached or an active refill job appears." }];
+    return packet({
+      status: "ready",
+      summary: {
+        ...baseSummary,
+        refillNeeded: false,
+        duplicateRefillSuppressed: false,
+        sourceExhausted: false,
+        refillJob: refillJobSummary({ runId, sourceRefs, triggerReason, lowWatermark, highWatermark, lockId, timestamp, state: "completed", result: "no_safe_work", nextActions }),
+        candidateCount: 0,
+        queuedCount: 0,
+        needsReviewCount: 0,
+        blockedCount: 0,
+        dedupe: refillDedupeSummary([]),
+        eligibleCandidates: [],
+        needsReviewCandidates: [],
+        blockedCandidates: [],
+      },
+      nextActions,
+    });
+  }
+
+  const targetCandidateCount = Math.max(0, highWatermark - currentEligibleQueueDepth);
+  const normalizedCandidates = normalizeRefillCandidates(context.refillCandidates || context.candidateWorkPackets || context.candidateLanes || [], sourceRefs);
+  const dedupeKeys = existingDedupeKeys(context);
+  const classified = classifyRefillCandidates(normalizedCandidates, dedupeKeys, targetCandidateCount);
+  const sourceExhausted = normalizedCandidates.length === 0;
+  const result = classified.eligibleCandidates.length > 0
+    ? "queued_work"
+    : classified.needsReviewCandidates.length > 0
+      ? "needs_review"
+      : classified.blockedCandidates.length > 0
+        ? "blocked"
+        : "no_safe_work";
+  const state = sourceExhausted || result === "needs_review" || result === "blocked" ? "completed" : "running";
+  const status = result === "queued_work" ? "refilling" : sourceExhausted ? "attention" : result === "blocked" ? "blocked" : "attention";
+  const nextActions = refillWatermarkNextActions(result, sourceExhausted);
+  const blockers = result === "blocked"
+    ? [{ code: "dispatcher-refill-candidates-blocked", message: "All available refill candidates are blocked by source, authority, or verification gaps.", nextAction: "Do not queue blocked candidates; repair source evidence or ask the operator." }]
+    : [];
+  const warnings = [
+    ...(sourceExhausted ? [{ code: "dispatcher-refill-source-exhausted", message: "Refill reached source exhaustion before the high watermark." }] : []),
+    ...(classified.needsReviewCandidates.length > 0 ? [{ code: "dispatcher-refill-candidates-need-review", message: `${classified.needsReviewCandidates.length} refill candidate(s) require review before queueing.` }] : []),
+    ...(classified.blockedCandidates.length > 0 ? [{ code: "dispatcher-refill-candidates-blocked", message: `${classified.blockedCandidates.length} refill candidate(s) are blocked and were not queued.` }] : []),
+  ];
+
+  return packet({
+    ok: status !== "blocked",
+    status,
+    summary: {
+      ...baseSummary,
+      refillNeeded: true,
+      duplicateRefillSuppressed: false,
+      sourceExhausted,
+      refillJob: refillJobSummary({
+        runId,
+        sourceRefs,
+        triggerReason,
+        lowWatermark,
+        highWatermark,
+        lockId,
+        timestamp,
+        state,
+        result,
+        candidateCount: normalizedCandidates.length,
+        queuedCount: classified.eligibleCandidates.length,
+        needsReviewCount: classified.needsReviewCandidates.length,
+        blockedCount: classified.blockedCandidates.length,
+        evidenceRefs: refillEvidenceRefs(sourceRefs, normalizedCandidates),
+        blockers,
+        nextActions,
+        dedupe: refillDedupeSummary(classified.dedupeSkippedCandidates),
+      }),
+      candidateCount: normalizedCandidates.length,
+      queuedCount: classified.eligibleCandidates.length,
+      needsReviewCount: classified.needsReviewCandidates.length,
+      blockedCount: classified.blockedCandidates.length,
+      dedupe: refillDedupeSummary(classified.dedupeSkippedCandidates),
+      eligibleCandidates: classified.eligibleCandidates,
+      needsReviewCandidates: classified.needsReviewCandidates,
+      blockedCandidates: classified.blockedCandidates,
+      boundedSkip: refillBoundedSkipSummary(classified.boundedSkippedCandidates),
+    },
+    blockers,
+    warnings,
+    nextActions,
+  });
+}
+
+export function buildSourceArtifactDiscoveryPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const liveScan = options.liveScan === true || context.liveScan === true;
+  const fixtureProof = context.fixtureDiscoveryProof || context.sourceArtifactDiscoveryProof || {};
+  const fixtureProofStatus = String(fixtureProof.status || "").toLowerCase();
+  const liveAuthority = context.liveScanAuthority || options.liveScanAuthority || {};
+  const baseSummary = {
+    runId,
+    mode: liveScan ? "live_scan_requested" : "fixture_backed",
+    mutationMode: liveScan ? "blocked_live_scan" : "none; read-only discovery summary",
+    rawPayloadRetained: false,
+    artifacts: [],
+    artifactCount: 0,
+    rejectedCount: 0,
+    sourceExhausted: false,
+  };
+  if (liveScan && (!["pass", "passed"].includes(fixtureProofStatus) || liveAuthority.approved !== true)) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: baseSummary,
+      blockers: [
+        {
+          code: !["pass", "passed"].includes(fixtureProofStatus) ? "source-artifact-live-scan-proof-missing" : "source-artifact-live-scan-authority-missing",
+          message: "Live source scanning requires fixture-backed discovery proof and explicit authority first.",
+          nextAction: "Run fixture-backed discovery and keep live scanning blocked until proof passes.",
+        },
+      ],
+    });
+  }
+
+  const artifactInputs = sourceArtifactInputs(options, context);
+  const artifacts = [];
+  const rejected = [];
+  const seen = new Set();
+  for (const input of artifactInputs) {
+    const artifact = normalizeSourceArtifact(input);
+    if (!artifact) {
+      const rejectedRef = sanitizeLedgerField(input?.ref || input?.path || input?.sourceRef || input, "unsupported-source-artifact", 180);
+      rejected.push(rejectedRef);
+      continue;
+    }
+    if (seen.has(artifact.ref)) continue;
+    seen.add(artifact.ref);
+    artifacts.push(artifact);
+  }
+  const sourceExhausted = artifacts.length === 0;
+  const warnings = rejected.length > 0
+    ? [{ code: "source-artifact-rejected", message: `Rejected ${rejected.length} unsupported source artifact reference(s).` }]
+    : [];
+  return packet({
+    status: sourceExhausted ? "attention" : "ready",
+    summary: {
+      ...baseSummary,
+      mutationMode: "none; read-only discovery summary",
+      artifacts: artifacts.slice(0, 12),
+      artifactCount: artifacts.length,
+      rejectedCount: rejected.length,
+      rejectedRefs: rejected.slice(0, 12),
+      sourceExhausted,
+    },
+    warnings,
+    nextActions: sourceExhausted
+      ? [{ code: "source-artifact-exhausted", summary: "No source-owned artifacts were discovered.", nextAction: "Run housekeeping and ask for the next product decision instead of inventing work." }]
+      : [{ code: "source-artifact-discovery-ready", summary: "Bounded source artifacts are available as refill evidence.", nextAction: "Use discovered source refs as planning inputs only after eligibility checks." }],
+  });
+}
+
+export function buildSourceWorkEligibilityPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const discoveryPacket =
+    context.sourceArtifactDiscovery ||
+    (hasSourceArtifactInputs(options, context) || hasSourceWorkCandidateInputs(options, context)
+      ? buildSourceArtifactDiscoveryPlan(options, context)
+      : null);
+  const discoverySummary = discoveryPacket?.summary || discoveryPacket || {};
+  const artifactMap = sourceArtifactMap(discoverySummary.artifacts || []);
+  const candidates = sourceWorkCandidateInputs(options, context);
+  const existingDedupe = existingSourceWorkDedupe(context);
+  const candidateWorkPackets = [];
+  const needsReviewPackets = [];
+  const blockedPackets = [];
+  const skippedCandidates = [];
+  const seenDedupe = new Map(existingDedupe);
+
+  for (const [index, candidate] of candidates.entries()) {
+    const packetCandidate = normalizeCandidateWorkPacket(candidate, index, artifactMap);
+    if (packetCandidate.rejectedSourceRefs.length > 0) {
+      blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "ambiguous_source"));
+      continue;
+    }
+    const missingRequired = sourceWorkMissingFields(packetCandidate);
+    if (missingRequired.length > 0) {
+      blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "missing_required_fields", { missingRequired }));
+      continue;
+    }
+    if (packetCandidate.sourceRefs.length === 0) {
+      blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "ambiguous_source"));
+      continue;
+    }
+    const duplicateOf = seenDedupe.get(packetCandidate.dedupeKey);
+    if (duplicateOf) {
+      skippedCandidates.push(markCandidateWork(packetCandidate, "skipped", "dedupe_skipped", { linkedDuplicateOf: duplicateOf }));
+      continue;
+    }
+    seenDedupe.set(packetCandidate.dedupeKey, packetCandidate.candidateWorkPacketId);
+    if (packetCandidate.ownershipBoundaries.includes("runtime_state")) {
+      blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "runtime_source_not_deliverable"));
+      continue;
+    }
+    if (isBlockedAuthority(packetCandidate.authorityClass)) {
+      blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "authority_blocked"));
+      continue;
+    }
+    if (
+      packetCandidate.repoDeliverable &&
+      packetCandidate.ownershipBoundaries.includes("bmad_local_planning_state") &&
+      !hasSourceOwnedRewrite(packetCandidate)
+    ) {
+      needsReviewPackets.push(markCandidateWork(packetCandidate, "needs_review", "source_owned_rewrite_required", {
+        requiredSourceOwnedArtifact: packetCandidate.requiredSourceOwnedArtifact,
+      }));
+      continue;
+    }
+    if (requiresReviewAuthority(packetCandidate.authorityClass) || sourceWorkRiskRequiresReview(packetCandidate.riskClass)) {
+      needsReviewPackets.push(markCandidateWork(packetCandidate, "needs_review", "authority_requires_review"));
+      continue;
+    }
+    candidateWorkPackets.push(markCandidateWork(packetCandidate, "eligible", "eligible"));
+  }
+
+  const status =
+    blockedPackets.length > 0 || needsReviewPackets.length > 0
+      ? "attention"
+      : candidateWorkPackets.length > 0
+        ? "ready"
+        : "attention";
+  return packet({
+    status,
+    summary: {
+      runId,
+      sourceArtifactDiscovery: discoverySummary?.artifactCount !== undefined ? discoverySummary : null,
+      candidateCount: candidates.length,
+      eligibleCount: candidateWorkPackets.length,
+      needsReviewCount: needsReviewPackets.length,
+      blockedCount: blockedPackets.length,
+      candidateWorkPackets,
+      needsReviewPackets,
+      blockedPackets,
+      dedupe: sourceWorkDedupeSummary(skippedCandidates),
+      mutationMode: "none; read-only eligibility summary",
+      rawPayloadRetained: false,
+    },
+    warnings: [
+      ...(needsReviewPackets.length > 0 ? [{ code: "source-work-needs-review", message: `${needsReviewPackets.length} source work candidate(s) require review before queueing.` }] : []),
+      ...(blockedPackets.length > 0 ? [{ code: "source-work-blocked", message: `${blockedPackets.length} source work candidate(s) are blocked and were not queued.` }] : []),
+      ...(skippedCandidates.length > 0 ? [{ code: "source-work-dedupe-skipped", message: `${skippedCandidates.length} duplicate source work candidate(s) were linked or skipped.` }] : []),
+    ],
+    nextActions: candidateWorkPackets.length > 0
+      ? [{ code: "source-work-eligible", nextAction: "Pass eligible CandidateWorkPacket summaries to dispatcher refill watermarks." }]
+      : [{ code: "source-work-no-eligible-candidates", nextAction: "Repair source work fields, add a source-owned rewrite artifact, or ask for operator direction." }],
+  });
+}
+
+export function buildBmadPlanningGapPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const explicitRefs = [
+    ...sourceRefList(options.sourceRefs),
+    ...sourceRefList(context.sourceRefs),
+    ...sourceRefList(context.sourceEvidence),
+  ];
+  const sourceEvidence = normalizeSourceEvidence(explicitRefs.length > 0 ? explicitRefs : defaultSourceRefs(context));
+  const sourceSlice = context.sourceSlice || sourceEvidence.valid[0] || null;
+  const sourcePlanning = context.sourcePlanning || (sourceSlice ? discoverSourcePlanningState(sourceSlice, context) : context.sourcePlanningState || null);
+  const sourceRefs = sourceSlice ? [sourceSlice.ref] : sourceEvidence.valid.map((source) => source.ref);
+  const prerequisites = normalizeBmadPlanningPrerequisites(sourcePlanning?.prerequisites || context.planningPrerequisites || options.planningPrerequisites, { sourceSlice, sourcePlanning });
+  const missingPrerequisites = Object.entries(prerequisites)
+    .filter(([, prerequisite]) => prerequisite.status === "missing")
+    .map(([key]) => key);
+  const baseSummary = {
+    runId,
+    sourceRefs: sourceRefs.slice(0, 12),
+    sourcePlanning: sourcePlanning || null,
+    prerequisites,
+    safeUnrelatedWorkCanContinue: true,
+    mutationMode: "none; read-only BMAD planning-gap summary",
+    rawPayloadRetained: false,
+  };
+
+  if (missingPrerequisites.length > 0) {
+    return packet({
+      status: "blocked",
+      summary: {
+        ...baseSummary,
+        narrowestWorkflow: null,
+        gapType: "prerequisite_blocked",
+        reason: "Automatic implementation-work creation is blocked until this PRD has corrected planning prerequisites.",
+        refillDisposition: "block_implementation_work_creation",
+        broaderRegeneration: {
+          decision: "blocked",
+          reason: "Prerequisite planning artifacts are missing; broad regeneration is not safe to perform implicitly.",
+          blockedBy: missingPrerequisites,
+        },
+      },
+      blockers: [
+        {
+          code: "bmad-planning-prerequisite-missing",
+          missingPrerequisites,
+          message: "Corrected PRD, architecture, epics/stories, and readiness evidence are required before automatic implementation-work creation.",
+          nextAction: "Continue unrelated safe work or run the missing BMAD prerequisite workflow with explicit source evidence.",
+        },
+      ],
+      nextActions: [
+        {
+          code: "bmad-planning-prerequisites-blocked",
+          nextAction: "Do not create implementation work for this PRD until missing planning prerequisites exist.",
+        },
+      ],
+    });
+  }
+
+  const eligibleCount = nonNegativeInteger(context.sourceWorkEligibility?.summary?.eligibleCount ?? context.sourceWorkEligibility?.eligibleCount) ?? 0;
+  if (eligibleCount > 0) {
+    return packet({
+      status: "ready",
+      summary: {
+        ...baseSummary,
+        narrowestWorkflow: null,
+        gapType: "none",
+        reason: "Eligible source-owned work already exists, so no BMAD planning request is needed.",
+        refillDisposition: "use_existing_source_work",
+        broaderRegeneration: {
+          decision: "unnecessary",
+          reason: "Existing eligible source-work packets should feed dispatcher refill before creating planning requests.",
+        },
+      },
+      nextActions: [
+        {
+          code: "bmad-planning-no-gap",
+          nextAction: "Use existing eligible source-owned work; do not create redundant BMAD planning requests.",
+        },
+      ],
+    });
+  }
+
+  const signals = [
+    ...sourceRefList(options.workCreationSignals),
+    ...sourceRefList(context.workCreationSignals),
+    ...sourceRefList(context.operatorSteering),
+  ];
+  const selected = selectBmadPlanningGapWorkflow(sourceSlice, sourcePlanning, signals);
+  if (!selected.narrowestWorkflow) {
+    return packet({
+      status: "attention",
+      summary: {
+        ...baseSummary,
+        ...selected,
+        refillDisposition: "source_exhausted",
+        broaderRegeneration: {
+          decision: "blocked",
+          reason: "No eligible source-owned work or narrow BMAD planning workflow was detected.",
+        },
+      },
+      blockers: [
+        {
+          code: "bmad-planning-source-exhausted",
+          message: "No eligible source-owned work or narrow BMAD planning gap is available for automatic refill.",
+          nextAction: "Run housekeeping and stop, or ask the operator for the next product decision.",
+        },
+      ],
+      nextActions: [
+        {
+          code: "bmad-planning-source-exhausted",
+          nextAction: "Do not claim existing source work; no eligible source-work packet was available.",
+        },
+      ],
+    });
+  }
+  return packet({
+    status: "attention",
+    summary: {
+      ...baseSummary,
+      ...selected,
+      refillDisposition: "request_narrow_bmad_workflow",
+      broaderRegeneration: {
+        decision: "unnecessary",
+        reason: selected.broaderReason,
+      },
+    },
+    nextActions: [
+      {
+        code: "bmad-planning-gap-detected",
+        nextAction: `Run ${selected.narrowestWorkflow} only; do not regenerate broader BMAD artifacts.`,
+      },
+    ],
+  });
+}
+
+const BMAD_REQUEST_WORKFLOWS = new Set([
+  "bmad-create-story",
+  "bmad-check-implementation-readiness",
+  "bmad-ux",
+  "bmad-create-architecture",
+  "bmad-code-review",
+  "bmad-create-epics-and-stories",
+  "bmad-correct-course",
+]);
+
+export function bmadRequestWorkflowCatalog(context = {}) {
+  return Array.from(BMAD_REQUEST_WORKFLOWS).map((workflow) => ({
+    workflow,
+    ...bmadRequestWorkflowMetadata(workflow, null, context.sourcePlanning || null),
+  }));
+}
+
+export function buildBmadRequestPacketPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const outputDerivation = buildBmadOutputDerivationSummary(context.bmadOutputs || options.bmadOutputs || []);
+  const planningGap = context.bmadPlanningGap || (
+    hasBmadRequestPlanningInputs(options, context) ? buildBmadPlanningGapPlan(options, context) : null
+  );
+  const gapSummary = planningGap?.summary || {};
+  const workflow = sanitizeLedgerField(options.workflow || context.workflow || gapSummary.narrowestWorkflow || "", "", 80);
+  const rawSourceRefs = sourceRefList(options.sourceRefs).length > 0
+    ? sourceRefList(options.sourceRefs)
+    : sourceRefList(context.sourceRefs).length > 0
+      ? sourceRefList(context.sourceRefs)
+      : sourceRefList(gapSummary.sourceRefs);
+  const sourceEvidence = normalizeSourceEvidence(rawSourceRefs);
+  const sourceRefs = sourceEvidence.valid.map((source) => source.ref);
+  const authorityClass = options.authorityClass ||
+    context.authorityClass ||
+    defaultBmadRequestAuthorityClass(workflow, context);
+  const requestPacket = workflow
+    ? buildBmadRequestPacket({
+        runId,
+        workflow,
+        sourceRefs,
+        gapType: gapSummary.gapType || context.gapType || options.gapType || null,
+        reason: gapSummary.reason || context.reason || options.reason || "",
+        sourcePlanning: context.sourcePlanning || gapSummary.sourcePlanning || context.sourcePlanningState || null,
+        authorityStage: options.authorityStage || context.authorityStage || "backend_proof",
+        authorityClass,
+      })
+    : null;
+  const validation = validateBmadRequestPacket(requestPacket, options, context);
+  const sourceBlockers = sourceEvidence.rejected.length > 0 ? [{
+    code: "bmad-request-source-invalid",
+    message: "BMAD request packet source refs must be valid source-owned refs before they can be retained.",
+    rejectedCount: sourceEvidence.rejected.length,
+    nextAction: "Provide active PRD, story, runway, or source-owned repo evidence before creating a request packet.",
+  }] : [];
+  const blockers = validation.status === "blocked" ? [...sourceBlockers, ...validation.blockers] : sourceBlockers;
+  const hasDerivationBlocker = !requestPacket && outputDerivation.status === "blocked";
+  const attentionNeeded = ["needs_review", "partial"].includes(outputDerivation.status) || validation.status === "needs_review";
+  const blocked = validation.status === "blocked" || hasDerivationBlocker || sourceBlockers.length > 0;
+
+  return packet({
+    ok: !blocked,
+    status: blocked ? "blocked" : attentionNeeded ? "attention" : "ready",
+    summary: {
+      runId,
+      requestPacket: blocked ? null : requestPacket,
+      validation: sourceBlockers.length > 0 ? { ...validation, status: "blocked", blockers } : validation,
+      outputDerivation,
+      mutationMode: "none; read-only BMAD request packet summary",
+      rawPayloadRetained: false,
+    },
+    blockers: blockers.length > 0 ? blockers : hasDerivationBlocker ? outputDerivation.blockedOutputs.map((blocked) => ({
+      code: "bmad-output-derivation-blocked",
+      message: "BMAD output cannot become dispatcher work without source refs and verification targets.",
+      reason: blocked.reason,
+      nextAction: "Keep the BMAD artifact as local planning evidence until source-owned eligibility proof exists.",
+    })) : [],
+    nextActions: requestPacket && validation.status === "ready"
+      ? [{ code: "bmad-request-packet-ready", nextAction: `Review the ${workflow} request packet; do not execute BMAD until authority permits it.` }]
+      : attentionNeeded
+        ? [{ code: "bmad-output-derivation-needs-review", nextAction: "Review BMAD output derivation before treating it as source-owned candidate work." }]
+      : [],
+  });
+}
+
+function defaultBmadRequestAuthorityClass(workflow = "", context = {}) {
+  const sourcePlanning = context.sourcePlanning || context.sourcePlanningState || context.bmadPlanningGap?.summary?.sourcePlanning || null;
+  const nextBacklogStoryKey = sanitizeLedgerField(sourcePlanning?.sprintStatus?.nextBacklogStoryKey || "", "", 120);
+  if (workflow === "bmad-create-story" && nextBacklogStoryKey) {
+    return "allowed_unattended";
+  }
+  return "requires_preauthorization";
+}
+
+function hasBmadRequestPlanningInputs(options = {}, context = {}) {
+  return Boolean(
+    context.bmadPlanningGap ||
+      context.sourcePlanning ||
+      context.sourcePlanningState ||
+      context.sourceSlice ||
+      sourceRefList(options.sourceRefs).length > 0 ||
+      sourceRefList(context.sourceRefs).length > 0 ||
+      sourceRefList(context.sourceEvidence).length > 0,
+  );
+}
+
+function buildBmadRequestPacket({
+  runId,
+  workflow,
+  sourceRefs,
+  gapType,
+  reason,
+  sourcePlanning,
+  authorityStage,
+  authorityClass,
+}) {
+  const metadata = bmadRequestWorkflowMetadata(workflow, gapType, sourcePlanning);
+  const safeSourceRefs = sourceRefs.slice(0, 12);
+  const verificationTarget = metadata.localOutputLocation
+    ? {
+        commandId: `verify-${snakeCaseKey(workflow) || "bmad-request"}-output`,
+        command: `test -f ${shellSingleQuote(metadata.localOutputLocation)}`,
+        expectedResult: "Expected local BMAD output path exists after the workflow is separately authorized and executed.",
+      }
+    : null;
+  return {
+    packetId: `${runId}-${snakeCaseKey(workflow) || "bmad-request"}-request`,
+    workflow,
+    sourceRefs: safeSourceRefs,
+    missingArtifact: metadata.missingArtifact,
+    expectedOutput: metadata.expectedOutput,
+    localOutputLocation: metadata.localOutputLocation,
+    verificationTarget,
+    scope: {
+      activePrdRef: sourceRefs.find((ref) => ref.startsWith("prd:")) || null,
+      sourceBound: safeSourceRefs.length > 0,
+      scopePolicy: "active_source_only",
+    },
+    authority: {
+      basis: "source-owned-refill-planning",
+      stage: sanitizeLedgerField(authorityStage || "backend_proof", "backend_proof", 80),
+      class: sanitizeLedgerField(authorityClass || "requires_preauthorization", "requires_preauthorization", 80),
+      posture: "request_packet_only",
+    },
+    stopLines: ["do_not_execute_bmad_workflow", "do_not_mutate_safe_backlog", "do_not_create_tracked_bmad_artifacts"],
+    retentionPolicy: {
+      localOutput: "local_bmad_output",
+      durableSourceRewrite: "separate_source_owned_follow_up_required",
+      rawProviderPayloads: "do_not_retain",
+      rawPrompts: "do_not_retain",
+      reasoningTraces: "do_not_retain",
+    },
+    reason: sanitizeLedgerField(reason || metadata.reason, "", 240),
+    mutationMode: "none; request packet only",
+    rawPayloadRetained: false,
+  };
+}
+
+function bmadRequestWorkflowMetadata(workflow, gapType, sourcePlanning = null) {
+  const sourceKey = sanitizeLedgerField(sourcePlanning?.sourceKey || "manager-control-plane", "manager-control-plane", 80);
+  const nextStoryKey = sanitizeLedgerField(sourcePlanning?.sprintStatus?.nextBacklogStoryKey || "", "", 120);
+  const storyOutput = nextStoryKey ? `_bmad-output/implementation-artifacts/${nextStoryKey}.md` : `_bmad-output/implementation-artifacts/${sourceKey}-next-story.md`;
+  const metadata = {
+    "bmad-create-story": {
+      missingArtifact: "story_file",
+      expectedOutput: "Create the next BMAD story artifact from the scoped sprint tracker.",
+      localOutputLocation: storyOutput,
+      reason: "Story creation is the narrowest missing BMAD artifact.",
+    },
+    "bmad-check-implementation-readiness": {
+      missingArtifact: "implementation_readiness_report",
+      expectedOutput: "Create or refresh implementation-readiness evidence for the active PRD slice.",
+      localOutputLocation: `_bmad-output/planning-artifacts/implementation-readiness-report-${sourceKey}.md`,
+      reason: "Implementation readiness is the narrowest missing BMAD artifact.",
+    },
+    "bmad-ux": {
+      missingArtifact: "ux_design_spec",
+      expectedOutput: "Create or refresh UX evidence for operator-facing workflow changes.",
+      localOutputLocation: `_bmad-output/planning-artifacts/ux-designs/ux-${sourceKey}/DESIGN.md`,
+      reason: "UX design is the narrowest missing BMAD artifact.",
+    },
+    "bmad-create-architecture": {
+      missingArtifact: "architecture_update",
+      expectedOutput: "Create or refresh architecture evidence for boundary, contract, schema, or authority changes.",
+      localOutputLocation: `_bmad-output/planning-artifacts/architecture-${sourceKey}.md`,
+      reason: "Architecture is the narrowest missing BMAD artifact.",
+    },
+    "bmad-code-review": {
+      missingArtifact: "code_review_report",
+      expectedOutput: "Review the ready implementation artifact and record findings before delivery or more work creation.",
+      localOutputLocation: `_bmad-output/implementation-artifacts/review-${sourceKey}.md`,
+      reason: "Code review is the narrowest missing BMAD workflow.",
+    },
+    "bmad-create-epics-and-stories": {
+      missingArtifact: "epics_and_stories",
+      expectedOutput: "Create source-owned epics, stories, and sprint tracking from the active PRD.",
+      localOutputLocation: "_bmad-output/planning-artifacts/epics.md",
+      reason: "Epics and stories are missing for the active PRD.",
+    },
+    "bmad-correct-course": {
+      missingArtifact: "sprint_change_proposal",
+      expectedOutput: "Create a bounded sprint change proposal for source-owned backlog continuation.",
+      localOutputLocation: `_bmad-output/planning-artifacts/sprint-change-proposal-${sourceKey}.md`,
+      reason: "Correct-course is needed to extend exhausted source-owned backlog.",
+    },
+  };
+  return metadata[workflow] || {
+    missingArtifact: sanitizeLedgerField(gapType || "unknown", "unknown", 80),
+    expectedOutput: "Unknown BMAD workflow output.",
+    localOutputLocation: null,
+    reason: "Unsupported BMAD workflow.",
+  };
+}
+
+function validateBmadRequestPacket(requestPacket, options = {}, context = {}) {
+  const blockers = [];
+  if (!requestPacket?.workflow) {
+    return { status: "no_request", blockers: [], reason: "No BMAD request packet is needed.", rawPayloadRetained: false };
+  }
+  if (!BMAD_REQUEST_WORKFLOWS.has(requestPacket.workflow)) {
+    blockers.push({
+      code: "bmad-request-unsupported-workflow",
+      message: `Unsupported BMAD workflow '${requestPacket.workflow}'.`,
+      nextAction: "Use the narrow workflow selected by planning-gap detection or request operator review.",
+    });
+  }
+  if (!requestPacket.sourceRefs.length) {
+    blockers.push({
+      code: "bmad-request-source-missing",
+      message: "BMAD request packet requires at least one source ref.",
+      nextAction: "Provide active PRD, story, runway, or source-owned repo evidence before creating a request packet.",
+    });
+  }
+  if (!requestPacket.verificationTarget?.command) {
+    blockers.push({
+      code: "bmad-request-verification-missing",
+      message: "BMAD request packet requires a verification target for the expected local output.",
+      nextAction: "Add a bounded verification target before surfacing the packet.",
+    });
+  }
+  const activePrdRef = sanitizeLedgerField(options.activePrdRef || context.activePrdRef || "", "", 240);
+  if (activePrdRef && !requestPacket.sourceRefs.includes(activePrdRef)) {
+    blockers.push({
+      code: "bmad-request-out-of-scope",
+      message: "BMAD request source refs do not match the active PRD scope.",
+      nextAction: "Block or mark needs_review before expanding scope beyond the active PRD.",
+    });
+  }
+  if (isBlockedAuthority(requestPacket.authority.class)) {
+    blockers.push({
+      code: "bmad-request-authority-blocked",
+      message: "BMAD request packet authority class blocks unattended planning refill.",
+      nextAction: "Keep the request as blocked evidence until authority changes.",
+    });
+  }
+  const authorityNeedsReview = requiresReviewAuthority(requestPacket.authority.class);
+  if (options.invokeBmad === true || context.invokeBmad === true || options.writeBmadArtifacts === true || context.writeBmadArtifacts === true || options.mutateBacklog === true || context.mutateBacklog === true) {
+    blockers.push({
+      code: "bmad-request-forbidden-mutation",
+      message: "Request packet construction cannot invoke BMAD, write artifacts, or mutate safe backlog.",
+      nextAction: "Create only the read-only request packet; execute BMAD through a separately authorized workflow.",
+    });
+  }
+  return {
+    status: blockers.length > 0 ? "blocked" : authorityNeedsReview ? "needs_review" : "ready",
+    blockers,
+    reason: blockers.length > 0
+      ? "BMAD request packet validation failed closed."
+      : authorityNeedsReview
+        ? "BMAD request packet requires preauthorization before it can be treated as ready."
+        : "BMAD request packet is bounded and ready for review.",
+    rawPayloadRetained: false,
+  };
+}
+
+function buildBmadOutputDerivationSummary(outputs = []) {
+  const outputList = Array.isArray(outputs) ? outputs : [];
+  if (outputList.length === 0) {
+    return {
+      status: "not_evaluated",
+      candidateWorkPackets: [],
+      blockedOutputs: [],
+      rawPayloadRetained: false,
+    };
+  }
+  const candidateWorkPackets = [];
+  const blockedOutputs = [];
+  const needsReviewOutputs = [];
+  const derivationCandidates = [];
+  outputList.forEach((output, index) => {
+    const artifactRef = sanitizeLedgerField(output?.artifactRef || output?.artifact_ref || `bmad-output-${index + 1}`, `bmad-output-${index + 1}`, 240);
+    const sourceEvidence = normalizeSourceEvidence(sourceRefList(output?.sourceRefs));
+    const sourceRefs = sourceEvidence.valid.map((source) => source.ref);
+    const verificationTargets = sourceRefList(output?.verificationTargets);
+    const authorityClass = sanitizeLedgerField(output?.authorityClass || output?.authority_class || "", "", 80);
+    if (sourceEvidence.rejected.length > 0 || sourceRefs.length === 0 || verificationTargets.length === 0) {
+      blockedOutputs.push({
+        artifactRef,
+        reason: sourceEvidence.rejected.length > 0 ? "invalid_source_ref" : "missing_source_or_verification",
+      });
+      return;
+    }
+    if (!authorityClass || isBlockedAuthority(authorityClass)) {
+      blockedOutputs.push({
+        artifactRef,
+        reason: "authority_blocked",
+      });
+      return;
+    }
+    if (isLocalBmadArtifactRef(artifactRef) && !hasSourceOwnedRewriteProof(output, sourceRefs)) {
+      needsReviewOutputs.push({
+        artifactRef,
+        reason: "missing_source_owned_rewrite_proof",
+      });
+      return;
+    }
+    const sourceOwnedRewriteRef = sourceOwnedRewriteRefForBmadOutput(output, sourceRefs);
+    derivationCandidates.push({
+      candidateWorkPacketId: sanitizeLedgerField(output?.candidateId || output?.candidateWorkPacketId || `bmad-derived-${index + 1}`, `bmad-derived-${index + 1}`, 120),
+      localPlanningArtifactRef: artifactRef,
+      title: sanitizeLedgerField(output?.title || output?.summary || `BMAD derived candidate ${index + 1}`, `BMAD derived candidate ${index + 1}`, 180),
+      sourceRefs: isLocalBmadArtifactRef(artifactRef) ? [artifactRef, ...sourceRefs] : sourceRefs,
+      acceptanceCriteria: sourceRefList(output?.acceptanceCriteria).slice(0, 12),
+      verificationTargets,
+      touchedSurfaceHint: sanitizeLedgerField(output?.touchedSurfaceHint || output?.touched_surface_hint || "", "", 160),
+      authorityClass,
+      sourceOwnedRewriteRef,
+      riskClass: sanitizeLedgerField(output?.riskClass || output?.risk_class || "low", "low", 80),
+      boundary: "bmad_output_local_until_source_work_eligibility_passes",
+      rawPayloadRetained: false,
+    });
+  });
+  const eligibility = derivationCandidates.length > 0
+    ? buildSourceWorkEligibilityPlan({}, { sourceWorkCandidates: derivationCandidates })
+    : null;
+  candidateWorkPackets.push(...(eligibility?.summary?.candidateWorkPackets || []));
+  needsReviewOutputs.push(...(eligibility?.summary?.needsReviewPackets || []).map((candidate) => ({
+    artifactRef: sanitizeLedgerField(candidate.sourceRefs?.[0] || candidate.candidateWorkPacketId, candidate.candidateWorkPacketId, 240),
+    reason: candidate.eligibilityReason || "source_work_eligibility_needs_review",
+    candidateWorkPacketId: candidate.candidateWorkPacketId,
+  })));
+  blockedOutputs.push(...(eligibility?.summary?.blockedPackets || []).map((candidate) => ({
+    artifactRef: sanitizeLedgerField(candidate.sourceRefs?.[0] || candidate.candidateWorkPacketId, candidate.candidateWorkPacketId, 240),
+    reason: candidate.eligibilityReason || "source_work_eligibility_blocked",
+    candidateWorkPacketId: candidate.candidateWorkPacketId,
+  })));
+  const status = blockedOutputs.length > 0 && candidateWorkPackets.length === 0
+    ? "blocked"
+    : needsReviewOutputs.length > 0 && candidateWorkPackets.length === 0
+      ? "needs_review"
+      : blockedOutputs.length > 0 || needsReviewOutputs.length > 0
+        ? "partial"
+        : "eligible";
+  return {
+    status,
+    candidateWorkPackets,
+    blockedOutputs,
+    needsReviewOutputs,
+    rawPayloadRetained: false,
+  };
+}
+
+function isLocalBmadArtifactRef(ref = "") {
+  return String(ref || "").replace(/\\/g, "/").includes("_bmad-output/");
+}
+
+function hasSourceOwnedRewriteProof(output = {}, sourceRefs = []) {
+  if (output.sourceOwnedRewriteProof === true || output.source_owned_rewrite_proof === true) return true;
+  const rewriteEvidence = normalizeSourceEvidence(sourceRefList(output.sourceOwnedRewriteRefs || output.source_owned_rewrite_refs));
+  return rewriteEvidence.valid.some((source) => !String(source.ref || "").replace(/\\/g, "/").includes("_bmad-output/"));
+}
+
+function sourceOwnedRewriteRefForBmadOutput(output = {}, sourceRefs = []) {
+  const explicit = sourceRefList(output.sourceOwnedRewriteRef || output.source_owned_rewrite_ref || output.sourceOwnedRewriteRefs || output.source_owned_rewrite_refs);
+  const explicitEvidence = normalizeSourceEvidence(explicit);
+  const explicitRef = explicitEvidence.valid.find((source) => !String(source.ref || "").replace(/\\/g, "/").includes("_bmad-output/"))?.ref;
+  if (explicitRef) return explicitRef;
+  if (output.sourceOwnedRewriteProof === true || output.source_owned_rewrite_proof === true) {
+    return sourceRefs.find((ref) => !String(ref || "").replace(/\\/g, "/").includes("_bmad-output/")) || "";
+  }
+  return "";
+}
+
+const MATURE_TOOL_DECISIONS = new Set(["adopt", "defer", "reject"]);
+const MATURE_TOOL_CATEGORIES = new Set(["queue_backend", "policy_engine", "session_worktree", "verification_runner"]);
+
+const MATURE_TOOL_CANDIDATES = [
+  {
+    candidateId: "bullmq-redis",
+    name: "BullMQ/Redis",
+    category: "queue_backend",
+    fallback: "sqlite-lease-harness",
+    defaultDecision: "defer",
+    defaultRejectionReasons: ["missing_runnable_evidence", "local_service_dependency_unproven"],
+    defaultRollbackPath: "Defer BullMQ/Redis and continue on the local lease harness until local Redis proof passes.",
+    stopLines: ["do_not_install_dependency", "do_not_launch_redis", "do_not_replace_dispatcher_port"],
+  },
+  {
+    candidateId: "hatchet",
+    name: "Hatchet",
+    category: "queue_backend",
+    fallback: "sqlite-lease-harness",
+    defaultDecision: "defer",
+    defaultRejectionReasons: ["missing_runnable_evidence", "service_dependency_unproven"],
+    defaultRollbackPath: "Defer Hatchet and continue on the local lease harness until local orchestration proof passes.",
+    stopLines: ["do_not_install_dependency", "do_not_launch_hatchet", "do_not_replace_dispatcher_port"],
+  },
+  {
+    candidateId: "sqlite-lease-harness",
+    name: "SQLite lease harness fallback",
+    category: "queue_backend",
+    fallback: "sqlite-lease-harness",
+    defaultDecision: "adopt",
+    defaultEvidenceRefs: ["architecture:sqlite-fallback-criteria"],
+    defaultRollbackPath: "Replace the fallback adapter with a future DispatcherPort adapter after mature-tool evidence passes.",
+    stopLines: ["do_not_add_live_persistence_in_this_story", "preserve_dispatcher_port_contract"],
+    fallbackCandidate: true,
+  },
+  {
+    candidateId: "opa-conftest",
+    name: "OPA/Conftest",
+    category: "policy_engine",
+    fallback: "deterministic-policy-checks",
+    defaultDecision: "defer",
+    defaultRejectionReasons: ["missing_policy_schema_evidence"],
+    defaultRollbackPath: "Defer OPA/Conftest and continue with deterministic in-process policy checks.",
+    stopLines: ["do_not_install_dependency", "do_not_make_policy_source_of_truth_before_schema"],
+  },
+  {
+    candidateId: "claude-squad",
+    name: "Claude Squad",
+    category: "session_worktree",
+    fallback: "codex-workspace-protocol",
+    defaultDecision: "defer",
+    defaultRejectionReasons: ["license_review_required", "headless_session_fit_unproven"],
+    defaultRollbackPath: "Defer Claude Squad and continue with the repo-owned codex-workspace protocol.",
+    stopLines: ["do_not_install_dependency", "do_not_manage_non_manager_sessions"],
+  },
+  {
+    candidateId: "dagger",
+    name: "Dagger",
+    category: "verification_runner",
+    fallback: "existing-pnpm-scripts",
+    defaultDecision: "defer",
+    defaultRejectionReasons: ["missing_runnable_evidence", "runtime_layer_unproven"],
+    defaultRollbackPath: "Defer Dagger and continue with existing pnpm verification scripts.",
+    stopLines: ["do_not_install_dependency", "do_not_replace_existing_verification"],
+  },
+  {
+    candidateId: "existing-pnpm-scripts",
+    name: "Existing pnpm verification scripts",
+    category: "verification_runner",
+    fallback: "existing-pnpm-scripts",
+    defaultDecision: "adopt",
+    defaultEvidenceRefs: ["repo:package-json-check-scripts"],
+    defaultRollbackPath: "Continue using the existing package scripts until a verified runner adapter supersedes them.",
+    stopLines: ["do_not_skip_existing_regression_suite"],
+    fallbackCandidate: true,
+  },
+];
+
+export function buildMatureToolEvaluationPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const evidenceByCandidate = normalizeMatureToolEvidence(context.toolEvidence || options.toolEvidence || {});
+  const extraCandidates = normalizeMatureToolCandidateOverrides(context.candidates || options.candidates || []);
+  const blockers = [];
+  const candidateDefinitions = [...MATURE_TOOL_CANDIDATES, ...extraCandidates];
+  for (const duplicateId of duplicateMatureToolCandidateIds(candidateDefinitions)) {
+    blockers.push({
+      code: "mature-tool-duplicate-candidate-id",
+      candidateId: duplicateId,
+      message: "Mature-tool candidate IDs must be unique before evidence can be evaluated.",
+      nextAction: "Remove or rename duplicate candidate overrides before selecting an adapter path.",
+    });
+  }
+  const candidates = candidateDefinitions.map((definition) =>
+    evaluateMatureToolCandidate(definition, evidenceByCandidate.get(definition.candidateId), blockers),
+  );
+  const selectedPaths = selectMatureToolPaths(candidates);
+  const fallbackSelected = selectedPaths.queueBackend?.candidateId === "sqlite-lease-harness";
+  const blocked = blockers.length > 0;
+  const hasDeferredOrRejected = candidates.some((candidate) => ["defer", "reject"].includes(candidate.decision));
+  const status = blocked ? "blocked" : hasDeferredOrRejected || fallbackSelected ? "attention" : "ready";
+  const nextAction = blocked
+    ? "repair_mature_tool_evidence_before_adapter_work"
+    : fallbackSelected
+      ? "continue_backend_proof_on_selected_fallback"
+      : "plan_adapter_behind_dispatcher_port";
+
+  return packet({
+    ok: !blocked,
+    status,
+    summary: {
+      runId,
+      candidates,
+      selectedPaths,
+      fallbackSelected,
+      noAdditionalPlanningCycleRequired: true,
+      nextAction,
+      canonicalProductSummary: {
+        dispatchBoundary: "DispatcherPort",
+        productObjects: ["CandidateWorkPacket", "WorkItem", "Lease", "ExecutionAttempt", "EvidenceRef", "ManagerExecutionLaneSummary"],
+        adapterPosture: fallbackSelected ? "fallback_adapter_path_selected" : "adapter_boundary_selected",
+        stateSourcePolicy: "canonical_kendall_summary_packets",
+        rawPayloadRetained: false,
+      },
+      mutationMode: "none; read-only mature-tool evaluation summary",
+      rawPayloadRetained: false,
+    },
+    blockers,
+    warnings: [
+      ...(fallbackSelected && !blocked ? [{ code: "mature-tool-fallback-selected", message: "No mature queue/orchestration candidate passed all gates; selected local lease harness fallback." }] : []),
+      ...candidates.filter((candidate) => candidate.decision === "defer").map((candidate) => ({
+        code: "mature-tool-deferred",
+        candidateId: candidate.candidateId,
+        message: `${candidate.name} is deferred until evidence gates pass.`,
+      })).slice(0, 8),
+    ],
+    nextActions: [
+      blocked
+        ? { code: "mature-tool-evidence-blocked", nextAction: "Repair blocked mature-tool evidence before continuing adapter or fallback planning." }
+        : fallbackSelected
+        ? { code: "mature-tool-fallback-selected", nextAction: "Continue backend proof on the local lease harness fallback without another BMAD planning cycle." }
+        : { code: "mature-tool-adapter-boundary-selected", nextAction: "Plan any adopted adapter behind DispatcherPort and keep Kendall product summaries canonical." },
+    ],
+  });
+}
+
+function duplicateMatureToolCandidateIds(candidateDefinitions = []) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const definition of candidateDefinitions) {
+    const candidateId = sanitizeLedgerField(definition?.candidateId || "", "", 80);
+    if (!candidateId) continue;
+    if (seen.has(candidateId)) duplicates.add(candidateId);
+    seen.add(candidateId);
+  }
+  return Array.from(duplicates);
+}
+
+function normalizeMatureToolEvidence(toolEvidence = {}) {
+  const entries = Array.isArray(toolEvidence)
+    ? toolEvidence.map((entry) => [entry?.candidateId || entry?.candidate_id || entry?.id, entry])
+    : Object.entries(toolEvidence);
+  const normalized = new Map();
+  for (const [rawId, rawEvidence] of entries) {
+    const candidateId = sanitizeLedgerField(rawId, "", 80);
+    if (!candidateId || !rawEvidence || typeof rawEvidence !== "object") continue;
+    normalized.set(candidateId, rawEvidence);
+  }
+  return normalized;
+}
+
+function normalizeMatureToolCandidateOverrides(candidates = []) {
+  if (!Array.isArray(candidates)) return [];
+  return candidates.map((candidate, index) => ({
+    candidateId: sanitizeLedgerField(candidate?.candidateId || candidate?.candidate_id || candidate?.id || `custom-candidate-${index + 1}`, `custom-candidate-${index + 1}`, 80),
+    name: sanitizeLedgerField(candidate?.name || candidate?.candidateName || `Custom candidate ${index + 1}`, `Custom candidate ${index + 1}`, 120),
+    category: sanitizeLedgerField(candidate?.category || "", "", 80),
+    fallback: sanitizeLedgerField(candidate?.fallback || "", "", 120),
+    defaultDecision: sanitizeLedgerField(candidate?.decision || candidate?.defaultDecision || "defer", "defer", 40),
+    defaultRejectionReasons: sourceRefList(candidate?.rejectionReasons || candidate?.defaultRejectionReasons),
+    defaultEvidenceRefs: sourceRefList(candidate?.evidenceRefs || candidate?.defaultEvidenceRefs),
+    defaultRollbackPath: sanitizeLedgerField(candidate?.rollbackPath || candidate?.defaultRollbackPath || "", "", 240),
+    stopLines: sourceRefList(candidate?.stopLines),
+    fallbackCandidate: candidate?.fallbackCandidate === true,
+  }));
+}
+
+function evaluateMatureToolCandidate(definition, evidence = {}, blockers = []) {
+  const evidenceRefs = sourceRefList(evidence.runnableEvidenceRefs || evidence.evidenceRefs || definition.defaultEvidenceRefs).slice(0, 8);
+  const explicitDecision = evidence.decision !== undefined ? sanitizeLedgerField(evidence.decision, "", 40) : "";
+  const explicitDecisionValid = !explicitDecision || MATURE_TOOL_DECISIONS.has(explicitDecision);
+  const gateResults = matureToolGateResults(definition, evidence);
+  const rawPayloadRetained = evidence.rawPayloadRetained === true || evidence.raw_payload_retained === true;
+  const claimedLiveAdoption = evidence.claimedInstall === true ||
+    evidence.claimed_install === true ||
+    evidence.claimedDependencyInstall === true ||
+    evidence.claimed_dependency_install === true ||
+    evidence.claimedServiceLaunch === true ||
+    evidence.claimed_service_launch === true ||
+    evidence.launchedService === true ||
+    evidence.launched_service === true ||
+    evidence.startedRuntime === true ||
+    evidence.started_runtime === true;
+  const rejectionReasons = [
+    ...sourceRefList(definition.defaultRejectionReasons),
+    ...gateResults.reasons,
+    ...(!explicitDecisionValid ? ["invalid_decision"] : []),
+    ...(evidenceRefs.length === 0 && !definition.fallbackCandidate ? ["missing_runnable_evidence"] : []),
+  ];
+
+  if (!MATURE_TOOL_CATEGORIES.has(definition.category)) {
+    blockers.push({
+      code: "mature-tool-unsupported-category",
+      candidateId: definition.candidateId,
+      message: "Mature-tool candidate category is unsupported.",
+      nextAction: "Use queue_backend, policy_engine, session_worktree, or verification_runner.",
+    });
+  }
+  if (!explicitDecisionValid) {
+    blockers.push({
+      code: "mature-tool-invalid-decision",
+      candidateId: definition.candidateId,
+      message: "Mature-tool candidate decision must be adopt, defer, or reject.",
+      nextAction: "Rewrite the decision with a supported classification.",
+    });
+  }
+  if (claimedLiveAdoption) {
+    blockers.push({
+      code: "mature-tool-forbidden-live-adoption",
+      candidateId: definition.candidateId,
+      message: "Mature-tool evaluation cannot install dependencies, launch services, or claim live adapter adoption.",
+      nextAction: "Record metadata-only evidence and leave live adoption to a future authority-gated adapter story.",
+    });
+  }
+  if (rawPayloadRetained) {
+    blockers.push({
+      code: "mature-tool-raw-payload-retained",
+      candidateId: definition.candidateId,
+      message: "Mature-tool evaluation summaries must not retain raw payloads.",
+      nextAction: "Retain only source refs, evidence refs, decision metadata, and verification results.",
+    });
+  }
+
+  const rollbackPath = sanitizeLedgerField(evidence.rollbackPath || evidence.rollback_path || definition.defaultRollbackPath || "", "", 240);
+  const fallback = sanitizeLedgerField(evidence.fallback || definition.fallback || "", "", 120);
+  let decision = explicitDecisionValid && explicitDecision ? explicitDecision : definition.defaultDecision || "defer";
+  if (!explicitDecisionValid) {
+    decision = "reject";
+  } else if (!explicitDecision) {
+    if (gateResults.blocked) {
+      decision = "reject";
+    } else if (definition.defaultDecision === "adopt" && definition.fallbackCandidate) {
+      decision = "adopt";
+    } else if (evidenceRefs.length > 0 && rollbackPath && gateResults.ready) {
+      decision = "adopt";
+    } else {
+      decision = "defer";
+    }
+  }
+  if (decision === "adopt" && (
+    !rollbackPath ||
+    (!definition.fallbackCandidate && evidenceRefs.length === 0) ||
+    !gateResults.ready ||
+    rawPayloadRetained ||
+    claimedLiveAdoption
+  )) {
+    decision = gateResults.blocked ? "reject" : "defer";
+  }
+  if (["defer", "reject"].includes(decision) && !fallback) {
+    blockers.push({
+      code: "mature-tool-fallback-missing",
+      candidateId: definition.candidateId,
+      message: "Deferred or rejected mature-tool candidates require an implementation fallback.",
+      nextAction: "Name the fallback path so backend work can continue.",
+    });
+  }
+
+  return {
+    candidateId: definition.candidateId,
+    name: definition.name,
+    category: definition.category,
+    decision,
+    gateResults: gateResults.results,
+    runnableEvidenceRefs: evidenceRefs,
+    rejectionReasons: [...new Set(rejectionReasons)].slice(0, 12),
+    localDependencyPosture: gateResults.results.localDependency,
+    licensePosture: gateResults.results.license,
+    dataBoundaryPosture: gateResults.results.dataBoundary,
+    recoveryPosture: gateResults.results.recovery,
+    leaseSemanticsPosture: gateResults.results.leaseSemantics,
+    rollbackPath,
+    fallback,
+    adapterBoundary: "DispatcherPort",
+    stopLines: (definition.stopLines || []).slice(0, 8),
+    mutationMode: "none; evaluation metadata only",
+    rawPayloadRetained: false,
+  };
+}
+
+function matureToolGateResults(definition, evidence = {}) {
+  const results = {
+    localDependency: sanitizeLedgerField(evidence.localDependencyPosture || evidence.local_dependency_posture || (definition.fallbackCandidate ? "built_in" : "unproven"), "unproven", 80),
+    license: sanitizeLedgerField(evidence.licensePosture || evidence.license_posture || (definition.fallbackCandidate ? "acceptable" : "unknown"), "unknown", 80),
+    dataBoundary: sanitizeLedgerField(evidence.dataBoundaryPosture || evidence.data_boundary_posture || (definition.fallbackCandidate ? "local_only" : "unknown"), "unknown", 80),
+    recovery: sanitizeLedgerField(evidence.recoveryPosture || evidence.recovery_posture || (definition.fallbackCandidate ? "passed" : "missing"), "missing", 80),
+    leaseSemantics: sanitizeLedgerField(evidence.leaseSemanticsPosture || evidence.lease_semantics_posture || (definition.fallbackCandidate ? "passed" : "missing"), "missing", 80),
+  };
+  const reasons = [];
+  if (["remote_only", "remote_required"].includes(results.localDependency)) reasons.push("local_first_blocked");
+  if (["unknown", "unproven", "blocked"].includes(results.localDependency)) reasons.push("local_dependency_unproven");
+  if (results.license === "blocked") reasons.push("license_blocked");
+  if (["blocked", "remote_data_required"].includes(results.dataBoundary)) reasons.push("data_boundary_blocked");
+  if (results.recovery === "failed") reasons.push("recovery_failed");
+  if (results.leaseSemantics === "failed") reasons.push("lease_semantics_failed");
+  if (results.license === "unknown") reasons.push("license_unknown");
+  if (results.dataBoundary === "unknown") reasons.push("data_boundary_unknown");
+  if (results.recovery === "missing") reasons.push("recovery_evidence_missing");
+  if (results.leaseSemantics === "missing") reasons.push("lease_semantics_evidence_missing");
+  const blocked = reasons.some((reason) => ["local_first_blocked", "license_blocked", "data_boundary_blocked", "recovery_failed", "lease_semantics_failed"].includes(reason));
+  const ready = !blocked &&
+    !["unknown", "unproven", "blocked"].includes(results.localDependency) &&
+    !["unknown", "blocked"].includes(results.license) &&
+    !["unknown", "blocked", "remote_data_required"].includes(results.dataBoundary) &&
+    !["missing", "failed"].includes(results.recovery) &&
+    !["missing", "failed"].includes(results.leaseSemantics);
+  return { results, reasons, blocked, ready };
+}
+
+function selectMatureToolPaths(candidates = []) {
+  const byCategory = (category) => candidates.filter((candidate) => candidate.category === category && candidate.decision === "adopt");
+  const queueCandidates = byCategory("queue_backend");
+  const queueBackend = queueCandidates.find((candidate) => candidate.candidateId !== "sqlite-lease-harness") || queueCandidates.find((candidate) => candidate.candidateId === "sqlite-lease-harness") || null;
+  const policyEngine = byCategory("policy_engine")[0] || {
+    candidateId: "deterministic-policy-checks",
+    decision: "fallback",
+    adapterBoundary: "CandidateWorkPacketPolicy",
+    fallback: "deterministic-policy-checks",
+  };
+  const sessionWorktree = byCategory("session_worktree")[0] || {
+    candidateId: "codex-workspace-protocol",
+    decision: "fallback",
+    adapterBoundary: "WorkspaceSessionAdapter",
+    fallback: "codex-workspace-protocol",
+  };
+  const verificationRunner = byCategory("verification_runner").find((candidate) => candidate.candidateId !== "existing-pnpm-scripts") ||
+    byCategory("verification_runner").find((candidate) => candidate.candidateId === "existing-pnpm-scripts") ||
+    null;
+  return {
+    queueBackend,
+    policyEngine,
+    sessionWorktree,
+    verificationRunner,
+  };
+}
+
+export function buildLargeSliceContinuationPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const completedSlice = normalizeLargeSliceCompletedSlice(context.completedSlice || context.completed_slice || null);
+  const completedSlices = normalizeLargeSliceCompletedSlices(context.completedSlices || context.completed_slices || [], completedSlice);
+  const completedSliceCloseoutGaps = validateLargeSliceCompletedSliceCloseout(completedSlice);
+  const candidateNextSlices = normalizeLargeSliceCandidates(context.nextSliceCandidates || context.next_slice_candidates || context.candidateNextSlices || []);
+  const closeoutReady = completedSliceCloseoutGaps.length === 0;
+  const eligibleNextSlice = candidateNextSlices.find((candidate) => candidate.eligibilityDecision === "eligible") || null;
+  const selectedNextSlice = closeoutReady ? eligibleNextSlice : null;
+  const sourceExhausted = largeSliceSourceExhausted(context, candidateNextSlices);
+  const housekeepingPlan = sourceExhausted
+    ? buildLargeSliceHousekeepingPlan(completedSlices, context)
+    : {
+        state: selectedNextSlice ? "not_needed" : "waiting_for_safe_work",
+        stopAfterHousekeeping: false,
+        completedSliceCount: completedSlices.length,
+        evidenceRefs: uniqueStrings(completedSlices.flatMap((slice) => slice.evidenceRefs)).slice(0, 12),
+      };
+  const continuationState = sourceExhausted
+    ? "source_exhausted"
+    : selectedNextSlice
+      ? "next_slice_selected"
+      : candidateNextSlices.some((candidate) => candidate.eligibilityDecision === "needs_review")
+        ? "needs_review"
+        : candidateNextSlices.length > 0
+          ? "blocked"
+          : "waiting_for_safe_work";
+  const status = sourceExhausted ? "attention" : selectedNextSlice ? "ready" : continuationState === "needs_review" ? "attention" : "blocked";
+  const blockers = candidateNextSlices
+    .filter((candidate) => candidate.eligibilityDecision === "blocked")
+    .map((candidate) => ({
+      code: "large-slice-candidate-blocked",
+      candidateId: candidate.candidateId,
+      message: `${candidate.title} is blocked for large-slice continuation.`,
+      reason: candidate.rejectionReasons[0] || "blocked",
+      nextAction: "Repair source-owned evidence, verification, authority, or stop-line blockers before queueing this slice.",
+    }))
+    .slice(0, 8);
+  if (!sourceExhausted && eligibleNextSlice && !closeoutReady) {
+    blockers.unshift({
+      code: "large-slice-closeout-incomplete",
+      message: "Completed slice closeout is incomplete; automatic continuation requires source-owned completion evidence first.",
+      reason: completedSliceCloseoutGaps[0] || "missing_completed_slice_closeout",
+      nextAction: "Record completion evidence, requirement coverage, verification result, recovery path, and touched surfaces before selecting the next slice.",
+    });
+  }
+  const warnings = [
+    ...candidateNextSlices
+      .filter((candidate) => candidate.eligibilityDecision === "needs_review")
+      .map((candidate) => ({
+        code: "large-slice-needs-review",
+        candidateId: candidate.candidateId,
+        message: `${candidate.title} needs review before automatic continuation.`,
+      })),
+    ...(sourceExhausted ? [{ code: "large-slice-source-exhausted", message: "No dispatchable or refillable source-owned work remains." }] : []),
+  ].slice(0, 12);
+  const nextActions = sourceExhausted
+    ? [{ code: "large-slice-housekeeping-stop", nextAction: "Perform housekeeping, summarize completed work, name the next product decision, and stop." }]
+    : selectedNextSlice
+      ? [{ code: "large-slice-next-selected", nextAction: `Queue or dispatch ${selectedNextSlice.candidateId} through existing refill/dispatch gates.` }]
+      : continuationState === "needs_review"
+        ? [{ code: "large-slice-review-needed", nextAction: "Review needs_review slice candidates before automatic continuation." }]
+        : [{ code: "large-slice-blocked", nextAction: "Repair blocked slice evidence before continuing." }];
+
+  return packet({
+    ok: blockers.length === 0 || sourceExhausted || Boolean(selectedNextSlice),
+    status,
+    summary: {
+      runId,
+      continuationState,
+      completedSlice,
+      completedSlices,
+      candidateNextSlices,
+      selectedNextSlice,
+      housekeepingPlan,
+      nextProductDecision: sanitizeLedgerField(context.nextProductDecision || context.next_product_decision || housekeepingPlan.nextProductDecision || "", "", 240),
+      noInventedWorkFromChat: true,
+      mutationMode: "none; metadata-only continuation plan",
+      stopLines: [
+        "no_chat_only_work_synthesis",
+        "no_live_worker_mutation",
+        "no_tmux_mutation",
+        "no_provider_calls",
+        "no_github_mutation",
+        "no_delivery_or_cleanup_apply",
+        "no_new_queue_infrastructure",
+      ],
+      rawPayloadRetained: false,
+    },
+    blockers,
+    warnings,
+    nextActions,
+  });
+}
+
+function normalizeLargeSliceCompletedSlices(slices = [], primary = null) {
+  const normalized = Array.isArray(slices) ? slices.map(normalizeLargeSliceCompletedSlice).filter(Boolean) : [];
+  if (primary && !normalized.some((slice) => slice.sliceId === primary.sliceId)) normalized.unshift(primary);
+  return normalized.slice(0, 12);
+}
+
+function normalizeLargeSliceCompletedSlice(slice = null) {
+  if (!slice || typeof slice !== "object") return null;
+  const sliceId = sanitizeLedgerField(slice.sliceId || slice.slice_id || slice.storyKey || slice.id || "", "", 100);
+  if (!sliceId) return null;
+  return {
+    sliceId,
+    title: sanitizeLedgerField(slice.title || slice.summary || sliceId, sliceId, 160),
+    requirementCoverage: sourceRefList(slice.requirementRefs || slice.requirementCoverage || slice.requirement_refs).slice(0, 12),
+    verificationResult: sanitizeLedgerField(slice.verificationResult || slice.verification_result || slice.verification?.status || "unknown", "unknown", 80),
+    verificationTargets: sourceRefList(slice.verificationTargets || slice.verification_targets || slice.verification?.targets).slice(0, 8),
+    evidenceRefs: sourceRefList(slice.evidenceRefs || slice.evidence_refs || slice.verification?.evidenceRefs).slice(0, 12),
+    recoveryPath: sanitizeLedgerField(slice.recoveryPath || slice.recovery_path || "", "", 240),
+    touchedSurfaces: sourceRefList(slice.touchedSurfaces || slice.touched_surfaces || slice.changedFiles || slice.changed_files).slice(0, 12),
+    rawPayloadRetained: false,
+  };
+}
+
+function validateLargeSliceCompletedSliceCloseout(slice = null) {
+  if (!slice) return ["missing_completed_slice_closeout"];
+  const gaps = [];
+  if (slice.evidenceRefs.length === 0) gaps.push("missing_completion_evidence_refs");
+  if (slice.requirementCoverage.length === 0) gaps.push("missing_requirement_coverage");
+  if (!slice.verificationResult || slice.verificationResult === "unknown") gaps.push("missing_verification_result");
+  if (slice.verificationTargets.length === 0) gaps.push("missing_verification_targets");
+  if (!slice.recoveryPath) gaps.push("missing_recovery_path");
+  if (slice.touchedSurfaces.length === 0) gaps.push("missing_touched_surfaces");
+  return gaps;
+}
+
+function normalizeLargeSliceCandidates(candidates = []) {
+  if (!Array.isArray(candidates)) return [];
+  return candidates.map((candidate, index) => evaluateLargeSliceCandidate(candidate, index)).slice(0, 16);
+}
+
+function evaluateLargeSliceCandidate(candidate = {}, index = 0) {
+  const candidateId = sanitizeLedgerField(candidate.candidateId || candidate.candidate_id || candidate.id || `large-slice-${index + 1}`, `large-slice-${index + 1}`, 100);
+  const title = sanitizeLedgerField(candidate.title || candidate.summary || candidateId, candidateId, 180);
+  const rawSourceRefs = sourceRefList(candidate.sourceRefs || candidate.source_refs);
+  const sourceEvidence = normalizeSourceEvidence(rawSourceRefs);
+  const sourceRefs = sourceEvidence.valid.map((source) => sanitizeLedgerField(source.ref || source.label, "", 180)).filter(Boolean).slice(0, 12);
+  const rejectedSourceRefs = sourceEvidence.rejected || [];
+  const evidenceRefs = sourceRefList(candidate.evidenceRefs || candidate.evidence_refs).slice(0, 12);
+  const verificationTargets = sourceRefList(candidate.verificationTargets || candidate.verification_targets).slice(0, 8);
+  const touchedSurfaces = sourceRefList(candidate.touchedSurfaces || candidate.touched_surfaces || candidate.changedFiles || candidate.changed_files).slice(0, 12);
+  const dependencyLock = sourceRefList(candidate.dependencyLock || candidate.dependency_lock || candidate.dependencies).slice(0, 8);
+  const splitCriteria = sourceRefList(candidate.splitCriteria || candidate.split_criteria).slice(0, 8);
+  const mergeOrder = sourceRefList(candidate.mergeOrder || candidate.merge_order).slice(0, 8);
+  const reconciliationOrder = sourceRefList(candidate.reconciliationOrder || candidate.reconciliation_order).slice(0, 8);
+  const stopLines = sourceRefList(candidate.stopLines || candidate.stop_lines).slice(0, 8);
+  const recoveryPath = sanitizeLedgerField(candidate.recoveryPath || candidate.recovery_path || "", "", 240);
+  const authorityClass = sanitizeLedgerField(candidate.authorityClass || candidate.authority_class || "needs_review", "needs_review", 80);
+  const proposedChildren = Array.isArray(candidate.proposedChildren || candidate.proposed_children)
+    ? (candidate.proposedChildren || candidate.proposed_children).map((child, childIndex) => ({
+        id: sanitizeLedgerField(child?.id || child?.candidateId || `child-${childIndex + 1}`, `child-${childIndex + 1}`, 100),
+        verificationTargets: sourceRefList(child?.verificationTargets || child?.verification_targets).slice(0, 6),
+        touchedSurfaces: sourceRefList(child?.touchedSurfaces || child?.touched_surfaces).slice(0, 8),
+      })).slice(0, 8)
+    : [];
+  const rejectionReasons = [];
+  const reviewReasons = [];
+  if (sourceRefs.length === 0) rejectionReasons.push("missing_source_refs");
+  if (rejectedSourceRefs.some((ref) => /^chat:/i.test(String(ref).trim()))) rejectionReasons.push("ambiguous_source");
+  if (rejectedSourceRefs.some((ref) => !/^chat:/i.test(String(ref).trim()))) rejectionReasons.push("source_evidence_not_source_owned");
+  if (evidenceRefs.length === 0) reviewReasons.push("missing_evidence_refs");
+  if (verificationTargets.length === 0) reviewReasons.push("missing_verification_target");
+  if (!recoveryPath) reviewReasons.push("missing_recovery_path");
+  if (touchedSurfaces.length === 0) reviewReasons.push("missing_touched_surfaces");
+  if (dependencyLock.length === 0) reviewReasons.push("missing_dependency_lock");
+  if (mergeOrder.length === 0 || reconciliationOrder.length === 0) reviewReasons.push("missing_merge_or_reconciliation_order");
+  if (authorityClass !== "allowed_unattended") reviewReasons.push("authority_requires_review");
+  if (touchedSurfaces.some((surface) => /^apps\/dashboard\//.test(surface) || /pipeline\/page|operator|ux|ui/i.test(surface))) {
+    reviewReasons.push("operator_workflow_or_ui_change");
+  }
+  if (splitCriteria.some((criterion) => /shared_acceptance|coupled|tight/i.test(criterion))) reviewReasons.push("coupled_split_boundary");
+  if (hasRuntimeDependencyExpansion(candidate)) reviewReasons.push("new_runtime_dependency");
+  if (splitChildrenOverlap(proposedChildren)) reviewReasons.push("overlapping_split_children");
+  if (
+    positiveBoolean(candidate.requiresLiveWorker ?? candidate.requires_live_worker) ||
+    positiveBoolean(candidate.requiresProviderCall ?? candidate.requires_provider_call) ||
+    positiveBoolean(candidate.requiresGithubMutation ?? candidate.requires_github_mutation) ||
+    positiveBoolean(candidate.requiresCleanupApply ?? candidate.requires_cleanup_apply) ||
+    positiveBoolean(candidate.requiresQueueInfrastructure ?? candidate.requires_queue_infrastructure) ||
+    positiveBoolean(candidate.requiresDelivery ?? candidate.requires_delivery) ||
+    positiveBoolean(candidate.requiresDispatchApply ?? candidate.requires_dispatch_apply) ||
+    positiveBoolean(candidate.crossesStopLine ?? candidate.crosses_stop_line ?? candidate.stopLineCrossed ?? candidate.stop_line_crossed)
+  ) {
+    rejectionReasons.push("forbidden_operation");
+  }
+  const splitDecision = classifyLargeSliceSplit({ proposedChildren, splitCriteria, mergeOrder, reconciliationOrder, reviewReasons, rejectionReasons });
+  const eligibilityDecision = rejectionReasons.length > 0 ? "blocked" : reviewReasons.length > 0 ? "needs_review" : "eligible";
+  return {
+    candidateId,
+    title,
+    sourceRefs,
+    authorityClass,
+    evidenceRefs,
+    verificationTargets,
+    touchedSurfaces,
+    recoveryPath,
+    dependencyLock,
+    splitCriteria,
+    mergeOrder,
+    reconciliationOrder,
+    stopLines,
+    splitDecision,
+    eligibilityDecision,
+    rejectionReasons: uniqueStrings([...rejectionReasons, ...reviewReasons]).slice(0, 12),
+    rawPayloadRetained: false,
+  };
+}
+
+function hasRuntimeDependencyExpansion(candidate = {}) {
+  if (positiveBoolean(candidate.requiresNewRuntimeDependency ?? candidate.requires_new_runtime_dependency)) return true;
+  const dependencySignals = [
+    candidate.newRuntimeDependencies,
+    candidate.new_runtime_dependencies,
+    candidate.runtimeDependencies,
+    candidate.runtime_dependencies,
+  ];
+  return dependencySignals.some((value) => sourceRefList(value).length > 0);
+}
+
+function splitChildrenOverlap(children = []) {
+  if (!Array.isArray(children) || children.length < 2) return false;
+  const seen = new Set();
+  for (const child of children) {
+    for (const surface of child.touchedSurfaces || []) {
+      const key = String(surface || "").trim();
+      if (!key) continue;
+      if (seen.has(key)) return true;
+      seen.add(key);
+    }
+  }
+  return false;
+}
+
+function classifyLargeSliceSplit({ proposedChildren = [], splitCriteria = [], mergeOrder = [], reconciliationOrder = [], reviewReasons = [], rejectionReasons = [] } = {}) {
+  if (rejectionReasons.length > 0) {
+    return { decision: "blocked", reason: rejectionReasons[0] || "blocked", childCount: proposedChildren.length };
+  }
+  const allChildrenVerifiable = proposedChildren.length >= 2 &&
+    proposedChildren.every((child) => child.verificationTargets.length > 0 && child.touchedSurfaces.length > 0);
+  const criteria = new Set(splitCriteria);
+  const splitAllowed = allChildrenVerifiable &&
+    reviewReasons.length === 0 &&
+    criteria.has("independently_testable") &&
+    criteria.has("low_overlap") &&
+    (criteria.has("saves_time_or_tokens") || criteria.has("reduces_time") || criteria.has("reduces_token_usage")) &&
+    mergeOrder.length > 0 &&
+    reconciliationOrder.length > 0;
+  if (splitAllowed) {
+    return { decision: "split_allowed", reason: "independent_low_overlap_verified_children", childCount: proposedChildren.length };
+  }
+  if (proposedChildren.length > 0 || reviewReasons.length > 0) {
+    return { decision: "needs_review", reason: reviewReasons[0] || "split_criteria_unproven", childCount: proposedChildren.length };
+  }
+  return { decision: "keep_large_slice", reason: "coherent_large_slice", childCount: 0 };
+}
+
+function largeSliceSourceExhausted(context = {}, candidates = []) {
+  if (candidates.length > 0) return false;
+  const dispatcher = context.dispatcherSummary?.summary || context.dispatcherSummary || {};
+  const counts = dispatcher.counts || {};
+  const candidateStateCounts = dispatcher.candidateStateCounts || dispatcher.candidate_state_counts || {};
+  const dispatchable = nonNegativeInteger(counts.dispatchable ?? counts.assignable ?? counts.queued ?? candidateStateCounts.assignable ?? candidateStateCounts.queued) ?? 0;
+  const active = nonNegativeInteger(
+    counts.active ??
+    counts.activeLeases ??
+    counts.active_leases ??
+    candidateStateCounts.active ??
+    candidateStateCounts.activeLeases ??
+    candidateStateCounts.active_leases ??
+    context.activeLeases ??
+    context.active_leases,
+  ) ?? 0;
+  const eligibleFromRefill = nonNegativeInteger(
+    context.refillPlan?.summary?.sourceWorkEligibility?.eligibleCount ??
+    context.refillPlan?.summary?.source_work_eligibility?.eligible_count ??
+    context.sourceWorkEligibility?.summary?.eligibleCount ??
+    context.sourceWorkEligibility?.eligibleCount,
+  ) ?? 0;
+  const refillCandidateLanes = Array.isArray(context.refillPlan?.summary?.candidateLanes)
+    ? context.refillPlan.summary.candidateLanes.length
+    : Array.isArray(context.refillPlan?.summary?.candidate_lanes)
+      ? context.refillPlan.summary.candidate_lanes.length
+      : 0;
+  const refillCandidates = Array.isArray(context.refillCandidates)
+    ? context.refillCandidates.length
+    : Array.isArray(context.refill_candidates)
+      ? context.refill_candidates.length
+      : 0;
+  const sourceExhausted = context.refillPlan?.summary?.refillWatermark?.summary?.sourceExhausted === true ||
+    context.refillPlan?.summary?.sourceExhausted === true ||
+    context.sourceExhausted === true ||
+    context.source_exhausted === true;
+  return dispatchable === 0 && active === 0 && eligibleFromRefill === 0 && refillCandidateLanes === 0 && refillCandidates === 0 && sourceExhausted;
+}
+
+function buildLargeSliceHousekeepingPlan(completedSlices = [], context = {}) {
+  const evidenceRefs = uniqueStrings(completedSlices.flatMap((slice) => slice.evidenceRefs)).slice(0, 12);
+  const requirementCoverage = uniqueStrings(completedSlices.flatMap((slice) => slice.requirementCoverage)).slice(0, 12);
+  return {
+    state: "ready",
+    stopAfterHousekeeping: true,
+    completedSliceCount: completedSlices.length,
+    completedSlices: completedSlices.map((slice) => ({ sliceId: slice.sliceId, title: slice.title, requirementCoverage: slice.requirementCoverage })).slice(0, 12),
+    evidenceRefs,
+    requirementCoverage,
+    summary: completedSlices.length > 0
+      ? `Completed ${completedSlices.length} source-owned slice(s); no dispatchable or refillable source-owned work remains.`
+      : "No dispatchable or refillable source-owned work remains.",
+    nextProductDecision: sanitizeLedgerField(
+      context.nextProductDecision || context.next_product_decision || "Select the next source-owned PRD, approve an authority expansion, or stop the manager run.",
+      "Select the next source-owned PRD, approve an authority expansion, or stop the manager run.",
+      240,
+    ),
+    recoveryPath: "Rerun preflight/refill after new source-owned work or explicit authority is available.",
+  };
+}
+
+function uniqueStrings(values = []) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+export function buildRefillPlan(options = {}, context = {}) {
+  const desiredWorkers = boundedDesiredWorkers(options.desiredWorkers);
+  const apply = options.apply === true;
+  const assignmentArgs = ["assignment-report", "--summary-json"];
+  if (options.stateRoot) assignmentArgs.push("--state-root", options.stateRoot);
+  const assignment = context.assignmentSummary || readAssignmentSummaryFile(options.assignmentSummaryFile) || runWorkspaceJson(assignmentArgs, context);
+  if (assignment?.ok === false) {
+    return packet({
+      ok: false,
+      status: "unknown",
+      summary: {
+        desiredWorkers,
+        dispatchableLanes: null,
+        activeLanes: null,
+        safeWorkSupply: null,
+        refillNeeded: null,
+        closedLanes: null,
+        source: null,
+        sourceSlice: null,
+        candidateLanes: [],
+        closedEvidence: { count: null, preservation: "preserve_do_not_requeue" },
+        workCreationStep: null,
+        splitPlan: null,
+        mutationMode: "blocked_until_inventory_available",
+      },
+      blockers: [
+        {
+          code: "assignment-report-unavailable",
+          message: assignment.error || "assignment report unavailable",
+          nextAction: "Restore assignment inventory before creating or refreshing safe backlog work.",
+        },
+      ],
+    });
+  }
+  const assignmentDispatchable = nonNegativeInteger(
+    assignment?.summary?.backlogStatusCounts?.assignable ??
+      assignment?.backlogStatusCounts?.assignable ??
+      assignment?.summary?.assignableCount ??
+      assignment?.assignableCount,
+  );
+  const dispatchable = dispatchPreviewCount(context.dispatchPreview, "dispatchable") ?? assignmentDispatchable;
+  const closed =
+    nonNegativeInteger(assignment?.summary?.backlogStatusCounts?.closed ?? assignment?.backlogStatusCounts?.closed ?? 0) ??
+    dispatchPreviewCount(context.dispatchPreview, "closed");
+  const claimedAssignments = nonNegativeInteger(assignment?.summary?.laneAssignmentStatusCounts?.claimed ?? assignment?.laneAssignmentStatusCounts?.claimed) ?? 0;
+  const activeWorkspaces = nonNegativeInteger(assignment?.summary?.workspaceAssignmentStatusCounts?.active ?? assignment?.workspaceAssignmentStatusCounts?.active) ?? 0;
+  const activeLaneEvidence = summarizeActiveLaneEvidence(assignment, { stateRoot: options.stateRoot });
+  const detailedWorkerEligibleActive =
+    activeLaneEvidence.hasDetailedLaneAssignments && activeLaneEvidence.workerEligibleCount !== null ? activeLaneEvidence.workerEligibleCount : null;
+  const active =
+    dispatchPreviewCount(context.dispatchPreview, "active") ??
+    detailedWorkerEligibleActive ??
+    nonNegativeInteger(assignment?.summary?.backlogStatusCounts?.active ?? assignment?.backlogStatusCounts?.active) ??
+    Math.max(claimedAssignments, activeWorkspaces, 0);
+  if (dispatchable === null || closed === null) {
+    return packet({
+      ok: false,
+      status: "unknown",
+      summary: {
+        desiredWorkers,
+        dispatchableLanes: dispatchable,
+        activeLanes: active,
+        activeLaneEvidence,
+        safeWorkSupply: null,
+        refillNeeded: null,
+        closedLanes: closed,
+        source: null,
+        sourceSlice: null,
+        candidateLanes: [],
+        closedEvidence: { count: closed, preservation: "preserve_do_not_requeue" },
+        workCreationStep: null,
+        splitPlan: null,
+        mutationMode: "blocked_until_inventory_available",
+      },
+      blockers: [
+        {
+          code: "assignment-report-malformed",
+          message: "Assignment inventory did not provide non-negative integer backlog counts.",
+          nextAction: "Repair assignment inventory before creating or refreshing safe backlog work.",
+        },
+      ],
+    });
+  }
+  const safeWorkSupply = dispatchable + active;
+  const refillNeeded = Math.max(0, desiredWorkers - safeWorkSupply);
+  const starvation = refillNeeded > 0;
+  const sourceArtifactDiscovery =
+    context.sourceArtifactDiscovery ||
+    (context.discoverSourceArtifacts || options.discoverSourceArtifacts || hasSourceArtifactInputs(options, context) || hasSourceWorkCandidateInputs(options, context)
+      ? buildSourceArtifactDiscoveryPlan(options, context)
+      : null);
+  const sourceWorkEligibility =
+    context.sourceWorkEligibility ||
+    (hasSourceWorkCandidateInputs(options, context)
+      ? buildSourceWorkEligibilityPlan(options, { ...context, sourceArtifactDiscovery })
+      : null);
+  const eligibleSourceWorkPackets = Array.isArray(sourceWorkEligibility?.summary?.candidateWorkPackets)
+    ? sourceWorkEligibility.summary.candidateWorkPackets
+    : [];
+  const discoveredSourceRefs = Array.isArray(sourceArtifactDiscovery?.summary?.artifacts)
+    ? sourceArtifactDiscovery.summary.artifacts.map((artifact) => artifact.ref).filter(Boolean)
+    : [];
+  const explicitSourceRefs = [
+    ...sourceRefList(options.sourceRefs),
+    ...sourceRefList(context.sourceRefs),
+    ...sourceRefList(context.sourceEvidence),
+    ...sourceRefList(discoveredSourceRefs),
+    ...eligibleSourceWorkPackets.flatMap((candidate) => sourceRefList(candidate.sourceRefs)),
+  ];
+  const sourceEvidence = normalizeSourceEvidence(explicitSourceRefs.length > 0 ? explicitSourceRefs : defaultSourceRefs(context));
+  const sourceSlice = sourceEvidence.valid[0] || null;
+  const closedEvidence = { count: closed, preservation: "preserve_do_not_requeue" };
+  const sourceWarnings =
+    sourceEvidence.rejected.length > 0
+      ? [
+          {
+            code: "source-evidence-rejected",
+            message: `Rejected ${sourceEvidence.rejected.length} refill source reference(s).`,
+          },
+        ]
+      : [];
+  if (starvation && !sourceSlice) {
+    const ambiguous = sourceEvidence.rejected.length > 0;
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        desiredWorkers,
+        dispatchableLanes: dispatchable,
+        activeLanes: active,
+        activeLaneEvidence,
+        safeWorkSupply,
+        refillNeeded,
+        closedLanes: closed,
+        source: null,
+        sourceSlice: null,
+        sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
+        sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+        candidateLanes: [],
+        closedEvidence,
+        workCreationStep: null,
+        splitPlan: null,
+        mutationMode: "blocked",
+      },
+      blockers: [
+        {
+          code: ambiguous ? "source-evidence-ambiguous" : "source-evidence-missing",
+          message: ambiguous
+            ? "Refill source evidence is ambiguous or not source-owned."
+            : "No source-owned PRD, runway, story, or repo doc evidence is available for refill planning.",
+          nextAction: "Run housekeeping and stop, or ask the operator for product direction before creating new work.",
+        },
+      ],
+      warnings: sourceWarnings,
+    });
+  }
+  const sourcePlanning = sourceSlice ? discoverSourcePlanningState(sourceSlice, context) : null;
+  const bmadPlanningGap = starvation && sourceSlice
+    ? buildBmadPlanningGapPlan(options, { ...context, sourceRefs: [sourceSlice.ref], sourceSlice, sourcePlanning, sourceWorkEligibility })
+    : null;
+  let workCreationStep = starvation && sourceSlice && bmadPlanningGap?.summary?.narrowestWorkflow
+    ? selectWorkCreationStep(sourceSlice, [...sourceRefList(options.workCreationSignals), ...sourceRefList(context.workCreationSignals), ...sourceRefList(context.operatorSteering)], sourcePlanning, refillNeeded, bmadPlanningGap)
+    : null;
+  const bmadRequestPacketPlan = workCreationStep
+    ? buildBmadRequestPacketPlan(options, { ...context, sourceRefs: [sourceSlice.ref], sourcePlanning, bmadPlanningGap })
+    : null;
+  const requestPacketBlocked = bmadRequestPacketPlan?.status === "blocked";
+  const requestPacketReady = bmadRequestPacketPlan?.summary?.validation?.status === "ready";
+  if (workCreationStep?.workCreationPacket && bmadRequestPacketPlan) {
+    workCreationStep = {
+      ...workCreationStep,
+      workCreationPacket: {
+        ...workCreationStep.workCreationPacket,
+        requestPacketRef: bmadRequestPacketPlan.summary?.requestPacket ? "summary.bmadRequestPacket" : null,
+        validation: bmadRequestPacketPlan.summary?.validation || null,
+      },
+    };
+  }
+  const materializationGate = buildRefillMaterializationGate(workCreationStep, sourceSlice, sourcePlanning, bmadRequestPacketPlan?.summary?.validation || null);
+  const splitPlan = starvation && sourceSlice ? buildSplitPlan(context.splitHints || options.splitHints || null) : null;
+  const candidateLanes = starvation && workCreationStep && !requestPacketBlocked ? buildCandidateLanePackets(refillNeeded, sourceSlice, workCreationStep, splitPlan) : [];
+  const dispatcherRefill = buildDispatcherRefillWatermarkPlan(
+    {
+      ...options,
+      queueDepth: dispatchable,
+      activeLeases: active,
+    },
+    {
+      ...context,
+      sourceRefs: sourceSlice ? [sourceSlice.ref] : explicitSourceRefs,
+      candidateLanes,
+      refillCandidates: sourceWorkEligibility ? eligibleSourceWorkPackets : context.refillCandidates,
+      dispatchPreview: context.dispatchPreview,
+    },
+  );
+  if (apply) {
+    if (workCreationStep && (requestPacketBlocked || bmadRequestPacketPlan?.summary?.validation?.status !== "ready")) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: {
+          apply: true,
+          workflow: workCreationStep?.workflow || null,
+          mutationMode: "none",
+          retention: "metadata_only_refill_apply_summary",
+          requestPacketValidation: bmadRequestPacketPlan?.summary?.validation || null,
+        },
+        blockers: bmadRequestPacketPlan?.blockers?.length
+          ? bmadRequestPacketPlan.blockers
+          : [{
+              code: "refill-apply-request-packet-not-ready",
+              message: "Refill apply requires an explicitly ready BMAD request packet.",
+              nextAction: "Review or authorize the request packet before applying local BMAD output mutation.",
+            }],
+      });
+    }
+    const refillApply = applyRefillWorkCreation({
+      desiredWorkers,
+      dispatchable,
+      active,
+      safeWorkSupply,
+      refillNeeded,
+      closed,
+      sourceSlice,
+      sourcePlanning,
+      workCreationStep,
+    }, context);
+    return refillApply;
+  }
+  return packet({
+    status: starvation ? "refill_needed" : "ready",
+    summary: {
+      desiredWorkers,
+      dispatchableLanes: dispatchable,
+      activeLanes: active,
+      activeLaneEvidence,
+      safeWorkSupply,
+      refillNeeded,
+      closedLanes: closed,
+      source: sourceSlice?.label || null,
+      sourceSlice,
+      sourcePlanning,
+      candidateLanes,
+      sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
+      sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+      bmadPlanningGap: bmadPlanningGap?.summary || null,
+      bmadRequestPacket: requestPacketBlocked ? null : bmadRequestPacketPlan?.summary?.requestPacket || null,
+      materializationGate,
+      refillJob: dispatcherRefill.summary?.refillJob || null,
+      refillWatermark: dispatcherRefill.summary || null,
+      closedEvidence,
+      workCreationStep,
+      splitPlan,
+      mutationMode: starvation ? "dry_run_required" : "none",
+    },
+    warnings: sourceWarnings,
+    blockers: [...(bmadPlanningGap?.blockers || []), ...(requestPacketBlocked ? bmadRequestPacketPlan.blockers || [] : [])],
+    nextActions: starvation
+      ? [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: materializationGate ? materializationGate.nextAction : workCreationNextAction(workCreationStep),
+            materializationGate: materializationGate ? compactRefillMaterializationGateAction(materializationGate) : null,
+          },
+        ]
+      : [],
+  });
+}
+
+function refillTriggerReason(value) {
+  const text = String(value || "").trim();
+  return ["low_watermark", "manual_bootstrap", "source_exhaustion_check", "recovery"].includes(text) ? text : "low_watermark";
+}
+
+function refillSourceRefs(options = {}, context = {}) {
+  const refs = [
+    ...sourceRefList(options.sourceRefs),
+    ...sourceRefList(context.sourceRefs),
+    ...sourceRefList(context.sourceEvidence),
+  ];
+  const normalized = normalizeSourceEvidence(refs);
+  return normalized.valid.map((source) => source.ref).slice(0, 12);
+}
+
+function refillSourceKey(sourceRefs = []) {
+  if (sourceRefs.length === 0) return "no-source";
+  return sanitizeLedgerField([...new Set(sourceRefs)].sort().join("+"), "source", 120)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "source";
+}
+
+function findActiveRefillJob(jobs = [], lockId = "") {
+  if (!Array.isArray(jobs)) return null;
+  return jobs.find((job) => {
+    const state = String(job?.state || job?.status || "").toLowerCase();
+    const sameLock = String(job?.lockId || job?.lock_id || "") === lockId;
+    return sameLock && ["planned", "running", "refilling"].includes(state);
+  }) || null;
+}
+
+function normalizeRefillJobForSummary(job = {}, defaults = {}) {
+  return refillJobSummary({
+    runId: defaults.runId,
+    sourceRefs: defaults.sourceRefs,
+    triggerReason: defaults.triggerReason,
+    lowWatermark: defaults.lowWatermark,
+    highWatermark: defaults.highWatermark,
+    lockId: defaults.lockId,
+    timestamp: defaults.timestamp,
+    refillJobId: job.refillJobId || job.refill_job_id,
+    state: job.state || job.status || "running",
+    result: job.result || "queued_work",
+    candidateCount: job.candidateCount ?? job.candidate_count,
+    queuedCount: job.queuedCount ?? job.queued_count,
+    needsReviewCount: job.needsReviewCount ?? job.needs_review_count,
+    blockedCount: job.blockedCount ?? job.blocked_count,
+    startedAt: job.startedAt || job.started_at,
+    finishedAt: job.finishedAt || job.finished_at,
+    evidenceRefs: job.evidenceRefs || job.evidence_refs,
+    blockers: job.blockers,
+    nextActions: job.nextActions || job.next_actions,
+    dedupe: job.dedupe,
+  });
+}
+
+function refillJobSummary({
+  runId,
+  sourceRefs = [],
+  triggerReason = "low_watermark",
+  lowWatermark = DEFAULT_REFILL_LOW_WATERMARK,
+  highWatermark = DEFAULT_REFILL_HIGH_WATERMARK,
+  lockId = "",
+  timestamp = new Date().toISOString(),
+  refillJobId = "",
+  state = "running",
+  result = "queued_work",
+  candidateCount = 0,
+  queuedCount = 0,
+  needsReviewCount = 0,
+  blockedCount = 0,
+  startedAt = "",
+  finishedAt = undefined,
+  evidenceRefs = [],
+  blockers = [],
+  nextActions = [],
+  dedupe = null,
+} = {}) {
+  const normalizedState = ["planned", "running", "completed", "blocked", "failed"].includes(String(state)) ? String(state) : "running";
+  const normalizedResult = ["queued_work", "no_safe_work", "needs_review", "blocked", "failed"].includes(String(result)) ? String(result) : "queued_work";
+  const id = sanitizeLedgerField(refillJobId || `refill-${refillSourceKey(sourceRefs)}-${triggerReason}-${lowWatermark}-${highWatermark}`, "refill-job", 180);
+  const authorityClass = normalizedResult === "blocked"
+    ? "block_and_record"
+    : normalizedResult === "needs_review"
+      ? "requires_preauthorization"
+      : "allowed_unattended";
+  const suppliedEvidenceRefs = sourceRefList(evidenceRefs);
+  return {
+    refillJobId: id,
+    sourceRefs: sourceRefs.map((ref) => sanitizeLedgerField(ref, "", 180)).filter(Boolean).slice(0, 12),
+    triggerReason,
+    lowWatermark,
+    highWatermark,
+    lockId: sanitizeLedgerField(lockId, "refill-lock", 180),
+    candidateCount: nonNegativeInteger(candidateCount) ?? 0,
+    queuedCount: nonNegativeInteger(queuedCount) ?? 0,
+    needsReviewCount: nonNegativeInteger(needsReviewCount) ?? 0,
+    blockedCount: nonNegativeInteger(blockedCount) ?? 0,
+    authorityClass,
+    state: normalizedState,
+    startedAt: sanitizeLedgerField(startedAt || timestamp, timestamp, 80),
+    finishedAt: finishedAt === undefined ? (normalizedState === "completed" || normalizedState === "blocked" || normalizedState === "failed" ? sanitizeLedgerField(timestamp, timestamp, 80) : null) : finishedAt,
+    result: normalizedResult,
+    evidenceRefs: compactRefillEvidenceRefs(suppliedEvidenceRefs.length > 0 ? suppliedEvidenceRefs : sourceRefs.map((ref) => `source:${ref}`)),
+    blockers: compactRefillBlockers(blockers),
+    nextActions: compactRefillNextActions(nextActions),
+    dedupe: dedupe || refillDedupeSummary([]),
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeRefillCandidates(candidates = [], fallbackSourceRefs = []) {
+  if (!Array.isArray(candidates)) return [];
+  return candidates.slice(0, 24).map((candidate, index) => {
+    const refs = [
+      ...sourceRefList(candidate?.sourceRefs),
+      ...sourceRefList(candidate?.sourceRef ? `${candidate.sourceType || "story"}:${candidate.sourceRef}` : ""),
+      ...fallbackSourceRefs,
+    ];
+    const evidence = normalizeSourceEvidence(refs);
+    return {
+      candidateId: sanitizeLedgerField(candidate?.candidateId || candidate?.candidateWorkPacketId || candidate?.id || `candidate-${index + 1}`, `candidate-${index + 1}`, 120),
+      title: sanitizeLedgerField(candidate?.title || candidate?.proposedSlice || candidate?.kind || `Refill candidate ${index + 1}`, `Refill candidate ${index + 1}`, 160),
+      sourceRefs: evidence.valid.map((source) => source.ref).slice(0, 8),
+      rejectedSourceRefs: evidence.rejected,
+      dedupeKey: sanitizeLedgerField(candidate?.dedupeKey || candidate?.dedupe_key || candidate?.candidateId || candidate?.id || `candidate-${index + 1}`, `candidate-${index + 1}`, 160),
+      authorityClass: sanitizeLedgerField(candidate?.authorityClass || candidate?.authority_class || "", "", 80),
+      verificationTargets: sourceRefList(candidate?.verificationTargets || candidate?.verification || candidate?.verification_targets).map((target) => sanitizeLedgerField(target, "", 180)).filter(Boolean).slice(0, 8),
+      evidenceRefs: sourceRefList(candidate?.evidenceRefs || candidate?.evidence_refs).map((target) => sanitizeLedgerField(target, "", 120)).filter(Boolean).slice(0, 8),
+    };
+  });
+}
+
+function existingDedupeKeys(context = {}) {
+  const keys = new Set();
+  for (const value of sourceRefList(context.completedDedupeKeys || context.existingDedupeKeys)) {
+    if (value) keys.add(String(value));
+  }
+  for (const item of [
+    ...(Array.isArray(context.existingWorkItems) ? context.existingWorkItems : []),
+    ...(Array.isArray(context.workItems) ? context.workItems : []),
+    ...(Array.isArray(context.queuedWorkItems) ? context.queuedWorkItems : []),
+  ]) {
+    const key = item?.dedupeKey || item?.dedupe_key;
+    if (key) keys.add(String(key));
+  }
+  return keys;
+}
+
+function classifyRefillCandidates(candidates = [], dedupeKeys = new Set(), targetCandidateCount = 0) {
+  const eligibleCandidates = [];
+  const needsReviewCandidates = [];
+  const blockedCandidates = [];
+  const dedupeSkippedCandidates = [];
+  const boundedSkippedCandidates = [];
+  const seenDedupeKeys = new Set(dedupeKeys);
+  for (const candidate of candidates) {
+    if (seenDedupeKeys.has(candidate.dedupeKey)) {
+      dedupeSkippedCandidates.push(compactRefillCandidate(candidate, "dedupe_skipped"));
+      continue;
+    }
+    seenDedupeKeys.add(candidate.dedupeKey);
+    if (candidate.sourceRefs.length === 0 || candidate.rejectedSourceRefs.length > 0) {
+      blockedCandidates.push(compactRefillCandidate(candidate, "ambiguous_source"));
+      continue;
+    }
+    if (candidate.verificationTargets.length === 0) {
+      needsReviewCandidates.push(compactRefillCandidate(candidate, "missing_verification_target"));
+      continue;
+    }
+    const authorityClass = String(candidate.authorityClass || "").toLowerCase();
+    if (
+      !authorityClass ||
+      [
+        "requires_preauthorization",
+        "high_risk",
+        "high-risk",
+        "operator_required",
+        "operator-required",
+        "manual_review",
+        "manual-review",
+        "needs_review",
+        "needs-review",
+        "unsafe",
+        "broad",
+        "ambiguous",
+      ].includes(authorityClass)
+    ) {
+      needsReviewCandidates.push(compactRefillCandidate(candidate, "authority_requires_review"));
+      continue;
+    }
+    if (authorityClass === "block_and_record" || authorityClass === "forbidden") {
+      blockedCandidates.push(compactRefillCandidate(candidate, "authority_blocked"));
+      continue;
+    }
+    if (eligibleCandidates.length >= targetCandidateCount) {
+      boundedSkippedCandidates.push(compactRefillCandidate(candidate, "above_high_watermark_target"));
+      continue;
+    }
+    eligibleCandidates.push(compactRefillCandidate(candidate, "eligible"));
+  }
+  return { eligibleCandidates, needsReviewCandidates, blockedCandidates, dedupeSkippedCandidates, boundedSkippedCandidates };
+}
+
+function compactRefillCandidate(candidate, reason) {
+  return {
+    candidateId: candidate.candidateId,
+    title: candidate.title,
+    sourceRefs: candidate.sourceRefs,
+    dedupeKey: candidate.dedupeKey,
+    authorityClass: candidate.authorityClass || null,
+    verificationTargetCount: candidate.verificationTargets.length,
+    evidenceRefCount: candidate.evidenceRefs.length,
+    reason,
+    rawPayloadRetained: false,
+  };
+}
+
+function refillDedupeSummary(skipped = []) {
+  return {
+    skippedCount: skipped.length,
+    skippedCandidates: skipped.slice(0, 12),
+    rawPayloadRetained: false,
+  };
+}
+
+function refillBoundedSkipSummary(skipped = []) {
+  return {
+    skippedCount: skipped.length,
+    skippedCandidates: skipped.slice(0, 12),
+    reason: "above_high_watermark_target",
+    rawPayloadRetained: false,
+  };
+}
+
+function refillEvidenceRefs(sourceRefs = [], candidates = []) {
+  return compactRefillEvidenceRefs([
+    ...sourceRefs.map((ref) => `source:${ref}`),
+    ...candidates.flatMap((candidate) => sourceRefList(candidate.evidenceRefs || candidate.evidence_refs)),
+  ]);
+}
+
+function compactRefillEvidenceRefs(refs = []) {
+  return [...new Set(sourceRefList(refs).map((ref) => sanitizeLedgerField(ref, "", 180)).filter(Boolean))].slice(0, 12);
+}
+
+function compactRefillBlockers(blockers = []) {
+  if (!Array.isArray(blockers)) return [];
+  return blockers.slice(0, 8).map((blocker) => ({
+    code: sanitizeLedgerField(blocker?.code, "dispatcher-refill-blocker", 120),
+    message: sanitizeLedgerField(blocker?.message, "", 240),
+    nextAction: sanitizeLedgerField(blocker?.nextAction, "", 260),
+  }));
+}
+
+function compactRefillNextActions(nextActions = []) {
+  if (!Array.isArray(nextActions)) return [];
+  return nextActions.slice(0, 8).map((action) => ({
+    code: sanitizeLedgerField(action?.code, "dispatcher-refill-next-action", 120),
+    summary: sanitizeLedgerField(action?.summary, "", 180),
+    nextAction: sanitizeLedgerField(action?.nextAction, "", 260),
+  }));
+}
+
+function refillWatermarkNextActions(result, sourceExhausted) {
+  if (result === "queued_work") {
+    return [{ code: "dispatcher-refill-started", summary: "Refill job can queue eligible source-owned work up to the high watermark.", nextAction: "Record refill evidence and refresh dispatcher queue summary." }];
+  }
+  if (sourceExhausted || result === "no_safe_work") {
+    return [{ code: "dispatcher-refill-source-exhausted", summary: "No eligible source-owned refill candidates are available.", nextAction: "Run housekeeping and stop, or request the narrowest BMAD planning step." }];
+  }
+  if (result === "needs_review") {
+    return [{ code: "dispatcher-refill-needs-review", summary: "Refill candidates require review before queueing.", nextAction: "Surface review-needed candidates with source refs and verification gaps." }];
+  }
+  return [{ code: "dispatcher-refill-blocked", summary: "Refill candidates are blocked by source, authority, or verification gaps.", nextAction: "Do not queue blocked candidates; repair source evidence or ask the operator." }];
+}
+
+function applyRefillWorkCreation(plan = {}, context = {}) {
+  const { workCreationStep, refillNeeded } = plan;
+  const blockers = [];
+  if (refillNeeded <= 0) {
+    return packet({
+      status: "ready",
+      summary: {
+        apply: true,
+        workflow: null,
+        mutationMode: "none; refill no longer needed at apply time",
+        retention: "metadata_only_refill_apply_summary",
+      },
+      warnings: [{ code: "refill-apply-not-needed", message: "No refill work creation is currently needed; treated as an idempotent no-op." }],
+      nextActions: [{ code: "refill-apply-noop", summary: "No refill work creation was needed at apply time.", nextAction: "Continue manager cycle monitoring." }],
+    });
+  }
+  if (!workCreationStep?.workflow) {
+    blockers.push({ code: "refill-apply-workflow-missing", message: "Refill apply requires a source-owned work creation workflow.", nextAction: "Regenerate manager-refill-plan before applying." });
+  }
+  if (!workCreationStep?.workCreationPacket) {
+    blockers.push({ code: "refill-apply-packet-missing", message: "Refill apply requires a compact workCreationPacket.", nextAction: "Regenerate manager-refill-plan before applying." });
+  }
+  if (blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        apply: true,
+        workflow: workCreationStep?.workflow || null,
+        mutationMode: "none",
+        retention: "metadata_only_refill_apply_summary",
+      },
+      blockers,
+    });
+  }
+  const workflow = workCreationStep.workflow;
+  const result =
+    workflow === "bmad-correct-course"
+      ? applyCourseCorrectionRefill(workCreationStep, context)
+      : workflow === "bmad-create-story"
+        ? applyStoryCreationRefill(workCreationStep, { ...context, refillNeeded })
+        : {
+            ok: false,
+            blockers: [{
+              code: "refill-apply-workflow-unsupported",
+              message: `Refill apply is not yet proven for ${workflow}.`,
+              nextAction: `Run ${workflow} manually through its BMAD workflow.`,
+            }],
+          };
+  return packet({
+    ok: result.ok !== false,
+    status: result.ok === false ? "blocked" : "ready",
+    summary: {
+      apply: true,
+      workflow,
+      mutationMode: result.mutationMode || "local_bmad_output_only",
+      result: result.summary || result,
+      retention: "metadata_only_refill_apply_summary",
+      stopLines: ["no_worker_mutation", "no_dispatch_apply", "no_takeover", "no_provider_payload_retention", "no_tracked_source_mutation"],
+    },
+    blockers: result.blockers || [],
+    warnings: result.warnings || [],
+  });
+}
+
+function applyCourseCorrectionRefill(step = {}, context = {}) {
+  const draft = step.workCreationPacket?.courseCorrectionDraft;
+  const sprintPath = sanitizeRelativeBmadOutputPath(draft?.impact?.sprintStatusPath || step.sourcePlanning?.sprintStatus?.path || "");
+  if (!draft) {
+    return {
+      ok: false,
+      blockers: [{ code: "course-correction-draft-missing", message: "Course-correction refill apply requires a draft.", nextAction: "Regenerate manager-refill-plan." }],
+    };
+  }
+  if (!sprintPath) {
+    return {
+      ok: false,
+      blockers: [{ code: "course-correction-sprint-status-path-invalid", message: "Course-correction refill apply requires a sprint status path under _bmad-output/.", nextAction: "Regenerate manager-refill-plan with the scoped BMAD sprint tracker." }],
+    };
+  }
+  const sprintAbsolute = resolve(repoRoot, sprintPath);
+  if (!isInsideOrSame(sprintAbsolute, repoRoot) || !existsSync(sprintAbsolute)) {
+    return {
+      ok: false,
+      blockers: [{ code: "sprint-status-missing", message: `Sprint status does not exist: ${sprintPath}`, nextAction: "Restore sprint tracker before refill apply." }],
+    };
+  }
+  const source = readFileSync(sprintAbsolute, "utf8");
+  const storyStatuses = step.sourcePlanning?.sprintStatus?.storyStatuses || countSprintStories(source).storyStatuses || {};
+  const items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses);
+  if (items.length === 0) {
+    return {
+      ok: false,
+      blockers: [{ code: "course-correction-no-new-items", message: "Course-correction draft has no new backlog items to add.", nextAction: "Create a new source-owned PRD slice or adjust the draft." }],
+    };
+  }
+  const proposalPath = sanitizeRelativeBmadOutputPath(draft.outputPath || "");
+  if (!proposalPath) {
+    return {
+      ok: false,
+      blockers: [{ code: "course-correction-output-path-invalid", message: "Course-correction output path is invalid.", nextAction: "Regenerate the course-correction draft." }],
+    };
+  }
+  const proposalAbsolute = resolve(repoRoot, proposalPath);
+  mkdirSync(dirname(proposalAbsolute), { recursive: true });
+  writeFileSync(proposalAbsolute, renderCourseCorrectionProposal(draft, items), "utf8");
+  const updatedSprint = appendBacklogItemsToSprintStatus(source, items);
+  writeFileSync(sprintAbsolute, updatedSprint, "utf8");
+  return {
+    ok: true,
+    mutationMode: "local_bmad_course_correction_backlog_only",
+    summary: {
+      proposalPath,
+      sprintStatusPath: sprintPath,
+      addedBacklogCount: items.length,
+      addedBacklogItems: items.map((item) => ({ id: item.id, title: item.title })),
+      nextAction: "Run manager-refill-plan again; it should route to bmad-create-story for the first new backlog item.",
+    },
+  };
+}
+
+function applyStoryCreationRefill(step = {}, context = {}) {
+  const inputs = step.workCreationPacket?.storyCreationInputs;
+  if (!inputs?.storyKey || !inputs?.sprintStatusPath || !inputs?.storyOutputPath) {
+    return {
+      ok: false,
+      blockers: [{ code: "story-creation-inputs-missing", message: "Story creation refill apply requires story key, sprint tracker, and output path.", nextAction: "Regenerate manager-refill-plan." }],
+    };
+  }
+  const sprintPath = sanitizeRelativeBmadOutputPath(inputs.sprintStatusPath);
+  const storyPath = sanitizeRelativeBmadOutputPath(inputs.storyOutputPath);
+  if (!sprintPath || !storyPath) {
+    return {
+      ok: false,
+      blockers: [{ code: "story-creation-path-invalid", message: "Story creation paths must stay under _bmad-output.", nextAction: "Regenerate manager-refill-plan." }],
+    };
+  }
+  const sprintAbsolute = resolve(repoRoot, sprintPath);
+  if (!existsSync(sprintAbsolute)) {
+    return {
+      ok: false,
+      blockers: [{ code: "sprint-status-missing", message: `Sprint status does not exist: ${sprintPath}`, nextAction: "Restore sprint tracker before story creation." }],
+    };
+  }
+  const sprintSource = readFileSync(sprintAbsolute, "utf8");
+  const backlogStoryKeys = backlogStoryKeysFromSprintStatus(sprintSource);
+  const startIndex = backlogStoryKeys.indexOf(inputs.storyKey);
+  if (startIndex < 0) {
+    return {
+      ok: false,
+      blockers: [{ code: "story-creation-status-not-backlog", message: `${inputs.storyKey} is not in backlog status.`, nextAction: "Refresh manager-refill-plan before applying story creation." }],
+    };
+  }
+  const targetCount = Math.max(1, Math.min(6, nonNegativeInteger(context.refillNeeded) ?? nonNegativeInteger(step.workCreationPacket?.backlogTarget) ?? 1));
+  const selectedStoryKeys = backlogStoryKeys.slice(startIndex, startIndex + targetCount);
+  const selectedStoryPaths = selectedStoryKeys.map((storyKey) => (
+    storyKey === inputs.storyKey ? storyPath : `_bmad-output/implementation-artifacts/${storyKey}.md`
+  ));
+  const existingStoryPath = selectedStoryPaths.find((outputPath) => existsSync(resolve(repoRoot, outputPath)));
+  if (existingStoryPath) {
+    return {
+      ok: false,
+      blockers: [{ code: "story-creation-output-exists", message: `Story output already exists: ${existingStoryPath}`, nextAction: "Refresh manager-refill-plan before applying story creation." }],
+    };
+  }
+  const storyPaths = [];
+  let updatedSprint = sprintSource;
+  for (const storyKey of selectedStoryKeys) {
+    const outputPath = selectedStoryPaths[storyPaths.length];
+    const outputAbsolute = resolve(repoRoot, outputPath);
+    mkdirSync(dirname(outputAbsolute), { recursive: true });
+    writeFileSync(outputAbsolute, renderManagerGeneratedStory(storyKey, step), "utf8");
+    storyPaths.push(outputPath);
+    const statusPattern = new RegExp(`^(\\s+${escapeRegExp(storyKey)}:\\s*)backlog\\s*$`, "m");
+    updatedSprint = updatedSprint.replace(statusPattern, `$1ready-for-dev`);
+  }
+  updatedSprint = updatedSprint.replace(/^last_updated:\s*\d{4}-\d{2}-\d{2}\s*$/m, `last_updated: ${todayIsoDate()}`);
+  writeFileSync(sprintAbsolute, updatedSprint, "utf8");
+  return {
+    ok: true,
+    mutationMode: "local_bmad_story_file_only",
+    summary: {
+      storyKey: inputs.storyKey,
+      storyPath,
+      storyKeys: selectedStoryKeys,
+      storyPaths,
+      createdStoryCount: selectedStoryKeys.length,
+      requestedRefillCount: targetCount,
+      remainingRefillCount: Math.max(0, targetCount - selectedStoryKeys.length),
+      sprintStatusPath: sprintPath,
+      statusUpdate: inputs.statusUpdate || { from: "backlog", to: "ready-for-dev" },
+      nextAction: "Run dispatch preview; the ready story should become claimable if no ownership gate blocks it.",
+    },
+  };
+}
+
+function backlogStoryKeysFromSprintStatus(content = "") {
+  return String(content || "")
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*backlog\s*$/i)?.[1])
+    .filter(Boolean);
+}
+
+function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}) {
+  const existingIds = new Set(Object.keys(storyStatuses || {}));
+  const sourceItems = Array.isArray(draft.proposedBacklogItems) && draft.proposedBacklogItems.length > 0
+    ? draft.proposedBacklogItems
+    : nextEpicBacklogItems(storyStatuses);
+  const nonDuplicate = sourceItems
+    .map((item) => ({
+      id: sanitizeLedgerField(item.id || "", "", 120),
+      title: sanitizeLedgerField(item.title || titleFromStoryKey(item.id || ""), "", 180),
+    }))
+    .filter((item) => item.id && item.title && !existingIds.has(item.id));
+  if (nonDuplicate.length > 0) return nonDuplicate.slice(0, 6);
+  return nextEpicBacklogItems(storyStatuses).slice(0, 6);
+}
+
+function nextEpicBacklogItems(storyStatuses = {}) {
+  const epicNumbers = Object.keys(storyStatuses || {})
+    .map((key) => Number(String(key).match(/^(\d+)-\d+-/)?.[1] || 0))
+    .filter((number) => Number.isInteger(number) && number > 0);
+  const nextEpic = Math.max(0, ...epicNumbers) + 1;
+  return [
+    ["manager-refill-apply-gate", "Manager refill apply gate"],
+    ["manager-story-creation-apply-gate", "Manager story creation apply gate"],
+    ["manager-review-delivery-queue", "Manager review and delivery queue"],
+    ["worker-retirement-and-reassignment", "Worker retirement and reassignment"],
+    ["ten-cycle-stability-observer", "Ten cycle stability observer"],
+    ["cleanup-and-handoff-closeout", "Cleanup and handoff closeout"],
+  ].map(([slug, title], index) => ({
+    id: `${nextEpic}-${index + 1}-${slug}`,
+    title,
+  }));
+}
+
+function appendBacklogItemsToSprintStatus(source = "", items = []) {
+  const lines = String(source || "").replace(/\s*$/u, "\n").split(/\r?\n/);
+  const existingEpics = lines
+    .map((line) => Number(line.match(/^\s+epic-(\d+):/)?.[1] || 0))
+    .filter((number) => Number.isInteger(number) && number > 0);
+  const fallbackEpic = Math.max(0, ...existingEpics) + 1;
+  const epic = Number(items[0]?.id?.match(/^(\d+)-/)?.[1] || fallbackEpic);
+  const block = [
+    "",
+    `  epic-${epic}: in-progress`,
+    ...items.map((item) => `  ${item.id}: backlog`),
+    `  epic-${epic}-retrospective: optional`,
+  ];
+  const withoutTrailingEmpty = lines.at(-1) === "" ? lines.slice(0, -1) : lines;
+  return `${withoutTrailingEmpty.join("\n")}${block.join("\n")}\n`.replace(
+    /^last_updated:\s*\d{4}-\d{2}-\d{2}\s*$/m,
+    `last_updated: ${todayIsoDate()}`,
+  );
+}
+
+function renderCourseCorrectionProposal(draft = {}, items = []) {
+  const sourceRefs = Array.isArray(draft.sourceRefs) ? draft.sourceRefs : [];
+  const lines = [
+    "# Manager Control Plane Backlog Refill Proposal",
+    "",
+    `Generated: ${todayIsoDate()}`,
+    "",
+    "## Trigger",
+    "",
+    draft.issueSummary || "Safe backlog is below desired manager worker capacity.",
+    "",
+    "## Approach",
+    "",
+    draft.recommendedApproach?.summary || "Add bounded manager dogfood backlog and return to story creation.",
+    "",
+    "## Added Backlog",
+    "",
+    ...items.map((item) => `- ${item.id}: ${item.title}`),
+    "",
+    "## Evidence",
+    "",
+    `- Sprint status: ${draft.impact?.sprintStatusPath || "unknown"}`,
+    ...sourceRefs.map((ref) => `- Source: ${sanitizeLedgerField(ref, "", 180)}`),
+    "",
+    "## Stop Lines",
+    "",
+    "- Local BMAD output only",
+    "- No worker mutation",
+    "- No provider payload retention",
+    "- Existing dispatch gates still apply",
+    "",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function renderManagerGeneratedStory(storyKey = "", step = {}) {
+  const title = titleFromStoryKey(storyKey);
+  const sourceRef = step.sourceRef || step.sourcePlanning?.sourceKey || "manager-control-plane";
+  return [
+    `# Story ${storyKey}: ${title}`,
+    "",
+    "## Status",
+    "",
+    "ready-for-dev",
+    "",
+    "## Story",
+    "",
+    "As the autonomous Kendall manager, I need this bounded refill slice implemented through the existing manager-control-plane gates so work can keep moving without operator babysitting.",
+    "",
+    "## Acceptance Criteria",
+    "",
+    "1. The implementation is scoped to the named manager-control-plane slice.",
+    "2. The manager preserves existing safety gates for worker mutation, dispatch apply, delivery, cleanup, and provider usage.",
+    "3. The slice leaves compact evidence of what changed, how it was verified, and the next manager action.",
+    "4. The change can be dogfooded by the continuous manager loop without direct worker intervention.",
+    "",
+    "## Source Context",
+    "",
+    `- Source: ${sanitizeLedgerField(sourceRef, "", 180)}`,
+    `- Sprint tracker: ${step.workCreationPacket?.storyCreationInputs?.sprintStatusPath || "unknown"}`,
+    "",
+    "## Dev Notes",
+    "",
+    "- Use existing manager-control-plane scripts and tests before adding new surfaces.",
+    "- Prefer metadata-only summaries over raw tmux scrollback or provider payload retention.",
+    "- Keep mutations local and reversible unless an existing gate explicitly authorizes more.",
+    "",
+    "## Verification",
+    "",
+    "- Run focused manager-control-plane checks for the touched script or workflow.",
+    "- Dogfood one continuous cycle when the change affects manager loop behavior.",
+    "",
+  ].join("\n");
+}
+
+function sanitizeRelativeBmadOutputPath(path = "") {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!normalized.startsWith("_bmad-output/") || normalized.includes("..")) return "";
+  const absolute = resolve(repoRoot, normalized);
+  if (!isInsideOrSame(absolute, repoRoot)) return "";
+  return normalized;
+}
+
+function titleFromStoryKey(storyKey = "") {
+  return String(storyKey || "")
+    .replace(/^\d+-\d+-/, "")
+    .split("-")
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ") || "Manager Refill Slice";
+}
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function buildDispatchPreview(options = {}, context = {}) {
+  const preview = context.dispatchPreview || runWorkspaceJson(["dispatch-next", "--dry-run", "--summary-json"], context);
+  if (preview?.ok === false) {
+    return packet({
+      ok: false,
+      status: "unknown",
+      summary: {
+        available: false,
+        selectedLane: null,
+        selectedBranch: null,
+        allowed: false,
+        nextCommand: null,
+        nextActionGuidance: null,
+        mutation: "none; preview unavailable",
+      },
+      warnings: [{ code: "dispatch-preview-unavailable", message: preview.error || "dispatch preview unavailable" }],
+    });
+  }
+  const dispatch = preview?.dispatch || {};
+  const selected = preview?.selected || null;
+  const dispatchSelectedLane = dispatch.selectedLane || dispatch.selected_lane || null;
+  const selectedLane = dispatchSelectedLane || selected?.itemId || preview?.selectedLane || preview?.selected_lane || null;
+  const selectedBranch = dispatch.branch || selected?.branch || preview?.branch || null;
+  const baseBranch =
+    dispatch.baseBranch || dispatch.base_branch || selected?.baseBranch || selected?.base_branch || preview?.baseBranch || preview?.base_branch || null;
+  const claimAction = dispatch.claimAction || dispatch.claim_action || selected?.action || preview?.claimAction || preview?.claim_action || null;
+  const claimMutation =
+    dispatch.claimMutation || dispatch.claim_mutation || selected?.mutation || preview?.claimMutation || preview?.claim_mutation || null;
+  const workspaceAction = dispatch.workspaceAction || dispatch.workspace_action || preview?.workspaceAction || preview?.workspace_action || null;
+  const nextCommand = dispatch.nextCommand || dispatch.next_command || preview?.nextCommand || preview?.next_command || null;
+  const nextActionGuidance =
+    dispatch.nextActionGuidance || dispatch.next_action_guidance || selected?.nextAction || preview?.nextActionGuidance || preview?.next_action_guidance || null;
+  const recoveryPath =
+    dispatch.recoveryPath || dispatch.recovery_path || selected?.recoveryPath || selected?.recovery_path || preview?.recoveryPath || preview?.recovery_path || null;
+  const requestedAllowed = Boolean(dispatch.allowed ?? preview?.allowed ?? selected?.claimable);
+  const evidenceBlockers = [];
+  if (requestedAllowed && !baseBranch) {
+    evidenceBlockers.push({ code: "dispatch-preview-base-branch-missing", message: "Allowed dispatch preview is missing base branch evidence." });
+  }
+  if (requestedAllowed && !recoveryPath) {
+    evidenceBlockers.push({ code: "dispatch-preview-recovery-path-missing", message: "Allowed dispatch preview is missing recovery path evidence." });
+  }
+  if (dispatchSelectedLane && selected?.itemId && dispatchSelectedLane !== selected.itemId) {
+    evidenceBlockers.push({ code: "dispatch-preview-selected-lane-conflict", message: "Dispatch and selected lane evidence disagree." });
+  }
+  const allowed = requestedAllowed && evidenceBlockers.length === 0;
+  const dispatchBlockers = Array.isArray(dispatch.blockers) ? dispatch.blockers : Array.isArray(preview?.blockers) ? preview.blockers : [];
+  return packet({
+    status: allowed ? "ready" : "blocked",
+    summary: {
+      available: true,
+      selectedLane,
+      selectedBranch,
+      baseBranch,
+      allowed,
+      claimAction,
+      claimMutation,
+      workspaceAction,
+      nextCommand,
+      nextActionGuidance,
+      recoveryPath,
+      blockers: [...evidenceBlockers, ...dispatchBlockers],
+      stopLines: Array.isArray(dispatch.stopLines)
+        ? dispatch.stopLines.slice(0, 12)
+        : Array.isArray(dispatch.stop_lines)
+          ? dispatch.stop_lines.slice(0, 12)
+          : Array.isArray(preview?.stop_lines)
+            ? preview.stop_lines.slice(0, 12)
+            : [],
+      counts: preview?.counts || {},
+      candidateStateCounts: preview?.candidateStateCounts || preview?.candidate_state_counts || {},
+      mutation: preview?.mutation || "none; dry-run summary only",
+    },
+    blockers: allowed
+      ? []
+      : evidenceBlockers.length > 0
+        ? evidenceBlockers
+        : [{ code: "dispatch-preview-blocked", message: "No dispatchable safe backlog lane is ready to preview.", nextAction: "Inspect assignment report and safe backlog source before dispatch." }],
+    nextActions: allowed
+      ? [{ code: "dispatch-preview-ready", nextAction: nextActionGuidance || "Review dispatch preview before applying existing gates." }]
+      : [],
+  });
+}
+
+function summarizeActiveLaneEvidence(assignment = {}, options = {}) {
+  const laneAssignments = assignment?.summary?.laneAssignments || assignment?.laneAssignments || [];
+  const assignmentSummary = assignment?.summary || assignment || {};
+  const supplementedLanes =
+    assignmentSummary.laneAssignmentsTruncated || assignmentSummary.laneAssignments_truncated
+      ? readAssignmentFileLaneEvidence(options.stateRoot || workspaceState(options).root, assignmentSummary.currentOwner)
+      : [];
+  const mergedLaneAssignments = supplementedLanes.length > 0 ? mergeLaneEvidence(laneAssignments, supplementedLanes) : laneAssignments;
+  const hasDetailedLaneAssignments = Array.isArray(mergedLaneAssignments) && mergedLaneAssignments.length > 0;
+  const allActive = Array.isArray(mergedLaneAssignments)
+    ? mergedLaneAssignments
+        .filter((lane) => ["claimed", "active"].includes(String(lane.status || "")))
+        .map((lane) => ({
+          assignmentId: sanitizeLedgerField(lane.assignmentId || lane.assignment_id || "", "", 100),
+          taskId: sanitizeLedgerField(lane.taskId || lane.task_id || "", "", 120),
+          branch: sanitizeLedgerField(lane.branch || "", "", 140),
+          phase: sanitizeLedgerField(lane.phase || "unknown", "unknown", 60),
+          heartbeat: sanitizeLedgerField(lane.heartbeat || lane.lastHeartbeatAt || "", "", 80),
+        }))
+        .filter((lane) => lane.assignmentId)
+    : [];
+  const workerEligible = allActive.filter((lane) => !isNonWorkerLanePhase(lane.phase));
+  const active = allActive.slice(0, 6);
+  return {
+    activeCount: allActive.length,
+    verifiedCount: allActive.filter((lane) => lane.phase === "verified").length,
+    workerEligibleCount: hasDetailedLaneAssignments ? workerEligible.length : null,
+    lanes: active,
+    hasDetailedLaneAssignments,
+    truncated: allActive.length > active.length,
+  };
+}
+
+function isNonWorkerLanePhase(phase = "") {
+  return ["verified", "review", "review_ready", "delivery_ready", "reassignable", "closed", "done", "waiting_review", "merged"].includes(String(phase || "").toLowerCase());
+}
+
+function mergeLaneEvidence(primary = [], fallback = []) {
+  const byId = new Map();
+  for (const lane of fallback) {
+    const id = String(lane?.assignmentId || lane?.assignment_id || "");
+    if (!id) continue;
+    byId.set(id, lane);
+  }
+  for (const lane of primary) {
+    const id = String(lane?.assignmentId || lane?.assignment_id || "");
+    if (!id) continue;
+    byId.set(id, mergePresentFields(byId.get(id) || {}, lane));
+  }
+  return [...byId.values()];
+}
+
+function mergePresentFields(base = {}, override = {}) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(override || {})) {
+    if (value !== "" && value !== null && value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function readAssignmentFileLaneEvidence(stateRoot = "", _currentOwner = "") {
+  const root = resolve(stateRoot || "");
+  const assignmentsRoot = resolve(root, "assignments");
+  if (!stateRoot || !isInsideOrSame(assignmentsRoot, root) || !existsSync(assignmentsRoot)) return [];
+  return readdirSync(assignmentsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .slice(0, 300)
+    .map((entry) => {
+      try {
+        return JSON.parse(readFileSync(join(assignmentsRoot, entry.name), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter(isPlainObject)
+    .filter((record) => {
+      const status = String(record.status || "").toLowerCase();
+      const phase = String(record.phase || "").toLowerCase();
+      return ["claimed", "active", "reassignable", "closed", "done", "merged"].includes(status) || isNonWorkerLanePhase(phase);
+    })
+    .map((record) => ({
+      assignmentId: sanitizeLedgerField(record.assignment_id || record.assignmentId || "", "", 140),
+      taskId: sanitizeLedgerField(record.task_id || record.taskId || "", "", 140),
+      branch: sanitizeLedgerField(record.branch || "", "", 160),
+      owner: sanitizeLedgerField(record.owner || "", "", 160),
+      status: sanitizeLedgerField(record.status || "", "", 80),
+      phase: sanitizeLedgerField(record.phase || "", "", 80),
+      heartbeat: sanitizeLedgerField(record.last_heartbeat_at || record.lastHeartbeatAt || "", "", 80),
+    }))
+    .filter((lane) => lane.assignmentId && lane.taskId && lane.branch);
+}
+
+function sourceRefList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => sourceRefList(item));
+  if (typeof value === "object") {
+    const candidate = value.ref || value.path || value.refId || value.label || "";
+    if (candidate) {
+      return value.type ? [`${value.type}:${candidate}`] : [candidate];
+    }
+    return Object.values(value).flatMap((item) => sourceRefList(item));
+  }
+  return [value];
+}
+
+function sourceArtifactInputs(options = {}, context = {}) {
+  const explicitArtifacts = [
+    ...(Array.isArray(options.sourceArtifacts) ? options.sourceArtifacts : []),
+    ...(Array.isArray(context.sourceArtifacts) ? context.sourceArtifacts : []),
+  ];
+  const explicitRefs = [
+    ...sourceRefList(options.sourceArtifactRefs),
+    ...sourceRefList(context.sourceArtifactRefs),
+    ...sourceRefList(options.sourceRefs),
+    ...sourceRefList(context.sourceRefs),
+    ...sourceRefList(context.sourceEvidence),
+  ];
+  const defaults = context.discoverDefaultSources || options.discoverDefaultSources
+    ? defaultSourceRefs({ ...context, discoverDefaultSources: true })
+    : [];
+  const backlogDefaults = context.discoverDefaultBacklogSources || options.discoverDefaultBacklogSources
+    ? defaultBacklogSourceRefs({ ...context, discoverDefaultBacklogSources: true })
+    : [];
+  const contextArtifacts = Array.isArray(context.artifacts) ? context.artifacts : [];
+  return [...explicitRefs, ...explicitArtifacts, ...contextArtifacts, ...defaults, ...backlogDefaults].slice(0, 32);
+}
+
+function hasSourceArtifactInputs(options = {}, context = {}) {
+  return (
+    (Array.isArray(options.sourceArtifacts) && options.sourceArtifacts.length > 0) ||
+    (Array.isArray(context.sourceArtifacts) && context.sourceArtifacts.length > 0) ||
+    (Array.isArray(context.artifacts) && context.artifacts.length > 0) ||
+    sourceRefList(options.sourceArtifactRefs).length > 0 ||
+    sourceRefList(context.sourceArtifactRefs).length > 0
+  );
+}
+
+function sourceWorkCandidateInputs(options = {}, context = {}) {
+  return [
+    ...(Array.isArray(options.sourceWorkCandidates) ? options.sourceWorkCandidates : []),
+    ...(Array.isArray(context.sourceWorkCandidates) ? context.sourceWorkCandidates : []),
+    ...(Array.isArray(options.candidateWorkPackets) ? options.candidateWorkPackets : []),
+    ...(Array.isArray(context.candidateWorkPackets) ? context.candidateWorkPackets : []),
+  ].filter((candidate) => isPlainObject(candidate)).slice(0, 24);
+}
+
+function hasSourceWorkCandidateInputs(options = {}, context = {}) {
+  return sourceWorkCandidateInputs(options, context).length > 0;
+}
+
+function sourceArtifactMap(artifacts = []) {
+  const map = new Map();
+  for (const artifact of Array.isArray(artifacts) ? artifacts : []) {
+    const ref = sanitizeLedgerField(artifact?.ref || "", "", 180);
+    if (ref) map.set(ref, artifact);
+  }
+  return map;
+}
+
+function normalizeSourceArtifact(input) {
+  const inputObject = isPlainObject(input) ? input : { ref: input };
+  const rawRef = inputObject.ref || inputObject.sourceRef || inputObject.path || inputObject.refId || "";
+  const runtimeType = String(inputObject.sourceType || inputObject.source_type || inputObject.type || "").toLowerCase() === "runtime_state";
+  const runtimeRef = runtimeType ? sanitizeLedgerField(rawRef || "runtime:manager-runtime-state", "runtime:manager-runtime-state", 180) : "";
+  const source = runtimeType
+    ? { type: "runtime_state", ref: runtimeRef, label: runtimeRef }
+    : classifySourceRef(String(rawRef || ""));
+  if (!source) return null;
+  const sourceType = source.type;
+  const ownershipBoundary = sourceArtifactBoundary(source, inputObject);
+  const repoDeliverableAllowed = ownershipBoundary === "tracked_source_owned_repo_content";
+  const freshness = normalizeArtifactFreshness(inputObject.freshness || inputObject.status || "unknown");
+  const sourceSpans = normalizeSourceSpans(inputObject.sourceSpans || inputObject.source_spans || inputObject.spans);
+  return {
+    artifactId: sanitizeLedgerField(inputObject.artifactId || inputObject.id || `artifact-${refillSourceKey([source.ref])}`, "source-artifact", 160),
+    ref: sanitizeLedgerField(source.ref, "", 180),
+    label: sanitizeLedgerField(inputObject.label || source.label || source.ref, source.ref, 180),
+    sourceType,
+    ownershipBoundary,
+    freshness,
+    sourceSpans,
+    repoDeliverableAllowed,
+    authorityClass: repoDeliverableAllowed ? "allowed_unattended" : "requires_source_rewrite",
+    verificationHints: sourceRefList(inputObject.verificationHints || inputObject.verification || inputObject.verificationTargets).map((hint) => sanitizeLedgerField(hint, "", 180)).filter(Boolean).slice(0, 8),
+    nextAction: repoDeliverableAllowed
+      ? "Use as source-owned evidence after eligibility checks."
+      : ownershipBoundary === "runtime_state"
+        ? "Use as runtime evidence only; do not convert directly into repo deliverables."
+        : "Rewrite any durable decision into source-owned docs, scripts, tests, or policy before queueing deliverable work.",
+    rawPayloadRetained: false,
+  };
+}
+
+function sourceArtifactBoundary(source = {}, input = {}) {
+  const ref = String(source.ref || "").replace(/^(prd|runway|story|doc):/i, "").replace(/\\/g, "/").toLowerCase();
+  if (source.type === "runtime_state") return "runtime_state";
+  if (ref.startsWith("_bmad-output/")) return "bmad_local_planning_state";
+  if (ref.includes("/manager-runs/") || ref.includes("/runtime/") || ref.endsWith(".ndjson")) return "runtime_state";
+  const explicit = String(input.ownershipBoundary || input.ownership_boundary || "").toLowerCase();
+  if (["bmad_local_planning_state", "tracked_source_owned_repo_content", "runtime_state"].includes(explicit)) return explicit;
+  return "tracked_source_owned_repo_content";
+}
+
+function normalizeArtifactFreshness(value) {
+  const text = String(value || "").toLowerCase();
+  return ["fresh", "stale", "unknown", "partial", "missing"].includes(text) ? text : "unknown";
+}
+
+function normalizeSourceSpans(spans) {
+  const sourceSpans = Array.isArray(spans) ? spans : [];
+  if (sourceSpans.length === 0) {
+    return [{ label: "artifact_reference", startLine: null, endLine: null, summary: "Bounded artifact reference only." }];
+  }
+  return sourceSpans.slice(0, 8).map((span, index) => ({
+    label: sanitizeLedgerField(span?.label || `span-${index + 1}`, `span-${index + 1}`, 80),
+    startLine: nonNegativeInteger(span?.startLine ?? span?.start_line),
+    endLine: nonNegativeInteger(span?.endLine ?? span?.end_line),
+    summary: sanitizeLedgerField(span?.summary || "", "", 180),
+  }));
+}
+
+function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = new Map()) {
+  const rawSourceRefs = sourceRefList(
+    candidate.sourceRefs ||
+      candidate.source_refs ||
+      candidate.sourceRef ||
+      candidate.source_ref ||
+      candidate.sourceArtifactRefs ||
+      candidate.sourceArtifactRef,
+  );
+  const sourceRefs = [];
+  const rejectedSourceRefs = [];
+  const ownershipBoundaries = new Set();
+  const sourceSpans = [];
+  for (const rawRef of rawSourceRefs) {
+    const ref = sanitizeLedgerField(rawRef, "", 180);
+    if (!ref) continue;
+    const artifact = artifactMap.get(ref);
+    if (artifact) {
+      if (!sourceRefs.includes(ref)) sourceRefs.push(ref);
+      ownershipBoundaries.add(artifact.ownershipBoundary || "tracked_source_owned_repo_content");
+      sourceSpans.push(...normalizeSourceSpans(artifact.sourceSpans));
+      continue;
+    }
+    const evidence = normalizeSourceEvidence([ref]);
+    if (evidence.valid.length > 0) {
+      const normalizedRef = evidence.valid[0].ref;
+      if (!sourceRefs.includes(normalizedRef)) sourceRefs.push(normalizedRef);
+      ownershipBoundaries.add(sourceArtifactBoundary(evidence.valid[0], {}));
+    } else {
+      rejectedSourceRefs.push(...evidence.rejected);
+    }
+  }
+  const acceptanceCriteria = normalizeCandidateStringList(candidate.acceptanceCriteria || candidate.acceptance_criteria || candidate.acceptanceCriterion || candidate.ac);
+  const verificationTargets = normalizeCandidateStringList(candidate.verificationTargets || candidate.verification_targets || candidate.verification || candidate.verificationTarget);
+  const dependencyHints = normalizeCandidateStringList(candidate.dependencyHints || candidate.dependency_hints || candidate.dependencies);
+  const touchedSurfaceHint = sanitizeLedgerField(candidate.touchedSurfaceHint || candidate.touched_surface_hint || candidate.touchedSurface || "", "", 180);
+  const sourceOwnedRewrite = normalizeSourceOwnedRewriteRef(candidate.sourceOwnedRewriteRef || candidate.source_owned_rewrite_ref || "");
+  const sourceOwnedRewriteRef = sourceOwnedRewrite.ref;
+  const requiredSourceOwnedArtifact = sanitizeLedgerField(candidate.requiredSourceOwnedArtifact || candidate.required_source_owned_artifact || sourceOwnedRewriteRef || touchedSurfaceHint, "source-owned docs, scripts, tests, or policy artifact", 180);
+  const canonicalDedupeKey = sourceWorkDedupeKey(sourceRefs, acceptanceCriteria, touchedSurfaceHint);
+  return {
+    candidateWorkPacketId: sanitizeLedgerField(candidate.candidateWorkPacketId || candidate.candidateId || candidate.id || `source-work-${index + 1}`, `source-work-${index + 1}`, 120),
+    title: sanitizeLedgerField(candidate.title || candidate.proposedSlice || candidate.summary || `Source work candidate ${index + 1}`, `Source work candidate ${index + 1}`, 180),
+    sourceRefs: sourceRefs.slice(0, 8),
+    rejectedSourceRefs: rejectedSourceRefs.slice(0, 8),
+    sourceSpans: (sourceSpans.length > 0 ? sourceSpans : normalizeSourceSpans(candidate.sourceSpans || candidate.source_spans)).slice(0, 8),
+    acceptanceCriteria: acceptanceCriteria.slice(0, 8),
+    verificationTargets: verificationTargets.slice(0, 8),
+    riskClass: sanitizeLedgerField(candidate.riskClass || candidate.risk_class || "unknown", "unknown", 80),
+    dependencyHints: dependencyHints.slice(0, 8),
+    dedupeKey: canonicalDedupeKey,
+    suppliedDedupeKey: sanitizeLedgerField(candidate.dedupeKey || candidate.dedupe_key || "", "", 180),
+    touchedSurfaceHint,
+    authorityClass: sanitizeLedgerField(candidate.authorityClass || candidate.authority_class || "", "", 80),
+    evidenceRefs: normalizeCandidateStringList(candidate.evidenceRefs || candidate.evidence_refs).slice(0, 8),
+    ownershipBoundaries: [...ownershipBoundaries].sort(),
+    sourceOwnedRewriteRef,
+    sourceOwnedRewriteBoundary: sourceOwnedRewrite.boundary,
+    requiredSourceOwnedArtifact,
+    repoDeliverable: candidate.repoDeliverable !== false && candidate.repo_deliverable !== false,
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeCandidateStringList(value) {
+  return sourceRefList(value).map((item) => sanitizeLedgerField(item, "", 180)).filter(Boolean).slice(0, 12);
+}
+
+function sourceWorkMissingFields(candidate = {}) {
+  const missing = [];
+  if (!Array.isArray(candidate.sourceRefs) || candidate.sourceRefs.length === 0) missing.push("sourceRefs");
+  if (!Array.isArray(candidate.acceptanceCriteria) || candidate.acceptanceCriteria.length === 0) missing.push("acceptanceCriteria");
+  if (!Array.isArray(candidate.verificationTargets) || candidate.verificationTargets.length === 0) missing.push("verificationTargets");
+  if (!candidate.authorityClass) missing.push("authorityClass");
+  if (!candidate.dedupeKey) missing.push("dedupeKey");
+  if (!candidate.touchedSurfaceHint) missing.push("touchedSurfaceHint");
+  return missing;
+}
+
+function markCandidateWork(candidate = {}, decision = "blocked", reason = "blocked", extras = {}) {
+  return {
+    candidateWorkPacketId: candidate.candidateWorkPacketId,
+    candidateId: candidate.candidateWorkPacketId,
+    title: candidate.title,
+    sourceRefs: candidate.sourceRefs,
+    sourceSpans: candidate.sourceSpans,
+    acceptanceCriteria: candidate.acceptanceCriteria,
+    verificationTargets: candidate.verificationTargets,
+    riskClass: candidate.riskClass,
+    dependencyHints: candidate.dependencyHints,
+    dedupeKey: candidate.dedupeKey,
+    touchedSurfaceHint: candidate.touchedSurfaceHint,
+    authorityClass: candidate.authorityClass || null,
+    evidenceRefs: candidate.evidenceRefs,
+    eligibilityDecision: decision,
+    eligibilityReason: reason,
+    ...extras,
+    rawPayloadRetained: false,
+  };
+}
+
+function sourceWorkDedupeKey(sourceRefs = [], acceptanceCriteria = [], touchedSurfaceHint = "") {
+  const sourcePart = [...new Set(sourceRefs.map(canonicalSourceWorkRef))].sort().join("+") || "no-source";
+  const acPart = [...new Set(acceptanceCriteria.map((item) => String(item || "").trim().toLowerCase()))].sort().join("+") || "no-ac";
+  const surfacePart = canonicalSourceWorkRef(touchedSurfaceHint || "no-surface");
+  return sanitizeLedgerField(`${sourcePart}|${acPart}|${surfacePart}`, "source-work", 180).toLowerCase();
+}
+
+function existingSourceWorkDedupe(context = {}) {
+  const existing = new Map();
+  for (const item of [
+    ...(Array.isArray(context.existingCandidateWorkPackets) ? context.existingCandidateWorkPackets : []),
+    ...(Array.isArray(context.existingWorkItems) ? context.existingWorkItems : []),
+    ...(Array.isArray(context.workItems) ? context.workItems : []),
+    ...(Array.isArray(context.queuedWorkItems) ? context.queuedWorkItems : []),
+  ]) {
+    if (!isPlainObject(item)) continue;
+    const sourceRefs = normalizeCandidateStringList(item.sourceRefs || item.source_refs || item.sourceRef || item.source_ref);
+    const acceptanceCriteria = normalizeCandidateStringList(item.acceptanceCriteria || item.acceptance_criteria || item.acceptanceCriterion || item.ac);
+    const touchedSurfaceHint = sanitizeLedgerField(item.touchedSurfaceHint || item.touched_surface_hint || item.touchedSurface || "", "", 180);
+    const tupleKey = sourceRefs.length > 0 && acceptanceCriteria.length > 0 && touchedSurfaceHint
+      ? sourceWorkDedupeKey(sourceRefs, acceptanceCriteria, touchedSurfaceHint)
+      : "";
+    const key = sanitizeLedgerField(tupleKey || item.dedupeKey || item.dedupe_key || "", "", 180).toLowerCase();
+    const id = sanitizeLedgerField(item.candidateWorkPacketId || item.candidateId || item.workItemId || item.id || key, key, 120);
+    if (key) existing.set(key, id);
+  }
+  return existing;
+}
+
+function sourceWorkDedupeSummary(skipped = []) {
+  return {
+    skippedCount: skipped.length,
+    skippedCandidates: skipped.slice(0, 12),
+    rawPayloadRetained: false,
+  };
+}
+
+function hasSourceOwnedRewrite(candidate = {}) {
+  if (!candidate.sourceOwnedRewriteRef) return false;
+  if (candidate.sourceOwnedRewriteBoundary !== "tracked_source_owned_repo_content") return false;
+  const rewriteRef = canonicalSourceWorkRef(candidate.sourceOwnedRewriteRef);
+  return candidate.sourceRefs.some((ref) => canonicalSourceWorkRef(ref) === rewriteRef);
+}
+
+function requiresReviewAuthority(authorityClass = "") {
+  return [
+    "",
+    "requires_preauthorization",
+    "high_risk",
+    "high-risk",
+    "operator_required",
+    "operator-required",
+    "manual_review",
+    "manual-review",
+    "needs_review",
+    "needs-review",
+    "unsafe",
+    "broad",
+    "ambiguous",
+  ].includes(String(authorityClass || "").toLowerCase());
+}
+
+function isBlockedAuthority(authorityClass = "") {
+  return ["block_and_record", "forbidden"].includes(String(authorityClass || "").toLowerCase());
+}
+
+function sourceWorkRiskRequiresReview(riskClass = "") {
+  return ["", "unknown", "high", "extreme", "delivery", "cleanup", "provider", "secrets", "deployment"].includes(String(riskClass || "").toLowerCase());
+}
+
+function normalizeSourceOwnedRewriteRef(value = "") {
+  const raw = sanitizeLedgerField(value, "", 180);
+  if (!raw) return { ref: "", boundary: "" };
+  const source = classifySourceRef(raw);
+  if (!source) return { ref: raw, boundary: "" };
+  return {
+    ref: sanitizeLedgerField(source.ref, raw, 180),
+    boundary: sourceArtifactBoundary(source, {}),
+  };
+}
+
+function canonicalSourceWorkRef(value = "") {
+  return String(value || "")
+    .replace(/^(prd|runway|story|doc):/i, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .trim()
+    .toLowerCase();
+}
+
+function defaultSourceRefs(context = {}) {
+  if (!context.discoverDefaultSources) return [];
+  const prdRoot = join(repoRoot, "_bmad-output", "planning-artifacts", "prds");
+  if (!existsSync(prdRoot)) return [];
+  return readdirSync(prdRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const relativePath = `_bmad-output/planning-artifacts/prds/${entry.name}/prd.md`;
+      return {
+        name: entry.name,
+        relativePath,
+        absolutePath: join(prdRoot, entry.name, "prd.md"),
+      };
+    })
+    .filter((entry) => existsSync(entry.absolutePath))
+    .sort((a, b) => sourceArtifactRank(b.name) - sourceArtifactRank(a.name) || b.name.localeCompare(a.name))
+    .slice(0, 3)
+    .map((entry) => `prd:${entry.relativePath}`);
+}
+
+function defaultBacklogSourceRefs(context = {}) {
+  if (!context.discoverDefaultBacklogSources) return [];
+  const artifactDir = join(repoRoot, "_bmad-output", "implementation-artifacts");
+  if (!existsSync(artifactDir)) return [];
+  const sprintStatus = join(artifactDir, "sprint-status.yaml");
+  if (existsSync(sprintStatus)) {
+    const nextStory = nextSprintStoryRef(readFileSync(sprintStatus, "utf8"), artifactDir);
+    if (nextStory) return [nextStory];
+  }
+  return readdirSync(artifactDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^\d+-\d+-[a-z0-9-]+\.md$/i.test(entry.name))
+    .sort((a, b) => b.name.localeCompare(a.name))
+    .slice(0, 3)
+    .map((entry) => `story:_bmad-output/implementation-artifacts/${entry.name}`);
+}
+
+function nextSprintStoryRef(content, artifactDir) {
+  const preferredStatuses = ["in-progress", "ready-for-dev", "review", "backlog"];
+  const storyRows = [];
+  for (const line of String(content || "").split(/\r?\n/)) {
+    const match = line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*([a-z-]+)/i);
+    if (!match) continue;
+    storyRows.push({ key: match[1], status: match[2].toLowerCase() });
+  }
+  for (const status of preferredStatuses) {
+    const row = storyRows.find((candidate) => candidate.status === status);
+    if (!row) continue;
+    const storyPath = join(artifactDir, `${row.key}.md`);
+    if (existsSync(storyPath)) return `story:_bmad-output/implementation-artifacts/${row.key}.md`;
+  }
+  return "";
+}
+
+function sourceArtifactRank(name) {
+  const match = String(name || "").match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return 0;
+  return Number(`${match[1]}${match[2]}${match[3]}`);
+}
+
+function normalizeSourceEvidence(refs = []) {
+  const valid = [];
+  const rejected = [];
+  const seen = new Set();
+  for (const raw of refs) {
+    const text = String(raw || "").trim();
+    if (!text) continue;
+    const source = classifySourceRef(text);
+    if (!source) {
+      rejected.push(text.slice(0, 160));
+      continue;
+    }
+    const key = `${source.type}:${source.ref}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    valid.push(source);
+  }
+  return { valid: valid.slice(0, 12), rejected: rejected.slice(0, 12) };
+}
+
+function classifySourceRef(text) {
+  const ref = text.replace(/\s+/g, " ").slice(0, 240);
+  const prefixed = ref.match(/^(prd|runway|story|doc):(.+)/i);
+  if (prefixed) {
+    const type = prefixed[1].toLowerCase();
+    const remainder = prefixed[2].trim();
+    return classifySourcePath(remainder, type, ref);
+  }
+  return classifySourcePath(ref, "", ref);
+}
+
+function classifySourcePath(path, expectedType = "", originalRef = path) {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!normalized || normalized.includes("..") || resolve(repoRoot, normalized) === resolve(repoRoot)) return null;
+  const absolute = resolve(repoRoot, normalized);
+  if (!isInsideOrSame(absolute, repoRoot) || !existsSync(absolute)) return null;
+  const lower = normalized.toLowerCase();
+  const inferredType = inferSourceType(lower);
+  if (!inferredType || (expectedType && inferredType !== expectedType)) return null;
+  return { type: inferredType, ref: originalRef, label: `${inferredType}:${normalized.slice(0, 120)}` };
+}
+
+function inferSourceType(lowerPath) {
+  if (lowerPath.includes("_bmad-output/planning-artifacts/prds/") || lowerPath.includes("/prd")) return "prd";
+  if (lowerPath.includes("development-runway") || lowerPath.includes("runway")) return "runway";
+  if (lowerPath.startsWith("docs/") || lowerPath.includes("/docs/")) return "doc";
+  if (lowerPath.includes("_bmad-output/implementation-artifacts/") || /\b\d+-\d+-[a-z0-9-]+\.md\b/.test(lowerPath)) return "story";
+  return "";
+}
+
+function discoverSourcePlanningState(sourceSlice, context = {}) {
+  if (!sourceSlice || sourceSlice.type !== "prd") {
+    return null;
+  }
+  const sourcePath = sourceSlice.ref.replace(/^(prd|runway|story|doc):/i, "");
+  const sourceKey = sourcePlanningKey(sourcePath);
+  if (isPlainObject(context.sourcePlanningState)) {
+    return {
+      sourceKey,
+      ...context.sourcePlanningState,
+    };
+  }
+  if (isPlainObject(context.sourcePlanningBySourceKey?.[sourceKey])) {
+    return {
+      sourceKey,
+      ...context.sourcePlanningBySourceKey[sourceKey],
+    };
+  }
+  const sprintStatus = findMatchingSprintStatus(sourceKey);
+  return {
+    sourceKey,
+    sprintStatus,
+  };
+}
+
+function sourcePlanningKey(sourcePath) {
+  const normalized = String(sourcePath || "").replace(/\\/g, "/");
+  const base = normalized.split("/").filter(Boolean).at(-2) || normalized.split("/").filter(Boolean).at(-1) || "";
+  return base
+    .replace(/^prd[-_]?/i, "")
+    .replace(/^Kendall_Nxt[-_]?/i, "")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function findMatchingSprintStatus(sourceKey) {
+  const artifactDir = join(repoRoot, "_bmad-output", "implementation-artifacts");
+  if (!sourceKey || !existsSync(artifactDir)) {
+    return { exists: false, path: null, backlogStories: null, readyStories: null, activeStories: null, doneStories: null };
+  }
+  const sourceTokens = sourceKey.split("-").filter((token) => token && !/^\d{4}$|^\d{2}$/.test(token));
+  const files = readdirSync(artifactDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^sprint-status.*\.ya?ml$/i.test(entry.name))
+    .map((entry) => {
+      const relativePath = `_bmad-output/implementation-artifacts/${entry.name}`;
+      const lowerName = entry.name.toLowerCase();
+      const tokenMatches = sourceTokens.filter((token) => lowerName.includes(token)).length;
+      return { relativePath, absolutePath: join(artifactDir, entry.name), tokenMatches };
+    })
+    .filter((entry) => entry.tokenMatches > 0)
+    .sort((a, b) => b.tokenMatches - a.tokenMatches || b.relativePath.localeCompare(a.relativePath));
+  const match = files[0];
+  if (!match) {
+    const canonicalPath = join(artifactDir, "sprint-status.yaml");
+    if (existsSync(canonicalPath)) {
+      return {
+        exists: true,
+        path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        ...countSprintStories(readFileSync(canonicalPath, "utf8"), { artifactDir }),
+      };
+    }
+    return { exists: false, path: null, backlogStories: null, readyStories: null, activeStories: null, doneStories: null };
+  }
+  return {
+    exists: true,
+    path: match.relativePath,
+    ...countSprintStories(readFileSync(match.absolutePath, "utf8"), { artifactDir }),
+  };
+}
+
+const sprintStoryStatusRank = {
+  backlog: 0,
+  "ready-for-dev": 1,
+  "in-progress": 2,
+  review: 3,
+  done: 4,
+};
+
+export function countSprintStories(content, options = {}) {
+  const counts = {
+    backlogStories: 0,
+    readyStories: 0,
+    reviewReadyStories: 0,
+    readyForDevStories: 0,
+    activeStories: 0,
+    doneStories: 0,
+    nextBacklogStoryKey: null,
+    storyStatuses: {},
+    storyStatusDrift: [],
+  };
+  const artifactDir = options.artifactDir || "";
+  for (const line of String(content || "").split(/\r?\n/)) {
+    const match = line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*([a-z-]+)/i);
+    if (!match) continue;
+    const storyKey = match[1];
+    const trackerStatus = match[2].toLowerCase();
+    const storyFileStatus = readAdjacentStoryStatus(storyKey, artifactDir);
+    const status = effectiveSprintStoryStatus(trackerStatus, storyFileStatus);
+    if (storyFileStatus && storyFileStatus !== trackerStatus && status === storyFileStatus) {
+      counts.storyStatusDrift.push({
+        storyKey,
+        trackerStatus,
+        storyFileStatus,
+        effectiveStatus: status,
+      });
+    }
+    counts.storyStatuses[storyKey] = status;
+    if (status === "backlog") {
+      counts.backlogStories += 1;
+      counts.nextBacklogStoryKey ||= storyKey;
+    }
+    else if (status === "ready-for-dev") {
+      counts.readyStories += 1;
+      counts.readyForDevStories += 1;
+    }
+    else if (status === "review") {
+      counts.readyStories += 1;
+      counts.reviewReadyStories += 1;
+    }
+    else if (status === "in-progress") counts.activeStories += 1;
+    else if (status === "done") counts.doneStories += 1;
+  }
+  return counts;
+}
+
+function readAdjacentStoryStatus(storyKey, artifactDir) {
+  if (!artifactDir) return "";
+  const storyPath = join(artifactDir, `${storyKey}.md`);
+  if (!existsSync(storyPath)) return "";
+  const source = readFileSync(storyPath, "utf8");
+  const status = source.match(/^## Status\s*\r?\n\s*([a-z-]+)\s*$/im)?.[1] || source.match(/^Status:\s*([a-z-]+)\s*$/im)?.[1] || "";
+  return normalizeSprintStoryStatus(status);
+}
+
+function effectiveSprintStoryStatus(trackerStatus, storyFileStatus) {
+  const tracker = normalizeSprintStoryStatus(trackerStatus);
+  const story = normalizeSprintStoryStatus(storyFileStatus);
+  if (!story) return tracker;
+  if (!tracker) return story;
+  const trackerRank = sprintStoryStatusRank[tracker] ?? -1;
+  const storyRank = sprintStoryStatusRank[story] ?? -1;
+  return storyRank > trackerRank ? story : tracker;
+}
+
+function normalizeSprintStoryStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return Object.hasOwn(sprintStoryStatusRank, normalized) ? normalized : "";
+}
+
+function sprintStoryRows(content) {
+  const rows = [];
+  for (const line of String(content || "").split(/\r?\n/)) {
+    const match = line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*([a-z-]+)/i);
+    if (!match) continue;
+    rows.push({
+      storyKey: match[1],
+      status: match[2].toLowerCase(),
+    });
+  }
+  return rows;
+}
+
+function bmadCodeReviewRequestPath(paths, storyKey) {
+  return join(paths.root, "bmad-review-requests", `${storyKey}.json`);
+}
+
+export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const paths = managerRunPaths(runId, options, context);
+  const sprintStatusPath = sanitizeRelativeBmadOutputPath(
+    options.sprintStatusPath ||
+    context.sprintStatusPath ||
+    context.cyclePacket?.summary?.runway?.sourcePlanning?.sprintStatus?.path ||
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  const requestedStoryKey = sanitizeLedgerField(options.storyKey || context.storyKey || "", "", 140);
+  const dryRunCommand = [
+    "node ./scripts/manager-bmad-code-review.mjs --summary-json",
+    runId ? `--run-id ${shellSingleQuote(runId)}` : "",
+    sprintStatusPath ? `--sprint-status-path ${shellSingleQuote(sprintStatusPath)}` : "",
+    requestedStoryKey ? `--story-key ${shellSingleQuote(requestedStoryKey)}` : "",
+  ].filter(Boolean).join(" ");
+  const applyCommand = `${dryRunCommand} --apply`;
+
+  if (!sprintStatusPath) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        workflow: "bmad-code-review",
+        mutationMode: "none",
+        rawPayloadRetained: false,
+      },
+      blockers: [{
+        code: "bmad-code-review-sprint-path-invalid",
+        message: "BMAD code review request needs a sprint status path under _bmad-output.",
+        nextAction: "Provide a source-owned sprint tracker before preparing review work.",
+      }],
+    });
+  }
+
+  const sprintAbsolute = resolve(repoRoot, sprintStatusPath);
+  if (!existsSync(sprintAbsolute)) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        workflow: "bmad-code-review",
+        sprintStatusPath,
+        mutationMode: "none",
+        rawPayloadRetained: false,
+      },
+      blockers: [{
+        code: "bmad-code-review-sprint-missing",
+        message: "BMAD code review request needs an existing sprint status tracker.",
+        nextAction: "Run BMAD sprint planning or point the manager at the active sprint tracker.",
+      }],
+    });
+  }
+
+  const content = readFileSync(sprintAbsolute, "utf8");
+  const rows = sprintStoryRows(content);
+  const reviewRows = rows.filter((row) => row.status === "review");
+  const eligibleRows = reviewRows
+    .filter((row) => !requestedStoryKey || row.storyKey === requestedStoryKey)
+    .map((row) => {
+      const storyPath = `_bmad-output/implementation-artifacts/${row.storyKey}.md`;
+      const storyAbsolute = resolve(repoRoot, storyPath);
+      return {
+        ...row,
+        storyPath,
+        sourceRef: `story:${storyPath}`,
+        storyExists: existsSync(storyAbsolute),
+      };
+    });
+  const selected = eligibleRows.find((row) => row.storyExists) || null;
+
+  if (!selected) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        workflow: "bmad-code-review",
+        sprintStatusPath,
+        requestedStoryKey: requestedStoryKey || null,
+        reviewStoryCount: reviewRows.length,
+        eligibleStoryCount: eligibleRows.length,
+        candidates: sanitizeCyclePacketValue(eligibleRows.slice(0, 6)),
+        mutationMode: "none",
+        rawPayloadRetained: false,
+      },
+      blockers: [{
+        code: reviewRows.length > 0 ? "bmad-code-review-story-missing" : "bmad-code-review-no-review-work",
+        message: reviewRows.length > 0
+          ? "Sprint tracker has review stories, but no selected review story file exists."
+          : "Sprint tracker has no stories in review status.",
+        nextAction: "Run lane advancement, story creation, or sprint planning before preparing a code review request.",
+      }],
+    });
+  }
+
+  const requestPath = bmadCodeReviewRequestPath(paths, selected.storyKey);
+  const alreadyPrepared = existsSync(requestPath);
+  const requestPacket = {
+    packetId: `${runId}-${selected.storyKey}-bmad-code-review-request`,
+    workflow: "bmad-code-review",
+    storyKey: selected.storyKey,
+    storyPath: selected.storyPath,
+    sprintStatusPath,
+    sourceRefs: [selected.sourceRef, `run:${runId}`],
+    authority: {
+      basis: "existing-bmad-code-review-workflow",
+      class: "allowed_unattended_request_packet_only",
+      posture: "prepare_review_request_not_review_result",
+    },
+    stopLines: [
+      "do_not_mark_story_reviewed",
+      "do_not_mutate_worker_state",
+      "do_not_merge_or_deliver",
+      "do_not_retain_raw_provider_payloads",
+      "do_not_fake_review_findings",
+    ],
+    retentionPolicy: {
+      packet: "manager_runtime_metadata_only",
+      rawPrompts: "do_not_retain",
+      rawProviderPayloads: "do_not_retain",
+      reasoningTraces: "do_not_retain",
+      sourceCopies: "do_not_retain",
+    },
+    nextWorkflow: {
+      skill: "bmad-code-review",
+      instruction: `Run bmad-code-review for ${selected.storyPath} and record real findings before delivery or additional work creation.`,
+    },
+    createdAt: new Date().toISOString(),
+    rawPayloadRetained: false,
+  };
+
+  let applied = false;
+  let appendWarning = null;
+  if (options.apply && !alreadyPrepared) {
+    const missing = ensureManagerRunExists(paths);
+    if (missing) return missing;
+    mkdirSync(dirname(requestPath), { recursive: true });
+    writeFileSync(requestPath, `${JSON.stringify(requestPacket, null, 2)}\n`);
+    applied = true;
+    const eventResult = ledgerCommand({
+      command: "append-event",
+      runId,
+      stateRoot: options.stateRoot || "",
+      eventType: "manager.ledger.appended",
+      summary: `Prepared BMAD code review request for ${selected.storyKey}.`,
+      authorityBasis: "existing-bmad-code-review-workflow-request-packet-only",
+      recoveryPath: "Use the prepared review request packet to run bmad-code-review; rerun manager-bmad-code-review if runtime state is lost.",
+      sourceRefs: [selected.sourceRef, `run:${runId}`],
+      evidenceRefs: [`review-request:${requestPath}`, `sprint-status:${sprintStatusPath}`],
+      idempotencyKey: `bmad-code-review-request:${runId}:${selected.storyKey}`,
+    }, context);
+    if (!eventResult.ok) {
+      appendWarning = {
+        code: "bmad-code-review-event-record-failed",
+        message: eventResult.blockers?.[0]?.message || "BMAD code review request event could not be recorded.",
+      };
+    }
+  }
+
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      workflow: "bmad-code-review",
+      selectedStory: sanitizeCyclePacketValue({
+        storyKey: selected.storyKey,
+        storyPath: selected.storyPath,
+        sprintStatusPath,
+        sourceRef: selected.sourceRef,
+      }),
+      requestPath,
+      alreadyPrepared,
+      applied,
+      reviewStoryCount: reviewRows.length,
+      candidates: sanitizeCyclePacketValue(eligibleRows.slice(0, 6)),
+      dryRunCommand,
+      applyCommand,
+      authority: "existing-bmad-code-review-workflow-request-packet-only",
+      mutationMode: options.apply ? "manager_runtime_review_request_packet" : "dry_run_only",
+      rawPayloadRetained: false,
+    },
+    warnings: appendWarning ? [appendWarning] : [],
+    nextActions: [{
+      code: alreadyPrepared || applied ? "bmad-code-review-request-prepared" : "bmad-code-review-request-ready",
+      nextAction: `Run bmad-code-review for ${selected.storyPath}; do not mark reviewed until real review findings are recorded.`,
+    }],
+  });
+}
+
+function normalizeBmadPlanningPrerequisites(input = {}, context = {}) {
+  const source = isPlainObject(input) ? input : {};
+  const specs = [
+    ["correctedPrd", "Corrected PRD exists for this manager-control-plane implementation."],
+    ["correctedArchitecture", "Corrected architecture exists for this manager-control-plane implementation."],
+    ["epicsAndStories", "Regenerated epics/stories and sprint tracking exist for this manager-control-plane implementation."],
+    ["implementationReadiness", "Implementation-readiness review exists for this manager-control-plane implementation."],
+  ];
+  return Object.fromEntries(specs.map(([key, description]) => {
+    const value = source[key] ?? source[snakeCaseKey(key)] ?? source[key.toLowerCase()];
+    const status = bmadPlanningPrerequisiteStatus(key, value, context);
+    return [key, { status, description }];
+  }));
+}
+
+function bmadPlanningPrerequisiteStatus(key, value, context = {}) {
+  if (value === false || value === "missing" || value === "blocked") return "missing";
+  if (value === true || value === "present" || value === "ready") return "present";
+  if (value !== undefined && value !== null && value !== "") return "present";
+  return inferBmadPlanningPrerequisiteStatus(key, context);
+}
+
+function inferBmadPlanningPrerequisiteStatus(key, context = {}) {
+  const sourceSlice = context.sourceSlice || null;
+  const sourcePlanning = context.sourcePlanning || {};
+  const sourceRef = String(sourceSlice?.ref || "");
+  const sourceKey = String(sourcePlanning?.sourceKey || sourcePlanningKey(sourceRef)).toLowerCase();
+  const appliesToManagerPrd = sourceSlice?.type === "prd" || sourceKey.includes("manager-control-plane") || sourceRef.toLowerCase().includes("manager-control-plane");
+  if (!appliesToManagerPrd) return "present";
+  if (key === "correctedPrd") return sourceSlice?.type === "prd" && sourceRefPathExists(sourceRef) ? "present" : "missing";
+  if (key === "correctedArchitecture") return planningArtifactExists("architecture-manager-control-plane") ? "present" : "missing";
+  if (key === "epicsAndStories") {
+    return sourcePlanning?.sprintStatus?.exists === true || existsSync(join(repoRoot, "_bmad-output", "planning-artifacts", "epics.md")) ? "present" : "missing";
+  }
+  if (key === "implementationReadiness") return planningArtifactExists("implementation-readiness-report-manager-control-plane") ? "present" : "missing";
+  return "missing";
+}
+
+function sourceRefPathExists(ref = "") {
+  const source = classifySourceRef(ref);
+  if (!source) return false;
+  const path = source.ref.replace(/^(prd|runway|story|doc):/i, "");
+  return existsSync(resolve(repoRoot, path));
+}
+
+function planningArtifactExists(namePart = "") {
+  const artifactDir = join(repoRoot, "_bmad-output", "planning-artifacts");
+  if (!existsSync(artifactDir)) return false;
+  const needle = String(namePart || "").toLowerCase();
+  return readdirSync(artifactDir, { withFileTypes: true })
+    .some((entry) => entry.isFile() && entry.name.toLowerCase().includes(needle));
+}
+
+function snakeCaseKey(key) {
+  return String(key || "").replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`).replace(/^_/, "");
+}
+
+function selectBmadPlanningGapWorkflow(sourceSlice, sourcePlanning = null, signals = []) {
+  const signalText = signals.join(" ").toLowerCase();
+  const sourceText = [sourceSlice?.ref, sourceSlice?.label].join(" ").toLowerCase();
+  const sprintStatus = sourcePlanning?.sprintStatus || null;
+  const reviewReadyCount = nonNegativeInteger(sprintStatus?.reviewReadyStories);
+  const readyForDevCount = nonNegativeInteger(sprintStatus?.readyForDevStories);
+  const ambiguousReadyCount = reviewReadyCount === null && readyForDevCount === null ? nonNegativeInteger(sprintStatus?.readyStories) : 0;
+  const signalMatch = bmadPlanningSignalWorkflow(signalText);
+  if (signalMatch) return signalMatch;
+  const sourceMatch = bmadPlanningSignalWorkflow(sourceText);
+  if (sourceMatch) return sourceMatch;
+  if (sprintStatus && !sprintStatus.exists && sourceSlice?.type === "prd") {
+    return {
+      narrowestWorkflow: "bmad-create-epics-and-stories",
+      gapType: "epics_and_stories",
+      reason: "No matching sprint tracker was found for this PRD; epics and stories are the narrowest missing BMAD artifact set.",
+      broaderReason: "PRD and architecture regeneration are unnecessary unless their prerequisite evidence is explicitly missing.",
+    };
+  }
+  if ((reviewReadyCount ?? ambiguousReadyCount ?? 0) > 0) {
+    return {
+      narrowestWorkflow: "bmad-code-review",
+      gapType: "review",
+      reason: "A review-ready story exists; code review is narrower than creating more story work.",
+      broaderReason: "Existing implementation artifacts should be reviewed before creating more planning work.",
+    };
+  }
+  if ((nonNegativeInteger(sprintStatus?.backlogStories) ?? 0) > 0) {
+    return {
+      narrowestWorkflow: "bmad-create-story",
+      gapType: "story_creation",
+      reason: "A backlog story exists; story creation is the narrowest missing workflow before implementation dispatch.",
+      broaderReason: "Existing PRD, architecture, epics, and sprint tracking are sufficient for the next story.",
+    };
+  }
+  if (sprintStatus?.exists && (nonNegativeInteger(sprintStatus.backlogStories) ?? 0) === 0) {
+    return {
+      narrowestWorkflow: "bmad-correct-course",
+      gapType: "backlog_expansion",
+      reason: "The matching sprint tracker has no backlog stories left; correct-course is the narrowest backlog expansion workflow.",
+      broaderReason: "The existing PRD and architecture still provide source context; only scoped backlog expansion is needed.",
+    };
+  }
+  if ((nonNegativeInteger(sprintStatus?.readyStories) ?? 0) > 0) {
+    return {
+      narrowestWorkflow: "bmad-code-review",
+      gapType: "review",
+      reason: "A review-ready story exists; code review is narrower than regenerating planning artifacts.",
+      broaderReason: "Existing implementation artifacts should be reviewed before creating more planning work.",
+    };
+  }
+  if (sourceSlice?.type === "story") {
+    return {
+      narrowestWorkflow: "bmad-create-story",
+      gapType: "story_creation",
+      reason: "Story source evidence can continue through the narrow story-creation workflow without broad artifact regeneration.",
+      broaderReason: "Existing story evidence is sufficient for bounded continuation; PRD, architecture, and epics regeneration are unnecessary.",
+    };
+  }
+  return {
+    narrowestWorkflow: null,
+    gapType: "none",
+    reason: "No missing BMAD planning workflow was detected from source planning state.",
+    broaderReason: "No planning regeneration is needed.",
+  };
+}
+
+function bmadPlanningSignalWorkflow(text = "") {
+  if (/\b(architecture|boundary|contract|schema|authority)\b/.test(text)) {
+    return {
+      narrowestWorkflow: "bmad-create-architecture",
+      gapType: "architecture",
+      reason: "Boundary or architecture evidence requires architecture clarification before creating implementation work.",
+      broaderReason: "Architecture clarification is narrower than regenerating the PRD or full backlog.",
+    };
+  }
+  if (/\b(ux|ui|operator-facing|dashboard|cockpit|daily-use|daily use)\b/.test(text)) {
+    return {
+      narrowestWorkflow: "bmad-ux",
+      gapType: "ux",
+      reason: "Operator-facing UX evidence requires UX planning before creating or dispatching implementation work.",
+      broaderReason: "UX planning is narrower than regenerating PRD, architecture, or epics.",
+    };
+  }
+  if (/\b(readiness|implementation-readiness|implementation readiness|ready-for-dev)\b/.test(text)) {
+    return {
+      narrowestWorkflow: "bmad-check-implementation-readiness",
+      gapType: "readiness",
+      reason: "Readiness evidence requires validating implementation inputs before creating or dispatching more work.",
+      broaderReason: "Readiness validation is narrower than regenerating PRD, architecture, or epics.",
+    };
+  }
+  if (/\b(review|code-review|code review|ready for review)\b/.test(text)) {
+    return {
+      narrowestWorkflow: "bmad-code-review",
+      gapType: "review",
+      reason: "Review evidence requires code review before creating or dispatching more work.",
+      broaderReason: "Reviewing the existing implementation artifact is narrower than regenerating planning artifacts.",
+    };
+  }
+  return null;
+}
+
+function selectWorkCreationStep(sourceSlice, signals = [], sourcePlanning = null, refillNeeded = 1, planningGap = null) {
+  const signalText = signals.join(" ").toLowerCase();
+  const sourceText = [sourceSlice.ref, sourceSlice.label].join(" ").toLowerCase();
+  let workflow = planningGap?.summary?.narrowestWorkflow || "bmad-create-story";
+  let reason = planningGap?.summary?.reason || "Story creation is the narrowest refill step for source-owned PRD or runway evidence.";
+  if (planningGap?.summary?.narrowestWorkflow) {
+    workflow = planningGap.summary.narrowestWorkflow;
+    reason = planningGap.summary.reason;
+  } else if (sourcePlanning?.sprintStatus?.exists && sourcePlanning.sprintStatus.backlogStories === 0) {
+    workflow = "bmad-correct-course";
+    reason = "The matching sprint tracker has no backlog stories left; expand or correct the BMAD backlog before creating another story.";
+  } else if (sourcePlanning?.sprintStatus && !sourcePlanning.sprintStatus.exists && sourceSlice.type === "prd") {
+    workflow = "bmad-create-epics-and-stories";
+    reason = "No matching sprint tracker was found for this PRD; create or refresh epics and stories before story creation.";
+  } else if (/\b(readiness|implementation-readiness|implementation readiness|ready-for-dev)\b/.test(signalText)) {
+    workflow = "bmad-check-implementation-readiness";
+    reason = "Explicit readiness evidence requires validating implementation inputs before creating or dispatching more work.";
+  } else if (/\b(ux|ui|operator-facing|dashboard|cockpit|daily-use|daily use)\b/.test(signalText)) {
+    workflow = "bmad-ux";
+    reason = "Explicit operator-facing UX evidence requires UX planning before creating or dispatching implementation work.";
+  } else if (/\b(architecture|boundary|contract|schema|authority)\b/.test(signalText)) {
+    workflow = "bmad-create-architecture";
+    reason = "Explicit boundary or architecture evidence requires architecture clarification before creating implementation work.";
+  } else if (/\b(architecture|boundary|contract|schema|authority)\b/.test(sourceText)) {
+    workflow = "bmad-create-architecture";
+    reason = "Boundary or architecture evidence requires architecture clarification before creating implementation work.";
+  } else if (/\b(readiness|implementation-readiness|implementation readiness|ready-for-dev)\b/.test(sourceText)) {
+    workflow = "bmad-check-implementation-readiness";
+    reason = "Readiness evidence requires validating implementation inputs before creating or dispatching more work.";
+  } else if (/\b(ux|ui|operator-facing|dashboard|cockpit|daily-use|daily use)\b/.test(sourceText)) {
+    workflow = "bmad-ux";
+    reason = "Operator-facing UX evidence requires UX planning before creating or dispatching implementation work.";
+  }
+  const step = {
+    workflow,
+    reason,
+    sourceRef: sourceSlice.ref,
+    sourceType: sourceSlice.type,
+    sourcePlanning,
+    artifactPolicy: {
+      retention: "local_bmad_output",
+      durableSourceRewrite: "separate_source_owned_follow_up_required",
+      rawProviderPayloads: "do_not_retain",
+    },
+    authority: {
+      posture: "dry_run_required",
+      authorityBasis: "source-owned-refill-planning",
+      evidence: [sourceSlice.ref],
+      stopLines: ["do_not_execute_bmad_workflow", "do_not_mutate_safe_backlog", "do_not_create_tracked_bmad_artifacts"],
+    },
+  };
+  step.workCreationPacket = buildWorkCreationPacket(step, sourceSlice, signals, refillNeeded);
+  return step;
+}
+
+function buildWorkCreationPacket(step, sourceSlice, signals = [], refillNeeded = 1) {
+  const sprintPath = step.sourcePlanning?.sprintStatus?.path || null;
+  const requestedRefill = Math.max(1, Math.min(6, nonNegativeInteger(refillNeeded) ?? 1));
+  const backlogTarget = Math.min(Math.max(step.sourcePlanning?.sprintStatus?.backlogStories === 0 ? 6 : requestedRefill, 1), 6);
+  const packet = {
+    workflow: step.workflow,
+    mode: "autonomous_draft_then_existing_bmad_gate",
+    trigger: workCreationTrigger(step),
+    sourceRefs: [sourceSlice.ref],
+    sprintStatusPath: sprintPath,
+    backlogTarget,
+    requestedOutcome: workCreationRequestedOutcome(step, backlogTarget),
+    operatorPreference: "progress_with_best_judgement_except_extreme_risk",
+    evidencePolicy: {
+      retain: ["artifact paths", "compact findings", "story ids", "verification commands", "operator-facing checkpoints"],
+      doNotRetain: ["raw_prompts", "raw_model_outputs", "reasoning_traces", "provider_payloads", "secrets"],
+    },
+    nextWorkflowInputs: workCreationWorkflowInputs(step, signals),
+    storyCreationInputs: buildStoryCreationInputs(step),
+    courseCorrectionDraft: buildCourseCorrectionDraft(step, sourceSlice, backlogTarget, signals),
+    stopLines: step.authority.stopLines,
+  };
+  return packet;
+}
+
+function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null) {
+  const packet = workCreationStep?.workCreationPacket;
+  if (!workCreationStep?.workflow || !packet) return null;
+  const workflow = sanitizeLedgerField(workCreationStep.workflow, "", 80);
+  if (workflow === "bmad-create-story") {
+    return buildStoryCreationMaterializationGate(workCreationStep, sourceSlice, sourcePlanning, requestPacketValidation);
+  }
+  if (workflow !== "bmad-correct-course") return null;
+  const draft = packet.courseCorrectionDraft || null;
+  const storyInputs = packet.storyCreationInputs || null;
+  const selectedCandidate =
+    firstBacklogCandidate(draft?.candidateBacklogItems) ||
+    firstBacklogCandidate(draft?.proposedBacklogItems) ||
+    (storyInputs?.storyKey ? { id: storyInputs.storyKey, title: titleFromStoryKey(storyInputs.storyKey) } : null);
+  const sprintStatusPath = sanitizeLedgerField(packet.sprintStatusPath || storyInputs?.sprintStatusPath || sourcePlanning?.sprintStatus?.path || "", "", 220);
+  const proposalOutputPath = sanitizeLedgerField(draft?.outputPath || "", "", 220) || null;
+  const sourceRef = sanitizeLedgerField(sourceSlice?.ref || workCreationStep.sourceRef || packet.sourceRefs?.[0] || "", "", 220);
+  const dryRunCommand = "node ./scripts/manager-refill-plan.mjs --summary-json";
+  const sourceRefArg = sourceRef ? ` --source-ref ${shellSingleQuote(sourceRef)}` : "";
+  const applyCommand = `node ./scripts/manager-refill-plan.mjs --summary-json --apply${sourceRefArg}`;
+  const missingRequiredFields = [];
+  if (!sourceRef) missingRequiredFields.push("sourceRef");
+  if (!sprintStatusPath) missingRequiredFields.push("sprintStatusPath");
+  if (!proposalOutputPath) missingRequiredFields.push("proposalOutputPath");
+  if (!selectedCandidate?.id) missingRequiredFields.push("selectedCandidateStory");
+  const requestPacketStatus = sanitizeLedgerField(requestPacketValidation?.status || "", "", 80) || "unknown";
+  const contextComplete = missingRequiredFields.length === 0;
+  const ready = contextComplete && requestPacketStatus === "ready";
+  const needsReview = contextComplete && requestPacketStatus !== "ready";
+  return {
+    state: ready ? "ready" : needsReview ? "needs_review" : "blocked",
+    workflow,
+    sourceRef,
+    sourceType: sanitizeLedgerField(sourceSlice?.type || workCreationStep.sourceType || "", "", 40),
+    sprintStatusPath,
+    proposalOutputPath,
+    selectedCandidateStory: selectedCandidate,
+    nextWorkflow: "bmad-create-story",
+    dryRunCommand,
+    applyCommand,
+    applyRequiresExistingGate: true,
+    nextAction: ready
+      ? `Review materialization gate, then run ${applyCommand} only through the existing approved local BMAD output gate.`
+      : needsReview
+        ? `Review or authorize the bmad-correct-course request packet before applying local BMAD output mutation: ${requestPacketStatus}.`
+      : `Repair correct-course materialization packet before apply: missing ${missingRequiredFields.join(", ")}.`,
+    mutationMode: ready ? "dry_run_required" : needsReview ? "blocked_until_request_packet_ready" : "blocked_until_materialization_context_complete",
+    applyMutationMode: "local_bmad_course_correction_backlog_only",
+    authority: "source-owned-refill-planning-existing-gates",
+    missingRequiredFields,
+    requestPacketValidation: requestPacketValidation || null,
+    blockers: ready ? [] : needsReview ? [{
+      code: "refill-materialization-request-packet-not-ready",
+      message: `Correct-course request packet is ${requestPacketStatus}; apply requires the existing approved local BMAD output gate.`,
+      nextAction: "Review or authorize the request packet before applying local BMAD output mutation.",
+    }] : [{
+      code: "refill-materialization-context-incomplete",
+      message: `Correct-course materialization gate is missing required field(s): ${missingRequiredFields.join(", ")}.`,
+      nextAction: "Refresh the bounded refill packet from source-owned planning state before applying local BMAD output mutation.",
+    }],
+    stopLines: [
+      ...sourceRefList(packet.stopLines),
+      "no_worker_mutation",
+      "no_dispatch_apply",
+      "no_worker_launch_or_kill",
+      "no_takeover",
+      "no_provider_calls",
+      "no_git_or_github_mutation",
+      "no_raw_pane_or_provider_payload_retention",
+    ].filter(Boolean).slice(0, 16),
+    recoveryPath: "Rerun manager-refill-plan without --apply to preview current source-owned refill posture; revert local _bmad-output planning artifacts if apply produced the wrong scoped backlog.",
+    retention: "metadata_only_refill_materialization_gate",
+    rawPayloadRetained: false,
+  };
+}
+
+function buildStoryCreationMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null) {
+  const packet = workCreationStep?.workCreationPacket || {};
+  const storyInputs = packet.storyCreationInputs || {};
+  const sourceRef = sanitizeLedgerField(sourceSlice?.ref || workCreationStep?.sourceRef || packet.sourceRefs?.[0] || "", "", 220);
+  const sprintStatusPath = sanitizeLedgerField(storyInputs.sprintStatusPath || packet.sprintStatusPath || sourcePlanning?.sprintStatus?.path || "", "", 220);
+  const storyOutputPath = sanitizeLedgerField(storyInputs.storyOutputPath || "", "", 220);
+  const selectedCandidate = storyInputs.storyKey
+    ? { id: sanitizeLedgerField(storyInputs.storyKey, "", 140), title: titleFromStoryKey(storyInputs.storyKey) }
+    : null;
+  const dryRunCommand = "node ./scripts/manager-refill-plan.mjs --summary-json";
+  const sourceRefArg = sourceRef ? ` --source-ref ${shellSingleQuote(sourceRef)}` : "";
+  const applyCommand = `node ./scripts/manager-refill-plan.mjs --summary-json --apply${sourceRefArg}`;
+  const missingRequiredFields = [];
+  if (!sourceRef) missingRequiredFields.push("sourceRef");
+  if (!sprintStatusPath) missingRequiredFields.push("sprintStatusPath");
+  if (!storyOutputPath) missingRequiredFields.push("storyOutputPath");
+  if (!selectedCandidate?.id) missingRequiredFields.push("selectedCandidateStory");
+  const requestPacketStatus = sanitizeLedgerField(requestPacketValidation?.status || "", "", 80) || "unknown";
+  const contextComplete = missingRequiredFields.length === 0;
+  const ready = contextComplete && requestPacketStatus === "ready";
+  const needsReview = contextComplete && requestPacketStatus !== "ready";
+  return {
+    state: ready ? "ready" : needsReview ? "needs_review" : "blocked",
+    workflow: "bmad-create-story",
+    sourceRef,
+    sourceType: sanitizeLedgerField(sourceSlice?.type || workCreationStep?.sourceType || "", "", 40),
+    sprintStatusPath,
+    storyOutputPath,
+    selectedCandidateStory: selectedCandidate,
+    nextWorkflow: "dispatch-preview",
+    dryRunCommand,
+    applyCommand,
+    applyRequiresExistingGate: true,
+    nextAction: ready
+      ? `Review materialization gate, then run ${applyCommand} only through the existing approved local BMAD story output gate.`
+      : needsReview
+        ? `Review or authorize the bmad-create-story request packet before applying local BMAD story output mutation: ${requestPacketStatus}.`
+        : `Repair story-creation materialization packet before apply: missing ${missingRequiredFields.join(", ")}.`,
+    mutationMode: ready ? "dry_run_required" : needsReview ? "blocked_until_request_packet_ready" : "blocked_until_materialization_context_complete",
+    applyMutationMode: "local_bmad_story_file_only",
+    authority: "source-owned-refill-planning-existing-gates",
+    missingRequiredFields,
+    requestPacketValidation: requestPacketValidation || null,
+    blockers: ready ? [] : needsReview ? [{
+      code: "refill-materialization-request-packet-not-ready",
+      message: `Story-creation request packet is ${requestPacketStatus}; apply requires the existing approved local BMAD story output gate.`,
+      nextAction: "Review or authorize the request packet before applying local BMAD story output mutation.",
+    }] : [{
+      code: "refill-materialization-context-incomplete",
+      message: `Story-creation materialization gate is missing required field(s): ${missingRequiredFields.join(", ")}.`,
+      nextAction: "Refresh the bounded refill packet from source-owned planning state before applying local BMAD story output mutation.",
+    }],
+    stopLines: [
+      ...sourceRefList(packet.stopLines),
+      "no_worker_mutation",
+      "no_dispatch_apply",
+      "no_worker_launch_or_kill",
+      "no_takeover",
+      "no_provider_calls",
+      "no_git_or_github_mutation",
+      "no_raw_pane_or_provider_payload_retention",
+    ].filter(Boolean).slice(0, 16),
+    recoveryPath: "Rerun manager-refill-plan without --apply to preview current source-owned refill posture; remove local _bmad-output story artifacts and restore sprint-status if apply produced the wrong scoped story.",
+    retention: "metadata_only_refill_materialization_gate",
+    rawPayloadRetained: false,
+  };
+}
+
+function firstBacklogCandidate(items = []) {
+  if (!Array.isArray(items)) return null;
+  const item = items.find((candidate) => candidate?.id || candidate?.storyKey || candidate?.story_key);
+  if (!item) return null;
+  const id = sanitizeLedgerField(item.id || item.storyKey || item.story_key || "", "", 140);
+  if (!id) return null;
+  return {
+    id,
+    title: sanitizeLedgerField(item.title || titleFromStoryKey(id), titleFromStoryKey(id), 180),
+  };
+}
+
+function compactRefillMaterializationGateAction(gate = {}) {
+  return {
+    state: gate.state || null,
+    workflow: gate.workflow || null,
+    sourceRef: gate.sourceRef || null,
+    sprintStatusPath: gate.sprintStatusPath || null,
+    proposalOutputPath: gate.proposalOutputPath || null,
+    storyOutputPath: gate.storyOutputPath || null,
+    selectedCandidateStory: gate.selectedCandidateStory || null,
+    dryRunCommand: gate.dryRunCommand || null,
+    applyCommand: gate.applyCommand || null,
+    applyRequiresExistingGate: gate.applyRequiresExistingGate === true,
+    mutationMode: gate.mutationMode || null,
+    missingRequiredFields: Array.isArray(gate.missingRequiredFields) ? gate.missingRequiredFields : [],
+    requestPacketValidation: gate.requestPacketValidation || null,
+    stopLines: Array.isArray(gate.stopLines) ? gate.stopLines : [],
+    recoveryPath: gate.recoveryPath || null,
+    rawPayloadRetained: false,
+  };
+}
+
+function workCreationTrigger(step) {
+  if (step.workflow === "bmad-correct-course") {
+    return "safe backlog exhausted while desired manager worker capacity remains available";
+  }
+  if (step.workflow === "bmad-create-epics-and-stories") {
+    return "source PRD has no matching sprint tracker";
+  }
+  return "safe backlog below desired manager worker capacity";
+}
+
+function workCreationRequestedOutcome(step, backlogTarget) {
+  if (step.workflow === "bmad-correct-course") {
+    return `Create or approve enough source-owned backlog to refill up to ${backlogTarget} safe worker lane(s), then route back to story creation.`;
+  }
+  if (step.workflow === "bmad-create-epics-and-stories") {
+    return "Create source-owned epics, stories, and sprint tracking before dispatching implementation lanes.";
+  }
+  return "Create the narrowest source-owned work item that can be safely verified and dispatched.";
+}
+
+function workCreationWorkflowInputs(step, signals = []) {
+  const inputs = [
+    {
+      name: "source",
+      value: step.sourceRef,
+    },
+  ];
+  if (step.sourcePlanning?.sprintStatus?.path) {
+    inputs.push({
+      name: "sprintStatus",
+      value: step.sourcePlanning.sprintStatus.path,
+    });
+  }
+  const compactSignals = sourceRefList(signals)
+    .map((signal) => sanitizeLedgerField(signal, "", 160))
+    .filter(Boolean)
+    .slice(0, 6);
+  if (compactSignals.length > 0) {
+    inputs.push({
+      name: "signals",
+      value: compactSignals,
+    });
+  }
+  return inputs;
+}
+
+function buildStoryCreationInputs(step) {
+  if (step.workflow !== "bmad-create-story") return null;
+  const storyKey = step.sourcePlanning?.sprintStatus?.nextBacklogStoryKey || null;
+  const sprintStatusPath = step.sourcePlanning?.sprintStatus?.path || null;
+  if (!storyKey && !sprintStatusPath) return null;
+  return {
+    storyKey,
+    sprintStatusPath,
+    storyOutputPath: storyKey ? `_bmad-output/implementation-artifacts/${storyKey}.md` : null,
+    statusUpdate: storyKey ? { from: "backlog", to: "ready-for-dev" } : null,
+    note: "Use the scoped sprint tracker and explicit story key; do not fall back to the global sprint-status.yaml.",
+  };
+}
+
+function buildCourseCorrectionDraft(step, sourceSlice, backlogTarget, signals = []) {
+  if (step.workflow !== "bmad-correct-course") return null;
+  const sourceKey = step.sourcePlanning?.sourceKey || sourcePlanningKey(sourceSlice.ref);
+  const sprintPath = step.sourcePlanning?.sprintStatus?.path || null;
+  const compactSignals = sourceRefList(signals)
+    .map((signal) => sanitizeLedgerField(signal, "", 120))
+    .filter(Boolean)
+    .slice(0, 6);
+  return {
+    proposalKind: "sprint_change_proposal_seed",
+    outputPath: `_bmad-output/planning-artifacts/sprint-change-proposal-${sourceKey}.md`,
+    trigger: "safe_backlog_exhausted_after_tracked_sprint_completion",
+    issueSummary: "The matching sprint tracker has no backlog stories left while the manager still needs source-owned work to continue dogfooding toward autonomous multi-worker operation.",
+    impact: {
+      sourceKey,
+      sprintStatusPath: sprintPath,
+      backlogStories: step.sourcePlanning?.sprintStatus?.backlogStories ?? null,
+      doneStories: step.sourcePlanning?.sprintStatus?.doneStories ?? null,
+      affectedCapabilities: ["safe_backlog_refill", "planning_only_continuation", "worker_ramp_dogfood", "operator_progress_reporting"],
+    },
+    recommendedApproach: {
+      classification: "moderate_backlog_reorganization",
+      summary: "Add a bounded dogfood-hardening backlog under the existing manager-control-plane PRD, then create stories through the normal BMAD story workflow.",
+      rationale: "The PRD success criteria still require end-to-end dogfood evidence and six-worker ramp confidence, but the initial sprint tracker is exhausted.",
+    },
+    candidateBacklogItems: buildCourseCorrectionBacklogItems(backlogTarget),
+    workflowMode: "batch",
+    signals: compactSignals,
+  };
+}
+
+function buildCourseCorrectionBacklogItems(backlogTarget) {
+  const items = [
+    {
+      id: "6-1-planning-only-bmad-refill-continuation",
+      title: "Planning-Only BMAD Refill Continuation",
+      outcome: "Manager continues source-owned BMAD backlog planning when worker mutation is blocked, while preserving worker stop lines.",
+      verification: "pnpm run test:manager-control-plane && live cycle projection shows continuation.state=planning_only",
+    },
+    {
+      id: "6-2-correct-course-backlog-materialization",
+      title: "Correct-Course Backlog Materialization",
+      outcome: "Manager can turn a compact course-correction packet into source-owned backlog/story artifacts without broad rediscovery.",
+      verification: "manager refill packet includes courseCorrectionDraft and resulting sprint tracker contains new backlog stories",
+    },
+    {
+      id: "6-3-stale-owner-takeover-inspection-packet",
+      title: "Stale Owner Takeover Inspection Packet",
+      outcome: "Manager prepares exact dry-run takeover evidence for blocked lane and workspace assignments without applying takeover.",
+      verification: "cycle/resume packet names exact blocked assignment ids and takeover dry-run commands",
+    },
+    {
+      id: "6-4-one-lane-dispatch-dogfood-harness",
+      title: "One-Lane Dispatch Dogfood Harness",
+      outcome: "Manager can dispatch or simulate one safe lane through existing gates and report what daily-use work is testable.",
+      verification: "dispatch preview/apply proof includes selected lane, base branch, claim action, and recovery path",
+    },
+    {
+      id: "6-5-worker-ramp-readiness-gate",
+      title: "Worker Ramp Readiness Gate",
+      outcome: "Manager decides when to move from one to two workers, then toward six, based on no-new-friction evidence.",
+      verification: "cycle packet exposes ramp readiness, blocker classes, and next allowed worker count",
+    },
+    {
+      id: "6-6-overnight-run-recovery-and-housekeeping",
+      title: "Overnight Run Recovery And Housekeeping",
+      outcome: "Manager preserves enough state to resume after compaction/interruption, perform housekeeping, and continue or stop cleanly.",
+      verification: "resume-state and cleanup-plan packets prove recovery state, cleanup scopes, and no unsafe mutation",
+    },
+  ];
+  return items.slice(0, Math.min(Math.max(backlogTarget, 1), 6));
+}
+
+function buildSplitPlan(hints) {
+  if (!hints || typeof hints !== "object") return null;
+  const groups = Array.isArray(hints.groups) ? hints.groups.slice(0, 6) : [];
+  const couplingSignals = sourceRefList(hints.couplingSignals || hints.blockers || []);
+  const normalizedGroups = groups.map((group, index) => ({
+    id: sanitizeLedgerField(group?.id || `slice-${index + 1}`, `slice-${index + 1}`, 80),
+    acceptanceCriteria: sourceRefList(group?.acceptanceCriteria || group?.coveredAcceptanceCriteria || []).map((item) => sanitizeLedgerField(item, "", 120)).filter(Boolean).slice(0, 8),
+    likelyTouchedFiles: sourceRefList(group?.likelyTouchedFiles || group?.files || []).map((file) => normalizeLikelyFile(file)).filter(Boolean).slice(0, 12),
+    verification: sourceRefList(group?.verification || []).map((item) => sanitizeLedgerField(item, "", 160)).filter(Boolean).slice(0, 8),
+    reconciliationStep: sanitizeLedgerField(group?.reconciliationStep || "merge in order and rerun parent story verification", "merge in order and rerun parent story verification", 200),
+  }));
+  const couplingText = [
+    ...couplingSignals,
+    hints.parentStory || "",
+    ...normalizedGroups.flatMap((group) => [group.id, ...group.acceptanceCriteria, ...group.likelyTouchedFiles, ...group.verification]),
+  ].join(" ");
+  const hasCouplingSignal = /\b(ux|coherence|contract|schema|shared|coupled|same file|edit surface)\b/i.test(couplingText);
+  const fileOwners = new Map();
+  let hasOverlap = false;
+  for (const group of normalizedGroups) {
+    for (const normalized of group.likelyTouchedFiles) {
+      if (!normalized) continue;
+      if (fileOwners.has(normalized)) hasOverlap = true;
+      fileOwners.set(normalized, group.id);
+    }
+  }
+  const independentlyTestable = normalizedGroups.length >= 2 && normalizedGroups.every((group) => group.acceptanceCriteria.length > 0 && group.likelyTouchedFiles.length > 0 && group.verification.length > 0);
+  if (!independentlyTestable || hasCouplingSignal || hasOverlap) {
+    return {
+      status: "keep_story_boundary",
+      parentStory: sanitizeLedgerField(hints.parentStory || "unknown-story", "unknown-story", 120),
+      slices: [],
+      blockers: [
+        {
+          code: hasOverlap ? "split-file-overlap" : hasCouplingSignal ? "split-coupled-surface" : "split-not-independently-testable",
+          message: "Parallel split is blocked because acceptance criteria, UX coherence, contracts, or edit surfaces are coupled.",
+        },
+      ],
+      reason: "Keep the BMAD story boundary intact because the proposed split is coupled or not independently testable.",
+    };
+  }
+  const parentStory = sanitizeLedgerField(hints.parentStory || "unknown-story", "unknown-story", 120);
+  const slices = normalizedGroups.map((group, index) => ({
+    sliceId: group.id,
+    parentStory,
+    coveredAcceptanceCriteria: group.acceptanceCriteria,
+    likelyTouchedFiles: group.likelyTouchedFiles,
+    verification: group.verification,
+    mergeOrder: index + 1,
+    reconciliationStep: group.reconciliationStep,
+  }));
+  return {
+    status: "split_proposed",
+    parentStory,
+    slices,
+    reason: "Split is likely to reduce elapsed time and token usage because acceptance criteria are independently testable with low file overlap, without reducing quality.",
+  };
+}
+
+function normalizeLikelyFile(file) {
+  return String(file || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "");
+}
+
+function buildCandidateLanePackets(refillNeeded, sourceSlice, workCreationStep = null, splitPlan = null) {
+  if (!sourceSlice) return [];
+  return Array.from({ length: Math.min(refillNeeded, 6) }, (_item, index) => ({
+    candidateId: `refill-${index + 1}`,
+    kind: "safe-backlog-candidate",
+    status: "planned",
+    sourceRef: sourceSlice.ref,
+    sourceType: sourceSlice.type,
+    mutationMode: "dry_run_required",
+    workCreationStep: compactWorkCreationStepRef(workCreationStep),
+    splitSlice: splitPlan?.status === "split_proposed" ? splitPlan.slices[index] || null : null,
+    splitPlan:
+      splitPlan?.status === "split_proposed"
+        ? { status: index < splitPlan.slices.length ? "split_slice_assigned" : "split_parent_reference", parentStory: splitPlan.parentStory }
+        : splitPlan,
+    nextAction: workCreationNextAction(workCreationStep),
+  }));
+}
+
+function compactWorkCreationStepRef(workCreationStep = null) {
+  if (!workCreationStep?.workflow) return null;
+  return {
+    workflow: workCreationStep.workflow,
+    packetRef: "summary.workCreationStep.workCreationPacket",
+    reasonRef: "summary.workCreationStep.reason",
+  };
+}
+
+function workCreationNextAction(workCreationStep = null) {
+  if (!workCreationStep?.workflow) {
+    return "Use the narrowest BMAD workflow to create source-owned safe backlog work.";
+  }
+  if (workCreationStep.workflow === "bmad-correct-course") {
+    const sprintPath = workCreationStep.sourcePlanning?.sprintStatus?.path;
+    return sprintPath
+      ? `Run bmad-correct-course against ${sprintPath} to add source-owned backlog before story creation.`
+      : "Run bmad-correct-course to add source-owned backlog before story creation.";
+  }
+  if (workCreationStep.workflow === "bmad-create-epics-and-stories") {
+    return "Run bmad-create-epics-and-stories to create source-owned backlog before story creation.";
+  }
+  return `Run ${workCreationStep.workflow} to create source-owned safe backlog work.`;
+}
+
+export function buildCleanupPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = runOptions.runId;
+  const paths = managerRunPaths(runId, runOptions, context);
+  const oldManagerState = existsSync(paths.root);
+  const staleOwner = context.staleOwnerInspection || buildStaleOwnerInspection(runOptions, context);
+  const cleanupCandidates = Array.isArray(staleOwner.summary?.inspections)
+    ? staleOwner.summary.inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate")
+    : [];
+  const dirtyWorkspaces = Array.isArray(staleOwner.summary?.inspections)
+    ? staleOwner.summary.inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required")
+    : [];
+  const cleanupCandidateCount = staleOwner.summary?.cleanupCandidateCount || 0;
+  const dirtyWorkspaceCount = staleOwner.summary?.dirtyWorkspaceCount || 0;
+  const cleanupIds = cleanupCandidates.map((inspection) => inspection.id).filter(Boolean);
+  const closeoutPreview = cleanupIds.length > 0
+    ? context.closeAssignmentsSummary || runWorkspaceJson(["close-assignments", "--ids", cleanupIds.join(","), "--summary-json"], context)
+    : null;
+  const dirtyPreservation = dirtyWorkspaces.length > 0
+    ? context.dirtyWorkspacePreservation || buildDirtyWorkspacePreservation(runOptions, { ...context, staleOwnerInspection: staleOwner })
+    : null;
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      managerStatePresent: oldManagerState,
+      mutationMode: "dry_run_required",
+      cleanupScopes: ["manager-run-state", "merged-managed-lanes", "closed-assignments"],
+      staleOwnerCleanup: {
+        mutationMode: "dry_run_only",
+        targetCount: staleOwner.summary?.targetCount || 0,
+        cleanupCandidateCount,
+        dirtyWorkspaceCount,
+        takeoverApprovalCandidateCount: staleOwner.summary?.takeoverApprovalCandidateCount || 0,
+        closeoutPreview: closeoutPreview ? compactCloseoutPreview(closeoutPreview) : null,
+        dirtyPreservation: dirtyPreservation ? compactDirtyWorkspacePreservation(dirtyPreservation) : null,
+        retention: "metadata_only_stale_owner_cleanup_summary",
+      },
+    },
+    warnings: staleOwner.warnings || [],
+    nextActions: cleanupPlanNextActions({ cleanupCandidates, dirtyWorkspaces, cleanupCandidateCount, dirtyWorkspaceCount, closeoutPreview, dirtyPreservation }),
+  });
+}
+
+function compactCloseoutPreview(preview = {}) {
+  if (!preview || preview.ok === false || preview.error) {
+    return {
+      available: false,
+      error: sanitizeLedgerField(preview?.error || "close-assignments dry-run unavailable", "", 220),
+    };
+  }
+  const packetSummary = preview.summary || preview;
+  return {
+    available: true,
+    counts: packetSummary.counts || {},
+    statusCounts: packetSummary.statusCounts || {},
+    blockedReasons: Array.isArray(packetSummary.results)
+      ? packetSummary.results
+        .filter((result) => result.status === "blocked")
+        .map((result) => ({
+          assignmentId: sanitizeLedgerField(result.assignmentId || "", "", 140),
+          reason: sanitizeLedgerField(result.reason || "", "", 220),
+        }))
+        .slice(0, 6)
+      : [],
+    mutation: "none; close-assignments dry-run summary only",
+  };
+}
+
+function compactDirtyWorkspacePreservation(preservation = {}) {
+  if (!preservation || preservation.ok === false || preservation.error) {
+    return {
+      available: false,
+      error: sanitizeLedgerField(preservation?.error || "dirty workspace preservation unavailable", "", 220),
+    };
+  }
+  const packetSummary = preservation.summary || preservation;
+  return {
+    available: true,
+    targetCount: packetSummary.targetCount || 0,
+    preservedCount: packetSummary.preservedCount || 0,
+    evidence: Array.isArray(packetSummary.evidence)
+      ? packetSummary.evidence.map((entry) => ({
+          id: sanitizeLedgerField(entry.id || "", "", 140),
+          status: sanitizeLedgerField(entry.status || "", "", 80),
+          dirtyLineCount: Number(entry.dirtyLineCount || 0),
+          counts: entry.counts || {},
+          pathSamples: Array.isArray(entry.pathSamples) ? entry.pathSamples.slice(0, 12) : [],
+          truncated: entry.truncated === true,
+        })).slice(0, 6)
+      : [],
+    mutation: "none; dirty workspace preservation summary only",
+  };
+}
+
+function cleanupPlanNextActions({ cleanupCandidates = [], dirtyWorkspaces = [], cleanupCandidateCount = 0, dirtyWorkspaceCount = 0, closeoutPreview = null, dirtyPreservation = null } = {}) {
+  const actions = [];
+  const cleanupIds = cleanupCandidates.map((inspection) => inspection.id).filter(Boolean);
+  if (cleanupIds.length > 0) {
+    const closeoutSummary = closeoutPreview?.summary || closeoutPreview || {};
+    const blocked = Number(closeoutSummary.counts?.blocked || 0);
+    const closeable = Number(closeoutSummary.counts?.closeable || 0);
+    if (blocked > 0) {
+      actions.push({
+        code: "stale-assignment-closeout-approval-needed",
+        summary: `${blocked} stale assignment closeout(s) are blocked by existing closeout gates, usually owner mismatch.`,
+        nextAction: "Preserve close-assignments dry-run evidence and request explicit stale-record closeout approval before any --apply or gate expansion.",
+      });
+    } else {
+      actions.push({
+        code: "close-stale-assignment-records-dry-run",
+        summary: `Dry-run closeout for ${cleanupIds.length} stale assignment record(s) whose worktree, branch, and PR are absent.`,
+        nextAction: closeable > 0 ? "Review close-assignments dry-run evidence before any --apply." : `node ./scripts/codex-workspace.mjs close-assignments --ids ${shellSingleQuote(cleanupIds.join(","))} --summary-json`,
+      });
+    }
+  } else if (Number(cleanupCandidateCount || 0) > 0) {
+    actions.push({
+      code: "stale-owner-cleanup-inspection",
+      summary: `${cleanupCandidateCount} stale assignment cleanup candidate(s) need exact inspection IDs before closeout dry-run.`,
+      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+    });
+  }
+  if (dirtyWorkspaces.length > 0) {
+    const preservationSummary = dirtyPreservation?.summary || dirtyPreservation || {};
+    const preservedCount = Number(preservationSummary.preservedCount || 0);
+    const failedCount = Array.isArray(dirtyPreservation?.blockers) ? dirtyPreservation.blockers.length : 0;
+    const preservationComplete = preservedCount >= dirtyWorkspaces.length && failedCount === 0;
+    actions.push({
+      code: preservationComplete ? "dirty-workspace-preservation-complete" : "preserve-dirty-stale-workspace",
+      summary: preservationComplete
+        ? `${preservedCount} dirty stale workspace preservation packet(s) are available; cleanup and takeover apply remain gated.`
+        : `${dirtyWorkspaces.length} dirty stale workspace(s) must be preserved before closeout, takeover apply, or cleanup.`,
+      nextAction: preservationComplete
+        ? "Review preservation packet and stale-owner inspection before requesting explicit cleanup or takeover approval."
+        : "node ./scripts/manager-dirty-workspace-preservation.mjs --summary-json",
+    });
+  } else if (Number(dirtyWorkspaceCount || 0) > 0) {
+    actions.push({
+      code: "preserve-dirty-stale-workspace",
+      summary: `${dirtyWorkspaceCount} dirty stale workspace(s) need exact inspection evidence before closeout, takeover apply, or cleanup.`,
+      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+    });
+  }
+  actions.push({
+    code: "cleanup-apply-gated",
+    summary: "Cleanup application requires the existing workspace cleanup gates and explicit apply authority after dry-run evidence.",
+    nextAction: cleanupIds.length > 0 ? "Review close-assignments dry-run evidence before any --apply." : "Continue active worker monitoring.",
+  });
+  return actions;
+}
+
+export function buildDirtyWorkspacePreservation(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = runOptions.runId;
+  const staleOwner = context.staleOwnerInspection || buildStaleOwnerInspection(runOptions, context);
+  const dirtyWorkspaces = Array.isArray(staleOwner.summary?.inspections)
+    ? staleOwner.summary.inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required")
+    : [];
+  const evidence = dirtyWorkspaces.map((inspection) => preserveDirtyWorkspaceEvidence(inspection, context));
+  const failed = evidence.filter((entry) => !entry.ok);
+  return packet({
+    ok: failed.length === 0,
+    status: failed.length > 0 ? "blocked" : evidence.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      targetCount: dirtyWorkspaces.length,
+      preservedCount: evidence.filter((entry) => entry.ok).length,
+      evidence,
+      mutation: "none; dirty-worktree preservation evidence only",
+      retention: "metadata_only_dirty_status_counts_and_bounded_paths",
+    },
+    blockers: failed.map((entry) => ({
+      code: "dirty-workspace-preservation-failed",
+      message: entry.error || `Failed to preserve dirty workspace evidence for ${entry.id || "(missing id)"}.`,
+      nextAction: "Inspect stale-owner dry-run evidence before any takeover apply or cleanup decision.",
+    })),
+    warnings: evidence.length > 0 ? [{ code: "dirty-workspace-preservation-required", message: `${evidence.length} dirty stale workspace(s) remain gated from cleanup or takeover apply.` }] : [],
+    nextActions: evidence.length > 0
+      ? [{
+          code: "dirty-workspace-preservation-complete",
+          summary: "Dirty workspace evidence is preserved as bounded status metadata; cleanup and takeover apply remain gated.",
+          nextAction: "Review preservation packet and stale-owner inspection before requesting explicit cleanup or takeover approval.",
+        }]
+      : [{ code: "dirty-workspace-preservation-not-needed", summary: "No dirty stale workspace requires preservation.", nextAction: "Continue active worker monitoring." }],
+  });
+}
+
+function preserveDirtyWorkspaceEvidence(inspection = {}, context = {}) {
+  const id = sanitizeLedgerField(inspection.id || "", "", 140);
+  const worktreePath = sanitizeLedgerField(inspection.worktreePath || "", "", 260);
+  if (!id || !worktreePath) {
+    return { ok: false, id, worktreePath, error: "dirty workspace inspection is missing id or worktree path" };
+  }
+  if (!existsSync(worktreePath)) {
+    return { ok: false, id, worktreePath, error: "dirty workspace path no longer exists" };
+  }
+  const runner = context.gitRunner || spawnSync;
+  const result = runner("git", ["-C", worktreePath, "status", "--short", "--untracked-files=normal"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: context.timeoutMs || 5000,
+  });
+  if (result?.error) return { ok: false, id, worktreePath, error: result.error.message || "git status failed" };
+  if ((result?.status ?? 0) !== 0) return { ok: false, id, worktreePath, error: String(result?.stderr || result?.stdout || "git status failed").trim(), status: result?.status };
+  const lines = String(result?.stdout || "").split(/\r?\n/).filter(Boolean);
+  const counts = dirtyStatusCounts(lines);
+  return {
+    ok: true,
+    id,
+    kind: sanitizeLedgerField(inspection.kind || "", "", 80),
+    branch: sanitizeLedgerField(inspection.branch || "", "", 160),
+    owner: sanitizeLedgerField(inspection.owner || "", "", 160),
+    worktreePath,
+    status: lines.length > 0 ? "dirty" : "clean_after_refresh",
+    dirtyLineCount: lines.length,
+    counts,
+    pathSamples: lines.slice(0, 12).map((line) => sanitizeLedgerField(line.slice(3).trim(), "", 220)),
+    truncated: lines.length > 12,
+    mutation: "none; git status metadata only",
+  };
+}
+
+function dirtyStatusCounts(lines = []) {
+  const counts = { staged: 0, modified: 0, deleted: 0, renamed: 0, untracked: 0, other: 0 };
+  for (const line of lines) {
+    const indexStatus = line[0] || " ";
+    const worktreeStatus = line[1] || " ";
+    if (indexStatus !== " " && indexStatus !== "?") counts.staged += 1;
+    if (indexStatus === "?" && worktreeStatus === "?") counts.untracked += 1;
+    else if (indexStatus === "R" || worktreeStatus === "R") counts.renamed += 1;
+    else if (indexStatus === "D" || worktreeStatus === "D") counts.deleted += 1;
+    else if (worktreeStatus === "M" || indexStatus === "M") counts.modified += 1;
+    else if (indexStatus === " " && worktreeStatus === " ") counts.other += 1;
+  }
+  return counts;
+}
+
+export function buildDeliveryPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const lane = options.lane || context.lane || {};
+  const rawRequestedOperation = options.requestedOperation || context.requestedOperation || context.deliveryOperation || lane.requestedOperation || "";
+  const requestedOperation = normalizeDeliveryOperation(rawRequestedOperation);
+  const deliveryAuthority = evaluateDeliveryPhaseAuthority({ runId, rawRequestedOperation, requestedOperation, lane, deliveryPhase: options.deliveryPhase || context.deliveryPhase || lane.deliveryPhase, now: options.now || context.now });
+  const feedbackGate = findFeedbackDeliveryGate(lane, options.feedbackPlan || context.feedbackPlan || options.feedback || context.feedback);
+  const deliveryRequested = deliveryAuthority.status !== "not_requested";
+  const prStewardshipRequested = ["pr_create", "push"].includes(requestedOperation);
+  const mergePlan = buildMergeProofPlan({ lane, requestedOperation, deliveryAuthority });
+  const mergeEvidenceRequested = deliveryRequested && !prStewardshipRequested && requestedOperation !== "cleanup";
+  const missingEvidence = mergeEvidenceRequested ? mergePlan.missingEvidence : [];
+  const displayedMergePlan = prStewardshipRequested
+    ? { ...mergePlan, state: "not_requested", missingEvidence: [], mutationMode: "plan_only_no_merge_requested" }
+    : mergePlan;
+  const prPlan = buildPrStewardshipPlan({ lane, requestedOperation, deliveryAuthority, prDelivery: options.prDelivery || context.prDelivery || lane.prDelivery });
+  const cleanupPlan = buildDeliveryCleanupPlan(lane, { deliveryAuthority, requestedOperation });
+  const cleanupBlocked = deliveryRequested && (requestedOperation === "cleanup" || lane.mergeState === "merged") && cleanupPlan.state !== "ready" && cleanupPlan.state !== "deferred";
+  const authorityBlocked = deliveryAuthority.status !== "not_requested" && deliveryAuthority.status !== "active";
+  const prBlocked = prPlan.state === "blocked";
+  const blocked = authorityBlocked || prBlocked || missingEvidence.length > 0 || cleanupBlocked || Boolean(feedbackGate);
+  const authorityBlockers = deliveryAuthorityBlockers(deliveryAuthority);
+  const authorityMutationMode = authorityBlocked ? "blocked_until_delivery_phase_authority" : "existing_gates_required";
+  return packet({
+    ok: !blocked,
+    status: blocked ? "blocked" : "ready",
+    summary: {
+      runId,
+      mutationMode: "plan_only_existing_gates_required",
+      deliveryAuthority,
+      mergePlan: {
+        ...displayedMergePlan,
+        feedbackGate,
+        mutationMode: authorityMutationMode === "blocked_until_delivery_phase_authority" ? authorityMutationMode : displayedMergePlan.mutationMode,
+      },
+      prPlan,
+      cleanupPlan: authorityBlocked ? { ...cleanupPlan, mutationMode: "blocked_until_delivery_phase_authority" } : cleanupPlan,
+    },
+    blockers: [
+      ...authorityBlockers,
+      ...prStewardshipBlockers(prPlan),
+      ...missingEvidence.map((evidence) => ({
+        code: "delivery-evidence-missing",
+        message: `Delivery merge criterion is missing, stale, failing, or ambiguous: ${evidence}.`,
+        nextAction: mergePlan.threadAwareReviewInspectionRequired
+          ? "Inspect thread-aware review state for the exact head before other mergeability hypotheses, then collect exact existing-gate evidence before merge or cleanup."
+          : "Collect exact existing-gate evidence before merge or cleanup.",
+        affectedLane: mergePlan.affectedLane || null,
+        affectedBranch: mergePlan.affectedBranch || null,
+      })),
+      ...(cleanupBlocked
+        ? [
+            {
+              code: "cleanup-evidence-missing",
+              message: "Merged lane cleanup evidence is missing, stale, or outside expected scope.",
+              nextAction: "Collect expected worktree, branch, head, and assignment evidence before cleanup.",
+            },
+          ]
+        : []),
+      ...(feedbackGate
+        ? [
+            {
+              code: "delivery-blocking-feedback",
+              message: "Affected delivery is paused by unresolved operator feedback.",
+              nextAction: "Resolve or explicitly park blocking/correction feedback before merge.",
+            },
+          ]
+        : []),
+    ],
+  });
+}
+
+function normalizeDeliveryOperation(operation = "") {
+  const normalized = String(operation || "").trim().toLowerCase().replaceAll("-", "_");
+  if (["pr", "pull_request", "create_pr", "pr_create"].includes(normalized)) return "pr_create";
+  if (["push", "git_push", "pr_update", "update_pr", "update"].includes(normalized)) return "push";
+  if (["merge", "pr_merge"].includes(normalized)) return "merge";
+  if (["cleanup", "clean_up", "cleanup_apply"].includes(normalized)) return "cleanup";
+  return "";
+}
+
+function laneHasDeliveryIntent(lane = {}, requestedOperation = "") {
+  if (requestedOperation) return true;
+  return Boolean(
+    lane.deliveryGate ||
+    lane.prNumber ||
+    lane.mergeState === "merged" ||
+    lane.readyForDelivery === true ||
+    lane.deliveryRequested === true ||
+    lane.phase === "delivery_ready",
+  );
+}
+
+function hasRawDeliveryOperation(operation = "") {
+  return String(operation || "").trim().length > 0;
+}
+
+function deliveryPhaseEvidenceRefs(deliveryPhase = {}) {
+  const refs = [];
+  for (const value of [deliveryPhase.evidenceRef, deliveryPhase.evidence_ref]) {
+    if (value) refs.push(sanitizeLedgerField(value, "", 180));
+  }
+  if (Array.isArray(deliveryPhase.evidenceRefs)) {
+    for (const ref of deliveryPhase.evidenceRefs) {
+      const sanitized = sanitizeLedgerField(ref, "", 180);
+      if (sanitized) refs.push(sanitized);
+    }
+  }
+  return [...new Set(refs)].slice(0, 8);
+}
+
+function normalizeDeliveryPhaseList(value) {
+  if (Array.isArray(value)) return value.map((entry) => sanitizeLedgerField(entry, "", 180)).filter(Boolean);
+  const sanitized = sanitizeLedgerField(value, "", 180);
+  return sanitized ? [sanitized] : [];
+}
+
+function deliveryPhaseCleanupTargets(deliveryPhase = {}) {
+  const targets = deliveryPhase.allowedCleanupTargets || deliveryPhase.cleanupTargets || {};
+  return {
+    worktreePath: sanitizeLedgerField(targets.worktreePath || targets.worktree || "", "", 260),
+    localBranch: sanitizeLedgerField(targets.localBranch || "", "", 180),
+    remoteBranch: sanitizeLedgerField(targets.remoteBranch || "", "", 180),
+  };
+}
+
+function laneExpectedCleanupTargets(lane = {}) {
+  const expected = lane.expectedCleanup || {};
+  return {
+    worktreePath: sanitizeLedgerField(expected.worktreePath || "", "", 260),
+    localBranch: sanitizeLedgerField(expected.localBranch || "", "", 180),
+    remoteBranch: sanitizeLedgerField(expected.remoteBranch || "", "", 180),
+  };
+}
+
+function cleanupTargetsMatch(allowed = {}, expected = {}) {
+  const expectedValues = Object.entries(expected).filter(([, value]) => Boolean(value));
+  if (expectedValues.length === 0) return true;
+  return expectedValues.every(([key, value]) => allowed[key] === value);
+}
+
+function prDeliveryEvidenceRefs(prDelivery = {}) {
+  return normalizeCandidateStringList(prDelivery.evidenceRefs || prDelivery.evidence_refs || prDelivery.evidenceRef || prDelivery.evidence_ref);
+}
+
+function normalizePrEvidenceStringList(value, { limit = 80, maxLength = 260 } = {}) {
+  return sourceRefList(value).map((item) => sanitizeLedgerField(item, "", maxLength)).filter(Boolean).slice(0, limit);
+}
+
+function normalizeRiskSurfaceName(value = "") {
+  return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function normalizeRiskSurfaceList(value, { limit = 40 } = {}) {
+  return [...new Set(normalizePrEvidenceStringList(value, { limit, maxLength: 120 }).map(normalizeRiskSurfaceName).filter(Boolean))].slice(0, limit);
+}
+
+function classifyHighRiskDeliverySurfaces(changedFiles = [], explicitSurfaces = []) {
+  const surfaces = new Set(normalizeRiskSurfaceList(explicitSurfaces));
+  for (const file of changedFiles) {
+    const normalized = String(file || "").toLowerCase();
+    if (/(^|\/)(secret|secrets|credential|credentials|auth|token|tokens|api[-_]?key|password|\.env(?:\.|$)|id_rsa|id_dsa|id_ecdsa|id_ed25519|.*\.(?:pem|key|p12|pfx))/.test(normalized)) surfaces.add("credential_handling");
+    if (/\b(provider|openai|anthropic|model[-_ ]?provider|llm|api[-_ ]?client)\b/.test(normalized)) surfaces.add("provider_calls");
+    if (/(^|\/)(\.github\/workflows|deploy|deployment|release|ci|cd)(\/|\.|-|_)/.test(normalized)) surfaces.add("deployment_automation");
+    if (/(^|\/)(migrations?|schema|prisma|alembic|db)(\/|\.|-|_)/.test(normalized)) surfaces.add("database_schema_migration");
+    if (/(^|\/).*(cleanup|delete|remove|prune|destructive).*/.test(normalized)) surfaces.add("destructive_cleanup");
+    if (/(^|\/)(agents\.md|policy|policies|authority|permissions?|governance)(\/|\.|-|_)/.test(normalized)) surfaces.add("authority_or_policy_expansion");
+    if (/(^|\/).*(evidence|retention|raw[-_ ]?payload|provider[-_ ]?payload).*/.test(normalized)) surfaces.add("generated_evidence_retention");
+  }
+  return [...surfaces].sort();
+}
+
+function operationMatchesExpectedMutation(requestedOperation = "", expectedMutation = "") {
+  const requested = normalizeDeliveryOperation(requestedOperation);
+  const expected = normalizeDeliveryOperation(expectedMutation);
+  return requested && expected && requested === expected;
+}
+
+function buildPrStewardshipPlan({ lane = {}, requestedOperation = "", deliveryAuthority = {}, prDelivery = {} } = {}) {
+  if (!["pr_create", "push"].includes(requestedOperation)) {
+    return {
+      state: "not_requested",
+      mutationMode: "plan_only_no_pr_delivery_requested",
+      rawPayloadRetained: false,
+    };
+  }
+  const input = isPlainObject(prDelivery) ? prDelivery : {};
+  const laneId = sanitizeLedgerField(lane.laneId || lane.assignmentId || lane.taskId || "", "", 160);
+  const branch = sanitizeLedgerField(lane.branch || lane.localBranch || "", "", 180);
+  const baseBranch = sanitizeLedgerField(lane.baseBranch || "", "", 120);
+  const headSha = sanitizeLedgerField(lane.headSha || "", "", 80);
+  const expectedHeadSha = sanitizeLedgerField(lane.expectedHeadSha || "", "", 80);
+  const changedFiles = normalizePrEvidenceStringList(input.changedFiles || input.changed_files || lane.changedFiles || lane.changed_files, { limit: 120, maxLength: 260 });
+  const dirtyFiles = normalizePrEvidenceStringList(input.dirtyFiles || input.dirty_files || lane.dirtyFiles || lane.dirty_files, { limit: 120, maxLength: 260 });
+  const verificationCommand = sanitizeLedgerField(input.verificationCommand || input.verification_command || lane.verificationCommand || "", "", 260);
+  const verificationHeadSha = sanitizeLedgerField(input.verificationHeadSha || input.verification_head_sha || lane.verificationHeadSha || "", "", 80);
+  const evidenceRefs = prDeliveryEvidenceRefs(input);
+  const rollbackNote = sanitizeLedgerField(input.rollbackNote || input.rollback_note || "", "", 260);
+  const recoveryPath = sanitizeLedgerField(input.recoveryPath || input.recovery_path || "", "", 260);
+  const expectedMutation = sanitizeLedgerField(input.expectedMutation || input.expected_mutation || requestedOperation, requestedOperation, 120);
+  const dryRunApproved = input.dryRunApproved === true || input.policyApproved === true || input.dry_run_approved === true || input.policy_approved === true;
+  const dirtyState = sanitizeLedgerField(input.dirtyState || input.dirty_state || lane.dirtyState || lane.dirty_state || (lane.dirty === true ? "dirty" : ""), "", 120).toLowerCase();
+  const branchState = sanitizeLedgerField(input.branchState || input.branch_state || lane.branchState || lane.branch_state || "", "", 120).toLowerCase();
+  const baseState = sanitizeLedgerField(input.baseState || input.base_state || lane.baseState || lane.base_state || "", "", 120).toLowerCase();
+  const headState = sanitizeLedgerField(input.headState || input.head_state || lane.headState || lane.head_state || "", "", 120).toLowerCase();
+  const prNumber = lane.prNumber || input.prNumber || input.pr_number || null;
+  const prHeadSha = sanitizeLedgerField(lane.prHeadSha || input.prHeadSha || input.pr_head_sha || "", "", 80);
+  const localVerification = sanitizeLedgerField(input.localVerification || input.local_verification || lane.localVerification || "", "", 120);
+  const localVerificationHeadSha = sanitizeLedgerField(input.localVerificationHeadSha || input.local_verification_head_sha || lane.localVerificationHeadSha || lane.local_verification_head_sha || "", "", 80);
+  const highRiskSurfaces = classifyHighRiskDeliverySurfaces(changedFiles, input.highRiskSurfaces || input.high_risk_surfaces);
+  const authorityCoveredSurfaces = new Set(normalizeRiskSurfaceList(deliveryAuthority.authorityCoveredSurfaces || deliveryAuthority.authority_covered_surfaces));
+  const uncoveredHighRiskSurfaces = highRiskSurfaces.filter((surface) => !authorityCoveredSurfaces.has(surface));
+  const missingEvidence = [];
+
+  if (deliveryAuthority.status !== "active") missingEvidence.push("active_delivery_phase");
+  if (!laneId) missingEvidence.push("lane_id");
+  if (!branch) missingEvidence.push("branch");
+  if (!baseBranch) missingEvidence.push("base_branch");
+  if (!headSha) missingEvidence.push("head_sha");
+  if (!expectedHeadSha || expectedHeadSha !== headSha) missingEvidence.push("exact_head_sha");
+  if (!operationMatchesExpectedMutation(requestedOperation, expectedMutation)) missingEvidence.push("expected_mutation_mismatch");
+  if (requestedOperation === "push" && !prNumber) missingEvidence.push("pr_number");
+  if (requestedOperation === "push" && (!prHeadSha || prHeadSha !== headSha)) missingEvidence.push("pr_head_stale");
+  if (requestedOperation === "pr_create" && prNumber) missingEvidence.push("existing_pr_number");
+  if (localVerification !== "passed") missingEvidence.push("local_verification");
+  if (!localVerificationHeadSha || localVerificationHeadSha !== headSha) missingEvidence.push("local_verification_head");
+  if (changedFiles.length === 0) missingEvidence.push("changed_files");
+  if (!verificationCommand) missingEvidence.push("verification_command");
+  if (!verificationHeadSha || verificationHeadSha !== headSha) missingEvidence.push("verification_head_stale");
+  if (evidenceRefs.length === 0) missingEvidence.push("evidence_ref");
+  if (!rollbackNote) missingEvidence.push("rollback_note");
+  if (!recoveryPath) missingEvidence.push("recovery_path");
+  if (!dryRunApproved) missingEvidence.push("dry_run_policy_approval");
+  if (!dirtyState) missingEvidence.push("dirty_state");
+  else if (!["clean", "scoped", "lane_scoped"].includes(dirtyState)) missingEvidence.push("dirty_unrelated_changes");
+  if (["scoped", "lane_scoped"].includes(dirtyState) && (dirtyFiles.length === 0 || !dirtyFiles.every((file) => changedFiles.includes(file)))) missingEvidence.push("dirty_scope_mismatch");
+  if (!branchState) missingEvidence.push("branch_state");
+  else if (["ambiguous", "unknown", "stale"].includes(branchState)) missingEvidence.push("branch_state_ambiguous");
+  if (!baseState) missingEvidence.push("base_state");
+  else if (["ambiguous", "unknown", "stale"].includes(baseState)) missingEvidence.push("base_state_ambiguous");
+  if (!headState) missingEvidence.push("head_state");
+  else if (["ambiguous", "unknown", "stale"].includes(headState)) missingEvidence.push("head_state_ambiguous");
+  if (uncoveredHighRiskSurfaces.length > 0) missingEvidence.push("high_risk_surface_authority");
+
+  const ready = missingEvidence.length === 0;
+  const authorityBlocked = deliveryAuthority.status !== "active";
+  return {
+    state: ready ? "ready" : "blocked",
+    requestedOperation,
+    affectedLane: laneId || null,
+    affectedBranch: branch || null,
+    branch: branch || null,
+    baseBranch: baseBranch || null,
+    headSha: headSha || null,
+    changedFiles,
+    verificationCommand: verificationCommand || null,
+    verificationHeadSha: verificationHeadSha || null,
+    evidenceRefs,
+    rollbackNote: rollbackNote || null,
+    recoveryPath: recoveryPath || null,
+    expectedMutation,
+    dryRunApproved,
+    dirtyState: dirtyState || null,
+    dirtyFiles,
+    highRiskSurfaces,
+    authorityCoveredSurfaces: [...authorityCoveredSurfaces],
+    missingEvidence,
+    mutationMode: authorityBlocked ? "blocked_until_delivery_phase_authority" : ready ? "delivery_phase_pr_mutation_permitted" : "dry_run_required",
+    rawPayloadRetained: false,
+  };
+}
+
+function prStewardshipBlockers(prPlan = {}) {
+  if (prPlan.state !== "blocked") return [];
+  const missingEvidence = prPlan.missingEvidence || [];
+  const blockers = [];
+  if (missingEvidence.some((evidence) => evidence === "high_risk_surface_authority")) {
+    blockers.push({
+      code: "pr-stewardship-high-risk",
+      message: "PR creation or update includes high-risk surfaces outside the active delivery authority.",
+      nextAction: "Add explicit authority for the high-risk surfaces or split/park the delivery.",
+      affectedLane: prPlan.affectedLane || null,
+      affectedBranch: prPlan.affectedBranch || null,
+      highRiskSurfaces: prPlan.highRiskSurfaces || [],
+    });
+  }
+  if (missingEvidence.some((evidence) => evidence !== "active_delivery_phase" && evidence !== "high_risk_surface_authority")) {
+    blockers.push({
+      code: "pr-stewardship-evidence-missing",
+      message: `PR creation or update dry-run evidence is missing, stale, unsafe, or ambiguous: ${missingEvidence.filter((evidence) => evidence !== "active_delivery_phase").join(", ")}.`,
+      nextAction: "Collect scoped dry-run evidence, exact head, verification, rollback, and recovery metadata before PR mutation.",
+      affectedLane: prPlan.affectedLane || null,
+      affectedBranch: prPlan.affectedBranch || null,
+      missingEvidence,
+    });
+  }
+  return blockers;
+}
+
+function missingCleanupTargetFields(targets = {}, prefix = "cleanup_targets") {
+  return ["worktreePath", "localBranch", "remoteBranch"]
+    .filter((key) => !targets[key])
+    .map((key) => `${prefix}.${key}`);
+}
+
+function evaluateDeliveryPhaseAuthority({ runId, rawRequestedOperation = "", requestedOperation = "", lane = {}, deliveryPhase = null, now = null } = {}) {
+  const operation = requestedOperation || (lane.mergeState === "merged" ? "cleanup" : "merge");
+  const rawOperationProvided = hasRawDeliveryOperation(rawRequestedOperation);
+  const deliveryIntent = rawOperationProvided || laneHasDeliveryIntent(lane, requestedOperation);
+  const blockedOperations = ["pr_create", "push", "merge", "cleanup"];
+  const affectedLane = sanitizeLedgerField(lane.laneId || lane.assignmentId || lane.taskId || "", "", 160);
+  const affectedBranch = sanitizeLedgerField(lane.branch || lane.localBranch || "", "", 180);
+  if (!deliveryIntent) {
+    return {
+      status: "not_requested",
+      mutationMode: "plan_only_no_delivery_requested",
+      rawPayloadRetained: false,
+    };
+  }
+  if (!isPlainObject(deliveryPhase)) {
+    return {
+      status: "blocked_missing_contract",
+      missingContract: "delivery_phase",
+      requestedOperation: operation,
+      affectedLane: affectedLane || null,
+      affectedBranch: affectedBranch || null,
+      blockedOperations,
+      mutationMode: "blocked_until_delivery_phase_authority",
+      mismatchReasons: ["delivery_phase_missing"],
+      rawPayloadRetained: false,
+    };
+  }
+
+  const authorityFamily = sanitizeLedgerField(deliveryPhase.authorityFamily || deliveryPhase.authority_family || "", "", 120);
+  const authorityRef = sanitizeLedgerField(deliveryPhase.authorityRef || deliveryPhase.authority_ref || "", "", 180);
+  const approvalRef = sanitizeLedgerField(deliveryPhase.approvalRef || deliveryPhase.approval_ref || "", "", 180);
+  const phaseRunId = sanitizeLedgerField(deliveryPhase.runId || deliveryPhase.run_id || "", "", 120);
+  const phaseLaneId = sanitizeLedgerField(deliveryPhase.laneId || deliveryPhase.lane_id || "", "", 160);
+  const branchScope = normalizeDeliveryPhaseList(deliveryPhase.branchScope || deliveryPhase.branch_scope || deliveryPhase.branches);
+  const targetBase = sanitizeLedgerField(deliveryPhase.targetBase || deliveryPhase.target_base || "", "", 120);
+  const exactHeadSha = sanitizeLedgerField(deliveryPhase.exactHeadSha || deliveryPhase.exact_head_sha || deliveryPhase.headSha || "", "", 80);
+  const reviewThreadRequirement = sanitizeLedgerField(deliveryPhase.reviewThreadRequirement || deliveryPhase.review_thread_requirement || "", "", 120);
+  const checkRequirement = sanitizeLedgerField(deliveryPhase.checkRequirement || deliveryPhase.check_requirement || "", "", 120);
+  const localVerification = sanitizeLedgerField(deliveryPhase.localVerification || deliveryPhase.local_verification || "", "", 120);
+  const allowedOperations = normalizeDeliveryPhaseList(deliveryPhase.allowedOperations || deliveryPhase.allowed_operations).map(normalizeDeliveryOperation).filter(Boolean);
+  const authorityCoveredSurfaces = normalizeRiskSurfaceList(deliveryPhase.authorityCoveredSurfaces || deliveryPhase.authority_covered_surfaces || deliveryPhase.allowedHighRiskSurfaces || deliveryPhase.allowed_high_risk_surfaces);
+  const stopLines = normalizeDeliveryPhaseList(deliveryPhase.stopLines || deliveryPhase.stop_lines);
+  const rollbackPath = sanitizeLedgerField(deliveryPhase.rollbackPath || deliveryPhase.rollback_path || deliveryPhase.recoveryPath || "", "", 260);
+  const expiresAt = sanitizeLedgerField(deliveryPhase.expiresAt || deliveryPhase.expires_at || "", "", 80);
+  const evidenceRefs = deliveryPhaseEvidenceRefs(deliveryPhase);
+  const cleanupTargets = deliveryPhaseCleanupTargets(deliveryPhase);
+  const expectedCleanup = laneExpectedCleanupTargets(lane);
+  const missingCleanupTargets = missingCleanupTargetFields(cleanupTargets);
+  const missingExpectedCleanupTargets = missingCleanupTargetFields(expectedCleanup, "lane_expected_cleanup");
+  const laneId = sanitizeLedgerField(lane.laneId || lane.assignmentId || lane.taskId || "", "", 160);
+  const laneBranch = sanitizeLedgerField(lane.branch || lane.localBranch || "", "", 180);
+  const laneBase = sanitizeLedgerField(lane.baseBranch || "", "", 120);
+  const laneHead = sanitizeLedgerField(lane.headSha || "", "", 80);
+  const missingFields = [];
+  const mismatchReasons = [];
+
+  if (authorityFamily !== "delivery_phase") mismatchReasons.push("authority_family_invalid");
+  if (!authorityRef && !approvalRef) missingFields.push("authority_ref");
+  if (!phaseRunId && !expiresAt) missingFields.push("run_id_or_expiration");
+  if (phaseRunId && phaseRunId !== runId) mismatchReasons.push("run_id_mismatch");
+  if (laneId && !phaseLaneId) missingFields.push("lane_id");
+  if (phaseLaneId && laneId && phaseLaneId !== laneId) mismatchReasons.push("lane_scope_mismatch");
+  if (branchScope.length === 0) missingFields.push("branch_scope");
+  else if (!laneBranch) missingFields.push("lane_branch");
+  else if (laneBranch && !branchScope.includes(laneBranch)) mismatchReasons.push("branch_scope_mismatch");
+  if (!targetBase) missingFields.push("target_base");
+  else if (!laneBase) missingFields.push("lane_base");
+  else if (laneBase && targetBase !== laneBase) mismatchReasons.push("target_base_mismatch");
+  if (!exactHeadSha) missingFields.push("exact_head_sha");
+  else if (!laneHead) missingFields.push("lane_head_sha");
+  else if (laneHead && exactHeadSha !== laneHead) mismatchReasons.push("exact_head_mismatch");
+  if (!reviewThreadRequirement) missingFields.push("review_thread_requirement");
+  if (!checkRequirement) missingFields.push("check_requirement");
+  if (!localVerification) missingFields.push("local_verification");
+  if (allowedOperations.length === 0) missingFields.push("allowed_operations");
+  else if (rawOperationProvided && !requestedOperation) mismatchReasons.push("operation_unknown");
+  else if (operation && !allowedOperations.includes(operation)) mismatchReasons.push("operation_not_allowed");
+  if (!rollbackPath) {
+    missingFields.push("rollback_path");
+    mismatchReasons.push("rollback_path_missing");
+  }
+  if (stopLines.length === 0) {
+    missingFields.push("stop_lines");
+    mismatchReasons.push("stop_lines_missing");
+  }
+  if (evidenceRefs.length === 0) missingFields.push("evidence_ref");
+  missingFields.push(...missingCleanupTargets);
+  if (operation === "cleanup" || lane.mergeState === "merged") {
+    missingFields.push(...missingExpectedCleanupTargets);
+    if (!cleanupTargetsMatch(cleanupTargets, expectedCleanup)) mismatchReasons.push("cleanup_target_mismatch");
+  }
+  if (expiresAt) {
+    const expiryMs = Date.parse(expiresAt);
+    const nowMs = now ? Date.parse(now) : Date.now();
+    if (Number.isNaN(expiryMs)) mismatchReasons.push("expiration_invalid");
+    else if (Number.isNaN(nowMs)) mismatchReasons.push("now_invalid");
+    else if (!Number.isNaN(nowMs) && expiryMs <= nowMs) mismatchReasons.push("authority_expired");
+  }
+
+  const active = missingFields.length === 0 && mismatchReasons.length === 0;
+  return {
+    status: active ? "active" : "blocked_invalid_contract",
+    mutationMode: active ? "plan_only_delivery_phase_authorized" : "blocked_until_delivery_phase_authority",
+    authorityFamily,
+    authorityRef: authorityRef || approvalRef || null,
+    approvalRef: approvalRef || null,
+    requestedOperation: operation,
+    affectedLane: laneId || null,
+    affectedBranch: laneBranch || null,
+    allowedOperations,
+    authorityCoveredSurfaces,
+    branchScope,
+    targetBase: targetBase || null,
+    exactHeadSha: exactHeadSha || null,
+    reviewThreadRequirement: reviewThreadRequirement || null,
+    checkRequirement: checkRequirement || null,
+    localVerification: localVerification || null,
+    cleanupTargets,
+    rollbackPath: rollbackPath || null,
+    stopLines,
+    expiresAt: expiresAt || null,
+    missingFields,
+    mismatchReasons,
+    evidenceRefs,
+    rawPayloadRetained: false,
+  };
+}
+
+function deliveryAuthorityBlockers(deliveryAuthority = {}) {
+  if (deliveryAuthority.status === "blocked_missing_contract") {
+    return [{
+      code: "delivery-phase-authority-missing",
+      message: "Delivery requested without an active delivery_phase contract.",
+      nextAction: "Create or attach an Implementation Run Contract delivery_phase before PR creation, push, merge, or cleanup.",
+      affectedLane: deliveryAuthority.affectedLane || null,
+      affectedBranch: deliveryAuthority.affectedBranch || null,
+      blockedOperations: deliveryAuthority.blockedOperations || ["pr_create", "push", "merge", "cleanup"],
+    }];
+  }
+  if (deliveryAuthority.status === "blocked_invalid_contract") {
+    return [{
+      code: "delivery-phase-authority-invalid",
+      message: `Delivery_phase contract is incomplete, expired, or outside lane scope: ${(deliveryAuthority.missingFields || []).concat(deliveryAuthority.mismatchReasons || []).join(", ") || "invalid contract"}.`,
+      nextAction: "Repair delivery_phase authority evidence before PR creation, push, merge, or cleanup.",
+      affectedLane: deliveryAuthority.affectedLane || null,
+      affectedBranch: deliveryAuthority.affectedBranch || null,
+      missingFields: deliveryAuthority.missingFields || [],
+      mismatchReasons: deliveryAuthority.mismatchReasons || [],
+    }];
+  }
+  return [];
+}
+
+function findFeedbackDeliveryGate(lane = {}, feedbackInput = null) {
+  const plan = feedbackInput?.summary?.feedbackRoutes ? feedbackInput : null;
+  const routes = plan ? plan.summary.feedbackRoutes : Array.isArray(feedbackInput?.feedbackRoutes) ? feedbackInput.feedbackRoutes : [];
+  if (!Array.isArray(routes) || routes.length === 0) return null;
+  const laneIds = new Set(
+    [lane.laneId, lane.assignmentId, lane.taskId, lane.branch, lane.prNumber ? String(lane.prNumber) : ""]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
+  const gate = routes.find((route) => {
+    if (!["blocking", "correction"].includes(route.classification)) return false;
+    if (route.affectedDeliveryGate?.scope === "all_affected_delivery") return true;
+    const affected = String(route.affectedLane || route.affectedDeliveryGate?.affectedLane || "").trim();
+    return affected && laneIds.has(affected);
+  });
+  if (!gate) return null;
+  return {
+    feedbackId: gate.feedbackId,
+    classification: gate.classification,
+    affectedLane: gate.affectedLane || gate.affectedDeliveryGate?.affectedLane || "all_affected_delivery",
+    mergePolicy: gate.classification === "blocking" ? "prevent_affected_pr_merge" : "hold_until_correction_resolved",
+    recoveryPath: "resolve feedback route before delivery merge",
+  };
+}
+
+export function buildRecoveryPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const stateSignals = options.stateSignals || context.stateSignals || {};
+  const drift = options.drift || context.drift || {};
+  const retrySignals = Array.isArray(options.retrySignals || context.retrySignals) ? (options.retrySignals || context.retrySignals).filter(isPlainObject).slice(0, 12) : [];
+  const safeWork = options.safeWork || options.unblockedWork || context.safeWork || context.unblockedWork || {};
+  const reconciliation = buildSplitBrainReconciliation(stateSignals, { runId });
+  const autoRepair = buildAutoRepairDecision(drift, { runId, reconciliation, failureBudget: options.failureBudget ?? context.failureBudget });
+  const retryRoutes = retrySignals.map((signal) => buildRetryRoute(signal, { safeWork })).filter(Boolean);
+  const blockers = [];
+  if (reconciliation.action === "park_ambiguous_lane") {
+    blockers.push({ code: "split-brain-state", message: "Dispatcher, ledger, worker, workspace, Git, or PR state is incomplete or disagrees.", nextAction: "Park ambiguous lane and reconcile state before mutation." });
+  }
+  if (autoRepair.posture === "blocked") {
+    blockers.push({ code: "auto-repair-blocked", message: "Drift is not proven manager-owned low-risk repair.", nextAction: autoRepair.nextAction || "Do not auto-repair; investigate or ask operator." });
+  }
+  for (const route of retryRoutes.filter((entry) => entry.action === "park_lane")) {
+    const eligibleParallelWork = nonNegativeInteger(route.unblockedParallelWork?.eligibleCount) ?? 0;
+    blockers.push({
+      code: "retry-route-park-lane",
+      message: "Retry budget exhausted for unsafe or ownership-sensitive failure.",
+      nextAction: eligibleParallelWork > 0
+        ? "Keep the affected lane parked and continue unrelated safe work through existing gates."
+        : "Park the lane and preserve evidence before retrying.",
+      scope: eligibleParallelWork > 0 && route.posture === "routed" ? "affected_lane" : "manager",
+      affectedLane: route.affectedLane || null,
+      unblockedParallelWork: route.unblockedParallelWork || null,
+    });
+  }
+  if (retryRoutes.some((route) => route.posture === "blocked")) {
+    blockers.push({ code: "retry-route-blocked", message: "Retry route evidence is missing, stale, unsafe, or authority-expanding.", nextAction: "Record a compact RCA packet or park the lane before retrying." });
+  }
+  const hardBlockers = blockers.filter((blocker) => blocker.scope !== "affected_lane");
+  return packet({
+    ok: hardBlockers.length === 0,
+    status: hardBlockers.length > 0 ? "blocked" : retryRoutes.length > 0 || blockers.length > 0 ? "attention" : "ready",
+    summary: {
+      runId,
+      mutationMode: "plan_only_recovery_gates_required",
+      rawPayloadRetained: false,
+      reconciliation,
+      autoRepair,
+      retryRoutes,
+    },
+    blockers,
+    nextActions: retryRoutes.map((route) => ({ code: `retry-route-${route.action}`, summary: route.summary, nextAction: route.nextAction })),
+  });
+}
+
+function buildSplitBrainReconciliation(signals = {}, options = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const disagreements = [];
+  const dispatcher = normalizeReconciliationSurface("dispatcher", signals.dispatcher || signals.dispatcherState || signals.queue || signals.lease);
+  const ledger = normalizeReconciliationSurface("ledger", signals.ledger);
+  const workers = normalizeReconciliationSurface("workers", signals.workers || signals.workerSessions);
+  const tmux = normalizeReconciliationSurface("tmux", signals.tmux);
+  const assignment = normalizeReconciliationSurface("assignment", signals.assignment || signals.workspaceAssignment);
+  const workspace = normalizeReconciliationSurface("workspace", signals.workspace || signals.worktree || signals.workspaces);
+  const git = normalizeReconciliationSurface("git", signals.git);
+  const pr = normalizeReconciliationSurface("pr", signals.pr || signals.github);
+  const surfaces = { dispatcher, ledger, workers, tmux, assignment, workspace, git, pr };
+  const missingEvidence = ["dispatcher", "ledger", "workers", "tmux", "assignment", "workspace", "git", "pr"].filter((surface) => !surfaces[surface].available);
+  disagreements.push(...missingEvidence.map((surface) => `missing-${surface}`));
+  const laneIdDisagreements = compareSurfaceIdentity("laneId", surfaces, ["dispatcher", "ledger", "workers", "tmux", "assignment", "workspace", "git", "pr"]);
+  disagreements.push(...laneIdDisagreements.map((pair) => `${pair}-lane`));
+  const branchDisagreements = compareSurfaceIdentity("branch", surfaces, ["dispatcher", "ledger", "assignment", "workspace", "git", "pr"]);
+  disagreements.push(...branchDisagreements.map((pair) => `${pair}-branch`));
+  for (const [name, surface] of Object.entries(surfaces)) {
+    if (surface.available && surface.minimumEvidenceMissing) disagreements.push(`${name}-minimum-evidence-missing`);
+    if (surface.available && surface.ownerMissing === true) disagreements.push(`${name}-owner-missing`);
+    if (surface.managerOwned === false) disagreements.push(`${name}-owner-mismatch`);
+    if (surface.owner && runId && !isRunOwnedSurfaceOwner(surface.owner, runId) && !["git", "pr"].includes(name)) disagreements.push(`${name}-owner-mismatch`);
+    if (surface.available && surface.freshness !== "fresh") disagreements.push(`${name}-stale-evidence`);
+  }
+  if (git.headSha && pr.headSha && git.headSha !== pr.headSha) disagreements.push("git-pr-head");
+  if (git.available && !git.headSha) disagreements.push("git-head-missing");
+  if (pr.available && !pr.headSha) disagreements.push("pr-head-missing");
+  if (git.headMatches === false || pr.headMatches === false || git.branchHeadMismatch === true || pr.branchHeadMismatch === true) disagreements.push("git-pr-head");
+  if (git.baseBranch && pr.baseBranch && git.baseBranch !== pr.baseBranch) disagreements.push("git-pr-base");
+  if (ledger.state && tmux.state && ledger.state !== tmux.state) disagreements.push("ledger-tmux");
+  if (ledger.state && assignment.state && !compatibleLaneState(ledger.state, assignment.state)) disagreements.push("ledger-assignment");
+  if (pr.state && assignment.state && pr.state === "open" && /closed|done|merged/i.test(assignment.state)) disagreements.push("pr-assignment");
+  for (const [name, surface] of Object.entries(surfaces)) {
+    if (surface.dirty === true || surface.dirty === "unknown") disagreements.push(`${name}-dirty-state`);
+    if (surface.duplicateClaims > 0) disagreements.push(`${name}-duplicate-claim`);
+    if (surface.expiredLeases > 0 || surface.leaseState === "expired") disagreements.push(`${name}-expired-lease`);
+    if (surface.unknownSessions > 0 || surface.state === "unknown_session") disagreements.push(`${name}-unknown-session`);
+  }
+  const uniqueDisagreements = Array.from(new Set(disagreements));
+  const recoveryStatus = uniqueDisagreements.length > 0
+    ? missingEvidence.length > 0 ? "blocked_missing_evidence" : "parked_split_brain"
+    : "resume_safe_checkpoint";
+  const latestSafeCheckpoint = sanitizeLedgerField(ledger.latestSafeCheckpoint || ledger.eventWatermark || dispatcher.eventWatermark || "", "", 160) || null;
+  if (!latestSafeCheckpoint) uniqueDisagreements.push("checkpoint-missing");
+  const blocked = uniqueDisagreements.length > 0;
+  return {
+    status: blocked ? "blocked" : "ready",
+    action: blocked ? "park_ambiguous_lane" : "resume_after_reconcile",
+    recoveryStatus: blocked && recoveryStatus === "resume_safe_checkpoint" ? "blocked_missing_evidence" : recoveryStatus,
+    latestSafeCheckpoint,
+    nextAction: blocked ? "park_or_route_recovery_before_mutation" : "resume_from_latest_safe_checkpoint",
+    operatorAttentionRequired: blocked,
+    recoveryAttemptCount: nonNegativeInteger(ledger.recoveryAttemptCount ?? dispatcher.recoveryAttemptCount) ?? 0,
+    lastRecoveryAt: sanitizeLedgerField(ledger.lastRecoveryAt || dispatcher.lastRecoveryAt || "", "", 80) || null,
+    evidenceFreshness: reconciliationEvidenceFreshness(surfaces),
+    surfaces: sanitizeReconciliationSurfaces(surfaces),
+    disagreements: uniqueDisagreements,
+    missingEvidence,
+    policy: "reconcile_before_mutation",
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeReconciliationSurface(name, input = null) {
+  if (!isPlainObject(input)) return { surface: name, available: false, rawPayloadRetained: false };
+  const counts = input.counts || {};
+  const dirtyValue = input.dirty ?? input.dirtyState?.dirty ?? input.worktree?.dirty ?? input.worktree?.status ?? input.statusLines ?? input.dirtyFileCount ?? input.counts?.dirty;
+  const laneId = sanitizeLedgerField(input.laneId || input.assignmentId || input.taskId || input.workItemId || input.selectedLane || "", "", 140) || null;
+  const branch = sanitizeLedgerField(input.branch || input.currentBranch || input.headRef || input.prBranch || "", "", 160) || null;
+  const owner = sanitizeLedgerField(input.owner || input.leaseOwner || input.currentOwner || input.managerOwner || "", "", 140) || null;
+  const state = sanitizeLedgerField(input.state || input.status || input.phase || "", "", 80) || null;
+  const headSha = sanitizeLedgerField(input.headSha || input.localSha || input.sha || input.headRefOid || "", "", 80) || null;
+  const baseBranch = sanitizeLedgerField(input.baseBranch || input.base || "", "", 80) || null;
+  const minimumEvidenceMissing = reconciliationMinimumEvidenceMissing(name, { laneId, branch, owner, state, headSha, baseBranch });
+  const ownerMissing = ["dispatcher", "ledger", "workers", "tmux", "assignment", "workspace"].includes(name) && !owner && input.managerOwned !== true;
+  return {
+    surface: name,
+    available: true,
+    laneId,
+    branch,
+    owner,
+    managerOwned: typeof input.managerOwned === "boolean" ? input.managerOwned : undefined,
+    state,
+    leaseState: sanitizeLedgerField(input.leaseState || input.currentLease?.state || input.lease?.state || "", "", 80) || null,
+    headSha,
+    baseBranch,
+    headMatches: typeof input.headMatches === "boolean" ? input.headMatches : undefined,
+    branchHeadMismatch: typeof input.branchHeadMismatch === "boolean" ? input.branchHeadMismatch : undefined,
+    dirty: normalizeReconciliationDirtyState(dirtyValue),
+    duplicateClaims: nonNegativeInteger(input.duplicateClaims ?? input.duplicateClaimCount ?? counts.duplicateClaims) ?? 0,
+    expiredLeases: nonNegativeInteger(input.expiredLeases ?? input.expiredLeaseCount ?? counts.expired ?? counts.expiredLeases) ?? 0,
+    unknownSessions: nonNegativeInteger(input.unknownSessions ?? input.unknownSessionCount ?? counts.unknownSessions) ?? 0,
+    eventWatermark: sanitizeLedgerField(input.eventWatermark || input.watermark || "", "", 160) || null,
+    latestSafeCheckpoint: sanitizeLedgerField(input.latestSafeCheckpoint || input.checkpointId || "", "", 160) || null,
+    recoveryAttemptCount: nonNegativeInteger(input.recoveryAttemptCount),
+    lastRecoveryAt: sanitizeLedgerField(input.lastRecoveryAt || "", "", 80) || null,
+    freshness: sanitizeLedgerField(input.freshness || input.evidenceFreshness || "", "", 80) || null,
+    minimumEvidenceMissing,
+    ownerMissing,
+    rawPayloadRetained: false,
+  };
+}
+
+function reconciliationMinimumEvidenceMissing(name = "", surface = {}) {
+  if (["dispatcher", "ledger", "workers", "tmux", "assignment", "workspace"].includes(name)) {
+    return !(surface.laneId && surface.state);
+  }
+  if (name === "git" || name === "pr") {
+    return !(surface.laneId && surface.branch && surface.headSha && surface.baseBranch);
+  }
+  return false;
+}
+
+function normalizeReconciliationDirtyState(value) {
+  if (value === undefined || value === null || value === false) return false;
+  if (value === true) return true;
+  if (typeof value === "number") return value > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return false;
+  if (["clean", "false", "none", "no_changes", "no-changes", "unchanged"].includes(text)) return false;
+  if (["dirty", "modified", "uncommitted", "changed", "changes", "pending", "porcelain"].includes(text)) return true;
+  if (text === "unknown") return "unknown";
+  return "unknown";
+}
+
+function isRunOwnedSurfaceOwner(owner = "", runId = "") {
+  const normalizedOwner = String(owner || "").trim();
+  const normalizedRunId = String(runId || "").trim();
+  return Boolean(
+    normalizedOwner &&
+    normalizedRunId &&
+    (normalizedOwner === normalizedRunId || normalizedOwner.startsWith(`${normalizedRunId}/`)),
+  );
+}
+
+function compareSurfaceIdentity(field, surfaces = {}, names = []) {
+  const present = names
+    .map((name) => [name, surfaces[name]?.[field]])
+    .filter(([, value]) => value !== null && value !== undefined && value !== "");
+  if (present.length < 2) return [];
+  const [, expected] = present[0];
+  return present
+    .slice(1)
+    .filter(([, value]) => value !== expected)
+    .map(([name]) => `${present[0][0]}-${name}`);
+}
+
+function reconciliationEvidenceFreshness(surfaces = {}) {
+  const values = Object.values(surfaces)
+    .filter((surface) => surface?.available)
+    .map((surface) => surface.freshness || "unknown");
+  if (values.length === 0) return "missing";
+  if (values.some((value) => value === "stale")) return "stale";
+  if (values.every((value) => value === "fresh")) return "fresh";
+  return "mixed";
+}
+
+function sanitizeReconciliationSurfaces(surfaces = {}) {
+  const output = {};
+  for (const [name, surface] of Object.entries(surfaces)) {
+    output[name] = sanitizeCyclePacketValue(surface);
+  }
+  return output;
+}
+
+function compatibleLaneState(left = "", right = "") {
+  const pair = `${normalizeLaneState(left)}:${normalizeLaneState(right)}`;
+  return new Set(["active:assigned", "assigned:active", "closed:closed", "done:closed", "merged:closed"]).has(pair) || normalizeLaneState(left) === normalizeLaneState(right);
+}
+
+function normalizeLaneState(state = "") {
+  return String(state || "").trim().toLowerCase();
+}
+
+const AUTO_REPAIR_POLICIES = new Map([
+  ["manager-owned-ledger-append", {
+    action: "append_manager_ledger_event",
+    authorityBasis: "manager-owned-runtime-ledger-recovery",
+    objectType: "manager-ledger-event",
+    recoveryPath: "append manager-owned ledger event",
+    recordDestination: "manager-ledger-event",
+    resultDestination: "manager-ledger-event",
+  }],
+  ["stale-lock-release-after-expiry", {
+    action: "release_expired_manager_lock",
+    authorityBasis: "manager-owned-expired-lock-recovery",
+    objectType: "manager-lock",
+    recoveryPath: "release expired manager-owned lock",
+    recordDestination: "manager-ledger-event",
+    resultDestination: "manager-ledger-event",
+  }],
+  ["fake-worker-lease-expiry-return", {
+    action: "return_expired_fake_worker_lease",
+    authorityBasis: "manager-owned-fake-worker-lease-recovery",
+    objectType: "fake-worker-lease",
+    recoveryPath: "return expired fake-worker lease",
+    recordDestination: "manager-ledger-event",
+    resultDestination: "dispatcher-lease-event",
+  }],
+  ["duplicate-refill-lock-rejection", {
+    action: "reject_duplicate_refill_lock",
+    authorityBasis: "dispatcher-refill-lock-idempotency",
+    objectType: "dispatcher-refill-lock",
+    recoveryPath: "reject duplicate dispatcher refill lock",
+    recordDestination: "manager-ledger-event",
+    resultDestination: "dispatcher-refill-event",
+  }],
+  ["regenerate-dispatcher-summary", {
+    action: "regenerate_summary_from_dispatcher_truth",
+    authorityBasis: "authoritative-dispatcher-summary-regeneration",
+    objectType: "dispatcher-summary-packet",
+    recoveryPath: "regenerate dispatcher summary from dispatcher truth",
+    recordDestination: "manager-ledger-event",
+    resultDestination: "dispatcher-summary-packet",
+  }],
+]);
+
+const AUTO_REPAIR_ALIASES = new Map([
+  ["missing-manager-heartbeat", "manager-owned-ledger-append"],
+  ["missing-manager-checkpoint", "manager-owned-ledger-append"],
+  ["stale-manager-target", "regenerate-dispatcher-summary"],
+]);
+
+function autoRepairEvidenceRefs(value) {
+  return sourceRefList(value)
+    .map((item) => sanitizeLedgerField(item, "", 120))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function autoRepairRefsAreStructured(refs = []) {
+  return refs.length > 0 && refs.every((ref) => /^(dispatcher|ledger|workers|events|recovery|checkpoint|watermark|lease|lock)[\w./:-]*(?:\.json|\.ndjson|:[\w./-]+)?$/i.test(ref));
+}
+
+function autoRepairPreStateValue(preState, field) {
+  if (!isPlainObject(preState)) return "";
+  return sanitizeLedgerField(preState[field] || "", "", 160);
+}
+
+function autoRepairOwnerMatches(owner, runId) {
+  return isRunOwnedSurfaceOwner(owner, runId);
+}
+
+function buildAutoRepairDecision(drift = {}, context = {}) {
+  const condition = sanitizeLedgerField(drift.condition || "", "", 120);
+  if (!condition) {
+    return {
+      posture: "not_needed",
+      condition,
+      repairClass: null,
+      evidence: [],
+      recoveryPath: "",
+      recordDestination: null,
+      recordResult: false,
+      rawPayloadRetained: false,
+    };
+  }
+  const repairClass = AUTO_REPAIR_ALIASES.get(condition) || condition;
+  const policy = AUTO_REPAIR_POLICIES.get(repairClass) || null;
+  const evidence = autoRepairEvidenceRefs(drift.evidence || drift.evidenceRefs || []);
+  const recoveryEvidence = autoRepairEvidenceRefs(drift.recoveryEvidence || drift.recoveryEvidenceRefs || []);
+  const recoveryPath = sanitizeLedgerField(drift.recoveryPath || "", "", 200);
+  const suppliedAuthorityBasis = sanitizeLedgerField(drift.authorityBasis || "", "", 160);
+  const authorityBasis = suppliedAuthorityBasis || policy?.authorityBasis || "";
+  const idempotencyProof = sanitizeLedgerField(drift.idempotencyProof || drift.idempotency || "", "", 200);
+  const freshness = sanitizeLedgerField(drift.freshness || drift.evidenceFreshness || "", "", 80);
+  const repairAttemptCount = nonNegativeInteger(drift.repairAttemptCount ?? drift.attemptCount ?? drift.failureCount) ?? 0;
+  const failureBudget = Math.max(1, nonNegativeInteger(context.failureBudget) ?? 3);
+  const preState = isPlainObject(drift.preState || drift.before) ? sanitizeCyclePacketValue(drift.preState || drift.before) : null;
+  const objectType = sanitizeLedgerField(drift.objectType || autoRepairPreStateValue(preState, "objectType"), "", 120);
+  const targetRef = sanitizeLedgerField(drift.targetRef || drift.objectId || drift.targetId || autoRepairPreStateValue(preState, "targetRef") || autoRepairPreStateValue(preState, "id"), "", 160);
+  const owner = sanitizeLedgerField(drift.owner || drift.managerOwner || autoRepairPreStateValue(preState, "owner"), "", 160);
+  const ownershipProof = sanitizeLedgerField(drift.ownershipProof || drift.ownershipEvidence || "", "", 200);
+  const result = isPlainObject(drift.result) ? sanitizeCyclePacketValue(drift.result) : { status: "planned" };
+  const reconciliationReady = context.reconciliation?.status === "ready" && context.reconciliation?.action === "resume_after_reconcile";
+  const destructive = /\b(delete|remove|kill|reset|force|drop|purge|rm|unlink|checkout|revert|clean|prune|apply cleanup|cleanup apply)\b/i.test(recoveryPath);
+  const blockedReasons = [];
+  if (!policy) blockedReasons.push("condition-not-allowlisted");
+  if (!reconciliationReady) blockedReasons.push("reconciliation-not-ready");
+  if (drift.managerOwned !== true) blockedReasons.push("manager-ownership-not-proven");
+  if (!owner || !autoRepairOwnerMatches(owner, context.runId)) blockedReasons.push("manager-owner-mismatch");
+  if (!ownershipProof) blockedReasons.push("ownership-proof-missing");
+  if (!objectType) blockedReasons.push("object-type-missing");
+  else if (policy && objectType !== policy.objectType) blockedReasons.push("object-type-not-allowlisted");
+  if (!targetRef) blockedReasons.push("target-ref-missing");
+  if (drift.lowRisk !== true) blockedReasons.push("low-risk-not-proven");
+  if (freshness !== "fresh") blockedReasons.push("fresh-evidence-required");
+  if (evidence.length === 0) blockedReasons.push("evidence-missing");
+  else if (!autoRepairRefsAreStructured(evidence)) blockedReasons.push("evidence-ref-not-structured");
+  if (recoveryEvidence.length === 0) blockedReasons.push("recovery-evidence-missing");
+  else if (!autoRepairRefsAreStructured(recoveryEvidence)) blockedReasons.push("recovery-evidence-ref-not-structured");
+  if (!preState || Object.keys(preState).length === 0) blockedReasons.push("pre-state-missing");
+  if (!authorityBasis) blockedReasons.push("authority-basis-missing");
+  else if (policy && suppliedAuthorityBasis && suppliedAuthorityBasis !== policy.authorityBasis) blockedReasons.push("authority-basis-not-allowlisted");
+  if (!idempotencyProof) blockedReasons.push("idempotency-proof-missing");
+  if (!recoveryPath) blockedReasons.push("recovery-path-missing");
+  else if (policy && recoveryPath !== policy.recoveryPath) blockedReasons.push("recovery-path-not-allowlisted");
+  if (destructive) blockedReasons.push("destructive-recovery-path");
+  if (repairAttemptCount >= failureBudget) blockedReasons.push("repair-budget-exhausted");
+  const allowed = blockedReasons.length === 0;
+  const budgetExceeded = blockedReasons.includes("repair-budget-exhausted");
+  return {
+    posture: allowed ? "auto_repair_allowed" : "blocked",
+    condition,
+    repairClass,
+    action: policy?.action || null,
+    evidence,
+    recoveryEvidence,
+    recoveryPath,
+    authorityBasis,
+    objectType,
+    targetRef,
+    owner,
+    ownershipProof,
+    preState,
+    result,
+    idempotencyProof,
+    repairAttemptCount,
+    failureBudget,
+    blockedReasons,
+    route: budgetExceeded ? "investigation_or_parking" : allowed ? "auto_repair" : "park_or_block",
+    nextAction: allowed
+      ? `Apply allowlisted auto-repair: ${policy.action}.`
+      : budgetExceeded
+        ? "Route repeated auto-repair failure to investigation or park the lane."
+        : "Park or block drift until allowlist, ownership, freshness, authority, and idempotency evidence are complete.",
+    resultDestination: allowed ? policy.resultDestination : null,
+    recordDestination: allowed ? policy.recordDestination : null,
+    recordResult: allowed,
+    rawPayloadRetained: false,
+  };
+}
+
+function retryEvidenceRefs(value, options = {}) {
+  const limit = options.limit === false ? Number.POSITIVE_INFINITY : nonNegativeInteger(options.limit) ?? 8;
+  return sourceRefList(value)
+    .map((item) => sanitizeLedgerField(item, "", 140))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function retryRefsAreStructured(refs = []) {
+  return refs.length > 0 && refs.every((ref) => {
+    const text = String(ref || "");
+    if (!text || /(^|[\\/])\.\.([\\/]|$)/.test(text) || text.includes("\\")) return false;
+    if (/\b(stdout|stderr|stack|stacktrace|traceback|transcript|scrollback|provider[-_ ]?payload|raw[-_ ]?(prompt|output|log|text|payload)|completion|reasoning[-_ ]?trace|secret|token)\b/i.test(text)) return false;
+    return /^(events|checkpoint|watermark|dispatcher|ledger|workers|verification|sandbox|recovery|handoff|workspace)[\w./:-]*(?:\.json|\.ndjson|\.md|:[\w./-]+)?$/i.test(text);
+  });
+}
+
+function classifySandboxSignature(signature = "") {
+  const text = String(signature || "").toLowerCase();
+  if (/spawnsync\s+\/usr\/bin\/node\s+eperm/.test(text)) return "node-spawnsync-eperm";
+  if (/\.git\/worktrees|git worktree.*read-only|read-only file system.*worktrees/.test(text)) return "git-worktree-erofs";
+  if (/pnpm.*erofs|erofs.*pnpm|read-only file system.*pnpm/.test(text)) return "managed-worktree-pnpm-erofs";
+  if (/uv.*cache|cache\/uv|could not acquire lock|read-only file system.*uv/.test(text)) return "uv-cache-erofs";
+  if (/network.*denied|network.*blocked|dns|connection.*denied/.test(text)) return "network-denied";
+  if (/timeout before output|timed out before.*output|runner timeout/.test(text)) return "runner-timeout-before-output";
+  return "";
+}
+
+function normalizeRetryFailureClass(failureKind = "", signature = "") {
+  const sandboxSignature = classifySandboxSignature(signature || failureKind);
+  if (sandboxSignature) return { failureClass: "sandbox", sandboxSignatureClass: sandboxSignature, sandboxBoundary: true };
+  const text = String(failureKind || "").toLowerCase();
+  if (/assertion|verification|test failed|docs drift|lint/.test(text)) return { failureClass: "verification", sandboxSignatureClass: "", sandboxBoundary: false };
+  if (/ambiguous|model|reasoning/.test(text)) return { failureClass: "model", sandboxSignatureClass: "", sandboxBoundary: false };
+  if (/unsafe|unknown|ownership/.test(text)) return { failureClass: "ownership", sandboxSignatureClass: "", sandboxBoundary: false };
+  if (/investigate|forensic|import/.test(text)) return { failureClass: "investigation", sandboxSignatureClass: "", sandboxBoundary: false };
+  if (/path|tool|dependency|permission|quoting|same-command|command/.test(text)) return { failureClass: text.includes("same-command") ? "same-command" : sanitizeLedgerField(failureKind, "tool-churn", 80), sandboxSignatureClass: "", sandboxBoundary: false };
+  return { failureClass: sanitizeLedgerField(failureKind || "same-command", "same-command", 80), sandboxSignatureClass: "", sandboxBoundary: false };
+}
+
+function retryCommandLooksReadOnlyVerification(commandShape = "", signal = {}) {
+  if (signal.readOnlyVerification === true || signal.readOnly === true) return true;
+  const command = String(commandShape || "").trim().toLowerCase();
+  return /^(pnpm\s+run\s+(check|test)|pnpm\s+(check|test)|npm\s+run\s+(check|test)|node\s+(--test|tests\/|\.\/scripts\/check-)|uv\s+run\b.*\b(pytest|python\s+-m\s+pytest|check|test)\b)/.test(command);
+}
+
+function retryStableFailureSignature(classification = {}, commandShape = "", failureKind = "") {
+  const commandSlug = sanitizeLedgerField(commandShape || failureKind || "unknown", "unknown", 120)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "unknown";
+  if (classification.sandboxBoundary) {
+    return `sandbox:${classification.sandboxSignatureClass || "unknown"}:${commandSlug}`;
+  }
+  return `${classification.failureClass || "same-command"}:${commandSlug}`;
+}
+
+function retryActionForFailureClass(failureClass = "") {
+  if (failureClass === "sandbox" || failureClass === "same-command" || /tool|path|dependency|permission|quoting|command/.test(failureClass)) return "tool_churn_rca";
+  if (failureClass === "verification") return "focused_verification";
+  if (failureClass === "model") return "model_escalation";
+  if (failureClass === "ownership" || /unsafe|unknown|ownership/.test(failureClass)) return "park_lane";
+  if (failureClass === "investigation") return "investigation";
+  return "tool_churn_rca";
+}
+
+function retryRouteSafeWork(signal = {}, context = {}) {
+  const signalSource = signal.unblockedWork || signal.safeWork;
+  const contextSource = context.safeWork;
+  const signalProvided = isPlainObject(signalSource) && Object.keys(signalSource).length > 0;
+  const contextProvided = isPlainObject(contextSource) && Object.keys(contextSource).length > 0;
+  const signalProven = signalProvided &&
+    /dispatcher|lease|assignment/i.test(String(signalSource.source || "")) &&
+    String(signalSource.freshness || signalSource.evidenceFreshness || "").toLowerCase() === "fresh" &&
+    signalSource.authorityExpanding !== true &&
+    signalSource.requiresNewAuthority !== true;
+  const source = contextProvided
+    ? contextSource
+    : signalProven
+      ? signalSource
+      : {};
+  const affectedLane = sanitizeLedgerField(signal.laneId || signal.assignmentId || signal.workItemId || signal.affectedLane || "", "", 140);
+  const sourceLanes = sourceRefList(source.lanes || source.candidates || source.laneIds || [])
+    .map((lane) => sanitizeLedgerField(lane, "", 120))
+    .filter(Boolean)
+    .slice(0, 8);
+  const crossesAffectedLane = Boolean(affectedLane && sourceLanes.includes(affectedLane));
+  const lanes = sourceLanes.filter((lane) => lane !== affectedLane);
+  const candidateCount = nonNegativeInteger(source.eligibleCount ?? source.count ?? lanes.length) ?? lanes.length;
+  const eligibleCount = lanes.length > 0 ? Math.min(candidateCount, lanes.length) : candidateCount;
+  return {
+    eligibleCount,
+    lanes,
+    source: sanitizeLedgerField(source.source || "dispatcher-lease-truth", "dispatcher-lease-truth", 120),
+    freshness: sanitizeLedgerField(source.freshness || source.evidenceFreshness || (Object.keys(source).length > 0 ? "fresh" : "unknown"), "unknown", 80),
+    provenance: contextProvided ? "context-dispatcher-truth" : signalProven ? "signal-dispatcher-truth" : "none",
+    crossesAffectedLane,
+    authorityExpanding: source.authorityExpanding === true || source.requiresNewAuthority === true,
+    mutationPerformed: false,
+  };
+}
+
+function retryRouteResumeCriteria(action = "", override = "") {
+  const explicit = sanitizeLedgerField(override || "", "", 220);
+  if (explicit) return explicit;
+  if (action === "tool_churn_rca") return "Tool Churn RCA packet recorded and one next safe action completed.";
+  if (action === "focused_verification") return "Focused verification result recorded for the changed surface.";
+  if (action === "model_escalation") return "Model escalation decision recorded with bounded retry evidence.";
+  if (action === "park_lane") return "Ownership or safety evidence is supplied, or the lane is explicitly retired.";
+  return "Investigation packet recorded with a narrowed next action.";
+}
+
+function retryRouteStopLine(action = "", sandboxBoundary = false) {
+  if (sandboxBoundary) return "Do not change package manager, wrapper, scope, command shape, or test target; rerun the exact same read-only command outside the sandbox once.";
+  if (action === "tool_churn_rca") return "Stop when the same command/tool path fails twice; write a Tool Churn RCA packet before retrying.";
+  if (action === "focused_verification") return "Stop broad retries and run the smallest focused verification that proves or disproves the failure.";
+  if (action === "model_escalation") return "Stop same-model retries until model/reasoning escalation is recorded.";
+  if (action === "park_lane") return "Stop retries until ownership or safety evidence is clear.";
+  return "Stop retries and investigate the stable failure signature before another attempt.";
+}
+
+function retryRouteNextAction(action, sandboxBoundary = false) {
+  if (sandboxBoundary) return "Rerun the exact same read-only verification command outside the sandbox once and record the result.";
+  if (action === "tool_churn_rca") return "Follow docs/workflows/tool-churn-rca.md before retrying the same command path.";
+  if (action === "focused_verification") return "Run the smallest focused verification that proves or disproves the failure.";
+  if (action === "model_escalation") return "Escalate reasoning/model effort before retrying.";
+  if (action === "park_lane") return "Park the lane until ownership or safety is clear.";
+  return "Run a focused investigation before retrying.";
+}
+
+function retryRouteDurableFix(action = "", sandboxBoundary = false) {
+  if (sandboxBoundary) return "Record the sandbox boundary in lane evidence; add a wrapper or preflight only if the same boundary recurs outside sandbox constraints.";
+  if (action === "tool_churn_rca") return "Create or update durable fix guidance after RCA identifies the root cause.";
+  if (action === "focused_verification") return "Add focused verification coverage or narrow the failing check to the changed surface.";
+  if (action === "model_escalation") return "Record the escalation rule so future similar failures choose the right model before retry.";
+  if (action === "park_lane") return "Record resume criteria and keep the parked lane visible until ownership or safety clears.";
+  return "Record the investigation result and one durable fix recommendation.";
+}
+
+function buildRetryRoute(signal = {}, context = {}) {
+  const count = nonNegativeInteger(signal.failureCount ?? signal.count) ?? 0;
+  const failureBudget = Math.max(2, nonNegativeInteger(signal.failureBudget ?? signal.budget) ?? 2);
+  const canonicalToolInput = signal.toolPath || signal.commandId || signal.commandShape || signal.command || "";
+  const toolPath = sanitizeLedgerField(canonicalToolInput, "", 160) || "unknown-tool";
+  const commandShape = sanitizeLedgerField(signal.commandShape || signal.command || toolPath, toolPath, 200);
+  const laneId = sanitizeLedgerField(signal.laneId || signal.assignmentId || signal.workItemId || signal.affectedLane || "", "", 140) || null;
+  const failureKind = sanitizeLedgerField(signal.failureKind || signal.failureClass || "same-command", "same-command", 100);
+  const rawFailureSignature = sanitizeLedgerField(signal.failureSignature || signal.signature || "", "", 180);
+  const classification = normalizeRetryFailureClass(failureKind, rawFailureSignature || `${failureKind}:${toolPath}`);
+  const readOnlyVerification = retryCommandLooksReadOnlyVerification(commandShape, signal);
+  const immediateSandboxBoundary = classification.sandboxBoundary && readOnlyVerification;
+  if (count < failureBudget && !immediateSandboxBoundary) return null;
+  const failureSignature = retryStableFailureSignature(classification, commandShape, failureKind);
+  const action = retryActionForFailureClass(classification.failureClass);
+  const allEvidenceRefs = retryEvidenceRefs(signal.evidence || signal.evidenceRefs || [], { limit: false });
+  const evidenceRefs = allEvidenceRefs.slice(0, 8);
+  const freshness = sanitizeLedgerField(signal.freshness || signal.evidenceFreshness || "fresh", "fresh", 80);
+  const blockedReasons = [];
+  if (!toolPath || toolPath === "unknown-tool") blockedReasons.push("command-shape-missing");
+  if (!commandShape) blockedReasons.push("command-shape-missing");
+  if (!laneId) blockedReasons.push("affected-lane-missing");
+  if (freshness !== "fresh") blockedReasons.push("fresh-evidence-required");
+  if (evidenceRefs.length === 0) blockedReasons.push("evidence-missing");
+  else if (!retryRefsAreStructured(allEvidenceRefs)) blockedReasons.push("evidence-ref-not-structured");
+  if (classification.sandboxBoundary && !readOnlyVerification) blockedReasons.push("sandbox-rerun-requires-read-only-verification");
+  if (signal.authorityExpanding === true || signal.requiresNewAuthority === true) blockedReasons.push("authority-expanding-route");
+  if (signal.crossLaneAmbiguous === true) blockedReasons.push("cross-lane-ambiguous");
+  const blocked = blockedReasons.length > 0;
+  const safeWork = retryRouteSafeWork(signal, context);
+  const invalidSignalSafeWork = isPlainObject(signal.unblockedWork || signal.safeWork) && Object.keys(signal.unblockedWork || signal.safeWork).length > 0 && safeWork.provenance === "none";
+  if (invalidSignalSafeWork) blockedReasons.push("unblocked-work-not-dispatcher-proven");
+  if (safeWork.provenance !== "none" && safeWork.freshness !== "fresh") blockedReasons.push("unblocked-work-not-fresh");
+  if (safeWork.provenance !== "none" && !/dispatcher|lease|assignment/i.test(safeWork.source)) blockedReasons.push("unblocked-work-not-dispatcher-proven");
+  if (safeWork.authorityExpanding) blockedReasons.push("unblocked-work-authority-expanding");
+  if (safeWork.crossesAffectedLane) blockedReasons.push("unblocked-work-crosses-affected-lane");
+  const blockedAfterSafeWork = blockedReasons.length > 0;
+  const retryStopLine = retryRouteStopLine(action, classification.sandboxBoundary);
+  const oneNextSafeAction = retryRouteNextAction(action, classification.sandboxBoundary);
+  const durableFixRecommendation = retryRouteDurableFix(action, classification.sandboxBoundary);
+  const resumeCriteria = retryRouteResumeCriteria(action, signal.resumeCriteria);
+  return {
+    posture: blockedAfterSafeWork ? "blocked" : "routed",
+    toolPath,
+    commandShape,
+    affectedLane: laneId,
+    failureKind,
+    failureClass: classification.failureClass,
+    failureSignature,
+    sandboxBoundary: classification.sandboxBoundary,
+    sandboxSignatureClass: classification.sandboxSignatureClass || null,
+    readOnlyVerification,
+    failureCount: count,
+    failureBudget,
+    intendedAction: action,
+    action: blockedAfterSafeWork && action !== "park_lane" ? "investigation" : action,
+    authorityBasis: "bounded-retry-route-policy",
+    evidenceRefs,
+    evidenceFreshness: freshness,
+    blockedReasons,
+    retryStopLine,
+    oneNextSafeAction,
+    durableFixRecommendation,
+    resumeCriteria,
+    rerunRequirement: classification.sandboxBoundary && readOnlyVerification ? "Rerun the exact same read-only verification command outside the sandbox once." : null,
+    parkedLane: action === "park_lane" || blockedAfterSafeWork
+      ? {
+          laneId,
+          visible: true,
+          resumeCriteria,
+        }
+      : null,
+    unblockedParallelWork: safeWork,
+    summary: blockedAfterSafeWork
+      ? `Retry route blocked for ${failureKind}; missing safe routing evidence.`
+      : `Retry budget exhausted for ${failureKind}; route to ${action.replaceAll("_", " ")}.`,
+    nextAction: blockedAfterSafeWork ? "Park or investigate until retry-route evidence is complete." : oneNextSafeAction,
+    rawPayloadRetained: false,
+  };
+}
+
+function deliveryMissingEvidence(lane = {}) {
+  return buildMergeProofPlan({ lane }).missingEvidence;
+}
+
+function buildMergeProofPlan({ lane = {}, requestedOperation = "", deliveryAuthority = {} } = {}) {
+  const laneId = sanitizeLedgerField(lane.laneId || lane.assignmentId || lane.taskId || "", "", 160);
+  const branch = sanitizeLedgerField(lane.branch || lane.localBranch || "", "", 180);
+  const headSha = sanitizeLedgerField(lane.headSha || "", "", 80);
+  const expectedHeadSha = sanitizeLedgerField(lane.expectedHeadSha || "", "", 80);
+  const prHeadSha = sanitizeLedgerField(lane.prHeadSha || "", "", 80);
+  const prNumber = normalizePrNumber(lane.prNumber || lane.pr_number);
+  const baseBranch = sanitizeLedgerField(lane.baseBranch || "", "", 120);
+  const authorityBase = sanitizeLedgerField(deliveryAuthority.targetBase || "", "", 120);
+  const checks = normalizeMergeStateValue(lane.checks || lane.checkState || lane.checksState || "");
+  const checksHeadSha = sanitizeLedgerField(lane.checksHeadSha || lane.checks_head_sha || "", "", 80);
+  const checksEvidenceKind = normalizeMergeStateValue(lane.checksEvidenceKind || lane.checks_evidence_kind || "");
+  const failingReportedChecks = Number(lane.failingReportedChecks ?? lane.failing_reported_checks ?? Number.NaN);
+  const reviewThreads = normalizeMergeStateValue(lane.reviewThreads || lane.reviewThreadState || lane.review_threads || "");
+  const reviewThreadsHeadSha = sanitizeLedgerField(lane.reviewThreadsHeadSha || lane.review_threads_head_sha || "", "", 80);
+  const reviewEvidenceKind = normalizeMergeStateValue(lane.reviewEvidenceKind || lane.review_evidence_kind || "");
+  const requestedChanges = normalizeMergeStateValue(lane.requestedChanges || lane.requested_changes || lane.reviewDecision || lane.review_decision || "");
+  const requestedChangesHeadSha = sanitizeLedgerField(lane.requestedChangesHeadSha || lane.requested_changes_head_sha || "", "", 80);
+  const localVerification = normalizeMergeStateValue(lane.localVerification || lane.local_verification || "");
+  const localVerificationHeadSha = sanitizeLedgerField(lane.localVerificationHeadSha || lane.local_verification_head_sha || "", "", 80);
+  const localVerificationCommand = sanitizeLedgerField(lane.localVerificationCommand || lane.local_verification_command || lane.verificationCommand || "", "", 260);
+  const mergeState = normalizeMergeStateValue(lane.mergeState || lane.merge_state || "");
+  const deliveryOperation = requestedOperation || deliveryAuthority.requestedOperation || "";
+  const allowedMergeStates = deliveryOperation === "cleanup" ? ["merged"] : ["clean"];
+  const mergeability = normalizeMergeStateValue(lane.mergeability || lane.mergeabilityState || lane.mergeability_state || "");
+  const threadAwareReviewInspected = lane.threadAwareReviewInspected === true || lane.thread_aware_review_inspected === true;
+  const changedFiles = normalizePrEvidenceStringList(lane.changedFiles || lane.changed_files, { limit: 120, maxLength: 260 });
+  const changedFilesHeadSha = sanitizeLedgerField(lane.changedFilesHeadSha || lane.changed_files_head_sha || lane.diffHeadSha || lane.diff_head_sha || "", "", 80);
+  const highRiskSurfaces = classifyHighRiskDeliverySurfaces(changedFiles, lane.highRiskSurfaces || lane.high_risk_surfaces);
+  const authorityCoveredSurfaces = new Set(normalizeRiskSurfaceList(deliveryAuthority.authorityCoveredSurfaces || deliveryAuthority.authority_covered_surfaces));
+  const uncoveredHighRiskSurfaces = highRiskSurfaces.filter((surface) => !authorityCoveredSurfaces.has(surface));
+  const draftEvidence = normalizeDraftEvidence(lane);
+  const mergeResult = buildMergeResultEvidence(lane.mergeResult || lane.merge_result);
+  const criteria = [];
+
+  criteria.push(mergeCriterion({
+    key: "managerOwnedLane",
+    source: "lane.managerOwned",
+    expected: true,
+    observed: lane.managerOwned === true,
+    proven: lane.managerOwned === true,
+  }));
+  criteria.push(mergeCriterion({
+    key: "codexWorkspaceGate",
+    source: "lane.workspaceGate",
+    expected: "codex-workspace",
+    observed: lane.workspaceGate || null,
+    proven: lane.workspaceGate === "codex-workspace",
+  }));
+  criteria.push(mergeCriterion({
+    key: "finishPrGate",
+    source: "lane.deliveryGate",
+    expected: "finish-pr",
+    observed: lane.deliveryGate || null,
+    proven: lane.deliveryGate === "finish-pr",
+  }));
+  criteria.push(mergeCriterion({
+    key: "prNumber",
+    source: "lane.prNumber",
+    expected: "positive integer",
+    observed: lane.prNumber || lane.pr_number || null,
+    proven: prNumber !== null,
+  }));
+  criteria.push(mergeCriterion({
+    key: "expectedBaseBranch",
+    missingKey: "baseBranch",
+    source: "delivery_phase.targetBase+lane.baseBranch",
+    expected: authorityBase || "present",
+    observed: baseBranch || null,
+    proven: Boolean(baseBranch) && (!authorityBase || authorityBase === baseBranch),
+  }));
+  criteria.push(mergeCriterion({
+    key: "prNonDraft",
+    source: "lane.prDraft+lane.isDraft",
+    expected: false,
+    observed: draftEvidence.observed,
+    proven: draftEvidence.proven,
+    reason: draftEvidence.reason,
+  }));
+  criteria.push(mergeCriterion({
+    key: "exactReviewedHeadSha",
+    missingKey: "exactHeadSha",
+    source: "lane.headSha+lane.expectedHeadSha",
+    expected: expectedHeadSha || "present",
+    observed: headSha || null,
+    headSha: headSha || null,
+    proven: Boolean(headSha) && Boolean(expectedHeadSha) && headSha === expectedHeadSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "prHeadSha",
+    source: "lane.prHeadSha",
+    expected: headSha || "exact head",
+    observed: prHeadSha || null,
+    headSha: prHeadSha || null,
+    proven: Boolean(headSha) && prHeadSha === headSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "checkRunExactHead",
+    missingKey: "checksPassed",
+    source: checksEvidenceKind || "lane.checks",
+    expected: "all reported checks passed for exact head",
+    observed: checks || null,
+    headSha: checksHeadSha || null,
+    proven: ["passed", "success", "successful"].includes(checks) && checksHeadSha === headSha && checkEvidenceIsSpecific(checksEvidenceKind) && failingReportedChecks === 0,
+    reason: !checkEvidenceIsSpecific(checksEvidenceKind)
+      ? "green_rollup_or_unsourced_checks_are_not_sufficient"
+      : failingReportedChecks !== 0
+        ? "failing_reported_checks_not_proven_zero"
+        : "",
+  }));
+  criteria.push(mergeCriterion({
+    key: "checksHeadSha",
+    source: "lane.checksHeadSha",
+    expected: headSha || "exact head",
+    observed: checksHeadSha || null,
+    headSha: checksHeadSha || null,
+    proven: Boolean(headSha) && checksHeadSha === headSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "threadAwareReviewState",
+    missingKey: "reviewThreadsResolved",
+    source: reviewEvidenceKind || "lane.reviewThreads",
+    expected: "resolved thread-aware review state",
+    observed: reviewThreads || null,
+    headSha: reviewThreadsHeadSha || null,
+    proven: reviewThreads === "resolved" && reviewThreadsHeadSha === headSha && reviewEvidenceIsThreadAware(reviewEvidenceKind),
+    reason: reviewEvidenceIsThreadAware(reviewEvidenceKind) ? "" : "flat_comments_are_not_thread_aware_review_proof",
+  }));
+  criteria.push(mergeCriterion({
+    key: "reviewThreadsHeadSha",
+    source: "lane.reviewThreadsHeadSha",
+    expected: headSha || "exact head",
+    observed: reviewThreadsHeadSha || null,
+    headSha: reviewThreadsHeadSha || null,
+    proven: Boolean(headSha) && reviewThreadsHeadSha === headSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "threadAwareReviewInspection",
+    source: "lane.threadAwareReviewInspected",
+    expected: true,
+    observed: threadAwareReviewInspected,
+    headSha: reviewThreadsHeadSha || null,
+    proven: threadAwareReviewInspected === true && reviewEvidenceIsThreadAware(reviewEvidenceKind),
+  }));
+  criteria.push(mergeCriterion({
+    key: "requestedChangesCleared",
+    source: "lane.requestedChanges",
+    expected: "none",
+    observed: requestedChanges || null,
+    headSha: requestedChangesHeadSha || null,
+    proven: ["none", "no_requested_changes", "none_requested", "cleared"].includes(requestedChanges) && requestedChangesHeadSha === headSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "localVerificationPassed",
+    source: "lane.localVerification",
+    expected: "passed",
+    observed: localVerification || null,
+    headSha: localVerificationHeadSha || null,
+    proven: localVerification === "passed",
+  }));
+  criteria.push(mergeCriterion({
+    key: "localVerificationHeadSha",
+    source: "lane.localVerificationHeadSha",
+    expected: headSha || "exact head",
+    observed: localVerificationHeadSha || null,
+    headSha: localVerificationHeadSha || null,
+    proven: Boolean(headSha) && localVerificationHeadSha === headSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "localVerificationCommand",
+    source: "lane.localVerificationCommand",
+    expected: "present",
+    observed: localVerificationCommand || null,
+    proven: Boolean(localVerificationCommand),
+  }));
+  criteria.push(mergeCriterion({
+    key: "mergeStateClean",
+    source: "lane.mergeState",
+    expected: deliveryOperation === "cleanup" ? "merged" : "clean",
+    observed: mergeState || null,
+    proven: allowedMergeStates.includes(mergeState),
+  }));
+  criteria.push(mergeCriterion({
+    key: "mergeabilityKnownClean",
+    source: "lane.mergeability",
+    expected: "mergeable",
+    observed: mergeability || null,
+    proven: ["mergeable", "clean", "mergeable_clean"].includes(mergeability),
+  }));
+  criteria.push(mergeCriterion({
+    key: "changedFilesEvidence",
+    missingKey: "changedFiles",
+    source: "lane.changedFiles+lane.changedFilesHeadSha",
+    expected: "changed files bound to exact head",
+    observed: changedFiles.length,
+    headSha: changedFilesHeadSha || null,
+    proven: changedFiles.length > 0 && changedFilesHeadSha === headSha,
+  }));
+  criteria.push(mergeCriterion({
+    key: "highRiskSurfacesCovered",
+    source: "lane.changedFiles+delivery_phase.authorityCoveredSurfaces",
+    expected: "no uncovered high-risk surfaces",
+    observed: uncoveredHighRiskSurfaces,
+    headSha: changedFilesHeadSha || null,
+    proven: changedFiles.length > 0 && changedFilesHeadSha === headSha && uncoveredHighRiskSurfaces.length === 0,
+  }));
+  if (mergeResult) {
+    criteria.push(mergeCriterion({
+      key: "mergeResultComplete",
+      source: "lane.mergeResult",
+      expected: "complete merge result metadata",
+      observed: mergeResult.missingFields,
+      headSha: mergeResult.headSha || null,
+      proven: mergeResult.missingFields.length === 0,
+    }));
+  }
+
+  const missingEvidence = mergeMissingEvidence(criteria);
+  const ready = missingEvidence.length === 0;
+  const ambiguousMergeability = ["blocked", "unknown", "ambiguous", "dirty", "pending", "unstable"].includes(mergeability);
+  return {
+    state: ready ? "ready" : "blocked",
+    affectedLane: laneId || null,
+    affectedBranch: branch || null,
+    prNumber,
+    prUrl: sanitizeLedgerField(lane.prUrl || lane.pr_url || "", "", 260) || null,
+    exactHeadSha: headSha || null,
+    baseBranch: baseBranch || null,
+    gates: ["codex-workspace.mjs finish-pr", "GitHub PR exact-head merge", "thread-aware review-thread check", "exact-head check runs", "local verification", "cleanup-current/cleanup-merged", "blocking-feedback gate"],
+    criteria,
+    highRiskSurfaces,
+    authorityCoveredSurfaces: [...authorityCoveredSurfaces],
+    missingEvidence,
+    threadAwareReviewInspectionRequired: ambiguousMergeability || !reviewEvidenceIsThreadAware(reviewEvidenceKind) || !threadAwareReviewInspected,
+    result: mergeResult,
+    mutationMode: ready ? "existing_gates_required" : "blocked_until_merge_criteria_proven",
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeDraftEvidence(lane = {}) {
+  const hasPrDraft = Object.hasOwn(lane, "prDraft") || Object.hasOwn(lane, "pr_draft");
+  const hasIsDraft = Object.hasOwn(lane, "isDraft") || Object.hasOwn(lane, "is_draft");
+  const prDraft = hasPrDraft ? Boolean(lane.prDraft ?? lane.pr_draft) : null;
+  const isDraft = hasIsDraft ? Boolean(lane.isDraft ?? lane.is_draft) : null;
+  const values = [prDraft, isDraft].filter((value) => value !== null);
+  if (values.length === 0) return { observed: null, proven: false, reason: "draft_state_missing" };
+  if (values.includes(true)) return { observed: values, proven: false, reason: "pr_is_draft" };
+  if (values.length > 1 && new Set(values).size > 1) return { observed: values, proven: false, reason: "draft_state_conflict" };
+  return { observed: false, proven: true, reason: "" };
+}
+
+function mergeMissingEvidence(criteria = []) {
+  const missing = [];
+  const add = (value) => {
+    if (value && !missing.includes(value)) missing.push(value);
+  };
+  for (const criterion of criteria.filter((item) => item.status !== "proven")) {
+    add(criterion.missingKey || criterion.key);
+    if (criterion.key === "checkRunExactHead") add("checkRunExactHead");
+    if (criterion.key === "threadAwareReviewState") add("threadAwareReviewState");
+    if (criterion.key === "localVerificationPassed") add("localVerificationPassed");
+  }
+  return missing;
+}
+
+function mergeCriterion({ key, missingKey = "", source = "", expected = null, observed = null, headSha = null, proven = false, reason = "" } = {}) {
+  return {
+    key,
+    missingKey: missingKey || key,
+    status: proven ? "proven" : "blocked",
+    source,
+    expected,
+    observed,
+    headSha,
+    reason: proven ? null : reason || "missing_stale_failing_or_ambiguous",
+  };
+}
+
+function normalizeMergeStateValue(value = "") {
+  return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function normalizePrNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric <= 0) return null;
+  return numeric;
+}
+
+function checkEvidenceIsSpecific(kind = "") {
+  const normalized = normalizeMergeStateValue(kind);
+  return ["check_runs", "all_reported_checks", "github_checks", "exact_head_checks"].includes(normalized);
+}
+
+function reviewEvidenceIsThreadAware(kind = "") {
+  const normalized = normalizeMergeStateValue(kind);
+  return ["thread_aware_review_threads", "review_threads", "github_review_threads", "thread_aware"].includes(normalized);
+}
+
+function buildMergeResultEvidence(result = null) {
+  if (!isPlainObject(result)) return null;
+  const evidence = {
+    prUrl: sanitizeLedgerField(result.prUrl || result.pr_url || "", "", 260) || null,
+    headSha: sanitizeLedgerField(result.headSha || result.head_sha || "", "", 80) || null,
+    baseBranch: sanitizeLedgerField(result.baseBranch || result.base_branch || "", "", 120) || null,
+    checkState: sanitizeLedgerField(result.checkState || result.check_state || "", "", 120) || null,
+    reviewState: sanitizeLedgerField(result.reviewState || result.review_state || "", "", 120) || null,
+    verificationCommand: sanitizeLedgerField(result.verificationCommand || result.verification_command || "", "", 260) || null,
+    mergeMethod: sanitizeLedgerField(result.mergeMethod || result.merge_method || "", "", 80) || null,
+    mergeResult: sanitizeLedgerField(result.mergeResult || result.merge_result || result.result || "", "", 120) || null,
+    rollbackPath: sanitizeLedgerField(result.rollbackPath || result.rollback_path || "", "", 260) || null,
+    evidenceRefs: normalizePrEvidenceStringList(result.evidenceRefs || result.evidence_refs || result.evidenceRef || result.evidence_ref, { limit: 20, maxLength: 180 }),
+    rawPayloadRetained: false,
+  };
+  const required = ["prUrl", "headSha", "baseBranch", "checkState", "reviewState", "verificationCommand", "mergeMethod", "mergeResult", "rollbackPath"];
+  return {
+    ...evidence,
+    missingFields: required.filter((field) => !evidence[field]),
+    complete: required.every((field) => Boolean(evidence[field])),
+  };
+}
+
+function buildDeliveryCleanupPlan(lane = {}, { deliveryAuthority = {}, requestedOperation = "" } = {}) {
+  const evidence = lane.cleanupEvidence || {};
+  const expected = lane.expectedCleanup || {};
+  const headSha = sanitizeLedgerField(lane.expectedHeadSha || lane.headSha || "", "", 80);
+  const evidenceHeadSha = sanitizeLedgerField(evidence.expectedHeadSha || evidence.expected_head_sha || "", "", 80);
+  const assignmentState = sanitizeLedgerField(evidence.assignmentState || evidence.assignment_state || "", "", 120);
+  const target = cleanupEvidenceTarget(evidence);
+  const dryRun = buildCleanupDryRunEvidence(evidence.dryRun || evidence.dry_run || null, { expected, expectedHeadSha: headSha });
+  const applyResult = buildCleanupApplyResultEvidence(evidence.applyResult || evidence.apply_result || null, { expected, expectedHeadSha: headSha, finalExpectedState: dryRun?.finalExpectedState || "" });
+  const deferred = cleanupShouldDefer(lane, requestedOperation);
+  const criteria = [
+    cleanupCriterion({
+      key: "managerOwnedLane",
+      source: "lane.managerOwned",
+      expected: true,
+      observed: lane.managerOwned ?? lane.manager_owned ?? null,
+      proven: positiveBoolean(lane.managerOwned ?? lane.manager_owned) === true,
+    }),
+    cleanupCriterion({
+      key: "codexWorkspaceGate",
+      source: "lane.workspaceGate",
+      expected: "codex-workspace",
+      observed: lane.workspaceGate || lane.workspace_gate || null,
+      proven: normalizeCleanupText(lane.workspaceGate || lane.workspace_gate) === "codex_workspace",
+    }),
+    cleanupCriterion({
+      key: "finishPrGate",
+      source: "lane.deliveryGate",
+      expected: "finish-pr",
+      observed: lane.deliveryGate || lane.delivery_gate || null,
+      proven: normalizeCleanupText(lane.deliveryGate || lane.delivery_gate) === "finish_pr",
+    }),
+    cleanupCriterion({
+      key: "activeCleanupAuthority",
+      source: "delivery_phase.status+delivery_phase.allowedOperations",
+      expected: "active delivery_phase cleanup authority",
+      observed: { status: deliveryAuthority.status || null, allowedOperations: deliveryAuthority.allowedOperations || [] },
+      proven: deliveryAuthority.status === "active" && Array.isArray(deliveryAuthority.allowedOperations) && deliveryAuthority.allowedOperations.includes("cleanup"),
+    }),
+    cleanupCriterion({
+      key: "objectType",
+      source: "lane.cleanupEvidence.objectType",
+      expected: "merged-managed-lane",
+      observed: evidence.objectType || evidence.object_type || null,
+      proven: normalizeCleanupText(evidence.objectType || evidence.object_type) === "merged_managed_lane",
+    }),
+    cleanupCriterion({
+      key: "prNumber",
+      source: "lane.prNumber",
+      expected: "merged PR number",
+      observed: lane.prNumber || lane.pr_number || null,
+      proven: normalizePrNumber(lane.prNumber || lane.pr_number) !== null,
+    }),
+    cleanupCriterion({
+      key: "prUrl",
+      source: "lane.prUrl",
+      expected: "merged PR URL",
+      observed: lane.prUrl || lane.pr_url || null,
+      proven: Boolean(sanitizeLedgerField(lane.prUrl || lane.pr_url || "", "", 260)),
+    }),
+    cleanupCriterion({
+      key: "baseBranch",
+      source: "delivery_phase.targetBase+lane.baseBranch",
+      expected: deliveryAuthority.targetBase || lane.baseBranch || null,
+      observed: lane.baseBranch || lane.base_branch || null,
+      proven: Boolean(sanitizeLedgerField(lane.baseBranch || lane.base_branch || "", "", 120))
+        && (!deliveryAuthority.targetBase || deliveryAuthority.targetBase === (lane.baseBranch || lane.base_branch)),
+    }),
+    cleanupCriterion({
+      key: "ownershipProof",
+      source: "lane.cleanupEvidence.ownershipProof",
+      expected: "present",
+      observed: evidence.ownershipProof || evidence.ownership_proof || null,
+      proven: Boolean(sanitizeLedgerField(evidence.ownershipProof || evidence.ownership_proof || "", "", 260)),
+    }),
+    cleanupCriterion({
+      key: "mergedPr",
+      source: "lane.mergeState+lane.cleanupEvidence.mergedPr",
+      expected: "merged",
+      observed: { mergeState: lane.mergeState || null, mergedPr: evidence.mergedPr ?? evidence.merged_pr ?? null },
+      proven: lane.mergeState === "merged" && (evidence.mergedPr === true || evidence.merged_pr === true),
+    }),
+    cleanupCriterion({
+      key: "expectedHeadSha",
+      source: "lane.cleanupEvidence.expectedHeadSha",
+      expected: headSha || "exact cleanup head",
+      observed: evidenceHeadSha || null,
+      headSha: evidenceHeadSha || null,
+      proven: Boolean(headSha) && evidenceHeadSha === headSha,
+    }),
+    cleanupCriterion({
+      key: "worktreePath",
+      source: "lane.cleanupEvidence.worktreePath",
+      expected: expected.worktreePath || null,
+      observed: target.worktreePath || null,
+      proven: Boolean(expected.worktreePath) && target.worktreePath === expected.worktreePath,
+    }),
+    cleanupCriterion({
+      key: "localBranch",
+      source: "lane.cleanupEvidence.localBranch",
+      expected: expected.localBranch || null,
+      observed: target.localBranch || null,
+      proven: Boolean(expected.localBranch) && target.localBranch === expected.localBranch,
+    }),
+    cleanupCriterion({
+      key: "remoteBranch",
+      source: "lane.cleanupEvidence.remoteBranch",
+      expected: expected.remoteBranch || null,
+      observed: target.remoteBranch || null,
+      proven: Boolean(expected.remoteBranch) && target.remoteBranch === expected.remoteBranch,
+    }),
+    cleanupCriterion({
+      key: "assignmentState",
+      source: "lane.cleanupEvidence.assignmentState",
+      expected: "closed",
+      observed: assignmentState || null,
+      proven: normalizeCleanupText(assignmentState) === "closed",
+    }),
+    cleanupCriterion({
+      key: "authorityCleanupTargets",
+      source: "delivery_phase.allowedCleanupTargets+lane.expectedCleanup",
+      expected,
+      observed: deliveryAuthority.cleanupTargets || {},
+      proven: deliveryAuthority.status === "active" && cleanupTargetsMatch(deliveryAuthority.cleanupTargets || {}, expected),
+    }),
+    cleanupCriterion({
+      key: "evidencePath",
+      source: "lane.cleanupEvidence.evidencePath",
+      expected: "present",
+      observed: evidence.evidencePath || evidence.evidence_path || null,
+      proven: Boolean(sanitizeLedgerField(evidence.evidencePath || evidence.evidence_path || "", "", 260)),
+    }),
+    cleanupCriterion({
+      key: "blockedCaseBehavior",
+      source: "lane.cleanupEvidence.blockedCaseBehavior",
+      expected: "present",
+      observed: evidence.blockedCaseBehavior || evidence.blocked_case_behavior || null,
+      proven: Boolean(sanitizeLedgerField(evidence.blockedCaseBehavior || evidence.blocked_case_behavior || "", "", 260)),
+    }),
+    cleanupCriterion({
+      key: "idempotencyCondition",
+      source: "lane.cleanupEvidence.idempotencyCondition",
+      expected: "present",
+      observed: evidence.idempotencyCondition || evidence.idempotency_condition || null,
+      proven: Boolean(sanitizeLedgerField(evidence.idempotencyCondition || evidence.idempotency_condition || "", "", 260)),
+    }),
+    cleanupCriterion({
+      key: "dryRunEvidence",
+      source: "lane.cleanupEvidence.dryRun",
+      expected: "complete scoped cleanup dry-run metadata",
+      observed: dryRun ? dryRun.missingFields : ["dryRun"],
+      headSha: dryRun?.expectedHeadSha || null,
+      proven: Boolean(dryRun?.complete),
+    }),
+    cleanupCriterion({
+      key: "rawPayloadRetained",
+      source: "lane.cleanupEvidence.rawPayloadRetained+dryRun.rawPayloadRetained+applyResult.rawPayloadRetained",
+      expected: false,
+      observed: {
+        cleanupEvidence: evidence.rawPayloadRetained ?? evidence.raw_payload_retained ?? null,
+        dryRun: dryRun?.rawPayloadRetained ?? null,
+        applyResult: applyResult?.rawPayloadRetained ?? null,
+      },
+      proven: cleanupRawPayloadFlagExplicitFalse(evidence, ["rawPayloadRetained", "raw_payload_retained"], { allowMissing: true }) && dryRun?.rawPayloadRetained === false && (!applyResult || applyResult.rawPayloadRetained === false),
+    }),
+  ];
+  if (applyResult) {
+    criteria.push(cleanupCriterion({
+      key: "applyResultComplete",
+      source: "lane.cleanupEvidence.applyResult",
+      expected: "complete cleanup apply result metadata",
+      observed: applyResult.missingFields,
+      headSha: applyResult.expectedHeadSha || null,
+      proven: applyResult.complete && applyResult.idempotent === true,
+    }));
+  }
+  const missingEvidence = cleanupMissingEvidence(criteria);
+  const ready = missingEvidence.length === 0;
+  return {
+    state: deferred ? "deferred" : ready ? "ready" : "blocked_until_merged_pr_cleanup_evidence",
+    expectedHeadSha: evidenceHeadSha || lane.expectedHeadSha || lane.expected_head_sha || null,
+    allowedScopes: ["managed-worktree", "local-branch", "remote-branch", "assignment-state"],
+    worktreePath: target.worktreePath || null,
+    localBranch: target.localBranch || null,
+    remoteBranch: target.remoteBranch || null,
+    assignmentState: assignmentState || null,
+    criteria,
+    missingEvidence,
+    dryRun,
+    applyResult,
+    deferral: deferred
+      ? {
+          reason: sanitizeLedgerField(lane.cleanupDeferralReason || lane.cleanup_deferral_reason || "cleanup deferred because active delivery work is higher value", "", 260),
+          cleanupBlocking: positiveBoolean(lane.cleanupBlocking ?? lane.cleanup_blocking) === true,
+          activeDeliveryWorkHigherValue: positiveBoolean(lane.activeDeliveryWorkHigherValue ?? lane.active_delivery_work_higher_value) === true,
+        }
+      : null,
+    mutationMode: deferred ? "deferred_continue_active_delivery" : ready ? "existing_cleanup_gates_required" : "blocked_until_cleanup_criteria_proven",
+    rawPayloadRetained: false,
+  };
+}
+
+function cleanupEvidenceTarget(evidence = {}) {
+  return {
+    worktreePath: sanitizeLedgerField(evidence.worktreePath || evidence.worktree_path || "", "", 260),
+    localBranch: sanitizeLedgerField(evidence.localBranch || evidence.local_branch || "", "", 160),
+    remoteBranch: sanitizeLedgerField(evidence.remoteBranch || evidence.remote_branch || "", "", 160),
+  };
+}
+
+function buildCleanupDryRunEvidence(dryRun = null, { expected = {}, expectedHeadSha = "" } = {}) {
+  if (!isPlainObject(dryRun)) return null;
+  const target = cleanupEvidenceTarget(dryRun.target || dryRun);
+  const rawPayloadRetained = cleanupRawPayloadFlagExplicitFalse(dryRun, ["rawPayloadRetained", "raw_payload_retained"]) ? false : true;
+  const evidence = {
+    target,
+    expectedHeadSha: sanitizeLedgerField(dryRun.expectedHeadSha || dryRun.expected_head_sha || "", "", 80),
+    wouldDelete: normalizePrEvidenceStringList(dryRun.wouldDelete || dryRun.would_delete, { limit: 20, maxLength: 220 }),
+    skipped: normalizePrEvidenceStringList(dryRun.skipped || dryRun.skippedItems || dryRun.skipped_items, { limit: 20, maxLength: 220 }),
+    finalExpectedState: sanitizeLedgerField(dryRun.finalExpectedState || dryRun.final_expected_state || "", "", 220),
+    rollbackNote: sanitizeLedgerField(dryRun.rollbackNote || dryRun.rollback_note || dryRun.recoveryNote || dryRun.recovery_note || "", "", 260),
+    evidenceRefs: normalizePrEvidenceStringList(dryRun.evidenceRefs || dryRun.evidence_refs || dryRun.evidenceRef || dryRun.evidence_ref, { limit: 20, maxLength: 180 }),
+    rawPayloadRetained,
+  };
+  const required = [];
+  if (!expectedHeadSha || evidence.expectedHeadSha !== expectedHeadSha) required.push("expectedHeadSha");
+  if (!expected.worktreePath || target.worktreePath !== expected.worktreePath) required.push("target.worktreePath");
+  if (!expected.localBranch || target.localBranch !== expected.localBranch) required.push("target.localBranch");
+  if (!expected.remoteBranch || target.remoteBranch !== expected.remoteBranch) required.push("target.remoteBranch");
+  if (!Array.isArray(dryRun.wouldDelete || dryRun.would_delete)) required.push("wouldDelete");
+  if (!Array.isArray(dryRun.skipped || dryRun.skippedItems || dryRun.skipped_items)) required.push("skipped");
+  if (cleanupItemsOutsideExpectedScope([...evidence.wouldDelete, ...evidence.skipped], expected).length > 0) required.push("scopedItems");
+  if (!evidence.finalExpectedState) required.push("finalExpectedState");
+  if (!evidence.rollbackNote) required.push("rollbackNote");
+  if (evidence.evidenceRefs.length === 0) required.push("evidenceRefs");
+  if (evidence.rawPayloadRetained !== false) required.push("rawPayloadRetained");
+  return {
+    ...evidence,
+    missingFields: required,
+    complete: required.length === 0,
+  };
+}
+
+function buildCleanupApplyResultEvidence(result = null, { expected = {}, expectedHeadSha = "", finalExpectedState = "" } = {}) {
+  if (!isPlainObject(result)) return null;
+  const target = cleanupEvidenceTarget(result.target || result);
+  const rawPayloadRetained = cleanupRawPayloadFlagExplicitFalse(result, ["rawPayloadRetained", "raw_payload_retained"]) ? false : true;
+  const evidence = {
+    target,
+    expectedHeadSha: sanitizeLedgerField(result.expectedHeadSha || result.expected_head_sha || "", "", 80),
+    deletionResult: sanitizeLedgerField(result.deletionResult || result.deletion_result || result.result || "", "", 120),
+    skipped: normalizePrEvidenceStringList(result.skipped || result.skippedItems || result.skipped_items, { limit: 20, maxLength: 220 }),
+    finalState: sanitizeLedgerField(result.finalState || result.final_state || "", "", 220),
+    evidenceRefs: normalizePrEvidenceStringList(result.evidenceRefs || result.evidence_refs || result.evidenceRef || result.evidence_ref, { limit: 20, maxLength: 180 }),
+    rollbackNote: sanitizeLedgerField(result.rollbackNote || result.rollback_note || result.recoveryNote || result.recovery_note || "", "", 260),
+    rawPayloadRetained,
+  };
+  const successfulResult = ["already_clean", "already_clean_idempotent", "no_op_already_clean", "already_absent", "deleted", "cleaned"].includes(normalizeCleanupText(evidence.deletionResult));
+  const idempotent = successfulResult && Boolean(finalExpectedState) && evidence.finalState === finalExpectedState;
+  const required = [];
+  if (!expectedHeadSha || evidence.expectedHeadSha !== expectedHeadSha) required.push("expectedHeadSha");
+  if (!expected.worktreePath || target.worktreePath !== expected.worktreePath) required.push("target.worktreePath");
+  if (!expected.localBranch || target.localBranch !== expected.localBranch) required.push("target.localBranch");
+  if (!expected.remoteBranch || target.remoteBranch !== expected.remoteBranch) required.push("target.remoteBranch");
+  if (!evidence.deletionResult) required.push("deletionResult");
+  if (!["already_clean", "already_clean_idempotent", "no_op_already_clean", "already_absent", "deleted", "cleaned"].includes(normalizeCleanupText(evidence.deletionResult))) required.push("deletionResultAllowed");
+  if (!Array.isArray(result.skipped || result.skippedItems || result.skipped_items)) required.push("skipped");
+  if (cleanupItemsOutsideExpectedScope(evidence.skipped, expected).length > 0) required.push("scopedItems");
+  if (!evidence.finalState) required.push("finalState");
+  if (finalExpectedState && evidence.finalState !== finalExpectedState) required.push("finalStateMatchesDryRun");
+  if (evidence.evidenceRefs.length === 0) required.push("evidenceRefs");
+  if (!evidence.rollbackNote) required.push("rollbackNote");
+  if (evidence.rawPayloadRetained !== false) required.push("rawPayloadRetained");
+  if (!idempotent) required.push("idempotentRepeat");
+  return {
+    ...evidence,
+    missingFields: required,
+    complete: required.length === 0,
+    idempotent,
+  };
+}
+
+function cleanupCriterion({ key, source = "", expected = null, observed = null, headSha = null, proven = false, reason = "" } = {}) {
+  return {
+    key,
+    status: proven ? "proven" : "blocked",
+    source,
+    expected,
+    observed,
+    headSha,
+    reason: proven ? null : reason || "missing_stale_mismatched_or_ambiguous",
+  };
+}
+
+function cleanupMissingEvidence(criteria = []) {
+  const missing = [];
+  const add = (value) => {
+    if (value && !missing.includes(value)) missing.push(value);
+  };
+  for (const criterion of criteria.filter((item) => item.status !== "proven")) {
+    add(criterion.key);
+  }
+  return missing;
+}
+
+function cleanupShouldDefer(lane = {}, requestedOperation = "") {
+  if (requestedOperation === "cleanup") return false;
+  const priority = normalizeCleanupText(lane.cleanupPriority || lane.cleanup_priority);
+  const nonBlocking = positiveBoolean(lane.cleanupBlocking ?? lane.cleanup_blocking) !== true;
+  const activeDeliveryHigherValue = positiveBoolean(lane.activeDeliveryWorkHigherValue ?? lane.active_delivery_work_higher_value) === true;
+  return nonBlocking && activeDeliveryHigherValue && ["defer", "deferred", "opportunistic"].includes(priority);
+}
+
+function normalizeCleanupText(value = "") {
+  return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function cleanupRawPayloadFlagExplicitFalse(source = {}, keys = [], { allowMissing = false } = {}) {
+  const presentKey = keys.find((key) => Object.hasOwn(source, key));
+  if (!presentKey) return allowMissing;
+  return source[presentKey] === false;
+}
+
+function cleanupItemsOutsideExpectedScope(items = [], expected = {}) {
+  const allowedRefs = new Set([
+    expected.worktreePath ? `worktree:${expected.worktreePath}` : "",
+    expected.localBranch ? `local-branch:${expected.localBranch}` : "",
+    expected.remoteBranch ? `remote-branch:${expected.remoteBranch}` : "",
+    "assignment-state:already-closed",
+    "assignment-state:closed",
+    "worktree:already-absent",
+    "branches:already-absent",
+    "local-branch:already-absent",
+    "remote-branch:already-absent",
+  ].filter(Boolean));
+  return items.filter((item) => !allowedRefs.has(item));
+}
+
+export function buildLedgerReadiness(options = {}, context = {}) {
+  const runId = resolveManagerRunId(options, context);
+  const paths = managerRunPaths(runId, options, context);
+  const files = {};
+  const schemaGaps = [];
+  const jsonFiles = [
+    ["mission", paths.mission],
+    ["workers", paths.workers],
+    ["dispatcherSummary", paths.dispatcherSummary],
+    ["checkpoints", paths.checkpoints],
+  ];
+  const ndjsonFiles = [
+    ["events", paths.events],
+    ["questions", paths.questions],
+    ["resourceSnapshots", paths.resourceSnapshots],
+    ["usageSnapshots", paths.usageSnapshots],
+  ];
+  const jsonData = {};
+  const ndjsonData = {};
+
+  for (const [key, path] of jsonFiles) {
+    const result = readJsonStrict(path);
+    files[key] = result.status;
+    if (result.status !== "ready") {
+      schemaGaps.push({ code: `ledger-file-${result.status}`, file: key, path, message: result.message });
+    } else {
+      jsonData[key] = result.value;
+    }
+  }
+
+  if (files.workers === "ready" && !Array.isArray(jsonData.workers)) {
+    files.workers = "malformed";
+    schemaGaps.push({ code: "ledger-file-malformed", file: "workers", path: paths.workers, message: "workers.json must contain an array." });
+  }
+  if (files.mission === "ready" && !isPlainObject(jsonData.mission)) {
+    files.mission = "malformed";
+    schemaGaps.push({ code: "ledger-file-malformed", file: "mission", path: paths.mission, message: "mission.json must contain an object." });
+  }
+  if (files.checkpoints === "ready" && !Array.isArray(jsonData.checkpoints)) {
+    files.checkpoints = "malformed";
+    schemaGaps.push({ code: "ledger-file-malformed", file: "checkpoints", path: paths.checkpoints, message: "checkpoints.json must contain an array." });
+  }
+  if (files.dispatcherSummary === "ready" && !isPlainObject(jsonData.dispatcherSummary)) {
+    files.dispatcherSummary = "malformed";
+    schemaGaps.push({ code: "ledger-file-malformed", file: "dispatcherSummary", path: paths.dispatcherSummary, message: "dispatcher-summary.json must contain an object." });
+  }
+  if (files.workers === "ready" && jsonData.workers.some((record) => !isPlainObject(record))) {
+    files.workers = "malformed";
+    schemaGaps.push({ code: "ledger-file-malformed", file: "workers", path: paths.workers, message: "workers.json must contain only object records." });
+  }
+  if (files.checkpoints === "ready" && jsonData.checkpoints.some((record) => !isPlainObject(record))) {
+    files.checkpoints = "malformed";
+    schemaGaps.push({ code: "ledger-file-malformed", file: "checkpoints", path: paths.checkpoints, message: "checkpoints.json must contain only object records." });
+  }
+
+  for (const [key, path] of ndjsonFiles) {
+    const result = readNdjsonStrict(path);
+    files[key] = result.status;
+    if (result.status !== "ready") {
+      schemaGaps.push({ code: `ledger-file-${result.status}`, file: key, path, message: result.message });
+    } else {
+      ndjsonData[key] = result.value;
+    }
+  }
+  for (const [key, path] of ndjsonFiles) {
+    if (files[key] === "ready" && ndjsonData[key].some((record) => !isPlainObject(record))) {
+      files[key] = "malformed";
+      schemaGaps.push({ code: "ledger-file-malformed", file: key, path, message: `${key} must contain only object records.` });
+    }
+  }
+  if (files.events === "ready") {
+    const invalidEvent = ndjsonData.events.find((record) => validateRuntimeLedgerEventRecord(record) !== null);
+    if (invalidEvent) {
+      files.events = "malformed";
+      schemaGaps.push({
+        code: "ledger-event-schema-invalid",
+        file: "events",
+        path: paths.events,
+        message: validateRuntimeLedgerEventRecord(invalidEvent),
+      });
+    }
+  }
+  if (files.questions === "ready") {
+    const invalidQuestion = ndjsonData.questions.find((record) => validateRuntimeLedgerEventRecord(record) !== null);
+    if (invalidQuestion) {
+      files.questions = "malformed";
+      schemaGaps.push({
+        code: "ledger-event-schema-invalid",
+        file: "questions",
+        path: paths.questions,
+        message: validateRuntimeLedgerEventRecord(invalidQuestion),
+      });
+    }
+  }
+  if (files.resourceSnapshots === "ready") {
+    const invalidResource = ndjsonData.resourceSnapshots.find((record) => validateRuntimeLedgerEventRecord(record) !== null);
+    if (invalidResource) {
+      files.resourceSnapshots = "malformed";
+      schemaGaps.push({
+        code: "ledger-event-schema-invalid",
+        file: "resourceSnapshots",
+        path: paths.resourceSnapshots,
+        message: validateRuntimeLedgerEventRecord(invalidResource),
+      });
+    }
+  }
+  if (files.usageSnapshots === "ready") {
+    const invalidUsage = ndjsonData.usageSnapshots.find((record) => validateRuntimeLedgerEventRecord(record) !== null);
+    if (invalidUsage) {
+      files.usageSnapshots = "malformed";
+      schemaGaps.push({
+        code: "ledger-event-schema-invalid",
+        file: "usageSnapshots",
+        path: paths.usageSnapshots,
+        message: validateRuntimeLedgerEventRecord(invalidUsage),
+      });
+    }
+  }
+  if (files.checkpoints === "ready") {
+    const invalidCheckpoint = jsonData.checkpoints.find((record) => validateRuntimeLedgerEventRecord(record) !== null);
+    if (invalidCheckpoint) {
+      files.checkpoints = "malformed";
+      schemaGaps.push({
+        code: "ledger-event-schema-invalid",
+        file: "checkpoints",
+        path: paths.checkpoints,
+        message: validateRuntimeLedgerEventRecord(invalidCheckpoint),
+      });
+    }
+  }
+
+  return packet({
+    ok: schemaGaps.length === 0,
+    status: schemaGaps.length === 0 ? "ready" : "blocked",
+    summary: {
+      runId,
+      stateRoot: paths.proof.state.root,
+      root: paths.root,
+      files,
+      mission: jsonData.mission
+        ? {
+            runId: jsonData.mission.runId || null,
+            runState: jsonData.mission.runState || "unknown",
+            authorityProfile: jsonData.mission.authorityProfile || "unknown",
+            updatedAt: jsonData.mission.updatedAt || null,
+          }
+        : null,
+      workerCount: Array.isArray(jsonData.workers) ? jsonData.workers.length : 0,
+      checkpointCount: Array.isArray(jsonData.checkpoints) ? jsonData.checkpoints.length : 0,
+      dispatcherSummary: jsonData.dispatcherSummary || null,
+      eventCount: ndjsonData.events?.length || 0,
+      questionCount: ndjsonData.questions?.length || 0,
+      resourceSnapshotCount: ndjsonData.resourceSnapshots?.length || 0,
+      usageSnapshotCount: ndjsonData.usageSnapshots?.length || 0,
+      schemaGaps,
+    },
+    blockers: schemaGaps.map((gap) => ({
+      code: gap.code,
+      message: `${gap.file}: ${gap.message}`,
+      nextAction: "Repair or initialize manager ledger before resuming mutation.",
+    })),
+  });
+}
+
+export function buildResumeState(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const workspace = getWorkspaceProof(runOptions, context);
+  const ledger = buildLedgerReadiness(runOptions, context);
+  const assignment = buildAssignmentResume(runOptions, context);
+  const tmux = buildTmuxOrientationStatus(runOptions, context.tmuxContext || {});
+  const takeoverInspection = buildTakeoverInspectionPlan(assignment.summary);
+  const blockers = [];
+
+  if (!workspace.ok) {
+    blockers.push({ code: "workspace-state-unsafe", message: workspace.error, nextAction: "Choose a safe workspace state root." });
+  }
+  blockers.push(...(ledger.blockers || []));
+  blockers.push(...(assignment.blockers || []));
+  if (!tmux.summary.available) {
+    blockers.push({
+      code: "tmux-orientation-unavailable",
+      message: tmux.summary.error || "tmux orientation unavailable",
+      nextAction: "Restore tmux orientation or keep worker mutation disabled.",
+    });
+  }
+  for (const blocker of tmuxOrientationBlockers(tmux.summary)) {
+    blockers.push(blocker);
+  }
+
+  return packet({
+    ok: blockers.length === 0,
+    status: blockers.length === 0 ? "ready" : "blocked",
+    summary: {
+      runId: runOptions.runId,
+      ledger: ledger.summary,
+      assignment: assignment.summary,
+      tmux: tmux.summary,
+      takeoverInspection,
+      workspace: {
+        ok: workspace.ok,
+        stateRoot: workspace.state.root,
+        proof: workspace.proof || null,
+      },
+      schemaGaps: ledger.summary.schemaGaps,
+      resumeActions: blockers.length === 0 ? [{ code: "resume-safe", summary: "Resume evidence is consistent for read-only continuation." }] : [],
+    },
+    blockers,
+    warnings: [...(tmux.warnings || []), ...(assignment.warnings || [])],
+    nextActions: blockers.length === 0 ? [{ code: "resume-ready", summary: "Resume from compact manager state." }] : [],
+  });
+}
+
+export function buildAssignmentResume(options = {}, context = {}) {
+  const assignmentArgs = ["assignment-report", "--summary-json"];
+  if (options.stateRoot) assignmentArgs.push("--state-root", options.stateRoot);
+  const assignment = context.assignmentSummary || runWorkspaceJson(assignmentArgs, context);
+  if (assignment?.ok === false) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { available: false, source: "assignment-report", statusCounts: {}, counts: {} },
+      blockers: [
+        {
+          code: "assignment-report-unavailable",
+          message: assignment.error || "assignment report unavailable",
+          nextAction: "Restore assignment inventory before resuming manager mutation.",
+        },
+      ],
+    });
+  }
+  const report = assignment?.summary || assignment || {};
+  const statusCounts = {
+    backlog: report.backlogStatusCounts || {},
+    laneAssignments: report.laneAssignmentStatusCounts || {},
+    workspaceAssignments: report.workspaceAssignmentStatusCounts || {},
+  };
+  const ambiguous = ambiguousAssignmentStatusCounts(statusCounts);
+  return packet({
+    ok: ambiguous.length === 0,
+    status: ambiguous.length === 0 ? "ready" : "blocked",
+    summary: {
+      available: true,
+      source: "assignment-report",
+      stateRoot: report.stateRoot || null,
+      counts: report.counts || {},
+      statusCounts,
+      truncated: {
+        backlogCandidates: Boolean(report.backlogCandidatesTruncated),
+        laneAssignments: Boolean(report.laneAssignmentsTruncated),
+        workspaceAssignments: Boolean(report.workspaceAssignmentsTruncated),
+      },
+      blockedLaneAssignments: Array.isArray(report.blockedLaneAssignments) ? report.blockedLaneAssignments : [],
+      blockedWorkspaceAssignments: Array.isArray(report.blockedWorkspaceAssignments) ? report.blockedWorkspaceAssignments : [],
+      ambiguousStatusCounts: ambiguous,
+    },
+    blockers: ambiguous.map((item) => ({
+      code: "assignment-ambiguous-status",
+      message: `${item.bucket} has ${item.count} ${item.status} item(s).`,
+      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+    })),
+  });
+}
+
+function buildTakeoverInspectionPlan(assignmentSummary = {}) {
+  const laneAssignments = Array.isArray(assignmentSummary?.blockedLaneAssignments) ? assignmentSummary.blockedLaneAssignments : [];
+  const workspaceAssignments = Array.isArray(assignmentSummary?.blockedWorkspaceAssignments) ? assignmentSummary.blockedWorkspaceAssignments : [];
+  const laneTargets = laneAssignments.map((assignment) => buildTakeoverInspectionTarget("lane_assignment", assignment.assignmentId || assignment.assignment_id, assignment));
+  const workspaceTargets = workspaceAssignments.map((assignment) => buildTakeoverInspectionTarget("workspace_assignment", assignment.taskId || assignment.task_id, assignment));
+  const targets = [...laneTargets, ...workspaceTargets].filter(Boolean).slice(0, 12);
+  return {
+    needed: targets.length > 0,
+    mutationMode: "dry_run_only",
+    targetCount: targets.length,
+    targets,
+    stopLines: [
+      "do_not_apply_takeover_without_explicit_operator_approval",
+      "do_not_launch_workers",
+      "do_not_kill_workers",
+      "do_not_mutate_unknown_or_non_manager_owned_processes",
+    ],
+  };
+}
+
+function takeoverInspectionNextActions(takeoverInspection = {}) {
+  if (!takeoverInspection?.needed || !Array.isArray(takeoverInspection.targets) || takeoverInspection.targets.length === 0) return [];
+  return [
+    {
+      code: "takeover-inspection-required",
+      summary: `Prepare dry-run takeover evidence for ${takeoverInspection.targetCount} stale owner target(s).`,
+      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+    },
+  ];
+}
+
+function buildTakeoverInspectionTarget(kind, rawId, assignment = {}) {
+  const id = sanitizeLedgerField(rawId || "", "", 140);
+  if (!id) return null;
+  const reason = `manager dogfood stale owner inspection for ${id}`;
+  return {
+    kind,
+    id,
+    owner: sanitizeLedgerField(assignment.owner || "", "", 120),
+    branch: sanitizeLedgerField(assignment.branch || "", "", 140),
+    phase: sanitizeLedgerField(assignment.phase || "", "", 80),
+    heartbeat: sanitizeLedgerField(assignment.heartbeat || assignment.lastHeartbeatAt || "", "", 80),
+    staleReason: sanitizeLedgerField(assignment.reason || "", "", 180),
+    nextAction: "Run the dry-run takeover inspection command and ask the operator before any apply.",
+    dryRunCommand: `node ./scripts/codex-workspace.mjs takeover ${shellSingleQuote(id)} --dry-run --summary-json --takeover-reason ${shellSingleQuote(reason)}`,
+    mutationMode: "dry_run_only",
+  };
+}
+
+export function buildStaleOwnerInspection(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const resume = context.resumeState || buildResumeState(runOptions, context);
+  const targets = Array.isArray(resume.summary?.takeoverInspection?.targets) ? resume.summary.takeoverInspection.targets : [];
+  const limit = runOptions.limit === null || runOptions.limit === undefined ? targets.length : Math.max(0, Number(runOptions.limit) || 0);
+  const inspections = targets.slice(0, limit).map((target) => inspectStaleOwnerTarget(target, context));
+  const failed = inspections.filter((inspection) => !inspection.ok);
+  const cleanupCandidates = inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate");
+  const dirtyWorkspaces = inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required");
+  const approvalCandidates = inspections.filter((inspection) => inspection.classification === "takeover_apply_candidate_with_approval");
+  const blockers = failed.map((inspection) => ({
+    code: "stale-owner-inspection-failed",
+    message: inspection.error || `Failed stale-owner inspection for ${inspection.id || "(missing id)"}.`,
+    nextAction: inspection.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
+  }));
+  return packet({
+    ok: blockers.length === 0,
+    status: blockers.length > 0 ? "blocked" : inspections.length > 0 ? "attention" : "ready",
+    summary: {
+      runId: resume.summary?.ledger?.runId || runOptions.runId,
+      targetCount: targets.length,
+      inspectedCount: inspections.length,
+      cleanupCandidateCount: cleanupCandidates.length,
+      dirtyWorkspaceCount: dirtyWorkspaces.length,
+      takeoverApprovalCandidateCount: approvalCandidates.length,
+      inspections,
+      mutation: "none; dry-run takeover evidence only",
+      retention: "metadata_only_stale_owner_inspection",
+    },
+    blockers,
+    warnings: [
+      ...(cleanupCandidates.length > 0 ? [{ code: "stale-owner-cleanup-candidates", message: `${cleanupCandidates.length} stale owner target(s) look like abandoned records rather than takeover work.` }] : []),
+      ...(dirtyWorkspaces.length > 0 ? [{ code: "dirty-stale-owner-workspaces", message: `${dirtyWorkspaces.length} stale owner workspace(s) have dirty worktree evidence that must be preserved before apply or cleanup.` }] : []),
+    ],
+    nextActions: staleOwnerInspectionNextActions({ cleanupCandidates, dirtyWorkspaces, approvalCandidates, inspections }),
+  });
+}
+
+function inspectStaleOwnerTarget(target = {}, context = {}) {
+  const id = sanitizeLedgerField(target.id || "", "", 140);
+  if (!id) {
+    return { ok: false, id: "", classification: "invalid_target", error: "stale owner target id is missing", nextAction: "Refresh manager resume state." };
+  }
+  const reason = `manager dogfood stale owner inspection for ${id}`;
+  const result = context.takeoverResults?.[id] || runWorkspaceJson(["takeover", id, "--dry-run", "--summary-json", "--takeover-reason", reason], context);
+  if (!result || result.ok === false || result.error) {
+    return {
+      ok: false,
+      kind: target.kind,
+      id,
+      classification: "inspection_failed",
+      error: result?.error || "takeover dry-run did not return a usable packet",
+      nextAction: target.dryRunCommand || `node ./scripts/codex-workspace.mjs takeover ${shellSingleQuote(id)} --dry-run --summary-json --takeover-reason ${shellSingleQuote(reason)}`,
+    };
+  }
+  const classification = classifyStaleOwnerTakeoverResult(result);
+  return {
+    ok: true,
+    kind: target.kind,
+    id,
+    owner: target.owner || result.previousOwner || "",
+    branch: result.branch?.branch || target.branch || "",
+    decision: sanitizeLedgerField(result.decision || "", "", 80),
+    allowed: result.allowed === true,
+    classification,
+    worktreePath: sanitizeLedgerField(result.worktree?.path || "", "", 260),
+    worktreeStatus: sanitizeLedgerField(result.worktree?.status || "", "", 80),
+    worktreeExists: result.worktree?.exists === true,
+    branchStatus: sanitizeLedgerField(result.branch?.status || "", "", 80),
+    localSha: result.branch?.localSha || null,
+    remoteSha: result.branch?.remoteSha || null,
+    prStatus: sanitizeLedgerField(result.pr?.status || "", "", 80),
+    dirty: result.dirtyState?.dirty === true,
+    blockers: Array.isArray(result.blockers) ? result.blockers.slice(0, 6) : [],
+    nextAction: staleOwnerTargetNextAction(classification, id),
+    mutation: "none; dry-run summary only",
+  };
+}
+
+function classifyStaleOwnerTakeoverResult(result = {}) {
+  const worktreeMissing = result.worktree?.status === "missing" || result.worktree?.exists === false;
+  const branchMissing = !result.branch?.localSha && !result.branch?.remoteSha;
+  const noPr = !result.pr?.pr_number && !result.pr?.pr_url && (!result.pr?.status || result.pr.status === "none");
+  if (worktreeMissing && branchMissing && noPr) return "stale_record_cleanup_candidate";
+  if (result.dirtyState?.dirty === true || result.worktree?.status === "dirty") return "dirty_workspace_preservation_required";
+  if (result.allowed === true) return "takeover_apply_candidate_with_approval";
+  return "takeover_blocked_needs_operator_or_evidence";
+}
+
+function staleOwnerTargetNextAction(classification, id) {
+  if (classification === "stale_record_cleanup_candidate") {
+    return `Prepare cleanup/close evidence for stale assignment ${id}; do not request takeover apply for a missing worktree/branch record.`;
+  }
+  if (classification === "dirty_workspace_preservation_required") {
+    return `Preserve bounded dirty-worktree evidence for ${id} before any takeover apply or cleanup decision.`;
+  }
+  if (classification === "takeover_apply_candidate_with_approval") {
+    return `Ask operator for explicit takeover apply approval for ${id} only if the dry-run evidence is still needed.`;
+  }
+  return `Keep ${id} blocked until missing approval or evidence is resolved.`;
+}
+
+function staleOwnerInspectionNextActions({ cleanupCandidates = [], dirtyWorkspaces = [], approvalCandidates = [], inspections = [] } = {}) {
+  if (cleanupCandidates.length > 0) {
+    return [{
+      code: "stale-owner-cleanup-inspection",
+      summary: `${cleanupCandidates.length} stale owner target(s) appear to be cleanup candidates, not takeover candidates.`,
+      nextAction: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
+    }];
+  }
+  if (dirtyWorkspaces.length > 0) {
+    return [{
+      code: "stale-owner-dirty-workspace-inspection",
+      summary: `${dirtyWorkspaces.length} stale owner workspace(s) need dirty-worktree preservation before apply.`,
+      nextAction: "Preserve bounded dirty-worktree evidence, then rerun node ./scripts/manager-stale-owner-inspection.mjs --summary-json.",
+    }];
+  }
+  if (approvalCandidates.length > 0) {
+    return [{
+      code: "stale-owner-takeover-approval-needed",
+      summary: `${approvalCandidates.length} stale owner target(s) passed dry-run takeover gates but still need explicit operator approval.`,
+      nextAction: "Ask operator for explicit takeover apply approval for the exact target ids.",
+    }];
+  }
+  return [{
+    code: inspections.length > 0 ? "stale-owner-inspection-complete" : "stale-owner-inspection-not-needed",
+    summary: inspections.length > 0 ? "Stale owner inspection found no cleanup, dirty workspace, or apply-ready target." : "No stale owner target requires inspection.",
+    nextAction: "Continue active worker monitoring.",
+  }];
+}
+
+function shellSingleQuote(value = "") {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+export function classifyAutoApply(operation, context = {}) {
+  const lowRiskOperations = new Set(["ledger.append", "worker.heartbeat", "worker-target.update", "refill.metadata", "dispatch.apply", "cleanup.merged-lane"]);
+  const existingGateOperations = new Set(["dispatch.apply", "cleanup.merged-lane"]);
+  const resourceState = context.resourceState || "unknown";
+  const usageState = context.usageState || "unknown";
+  const weeklyUsage = normalizeWeeklyUsagePressure(context.weeklyUsage || context.weeklyUsageContext);
+  const missingProof = autoApplyMissingProof(operation, context, { existingGateOperations });
+  if (isBlockedRisk(context.risk) || isBlockedOwnership(context.ownershipEvidence)) {
+    return {
+      operation,
+      posture: "blocked",
+      authorityBasis: context.authorityBasis || "blocked-risk-or-ownership",
+      sourceEvidence: context.sourceEvidence || "missing",
+      ownershipEvidence: context.ownershipEvidence || "missing",
+      resourceState,
+      usageState,
+      weeklyUsage,
+      recoveryPath: context.recoveryPath || "stop and request operator approval before high-risk or outside-owner action",
+      reason: "Auto-apply is blocked for high-risk or outside-manager-owned operations.",
+    };
+  }
+  if (resourceState === "critical" || usageState === "manager_only") {
+    return {
+      operation,
+      posture: "blocked",
+      authorityBasis: context.authorityBasis || "resource-or-usage-stop-line",
+      sourceEvidence: context.sourceEvidence || "manager-runtime-state",
+      ownershipEvidence: context.ownershipEvidence || "manager-run-owner",
+      resourceState,
+      usageState,
+      weeklyUsage,
+      recoveryPath: context.recoveryPath || "wait for reset or reduce host pressure before applying manager-owned mutation",
+      reason: "Manager-owned mutation is blocked while usage or host pressure is at a stop-line state.",
+    };
+  }
+  if (["dispatch.apply", "worker-target.update"].includes(operation) && weeklyUsage.state === "pressured") {
+    return {
+      operation,
+      posture: "dry_run_required",
+      authorityBasis: context.authorityBasis || "weekly-usage-pressure",
+      sourceEvidence: context.sourceEvidence || "manager-runtime-state",
+      ownershipEvidence: context.ownershipEvidence || "manager-run-owner",
+      resourceState,
+      usageState,
+      weeklyUsage,
+      recoveryPath: context.recoveryPath || "defer new dispatch or optional work until weekly pressure recovers",
+      reason: "Reliable weekly usage pressure reduces new lease issuance before model quality changes.",
+      missingProof: [...new Set([...missingProof, "weeklyUsageDispatchPosture"])],
+    };
+  }
+  if (!lowRiskOperations.has(operation)) {
+    return {
+      operation,
+      posture: "dry_run_required",
+      authorityBasis: context.authorityBasis || "operation-not-low-risk-allowlisted",
+      sourceEvidence: context.sourceEvidence || "required",
+      ownershipEvidence: context.ownershipEvidence || "required",
+      resourceState,
+      usageState,
+      weeklyUsage,
+      recoveryPath: context.recoveryPath || "prove low-risk operation class or request operator approval",
+      reason: "Auto-apply requires a known low-risk manager-owned operation class.",
+      missingProof: ["lowRiskOperationClass"],
+    };
+  }
+  if (missingProof.length > 0) {
+    return {
+      operation,
+      posture: "dry_run_required",
+      authorityBasis: context.authorityBasis || "missing-auto-apply-proof",
+      sourceEvidence: context.sourceEvidence || "required",
+      ownershipEvidence: context.ownershipEvidence || "required",
+      resourceState,
+      usageState,
+      weeklyUsage,
+      recoveryPath: context.recoveryPath || `Provide missing proof: ${missingProof.join(", ")}.`,
+      reason: `Auto-apply requires missing proof: ${missingProof.join(", ")}.`,
+      missingProof,
+    };
+  }
+  return {
+    operation,
+    posture: "auto_apply_allowed",
+    authorityBasis: context.authorityBasis,
+    sourceEvidence: context.sourceEvidence,
+    ownershipEvidence: context.ownershipEvidence,
+    resourceState,
+    usageState,
+    weeklyUsage,
+    recoveryPath: context.recoveryPath,
+    reason: "Operation is manager-owned and low risk.",
+    missingProof: [],
+  };
+}
+
+function autoApplyMissingProof(operation, context = {}, policy = {}) {
+  const missing = [];
+  if (!validProofValue(context.authorityBasis, ["manager-owned-low-risk-mvp", "source-owned-refill-planning", "codex-workspace-existing-gates", "merged-lane-cleanup-gates"])) missing.push("authorityBasis");
+  if (!validProofValue(context.ownershipEvidence, ["manager-run-owner", "manager-owned-worker", "manager-owned-lane"])) missing.push("ownershipEvidence");
+  if (!validSourceEvidence(operation, context.sourceEvidence)) missing.push("sourceEvidence");
+  if (!validRecoveryPath(context.recoveryPath)) missing.push("recoveryPath");
+  if (!["normal", "warm"].includes(context.resourceState || "")) missing.push("resourceState");
+  if (!["normal", "conserve"].includes(context.usageState || "")) missing.push("usageState");
+  if (operation === "dispatch.apply" && context.usageState !== "normal") missing.push("dispatchPosture");
+  if (policy.existingGateOperations?.has(operation) && context.operationGate !== "existing-gates-proven") missing.push("existingGateProof");
+  return missing;
+}
+
+function validProofValue(value, allowed = []) {
+  const text = String(value || "").trim();
+  if (!text || /^(unknown|missing|ambiguous|none|required|outside|external)/i.test(text)) return false;
+  return allowed.includes(text);
+}
+
+function validSourceEvidence(operation, value) {
+  const text = String(value || "").trim();
+  if (!text || /^(unknown|missing|ambiguous|none|required|chat-only)/i.test(text)) return false;
+  if (operation === "refill.metadata") return text === "source-owned-refill-plan";
+  if (operation === "dispatch.apply") return text === "codex-workspace-existing-gates";
+  if (operation === "cleanup.merged-lane") return text === "merged-pr-cleanup-proof";
+  return text === "manager-runtime-state";
+}
+
+function validRecoveryPath(value) {
+  const text = String(value || "").trim();
+  return Boolean(text) && !/^(unknown|missing|ambiguous|none|required)$/i.test(text);
+}
+
+function isBlockedRisk(value) {
+  return /^(high|ambiguous|unsafe|broad)$/i.test(String(value || "").trim());
+}
+
+function isBlockedOwnership(value) {
+  return /^(outside-manager-owner|outside|external|ambiguous|unknown)$/i.test(String(value || "").trim());
+}
+
+export function buildPreflight(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context), apply: false };
+  const workspace = getWorkspaceProof(runOptions, context);
+  const repo = buildRepoPreflightStatus(context);
+  const branch = buildBranchPreflightStatus(context);
+  const githubCli = buildGithubCliPreflightStatus(context);
+  const workspaceProtocol = buildWorkspaceProtocolPreflightStatus(workspace);
+  const ledger = buildLedgerReadiness(runOptions, context);
+  const tmux = buildTmuxOrientationStatus(runOptions, context.tmuxContext || {});
+  const resource = buildResourceStatus(context.resourceContext || {});
+  const usage = buildUsageStatus(context.usageContext || {});
+  const dispatchPreview = context.dispatchPreview ? normalizeDispatchPreviewContext(context.dispatchPreview) : buildDispatchPreview(runOptions, context);
+  const dispatcher = buildDispatcherPreflightStatus(dispatchPreview, ledger);
+  const workers = buildWorkerStatus(runOptions, { ...context, usageContext: usage, resourceContext: resource, dispatchPreview });
+  const refill = buildRefillPlan(runOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
+  const cleanup = buildCleanupPlan(runOptions, context);
+  const blockerList = [];
+  if (!workspace.ok) {
+    blockerList.push({ code: "workspace-state-unsafe", message: workspace.error, nextAction: "Choose a safe workspace state root." });
+  }
+  if (dispatcher.status !== "ready") {
+    const dispatcherBlockers = Array.isArray(dispatcher.blockers) && dispatcher.blockers.length > 0
+      ? dispatcher.blockers
+      : [`Dispatcher preflight is ${dispatcher.status || "not ready"}.`];
+    blockerList.push(
+      ...dispatcherBlockers.map((message, index) => ({
+        code: index === 0 ? `preflight-dispatcher-${dispatcher.status || "not-ready"}` : `preflight-dispatcher-${dispatcher.status || "not-ready"}-${index + 1}`,
+        message: sanitizeLedgerField(message, "Dispatcher preflight is not ready.", 220),
+        nextAction: "Resolve dispatcher blockers before manager mutation.",
+      })),
+    );
+  }
+  blockerList.push(...(ledger.blockers || []));
+  blockerList.push(...(refill.blockers || []));
+  const warnings = uniqueWarnings([
+    ...(repo.warnings || []),
+    ...(branch.warnings || []),
+    ...(githubCli.warnings || []),
+    ...(workspaceProtocol.warnings || []),
+    ...(dispatcher.warnings || []),
+    ...(tmux.warnings || []),
+    ...(usage.warnings || []),
+    ...(resource.warnings || []),
+    ...(workers.warnings || []),
+    ...(refill.warnings || []),
+  ]);
+  const nextActions = uniqueActions([
+    ...(blockerList.length > 0
+      ? blockerList.map((blocker) => ({
+          code: blocker.code ? `${blocker.code}-preflight-action` : "preflight-blocker-action",
+          summary: blocker.message || "Preflight blocker.",
+          nextAction: blocker.nextAction || "Resolve preflight blocker before manager mutation.",
+        }))
+      : []),
+    ...(dispatcher.nextActions || []),
+    ...(refill.nextActions || []),
+    ...(usage.nextActions || []),
+  ]);
+  const recommendedNextAction = nextActions[0]?.nextAction || (blockerList.length > 0 ? "Resolve preflight blockers before manager mutation." : "Preflight ready; continue with bounded manager cycle.");
+  return packet({
+    ok: blockerList.length === 0,
+    status: blockerList.length > 0 ? "blocked" : "ready",
+    summary: {
+      repoRoot,
+      repo,
+      branch,
+      githubCli,
+      workspaceProtocol,
+      workspace: {
+        ok: workspace.ok,
+        stateRoot: workspace.state.root,
+        proof: workspace.proof || null,
+      },
+      tmux: tmux.summary,
+      usage: usage.summary,
+      resources: resource.summary,
+      runway: refill.summary,
+      dispatcher,
+      workers: workers.summary.workerCounts,
+      cleanup: cleanup.summary,
+      ledger: {
+        status: ledger.status,
+        root: ledger.summary.root,
+        files: ledger.summary.files,
+        schemaGapCount: ledger.summary.schemaGaps.length,
+        dispatcherSummary: summarizeLedgerDispatcherSummary(ledger.summary.dispatcherSummary),
+      },
+      recommendedNextAction,
+      mutation: "none; read-only preflight summary",
+      rawPayloadRetained: false,
+    },
+    blockers: blockerList,
+    warnings,
+    nextActions,
+  });
+}
+
+function buildRepoPreflightStatus(context = {}) {
+  const result = runReadOnlyTool(context.gitRunner || spawnSync, "git", ["rev-parse", "--show-toplevel"], context);
+  if (!result.ok) {
+    return {
+      status: "warning",
+      root: repoRoot,
+      mutation: "none; git metadata only",
+      warnings: [{ code: "preflight-repo-root-unavailable", message: result.error || "Unable to read git repository root." }],
+    };
+  }
+  return {
+    status: "ready",
+    root: sanitizeLedgerField(result.stdout || repoRoot, repoRoot, 240),
+    mutation: "none; git metadata only",
+    warnings: [],
+  };
+}
+
+function buildBranchPreflightStatus(context = {}) {
+  const runner = context.gitRunner || spawnSync;
+  const branch = runReadOnlyTool(runner, "git", ["rev-parse", "--abbrev-ref", "HEAD"], context);
+  const head = runReadOnlyTool(runner, "git", ["rev-parse", "HEAD"], context);
+  const status = runReadOnlyTool(runner, "git", ["status", "--short", "--branch"], context);
+  const statusLines = String(status.stdout || "").split(/\r?\n/).filter(Boolean);
+  const branchLine = statusLines.find((line) => line.startsWith("##")) || "";
+  const dirtyLines = statusLines.filter((line) => !line.startsWith("##"));
+  const warnings = [];
+  for (const [code, result] of [
+    ["preflight-branch-name-unavailable", branch],
+    ["preflight-head-sha-unavailable", head],
+    ["preflight-git-status-unavailable", status],
+  ]) {
+    if (!result.ok) warnings.push({ code, message: result.error || "Unable to read git branch metadata." });
+  }
+  return {
+    status: warnings.length > 0 ? "warning" : "ready",
+    current: sanitizeLedgerField(branch.stdout || "unknown", "unknown", 120),
+    headSha: sanitizeLedgerField(head.stdout || "", "", 80),
+    upstream: sanitizeLedgerField(branchLine.includes("...") ? branchLine.split("...")[1]?.split(" ")[0] || "" : "", "", 120),
+    dirty: dirtyLines.length > 0,
+    dirtyFileCount: dirtyLines.length,
+    mutation: "none; git metadata only",
+    warnings,
+  };
+}
+
+function buildGithubCliPreflightStatus(context = {}) {
+  const result = runReadOnlyTool(context.ghRunner || spawnSync, "gh", ["--version"], context);
+  if (!result.ok) {
+    return {
+      status: "warning",
+      available: false,
+      version: "",
+      mutation: "none; gh availability check only",
+      warnings: [{ code: "preflight-github-cli-unavailable", message: result.error || "GitHub CLI is unavailable." }],
+    };
+  }
+  return {
+    status: "ready",
+    available: true,
+    version: sanitizeLedgerField(String(result.stdout || "").split(/\r?\n/)[0] || "gh available", "gh available", 120),
+    mutation: "none; gh availability check only",
+    warnings: [],
+  };
+}
+
+function buildWorkspaceProtocolPreflightStatus(workspace = {}) {
+  const warnings = workspace.ok ? [] : [{ code: "preflight-workspace-state-unsafe", message: workspace.error || "Workspace state root is unsafe." }];
+  return {
+    status: workspace.ok ? "ready" : "blocked",
+    protocol: "codex-workspace-state",
+    stateRoot: workspace.state?.root || "",
+    storageProof: workspace.proof || null,
+    mutation: "none; workspace protocol proof only",
+    warnings,
+  };
+}
+
+function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
+  const summary = dispatchPreview.summary || dispatchPreview;
+  const counts = summary.counts || {};
+  const dispatch = summary.dispatch || {};
+  const ledgerDispatcher = ledger.summary?.dispatcherSummary || {};
+  const dispatchBlockers = [
+    ...(Array.isArray(dispatch.blockers) ? dispatch.blockers : []),
+    ...(Array.isArray(summary.blockers) ? summary.blockers : []),
+    ...(Array.isArray(dispatchPreview.blockers) ? dispatchPreview.blockers : []),
+  ];
+  const allowed = dispatch.allowed ?? summary.allowed ?? dispatchPreview.allowed;
+  const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
+  const dispatchableLanes = Number(counts.dispatchable ?? summary.dispatchableLanes ?? 0) || 0;
+  const activeLanes = Number(counts.active ?? candidateStateCounts.active ?? summary.activeLanes ?? 0) || 0;
+  const noNewDispatchButActive =
+    activeLanes > 0 &&
+    dispatchBlockers.length > 0 &&
+    dispatchBlockers.every((blocker) => isNoDispatchableLaneBlocker(blocker));
+  const effectiveDispatchBlockers = noNewDispatchButActive ? [] : dispatchBlockers;
+  const previewHasDispatcherTruth = Boolean(
+    isPlainObject(summary) &&
+    (
+      Object.keys(counts).length > 0 ||
+      isPlainObject(candidateStateCounts) ||
+      isPlainObject(dispatch) ||
+      summary.generatedAt ||
+      dispatch.generatedAt
+    )
+  );
+  const dispatcherSummaryUnavailable =
+    !isPlainObject(ledgerDispatcher) ||
+    ledgerDispatcher.stateSource === "dispatcher_summary_unavailable" ||
+    ["unknown", "stale"].includes(String(ledgerDispatcher.freshness || "").toLowerCase());
+  const placeholderSummaryUnavailable =
+    dispatcherSummaryUnavailable &&
+    (!isPlainObject(ledgerDispatcher) || ledgerDispatcher.stateSource === "dispatcher_summary_unavailable" || String(ledgerDispatcher.freshness || "").toLowerCase() === "unknown");
+  const previewBacked = placeholderSummaryUnavailable && previewHasDispatcherTruth && effectiveDispatchBlockers.length === 0;
+  const status = effectiveDispatchBlockers.length > 0 || (allowed === false && effectiveDispatchBlockers.length > 0) ? "blocked" : dispatcherSummaryUnavailable && !previewBacked ? "blocked" : dispatchableLanes > 0 || activeLanes > 0 ? "ready" : "ready";
+  const warnings = dispatcherSummaryUnavailable && !previewBacked
+    ? [{ code: "preflight-dispatcher-summary-unknown", message: "Dispatcher summary is unavailable or stale; refresh dispatcher state before inferring active work." }]
+    : [];
+  const nextActions = dispatcherSummaryUnavailable && !previewBacked
+    ? [{ code: "preflight-dispatcher-summary-refresh", summary: "Refresh dispatcher summary before manager mutation.", nextAction: "Run manager assignment/dispatch summary refresh before inferring active work." }]
+    : [];
+  const blockers = effectiveDispatchBlockers.map((blocker) => sanitizeLedgerField(blocker?.message || blocker, "dispatcher blocker", 180));
+  if (dispatcherSummaryUnavailable && !previewBacked) {
+    blockers.push("Dispatcher summary is unavailable or stale; refresh dispatcher state before manager mutation.");
+  }
+  return {
+    status,
+    dispatchableLanes,
+    activeLanes,
+    blockedLanes: Number(counts.blocked ?? 0) || 0,
+    dispatcherSummaryState: sanitizeLedgerField(previewBacked ? "dispatch_preview_live" : ledgerDispatcher.stateSource || "dispatcher_summary_unavailable", "dispatcher_summary_unavailable", 80),
+    freshness: sanitizeLedgerField(previewBacked ? "fresh" : ledgerDispatcher.freshness || "unknown", "unknown", 40),
+    blockers,
+    mutation: "none; dispatcher readiness summary only",
+    warnings,
+    nextActions,
+  };
+}
+
+function isNoDispatchableLaneBlocker(blocker = "") {
+  const text = String(blocker?.message || blocker?.code || blocker || "").toLowerCase();
+  return /no dispatchable|no .*safe backlog|no .*ready.*preview|no generated lane/.test(text);
+}
+
+function buildRecoveryNotRequestedPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || context.runId || defaultRunId());
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      reconciliation: {
+        status: "ready",
+        action: "not_requested",
+        recoveryStatus: "not_requested",
+        latestSafeCheckpoint: null,
+        nextAction: "continue_current_cycle",
+        operatorAttentionRequired: false,
+        recoveryAttemptCount: 0,
+        lastRecoveryAt: null,
+        evidenceFreshness: {},
+        surfaces: {},
+        disagreements: [],
+        missingEvidence: [],
+        policy: "reconcile_when_evidence_or_recovery_signal_exists",
+        rawPayloadRetained: false,
+      },
+      autoRepair: {
+        posture: "not_requested",
+        action: "none",
+        rawPayloadRetained: false,
+      },
+      retryRoutes: [],
+      mutationMode: "none_recovery_not_requested",
+      rawPayloadRetained: false,
+    },
+    blockers: [],
+    warnings: [],
+    nextActions: [],
+  });
+}
+
+function summarizeLedgerDispatcherSummary(summary = null) {
+  if (!isPlainObject(summary)) return null;
+  return {
+    stateSource: sanitizeLedgerField(summary.stateSource || "dispatcher_summary_unavailable", "dispatcher_summary_unavailable", 80),
+    freshness: sanitizeLedgerField(summary.freshness || "unknown", "unknown", 40),
+    currentPhase: sanitizeLedgerField(summary.currentPhase || "unknown", "unknown", 80),
+    updatedAt: sanitizeLedgerField(summary.updatedAt || "", "", 80),
+    nextAction: sanitizeLedgerField(summary.nextAction || "", "", 180),
+    queuedCount: nonNegativeInteger(summary.queuedCount ?? summary.queued ?? summary.counts?.queued),
+    activeCount: nonNegativeInteger(summary.activeCount ?? summary.active ?? summary.counts?.active),
+    blockedCount: nonNegativeInteger(summary.blockedCount ?? summary.blocked ?? summary.counts?.blocked),
+    failedCount: nonNegativeInteger(summary.failedCount ?? summary.failed ?? summary.counts?.failed),
+    rawPayloadRetained: false,
+  };
+}
+
+function runReadOnlyTool(runner, command, args, context = {}) {
+  try {
+    const result = runner(command, args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 5000 });
+    if (!result || typeof result !== "object" || typeof result.status !== "number") {
+      return { ok: false, stdout: "", stderr: "", error: `${command} returned malformed result` };
+    }
+    const status = Number(result.status);
+    const stdout = String(result?.stdout || "").trim();
+    const stderr = String(result?.stderr || "").trim();
+    if (result?.error) return { ok: false, stdout, stderr, error: result.error.message || `${command} unavailable` };
+    if (status !== 0) return { ok: false, stdout, stderr, error: stderr || stdout || `${command} exited ${status}` };
+    return { ok: true, stdout, stderr };
+  } catch (error) {
+    return { ok: false, stdout: "", stderr: "", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function buildCyclePacket(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const readOnlyRunOptions = { ...runOptions, apply: false };
+  const usageInput = {
+    ...(isPlainObject(context.usageContext) ? context.usageContext : {}),
+    weeklyUsage: context.usageContext?.weeklyUsage ?? context.weeklyUsage,
+    weeklyUsageContext: context.usageContext?.weeklyUsageContext ?? context.weeklyUsageContext,
+    weeklyUsagePressure: context.usageContext?.weeklyUsagePressure ?? context.weeklyUsagePressure,
+  };
+  const usage = usageInput && (usageInput.status || usageInput.state)
+    ? normalizeUsagePacketContext(usageInput, context)
+    : buildUsageStatus(usageInput);
+  const resources = context.resourceContext && (context.resourceContext.status || context.resourceContext.state) ? normalizePacketContext(context.resourceContext) : buildResourceStatus(context.resourceContext || {});
+  const preflight = context.preflightStatus ? normalizePacketContext(context.preflightStatus) : buildPreflight(readOnlyRunOptions, context);
+  const dispatchPreview = context.dispatchPreview ? normalizeDispatchPreviewContext(context.dispatchPreview) : buildDispatchPreview(readOnlyRunOptions, context);
+  const runway = buildRefillPlan(readOnlyRunOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
+  const workers = context.workerStatus ? normalizePacketContext(context.workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
+  const workerHandoff = buildWorkerHandoffPlan(readOnlyRunOptions, {
+    ...context,
+    workerStatus: workers,
+    assignmentSummary: context.assignmentSummary,
+  });
+  const workerProgress = context.workerProgressStatus || buildWorkerProgressStatus(readOnlyRunOptions, {
+    ...context,
+    workerStatus: workers,
+    assignmentSummary: context.assignmentSummary,
+  });
+  const laneAdvance = context.laneAdvanceStatus || buildLaneAdvancementPlan(readOnlyRunOptions, {
+    ...context,
+    workerStatus: workers,
+    assignmentSummary: context.assignmentSummary,
+    checkpoints: context.checkpoints || undefined,
+  });
+  const friction = buildWorkerFrictionPlan(readOnlyRunOptions, {
+    questions: context.workerQuestions || context.questions || [],
+    failureSignals: context.failureSignals || [],
+    safeWorkers: context.safeWorkers || context.unrelatedWork || context.safeWork,
+    taskRisk: context.taskRisk || {},
+    usageState: usage.status,
+  });
+  const steering = buildSteeringPlan(readOnlyRunOptions, context);
+  const cleanup = context.cleanupPlan || buildCleanupPlan(readOnlyRunOptions, context);
+  const resume = buildResumeState(readOnlyRunOptions, context);
+  const hasRecoverySignals = Boolean(context.stateSignals || context.reconciliationStateSignals);
+  const recovery = context.recoveryPlan
+    ? normalizePacketContext(context.recoveryPlan)
+    : hasRecoverySignals
+      ? buildRecoveryPlan(readOnlyRunOptions, { ...context, stateSignals: context.reconciliationStateSignals || context.stateSignals })
+      : buildRecoveryNotRequestedPlan(readOnlyRunOptions, context);
+  const workspace = getWorkspaceProof(readOnlyRunOptions, context);
+  const feedback = buildFeedbackPlan(readOnlyRunOptions, context);
+  const delivery = context.deliveryPlan ? normalizePacketContext(context.deliveryPlan) : buildDeliveryPlan(readOnlyRunOptions, { ...context, feedbackPlan: feedback });
+  const dispatcherState = buildCycleDispatcherState(dispatchPreview);
+  const queueLeaseSummary = buildCycleQueueLeaseSummary(dispatcherState);
+  const signalGaps = buildCycleSignalGaps({ usage, resources, dispatchPreview, workers, cleanup, preflight, context });
+  const observations = buildCycleObservations({ dispatchPreview, workers, context });
+  const frictionAttention = friction.status === "attention";
+  const workerQuestionBlockers = workerQuestionOperatorBlockers(friction.summary?.questionHandling || []);
+  const workerQuestionBlockerActions = workerQuestionBlockers.map((blocker) => ({
+    code: "worker-question-operator-interruption",
+    summary: blocker.message,
+    nextAction: blocker.nextAction,
+  }));
+  const steeringAttention = steering.status === "attention";
+  const feedbackAttention = feedback.status === "attention";
+  const workerProgressAttention = workerProgress.status === "attention";
+  const laneAdvanceAttention = laneAdvance.status === "attention";
+  const activeWorkerCount = Number(workers.summary?.workerCounts?.active || 0);
+  const preflightBlockers = preflight.blockers || [];
+  const blockers = [];
+  if (!workspace.ok) {
+    blockers.push({ code: "workspace-state-unsafe", message: workspace.error, nextAction: "Choose a safe workspace state root." });
+  }
+  if (preflightBlockers.length > 0 && !frictionAttention && !workerProgressAttention && !laneAdvanceAttention && activeWorkerCount === 0) {
+    blockers.push(...preflightBlockers);
+  }
+  blockers.push(...signalGaps.blockers);
+  blockers.push(...(resume.blockers || []));
+  blockers.push(...(recovery.blockers || []));
+  blockers.push(...(runway.blockers || []));
+  blockers.push(...(workers.blockers || []));
+  const dispatchPosture = applySteeringToDispatchPosture(buildDispatchPosture(usage.status, resources.status, usage.summary?.weekly), steering.summary);
+  const dispatchPostureAllowsNewDispatch = dispatchPosture.summary?.newDispatchAllowed !== false;
+  blockers.push(...dispatchPosture.blockers);
+  blockers.push(...workerQuestionBlockers);
+  blockers.push(...(steering.blockers || []));
+  blockers.push(...(feedback.blockers || []));
+  blockers.push(...(delivery.blockers || []));
+  const baseStatus = blockers.length > 0 ? "blocked" : frictionAttention || steeringAttention || feedbackAttention || workerProgressAttention || laneAdvanceAttention ? "attention" : "ready";
+  const continuation = buildContinuationPlan({ status: baseStatus, blockers, runway, usage, resources, workers, resume, dispatchPreview });
+  const status = baseStatus === "blocked" && continuation.canContinue ? "attention" : baseStatus;
+  const reportedBlockers = suppressSupersededCycleBlockers({ blockers, cleanup });
+  const recoveryMutationBlocked = recoveryBlocksManagerMutation(recovery);
+  const autoApply = [
+    classifyAutoApply("ledger.append", { resourceState: resources.status, usageState: usage.status, weeklyUsage: usage.summary?.weekly }),
+    classifyAutoApply("dispatch.apply", { resourceState: resources.status, usageState: usage.status, weeklyUsage: usage.summary?.weekly }),
+  ];
+  const currentSource = runway.summary.sourceSlice?.label || "none";
+  const blockerActions = blockers
+    .map((blocker) => ({
+      code: blocker.code ? `${blocker.code}-action` : "blocker-action",
+      summary: blocker.message || "Manager is blocked.",
+      nextAction: blocker.nextAction || "Inspect blocker evidence before resuming manager mutation.",
+    }))
+    .filter((action) => action.nextAction);
+  const takeoverInspectionActions = takeoverInspectionNextActions(resume.summary.takeoverInspection);
+  const workerWarmActions =
+    continuation.state === "worker_warm_ready"
+      ? [
+          {
+            code: "manager-owned-worker-warm-ready",
+            summary: `Warm ${continuation.startWarmCandidates} manager-owned worker(s) through existing gates.`,
+            nextAction: `node ./scripts/manager-worker-warm.mjs --summary-json --limit ${continuation.startWarmCandidates}`,
+          },
+        ]
+      : [];
+  const workerHandoffActions = workerHandoff.status === "ready" ? (workerHandoff.nextActions || []).map((action) => ({
+    ...action,
+    code: action.code || "worker-handoff-action",
+  })) : [];
+  const activeWorkerActions =
+    continuation.state === "active_worker_monitoring"
+      ? [
+          {
+            code: "active-worker-monitoring",
+            summary: `Monitor ${continuation.activeWorkers} active manager-owned worker(s); keep takeover and dispatch apply blocked.`,
+            nextAction: "Poll manager-worker-progress and route only blockers, questions, checkpoints, stale progress signals, and risky decisions.",
+          },
+        ]
+      : [];
+  const workerProgressActions = (workerProgress.nextActions || []).map((action) => ({
+    ...action,
+    code: action.code || "worker-progress-action",
+  }));
+  const laneAdvanceActions = (laneAdvance.nextActions || []).map((action) => ({
+    ...action,
+    code: action.code || "manager-lane-advance-ready",
+  }));
+  const cleanupActions = (cleanup.nextActions || []).map((action) => ({
+    ...action,
+    code: action.code || "cleanup-action",
+  }));
+  const supersededActions = supersededCycleActionCodes({ cleanup });
+  const nextActions = uniqueActions([
+    ...(recoveryMutationBlocked ? [] : workerQuestionBlockerActions),
+    ...(recoveryMutationBlocked ? [] : workerWarmActions),
+    ...(recoveryMutationBlocked ? [] : workerHandoffActions),
+    ...(recoveryMutationBlocked ? [] : laneAdvanceActions),
+    ...(recoveryMutationBlocked ? [] : workerProgressActions),
+    ...signalGaps.nextActions,
+    ...(recoveryMutationBlocked ? [] : dispatchPostureAllowsNewDispatch ? (dispatchPreview.nextActions || []) : []),
+    ...(recoveryMutationBlocked ? [] : runway.nextActions || []),
+    ...activeWorkerActions,
+    ...(usage.nextActions || []),
+    ...(recoveryMutationBlocked ? [] : friction.nextActions || []),
+    ...(recoveryMutationBlocked ? [] : steering.nextActions || []),
+    ...(recoveryMutationBlocked ? [] : feedback.nextActions || []),
+    ...(recoveryMutationBlocked ? [] : cleanupActions),
+    ...takeoverInspectionActions,
+    ...blockerActions,
+  ].filter((action) => !supersededActions.has(action.code)));
+  const sourceBackedRefillAction =
+    !recoveryMutationBlocked && runway.summary.dispatchableLanes === 0 && runway.summary.sourceSlice ? runway.nextActions?.[0]?.nextAction : null;
+  const safeDispatchAction = !recoveryMutationBlocked && dispatchPostureAllowsNewDispatch && dispatchPreview.summary?.allowed ? dispatchPreview.nextActions?.[0]?.nextAction : null;
+  const activeWorkerAction = activeWorkerActions[0]?.nextAction || null;
+  const workerWarmAction = recoveryMutationBlocked ? null : workerWarmActions[0]?.nextAction || null;
+  const workerHandoffAction = recoveryMutationBlocked ? null : workerHandoffActions[0]?.nextAction || null;
+  const laneAdvanceAction = recoveryMutationBlocked ? null : laneAdvanceActions[0]?.nextAction || null;
+  const cleanupAction = recoveryMutationBlocked ? null : cleanupActions[0]?.nextAction || null;
+  const actionNeeded =
+    (recoveryMutationBlocked ? null : workerQuestionBlockerActions[0]?.nextAction) ||
+    (recoveryMutationBlocked ? null : steering.blockers?.[0]?.nextAction) ||
+    (recoveryMutationBlocked ? null : steering.nextActions?.[0]?.nextAction) ||
+    (recoveryMutationBlocked ? null : feedback.nextActions?.[0]?.nextAction) ||
+    workerWarmAction ||
+    workerHandoffAction ||
+    laneAdvanceAction ||
+    (recoveryMutationBlocked ? null : workerProgress.nextActions?.[0]?.nextAction) ||
+    (recoveryMutationBlocked ? null : friction.nextActions?.[0]?.nextAction) ||
+    safeDispatchAction ||
+    sourceBackedRefillAction ||
+    activeWorkerAction ||
+    cleanupAction ||
+    takeoverInspectionActions[0]?.nextAction ||
+    resume.blockers?.[0]?.nextAction ||
+    runway.blockers?.[0]?.nextAction ||
+    (recoveryMutationBlocked ? null : runway.nextActions?.[0]?.nextAction) ||
+    "none";
+  const progress = buildProgressBeaconPlan(runOptions, {
+    runState: continuation.progressRunState,
+    workerCounts: workers.summary?.workerCounts || {},
+    usageState: usage.status,
+    resourceState: resources.status,
+    currentSource,
+    operatorActionState: actionNeeded,
+    queueLeaseSummary,
+    sourceExhausted: context.sourceExhausted ?? context.source_exhausted ?? runway.summary?.sourceExhausted ?? runway.summary?.source_exhausted,
+    cleanupState: context.cleanupState || context.cleanup_state || cleanup.summary?.state || cleanup.status,
+    housekeepingCompleted: context.housekeepingCompleted ?? context.housekeeping_complete,
+    nextProductDecision: context.nextProductDecision || context.next_product_decision || runway.summary?.nextProductDecision || continuation.nextProductDecision,
+    openLanes: context.openLanes || context.open_lanes || cycleOpenLaneSummaries({ workers, dispatchPreview }),
+    parkedLanes: context.parkedLanes || context.parked_lanes || cycleParkedLaneSummaries({ recovery }),
+    checkpoints: context.checkpoints || [],
+    checkpointCandidates: context.checkpointCandidates || [],
+    activeLaneEvidence: context.activeLaneEvidence || context.active_lane_evidence || runway.summary.activeLaneEvidence,
+    workContinues: continuation.canContinue,
+    nextSource: currentSource,
+  });
+  const report = progress.summary.heartbeat.text;
+  const preflightSummary = preflight.summary || {};
+  const cycleRecommendedActions = sanitizeCycleActions(nextActions);
+  return packet({
+    ok: status !== "blocked",
+    status,
+    summary: {
+      run: { runId: runOptions.runId, state: status },
+      usage: sanitizeCyclePacketValue(usage.summary),
+      resources: sanitizeCyclePacketValue(resources.summary),
+      dispatcher: sanitizeCyclePacketValue(dispatcherState.dispatcher),
+      queue: sanitizeCyclePacketValue(dispatcherState.queue),
+      lease: sanitizeCyclePacketValue(dispatcherState.lease),
+      workers: sanitizeCyclePacketValue(workers.summary),
+      workerProgress: sanitizeCyclePacketValue(workerProgress.summary),
+      laneAdvance: sanitizeCyclePacketValue(laneAdvance.summary),
+      runway: sanitizeCyclePacketValue(runway.summary),
+      preflight: {
+        status: preflight.status,
+        repo: sanitizeCyclePacketValue(preflightSummary.repo),
+        branch: sanitizeCyclePacketValue(preflightSummary.branch),
+        githubCli: sanitizeCyclePacketValue(preflightSummary.githubCli),
+        workspaceProtocol: sanitizeCyclePacketValue(preflightSummary.workspaceProtocol),
+        dispatcher: sanitizeCyclePacketValue(preflightSummary.dispatcher),
+        ledgerStatus: preflightSummary.ledger?.status || "unknown",
+        blockerCount: preflight.blockers?.length || 0,
+        warningCount: preflight.warnings?.length || 0,
+        recommendedNextAction: sanitizeLedgerField(preflightSummary.recommendedNextAction || "", "", 180),
+        mutation: "none; read-only preflight summary",
+        rawPayloadRetained: false,
+      },
+      continuation: sanitizeCyclePacketValue(continuation),
+      recovery: sanitizeCyclePacketValue(recovery.summary),
+      dispatchPreview: sanitizeCyclePacketValue(dispatchPreview.summary),
+      delivery: sanitizeCyclePacketValue(delivery.summary || { mutationMode: "existing-gates-required", source: "codex-workspace existing gates" }),
+      dispatchPosture: sanitizeCyclePacketValue(dispatchPosture.summary),
+      steering: sanitizeCyclePacketValue(steering.summary),
+      modelRouting: sanitizeCyclePacketValue(friction.summary.modelRouting),
+      dependencyLoops: sanitizeCyclePacketValue(friction.summary.dependencyLoops),
+      questionBlockers: sanitizeCyclePacketValue(workerQuestionBlockers),
+      reviewResourcePolicy: sanitizeCyclePacketValue(friction.summary.reviewResourcePolicy),
+      cleanup: sanitizeCyclePacketValue(cleanup.summary),
+      resume: {
+        status: resume.status,
+        ledgerStatus: resume.summary?.ledger?.status || "unknown",
+        schemaGapCount: resume.summary.schemaGaps.length,
+        blockerCount: resume.blockers.length,
+        blockedLaneAssignments: sanitizeCyclePacketValue(resume.summary.assignment.blockedLaneAssignments || []),
+        blockedWorkspaceAssignments: sanitizeCyclePacketValue(resume.summary.assignment.blockedWorkspaceAssignments || []),
+        takeoverInspection: sanitizeCyclePacketValue(resume.summary.takeoverInspection || null),
+      },
+      progress: sanitizeCyclePacketValue(progress.summary),
+      feedback: sanitizeCyclePacketValue(feedback.summary),
+      signalGaps: {
+        status: signalGaps.status,
+        gapCount: signalGaps.gapCount,
+        blockerCount: signalGaps.blockerCount,
+        gaps: signalGaps.gaps,
+        rawPayloadRetained: false,
+      },
+      observations: {
+        authority: observations.authority,
+        dispatcherActiveCount: observations.dispatcherActiveCount,
+        workerActiveCount: observations.workerActiveCount,
+        tmux: observations.tmux,
+        logs: observations.logs,
+        dashboard: observations.dashboard,
+        conflicts: observations.conflicts,
+        rawPayloadRetained: false,
+      },
+      checkpoints: sanitizeCyclePacketValue(progress.summary.checkpointReports),
+      finalReport: sanitizeCyclePacketValue(progress.summary.finalReport),
+      questions: sanitizeCyclePacketValue(friction.summary.questionHandling),
+      failureLoops: sanitizeCyclePacketValue(friction.summary.failureLoops),
+      blockers: sanitizeCyclePacketValue(reportedBlockers),
+      recommendedActions: cycleRecommendedActions,
+      autoApply: sanitizeCyclePacketValue(autoApply),
+      report: sanitizeLedgerField(report, "Manager: status unavailable", 600),
+    },
+    blockers: sanitizeCyclePacketValue(reportedBlockers),
+    warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
+    nextActions: cycleRecommendedActions,
+  });
+}
+
+export function buildContinuousRunPlan(options = {}, context = {}) {
+  const cycle = context.cyclePacket || buildCyclePacket(options, context);
+  const promptProbe = context.promptProbe || buildWorkerPromptProbePlan({ ...options, limit: 6 }, context);
+  const submitPending = context.submitPendingPlan || buildWorkerSubmitPendingPlan({ ...options, limit: 6 }, context);
+  const promptProbeActions = promptProbe.status === "attention" && Array.isArray(promptProbe.nextActions) ? promptProbe.nextActions : [];
+  const submitPendingActions = submitPending.status === "ready" && Array.isArray(submitPending.nextActions)
+    ? submitPending.nextActions.filter((action) => action.code === "worker-submit-pending-apply-ready")
+    : [];
+  const idleLoadActions = buildPromptIdleLoadActions(cycle, promptProbe);
+  const nextActions = [...promptProbeActions, ...submitPendingActions, ...idleLoadActions, ...(Array.isArray(cycle.nextActions) ? cycle.nextActions : [])];
+  const needsQuestionAnswerGate = nextActions.some((action) => action.code === "worker-progress-blocked_question");
+  const questionAnswer = context.questionAnswerPlan || (needsQuestionAnswerGate ? buildWorkerQuestionAnswerPlan({ ...options, limit: 6 }, context) : null);
+  const questionAnswerAvailable = !needsQuestionAnswerGate ||
+    Number(questionAnswer?.summary?.planned || 0) > 0 ||
+    Number(questionAnswer?.summary?.answerableQuestions || 0) > 0;
+  const dispatchRoutingHold = buildContinuousDispatchRoutingHold(cycle);
+  const actionable = nextActions
+    .filter((action) => action.code !== "worker-progress-blocked_question" || questionAnswerAvailable)
+    .map((action) => buildContinuousAction(action, cycle))
+    .filter(Boolean)
+    .filter((action) => continuousActionAllowedByContinuation(action, cycle))
+    .sort((left, right) => continuousActionPriority(left) - continuousActionPriority(right));
+  const selected = actionable.find((action) => !action.readOnly) || actionable[0] || null;
+  const workers = cycle.summary?.workers?.workerCounts || {};
+  const usage = cycle.summary?.usage || {};
+  const resources = cycle.summary?.resources || {};
+  const stopReasons = [];
+  if (cycle.status === "blocked") {
+    stopReasons.push({ code: "cycle-blocked", message: "Cycle packet is blocked; continuous mode must stop for operator or repair." });
+  }
+  if (usage.state === "manager_only") {
+    stopReasons.push({ code: "usage-manager-only", message: "Usage is manager_only; continuous mode must stop new worker mutation." });
+  }
+  if (resources.state === "critical") {
+    stopReasons.push({ code: "resource-critical", message: "Resources are critical; continuous mode must avoid additional worker mutation." });
+  }
+  const effectiveSelected = stopReasons.length > 0 ? null : selected;
+  const status = stopReasons.length > 0 ? "blocked" : effectiveSelected || cycle.status === "attention" ? "attention" : "ready";
+  const selectedAction = sanitizeCyclePacketValue(effectiveSelected);
+  const attentionNextAction = sanitizeLedgerField(
+    dispatchRoutingHold?.nextAction || cycle.nextActions?.[0]?.nextAction || "Inspect the latest manager-cycle-packet recommended actions.",
+    "Inspect the latest manager-cycle-packet recommended actions.",
+    260,
+  );
+  return packet({
+    ok: stopReasons.length === 0,
+    status,
+    summary: {
+      runId: cycle.summary?.run?.runId || resolveManagerRunId(options, context),
+      mode: "continuous",
+      maxIterations: options.maxIterations ?? 0,
+      intervalMs: Math.max(1000, nonNegativeInteger(options.intervalMs) ?? 60000),
+      heartbeatEvery: Math.max(1, nonNegativeInteger(options.heartbeatEvery) ?? 1),
+      workerCounts: {
+        active: workers.active ?? 0,
+        warm: workers.warm ?? 0,
+        paused: workers.paused ?? 0,
+      },
+      usageState: usage.state || "unknown",
+      resourceState: resources.state || "unknown",
+      cycleStatus: cycle.status,
+      selectedAction,
+      reviewResourcePolicy: sanitizeCyclePacketValue(cycle.summary?.reviewResourcePolicy || null),
+      dispatchRouting: sanitizeCyclePacketValue(dispatchRoutingHold?.decision || null),
+      allowedActionCount: stopReasons.length > 0 ? 0 : actionable.length,
+      retention: "metadata_only_continuous_loop_summary",
+      stopReasons: sanitizeCyclePacketValue(stopReasons),
+    },
+    blockers: stopReasons.map((reason) => ({ code: reason.code, message: reason.message, nextAction: "Stop continuous mode and inspect the latest manager-cycle-packet." })),
+    warnings: sanitizeCyclePacketValue([...(promptProbe.warnings || []), ...(cycle.warnings || [])]),
+    nextActions: stopReasons.length > 0
+      ? [{ code: "continuous-blocked", summary: "Continuous mode is blocked by the latest cycle packet.", nextAction: "Stop continuous mode and inspect the latest manager-cycle-packet." }]
+      : effectiveSelected
+        ? [{ code: "continuous-apply-ready", summary: sanitizeLedgerField(effectiveSelected.summary, "", 180), nextAction: sanitizeLedgerField(effectiveSelected.applyCommand, "", 260) }]
+        : cycle.status === "attention"
+        ? [{ code: "continuous-attention-monitor", summary: "Manager attention remains, but no auto-safe action is currently available.", nextAction: attentionNextAction }]
+        : [{ code: "continuous-monitor", summary: "No manager-owned auto action is currently needed.", nextAction: "Sleep until the next continuous manager poll." }],
+  });
+}
+
+function continuousActionPriority(action = {}) {
+  const priorities = new Map([
+    ["continuous-worker-answer-question", 10],
+    ["continuous-worker-prompt-probe", 15],
+    ["continuous-worker-submit-pending", 20],
+    ["continuous-lane-advance-apply", 29],
+    ["continuous-worker-warm", 30],
+    ["continuous-worker-handoff", 31],
+    ["continuous-worker-progress-signal", 32],
+    ["continuous-dispatch-apply", 33],
+    ["continuous-refill-apply", 34],
+    ["continuous-bmad-code-review-request", 34],
+    ["continuous-worker-prompt-idle-progress-signal", 35],
+    ["continuous-worker-recovery-inspection", 55],
+    ["continuous-worker-retire", 60],
+  ]);
+  return priorities.get(action.code) ?? 100;
+}
+
+function continuousActionAllowedByContinuation(action = {}, cycle = {}) {
+  const continuation = cycle.summary?.continuation || {};
+  const attentionPolicy = cycle.summary?.reviewResourcePolicy?.managerLoopBinding || {};
+  if (Number(attentionPolicy.operatorInterruptionCount || 0) > 0 && action.code === "continuous-worker-answer-question") {
+    return false;
+  }
+  if (continuation.workerMutationAllowed === false && String(action.mutationClass || "").startsWith("manager_owned_worker_")) {
+    return false;
+  }
+  if (continuation.dispatchApplyAllowed === false && action.mutationClass === "assignment_workspace_claim_only") {
+    return false;
+  }
+  return true;
+}
+
+function buildPromptIdleLoadActions(cycle = {}, promptProbe = {}) {
+  const progressRows = Array.isArray(cycle.summary?.workerProgress?.workerProgress)
+    ? cycle.summary.workerProgress.workerProgress
+    : [];
+  const promptIdleIds = new Set(
+    (Array.isArray(promptProbe.summary?.probes) ? promptProbe.summary.probes : [])
+      .filter((probe) => probe.promptDetected === true && probe.inputHasManagerPointer !== true)
+      .map((probe) => String(probe.workerId || ""))
+      .filter(Boolean),
+  );
+  if (promptIdleIds.size === 0 || progressRows.length === 0) return [];
+  const promptIdleRows = progressRows.filter((worker) => promptIdleIds.has(String(worker.workerId || "")));
+  const completedRows = promptIdleRows.filter((worker) => ["manager_review_ready", "delivery_gate_ready"].includes(worker.progressState));
+  const laneAdvanceReady = Boolean(
+    Number(cycle.summary?.laneAdvance?.readyLaneCount || 0) > 0 ||
+    (Array.isArray(cycle.nextActions) && cycle.nextActions.some((action) => action.code === "manager-lane-advance-ready")),
+  );
+  const handoffIdleRows = promptIdleRows.filter((worker) =>
+    worker.progressState === "handoff_sent" &&
+    Number(worker.checkpointCount || 0) === 0 &&
+    Number(worker.ageSeconds || 0) >= 15,
+  );
+  const checkpointIdleRows = promptIdleRows.filter((worker) =>
+    worker.progressState === "checkpoint_seen" &&
+    Number(worker.latestCheckpointAgeSeconds || 0) >= 60,
+  );
+  const answeredQuestionIdleRows = promptIdleRows.filter((worker) =>
+    worker.progressState === "question_answer_stale"
+  );
+  const actions = [];
+  if (completedRows.length > 0 && laneAdvanceReady) {
+    actions.push({
+      code: "manager-lane-advance-ready",
+      summary: `Advance ${completedRows.length} prompt-idle completed worker lane(s) so workers can be reused.`,
+      nextAction: `node ./scripts/manager-lane-advance.mjs --summary-json --limit ${Math.min(6, completedRows.length)}`,
+    });
+  }
+  const signalRows = [...handoffIdleRows, ...checkpointIdleRows, ...answeredQuestionIdleRows];
+  if (signalRows.length > 0) {
+    actions.push({
+      code: signalRows.length === 1 ? `worker-progress-${signalRows[0].progressState}` : "worker-progress-prompt_idle",
+      summary: `Signal ${signalRows.length} prompt-idle worker(s) for compact progress so idle panes do not wait for operator observation.`,
+      nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${Math.min(6, signalRows.length)} --prompt-idle`,
+    });
+  }
+  return actions;
+}
+
+function buildContinuousDispatchRoutingHold(cycle = {}) {
+  const dispatchAction = (Array.isArray(cycle.nextActions) ? cycle.nextActions : []).find((action) => action.code === "dispatch-preview-ready");
+  if (!dispatchAction) return null;
+  const decision = buildContinuousDispatchRoutingDecision(cycle);
+  if (decision.allowed) return null;
+  return {
+    decision,
+    nextAction: `Hold dispatch until usage/resource routing is ready: ${decision.blockedReasons.join(", ") || "routing blocked"}. Refresh usage/resource samples and rerun manager-cycle-packet.`,
+  };
+}
+
+function buildContinuousDispatchRoutingDecision(cycle = {}) {
+  const summary = cycle.summary || {};
+  const usage = summary.usage || {};
+  const resources = summary.resources || {};
+  const dispatchPreview = summary.dispatchPreview || {};
+  const owner = summary.run?.runId || "manager-continuous";
+  const readyQueueCount =
+    dispatchPreviewCount({ summary: dispatchPreview }, "dispatchable") ??
+    (dispatchPreview.selectedLane ? 1 : 0);
+  return buildUsageResourceRoutingDecision({
+    owner,
+    readyQueueCount,
+    usageSample: {
+      state: mapUsageStateForRouting(usage.state),
+      provider: usage.provider || "codex",
+      remainingPercent: usage.remainingPercent,
+      sampledAt: usage.sampledAt || usage.timestamp,
+    },
+    resourceSample: {
+      state: mapResourceStateForRouting(resources.state),
+      cpuLoadPercent: percentMetric(resources.cpuLoadPercent ?? resources.loadPercent, resources.loadRatio),
+      memoryUsedPercent: percentMetric(resources.memoryUsedPercent, resources.usedMemoryRatio),
+      sampledAt: resources.sampledAt || resources.timestamp,
+    },
+  });
+}
+
+function mapUsageStateForRouting(state = "unknown") {
+  if (state === "normal") return "normal";
+  if (["conserve", "drain", "manager_only"].includes(state)) return "low";
+  if (state === "stale") return "stale";
+  return "unknown";
+}
+
+function mapResourceStateForRouting(state = "unknown") {
+  if (state === "normal") return "normal";
+  if (["warm", "pressured", "critical", "high"].includes(state)) return "high";
+  if (state === "stale") return "stale";
+  return "unknown";
+}
+
+function percentMetric(percentValue, ratioValue) {
+  const percent = Number(percentValue);
+  if (Number.isFinite(percent)) return percent;
+  const ratio = Number(ratioValue);
+  return Number.isFinite(ratio) ? Number((ratio * 100).toFixed(2)) : null;
+}
+
+function buildContinuousAction(action = {}, cycle = {}) {
+  const nextAction = String(action.nextAction || "").trim();
+  if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
+    return {
+      code: "continuous-worker-prompt-probe",
+      summary: action.summary || "Submit visible manager pointers in worker input regions.",
+      dryRunCommand: nextAction,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-enter-only-repair-existing-gates",
+      mutationClass: "manager_owned_worker_enter_only_prompt_region_probe",
+    };
+  }
+  if (["worker-submit-pending-progress-signal", "worker-submit-pending-apply-ready"].includes(action.code) && nextAction.startsWith("node ./scripts/manager-worker-submit-pending.mjs ")) {
+    const dryRunCommand = nextAction.replace(/\s+--apply\b/, "");
+    return {
+      code: "continuous-worker-submit-pending",
+      summary: action.summary || "Submit pending manager-owned worker prompts.",
+      dryRunCommand,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-enter-only-repair-existing-gates",
+      mutationClass: "manager_owned_worker_enter_only",
+    };
+  }
+  if (action.code === "manager-owned-worker-warm-ready" && nextAction.startsWith("node ./scripts/manager-worker-warm.mjs ")) {
+    return {
+      code: "continuous-worker-warm",
+      summary: action.summary || "Warm manager-owned replacement workers.",
+      dryRunCommand: nextAction,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-warm-existing-gates",
+      mutationClass: "manager_owned_worker_warm",
+    };
+  }
+  if (action.code === "worker-handoff-apply-ready" && nextAction.startsWith("node ./scripts/manager-worker-handoff.mjs ")) {
+    const command = appendContinuousPostureFlags(nextAction, cycle);
+    return {
+      code: "continuous-worker-handoff",
+      summary: action.summary || "Hand off work to warm manager-owned workers.",
+      dryRunCommand: command.replace(/ --apply\b/g, ""),
+      applyCommand: command.includes(" --apply") ? command : `${command} --apply`,
+      authority: "manager-owned-worker-handoff-existing-gates",
+      mutationClass: "manager_owned_worker_handoff",
+    };
+  }
+  if (String(action.code || "").startsWith("worker-progress-") && nextAction.startsWith("node ./scripts/manager-worker-progress-signal.mjs ")) {
+    const promptIdle = /\s--prompt-idle\b/.test(nextAction) || String(action.code || "").includes("prompt_idle");
+    return {
+      code: promptIdle ? "continuous-worker-prompt-idle-progress-signal" : "continuous-worker-progress-signal",
+      summary: action.summary || "Signal stale manager-owned workers for compact progress.",
+      dryRunCommand: nextAction,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-progress-signal-existing-gates",
+      mutationClass: "manager_owned_worker_progress_signal",
+    };
+  }
+  if (action.code === "worker-progress-blocked_question" && nextAction.startsWith("node ./scripts/manager-worker-answer-question.mjs ")) {
+    return {
+      code: "continuous-worker-answer-question",
+      summary: action.summary || "Answer compact manager-owned worker questions.",
+      dryRunCommand: nextAction.replace(/ --apply\b/g, ""),
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-question-answer-existing-gates",
+      mutationClass: "manager_owned_worker_question_answer",
+    };
+  }
+  if (action.code === "worker-progress-progress_signal_unanswered" && nextAction === "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json") {
+    return {
+      code: "continuous-worker-recovery-inspection",
+      summary: action.summary || "Inspect unanswered manager-owned worker progress signals.",
+      dryRunCommand: nextAction,
+      applyCommand: `${nextAction} --apply`,
+      authority: "metadata-only-worker-recovery-inspection",
+      mutationClass: "metadata_only_worker_recovery_inspection",
+    };
+  }
+  if (action.code === "worker-progress-recovery_submit_unanswered" && nextAction.startsWith("node ./scripts/manager-worker-retire.mjs ")) {
+    return {
+      code: "continuous-worker-retire",
+      summary: action.summary || "Retire recovery-stuck manager-owned worker.",
+      dryRunCommand: nextAction,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-retire-after-recovery-existing-gates",
+      mutationClass: "manager_owned_worker_retire",
+    };
+  }
+  if (action.code === "manager-lane-advance-ready" && nextAction.startsWith("node ./scripts/manager-lane-advance.mjs ")) {
+    return {
+      code: "continuous-lane-advance-apply",
+      summary: action.summary || "Advance review-ready lanes into manager review or delivery metadata gates.",
+      dryRunCommand: nextAction,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-lane-advancement-heartbeat-existing-gates",
+      mutationClass: "assignment_heartbeat_metadata_only",
+    };
+  }
+  if (action.code === "safe-backlog-starvation") {
+    if (/\bbmad-code-review\b/.test(nextAction)) {
+      const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "", "", 120);
+      const reviewPlan = buildBmadCodeReviewRequestPlan(runId ? { runId } : {}, { cyclePacket: cycle });
+      if (reviewPlan.ok === false || reviewPlan.summary?.alreadyPrepared === true) {
+        return null;
+      }
+      const scopedRun = runId ? ` --run-id ${shellSingleQuote(runId)}` : "";
+      const dryRunCommand = reviewPlan.summary?.dryRunCommand || `node ./scripts/manager-bmad-code-review.mjs --summary-json${scopedRun}`;
+      const applyCommand = reviewPlan.summary?.applyCommand || `${dryRunCommand} --apply`;
+      return {
+        code: "continuous-bmad-code-review-request",
+        summary: action.summary || "Prepare the next source-owned BMAD code review request packet.",
+        dryRunCommand,
+        applyCommand,
+        authority: "existing-bmad-code-review-workflow-request-packet-only",
+        mutationClass: "manager_runtime_review_request_packet",
+      };
+    }
+    const gate = action.materializationGate || null;
+    const gateReady = gate?.state === "ready" || gate?.mutationMode === "dry_run_required";
+    const dryRunCommand = String(gate?.dryRunCommand || "").trim();
+    const applyCommand = String(gate?.applyCommand || "").trim();
+    if (!gateReady || !dryRunCommand.startsWith("node ./scripts/manager-refill-plan.mjs ") || !applyCommand.startsWith("node ./scripts/manager-refill-plan.mjs ")) {
+      return null;
+    }
+    return {
+      code: "continuous-refill-apply",
+      summary: action.summary || "Materialize source-owned local refill artifacts through existing BMAD gates.",
+      dryRunCommand,
+      applyCommand,
+      authority: "source-owned-refill-planning-existing-gates",
+      mutationClass: "local_bmad_refill_artifacts",
+    };
+  }
+  if (action.code === "dispatch-preview-ready") {
+    const dispatcher = cycle.summary?.dispatcher || {};
+    const dispatchPreview = cycle.summary?.dispatchPreview || {};
+    if ((dispatcher.allowed === false || dispatchPreview.allowed === false) || !(dispatcher.selectedLane || dispatchPreview.selectedLane)) {
+      return null;
+    }
+    const routingDecision = buildContinuousDispatchRoutingDecision(cycle);
+    if (!routingDecision.allowed) return null;
+    const dryRunCommand = routingDecision.selectedAction.command;
+    const applyCommand = dryRunCommand.replace(" --dry-run --summary-json", " --summary-json --apply");
+    return {
+      code: "continuous-dispatch-apply",
+      summary: action.summary || "Claim the next source-owned safe backlog lane through existing dispatch gates.",
+      dryRunCommand,
+      applyCommand,
+      authority: "codex-workspace-dispatch-existing-gates",
+      mutationClass: "assignment_workspace_claim_only",
+      routingDecision,
+    };
+  }
+  return null;
+}
+
+function appendContinuousPostureFlags(command = "", cycle = {}) {
+  const usageState = sanitizeContinuousFlagValue(cycle.summary?.usage?.state);
+  const resourceState = sanitizeContinuousFlagValue(cycle.summary?.resources?.state);
+  let next = String(command || "");
+  if (usageState && !/\s--usage-state(?:=|\s)/.test(next)) {
+    next += ` --usage-state ${usageState}`;
+  }
+  if (resourceState && !/\s--resource-state(?:=|\s)/.test(next)) {
+    next += ` --resource-state ${resourceState}`;
+  }
+  return next;
+}
+
+function sanitizeContinuousFlagValue(value = "") {
+  const text = String(value || "").trim();
+  return /^[A-Za-z0-9_-]+$/.test(text) ? text : "";
+}
+
+function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, resume = {}, dispatchPreview = {} } = {}) {
+  const blockerCodes = blockers.map((blocker) => blocker.code).filter(Boolean);
+  const usageState = normalizePosture(usage, "unknown");
+  const resourceState = normalizePosture(resources, "unknown");
+  if (blockerCodes.includes("split-brain-state")) {
+    return {
+      state: "blocked",
+      canContinue: false,
+      progressRunState: "blocked",
+      workerMutationAllowed: false,
+      workerStartAllowed: false,
+      dispatchApplyAllowed: false,
+      allowedActions: ["status_reporting", "read_only_inspection"],
+      blockedActions: ["worker_start", "worker_kill", "worker_answer", "lane_advance", "dispatch_apply", "delivery", "cleanup", "ownership_takeover"],
+      reason: "Split-brain reconciliation is blocked; no manager mutation can run until state is parked or reconciled.",
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  const hardWorkerMutationBlockers = [
+    "tmux-orientation-unavailable",
+    "tmux-takeover-required",
+    "worker-target-stop-line",
+  ];
+  const workerMutationBlocked = blockerCodes.some((code) =>
+    [
+      "assignment-ambiguous-status",
+      ...hardWorkerMutationBlockers,
+    ].includes(code),
+  );
+  const hardWorkerMutationBlocked = blockerCodes.some((code) => hardWorkerMutationBlockers.includes(code));
+  const sourceBackedRefillAvailable = Boolean(
+      runway.summary?.refillNeeded > 0 &&
+      runway.summary?.sourceSlice &&
+      runway.summary?.workCreationStep?.workCreationPacket &&
+      !["manager_only", "unknown"].includes(usageState) &&
+      !["critical"].includes(resourceState),
+  );
+  const blockedDeliveryTargets = new Set(
+    blockers
+      .filter((blocker) => ["delivery-phase-authority-missing", "delivery-phase-authority-invalid", "pr-stewardship-evidence-missing", "pr-stewardship-high-risk"].includes(blocker.code))
+      .flatMap((blocker) => [blocker.affectedLane, blocker.affectedBranch])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
+  const dispatchSelectedTargets = [
+    dispatchPreview.summary?.selectedLane,
+    dispatchPreview.summary?.selectedBranch,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const dispatchTargetsDeliveryBlocked = dispatchSelectedTargets.some((target) => blockedDeliveryTargets.has(target));
+  const safeDispatchApplyAvailable = Boolean(
+    dispatchPreview.summary?.allowed &&
+    dispatchPreview.summary?.selectedLane &&
+    dispatchPreview.summary?.claimMutation &&
+    !dispatchTargetsDeliveryBlocked &&
+    !["manager_only", "drain", "unknown"].includes(usageState) &&
+    !["critical", "pressured", "unknown"].includes(resourceState),
+  );
+  const activeWorkerCount = nonNegativeInteger(workers.summary?.workerCounts?.active) ?? 0;
+  const warmWorkerCount = nonNegativeInteger(workers.summary?.workerCounts?.warm) ?? 0;
+  const onlyStaleOwnershipBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => code === "assignment-ambiguous-status");
+  const onlyRetryParkedLaneBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => code === "retry-route-park-lane");
+  const onlyWorkerQuestionBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => code === "worker-question-operator-interruption");
+  const deliveryAuthorityBlockerCodes = new Set(["delivery-phase-authority-missing", "delivery-phase-authority-invalid"]);
+  const prStewardshipBlockerCodes = new Set(["pr-stewardship-evidence-missing", "pr-stewardship-high-risk"]);
+  const onlyDeliveryAuthorityBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => deliveryAuthorityBlockerCodes.has(code));
+  const onlyPrStewardshipBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => prStewardshipBlockerCodes.has(code));
+  const onlyDeliveryScopedBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => deliveryAuthorityBlockerCodes.has(code) || prStewardshipBlockerCodes.has(code));
+  const managerOwnedWarmStartAvailable = Boolean(
+      !hardWorkerMutationBlocked &&
+      workers.summary?.lifecyclePlan?.startWarmCandidates?.length > 0 &&
+      !["manager_only", "drain", "unknown"].includes(usageState) &&
+      !["critical", "unknown"].includes(resourceState),
+  );
+  if (activeWorkerCount > 0 && onlyStaleOwnershipBlocked && resourceState !== "critical") {
+    if (managerOwnedWarmStartAvailable) {
+      return {
+        state: "worker_warm_ready",
+        canContinue: true,
+        progressRunState: "worker-warm-ready",
+        workerMutationAllowed: true,
+        workerStartAllowed: true,
+        dispatchApplyAllowed: false,
+        allowedActions: ["manager_owned_worker_warm_existing_gates", "active_worker_monitoring", "status_reporting", "read_only_inspection"],
+        blockedActions: ["worker_kill", "dispatch_apply", "ownership_takeover"],
+        reason: "Active manager-owned workers can continue and retired capacity can be replaced through manager-owned warm gates while stale ownership remains blocked for takeover.",
+        startWarmCandidates: workers.summary.lifecyclePlan.startWarmCandidates.length,
+        activeWorkers: activeWorkerCount,
+        warmWorkers: warmWorkerCount,
+        blockerCodes,
+        blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+        blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+      };
+    }
+    const allowedActions = ["active_worker_monitoring", "feedback_routing", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["worker_kill", "ownership_takeover"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.unshift("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    return {
+      state: safeDispatchApplyAvailable ? "dispatch_or_active_monitoring" : "active_worker_monitoring",
+      canContinue: true,
+      progressRunState: safeDispatchApplyAvailable ? "dispatch-ready" : "active",
+      workerMutationAllowed: false,
+      workerStartAllowed: warmWorkerCount > 0,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: safeDispatchApplyAvailable
+        ? "Active manager-owned workers can continue, and existing dispatch gates have selected a safe lane for assignment/workspace preparation while takeover and worker kill remain blocked."
+        : "Active manager-owned workers can continue while stale ownership inspection remains blocked for takeover, dispatch apply, and worker kill.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      activeWorkers: activeWorkerCount,
+      warmWorkers: warmWorkerCount,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (status === "ready" && managerOwnedWarmStartAvailable && !workerMutationBlocked && resourceState !== "critical") {
+    return {
+      state: "worker_warm_ready",
+      canContinue: true,
+      progressRunState: "worker-warm-ready",
+      workerMutationAllowed: true,
+      workerStartAllowed: true,
+      dispatchApplyAllowed: false,
+      allowedActions: ["manager_owned_worker_warm_existing_gates", "status_reporting", "read_only_inspection"],
+      blockedActions: ["worker_kill", "ownership_takeover"],
+      reason: "Usage, resource, tmux, and worker target gates allow manager-owned warm starts.",
+      startWarmCandidates: workers.summary.lifecyclePlan.startWarmCandidates.length,
+      activeWorkers: activeWorkerCount,
+      warmWorkers: warmWorkerCount,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (managerOwnedWarmStartAvailable && workerMutationBlocked && resourceState !== "critical") {
+    return {
+      state: "worker_warm_ready",
+      canContinue: true,
+      progressRunState: "worker-warm-ready",
+      workerMutationAllowed: true,
+      workerStartAllowed: true,
+      dispatchApplyAllowed: false,
+      allowedActions: ["manager_owned_worker_warm_existing_gates", "status_reporting", "read_only_inspection"],
+      blockedActions: ["worker_kill", "dispatch_apply", "ownership_takeover"],
+      reason: "Stale ownership still requires inspection before takeover or dispatch apply, but manager-owned warm starts can proceed through existing worker gates.",
+      startWarmCandidates: workers.summary.lifecyclePlan.startWarmCandidates.length,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (sourceBackedRefillAvailable && !safeDispatchApplyAvailable && resourceState !== "critical") {
+    return {
+      state: "planning_only",
+      canContinue: true,
+      progressRunState: "planning",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: false,
+      allowedActions: ["source_owned_bmad_refill_planning", "status_reporting", "read_only_inspection"],
+      blockedActions: ["worker_start", "worker_kill", "dispatch_apply", "ownership_takeover"],
+      reason: "Safe backlog is below target, and source-owned backlog creation can continue from the compact BMAD handoff.",
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if ((sourceBackedRefillAvailable || safeDispatchApplyAvailable) && workerMutationBlocked && resourceState !== "critical") {
+    const allowedActions = ["source_owned_bmad_refill_planning", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["worker_start", "worker_kill", "ownership_takeover"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.unshift("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    return {
+      state: safeDispatchApplyAvailable ? "dispatch_or_planning" : "planning_only",
+      canContinue: true,
+      progressRunState: safeDispatchApplyAvailable ? "dispatch-ready" : "planning",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: safeDispatchApplyAvailable
+        ? "Worker mutation is blocked, but existing dispatch gates have selected a safe lane for assignment/workspace preparation."
+        : "Worker mutation is blocked, but source-owned backlog creation can continue from the compact BMAD handoff.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (onlyWorkerQuestionBlocked && resourceState !== "critical") {
+    const allowedActions = ["operator_interruption_for_dependent_worker", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["dependent_worker_continuation"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.push("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
+    return {
+      state: "worker_question_blocked",
+      canContinue: true,
+      progressRunState: "worker-question-blocked",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: "A worker question requires operator authority, but the blocker is scoped to the affected worker or lane and unrelated safe work can continue through existing gates.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (onlyDeliveryScopedBlocked && !onlyDeliveryAuthorityBlocked && !onlyPrStewardshipBlocked && resourceState !== "critical") {
+    const allowedActions = ["delivery_authority_operator_interruption", "pr_stewardship_operator_interruption", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["pr_create", "pr_update", "delivery", "cleanup"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.push("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
+    return {
+      state: "delivery_scoped_blocked",
+      canContinue: true,
+      progressRunState: "delivery-scoped-blocked",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: "Delivery authority or PR stewardship evidence is blocked for the affected lane, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (onlyDeliveryAuthorityBlocked && resourceState !== "critical") {
+    const allowedActions = ["delivery_authority_operator_interruption", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["delivery", "cleanup"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.push("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
+    return {
+      state: "delivery_authority_blocked",
+      canContinue: true,
+      progressRunState: "delivery-authority-blocked",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: "Delivery requires an active delivery_phase contract, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (onlyPrStewardshipBlocked && resourceState !== "critical") {
+    const allowedActions = ["pr_stewardship_operator_interruption", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["pr_create", "pr_update", "delivery"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.push("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
+    return {
+      state: "pr_stewardship_blocked",
+      canContinue: true,
+      progressRunState: "pr-stewardship-blocked",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: "PR creation or update requires scoped dry-run evidence and delivery authority, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (onlyRetryParkedLaneBlocked && (sourceBackedRefillAvailable || safeDispatchApplyAvailable) && resourceState !== "critical") {
+    const allowedActions = ["status_reporting", "read_only_inspection"];
+    const blockedActions = ["worker_kill", "ownership_takeover"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.unshift("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    if (sourceBackedRefillAvailable) {
+      allowedActions.unshift("source_owned_bmad_refill_planning");
+    } else {
+      blockedActions.push("worker_start");
+    }
+    return {
+      state: safeDispatchApplyAvailable ? "dispatch_or_planning" : "planning_only",
+      canContinue: true,
+      progressRunState: safeDispatchApplyAvailable ? "dispatch-ready" : "planning",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: "A retry lane is parked with visible resume criteria, but unrelated safe work can continue through existing dispatcher/refill gates.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  return {
+    state: status,
+    canContinue: status !== "blocked",
+    progressRunState: status,
+    workerMutationAllowed: status !== "blocked",
+    dispatchApplyAllowed: status !== "blocked" && Boolean(dispatchPreview.summary?.allowed),
+    allowedActions: status === "blocked" ? ["status_reporting", "read_only_inspection"] : ["governed_manager_actions"],
+    blockedActions: status === "blocked" ? ["worker_start", "worker_kill", "dispatch_apply", "ownership_takeover"] : [],
+    reason: status === "blocked" ? "Manager mutation is blocked until blockers are resolved." : "Manager can continue under existing governors.",
+    blockerCodes,
+    blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+    blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+  };
+}
+
+function recoveryBlocksManagerMutation(recovery = {}) {
+  if (recovery.summary?.reconciliation?.status === "blocked") return true;
+  if (recovery.summary?.autoRepair?.posture === "blocked") return true;
+  const retryRoutes = Array.isArray(recovery.summary?.retryRoutes) ? recovery.summary.retryRoutes : [];
+  if (retryRoutes.length === 0) return recovery.status === "blocked";
+  return retryRoutes.some((route) => {
+    const eligibleParallelWork = nonNegativeInteger(route?.unblockedParallelWork?.eligibleCount) ?? 0;
+    if (route?.posture === "blocked") return true;
+    if (route?.action === "park_lane" && eligibleParallelWork <= 0) return true;
+    return false;
+  });
+}
+
+function applySteeringToDispatchPosture(dispatchPosture, steeringSummary = {}) {
+  const futureDispatch = steeringSummary.futureDispatch || {};
+  if (!futureDispatch.action || futureDispatch.action === "keep_current_dispatch") return dispatchPosture;
+  if (futureDispatch.scope === "report-only" || futureDispatch.scope === "clarification-only") return dispatchPosture;
+  const summary = {
+    ...dispatchPosture.summary,
+    steeringAction: futureDispatch.action,
+    steeringScope: futureDispatch.scope,
+    steeringReport: steeringSummary.operatorReport,
+    reasons: [
+      ...(dispatchPosture.summary.reasons || []),
+      {
+        code: `steering-${futureDispatch.action}`,
+        message: "Operator steering changes future dispatch posture.",
+      },
+    ],
+  };
+  if (futureDispatch.targetWorkers !== undefined) summary.targetWorkers = futureDispatch.targetWorkers;
+  if (futureDispatch.focusSurface) summary.focusSurface = futureDispatch.focusSurface;
+  if (futureDispatch.newDispatchAllowed === false) {
+    summary.newDispatchAllowed = false;
+    summary.state = futureDispatch.action === "drain_and_stop" ? "drain" : "operator_paused";
+  } else if (futureDispatch.action === "drain_and_shift_focus") {
+    summary.state = dispatchPosture.summary.state === "allowed" ? "focused" : dispatchPosture.summary.state;
+  }
+  return {
+    ...dispatchPosture,
+    summary,
+  };
+}
+
+function buildDispatchPosture(usageState = "unknown", resourceState = "unknown", weeklyUsageInput = null) {
+  const reasons = [];
+  const blockers = [];
+  const weeklyUsage = normalizeWeeklyUsagePressure(weeklyUsageInput);
+  let state = "allowed";
+  let newDispatchAllowed = true;
+  if (usageState === "manager_only" || resourceState === "critical") {
+    state = "blocked";
+    newDispatchAllowed = false;
+    reasons.push({ code: usageState === "manager_only" ? "usage-manager-only" : "resource-critical", message: "Dispatch is blocked by usage or host-resource stop-line posture." });
+    blockers.push({ code: "dispatch-posture-blocked", message: "New dispatch is blocked by manager-only usage or critical resource posture.", nextAction: "Do not dispatch new work until usage/resource posture recovers." });
+  } else {
+    if (usageState === "drain") {
+      state = "drain";
+      newDispatchAllowed = false;
+      reasons.push({ code: "usage-drain", message: "Usage drain posture stops new dispatch." });
+    } else if (usageState === "conserve") {
+      state = "conservative";
+      reasons.push({ code: "usage-conserve", message: "Usage conserve posture allows only necessary source-owned dispatch." });
+    }
+    if (weeklyUsage.state === "pressured") {
+      state = state === "allowed" ? "conservative" : state;
+      newDispatchAllowed = false;
+      reasons.push({ code: "weekly-usage-pressure", message: "Reliable weekly usage pressure reduces new dispatch or defers optional work before model quality changes." });
+    }
+    if (resourceState === "pressured") {
+      state = state === "allowed" ? "conservative" : state;
+      newDispatchAllowed = false;
+      reasons.push({ code: "resource-pressured", message: "Resource pressure limits dispatch before model quality changes." });
+    } else if (resourceState === "warm" && state === "allowed") {
+      state = "conservative";
+      reasons.push({ code: "resource-warm", message: "Warm resource posture keeps dispatch conservative." });
+    }
+  }
+  return {
+    summary: {
+      state,
+      newDispatchAllowed,
+      usageState,
+      weeklyUsage,
+      resourceState,
+      modelQualityPolicy: "preserve_task_fit_quality",
+      leaseIssuancePolicy: resourceState !== "normal" ? resourceLeaseIssuancePolicy(resourceState) : usageLeaseIssuancePolicy(usageState, weeklyUsage),
+      usageLeaseIssuancePolicy: usageLeaseIssuancePolicy(usageState, weeklyUsage),
+      activeWorkPolicy: usageActiveWorkPolicy(usageState),
+      recoveryPath: "wait for usage/resource posture to recover or reduce active worker target",
+      reasons,
+    },
+    blockers,
+  };
+}
+
+function normalizePacketContext(context = {}) {
+  const status = context.status || context.state || context.summary?.state || "unknown";
+  return packet({
+    ok: context.ok ?? true,
+    status,
+    summary: context.summary || { state: status },
+    blockers: context.blockers || [],
+    warnings: context.warnings || [],
+    nextActions: context.nextActions || [],
+  });
+}
+
+function normalizeUsagePacketContext(context = {}, outer = {}) {
+  const base = isPlainObject(context.summary) ? context.summary : {};
+  const status = sanitizeLedgerField(context.status || context.state || base.state || "unknown", "unknown", 80);
+  const weekly = selectWeeklyUsagePressure(
+    base.weekly,
+    context.weekly,
+    context.weeklyUsage,
+    context.weeklyUsageContext,
+    context.weeklyUsagePressure,
+    outer.weeklyUsage,
+    outer.weeklyUsageContext,
+    outer.weeklyUsagePressure,
+  );
+  const rawRemaining = Number(base.remainingPercent ?? context.remainingPercent);
+  const rawResetSeconds = Number(base.resetInSeconds ?? context.resetInSeconds);
+  const resetTime = sanitizeLedgerField(base.resetTime || context.resetTime || "", "", 40) || null;
+  const resetInSeconds = Number.isFinite(rawResetSeconds) ? Math.max(0, Math.floor(rawResetSeconds)) : null;
+  const parsedForResume = { resetTime, resetInSeconds };
+  const managerOnly = status === "manager_only";
+  const sampledAt = sanitizeLedgerField(
+    base.sampledAt || context.sampledAt || base.timestamp || context.timestamp || outer.now || new Date().toISOString(),
+    new Date(0).toISOString(),
+    80,
+  );
+  const summary = {
+    source: sanitizeLedgerField(base.source || context.source || "injected-usage-context", "injected-usage-context", 80),
+    state: status,
+    remainingPercent: Number.isFinite(rawRemaining) ? boundedPercent(rawRemaining) : null,
+    sampledAt,
+    timestamp: sampledAt,
+    resetTime,
+    resetInSeconds,
+    weekly,
+    leaseIssuancePolicy: base.leaseIssuancePolicy || usageLeaseIssuancePolicy(status, weekly),
+    activeWorkPolicy: base.activeWorkPolicy || usageActiveWorkPolicy(status),
+    modelQualityPolicy: "preserve_task_fit_quality",
+    managerOnlyReason: managerOnly ? sanitizeLedgerField(base.managerOnlyReason || "five_hour_usage_at_or_below_2_percent", "five_hour_usage_at_or_below_2_percent", 120) : "",
+    resumeTrigger: managerOnly ? sanitizeLedgerField(base.resumeTrigger || usageResumeTrigger(parsedForResume), usageResumeTrigger(parsedForResume), 120) : "",
+    available: typeof base.available === "boolean" ? base.available : typeof context.available === "boolean" ? context.available : undefined,
+    fetcherPath: base.fetcherPath || context.fetcherPath ? sanitizeLedgerField(base.fetcherPath || context.fetcherPath, "", 240) : undefined,
+    rawPayloadRetained: false,
+  };
+  return packet({
+    ok: context.ok ?? true,
+    status,
+    summary,
+    blockers: context.blockers || [],
+    warnings: context.warnings || [],
+    nextActions: context.nextActions || [],
+  });
+}
+
+function normalizeDispatchPreviewContext(context = {}) {
+  if (context.summary) {
+    const normalized = normalizePacketContext(context);
+    const summary = normalized.summary || {};
+    const dispatch = summary.dispatch || {};
+    const blockers = [
+      ...(Array.isArray(normalized.blockers) ? normalized.blockers : []),
+      ...(Array.isArray(summary.blockers) ? summary.blockers : []),
+      ...(Array.isArray(dispatch.blockers) ? dispatch.blockers : []),
+    ];
+    const allowed = context.allowed ?? summary.allowed ?? dispatch.allowed ?? null;
+    return packet({
+      ...normalized,
+      ok: normalized.ok && blockers.length === 0 && allowed !== false && normalized.status !== "blocked",
+      status: normalized.status === "blocked" || blockers.length > 0 || allowed === false ? "blocked" : normalized.status,
+      summary: {
+        ...summary,
+        allowed,
+        blockers,
+        dispatch: {
+          ...dispatch,
+          allowed,
+          blockers,
+        },
+      },
+      blockers,
+    });
+  }
+  const dispatch = context.dispatch || {};
+  const status = context.status || (dispatch.allowed === false ? "blocked" : "ready");
+  const summary = {
+    ...context,
+    allowed: context.allowed ?? dispatch.allowed ?? null,
+    selectedLane: context.selectedLane || dispatch.selectedLane || context.selected?.itemId || null,
+    selectedBranch: context.selectedBranch || dispatch.branch || context.selected?.branch || null,
+    baseBranch: context.baseBranch || context.base_branch || dispatch.baseBranch || dispatch.base_branch || context.selected?.baseBranch || context.selected?.base_branch || null,
+    claimMutation: context.claimMutation || dispatch.claimMutation || context.selected?.mutation || null,
+    recoveryPath: context.recoveryPath || context.recovery_path || dispatch.recoveryPath || dispatch.recovery_path || context.selected?.recoveryPath || context.selected?.recovery_path || null,
+  };
+  return packet({
+    ok: context.ok ?? status !== "blocked",
+    status,
+    summary,
+    blockers: context.blockers || [],
+    warnings: context.warnings || [],
+    nextActions: context.nextActions || (dispatch.allowed === true
+      ? [{
+          code: "dispatch-preview-ready",
+          summary: dispatch.claimAction || context.selected?.action || "Safe dispatch preview is ready.",
+          nextAction: dispatch.nextActionGuidance || context.selected?.nextAction || "Review dispatch preview before apply.",
+        }]
+      : []),
+  });
+}
+
+function supersededCycleActionCodes({ cleanup = {} } = {}) {
+  const staleOwnerCleanup = cleanup.summary?.staleOwnerCleanup || {};
+  const hasCleanupEvidence = staleOwnerCleanup.closeoutPreview?.available === true || staleOwnerCleanup.dirtyPreservation?.available === true;
+  if (!hasCleanupEvidence) return new Set();
+  return new Set(["takeover-inspection-required", "assignment-ambiguous-status-action"]);
+}
+
+function suppressSupersededCycleBlockers({ blockers = [], cleanup = {} } = {}) {
+  const staleOwnerCleanup = cleanup.summary?.staleOwnerCleanup || {};
+  const hasCleanupEvidence = staleOwnerCleanup.closeoutPreview?.available === true || staleOwnerCleanup.dirtyPreservation?.available === true;
+  if (!hasCleanupEvidence) return blockers;
+  return blockers.filter((blocker) => blocker.code !== "assignment-ambiguous-status");
+}
+
+function cycleOpenLaneSummaries({ workers = {}, dispatchPreview = {} } = {}) {
+  const workerRows = Array.isArray(workers.summary?.workerProgress)
+    ? workers.summary.workerProgress
+    : Array.isArray(workers.summary?.workers)
+      ? workers.summary.workers
+      : [];
+  const lanes = workerRows
+    .filter(isPlainObject)
+    .map((worker) => ({
+      assignmentId: worker.assignmentId || worker.assignment_id || worker.laneId || worker.lane_id || worker.id,
+      branch: worker.branch || worker.workspaceBranch || "",
+      state: worker.progressState || worker.state || worker.status || "",
+    }))
+    .filter((lane) => lane.assignmentId);
+  if (dispatchPreview.summary?.selectedLane) {
+    lanes.push({
+      assignmentId: dispatchPreview.summary.selectedLane,
+      branch: dispatchPreview.summary.selectedBranch || "",
+      state: dispatchPreview.summary.allowed ? "dispatch_ready" : "dispatch_blocked",
+    });
+  }
+  return lanes.slice(0, 8);
+}
+
+function cycleParkedLaneSummaries({ recovery = {} } = {}) {
+  const retryRoutes = Array.isArray(recovery.summary?.retryRoutes) ? recovery.summary.retryRoutes : [];
+  return retryRoutes
+    .filter((route) => route?.action === "park_lane" || route?.parkedLane)
+    .map((route) => {
+      const parkedLane = route.parkedLane || {};
+      return {
+        assignmentId: parkedLane.assignmentId || route.assignmentId || route.laneId || route.id,
+        branch: parkedLane.branch || route.branch || "",
+        state: "parked",
+        reason: parkedLane.resumeCriteria || route.reason || route.summary || "parked lane",
+      };
+    })
+    .filter((lane) => lane.assignmentId)
+    .slice(0, 8);
+}
+
+function buildCycleDispatcherState(dispatchPreview = {}) {
+  const summary = dispatchPreview.summary || {};
+  const counts = summary.counts || {};
+  const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
+  const queueAvailable = nonNegativeInteger(counts.dispatchable ?? counts.assignable ?? counts.queued ?? candidateStateCounts.assignable ?? candidateStateCounts.queued);
+  const activeLeases = dispatchPreviewActiveLeaseCount(summary);
+  return {
+    dispatcher: {
+      status: dispatchPreview.status || "unknown",
+      allowed: summary.allowed ?? null,
+      selectedLane: sanitizeLedgerField(summary.selectedLane || "", "", 120) || null,
+      selectedBranch: sanitizeLedgerField(summary.selectedBranch || "", "", 160) || null,
+      baseBranch: sanitizeLedgerField(summary.baseBranch || summary.base_branch || "", "", 120) || null,
+      mutation: sanitizeLedgerField(summary.mutation || "none; dispatcher summary only", "none; dispatcher summary only", 120),
+      recoveryPath: sanitizeLedgerField(summary.recoveryPath || summary.recovery_path || "", "", 220) || null,
+      blockerCount: Array.isArray(dispatchPreview.blockers) ? dispatchPreview.blockers.length : 0,
+      warningCount: Array.isArray(dispatchPreview.warnings) ? dispatchPreview.warnings.length : 0,
+      rawPayloadRetained: false,
+    },
+    queue: {
+      dispatchableCount: nonNegativeInteger(counts.dispatchable ?? counts.assignable ?? candidateStateCounts.assignable),
+      queuedCount: nonNegativeInteger(counts.queued ?? candidateStateCounts.queued),
+      blockedCount: nonNegativeInteger(counts.blocked ?? candidateStateCounts.blocked),
+      closedCount: nonNegativeInteger(counts.closed ?? candidateStateCounts.closed),
+      availableCount: queueAvailable,
+      source: "dispatcher_preview",
+      rawPayloadRetained: false,
+    },
+    lease: {
+      activeCount: activeLeases,
+      expiredCount: nonNegativeInteger(counts.expired ?? candidateStateCounts.expired),
+      failedCount: nonNegativeInteger(counts.failed ?? candidateStateCounts.failed),
+      source: "dispatcher_preview",
+      rawPayloadRetained: false,
+    },
+  };
+}
+
+function buildCycleQueueLeaseSummary(dispatcherState = {}) {
+  const dispatcher = isPlainObject(dispatcherState.dispatcher) ? dispatcherState.dispatcher : {};
+  const queue = isPlainObject(dispatcherState.queue) ? dispatcherState.queue : {};
+  const lease = isPlainObject(dispatcherState.lease) ? dispatcherState.lease : {};
+  const queued = nonNegativeInteger(queue.availableCount ?? queue.dispatchableCount ?? queue.queuedCount);
+  const leased = nonNegativeInteger(lease.activeCount);
+  const blocked = nonNegativeInteger(queue.blockedCount ?? lease.failedCount);
+  const dispatcherStatus = sanitizeLedgerField(dispatcher.status || "unknown", "unknown", 80);
+  return {
+    queued,
+    leased,
+    blocked,
+    refilling: dispatcherStatus === "refilling",
+    nextAction: dispatcher.allowed === true ? "dispatch preview ready" : dispatcherStatus,
+    freshness: dispatcherStatus === "unknown" ? "unknown" : "dispatcher_preview",
+  };
+}
+
+function cycleCount(value) {
+  return nonNegativeInteger(value);
+}
+
+function sanitizeCycleActions(actions = []) {
+  return (Array.isArray(actions) ? actions : [])
+    .filter(isPlainObject)
+    .slice(0, 16)
+    .map((action) => ({
+      ...sanitizeCyclePacketValue(action, 0, ""),
+      code: sanitizeLedgerField(action.code || "cycle-action", "cycle-action", 100),
+      summary: sanitizeLedgerField(action.summary || "", "", 180),
+      nextAction: sanitizeLedgerField(action.nextAction || "", "", 500),
+    }));
+}
+
+function sanitizeCyclePacketValue(value, depth = 0, key = "") {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return sanitizeLedgerField(shouldRedactCycleKey(key) ? "[redacted-retention-field]" : value, "", 600);
+  }
+  if (Array.isArray(value)) {
+    if (depth >= 6) return [];
+    return value.slice(0, 24).map((entry) => sanitizeCyclePacketValue(entry, depth + 1, key));
+  }
+  if (isPlainObject(value)) {
+    if (depth >= 6) return {};
+    const output = {};
+    for (const [entryKey, entryValue] of Object.entries(value).slice(0, 60)) {
+      if (entryKey === "rawPayloadRetained" && entryValue === false) {
+        output[entryKey] = false;
+        continue;
+      }
+      if (shouldRedactCycleKey(entryKey)) {
+        output[entryKey] = typeof entryValue === "boolean" ? false : "[redacted-retention-field]";
+        continue;
+      }
+      output[entryKey] = sanitizeCyclePacketValue(entryValue, depth + 1, entryKey);
+    }
+    return output;
+  }
+  return sanitizeLedgerField(value, "", 120);
+}
+
+function shouldRedactCycleKey(key = "") {
+  const normalized = String(key || "").toLowerCase();
+  return ["raw", "scrollback", "prompt", "completion", "reasoning", "provider", "secret", "password", "token", "stack", "stdout", "stderr", "transcript", "sourcedump", "source_dump", "logbody", "log_body"].some((term) => normalized.includes(term));
+}
+
+function buildCycleSignalGaps({ usage = {}, resources = {}, dispatchPreview = {}, workers = {}, cleanup = {}, preflight = {}, context = {} } = {}) {
+  const gaps = [];
+  const addGap = ({ code, source, severity = "warning", reason, nextAction }) => {
+    gaps.push({
+      code,
+      source,
+      severity,
+      reason: sanitizeLedgerField(reason, "Cycle packet signal is incomplete.", 180),
+      nextAction: sanitizeLedgerField(nextAction, "Refresh the missing signal before manager mutation.", 180),
+    });
+  };
+  const dispatchSummary = dispatchPreview.summary || {};
+  const counts = dispatchSummary.counts || {};
+  const candidateStateCounts = dispatchSummary.candidateStateCounts || dispatchSummary.candidate_state_counts || {};
+  const queueCount = cycleCount(counts.dispatchable ?? counts.assignable ?? counts.queued ?? candidateStateCounts.assignable ?? candidateStateCounts.queued);
+  const activeLeaseCount = cycleCount(dispatchPreviewActiveLeaseCount(dispatchSummary));
+  if (context.dispatchPreview && (queueCount === null || activeLeaseCount === null)) {
+    addGap({
+      code: "cycle-dispatcher-counts-missing",
+      source: "dispatcher",
+      severity: dispatchPreview.status === "blocked" || dispatchSummary.allowed === false ? "blocker" : "warning",
+      reason: "Dispatcher preview did not include complete queue and lease counts.",
+      nextAction: "Refresh dispatcher status before deciding dispatch, worker, or refill action.",
+    });
+  }
+  if (context.dispatchPreview && queueCount === null) {
+    addGap({
+      code: "cycle-dispatcher-queue-counts-missing",
+      source: "dispatcher.queue",
+      severity: dispatchPreview.status === "blocked" || dispatchSummary.allowed === false ? "blocker" : "warning",
+      reason: "Dispatcher preview did not include queue or dispatchable counts.",
+      nextAction: "Refresh dispatcher queue summary before refill or dispatch decisions.",
+    });
+  }
+  if (context.dispatchPreview && activeLeaseCount === null) {
+    addGap({
+      code: "cycle-dispatcher-lease-counts-missing",
+      source: "dispatcher.lease",
+      severity: dispatchPreview.status === "blocked" || dispatchSummary.allowed === false ? "blocker" : "warning",
+      reason: "Dispatcher preview did not include active lease counts.",
+      nextAction: "Refresh dispatcher lease summary before inferring active work.",
+    });
+  }
+  const usageState = usage.status || usage.summary?.state || usage.summary?.usageState || "unknown";
+  if (usageState === "unknown") {
+    addGap({
+      code: "cycle-usage-state-unknown",
+      source: "usage",
+      reason: "Usage posture is unknown.",
+      nextAction: "Refresh Codex usage status before dispatching new work.",
+    });
+  }
+  const resourceState = resources.status || resources.summary?.state || resources.summary?.resourceState || "unknown";
+  if (resourceState === "unknown") {
+    addGap({
+      code: "cycle-resource-state-unknown",
+      source: "resources",
+      reason: "CPU/RAM posture is unknown.",
+      nextAction: "Refresh resource status before changing worker target.",
+    });
+  }
+  if (context.workerStatus && !isPlainObject(workers.summary?.workerCounts)) {
+    addGap({
+      code: "cycle-worker-counts-missing",
+      source: "workers",
+      severity: "blocker",
+      reason: "Worker status did not include workerCounts.",
+      nextAction: "Refresh worker status before inferring active, warm, or paused workers.",
+    });
+  }
+  if (context.cleanupPlan && !cleanup.summary) {
+    addGap({
+      code: "cycle-cleanup-summary-missing",
+      source: "cleanup",
+      reason: "Cleanup plan summary is unavailable.",
+      nextAction: "Refresh cleanup plan before surfacing cleanup actions.",
+    });
+  }
+  if (!preflight.summary || (context.preflightStatus && !isPlainObject(context.preflightStatus.summary))) {
+    addGap({
+      code: "cycle-preflight-summary-missing",
+      source: "preflight",
+      severity: "blocker",
+      reason: "Preflight summary is unavailable.",
+      nextAction: "Run manager preflight before manager mutation.",
+    });
+  }
+  const blockers = gaps
+    .filter((gap) => gap.severity === "blocker")
+    .map((gap) => ({
+      code: "cycle-signal-gap-blocked",
+      gapCode: gap.code,
+      message: gap.reason,
+      source: gap.source,
+      nextAction: gap.nextAction,
+    }));
+  const warnings = gaps
+    .filter((gap) => gap.severity !== "blocker")
+    .map((gap) => ({ code: gap.code, message: gap.reason, nextAction: gap.nextAction }));
+  const nextActions = gaps.length > 0
+    ? [{
+        code: "cycle-signal-gap-refresh",
+        summary: "Refresh missing or stale Cycle State Packet signals.",
+        nextAction: gaps[0].nextAction,
+      }]
+    : [];
+  return {
+    status: blockers.length > 0 ? "blocked" : gaps.length > 0 ? "warning" : "ready",
+    gapCount: gaps.length,
+    blockerCount: blockers.length,
+    gaps: gaps.slice(0, 12),
+    rawPayloadRetained: false,
+    blockers,
+    warnings,
+    nextActions,
+  };
+}
+
+function buildCycleObservations({ dispatchPreview = {}, workers = {}, context = {} } = {}) {
+  const dispatchSummary = dispatchPreview.summary || {};
+  const dispatcherActiveCount = dispatchPreviewActiveLeaseCount(dispatchSummary);
+  const workerActiveCount = nonNegativeInteger(workers.summary?.workerCounts?.active);
+  const tmuxSummary = context.tmuxSummary || {};
+  const tmuxActive = nonNegativeInteger(tmuxSummary.managerOwnedPanes ?? tmuxSummary.activePanes ?? tmuxSummary.paneCount);
+  const logObservation = context.logObservation || {};
+  const dashboardObservation = context.dashboardObservation || {};
+  const logActive = nonNegativeInteger(logObservation.activeWorkers ?? logObservation.activeCount);
+  const dashboardActive = nonNegativeInteger(dashboardObservation.activeWorkers ?? dashboardObservation.activeCount);
+  const conflicts = [];
+  const observationCounts = [
+    { source: "tmux", count: tmuxActive },
+    { source: "logs", count: logActive },
+    { source: "dashboard", count: dashboardActive },
+  ].filter((entry) => entry.count !== null && dispatcherActiveCount !== null && entry.count !== dispatcherActiveCount);
+  if (dispatcherActiveCount !== null && workerActiveCount !== null && workerActiveCount !== dispatcherActiveCount) {
+    conflicts.push({
+      code: "cycle-worker-dispatcher-conflict",
+      severity: "warning",
+      message: "Worker runtime state disagrees with dispatcher/lease active work truth.",
+      authoritativeSource: "dispatcher_lease_state",
+      observedSources: ["workers"],
+      nextAction: "Refresh dispatcher and worker status before changing work activity.",
+    });
+  }
+  if (observationCounts.length > 0) {
+    conflicts.push({
+      code: "cycle-observation-dispatcher-conflict",
+      severity: "warning",
+      message: "Observational surfaces disagree with dispatcher/lease worker activity truth.",
+      authoritativeSource: "dispatcher_lease_state",
+      observedSources: observationCounts.map((entry) => entry.source).slice(0, 6),
+      nextAction: "Treat observations as recovery clues and refresh dispatcher or lease state before changing work activity.",
+    });
+  }
+  return {
+    authority: "dispatcher_lease_state",
+    dispatcherActiveCount,
+    workerActiveCount,
+    tmux: {
+      role: "evidence_only",
+      available: tmuxSummary.available === true || tmuxActive !== null,
+      paneCount: nonNegativeInteger(tmuxSummary.paneCount),
+      managerOwnedPanes: tmuxActive,
+    },
+    logs: {
+      role: "recovery_clue_only",
+      available: Object.keys(logObservation).length > 0,
+      activeWorkers: logActive,
+    },
+    dashboard: {
+      role: "read_only_projection_only",
+      available: Object.keys(dashboardObservation).length > 0,
+      activeWorkers: dashboardActive,
+    },
+    conflicts,
+    rawPayloadRetained: false,
+    warnings: conflicts.map((conflict) => ({
+      code: conflict.code,
+      message: conflict.message,
+      nextAction: conflict.nextAction,
+    })),
+  };
+}
+
+function uniqueActions(actions = []) {
+  const seen = new Set();
+  const result = [];
+  for (const action of actions) {
+    const key = `${action.code || ""}:${action.nextAction || action.summary || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(action);
+  }
+  return result;
+}
+
+function uniqueWarnings(warnings = []) {
+  const seen = new Set();
+  const result = [];
+  for (const warning of warnings) {
+    const key = `${warning.code || ""}:${warning.message || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(warning);
+  }
+  return result;
+}
+
+export function ledgerCommand(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const paths = managerRunPaths(runId, options, context);
+  if (!paths.proof.ok) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, stateRoot: paths.proof.state.root },
+      blockers: [{ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." }],
+    });
+  }
+  if (options.command === "init") {
+    mkdirSync(paths.root, { recursive: true });
+    writeJsonIfMissing(paths.mission, {
+      runId,
+      objective: "Complete Kendall_Nxt PRDs end to end",
+      authorityProfile: "backend_proof",
+      authorityStage: "backend_proof",
+      runState: "starting",
+      controlState: "starting",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    writeJsonIfMissing(paths.workers, []);
+    writeJsonIfMissing(paths.dispatcherSummary, {
+      stateSource: "dispatcher_summary_unavailable",
+      freshness: "unknown",
+      currentPhase: "unknown",
+      nextAction: "reconstruct from dispatcher summary when available",
+      updatedAt: new Date().toISOString(),
+    });
+    writeJsonIfMissing(paths.checkpoints, []);
+    for (const ndjson of [paths.events, paths.questions, paths.resourceSnapshots, paths.usageSnapshots]) {
+      if (!existsSync(ndjson)) writeFileSync(ndjson, "");
+    }
+    const readiness = buildLedgerReadiness(options, context);
+    if (!readiness.ok) return readiness;
+    return packet({ status: "ready", summary: { runId, root: paths.root, initialized: true } });
+  }
+  if (options.command === "append-event") {
+    const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
+    if (blocked) return blocked;
+    const normalizedEventName = normalizeLedgerEventName(options.eventType || "manager.ledger.appended");
+    if (!normalizedEventName) return unknownLedgerEvent(paths, options.eventType || "");
+    const duplicate = findDuplicateLedgerEvent(paths.events, options.idempotencyKey);
+    if (duplicate) {
+      return packet({ status: "ready", summary: { runId, event: duplicate, duplicateIgnored: true } });
+    }
+    const event = ledgerRecord({
+      idPrefix: "evt",
+      idName: "eventId",
+      actor: "manager",
+      typeName: "eventType",
+      typeValue: options.eventType || normalizedEventName,
+      options,
+      fallbackSummary: "manager event",
+      eventName: normalizedEventName,
+    });
+    appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+    return packet({ status: "ready", summary: { runId, event } });
+  }
+  if (options.command === "append-question") {
+    const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
+    if (blocked) return blocked;
+    const duplicate = findDuplicateLedgerRecord(paths.questions, options.idempotencyKey);
+    if (duplicate) {
+      return packet({ status: "ready", summary: { runId, question: duplicate, duplicateIgnored: true } });
+    }
+    if (!isMaterialQuestionRecord(options)) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, recordPolicy: "material_decision_only" },
+        blockers: [
+          {
+            code: "ledger-question-not-material",
+            message: "Worker question ledger records require a material decision marker.",
+            nextAction: "Answer non-material worker friction without persisting it, or mark the compact decision as material.",
+          },
+        ],
+      });
+    }
+    const question = ledgerRecord({
+      idPrefix: "question",
+      idName: "questionId",
+      actor: options.workerId || "worker",
+      typeName: "questionType",
+      typeValue: options.eventType || "worker_question",
+      options,
+      fallbackSummary: "worker question",
+      eventName: "manager.question.recorded",
+    });
+    appendFileSync(paths.questions, `${JSON.stringify(question)}\n`);
+    return packet({ status: "ready", summary: { runId, question } });
+  }
+  if (options.command === "append-checkpoint") {
+    const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
+    if (blocked) return blocked;
+    const checkpointRead = readJsonStrict(paths.checkpoints);
+    if (checkpointRead.status !== "ready" || !Array.isArray(checkpointRead.value)) {
+      return malformedLedgerFile(paths, "checkpoints", paths.checkpoints, "checkpoints.json must contain an array.");
+    }
+    const checkpoints = checkpointRead.value;
+    const duplicate = findDuplicateLedgerRecordFromArray(checkpoints, options.idempotencyKey);
+    if (duplicate) {
+      return packet({ status: "ready", summary: { runId, checkpoint: duplicate, duplicateIgnored: true } });
+    }
+    const checkpoint = ledgerRecord({
+      idPrefix: "checkpoint",
+      idName: "checkpointId",
+      actor: "manager",
+      typeName: "checkpointType",
+      typeValue: options.eventType || "manager_checkpoint",
+      options,
+      fallbackSummary: "manager checkpoint",
+      eventName: "manager.checkpoint.recorded",
+    });
+    checkpoints.push(checkpoint);
+    writeFileSync(paths.checkpoints, `${JSON.stringify(checkpoints, null, 2)}\n`);
+    return packet({ status: "ready", summary: { runId, checkpoint } });
+  }
+  if (options.command === "append-resource-snapshot") {
+    const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: false });
+    if (blocked) return blocked;
+    const duplicate = findDuplicateLedgerRecord(paths.resourceSnapshots, options.idempotencyKey);
+    if (duplicate) {
+      return packet({ status: "ready", summary: { runId, snapshot: duplicate, duplicateIgnored: true } });
+    }
+    const snapshot = ledgerRecord({
+      idPrefix: "resource",
+      idName: "snapshotId",
+      actor: "manager",
+      typeName: "snapshotType",
+      typeValue: "resource",
+      options,
+      fallbackSummary: "resource snapshot",
+      eventName: "manager.resource.snapshot",
+      extra: { resourceState: sanitizeLedgerField(options.resourceState || "unknown", "unknown", 40) },
+    });
+    appendFileSync(paths.resourceSnapshots, `${JSON.stringify(snapshot)}\n`);
+    return packet({ status: "ready", summary: { runId, snapshot } });
+  }
+  if (options.command === "append-usage-snapshot") {
+    const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: false });
+    if (blocked) return blocked;
+    const duplicate = findDuplicateLedgerRecord(paths.usageSnapshots, options.idempotencyKey);
+    if (duplicate) {
+      return packet({ status: "ready", summary: { runId, snapshot: duplicate, duplicateIgnored: true } });
+    }
+    const snapshot = ledgerRecord({
+      idPrefix: "usage",
+      idName: "snapshotId",
+      actor: "manager",
+      typeName: "snapshotType",
+      typeValue: "usage",
+      options,
+      fallbackSummary: "usage snapshot",
+      eventName: "manager.usage.snapshot",
+      extra: { usageState: sanitizeLedgerField(options.usageState || "unknown", "unknown", 40) },
+    });
+    appendFileSync(paths.usageSnapshots, `${JSON.stringify(snapshot)}\n`);
+    return packet({ status: "ready", summary: { runId, snapshot } });
+  }
+  if (options.command === "read") {
+    const readiness = buildLedgerReadiness(options, context);
+    if (!readiness.ok) return readiness;
+    return packet({
+      status: existsSync(paths.root) ? "ready" : "missing",
+      summary: {
+        runId,
+        root: paths.root,
+        mission: readJson(paths.mission, null),
+        workers: readJson(paths.workers, []),
+        checkpoints: readJson(paths.checkpoints, []),
+        events: readNdjsonStrict(paths.events).value.slice(-10),
+        questions: readNdjsonStrict(paths.questions).value.slice(-10),
+        resourceSnapshots: readNdjsonStrict(paths.resourceSnapshots).value.slice(-10),
+        usageSnapshots: readNdjsonStrict(paths.usageSnapshots).value.slice(-10),
+        replaySummary: buildLedgerReplaySummary(paths),
+        counts: {
+          events: readiness.summary.eventCount,
+          questions: readiness.summary.questionCount,
+          resourceSnapshots: readiness.summary.resourceSnapshotCount,
+          usageSnapshots: readiness.summary.usageSnapshotCount,
+        },
+      },
+    });
+  }
+  return packet({
+    ok: false,
+    status: "blocked",
+    blockers: [{ code: "unknown-ledger-command", message: `Unknown manager-ledger command: ${options.command || "(missing)"}`, nextAction: "Use init, append-event, append-question, append-checkpoint, append-resource-snapshot, append-usage-snapshot, or read." }],
+  });
+}
+
+function isMaterialQuestionRecord(options = {}) {
+  return options.materialDecision === true || options.materialDecision === "true" || options.recordPolicy === "material_decision_only";
+}
+
+function runWorkspaceJson(args, context = {}) {
+  if (context.workspaceRunner) return context.workspaceRunner(args);
+  const result = spawnSync(process.execPath, [join(repoRoot, "scripts/codex-workspace.mjs"), ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: context.timeoutMs || 5000,
+  });
+  if (result.error) {
+    return { ok: false, error: result.error.message || "workspace command failed" };
+  }
+  if ((result.status ?? 1) !== 0) {
+    return { ok: false, error: (result.stderr || result.stdout || result.error?.message || "workspace command failed").trim() };
+  }
+  if (!String(result.stdout || "").trim()) {
+    return { ok: false, error: "workspace command produced no JSON output" };
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function readAssignmentSummaryFile(path) {
+  if (!path) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function readJson(path, fallback) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function readJsonStrict(path) {
+  if (!existsSync(path)) {
+    return { status: "missing", value: null, message: "file is missing" };
+  }
+  try {
+    return { status: "ready", value: JSON.parse(readFileSync(path, "utf8")), message: "" };
+  } catch (error) {
+    return { status: "malformed", value: null, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function readNdjsonStrict(path) {
+  if (!existsSync(path)) {
+    return { status: "missing", value: [], message: "file is missing" };
+  }
+  const text = readFileSync(path, "utf8");
+  const records = [];
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  for (let index = 0; index < lines.length; index += 1) {
+    try {
+      records.push(JSON.parse(lines[index]));
+    } catch (error) {
+      return {
+        status: "malformed",
+        value: [],
+        message: `line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+  return { status: "ready", value: records, message: "" };
+}
+
+function readJsonArray(path) {
+  if (!existsSync(path)) {
+    return { value: [], warning: null };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (Array.isArray(parsed)) {
+      return { value: parsed, warning: null };
+    }
+    return {
+      value: [],
+      warning: { code: "worker-state-malformed", message: "Manager workers.json must contain an array." },
+    };
+  } catch (error) {
+    return {
+      value: [],
+      warning: { code: "worker-state-unreadable", message: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+function writeJsonIfMissing(path, value) {
+  if (!existsSync(path)) {
+    writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  }
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function projectWorker(worker) {
+  return {
+    workerId: sanitizeLedgerField(worker.workerId || worker.id || "unknown-worker", "unknown-worker", 80),
+    owner: sanitizeLedgerField(worker.owner || "unknown", "unknown", 120),
+    runId: sanitizeLedgerField(worker.runId || worker.run_id || "", "", 80),
+    sessionName: sanitizeLedgerField(worker.sessionName || worker.session || "", "", 80),
+    provider: sanitizeLedgerField(worker.provider || "unknown", "unknown", 40),
+    modelPolicy: sanitizeLedgerField(worker.modelPolicy || "unknown", "unknown", 80),
+    modelRoute: isPlainObject(worker.modelRoute) ? {
+      policy: sanitizeLedgerField(worker.modelRoute.policy || worker.modelPolicy || "task-fit", "task-fit", 80),
+      source: sanitizeLedgerField(worker.modelRoute.source || "worker_record", "worker_record", 80),
+    } : null,
+    state: sanitizeLedgerField(worker.state || "unknown", "unknown", 40),
+    assignmentState: sanitizeLedgerField(worker.assignmentState || worker.assignment_state || worker.state || "unknown", "unknown", 40),
+    assignmentId: worker.assignmentId || worker.assignment_id || null,
+    taskId: worker.taskId || worker.task_id || null,
+    leaseId: sanitizeLedgerField(worker.leaseId || worker.lease_id || "", "", 140) || null,
+    leaseState: sanitizeLedgerField(worker.leaseState || worker.lease_state || "", "", 80) || null,
+    currentLease: isPlainObject(worker.currentLease || worker.current_lease) ? {
+      assignmentId: sanitizeIdentifierField((worker.currentLease || worker.current_lease).assignmentId || (worker.currentLease || worker.current_lease).assignment_id || "", "", 140),
+      taskId: sanitizeIdentifierField((worker.currentLease || worker.current_lease).taskId || (worker.currentLease || worker.current_lease).task_id || "", "", 140) || null,
+      leaseId: sanitizeIdentifierField((worker.currentLease || worker.current_lease).leaseId || (worker.currentLease || worker.current_lease).lease_id || worker.leaseId || worker.lease_id || "", "", 140) || null,
+      state: sanitizeLedgerField((worker.currentLease || worker.current_lease).state || worker.leaseState || worker.lease_state || "", "", 80) || null,
+      source: sanitizeLedgerField((worker.currentLease || worker.current_lease).source || "dispatcher_lease_state", "dispatcher_lease_state", 80),
+    } : null,
+    laneOwner: sanitizeLedgerField(worker.laneOwner || worker.lane_owner || "", "", 160),
+    worktreePath: worker.worktreePath || worker.worktree_path || null,
+    lastHeartbeatAt: worker.lastHeartbeatAt || worker.last_heartbeat_at || null,
+    heartbeat: isPlainObject(worker.heartbeat) ? {
+      status: sanitizeLedgerField(worker.heartbeat.status || "recorded", "recorded", 80),
+      source: sanitizeLedgerField(worker.heartbeat.source || "manager-worker-heartbeat", "manager-worker-heartbeat", 80),
+      lastHeartbeatAt: sanitizeLedgerField(worker.heartbeat.lastHeartbeatAt || worker.heartbeat.last_heartbeat_at || worker.lastHeartbeatAt || worker.last_heartbeat_at || "", "", 80),
+    } : null,
+    lastPreflight: isPlainObject(worker.lastPreflight || worker.last_preflight) ? {
+      status: sanitizeLedgerField((worker.lastPreflight || worker.last_preflight).status || "unknown", "unknown", 80),
+      source: sanitizeLedgerField((worker.lastPreflight || worker.last_preflight).source || "worker_record", "worker_record", 80),
+    } : null,
+    failureCount: Number.isFinite(Number(worker.failureCount)) ? Number(worker.failureCount) : 0,
+    recoveryState: sanitizeLedgerField(worker.recoveryState || "none", "none", 40),
+    recoveryAction: sanitizeLedgerField(worker.recoveryAction || worker.recovery_action || "", "", 120),
+    rawPayloadRetained: false,
+  };
+}
+
+function ambiguousAssignmentStatusCounts(statusCounts = {}) {
+  const ambiguous = [];
+  const ambiguousPattern = /(ambiguous|blocked|stale|takeover|unknown|missing|dirty|conflict|error|orphan|unsafe|failed)/i;
+  for (const [bucket, counts] of Object.entries(statusCounts)) {
+    for (const [status, count] of Object.entries(counts || {})) {
+      if (ambiguousPattern.test(status) && Number(count) > 0) {
+        ambiguous.push({ bucket, status, count: Number(count) });
+      }
+    }
+  }
+  return ambiguous;
+}
+
+function tmuxOrientationBlockers(summary = {}) {
+  const checks = [
+    ["tmux-workspace-errors", summary.workspaceErrorCount, "workspace orientation errors"],
+    ["tmux-takeover-required", summary.takeoverRequiredPanes, "takeover-required pane(s)"],
+    ["tmux-missing-worktrees", summary.missingWorktrees, "missing worktree pane(s)"],
+    ["tmux-unknown-dirty", summary.unknownDirtyPanes, "pane(s) with unknown dirty state"],
+    ["tmux-malformed-pane-metadata", summary.malformedPaneMetadata, "malformed tmux pane metadata row(s)"],
+  ];
+  return checks
+    .filter(([, count]) => Number(count) > 0)
+    .map(([code, count, label]) => ({
+      code,
+      message: `${count} ${label}.`,
+      nextAction: "Resolve tmux/workspace orientation ambiguity before resuming manager mutation.",
+    }));
+}
+
+function ensureManagerRunExists(paths) {
+  if (existsSync(paths.root)) {
+    return null;
+  }
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: { runId: paths.runId, root: paths.root },
+    blockers: [{ code: "manager-run-missing", message: "Manager run is not initialized.", nextAction: "Run manager-ledger init first." }],
+  });
+}
+
+function ensureLedgerAppendReady(paths, options = {}, context = {}, policy = {}) {
+  const missing = ensureManagerRunExists(paths);
+  if (missing) return missing;
+  const readiness = buildLedgerReadiness(options, context);
+  if (!readiness.ok) return readiness;
+  if (policy.requireEvidence) {
+    const missingFields = [];
+    if (!String(options.summary || "").trim()) missingFields.push("summary");
+    if (!String(options.authorityBasis || "").trim()) missingFields.push("authorityBasis");
+    if (!String(options.recoveryPath || "").trim()) missingFields.push("recoveryPath");
+    if (sanitizeSourceRefs(options.sourceRefs || []).length === 0) missingFields.push("sourceRefs");
+    if (sanitizeSourceRefs(options.evidenceRefs || options.evidenceRef || []).length === 0) missingFields.push("evidenceRefs");
+    if (missingFields.length > 0) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId: paths.runId, missingFields },
+        blockers: [
+          {
+            code: "ledger-evidence-missing",
+            message: `Ledger record is missing required evidence: ${missingFields.join(", ")}.`,
+            nextAction: "Provide compact summary, source refs, authority basis, and recovery path.",
+          },
+        ],
+      });
+    }
+  }
+  return null;
+}
+
+function malformedLedgerFile(paths, file, path, message) {
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: { runId: paths.runId, file, path },
+    blockers: [{ code: "ledger-file-malformed", message: `${file}: ${message}`, nextAction: "Repair manager ledger before appending new evidence." }],
+  });
+}
+
+function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = {}, fallbackSummary, eventName = "", extra = {} }) {
+  const recordId = `${idPrefix}-${Date.now()}-${process.hrtime.bigint().toString(36)}`;
+  const createdAt = new Date().toISOString();
+  const normalizedEventName = normalizeLedgerEventName(eventName || typeValue) || "manager.ledger.appended";
+  const sanitizedSourceRefs = sanitizeSourceRefs(options.sourceRefs || defaultLedgerSourceRefs(normalizedEventName));
+  const sanitizedEvidenceRefs = sanitizeSourceRefs(options.evidenceRefs || options.evidenceRef || defaultLedgerEvidenceRefs(normalizedEventName, recordId));
+  const correlationId = sanitizeLedgerField(options.correlationId || options.correlationID || recordId, recordId, 120);
+  return {
+    [idName]: recordId,
+    ...safeLedgerExtra(extra),
+    eventId: recordId,
+    schemaVersion: "manager_runtime_ledger_event.v1",
+    eventName: normalizedEventName,
+    timestamp: createdAt,
+    createdAt,
+    actor: sanitizeLedgerField(actor, "manager", 80),
+    actorType: actor === "manager" ? "manager" : actor === "operator" ? "operator" : "worker",
+    actorId: sanitizeLedgerField(actor, "manager", 80),
+    [typeName]: sanitizeLedgerField(typeValue, "manager_record", 80),
+    authorityBasis: sanitizeLedgerField(options.authorityBasis || "manager-owned-ledger-append", "manager-owned-ledger-append", 120),
+    summary: sanitizeLedgerField(options.summary || fallbackSummary, fallbackSummary, 240),
+    sourceRefs: sanitizedSourceRefs,
+    recoveryPath: sanitizeLedgerField(options.recoveryPath || "inspect manager ledger and rerun resume state", "inspect manager ledger and rerun resume state", 240),
+    result: sanitizeLedgerField(options.result || "recorded", "recorded", 40),
+    evidenceRefs: sanitizedEvidenceRefs,
+    correlationId,
+    causationId: sanitizeLedgerField(options.causationId || options.causationID || correlationId, correlationId, 120),
+    orderingKey: sanitizeLedgerField(options.orderingKey || createdAt, createdAt, 120),
+    idempotencyKey: sanitizeLedgerField(options.idempotencyKey || `${normalizedEventName}:${recordId}`, `${normalizedEventName}:${recordId}`, 160),
+    redactionBoundary: sanitizeLedgerField(options.redactionBoundary || "metadata_only", "metadata_only", 40),
+    projectionBehavior: sanitizeLedgerField(options.projectionBehavior || defaultLedgerProjectionBehavior(normalizedEventName), "records_evidence", 80),
+    rawPayloadRetained: false,
+  };
+}
+
+function safeLedgerExtra(extra = {}) {
+  const safe = {};
+  if (Object.prototype.hasOwnProperty.call(extra, "resourceState")) {
+    safe.resourceState = sanitizeLedgerField(extra.resourceState, "unknown", 40);
+  }
+  if (Object.prototype.hasOwnProperty.call(extra, "usageState")) {
+    safe.usageState = sanitizeLedgerField(extra.usageState, "unknown", 40);
+  }
+  return safe;
+}
+
+function defaultLedgerSourceRefs(eventName) {
+  if (eventName === "manager.resource.snapshot") return ["resource:local-host"];
+  if (eventName === "manager.usage.snapshot") return ["usage:codex-window"];
+  return [];
+}
+
+function defaultLedgerEvidenceRefs(eventName, recordId) {
+  if (eventName === "manager.resource.snapshot") return [`resource-snapshot:${recordId}`];
+  if (eventName === "manager.usage.snapshot") return [`usage-snapshot:${recordId}`];
+  return [];
+}
+
+function normalizeLedgerEventName(eventType = "") {
+  const raw = String(eventType || "").trim();
+  const direct = LEDGER_EVENT_NAMES.has(raw) ? raw : "";
+  if (direct) return direct;
+  return LEDGER_EVENT_ALIASES.get(raw) || "";
+}
+
+function unknownLedgerEvent(paths, eventType) {
+  const label = sanitizeLedgerField(eventType || "(missing)", "(missing)", 120);
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: { runId: paths.runId, eventType: label },
+    blockers: [
+      {
+        code: "ledger-event-unknown",
+        message: `Unknown manager runtime ledger event: ${label}.`,
+        nextAction: "Use a manager-control-plane event registry name before appending runtime ledger evidence.",
+      },
+    ],
+  });
+}
+
+const LEDGER_EVENT_NAMES = new Set([
+  "dispatcher.work.queued",
+  "dispatcher.lease.claimed",
+  "dispatcher.lease.heartbeat",
+  "dispatcher.lease.expired",
+  "dispatcher.attempt.completed",
+  "dispatcher.attempt.failed",
+  "dispatcher.refill.started",
+  "dispatcher.refill.completed",
+  "dispatcher.authority.blocked",
+  "dispatcher.summary.updated",
+  "dispatcher.summary.stale",
+  "dispatcher.progress.observed",
+  "dispatcher.policy.blocked_action",
+  "dispatcher.recovery.attempted",
+  "dispatcher.work_supply.empty",
+  "manager.run.started",
+  "manager.run.steered",
+  "manager.ledger.appended",
+  "manager.question.recorded",
+  "manager.checkpoint.recorded",
+  "manager.resource.snapshot",
+  "manager.usage.snapshot",
+  "manager.blocker.recorded",
+  "manager.recovery.blocked",
+  "manager.replay.summarized",
+]);
+
+const LEDGER_EVENT_ALIASES = new Map([
+  ["manager.event", "manager.ledger.appended"],
+  ["manager.raw", "manager.ledger.appended"],
+  ["manager.steering", "manager.run.steered"],
+  ["worker_target_changed", "manager.run.steered"],
+  ["worker_question", "manager.question.recorded"],
+  ["manager_checkpoint", "manager.checkpoint.recorded"],
+  ["worker_progress_signal", "manager.ledger.appended"],
+  ["worker_warm_apply", "manager.ledger.appended"],
+  ["worker_handoff_apply", "manager.ledger.appended"],
+  ["worker_recovery_inspection", "manager.recovery.blocked"],
+  ["worker_progress_signal_apply", "manager.ledger.appended"],
+  ["worker_submit_pending_apply", "manager.ledger.appended"],
+  ["worker_prompt_region_submit_apply", "manager.ledger.appended"],
+  ["worker_retire_apply", "manager.recovery.blocked"],
+  ["worker_question_answer_apply", "manager.question.recorded"],
+  ["worker_owner_delegation_apply", "manager.ledger.appended"],
+  ["worker_pointer_receipt_unverified", "manager.recovery.blocked"],
+]);
+
+function findDuplicateLedgerEvent(eventsPath, idempotencyKey) {
+  return findDuplicateLedgerRecord(eventsPath, idempotencyKey);
+}
+
+function findDuplicateLedgerRecord(recordsPath, idempotencyKey) {
+  const key = sanitizeLedgerField(idempotencyKey || "", "", 160);
+  if (!key) return null;
+  return readNdjsonStrict(recordsPath).value.find((event) => event?.idempotencyKey === key) || null;
+}
+
+function findDuplicateLedgerRecordFromArray(records = [], idempotencyKey) {
+  const key = sanitizeLedgerField(idempotencyKey || "", "", 160);
+  if (!key || !Array.isArray(records)) return null;
+  return records.find((event) => event?.idempotencyKey === key) || null;
+}
+
+function validateRuntimeLedgerEventRecord(record) {
+  const requiredStringFields = [
+    "eventId",
+    "schemaVersion",
+    "eventName",
+    "actorType",
+    "actorId",
+    "authorityBasis",
+    "result",
+    "correlationId",
+    "causationId",
+    "orderingKey",
+    "idempotencyKey",
+    "redactionBoundary",
+    "projectionBehavior",
+    "summary",
+    "createdAt",
+  ];
+  for (const field of requiredStringFields) {
+    if (!String(record?.[field] || "").trim()) return `runtime ledger event is missing required field: ${field}.`;
+  }
+  if (record.schemaVersion !== "manager_runtime_ledger_event.v1") {
+    return "runtime ledger event has an unsupported schemaVersion.";
+  }
+  if (!LEDGER_EVENT_NAMES.has(record.eventName)) {
+    return `runtime ledger event has unknown eventName: ${sanitizeLedgerField(record.eventName || "(missing)", "(missing)", 120)}.`;
+  }
+  if (!Array.isArray(record.sourceRefs) || record.sourceRefs.length === 0) {
+    return "runtime ledger event is missing sourceRefs.";
+  }
+  if (!Array.isArray(record.evidenceRefs) || record.evidenceRefs.length === 0) {
+    return "runtime ledger event is missing evidenceRefs.";
+  }
+  if (record.rawPayloadRetained !== false) {
+    return "runtime ledger event must retain metadata only.";
+  }
+  return null;
+}
+
+function defaultLedgerProjectionBehavior(eventName) {
+  if (eventName === "manager.recovery.blocked" || eventName === "manager.blocker.recorded") return "blocks_action";
+  if (eventName === "manager.run.started" || eventName === "manager.run.steered" || eventName === "manager.replay.summarized") return "updates_summary";
+  return "records_evidence";
+}
+
+function buildLedgerReplaySummary(paths) {
+  const mission = readJson(paths.mission, {});
+  const dispatcherSummary = readJson(paths.dispatcherSummary, {});
+  const events = readNdjsonStrict(paths.events).value;
+  const questions = readNdjsonStrict(paths.questions).value;
+  const checkpoints = readJson(paths.checkpoints, []);
+  const resourceSnapshots = readNdjsonStrict(paths.resourceSnapshots).value;
+  const usageSnapshots = readNdjsonStrict(paths.usageSnapshots).value;
+  const latestEvent = events.at(-1) || null;
+  const outstandingBlockers = events
+    .filter((event) => event.eventName === "manager.blocker.recorded" || event.eventName === "manager.recovery.blocked" || event.result === "blocked")
+    .slice(-10)
+    .map((event) => ({
+      code: sanitizeLedgerField(event.eventName || event.eventType || "ledger-blocker", "ledger-blocker", 100),
+      reason: sanitizeLedgerField(event.summary || "ledger blocker", "ledger blocker", 200),
+      safeRepairAction: sanitizeLedgerField(event.recoveryPath || "inspect manager ledger and rerun resume state", "inspect manager ledger and rerun resume state", 220),
+      evidenceRefs: Array.isArray(event.evidenceRefs) ? event.evidenceRefs : [],
+    }));
+  const dispatcherUnavailable =
+    !isPlainObject(dispatcherSummary) ||
+    dispatcherSummary.stateSource === "dispatcher_summary_unavailable" ||
+    dispatcherSummary.freshness === "unknown";
+  return {
+    runId: paths.runId,
+    mission: sanitizeLedgerField(mission.objective || "Complete Kendall_Nxt PRDs end to end", "Complete Kendall_Nxt PRDs end to end", 220),
+    authorityStage: sanitizeLedgerField(mission.authorityStage || mission.authorityProfile || "backend_proof", "backend_proof", 80),
+    controlState: replayControlState(mission, latestEvent),
+    eventWatermark: sanitizeLedgerField(latestEvent?.eventId || latestEvent?.eventId || "", "", 140),
+    outstandingBlockers,
+    openQuestions: questions.slice(-10).map((question) => sanitizeLedgerField(question.summary || question.questionType || "question", "question", 180)),
+    latestCheckpoints: Array.isArray(checkpoints) ? checkpoints.slice(-10).map((checkpoint) => sanitizeLedgerField(checkpoint.summary || checkpoint.checkpointType || "checkpoint", "checkpoint", 180)) : [],
+    latestResourceState: sanitizeLedgerField(resourceSnapshots.at(-1)?.resourceState || "unknown", "unknown", 60),
+    latestUsageState: sanitizeLedgerField(usageSnapshots.at(-1)?.usageState || "unknown", "unknown", 60),
+    nextSafeAction: outstandingBlockers.length > 0
+      ? "inspect_recovery_blockers"
+      : dispatcherUnavailable
+        ? "reconcile_dispatcher_summary"
+        : "continue_monitoring",
+    recoveryBlockers: outstandingBlockers,
+    rawPayloadRetained: false,
+    evidenceRefs: latestEvent?.evidenceRefs || [],
+  };
+}
+
+function replayControlState(mission = {}, latestEvent = null) {
+  if (latestEvent?.eventName === "manager.run.steered") return "active";
+  if (latestEvent?.eventName === "manager.recovery.blocked" || latestEvent?.eventName === "manager.blocker.recorded") return "blocked";
+  return sanitizeLedgerField(mission.controlState || mission.runState || "active", "active", 80);
+}
+
+function sanitizeSourceRefs(refs) {
+  const list = Array.isArray(refs) ? refs : [refs];
+  return list
+    .map((ref) => sanitizeLedgerField(ref, "", 160))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function sanitizeLedgerField(value, fallback, maxLength) {
+  const text = String(value || fallback || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (text || fallback).slice(0, maxLength);
+}
+
+function sanitizeIdentifierField(value, fallback = "", maxLength = 140) {
+  const text = String(value || fallback || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (text || fallback).slice(0, maxLength);
+}
+
+function isSafeCommandIdentifier(value = "") {
+  const text = String(value || "");
+  return Boolean(text.trim()) && !/\[redacted/i.test(text) && !/[\u0000-\u001f\u007f]/.test(text);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}

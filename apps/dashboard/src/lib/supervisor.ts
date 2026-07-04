@@ -304,16 +304,7 @@ function isProjectionFreshnessConsistent(projection: Partial<PipelineDashboardPr
     return false;
   }
   const ageMs = Date.parse(generatedAt) - Date.parse(sourceUpdatedAt);
-  if (ageMs <= staleAfterSeconds * 1000 || projection.freshnessState !== "live") {
-    return true;
-  }
-  return Array.isArray(projection.workPackets) && projection.workPackets.some((packet) => {
-    if (!packet || typeof packet !== "object") {
-      return false;
-    }
-    const candidate = packet as Partial<PipelineDashboardProjectionV0["workPackets"][number]>;
-    return candidate.truthLabel === "live" && typeof candidate.status === "string" && ["active", "waiting", "blocked", "failed"].includes(candidate.status);
-  });
+  return projection.freshnessState !== "live" || (ageMs >= 0 && ageMs <= staleAfterSeconds * 1000);
 }
 
 function isProjectionFixtureTruthConsistent(projection: Partial<PipelineDashboardProjectionV0>) {

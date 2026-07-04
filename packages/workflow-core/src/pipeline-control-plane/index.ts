@@ -24,6 +24,8 @@ export const LEGACY_TO_AUTHORITATIVE_STAGE = {
   human_gate: "needs_approval",
 } as const;
 
+const FORBIDDEN_METADATA_SUMMARY_FIELDS = /\b(?:rawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential)\b/i;
+
 export interface CreateLifecycleEventInput {
   packetId: string;
   targetStage?: AuthoritativePacketStage;
@@ -127,7 +129,7 @@ function assertMetadataSource(sourceRef: AuthoritativePacketSourceRef): void {
 
 function safeSummary(value: string | undefined): string {
   const summary = (value ?? "Metadata-only lifecycle event.").trim();
-  if (/\b(raw[\s_-]*(?:prompt|completion)|reasoning[\s_-]*trace|provider[\s_-]*payload|secret|credential)\b/i.test(summary)) {
+  if (FORBIDDEN_METADATA_SUMMARY_FIELDS.test(summary) || /\b(raw[\s_-]*(?:prompt|completion)|reasoning[\s_-]*trace|provider[\s_-]*payload|secret|credential)\b/i.test(summary)) {
     throw new Error("Lifecycle event summaries must not retain raw prompt, provider, or secret payloads.");
   }
   return summary.slice(0, 500);
