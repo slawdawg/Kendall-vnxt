@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
-    r"\b(raw[\s_-]*(prompt|completion)|reasoning[\s_-]*trace|provider[\s_-]*payload|secret|credential)\b",
+    r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
+    re.IGNORECASE,
+)
+EXECUTABLE_CONTROL_TEXT_RE = re.compile(
+    r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
 )
 
@@ -135,9 +139,13 @@ from supervisor.api.schemas import (
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
     PipelineFixtureModeV0View,
+    PipelineGatedControlV0View,
     PipelineManagerSummaryV0View,
     PipelineQueueSummaryV0View,
+    PipelineReliabilityProblemV0View,
+    PipelineWorkerSummaryV0View,
     PipelineSelectedPacketDetailV0View,
+    PipelineSourceStateV0View,
     PipelineStageSummaryV0View,
     PipelineTruthSummaryV0View,
     ProviderEnablementPolicyStepView,
@@ -321,7 +329,10 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
 
 DEFAULT_LLM_WIKI_DERIVED_FOLDER = "01 Dashboard Queue/LLM Wiki Derived"
 LLM_WIKI_REBUILD_BASIS = ("approved-memory-proposals", "source-evidence-crosswalk")
-AUTHORITATIVE_PLANNING_SOURCE_PATH = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md"
+AUTHORITATIVE_PLANNING_SOURCE_PATH = (
+    "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md"
+)
+AUTHORITATIVE_PLANNING_SOURCE_LABEL = "July 4 pipeline execution-loop reliability PRD"
 STALE_PLANNING_SOURCE_POLICY = (
     "hold or flag packets, stories, and architecture notes that reference superseded PRDs; "
     "do not silently derive downstream planning work from stale planning sources."
@@ -339,6 +350,7 @@ AUTHORITATIVE_PACKET_STAGE_SEQUENCE = [
     "deliver",
     "learn",
 ]
+PIPELINE_DISPATCHABLE_STAGES = {"capture", "classify", "route", "shape", "execute", "review", "promote", "deliver"}
 
 AUTHORITATIVE_PACKET_STAGE_LABELS = {
     "capture": "Capture",
@@ -871,6 +883,8 @@ class SupervisorService:
 
     def _safe_lifecycle_summary(self, summary: str) -> str:
         value = (summary or "Metadata-only lifecycle event.").strip()
+        if not value:
+            return "Metadata-only lifecycle event."
         if UNSAFE_LIFECYCLE_TEXT_RE.search(value):
             raise ValueError("Lifecycle event summaries must not retain raw prompt, provider payload, or secret content.")
         return value[:500]
@@ -878,7 +892,9 @@ class SupervisorService:
     def _safe_lifecycle_refs(self, refs: list[str]) -> list[str]:
         safe_refs = []
         for ref in refs:
-            value = str(ref).strip()
+            if not isinstance(ref, str):
+                raise ValueError("Lifecycle evidence refs must be strings.")
+            value = ref.strip()
             if not value:
                 raise ValueError("Lifecycle evidence refs must not be blank.")
             if len(value) > 255:
@@ -887,6 +903,177 @@ class SupervisorService:
                 raise ValueError("Lifecycle evidence refs must not retain raw prompt, provider payload, or secret content.")
             safe_refs.append(value)
         return safe_refs
+
+    def _projection_safe_lifecycle_summary(self, summary: str | None) -> str:
+        value = (summary or "Metadata-only lifecycle event.").strip()
+        if not value:
+            return "Metadata-only lifecycle event."
+        if UNSAFE_LIFECYCLE_TEXT_RE.search(value):
+            return "Redacted metadata-only lifecycle summary."
+        return value[:500]
+
+    def _projection_safe_lifecycle_refs(self, refs: list[str]) -> list[str]:
+        safe_refs = []
+        for ref in refs:
+            if not isinstance(ref, str):
+                continue
+            value = ref.strip()
+            if not value or len(value) > 255:
+                continue
+            if UNSAFE_LIFECYCLE_TEXT_RE.search(value):
+                continue
+            safe_refs.append(value)
+        return safe_refs
+
+    def _safe_candidate_import_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
+        if not isinstance(metadata, dict):
+            return {}
+        safe_metadata = dict(metadata)
+        if safe_metadata.get("projectionVisibility") == "gated_control_only":
+            if isinstance(safe_metadata.get("pipelineGatedControl"), dict):
+                safe_metadata["pipelineGatedControl"] = self._safe_pipeline_gated_control_metadata(
+                    safe_metadata["pipelineGatedControl"]
+                )
+            if isinstance(safe_metadata.get("pipelineGatedControls"), list):
+                safe_metadata["pipelineGatedControls"] = [
+                    self._safe_pipeline_gated_control_metadata(control)
+                    for control in safe_metadata["pipelineGatedControls"]
+                    if isinstance(control, dict)
+                ]
+            return safe_metadata
+        if safe_metadata.get("projectionVisibility") != "worker_summary_only":
+            return safe_metadata
+        if isinstance(safe_metadata.get("pipelineWorkerState"), dict):
+            safe_metadata["pipelineWorkerState"] = self._safe_pipeline_worker_state_metadata(safe_metadata["pipelineWorkerState"])
+        if isinstance(safe_metadata.get("pipelineWorkerStates"), list):
+            safe_metadata["pipelineWorkerStates"] = [
+                self._safe_pipeline_worker_state_metadata(state)
+                for state in safe_metadata["pipelineWorkerStates"]
+                if isinstance(state, dict)
+            ]
+        if isinstance(safe_metadata.get("pipelineWorkerSummary"), dict):
+            safe_metadata["pipelineWorkerSummary"] = self._safe_pipeline_worker_summary_metadata(
+                safe_metadata["pipelineWorkerSummary"]
+            )
+        return safe_metadata
+
+    def _safe_pipeline_gated_control_metadata(self, raw_control: dict[str, object]) -> dict[str, object]:
+        allowed_operations = {
+            "kill_worker",
+            "drain_worker",
+            "cleanup_workspace",
+            "takeover_workspace",
+            "provider_call",
+            "github_mutation",
+            "worker_launch",
+            "lease_mutation",
+            "source_mutation",
+            "terminal_access",
+            "raw_payload_retention",
+            "unknown",
+        }
+        allowed_statuses = {"gated", "action_needed", "blocked"}
+        safe_control: dict[str, object] = {}
+        control_id = raw_control.get("controlId")
+        if isinstance(control_id, str) and self._projection_safe_lifecycle_refs([control_id]):
+            safe_control["controlId"] = control_id.strip()[:255]
+        operation = raw_control.get("operation")
+        if isinstance(operation, str) and operation in allowed_operations:
+            safe_control["operation"] = operation
+        status = raw_control.get("status")
+        if isinstance(status, str) and status in allowed_statuses:
+            safe_control["status"] = status
+        for source_key, target_key in [
+            ("authorityFamily", "authorityFamily"),
+            ("stopLine", "stopLine"),
+            ("nextAction", "nextAction"),
+        ]:
+            value = raw_control.get(source_key)
+            if isinstance(value, str) and not EXECUTABLE_CONTROL_TEXT_RE.search(value):
+                safe_control[target_key] = self._projection_safe_lifecycle_summary(value)
+        packet_id = raw_control.get("packetId")
+        if isinstance(packet_id, str):
+            safe_packet_refs = self._projection_safe_lifecycle_refs([packet_id])
+            if safe_packet_refs:
+                safe_control["packetId"] = safe_packet_refs[0]
+        worker_refs = [
+            ref
+            for ref in self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_control, "workerRefs"))
+            if self._is_safe_worker_ref(ref)
+        ]
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_control, "evidenceRefs"))
+        if worker_refs:
+            safe_control["workerRefs"] = worker_refs
+        if evidence_refs:
+            safe_control["evidenceRefs"] = evidence_refs
+        if safe_control:
+            safe_control["metadataOnly"] = True
+        return safe_control
+
+    def _safe_pipeline_worker_state_metadata(self, raw_worker_state: dict[str, object]) -> dict[str, object]:
+        allowed_states = {"warm", "active", "waiting", "stalled", "failed", "draining", "killed", "complete", "unavailable", "unknown"}
+        safe_state: dict[str, object] = {}
+        state = raw_worker_state.get("state")
+        if isinstance(state, str) and state in allowed_states:
+            safe_state["state"] = state
+        worker_id = raw_worker_state.get("workerId")
+        if isinstance(worker_id, str) and worker_id.strip():
+            safe_state["workerId"] = worker_id.strip()[:120]
+        worker_ref = raw_worker_state.get("workerRef")
+        if isinstance(worker_ref, str) and self._is_safe_worker_ref(worker_ref):
+            safe_state["workerRef"] = worker_ref.strip()[:255]
+        summary = raw_worker_state.get("summary")
+        if isinstance(summary, str):
+            safe_state["summary"] = self._projection_safe_lifecycle_summary(summary)
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_state, "evidenceRefs"))
+        if evidence_refs:
+            safe_state["evidenceRefs"] = evidence_refs
+        return safe_state
+
+    def _safe_pipeline_worker_summary_metadata(self, raw_worker_summary: dict[str, object]) -> dict[str, object]:
+        count_keys = {
+            "warmCount",
+            "activeCount",
+            "waitingCount",
+            "stalledCount",
+            "failedCount",
+            "drainingCount",
+            "killedCount",
+            "completeCount",
+            "unavailableCount",
+            "unknownCount",
+        }
+        safe_summary: dict[str, object] = {}
+        for key in count_keys:
+            count = self._non_negative_int(raw_worker_summary.get(key))
+            if count is not None:
+                safe_summary[key] = count
+        worker_refs = [
+            ref
+            for ref in self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_summary, "workerRefs"))
+            if self._is_safe_worker_ref(ref)
+        ]
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_summary, "evidenceRefs"))
+        if safe_summary and not worker_refs and not evidence_refs:
+            return {}
+        if worker_refs:
+            safe_summary["workerRefs"] = worker_refs
+        if evidence_refs:
+            safe_summary["evidenceRefs"] = evidence_refs
+        return safe_summary
+
+    def _is_safe_worker_ref(self, value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        ref = value.strip()
+        return bool(ref) and ref.startswith("worker:") and len(ref) <= 255 and not UNSAFE_LIFECYCLE_TEXT_RE.search(ref)
+
+    def _non_negative_int(self, value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int) and value >= 0:
+            return value
+        return None
 
     async def create_work_item(self, session: AsyncSession, payload: WorkItemCreate) -> WorkItem:
         item = WorkItem(
@@ -1669,6 +1856,7 @@ class SupervisorService:
         return list(result.scalars())
 
     async def create_candidate_work(self, session: AsyncSession, payload: CandidateWorkCreate) -> CandidateWork:
+        import_metadata = self._safe_candidate_import_metadata(dict(payload.importMetadata))
         candidate = CandidateWork(
             title=payload.title,
             requested_outcome=payload.requestedOutcome,
@@ -1678,7 +1866,7 @@ class SupervisorService:
             risk_level=payload.riskLevel.value,
             priority=payload.priority.value,
             sort_order=payload.sortOrder,
-            import_metadata_json=dict(payload.importMetadata),
+            import_metadata_json=import_metadata,
             status=CandidateWorkStatus.PROPOSED.value,
         )
         session.add(candidate)
@@ -1807,6 +1995,8 @@ class SupervisorService:
         for candidate in candidates:
             if candidate.id in emitted_candidate_ids:
                 continue
+            if self._candidate_is_projection_metadata_only(candidate):
+                continue
             if candidate.promoted_work_item_id and candidate.promoted_work_item_id in item_ids:
                 continue
             packet_views.append(await self._assemble_work_packet(session, candidate=candidate, item=None))
@@ -1819,6 +2009,10 @@ class SupervisorService:
         try:
             authoritative_packets = await self.list_authoritative_work_packets(session)
             legacy_packets = await self.list_work_packets(session)
+            candidates = await self.list_candidate_work(session)
+            source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
+            worker_summary_records = self._pipeline_projection_worker_summary_records(candidates)
+            gated_controls = self._pipeline_projection_gated_controls(candidates)
         except SQLAlchemyError:
             return self._unavailable_pipeline_dashboard_projection(generated_at, stale_after_seconds)
 
@@ -1826,6 +2020,14 @@ class SupervisorService:
         legacy_projection_packets = [packet for packet in legacy_packets if packet.packetId not in authoritative_ids]
         source_timestamps = [self._ensure_aware(packet.updatedAt) for packet in authoritative_packets]
         source_timestamps.extend(self._ensure_aware(self._legacy_work_packet_updated_at(packet, generated_at)) for packet in legacy_projection_packets)
+        source_timestamps.extend(source_state.updatedAt for source_state in source_state_only_records)
+        source_timestamps.extend(record["updated_at"] for record in worker_summary_records)
+        source_timestamps.extend(
+            self._ensure_aware(candidate.updated_at)
+            for candidate in candidates
+            if self._candidate_is_pipeline_gated_control_only(candidate)
+            and candidate.status not in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}
+        )
         source_updated_at = max(source_timestamps, default=generated_at)
         projected_stage_statuses = [(packet.currentStage, packet.status) for packet in authoritative_packets]
         projected_stage_statuses.extend((packet.currentStage, packet.status) for packet in legacy_projection_packets)
@@ -1839,12 +2041,58 @@ class SupervisorService:
         stage_source_labels = {stage: [] for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE}
         dashboard_packets: list[PipelineDashboardWorkPacketV0View] = []
         selected_packet_details: list[PipelineSelectedPacketDetailV0View] = []
+        source_states_by_id: dict[str, PipelineSourceStateV0View] = {}
+        queue_buckets: list[str] = []
         evidence_refs: list[str] = []
+
+        for source_state in source_state_only_records:
+            self._upsert_pipeline_source_state(source_states_by_id, source_state)
+            evidence_refs.extend(source_state.evidenceRefs)
+            source_state_queue_bucket = self._pipeline_projection_queue_bucket_from_source_state(source_state.state)
+            if source_state_queue_bucket:
+                queue_buckets.append(source_state_queue_bucket)
+
+        worker_summary = self._pipeline_projection_worker_summary(
+            worker_summary_records,
+            generated_at=generated_at,
+            stale_after_seconds=stale_after_seconds,
+        )
+        evidence_refs.extend(worker_summary.evidenceRefs)
+        for control in gated_controls:
+            evidence_refs.extend(control.evidenceRefs)
 
         for packet in authoritative_packets:
             stage_counts[packet.currentStage] = stage_counts.get(packet.currentStage, 0) + 1
-            packet_evidence = sorted({evidence_ref for event in packet.history for evidence_ref in event.evidenceRefs})
+            packet_evidence = sorted(
+                {
+                    evidence_ref
+                    for event in packet.history
+                    for evidence_ref in self._projection_safe_lifecycle_refs(event.evidenceRefs)
+                }
+            )
             evidence_refs.extend(packet_evidence)
+            lifecycle_events = [
+                event
+                for event in packet.history
+                if event.eventType in {"packet.created", "packet.stage_transitioned"}
+            ]
+            current_lifecycle_event = next(
+                (event for event in lifecycle_events if event.eventId == packet.currentEventId),
+                None,
+            )
+            transition_events = [
+                event
+                for event in lifecycle_events
+                if event.eventType == "packet.stage_transitioned" and event.previousStage != event.targetStage
+            ]
+            latest_movement_event = (
+                next((event for event in reversed(transition_events) if event.targetStage == packet.currentStage), None)
+                if current_lifecycle_event
+                else None
+            )
+            recent_transition_event_refs = [f"event:{event.eventId}" for event in transition_events[-5:]]
+            latest_transition_event_ref = f"event:{latest_movement_event.eventId}" if latest_movement_event else None
+            latest_movement_summary = self._projection_safe_lifecycle_summary(latest_movement_event.payloadSummary) if latest_movement_event else None
             next_action = self._pipeline_projection_next_action(packet.currentStage, packet.status)
             blocker = "Packet status is blocked." if packet.status == "blocked" else None
             if packet.status == "failed":
@@ -1863,6 +2111,40 @@ class SupervisorService:
                     f"Packet source PRD is superseded by {planning_authority['superseded_by']}; "
                     "hold downstream work until the source is inspected."
                 )
+            self._upsert_pipeline_source_state(
+                source_states_by_id,
+                PipelineSourceStateV0View(
+                    sourceId=packet.sourceRef.refId,
+                    sourceRef=packet.sourceRef.refId,
+                    sourceKind=self._pipeline_projection_source_kind(getattr(packet.sourceRef, "sourceType", None)),
+                    state="stale" if planning_authority["status"] == "superseded" else "healthy",
+                    summary=(
+                        f"Source PRD is superseded by {planning_authority['superseded_by']}."
+                        if planning_authority["status"] == "superseded"
+                        else "Source is available for pipeline execution-loop planning."
+                    ),
+                    evidenceRefs=packet_evidence,
+                    updatedAt=packet.updatedAt,
+                    metadataOnly=True,
+                ),
+            )
+            authoritative_source_state = "stale" if planning_authority["status"] == "superseded" else "healthy"
+            queue_buckets.append(
+                self._pipeline_projection_queue_bucket(
+                    current_stage=packet.currentStage,
+                    status=packet.status,
+                    packet_source_label=packet_source_label,
+                    source_states=[authoritative_source_state],
+                )
+            )
+            can_satisfy_live_movement_proof = (
+                packet_source_label == "live"
+                and packet.status in {"active", "waiting", "blocked"}
+                and packet.currentStage != "learn"
+                and current_lifecycle_event is not None
+                and latest_movement_event is not None
+                and latest_transition_event_ref is not None
+            )
             stage_source_labels.setdefault(packet.currentStage, []).append(packet_source_label)
             dashboard_packets.append(
                 PipelineDashboardWorkPacketV0View(
@@ -1874,6 +2156,7 @@ class SupervisorService:
                     sourceRef=packet.sourceRef,
                     blocker=blocker,
                     nextAction=next_action,
+                    readyToTest=None,
                     evidenceRefs=packet_evidence,
                     updatedAt=packet.updatedAt,
                     metadataOnly=True,
@@ -1889,6 +2172,11 @@ class SupervisorService:
                     truthLabel=packet_source_label,
                     blocker=blocker,
                     nextAction=next_action,
+                    readyToTest=None,
+                    latestTransitionEventRef=latest_transition_event_ref,
+                    recentTransitionEventRefs=recent_transition_event_refs,
+                    latestMovementSummary=latest_movement_summary,
+                    canSatisfyLiveMovementProof=can_satisfy_live_movement_proof,
                     metadataOnly=True,
                 )
             )
@@ -1913,7 +2201,85 @@ class SupervisorService:
             if blocked_source_ref:
                 packet_source_label = "stale"
                 blocker = blocked_source_ref.blockedReason or "Packet source is stale or blocked; inspect source before downstream work."
+            legacy_source_states = [self._pipeline_projection_source_state_from_ref(source_ref) for source_ref in source_refs]
+            for source_ref in source_refs:
+                self._upsert_pipeline_source_state(
+                    source_states_by_id,
+                    PipelineSourceStateV0View(
+                        sourceId=source_ref.refId,
+                        sourceRef=source_ref.refId,
+                        sourceKind=self._pipeline_projection_source_kind(source_ref.sourceType),
+                        state=self._pipeline_projection_source_state_from_ref(source_ref),
+                        summary=self._projection_safe_lifecycle_summary(
+                            source_ref.blockedReason or source_ref.label or "Source state is projected from backend metadata."
+                        ),
+                        evidenceRefs=packet_evidence,
+                        updatedAt=updated_at,
+                        metadataOnly=True,
+                    ),
+                )
+            if packet.learnRefill:
+                learn_refill_state = packet.learnRefill.refillSourceState.state
+                projected_source_state = {
+                    "healthy": "healthy",
+                    "source_exhausted": "exhausted",
+                    "blocked": "blocked",
+                    "refilling": "refilling",
+                    "unknown": "unknown",
+                }.get(learn_refill_state, "unknown")
+                refill_evidence = self._projection_safe_lifecycle_refs(
+                    [
+                        *packet.learnRefill.refillSourceState.evidenceRefs,
+                        *packet.learnRefill.sourceExhaustion.evidenceRefs,
+                    ]
+                )
+                if projected_source_state != "exhausted" or refill_evidence:
+                    refill_source_ref_ids = list(
+                        dict.fromkeys(
+                            [
+                                *packet.learnRefill.refillSourceState.sourceRefs,
+                                *packet.learnRefill.sourceExhaustion.sourceRefs,
+                                *(source_ref.refId for source_ref in source_refs),
+                                packet.packetId,
+                            ]
+                        )
+                    )
+                    source_refs_by_id = {source_ref.refId: source_ref for source_ref in source_refs}
+                    refill_summary = (
+                        packet.learnRefill.sourceExhaustion.summary
+                        if projected_source_state == "exhausted"
+                        else packet.learnRefill.refillSourceState.explanation
+                    )
+                    for source_ref_id in refill_source_ref_ids:
+                        matching_source_ref = source_refs_by_id.get(source_ref_id)
+                        self._upsert_pipeline_source_state(
+                            source_states_by_id,
+                            PipelineSourceStateV0View(
+                                sourceId=source_ref_id,
+                                sourceRef=source_ref_id,
+                                sourceKind=(
+                                    self._pipeline_projection_source_kind(matching_source_ref.sourceType)
+                                    if matching_source_ref
+                                    else self._pipeline_projection_source_kind_from_ref_id(source_ref_id)
+                                ),
+                                state=projected_source_state,
+                                summary=self._projection_safe_lifecycle_summary(refill_summary),
+                                evidenceRefs=refill_evidence,
+                                updatedAt=updated_at,
+                                metadataOnly=True,
+                            ),
+                        )
+                    legacy_source_states.append(projected_source_state)
             stage_source_labels.setdefault(current_stage, []).append(packet_source_label)
+            ready_to_test = packet.learnRefill.readyToTest if packet.learnRefill else None
+            queue_buckets.append(
+                self._pipeline_projection_queue_bucket(
+                    current_stage=current_stage,
+                    status=packet.status,
+                    packet_source_label=packet_source_label,
+                    source_states=legacy_source_states,
+                )
+            )
             dashboard_packets.append(
                 PipelineDashboardWorkPacketV0View(
                     packetId=packet.packetId,
@@ -1924,6 +2290,7 @@ class SupervisorService:
                     sourceRef=None,
                     blocker=blocker,
                     nextAction=next_action,
+                    readyToTest=ready_to_test,
                     evidenceRefs=packet_evidence,
                     updatedAt=updated_at,
                     metadataOnly=True,
@@ -1939,6 +2306,11 @@ class SupervisorService:
                     truthLabel=packet_source_label,
                     blocker=blocker,
                     nextAction=next_action,
+                    readyToTest=ready_to_test,
+                    latestTransitionEventRef=None,
+                    recentTransitionEventRefs=[],
+                    latestMovementSummary=None,
+                    canSatisfyLiveMovementProof=False,
                     metadataOnly=True,
                 )
             )
@@ -1954,25 +2326,68 @@ class SupervisorService:
             )
             for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE
         ]
-        dispatchable_count = len(
-            [
-                1
-                for stage, status in projected_stage_statuses
-                if status in {"active", "waiting"} and stage != "needs_approval"
-            ]
-        )
-        blocked_count = len([1 for _stage, status in projected_stage_statuses if status in {"blocked", "failed"}])
-        closed_count = len([1 for _stage, status in projected_stage_statuses if status in {"complete", "deferred"}])
+        active_count = queue_buckets.count("active")
+        dispatchable_count = queue_buckets.count("dispatchable")
+        blocked_count = queue_buckets.count("blocked")
+        gated_count = queue_buckets.count("gated")
+        closed_count = queue_buckets.count("closed")
+        stale_count = queue_buckets.count("stale")
+        refilling_count = queue_buckets.count("refilling")
+        unknown_count = queue_buckets.count("unknown")
+        source_states = list(source_states_by_id.values())
+        source_state_counts = {
+            "healthy": sum(1 for source_state in source_states if source_state.state == "healthy"),
+            "exhausted": sum(1 for source_state in source_states if source_state.state == "exhausted"),
+            "blocked": sum(1 for source_state in source_states if source_state.state == "blocked"),
+            "gated": sum(1 for source_state in source_states if source_state.state == "gated"),
+            "stale": sum(1 for source_state in source_states if source_state.state == "stale"),
+            "unavailable": sum(1 for source_state in source_states if source_state.state == "unavailable"),
+            "refilling": sum(1 for source_state in source_states if source_state.state == "refilling"),
+            "unknown": sum(1 for source_state in source_states if source_state.state == "unknown"),
+        }
+        has_exhausted_source = any(source_state.state == "exhausted" and source_state.evidenceRefs for source_state in source_states)
         inactivity_reason = self._pipeline_projection_inactivity_reason(
             authoritative_packet_count=projected_packet_count,
+            active_count=active_count,
             dispatchable_count=dispatchable_count,
             blocked_count=blocked_count,
+            gated_count=gated_count,
+            refilling_count=refilling_count,
             closed_count=closed_count,
+            stale_count=stale_count,
+            unknown_count=unknown_count,
             empty_reason=empty_reason,
             is_stale=is_stale,
+            has_exhausted_source=has_exhausted_source,
+        )
+        projection_empty_reason = inactivity_reason if not projected_packet_count else empty_reason
+        manager_reliability_state = self._pipeline_projection_manager_reliability_state(
+            active_count=active_count,
+            dispatchable_count=dispatchable_count,
+            blocked_count=blocked_count,
+            gated_count=gated_count,
+            refilling_count=refilling_count,
+            stale_count=stale_count,
+            unknown_count=unknown_count,
+            inactivity_reason=inactivity_reason,
+            is_stale=is_stale,
+        )
+        manager_evidence_refs = sorted(set(self._projection_safe_lifecycle_refs(evidence_refs)))
+        reliability_problems = self._pipeline_projection_reliability_problems(
+            source_label=source_label,
+            freshness_state=freshness_state,
+            dispatchable_count=dispatchable_count,
+            active_count=active_count,
+            gated_count=gated_count,
+            blocked_count=blocked_count,
+            inactivity_reason=inactivity_reason,
+            manager_active_count=None,
+            worker_summary=worker_summary,
         )
         summary_text = (
-            "No backend WorkPackets are present."
+            "No backend WorkPackets are present; approved source work is exhausted."
+            if not projected_packet_count and inactivity_reason == "source_exhausted"
+            else "No backend WorkPackets are present."
             if not projected_packet_count
             else f"{projected_packet_count} backend WorkPacket(s) projected from supervisor state."
         )
@@ -2000,7 +2415,7 @@ class SupervisorService:
             ),
             truthSummary=PipelineTruthSummaryV0View(
                 label=source_label,
-                emptyReason=empty_reason,
+                emptyReason=projection_empty_reason,
                 backendEmpty=not projected_packet_count,
                 backendUnavailable=False,
                 fixtureBacked=False,
@@ -2008,29 +2423,48 @@ class SupervisorService:
                 summary=summary_text,
             ),
             stageSummaries=stage_summaries,
+            sourceStates=source_states,
             workPackets=dashboard_packets,
             selectedPacketDetails=selected_packet_details,
             managerSummary=PipelineManagerSummaryV0View(
-                stateSource="unknown",
-                freshnessState="unknown",
+                stateSource="supervisor_projection",
+                reliabilityState=manager_reliability_state,
+                freshnessState=freshness_state,
                 activeLeaseCount=None,
                 activeWorkerCount=None,
                 warmWorkerCount=None,
                 blockedQueueCount=blocked_count,
                 dispatchableQueueCount=dispatchable_count,
                 closedQueueCount=closed_count,
+                healthySourceCount=source_state_counts["healthy"],
+                exhaustedSourceCount=source_state_counts["exhausted"],
+                blockedSourceCount=source_state_counts["blocked"],
+                gatedSourceCount=source_state_counts["gated"],
+                staleSourceCount=source_state_counts["stale"],
+                unavailableSourceCount=source_state_counts["unavailable"],
+                refillingSourceCount=source_state_counts["refilling"],
+                unknownSourceCount=source_state_counts["unknown"],
                 sourceExhausted=inactivity_reason == "source_exhausted",
                 inactivityReason=inactivity_reason,
+                evidenceRefs=manager_evidence_refs,
                 summary=(
                     "Manager runtime lease and worker counts are not connected; "
                     f"queue counts are projected from {projected_packet_count} backend WorkPacket(s)."
                 ),
                 metadataOnly=True,
             ),
+            workerSummary=worker_summary,
+            reliabilityProblems=reliability_problems,
+            gatedControls=gated_controls,
             queueSummary=PipelineQueueSummaryV0View(
+                activeCount=active_count,
                 dispatchableCount=dispatchable_count,
                 blockedCount=blocked_count,
+                gatedCount=gated_count,
                 closedCount=closed_count,
+                staleCount=stale_count,
+                refillingCount=refilling_count,
+                unknownCount=unknown_count,
                 emptyReason=queue_empty_reason,
                 sourceExhausted=inactivity_reason == "source_exhausted",
                 summary=summary_text,
@@ -2085,10 +2519,12 @@ class SupervisorService:
                 summary=summary,
             ),
             stageSummaries=stage_summaries,
+            sourceStates=[],
             workPackets=[],
             selectedPacketDetails=[],
             managerSummary=PipelineManagerSummaryV0View(
                 stateSource="unavailable",
+                reliabilityState="unavailable",
                 freshnessState="unavailable",
                 activeLeaseCount=None,
                 activeWorkerCount=None,
@@ -2096,15 +2532,49 @@ class SupervisorService:
                 blockedQueueCount=None,
                 dispatchableQueueCount=None,
                 closedQueueCount=None,
+                healthySourceCount=None,
+                exhaustedSourceCount=None,
+                blockedSourceCount=None,
+                gatedSourceCount=None,
+                staleSourceCount=None,
+                unavailableSourceCount=None,
+                refillingSourceCount=None,
+                unknownSourceCount=None,
                 sourceExhausted=False,
                 inactivityReason="backend_unavailable",
+                evidenceRefs=[],
                 summary="Manager runtime state is unavailable because backend projection failed.",
                 metadataOnly=True,
             ),
+            workerSummary=PipelineWorkerSummaryV0View(
+                stateSource="unavailable",
+                freshnessState="unavailable",
+                warmCount=None,
+                activeCount=None,
+                waitingCount=None,
+                stalledCount=None,
+                failedCount=None,
+                drainingCount=None,
+                killedCount=None,
+                completeCount=None,
+                unavailableCount=None,
+                unknownCount=None,
+                workerRefs=[],
+                evidenceRefs=[],
+                summary="Worker runtime state is unavailable because backend projection failed.",
+                metadataOnly=True,
+            ),
+            reliabilityProblems=[],
+            gatedControls=[],
             queueSummary=PipelineQueueSummaryV0View(
+                activeCount=None,
                 dispatchableCount=None,
                 blockedCount=None,
+                gatedCount=None,
                 closedCount=None,
+                staleCount=None,
+                refillingCount=None,
+                unknownCount=None,
                 emptyReason="backend_unavailable",
                 sourceExhausted=False,
                 summary=summary,
@@ -2166,6 +2636,19 @@ class SupervisorService:
             source_ref_type = "manual"
             source_ref = authoritative_packet.sourceRef
             source_path = source_ref.pathOrUrl if isinstance(getattr(source_ref, "pathOrUrl", None), str) else None
+        source_freshness = "fresh"
+        source_access_state = "allowed"
+        source_blocked_reason = None
+        if source_path:
+            planning_authority = self._planning_source_authority(source_path)
+            if planning_authority["status"] == "superseded":
+                source_freshness = "stale"
+                source_access_state = "blocked"
+                source_blocked_reason = (
+                    f"Source PRD is superseded by {planning_authority['superseded_by']}; "
+                    "inspect source before creating downstream follow-up work."
+                )
+                source_path = None
 
         work_packet_source_refs = [
             {
@@ -2173,11 +2656,11 @@ class SupervisorService:
                 "sourceType": source_ref_type,
                 "label": source_packet_title,
                 "pathOrUrl": source_path,
-                "freshness": "fresh",
-                "accessState": "allowed",
+                "freshness": source_freshness,
+                "accessState": source_access_state,
                 "canonical": True,
                 "summaryOnly": True,
-                "blockedReason": None,
+                "blockedReason": source_blocked_reason,
             }
         ]
         operator_feedback_length = len(payload.operatorFeedback) if payload.operatorFeedback else 0
@@ -2258,7 +2741,7 @@ class SupervisorService:
         return default
 
     def _legacy_work_packet_evidence_refs(self, packet: WorkPacketV0View) -> list[str]:
-        return [ref.refId for ref in packet.evidenceRefs]
+        return self._projection_safe_lifecycle_refs([ref.refId for ref in packet.evidenceRefs])
 
     def _pipeline_projection_packet_source_label(
         self,
@@ -2317,25 +2800,603 @@ class SupervisorService:
         self,
         *,
         authoritative_packet_count: int,
+        active_count: int,
         dispatchable_count: int,
         blocked_count: int,
+        gated_count: int,
+        refilling_count: int,
         closed_count: int,
+        stale_count: int,
+        unknown_count: int,
         empty_reason: str | None,
         is_stale: bool,
+        has_exhausted_source: bool,
     ) -> str | None:
-        if dispatchable_count:
+        if active_count or dispatchable_count:
             return None
         if is_stale:
             return "projection_stale"
-        if empty_reason:
-            return empty_reason
         if blocked_count:
             return "blocked"
-        if authoritative_packet_count and closed_count == authoritative_packet_count:
+        if gated_count:
+            return "approval_required"
+        if refilling_count:
+            return "refilling"
+        if stale_count:
+            return "unknown"
+        if unknown_count:
+            return "unknown"
+        if has_exhausted_source:
             return "source_exhausted"
+        if empty_reason:
+            return empty_reason
         if authoritative_packet_count:
             return "unknown"
         return "healthy_empty"
+
+    def _pipeline_projection_manager_reliability_state(
+        self,
+        *,
+        active_count: int,
+        dispatchable_count: int,
+        blocked_count: int,
+        gated_count: int,
+        refilling_count: int,
+        stale_count: int,
+        unknown_count: int,
+        inactivity_reason: str | None,
+        is_stale: bool,
+    ) -> str:
+        if is_stale or inactivity_reason == "projection_stale":
+            return "degraded"
+        if active_count:
+            return "running"
+        if dispatchable_count:
+            return "ready"
+        if inactivity_reason == "source_exhausted":
+            return "source_exhausted"
+        if inactivity_reason == "backend_unavailable":
+            return "unavailable"
+        if blocked_count or inactivity_reason == "blocked":
+            return "blocked"
+        if gated_count or inactivity_reason == "approval_required":
+            return "waiting_for_approval"
+        if refilling_count or inactivity_reason == "refilling":
+            return "refilling"
+        if stale_count or unknown_count or inactivity_reason == "unknown":
+            return "unknown"
+        if inactivity_reason == "healthy_empty":
+            return "healthy_idle"
+        return "unknown"
+
+    def _pipeline_projection_source_state_only_records(self, candidates: list[CandidateWork]) -> list[PipelineSourceStateV0View]:
+        source_states: list[PipelineSourceStateV0View] = []
+        for candidate in candidates:
+            if not self._candidate_is_pipeline_source_state_only(candidate):
+                continue
+            if candidate.status in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}:
+                continue
+            metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+            source_state = self._pipeline_projection_source_state_from_metadata(
+                metadata.get("pipelineSourceState"),
+                fallback_source_id=f"candidate_work:{candidate.id}",
+                fallback_updated_at=self._ensure_aware(candidate.updated_at),
+            )
+            if source_state:
+                source_states.append(source_state)
+        return source_states
+
+    def _candidate_is_pipeline_source_state_only(self, candidate: CandidateWork) -> bool:
+        metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        return metadata.get("projectionVisibility") == "source_state_only"
+
+    def _candidate_is_pipeline_worker_summary_only(self, candidate: CandidateWork) -> bool:
+        metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        return metadata.get("projectionVisibility") == "worker_summary_only"
+
+    def _candidate_is_pipeline_gated_control_only(self, candidate: CandidateWork) -> bool:
+        metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        return metadata.get("projectionVisibility") == "gated_control_only"
+
+    def _candidate_is_projection_metadata_only(self, candidate: CandidateWork) -> bool:
+        return (
+            self._candidate_is_pipeline_source_state_only(candidate)
+            or self._candidate_is_pipeline_worker_summary_only(candidate)
+            or self._candidate_is_pipeline_gated_control_only(candidate)
+        )
+
+    def _pipeline_projection_gated_controls(self, candidates: list[CandidateWork]) -> list[PipelineGatedControlV0View]:
+        controls: list[PipelineGatedControlV0View] = []
+        for candidate in candidates:
+            if not self._candidate_is_pipeline_gated_control_only(candidate):
+                continue
+            if candidate.status in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}:
+                continue
+            metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+            raw_controls: list[object] = []
+            if isinstance(metadata.get("pipelineGatedControl"), dict):
+                raw_controls.append(metadata["pipelineGatedControl"])
+            if isinstance(metadata.get("pipelineGatedControls"), list):
+                raw_controls.extend(metadata["pipelineGatedControls"])
+            for index, raw_control in enumerate(raw_controls):
+                control = self._pipeline_projection_gated_control_from_metadata(
+                    raw_control,
+                    fallback_control_id=f"control:candidate-work:{candidate.id}:{index}",
+                )
+                if control:
+                    controls.append(control)
+        deduped_controls = {control.controlId: control for control in controls}
+        return sorted(deduped_controls.values(), key=lambda control: control.controlId)
+
+    def _pipeline_projection_gated_control_from_metadata(
+        self,
+        raw_control: object,
+        *,
+        fallback_control_id: str,
+    ) -> PipelineGatedControlV0View | None:
+        if not isinstance(raw_control, dict):
+            return None
+        allowed_operations = {
+            "kill_worker",
+            "drain_worker",
+            "cleanup_workspace",
+            "takeover_workspace",
+            "provider_call",
+            "github_mutation",
+            "worker_launch",
+            "lease_mutation",
+            "source_mutation",
+            "terminal_access",
+            "raw_payload_retention",
+            "unknown",
+        }
+        allowed_statuses = {"gated", "action_needed", "blocked"}
+        operation = raw_control.get("operation")
+        if not isinstance(operation, str) or operation not in allowed_operations:
+            return None
+        status = raw_control.get("status")
+        if not isinstance(status, str) or status not in allowed_statuses:
+            return None
+        authority_family = raw_control.get("authorityFamily")
+        stop_line = raw_control.get("stopLine")
+        next_action = raw_control.get("nextAction")
+        if not all(isinstance(value, str) and value.strip() for value in [authority_family, stop_line, next_action]):
+            return None
+        if any(EXECUTABLE_CONTROL_TEXT_RE.search(value) for value in [authority_family, stop_line, next_action]):
+            return None
+        control_id_candidates = [raw_control.get("controlId") if isinstance(raw_control.get("controlId"), str) else "", fallback_control_id]
+        control_id_refs = self._projection_safe_lifecycle_refs(control_id_candidates)
+        control_id = control_id_refs[0] if control_id_refs else fallback_control_id
+        worker_refs = [
+            ref
+            for ref in self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_control, "workerRefs"))
+            if self._is_safe_worker_ref(ref)
+        ]
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_control, "evidenceRefs"))
+        packet_id = raw_control.get("packetId")
+        safe_packet_refs = self._projection_safe_lifecycle_refs([packet_id]) if isinstance(packet_id, str) else []
+        return PipelineGatedControlV0View(
+            controlId=control_id,
+            operation=operation,
+            status=status,
+            authorityFamily=self._projection_safe_lifecycle_summary(authority_family),
+            stopLine=self._projection_safe_lifecycle_summary(stop_line),
+            nextAction=self._projection_safe_lifecycle_summary(next_action),
+            packetId=safe_packet_refs[0] if safe_packet_refs else None,
+            workerRefs=worker_refs,
+            evidenceRefs=evidence_refs,
+            metadataOnly=True,
+        )
+
+    def _pipeline_projection_worker_summary_records(self, candidates: list[CandidateWork]) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for candidate in candidates:
+            if not self._candidate_is_pipeline_worker_summary_only(candidate):
+                continue
+            if candidate.status in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}:
+                continue
+            metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+            raw_states: list[object] = []
+            if isinstance(metadata.get("pipelineWorkerState"), dict):
+                raw_states.append(metadata["pipelineWorkerState"])
+            if isinstance(metadata.get("pipelineWorkerStates"), list):
+                raw_states.extend(metadata["pipelineWorkerStates"])
+            summary_record = self._pipeline_projection_worker_summary_record_from_metadata(
+                metadata.get("pipelineWorkerSummary"),
+                fallback_updated_at=self._ensure_aware(candidate.updated_at),
+            )
+            if summary_record:
+                records.append(summary_record)
+            for raw_state in raw_states:
+                record = self._pipeline_projection_worker_record_from_metadata(
+                    raw_state,
+                    fallback_updated_at=self._ensure_aware(candidate.updated_at),
+                )
+                if record:
+                    records.append(record)
+        return self._dedupe_pipeline_worker_records(records)
+
+    def _pipeline_projection_worker_summary_record_from_metadata(
+        self,
+        raw_worker_summary: object,
+        *,
+        fallback_updated_at: datetime,
+    ) -> dict[str, object] | None:
+        if not isinstance(raw_worker_summary, dict):
+            return None
+        count_key_by_state = {
+            "warm": "warmCount",
+            "active": "activeCount",
+            "waiting": "waitingCount",
+            "stalled": "stalledCount",
+            "failed": "failedCount",
+            "draining": "drainingCount",
+            "killed": "killedCount",
+            "complete": "completeCount",
+            "unavailable": "unavailableCount",
+            "unknown": "unknownCount",
+        }
+        counts = {
+            state: self._non_negative_int(raw_worker_summary.get(key))
+            for state, key in count_key_by_state.items()
+        }
+        counts = {state: count for state, count in counts.items() if count is not None}
+        worker_refs = [
+            ref
+            for ref in self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_summary, "workerRefs"))
+            if self._is_safe_worker_ref(ref)
+        ]
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_summary, "evidenceRefs"))
+        if not counts and not worker_refs and not evidence_refs:
+            return None
+        if counts and not worker_refs and not evidence_refs:
+            return None
+        return {
+            "state": "summary",
+            "counts": counts,
+            "worker_refs": worker_refs,
+            "evidence_refs": evidence_refs,
+            "updated_at": fallback_updated_at,
+        }
+
+    def _pipeline_projection_worker_record_from_metadata(
+        self,
+        raw_worker_state: object,
+        *,
+        fallback_updated_at: datetime,
+    ) -> dict[str, object] | None:
+        if not isinstance(raw_worker_state, dict):
+            return None
+        allowed_states = {"warm", "active", "waiting", "stalled", "failed", "draining", "killed", "complete", "unavailable", "unknown"}
+        raw_state = raw_worker_state.get("state")
+        if not isinstance(raw_state, str) or raw_state not in allowed_states:
+            return None
+        state = raw_state
+        raw_worker_ref = raw_worker_state.get("workerRef")
+        raw_worker_id = raw_worker_state.get("workerId")
+        fallback_worker_ref = f"worker:{raw_worker_id.strip()}" if isinstance(raw_worker_id, str) and raw_worker_id.strip() else None
+        worker_ref_candidates = [raw_worker_ref if isinstance(raw_worker_ref, str) else "", fallback_worker_ref or ""]
+        worker_refs = [ref for ref in self._projection_safe_lifecycle_refs(worker_ref_candidates) if self._is_safe_worker_ref(ref)]
+        if not worker_refs:
+            return None
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_state, "evidenceRefs"))
+        return {
+            "state": state,
+            "worker_refs": worker_refs[:1],
+            "evidence_refs": evidence_refs,
+            "updated_at": fallback_updated_at,
+        }
+
+    def _dedupe_pipeline_worker_records(self, records: list[dict[str, object]]) -> list[dict[str, object]]:
+        keyed: dict[str, dict[str, object]] = {}
+        unkeyed: list[dict[str, object]] = []
+        for record in records:
+            worker_refs = record.get("worker_refs", [])
+            key = worker_refs[0] if isinstance(worker_refs, list) and worker_refs and isinstance(worker_refs[0], str) else None
+            if not key:
+                unkeyed.append(record)
+                continue
+            existing = keyed.get(key)
+            if not existing:
+                keyed[key] = record
+                continue
+            existing_updated_at = existing.get("updated_at")
+            record_updated_at = record.get("updated_at")
+            if isinstance(record_updated_at, datetime) and (
+                not isinstance(existing_updated_at, datetime) or record_updated_at >= existing_updated_at
+            ):
+                keyed[key] = record
+        return [*keyed.values(), *unkeyed]
+
+    def _pipeline_projection_worker_summary(
+        self,
+        records: list[dict[str, object]],
+        *,
+        generated_at: datetime,
+        stale_after_seconds: int,
+    ) -> PipelineWorkerSummaryV0View:
+        if not records:
+            return PipelineWorkerSummaryV0View(
+                stateSource="unknown",
+                freshnessState="unknown",
+                warmCount=None,
+                activeCount=None,
+                waitingCount=None,
+                stalledCount=None,
+                failedCount=None,
+                drainingCount=None,
+                killedCount=None,
+                completeCount=None,
+                unavailableCount=None,
+                unknownCount=None,
+                workerRefs=[],
+                evidenceRefs=[],
+                summary="Worker runtime state is not connected to the supervisor projection.",
+                metadataOnly=True,
+            )
+        updated_values = [record.get("updated_at") for record in records]
+        latest_updated_at = max((value for value in updated_values if isinstance(value, datetime)), default=generated_at)
+        freshness_state = "stale" if (generated_at - latest_updated_at).total_seconds() > stale_after_seconds else "live"
+        states = [str(record.get("state") or "unknown") for record in records if record.get("state") != "summary"]
+        summary_counts = {
+            "warm": 0,
+            "active": 0,
+            "waiting": 0,
+            "stalled": 0,
+            "failed": 0,
+            "draining": 0,
+            "killed": 0,
+            "complete": 0,
+            "unavailable": 0,
+            "unknown": 0,
+        }
+        for record in records:
+            counts = record.get("counts")
+            if not isinstance(counts, dict):
+                continue
+            for state in summary_counts:
+                count = counts.get(state)
+                if isinstance(count, int) and count >= 0:
+                    summary_counts[state] += count
+        worker_refs = sorted(
+            {
+                ref
+                for record in records
+                for ref in record.get("worker_refs", [])
+                if isinstance(ref, str)
+            }
+        )
+        evidence_refs = sorted(
+            {
+                ref
+                for record in records
+                for ref in record.get("evidence_refs", [])
+                if isinstance(ref, str)
+            }
+        )
+        return PipelineWorkerSummaryV0View(
+            stateSource="manager_summary",
+            freshnessState=freshness_state,
+            warmCount=states.count("warm") + summary_counts["warm"],
+            activeCount=states.count("active") + summary_counts["active"],
+            waitingCount=states.count("waiting") + summary_counts["waiting"],
+            stalledCount=states.count("stalled") + summary_counts["stalled"],
+            failedCount=states.count("failed") + summary_counts["failed"],
+            drainingCount=states.count("draining") + summary_counts["draining"],
+            killedCount=states.count("killed") + summary_counts["killed"],
+            completeCount=states.count("complete") + summary_counts["complete"],
+            unavailableCount=states.count("unavailable") + summary_counts["unavailable"],
+            unknownCount=states.count("unknown") + summary_counts["unknown"],
+            workerRefs=worker_refs,
+            evidenceRefs=evidence_refs,
+            summary=f"{len(records)} worker reliability metadata record(s) projected.",
+            metadataOnly=True,
+        )
+
+    def _pipeline_projection_reliability_problems(
+        self,
+        *,
+        source_label: str,
+        freshness_state: str,
+        dispatchable_count: int,
+        active_count: int,
+        gated_count: int,
+        blocked_count: int,
+        inactivity_reason: str | None,
+        manager_active_count: int | None,
+        worker_summary: PipelineWorkerSummaryV0View,
+    ) -> list[PipelineReliabilityProblemV0View]:
+        if source_label != "live" or freshness_state != "live":
+            return []
+        if dispatchable_count <= 0:
+            return []
+        if inactivity_reason in {"source_exhausted", "healthy_empty", "approval_required", "backend_unavailable", "projection_stale"}:
+            return []
+        progressing_manager = (manager_active_count or 0) > 0 or active_count > 0
+        progressing_worker = worker_summary.freshnessState == "live" and any(
+            (count or 0) > 0
+            for count in [
+                worker_summary.activeCount,
+                worker_summary.drainingCount,
+            ]
+        )
+        if progressing_manager or progressing_worker:
+            return []
+        if worker_summary.stateSource in {"manager_summary", "supervisor_projection"}:
+            likely_issue = "worker"
+        elif blocked_count and not dispatchable_count:
+            likely_issue = "source"
+        elif gated_count and not dispatchable_count:
+            likely_issue = "approval"
+        else:
+            likely_issue = "manager"
+        return [
+            PipelineReliabilityProblemV0View(
+                problemId="problem:idle-with-ready-work",
+                kind="idle_with_ready_work",
+                severity="attention",
+                likelyIssue=likely_issue,
+                summary="Dispatchable work exists, but no active or progressing worker is visible in backend projection metadata.",
+                evidenceRefs=["queue:dispatchable", "worker:no-live-progress"],
+                metadataOnly=True,
+            )
+        ]
+
+    def _pipeline_projection_queue_bucket_from_source_state(self, source_state: str) -> str | None:
+        if source_state == "blocked" or source_state == "unavailable":
+            return "blocked"
+        if source_state == "gated":
+            return "gated"
+        if source_state == "stale":
+            return "stale"
+        if source_state == "refilling":
+            return "refilling"
+        if source_state == "unknown":
+            return "unknown"
+        return None
+
+    def _pipeline_projection_source_state_from_metadata(
+        self,
+        raw_source_state: object,
+        *,
+        fallback_source_id: str,
+        fallback_updated_at: datetime,
+    ) -> PipelineSourceStateV0View | None:
+        if not isinstance(raw_source_state, dict):
+            return None
+        allowed_states = {"healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown"}
+        raw_state = raw_source_state.get("state")
+        state = raw_state if isinstance(raw_state, str) and raw_state in allowed_states else "unknown"
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_source_state, "evidenceRefs"))
+        if state == "exhausted" and not evidence_refs:
+            return None
+        raw_source_id = raw_source_state.get("sourceId")
+        raw_source_ref = raw_source_state.get("sourceRef")
+        source_id = raw_source_id if isinstance(raw_source_id, str) and raw_source_id.strip() else fallback_source_id
+        source_ref = raw_source_ref if isinstance(raw_source_ref, str) and raw_source_ref.strip() else source_id
+        raw_summary = raw_source_state.get("summary")
+        return PipelineSourceStateV0View(
+            sourceId=source_id,
+            sourceRef=source_ref,
+            sourceKind=self._pipeline_projection_source_kind(raw_source_state.get("sourceKind")),
+            state=state,
+            summary=self._projection_safe_lifecycle_summary(raw_summary if isinstance(raw_summary, str) else "Source state projected from backend metadata."),
+            evidenceRefs=evidence_refs,
+            updatedAt=fallback_updated_at,
+            metadataOnly=True,
+        )
+
+    def _pipeline_projection_queue_bucket(
+        self,
+        *,
+        current_stage: str,
+        status: str,
+        packet_source_label: str,
+        source_states: list[str],
+    ) -> str:
+        source_state_set = set(source_states)
+        if status in {"complete", "deferred"}:
+            return "closed"
+        if status in {"blocked", "failed"} or source_state_set.intersection({"blocked", "unavailable"}):
+            return "blocked"
+        if current_stage == "needs_approval" or "gated" in source_state_set:
+            return "gated"
+        if packet_source_label == "stale" or "stale" in source_state_set:
+            return "stale"
+        if "exhausted" in source_state_set:
+            return "unknown"
+        if "refilling" in source_state_set:
+            return "refilling"
+        if "unknown" in source_state_set:
+            return "unknown"
+        if status == "active" and current_stage in PIPELINE_DISPATCHABLE_STAGES and packet_source_label == "live":
+            return "active"
+        if status == "waiting" and current_stage in PIPELINE_DISPATCHABLE_STAGES and packet_source_label == "live":
+            return "dispatchable"
+        return "unknown"
+
+    def _pipeline_projection_source_kind(self, value: object) -> str:
+        if isinstance(value, str) and value in {
+            "prd",
+            "bmad_story",
+            "operator_input",
+            "workflow",
+            "repo_doc",
+            "candidate_work",
+            "work_item",
+            "bmad_artifact",
+            "obsidian",
+            "llm_wiki",
+            "github",
+            "research",
+            "manual",
+        }:
+            return value
+        return "unknown"
+
+    def _pipeline_projection_source_kind_from_ref_id(self, ref_id: str) -> str:
+        if ref_id.startswith("candidate_work:"):
+            return "candidate_work"
+        if ref_id.startswith("work_item:"):
+            return "work_item"
+        if ref_id.startswith("prd:"):
+            return "prd"
+        return "unknown"
+
+    def _pipeline_projection_source_state_from_ref(self, source_ref: SourceRefV0View) -> str:
+        if source_ref.accessState == "blocked":
+            return "blocked"
+        if source_ref.accessState == "excluded":
+            return "gated"
+        if source_ref.accessState == "missing":
+            return "unavailable"
+        if source_ref.freshness == "stale":
+            return "stale"
+        if source_ref.freshness == "unknown":
+            return "unknown"
+        return "healthy"
+
+    def _upsert_pipeline_source_state(
+        self,
+        source_states_by_id: dict[str, PipelineSourceStateV0View],
+        candidate: PipelineSourceStateV0View,
+    ) -> None:
+        existing = source_states_by_id.get(candidate.sourceId)
+        if not existing:
+            source_states_by_id[candidate.sourceId] = candidate
+            return
+        state_rank = {
+            "exhausted": 80,
+            "blocked": 70,
+            "gated": 60,
+            "stale": 50,
+            "unavailable": 40,
+            "refilling": 30,
+            "unknown": 20,
+            "healthy": 10,
+        }
+        merged_evidence = sorted(set([*existing.evidenceRefs, *candidate.evidenceRefs]))
+        selected = (
+            candidate
+            if (
+                state_rank.get(candidate.state, 0) > state_rank.get(existing.state, 0)
+                or (
+                    state_rank.get(candidate.state, 0) == state_rank.get(existing.state, 0)
+                    and candidate.updatedAt >= existing.updatedAt
+                )
+            )
+            else existing
+        )
+        source_states_by_id[candidate.sourceId] = PipelineSourceStateV0View(
+            sourceId=selected.sourceId,
+            sourceRef=selected.sourceRef,
+            sourceKind=selected.sourceKind,
+            state=selected.state,
+            summary=selected.summary,
+            evidenceRefs=merged_evidence,
+            updatedAt=max(existing.updatedAt, candidate.updatedAt),
+            metadataOnly=True,
+        )
 
     async def update_candidate_work(self, session: AsyncSession, candidate_work_id: str, payload: CandidateWorkUpdate) -> CandidateWork | None:
         candidate = await session.get(CandidateWork, candidate_work_id)
@@ -2369,6 +3430,8 @@ class SupervisorService:
             raise ValueError("Candidate work must be approved before promotion.")
         if candidate.promoted_work_item_id:
             raise ValueError("Candidate work has already been promoted.")
+        if self._candidate_is_projection_metadata_only(candidate):
+            raise ValueError("Projection metadata-only Candidate Work cannot be promoted into runnable WorkItems.")
 
         import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
         normalized_work_packet_source_refs = self._normalized_work_packet_metadata_source_refs(import_metadata)
@@ -24893,7 +25956,7 @@ class SupervisorService:
                 canonical=True,
                 summaryOnly=True,
                 blockedReason=(
-                    f"{label} is superseded by the July 1 authoritative PRD at "
+                    f"{label} is superseded by the {AUTHORITATIVE_PLANNING_SOURCE_LABEL} at "
                     f"{planning_authority['superseded_by']}; hold or flag this packet for inspection before downstream planning."
                 ),
             )
@@ -24916,7 +25979,7 @@ class SupervisorService:
                 "status": "authoritative",
                 "superseded_by": None,
                 "downstream_use_allowed": True,
-                "operator_explanation": "This is the July 1 PRD and is authoritative for pipeline and manager/control-plane planning.",
+                "operator_explanation": f"This is the {AUTHORITATIVE_PLANNING_SOURCE_LABEL} and is authoritative for pipeline execution-loop reliability planning.",
             }
         if path.startswith("_bmad-output/planning-artifacts/prds/") and path.endswith("/prd.md"):
             return {
@@ -24924,7 +25987,7 @@ class SupervisorService:
                 "superseded_by": AUTHORITATIVE_PLANNING_SOURCE_PATH,
                 "downstream_use_allowed": False,
                 "operator_explanation": (
-                    "This draft PRD is superseded by the July 1 PRD. Treat it as historical and hold or flag downstream planning references for inspection."
+                    f"This draft PRD is superseded by the {AUTHORITATIVE_PLANNING_SOURCE_LABEL}. Treat it as historical and hold or flag downstream planning references for inspection."
                 ),
             }
         return {
@@ -25010,7 +26073,7 @@ class SupervisorService:
                 safe_freshness = "stale"
                 safe_access_state = "blocked"
                 safe_blocked_reason = (
-                    f"{safe_label} is superseded by the July 1 authoritative PRD at "
+                    f"{safe_label} is superseded by the {AUTHORITATIVE_PLANNING_SOURCE_LABEL} at "
                     f"{planning_authority['superseded_by']}; hold or flag this packet for inspection before downstream planning."
                 )
             if safe_access_state != "allowed" and not safe_blocked_reason:

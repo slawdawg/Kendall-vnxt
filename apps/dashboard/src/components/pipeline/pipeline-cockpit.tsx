@@ -777,6 +777,7 @@ function projectionToCockpitPackets(
   const activeBoardCards = activeBoardViewModel.activeBoard.stageLanes.flatMap((lane) => lane.packetCards);
   const activeBoardCardByPacketId = new Map(activeBoardCards.map((card) => [card.packetId, card]));
   const projectionPacketById = new Map(projection.workPackets.map((packet) => [packet.packetId, packet]));
+  const selectedDetailByPacketId = new Map(projection.selectedPacketDetails.map((detail) => [detail.packetId, detail]));
   const refreshUnavailable = Boolean(projectionError);
   const proofFreshness = projectionFreshnessForPackets(projection);
   const proofSource = projectionSourceForPackets(projection);
@@ -802,17 +803,25 @@ function projectionToCockpitPackets(
       : packet.truthLabel === "unavailable"
         ? "unavailable"
         : effectiveFreshness;
-    const packetIsLive = projectionIsLive && packet.truthLabel === "live";
+    const detail = selectedDetailByPacketId.get(packet.packetId) ?? null;
+    const detailCanSatisfyLiveMovementProof = detail?.canSatisfyLiveMovementProof ?? false;
+    const packetIsLive = projectionIsLive && packet.truthLabel === "live" && detailCanSatisfyLiveMovementProof;
     const packetProofLabel = packetIsLive
       ? "live backend proof"
       : packet.truthLabel === "live"
         ? projectionLiveProofLabel(projectionLiveProof)
         : `not live proof: packet ${packet.truthLabel}`;
     const sourceTrustState = projectionSourceTrustState(packetSourceLabel, packetFreshness);
-    const sourceRefs = packet.sourceRef
-      ? [projectionSourceRefForPacket(packet.sourceRef, packetSourceLabel, packetFreshness)]
-      : [];
-    const evidenceRefs = packet.evidenceRefs.map((refId) => ({
+    const projectionDetailSourceRefs = detail?.sourceRefs ?? [];
+    const detailSourceRefs = projectionDetailSourceRefs.length > 0
+      ? projectionDetailSourceRefs
+      : packet.sourceRef
+        ? [packet.sourceRef]
+        : [];
+    const sourceRefs = detailSourceRefs.map((ref) => projectionSourceRefForPacket(ref, packetSourceLabel, packetFreshness));
+    const projectionDetailEvidenceRefs = detail?.evidenceRefs ?? [];
+    const detailEvidenceRefs = projectionDetailEvidenceRefs.length > 0 ? projectionDetailEvidenceRefs : packet.evidenceRefs;
+    const evidenceRefs = detailEvidenceRefs.map((refId) => ({
       refId,
       evidenceType: "event" as const,
       label: refId,
@@ -822,6 +831,11 @@ function projectionToCockpitPackets(
     const summary = card.nextActionLabel ?? packet.blocker ?? projection.truthSummary.summary;
     const nextAction = card.nextActionLabel ?? packet.nextAction ?? packet.blocker ?? "";
     const lifecycleEvidenceRefs = evidenceRefs.map((ref) => ref.refId);
+    const projectionDetailMovementRefs = detail?.recentTransitionEventRefs ?? [];
+    const movementEventRefs = detail
+      ? projectionDetailMovementRefs
+      : lifecycleEvidenceRefs;
+    const latestMovementRef = detail?.latestTransitionEventRef ?? movementEventRefs.at(-1) ?? null;
     return {
       packetId: packet.packetId,
       title: packet.title,
@@ -837,8 +851,8 @@ function projectionToCockpitPackets(
         reasonCodes: [packetSourceLabel, packetFreshness],
         authoritativeRef: `projection:${packet.packetId}`,
         derivedFromRefs: lifecycleEvidenceRefs,
-        transitionEventRefs: lifecycleEvidenceRefs,
-        latestTransitionEventRef: lifecycleEvidenceRefs.at(-1) ?? null,
+        transitionEventRefs: movementEventRefs,
+        latestTransitionEventRef: latestMovementRef,
         attemptRef: null,
         metadataOnly: true,
         sourceMutationAllowed: false,
@@ -891,7 +905,7 @@ function projectionToCockpitPackets(
         sourceContext: projection.truthSummary.summary,
         lowConfidenceActions: packetIsLive ? [] : ["Refresh projection", "Inspect supervisor state"],
       },
-      lastEvent: `projection updated ${packet.updatedAt}`,
+      lastEvent: detail?.latestMovementSummary ?? `projection updated ${packet.updatedAt}`,
       riskFlags: packetIsLive ? [] : [packetSourceLabel, packetFreshness],
       matrixRowIds: [],
       humanGateFixtureEvents: [],
@@ -929,6 +943,11 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     rawPayloadRetained: false as const,
   }));
   const lifecycleEvidenceRefs = evidenceRefs.map((ref) => ref.refId);
+  const projectionDetailMovementRefs = detail?.recentTransitionEventRefs ?? [];
+  const movementEventRefs = detail
+    ? projectionDetailMovementRefs
+    : lifecycleEvidenceRefs;
+  const latestMovementRef = detail?.latestTransitionEventRef ?? movementEventRefs.at(-1) ?? null;
   return {
     packetId: packet.packetId,
     title: packet.title,
@@ -944,8 +963,8 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
       reasonCodes: [sourceLabel, freshnessState, "detail-only"],
       authoritativeRef: `projection-detail:${packet.packetId}`,
       derivedFromRefs: lifecycleEvidenceRefs,
-      transitionEventRefs: lifecycleEvidenceRefs,
-      latestTransitionEventRef: lifecycleEvidenceRefs.at(-1) ?? null,
+      transitionEventRefs: movementEventRefs,
+      latestTransitionEventRef: latestMovementRef,
       attemptRef: null,
       metadataOnly: true,
       sourceMutationAllowed: false,
@@ -996,7 +1015,7 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
       sourceContext: projection?.truthSummary.summary ?? "Projection detail-only packet.",
       lowConfidenceActions: sourceLabel === "live" && freshnessState === "live" ? [] : ["Inspect diagnostics", "Refresh projection"],
     },
-    lastEvent: `projection updated ${packet.updatedAt}`,
+    lastEvent: detail?.latestMovementSummary ?? `projection updated ${packet.updatedAt}`,
     riskFlags: sourceLabel === "live" && freshnessState === "live" ? ["detail-only"] : ["detail-only", sourceLabel, freshnessState],
     matrixRowIds: [],
     humanGateFixtureEvents: [],
@@ -2015,7 +2034,11 @@ function PacketMiniCard({
   const statusClass = statusClassForPacket(packet);
   return (
     <button
-      aria-label={`Inspect packet: ${packet.title}`}
+      aria-label={packet.activeBoardCard?.attention
+        ? `Action needed: ${packet.title}; ${packetCardAttentionReasonLabel(packet)}; ${packetCardOperatorActionLabel(packet)}`
+        : packet.activeBoardCard?.readyToTest
+          ? `Ready to test: ${packet.title}`
+        : `Inspect packet: ${packet.title}`}
       aria-pressed={selected}
       className={`pipeline-mini-packet ${statusClass} ${selected ? "pipeline-mini-packet-selected" : ""}`}
       onClick={(event) => onSelect(event.currentTarget)}
@@ -2032,15 +2055,27 @@ function PacketMiniCard({
         <span className="pipeline-mini-packet-meta">
           {packetCardNextLabel(packet)}
         </span>
+        {packet.activeBoardCard?.attention ? (
+          <span className="pipeline-mini-packet-meta pipeline-mini-packet-action-needed-text">
+            {packetCardAttentionReasonLabel(packet)}; {packetCardOperatorActionLabel(packet)}
+          </span>
+        ) : null}
       </span>
       {packet.activeBoardCard?.readyToTest ? (
-        <span aria-label="Ready to test packet" className="pipeline-mini-packet-ready">Test</span>
+        <span aria-label={`Ready to test: ${packet.title}`} className="pipeline-mini-packet-ready">Test</span>
       ) : null}
       {packet.fixtureId.startsWith("projection:") || packet.activeBoardCard ? null : (
         <span className="pipeline-mini-packet-proof">non-live fixture</span>
       )}
       {packet.activeBoardCard?.attention || packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate" ? (
-        <span aria-hidden="true" className="pipeline-mini-packet-alert">!</span>
+        packet.activeBoardCard?.attention ? (
+          <span aria-label="Action needed packet" className="pipeline-mini-packet-alert pipeline-mini-packet-action-needed">
+            <span aria-hidden="true">!</span>
+            <span>Need</span>
+          </span>
+        ) : (
+          <span aria-hidden="true" className="pipeline-mini-packet-alert">!</span>
+        )
       ) : null}
     </button>
   );
@@ -2272,7 +2307,7 @@ function PacketInspection({
   projectionError,
 }: {
   onClose: () => void;
-  packet: PipelineFixturePacket;
+  packet: ActiveBoardCockpitPacket;
   projectionDetail: ProjectionSelectedPacketDetail | null;
   projectionError: string | null;
 }) {
@@ -2280,7 +2315,7 @@ function PacketInspection({
   useEffect(() => {
     panelRef.current?.focus();
   }, [packet.packetId]);
-  const projectionBackedPacket = packet.fixtureId.startsWith("projection:");
+  const projectionBackedPacket = packet.fixtureId.startsWith("projection:") || packet.fixtureId.startsWith("projection-detail:");
   const projectionRefreshLabel = projectionError
     ? `refresh unavailable; last-known ${packet.freshnessLabel}`
     : packet.freshnessLabel;
@@ -2291,9 +2326,17 @@ function PacketInspection({
   const detailTruth = projectionDetailTruthLabel(projectionDetail, packet, projectionRefreshLabel);
   const detailNextAction = projectionDetailNextAction(projectionDetail, packet);
   const detailBlocker = projectionDetailBlocker(projectionDetail, packet);
+  const detailMovement = projectionDetailMovementSummary(projectionDetail);
   const detailQuality = detailEvidenceRefs.length > 0 ? `${detailEvidenceRefs.length} metadata-only evidence ref${detailEvidenceRefs.length === 1 ? "" : "s"}` : "quality evidence not present in projection detail";
   const detailAuthority = authorityNeedsLabel(packet);
   const detailTestability = packetCardTestabilityLabel(packet);
+  const actionNeededKind = packet.activeBoardCard?.attentionKind ?? null;
+  const actionNeededReason = detailBlocker !== "blocker not named"
+    ? detailBlocker
+    : packet.activeBoardCard?.attentionReasonLabel ?? "No action-needed reason named.";
+  const actionNeededNext = detailNextAction !== "next action not named"
+    ? detailNextAction
+    : packet.activeBoardCard?.nextOperatorActionLabel ?? "Inspect packet detail.";
   const testTarget = packetTestTargetLabel(packet, detailNextAction);
   const checksRun = packetChecksRunLabel(detailEvidenceRefs);
   const residualRisk = packetResidualRiskLabel(packet);
@@ -2348,6 +2391,19 @@ function PacketInspection({
         <InspectionRow label="Authority needs" value={detailAuthority} />
         <InspectionRow label="Testability" value={detailTestability} />
       </dl>
+      {packet.activeBoardCard?.attention ? (
+        <section aria-label="Action Needed detail" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+          <h3 className="text-sm font-semibold">Action Needed</h3>
+          <dl className="grid gap-2 text-sm">
+            <InspectionRow label="Blocker class" value={actionNeededKind ? actionNeededKind.replace(/_/g, " ") : "unknown"} />
+            <InspectionRow label="Reason" value={actionNeededReason} />
+            <InspectionRow label="Next operator action" value={actionNeededNext} />
+            <InspectionRow label="Owner" value={packet.currentOwner} />
+            <InspectionRow label="Evidence refs" value={detailEvidenceRefs.length > 0 ? detailEvidenceRefs.join(", ") : "No evidence refs in backend projection detail."} />
+            <InspectionRow label="Five whys summary" value={routeSourceContext} />
+          </dl>
+        </section>
+      ) : null}
       <section aria-label="Packet route and reasoning" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
         <h3 className="text-sm font-semibold">Route and reasoning</h3>
         <dl className="grid gap-2 text-sm">
@@ -2369,6 +2425,9 @@ function PacketInspection({
       {projectionBackedPacket ? (
         <section aria-label="Backend projection packet detail" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
           <h3 className="text-sm font-semibold">Backend projection detail</h3>
+          <dl className="grid gap-2 text-sm">
+            <InspectionRow label="Latest movement" value={detailMovement} />
+          </dl>
           <RefList title="Source refs" values={detailSourceRefs} empty="No source refs in backend projection detail." />
           <RefList title="Evidence refs" values={detailEvidenceRefs} empty="No evidence refs in backend projection detail." />
         </section>
@@ -2536,6 +2595,10 @@ function projectionDetailBlocker(
 ) {
   const blocker = detail?.blocker ?? (packet.status === "blocked" || packet.status === "failed" ? packet.nextAction : "");
   return blocker.trim() || "blocker not named";
+}
+
+function projectionDetailMovementSummary(detail: ProjectionSelectedPacketDetail | null) {
+  return detail?.latestMovementSummary?.trim() || "movement proof not present in projection detail";
 }
 
 function authorityNeedsLabel(packet: PipelineFixturePacket) {
@@ -2725,6 +2788,18 @@ function packetCardNextLabel(packet: ActiveBoardCockpitPacket) {
   }
   const nextAction = packet.nextAction.trim() || "next action not named";
   return `next ${nextAction}`;
+}
+
+function packetCardAttentionReasonLabel(packet: ActiveBoardCockpitPacket) {
+  return packet.activeBoardCard?.attentionReasonLabel
+    ? `reason ${packet.activeBoardCard.attentionReasonLabel}`
+    : "reason attention needed";
+}
+
+function packetCardOperatorActionLabel(packet: ActiveBoardCockpitPacket) {
+  return packet.activeBoardCard?.nextOperatorActionLabel
+    ? `operator ${packet.activeBoardCard.nextOperatorActionLabel}`
+    : "operator inspect detail";
 }
 
 function packetCardTestabilityLabel(packet: ActiveBoardCockpitPacket) {

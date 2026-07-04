@@ -293,10 +293,10 @@ def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_
     db_name = "authoritative-work-packet-lifecycle.db"
     db_path = _db_path(tmp_path, db_name)
     source_ref = {
-        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
         "sourceType": "prd",
-        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
-        "title": "Backend-backed pipeline control plane",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+        "title": "Pipeline execution loop reliability",
     }
 
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -349,6 +349,70 @@ def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_
             },
         )
         assert raw_spaced_summary_response.status_code == 400
+        terminal_scrollback_summary_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-terminal-scrollback-summary",
+                "title": "Terminal scrollback summary should be blocked",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "terminal scrollback retained in lifecycle metadata",
+                "evidenceRefs": ["story:terminal-scrollback"],
+            },
+        )
+        assert terminal_scrollback_summary_response.status_code == 400
+        for index, marker in enumerate(
+            [
+                "raw prompts",
+                "raw completion",
+                "provider payloads",
+                "reasoning traces",
+                "secret_key",
+                "credential_id",
+                "terminal scrollbacks",
+                "tmux_scrollback",
+                "pane scrollback",
+                "raw transcript",
+            ]
+        ):
+            unsafe_create_summary_response = client.post(
+                "/pipeline-control-plane/work-packets",
+                json={
+                    "packetId": f"packet-unsafe-create-summary-{index}",
+                    "title": "Unsafe create summary should be blocked",
+                    "sourceRef": source_ref,
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "payloadSummary": f"{marker} retained in lifecycle metadata",
+                    "evidenceRefs": [f"story:unsafe-create-summary-{index}"],
+                },
+            )
+            assert unsafe_create_summary_response.status_code == 400
+            unsafe_transition_summary_response = client.post(
+                "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+                json={
+                    "targetStage": "classify",
+                    "expectedCurrentEventId": current_event_id,
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "payloadSummary": f"{marker} retained in lifecycle metadata",
+                    "evidenceRefs": [f"story:unsafe-transition-summary-{index}"],
+                },
+            )
+            assert unsafe_transition_summary_response.status_code == 400
+            unsafe_transition_ref_response = client.post(
+                "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+                json={
+                    "targetStage": "classify",
+                    "expectedCurrentEventId": current_event_id,
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "payloadSummary": "Unsafe transition evidence ref should be blocked.",
+                    "evidenceRefs": [f"evidence:{marker.replace(' ', '-')}"],
+                },
+            )
+            assert unsafe_transition_ref_response.status_code == 400
+        after_unsafe_response = client.get("/pipeline-control-plane/work-packets/packet-story-1-1")
+        assert after_unsafe_response.status_code == 200
+        assert after_unsafe_response.json()["data"]["currentEventId"] == current_event_id
+        assert len(after_unsafe_response.json()["data"]["history"]) == 1
 
         stale_transition_response = client.post(
             "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
@@ -481,6 +545,17 @@ def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_
             },
         )
         assert blocked_raw_ref_response.status_code == 400
+        blocked_tmux_ref_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-story-1-1/transitions",
+            json={
+                "targetStage": "capture",
+                "expectedCurrentEventId": latest["currentEventId"],
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "Tmux evidence ref should not be accepted.",
+                "evidenceRefs": ["tmux-pane-scrollback:do-not-store"],
+            },
+        )
+        assert blocked_tmux_ref_response.status_code == 400
 
         reused_transition_key_create = client.post(
             "/pipeline-control-plane/work-packets",
@@ -536,13 +611,212 @@ def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_
         assert restarted["history"][4]["previousStage"] == "route"
 
 
+def test_authoritative_work_packet_multi_stage_movement_proves_live_projection(tmp_path, monkeypatch) -> None:
+    db_name = "authoritative-work-packet-multi-stage-movement.db"
+    db_path = _db_path(tmp_path, db_name)
+    source_ref = {
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+        "sourceType": "prd",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+        "title": "Pipeline execution loop reliability",
+    }
+    representative_path = ["capture", "classify", "route", "shape", "needs_approval", "execute", "review"]
+    proof_refs = ["story:1-4", "story:5-1", "proof:multi-stage-backend-movement", "proof:representative-execution-loop"]
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-story-1-4-multi-stage-proof",
+                "title": "Multi-stage backend movement proof",
+                "initialStage": "capture",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "story-1-4-create-multi-stage-proof",
+                "payloadSummary": "Created from the authoritative pipeline execution-loop PRD.",
+                "evidenceRefs": [*proof_refs, "stage:capture"],
+            },
+        )
+        assert create_response.status_code == 200
+        current_event_id = create_response.json()["data"]["currentEventId"]
+        transition_event_ids = []
+        for previous_stage, target_stage in zip(representative_path, representative_path[1:]):
+            transition_response = client.post(
+                "/pipeline-control-plane/work-packets/packet-story-1-4-multi-stage-proof/transitions",
+                json={
+                    "targetStage": target_stage,
+                    "expectedCurrentEventId": current_event_id,
+                    "status": "active",
+                    "truthLabel": "source_owned",
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "idempotencyKey": f"story-1-4-transition-{target_stage}",
+                    "causationId": current_event_id,
+                    "payloadSummary": f"Accepted transition from {previous_stage} to {target_stage}.",
+                    "evidenceRefs": [*proof_refs, f"stage:{target_stage}"],
+                },
+            )
+            assert transition_response.status_code == 200
+            transition_packet = transition_response.json()["data"]
+            current_event_id = transition_packet["currentEventId"]
+            transition_event_ids.append(current_event_id)
+        assert transition_event_ids
+
+    with _client(tmp_path, monkeypatch, db_name) as restarted_client:
+        refreshed_response = restarted_client.get("/pipeline-control-plane/work-packets/packet-story-1-4-multi-stage-proof")
+        assert refreshed_response.status_code == 200
+        refreshed = refreshed_response.json()["data"]
+        assert refreshed["currentStage"] == "review"
+        assert refreshed["status"] == "active"
+        assert refreshed["currentEventId"] == transition_event_ids[-1]
+        assert [event["targetStage"] for event in refreshed["history"]] == representative_path
+        assert [event["eventType"] for event in refreshed["history"]] == ["packet.created", *(["packet.stage_transitioned"] * 6)]
+        assert [event["previousStage"] for event in refreshed["history"][1:]] == representative_path[:-1]
+        assert all(event["sourceRef"] == source_ref for event in refreshed["history"])
+        assert all(event["metadataOnly"] is True for event in refreshed["history"])
+        assert all(event["payloadSummary"] and len(event["payloadSummary"]) <= 500 for event in refreshed["history"])
+
+        projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["sourceLabel"] == "live"
+        assert projection["freshnessState"] == "live"
+        assert projection["fixtureMode"]["enabled"] is False
+        assert projection["fixtureMode"]["canSatisfyLiveProof"] is False
+        assert projection["backendReachability"]["state"] == "reachable"
+        assert projection["truthSummary"]["fixtureBacked"] is False
+        assert projection["truthSummary"]["stale"] is False
+        projected_packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == "packet-story-1-4-multi-stage-proof")
+        selected_detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
+        assert projected_packet["currentStage"] == "review"
+        assert projected_packet["status"] == "active"
+        assert projected_packet["truthLabel"] == "live"
+        assert projected_packet["sourceRef"] == source_ref
+        assert projected_packet["metadataOnly"] is True
+        assert selected_detail["currentStage"] == "review"
+        assert selected_detail["status"] == "active"
+        assert selected_detail["truthLabel"] == "live"
+        assert selected_detail["sourceRefs"] == [source_ref]
+        assert selected_detail["latestTransitionEventRef"] == f"event:{transition_event_ids[-1]}"
+        assert selected_detail["recentTransitionEventRefs"] == [f"event:{event_id}" for event_id in transition_event_ids[-5:]]
+        assert selected_detail["latestMovementSummary"] == "Accepted transition from execute to review."
+        assert selected_detail["canSatisfyLiveMovementProof"] is True
+        assert selected_detail["metadataOnly"] is True
+        for evidence_ref in [
+            "proof:multi-stage-backend-movement",
+            "proof:representative-execution-loop",
+            "stage:capture",
+            "stage:route",
+            "stage:execute",
+            "stage:review",
+            "story:1-4",
+            "story:5-1",
+        ]:
+            assert evidence_ref in selected_detail["evidenceRefs"]
+            assert evidence_ref in projection["evidenceRefs"]
+        retained_text = " ".join(
+            [
+                *selected_detail["evidenceRefs"],
+                *projection["evidenceRefs"],
+                *(event["payloadSummary"] for event in refreshed["history"]),
+            ]
+        ).lower()
+        for unsafe_marker in [
+            "raw prompt",
+            "raw completion",
+            "provider payload",
+            "reasoning trace",
+            "secret",
+            "credential",
+            "terminal scrollback",
+            "tmux scrollback",
+            "pane scrollback",
+            "raw transcript",
+        ]:
+            assert unsafe_marker not in retained_text
+
+        same_stage_review_response = restarted_client.post(
+            "/pipeline-control-plane/work-packets/packet-story-1-4-multi-stage-proof/transitions",
+            json={
+                "targetStage": "review",
+                "expectedCurrentEventId": current_event_id,
+                "status": "blocked",
+                "truthLabel": "source_owned",
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "story-1-4-transition-review-same-stage",
+                "causationId": current_event_id,
+                "payloadSummary": "Review remains blocked without counting as a new movement event.",
+                "evidenceRefs": [*proof_refs, "stage:review-blocked"],
+            },
+        )
+        assert same_stage_review_response.status_code == 200
+        current_event_id = same_stage_review_response.json()["data"]["currentEventId"]
+        same_stage_projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        assert same_stage_projection_response.status_code == 200
+        same_stage_projection = same_stage_projection_response.json()["data"]
+        same_stage_detail = next(detail for detail in same_stage_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
+        assert same_stage_detail["currentStage"] == "review"
+        assert same_stage_detail["status"] == "blocked"
+        assert same_stage_detail["latestTransitionEventRef"] == f"event:{transition_event_ids[-1]}"
+        assert same_stage_detail["latestMovementSummary"] == "Accepted transition from execute to review."
+        assert same_stage_detail["canSatisfyLiveMovementProof"] is True
+
+        for previous_stage, target_stage in [("review", "promote"), ("promote", "deliver"), ("deliver", "learn")]:
+            terminal_transition_response = restarted_client.post(
+                "/pipeline-control-plane/work-packets/packet-story-1-4-multi-stage-proof/transitions",
+                json={
+                    "targetStage": target_stage,
+                    "expectedCurrentEventId": current_event_id,
+                    "status": "active",
+                    "truthLabel": "source_owned",
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "idempotencyKey": f"story-1-4-transition-terminal-{target_stage}",
+                    "causationId": current_event_id,
+                    "payloadSummary": f"Accepted transition from {previous_stage} to {target_stage}.",
+                    "evidenceRefs": [*proof_refs, f"stage:{target_stage}"],
+                },
+            )
+            assert terminal_transition_response.status_code == 200
+            current_event_id = terminal_transition_response.json()["data"]["currentEventId"]
+
+        terminal_projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        assert terminal_projection_response.status_code == 200
+        terminal_projection = terminal_projection_response.json()["data"]
+        terminal_detail = next(detail for detail in terminal_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
+        assert terminal_detail["currentStage"] == "learn"
+        assert terminal_detail["latestTransitionEventRef"] == f"event:{current_event_id}"
+        assert terminal_detail["canSatisfyLiveMovementProof"] is False
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update authoritative_work_packet_lifecycle_events set payload_summary = ?, evidence_refs_json = ? where id = ?",
+                (
+                    "raw transcript and secret_key from old retained data should be redacted on projection.",
+                    json.dumps(["story:1-4", "raw transcript:legacy", "secret_key:legacy"]),
+                    current_event_id,
+                ),
+            )
+            conn.commit()
+
+        redacted_projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        assert redacted_projection_response.status_code == 200
+        redacted_projection = redacted_projection_response.json()["data"]
+        redacted_detail = next(detail for detail in redacted_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
+        assert redacted_detail["latestMovementSummary"] == "Redacted metadata-only lifecycle summary."
+        assert "raw transcript:legacy" not in redacted_detail["evidenceRefs"]
+        assert "secret_key:legacy" not in redacted_detail["evidenceRefs"]
+        assert "raw transcript:legacy" not in redacted_projection["evidenceRefs"]
+        assert "secret_key:legacy" not in redacted_projection["evidenceRefs"]
+
+
 def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_states(tmp_path, monkeypatch) -> None:
     db_name = "pipeline-dashboard-projection.db"
     source_ref = {
-        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
         "sourceType": "prd",
-        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
-        "title": "Live pipeline backend projection",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+        "title": "Pipeline execution loop reliability",
     }
     superseded_source_ref = {
         "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-02/prd.md",
@@ -567,9 +841,11 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             "fixtureMode",
             "truthSummary",
             "stageSummaries",
+            "sourceStates",
             "workPackets",
             "selectedPacketDetails",
             "managerSummary",
+            "workerSummary",
             "queueSummary",
             "evidenceRefs",
         }
@@ -585,12 +861,33 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert empty_projection["truthSummary"]["backendEmpty"] is True
         assert empty_projection["truthSummary"]["backendUnavailable"] is False
         assert empty_projection["workPackets"] == []
-        assert empty_projection["managerSummary"]["stateSource"] == "unknown"
+        assert empty_projection["sourceStates"] == []
+        assert empty_projection["managerSummary"]["stateSource"] == "supervisor_projection"
+        assert empty_projection["managerSummary"]["reliabilityState"] == "healthy_idle"
+        assert empty_projection["managerSummary"]["freshnessState"] == "live"
         assert empty_projection["managerSummary"]["activeLeaseCount"] is None
         assert empty_projection["managerSummary"]["activeWorkerCount"] is None
         assert empty_projection["managerSummary"]["warmWorkerCount"] is None
+        assert empty_projection["managerSummary"]["healthySourceCount"] == 0
+        assert empty_projection["managerSummary"]["exhaustedSourceCount"] == 0
+        assert empty_projection["managerSummary"]["unknownSourceCount"] == 0
         assert empty_projection["managerSummary"]["inactivityReason"] == "healthy_empty"
+        assert empty_projection["managerSummary"]["evidenceRefs"] == []
+        assert empty_projection["workerSummary"]["stateSource"] == "unknown"
+        assert empty_projection["workerSummary"]["freshnessState"] == "unknown"
+        assert empty_projection["workerSummary"]["warmCount"] is None
+        assert empty_projection["workerSummary"]["activeCount"] is None
+        assert empty_projection["workerSummary"]["workerRefs"] == []
+        assert empty_projection["workerSummary"]["evidenceRefs"] == []
+        assert empty_projection["reliabilityProblems"] == []
         assert empty_projection["queueSummary"]["emptyReason"] == "healthy_empty"
+        assert empty_projection["queueSummary"]["dispatchableCount"] == 0
+        assert empty_projection["queueSummary"]["blockedCount"] == 0
+        assert empty_projection["queueSummary"]["gatedCount"] == 0
+        assert empty_projection["queueSummary"]["closedCount"] == 0
+        assert empty_projection["queueSummary"]["staleCount"] == 0
+        assert empty_projection["queueSummary"]["refillingCount"] == 0
+        assert empty_projection["queueSummary"]["unknownCount"] == 0
         assert {stage["stage"] for stage in empty_projection["stageSummaries"]} == {
             "capture",
             "classify",
@@ -639,6 +936,21 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             },
         )
         assert create_response.status_code == 200
+        transition_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-story-2-4-real-proof/transitions",
+            json={
+                "targetStage": "review",
+                "expectedCurrentEventId": create_response.json()["data"]["currentEventId"],
+                "status": "active",
+                "truthLabel": "source_owned",
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "projection-transition-story-1-3-review",
+                "payloadSummary": "Accepted transition to review for live movement proof.",
+                "evidenceRefs": ["event:review", "story:1-3"],
+            },
+        )
+        assert transition_response.status_code == 200
+        review_event_ref = f"event:{transition_response.json()['data']['currentEventId']}"
 
         projection_response = client.get("/pipeline-control-plane/projection")
         assert projection_response.status_code == 200
@@ -652,39 +964,55 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert projection["truthSummary"]["backendUnavailable"] is False
         assert projection["truthSummary"]["fixtureBacked"] is False
         assert projection["truthSummary"]["stale"] is False
-        assert projection["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
-        assert projection["queueSummary"]["dispatchableCount"] == 1
-        assert projection["managerSummary"]["stateSource"] == "unknown"
-        assert projection["managerSummary"]["freshnessState"] == "unknown"
+        assert projection["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
+        assert projection["queueSummary"]["activeCount"] == 1
+        assert projection["queueSummary"]["dispatchableCount"] == 0
+        assert projection["queueSummary"]["blockedCount"] == 0
+        assert projection["queueSummary"]["gatedCount"] == 0
+        assert projection["queueSummary"]["closedCount"] == 0
+        assert projection["queueSummary"]["staleCount"] == 0
+        assert projection["queueSummary"]["refillingCount"] == 0
+        assert projection["queueSummary"]["unknownCount"] == 0
+        assert projection["managerSummary"]["stateSource"] == "supervisor_projection"
+        assert projection["managerSummary"]["reliabilityState"] == "running"
+        assert projection["managerSummary"]["freshnessState"] == "live"
         assert projection["managerSummary"]["activeLeaseCount"] is None
         assert projection["managerSummary"]["activeWorkerCount"] is None
         assert projection["managerSummary"]["warmWorkerCount"] is None
-        assert projection["managerSummary"]["dispatchableQueueCount"] == 1
+        assert projection["managerSummary"]["dispatchableQueueCount"] == 0
+        assert projection["managerSummary"]["healthySourceCount"] == 1
+        assert projection["managerSummary"]["exhaustedSourceCount"] == 0
+        assert projection["managerSummary"]["unknownSourceCount"] == 0
         assert projection["managerSummary"]["inactivityReason"] is None
+        assert projection["managerSummary"]["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
         assert {packet["packetId"] for packet in projection["workPackets"]} == {detail["packetId"] for detail in projection["selectedPacketDetails"]}
         projected_packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
         assert projected_packet["title"] == "Projection packet"
-        assert projected_packet["currentStage"] == "execute"
+        assert projected_packet["currentStage"] == "review"
         assert projected_packet["status"] == "active"
         assert projected_packet["truthLabel"] == "live"
         assert projected_packet["sourceRef"] == source_ref
         assert projected_packet["blocker"] is None
-        assert projected_packet["nextAction"] == "Advance toward Review."
-        assert projected_packet["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
+        assert projected_packet["nextAction"] == "Advance toward Promote."
+        assert projected_packet["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
         assert projected_packet["metadataOnly"] is True
         selected_detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
         assert selected_detail["sourceRefs"] == [source_ref]
-        assert selected_detail["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
-        assert selected_detail["currentStage"] == "execute"
+        assert selected_detail["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
+        assert selected_detail["currentStage"] == "review"
         assert selected_detail["status"] == "active"
         assert selected_detail["truthLabel"] == "live"
+        assert selected_detail["latestTransitionEventRef"] == review_event_ref
+        assert selected_detail["recentTransitionEventRefs"] == [review_event_ref]
+        assert selected_detail["latestMovementSummary"] == "Accepted transition to review for live movement proof."
+        assert selected_detail["canSatisfyLiveMovementProof"] is True
         assert selected_detail["blocker"] is None
-        assert selected_detail["nextAction"] == "Advance toward Review."
+        assert selected_detail["nextAction"] == "Advance toward Promote."
         assert selected_detail["metadataOnly"] is True
-        execute_summary = next(stage for stage in projection["stageSummaries"] if stage["stage"] == "execute")
-        assert execute_summary["packetCount"] == 1
-        assert execute_summary["sourceLabel"] == "live"
-        assert execute_summary["freshnessState"] == "live"
+        review_summary = next(stage for stage in projection["stageSummaries"] if stage["stage"] == "review")
+        assert review_summary["packetCount"] == 1
+        assert review_summary["sourceLabel"] == "live"
+        assert review_summary["freshnessState"] == "live"
 
         refreshed_response = client.get("/pipeline-control-plane/projection")
         assert refreshed_response.status_code == 200
@@ -700,7 +1028,9 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert refreshed_packet["metadataOnly"] is True
         assert refreshed_packet["sourceRef"] == source_ref
         assert refreshed_detail["sourceRefs"] == [source_ref]
-        assert refreshed_detail["evidenceRefs"] == ["proof:pipeline-real-workpacket", "story:2-4"]
+        assert refreshed_detail["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
+        assert refreshed_detail["latestTransitionEventRef"] == review_event_ref
+        assert refreshed_detail["canSatisfyLiveMovementProof"] is True
         assert refreshed_detail["truthLabel"] == "live"
         assert refreshed_detail["metadataOnly"] is True
 
@@ -738,6 +1068,20 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             },
         )
         assert fresh_create_response.status_code == 200
+        same_stage_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-story-2-4-fresh/transitions",
+            json={
+                "targetStage": "route",
+                "expectedCurrentEventId": fresh_create_response.json()["data"]["currentEventId"],
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "projection-transition-story-1-3-same-stage",
+                "payloadSummary": "Same-stage refresh should not satisfy live movement proof.",
+                "evidenceRefs": ["event:same-stage", "story:1-3"],
+            },
+        )
+        assert same_stage_response.status_code == 200
         approval_waiting_response = client.post(
             "/pipeline-control-plane/work-packets",
             json={
@@ -760,8 +1104,15 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         mixed_projection = mixed_response.json()["data"]
         assert mixed_projection["sourceLabel"] == "live"
         assert mixed_projection["freshnessState"] == "live"
-        assert mixed_projection["queueSummary"]["dispatchableCount"] == 2
-        assert mixed_projection["managerSummary"]["dispatchableQueueCount"] == 2
+        assert mixed_projection["queueSummary"]["activeCount"] == 1
+        assert mixed_projection["queueSummary"]["dispatchableCount"] == 1
+        assert mixed_projection["queueSummary"]["gatedCount"] == 1
+        assert mixed_projection["queueSummary"]["closedCount"] == 0
+        assert mixed_projection["queueSummary"]["staleCount"] == 0
+        assert mixed_projection["queueSummary"]["refillingCount"] == 0
+        assert mixed_projection["queueSummary"]["unknownCount"] == 0
+        assert mixed_projection["managerSummary"]["dispatchableQueueCount"] == 1
+        assert mixed_projection["managerSummary"]["reliabilityState"] == "running"
         approval_summary = next(stage for stage in mixed_projection["stageSummaries"] if stage["stage"] == "needs_approval")
         assert approval_summary["packetCount"] == 1
         mixed_active_packet = next(packet for packet in mixed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
@@ -772,6 +1123,10 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert mixed_active_detail["truthLabel"] == "live"
         assert mixed_fresh_packet["truthLabel"] == "live"
         assert mixed_fresh_detail["truthLabel"] == "live"
+        assert mixed_fresh_detail["latestTransitionEventRef"] is None
+        assert mixed_fresh_detail["recentTransitionEventRefs"] == []
+        assert mixed_fresh_detail["latestMovementSummary"] is None
+        assert mixed_fresh_detail["canSatisfyLiveMovementProof"] is False
         assert {packet["packetId"] for packet in mixed_projection["workPackets"]} == {detail["packetId"] for detail in mixed_projection["selectedPacketDetails"]}
         mixed_execute_summary = next(stage for stage in mixed_projection["stageSummaries"] if stage["stage"] == "execute")
         mixed_route_summary = next(stage for stage in mixed_projection["stageSummaries"] if stage["stage"] == "route")
@@ -794,7 +1149,9 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert blocked_projection["sourceLabel"] == "live"
         assert blocked_projection["queueSummary"]["dispatchableCount"] == 0
         assert blocked_projection["queueSummary"]["blockedCount"] == 2
+        assert blocked_projection["queueSummary"]["gatedCount"] == 1
         assert blocked_projection["managerSummary"]["inactivityReason"] == "blocked"
+        assert blocked_projection["managerSummary"]["reliabilityState"] == "blocked"
 
         with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
             conn.execute("update authoritative_work_packets set updated_at = CURRENT_TIMESTAMP where id in (?, ?)", ("packet-story-2-4-real-proof", "packet-story-2-4-fresh"))
@@ -806,7 +1163,9 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert fresh_blocked_projection["sourceLabel"] == "live"
         assert fresh_blocked_projection["queueSummary"]["dispatchableCount"] == 0
         assert fresh_blocked_projection["queueSummary"]["blockedCount"] == 2
+        assert fresh_blocked_projection["queueSummary"]["gatedCount"] == 1
         assert fresh_blocked_projection["managerSummary"]["inactivityReason"] == "blocked"
+        assert fresh_blocked_projection["managerSummary"]["reliabilityState"] == "blocked"
         assert fresh_blocked_projection["truthSummary"]["backendEmpty"] is False
         assert fresh_blocked_projection["queueSummary"]["emptyReason"] == "blocked"
         assert fresh_blocked_projection["managerSummary"]["sourceExhausted"] is False
@@ -824,10 +1183,14 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         failed_projection = failed_response.json()["data"]
         assert failed_projection["queueSummary"]["dispatchableCount"] == 0
         assert failed_projection["queueSummary"]["blockedCount"] == 2
+        assert failed_projection["queueSummary"]["gatedCount"] == 1
         assert failed_projection["queueSummary"]["closedCount"] == 0
         assert failed_projection["queueSummary"]["emptyReason"] == "blocked"
         failed_packet = next(packet for packet in failed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
+        failed_detail = next(detail for detail in failed_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
         assert failed_packet["blocker"] == "Packet status is failed."
+        assert failed_detail["latestTransitionEventRef"] == review_event_ref
+        assert failed_detail["canSatisfyLiveMovementProof"] is False
 
         with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
             conn.execute(
@@ -840,23 +1203,33 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             )
             conn.commit()
 
-        source_exhausted_response = client.get("/pipeline-control-plane/projection")
-        assert source_exhausted_response.status_code == 200
-        source_exhausted_projection = source_exhausted_response.json()["data"]
-        assert source_exhausted_projection["sourceLabel"] == "live"
-        assert source_exhausted_projection["freshnessState"] == "live"
-        assert source_exhausted_projection["truthSummary"]["backendEmpty"] is False
-        assert len(source_exhausted_projection["workPackets"]) == 3
-        assert source_exhausted_projection["queueSummary"]["dispatchableCount"] == 0
-        assert source_exhausted_projection["queueSummary"]["blockedCount"] == 0
-        assert source_exhausted_projection["queueSummary"]["closedCount"] == 3
-        assert source_exhausted_projection["queueSummary"]["emptyReason"] == "source_exhausted"
-        assert source_exhausted_projection["queueSummary"]["sourceExhausted"] is True
-        assert source_exhausted_projection["managerSummary"]["inactivityReason"] == "source_exhausted"
-        assert source_exhausted_projection["managerSummary"]["sourceExhausted"] is True
-        assert source_exhausted_projection["managerSummary"]["dispatchableQueueCount"] == 0
-        assert source_exhausted_projection["managerSummary"]["blockedQueueCount"] == 0
-        assert source_exhausted_projection["managerSummary"]["closedQueueCount"] == 3
+        closed_no_source_exhaustion_response = client.get("/pipeline-control-plane/projection")
+        assert closed_no_source_exhaustion_response.status_code == 200
+        closed_no_source_exhaustion_projection = closed_no_source_exhaustion_response.json()["data"]
+        assert closed_no_source_exhaustion_projection["sourceLabel"] == "live"
+        assert closed_no_source_exhaustion_projection["freshnessState"] == "live"
+        assert closed_no_source_exhaustion_projection["truthSummary"]["backendEmpty"] is False
+        assert len(closed_no_source_exhaustion_projection["workPackets"]) == 3
+        assert closed_no_source_exhaustion_projection["queueSummary"]["dispatchableCount"] == 0
+        assert closed_no_source_exhaustion_projection["queueSummary"]["blockedCount"] == 0
+        assert closed_no_source_exhaustion_projection["queueSummary"]["gatedCount"] == 0
+        assert closed_no_source_exhaustion_projection["queueSummary"]["closedCount"] == 3
+        assert closed_no_source_exhaustion_projection["queueSummary"]["staleCount"] == 0
+        assert closed_no_source_exhaustion_projection["queueSummary"]["refillingCount"] == 0
+        assert closed_no_source_exhaustion_projection["queueSummary"]["unknownCount"] == 0
+        assert closed_no_source_exhaustion_projection["queueSummary"]["emptyReason"] == "unknown"
+        assert closed_no_source_exhaustion_projection["queueSummary"]["sourceExhausted"] is False
+        assert closed_no_source_exhaustion_projection["managerSummary"]["inactivityReason"] == "unknown"
+        assert closed_no_source_exhaustion_projection["managerSummary"]["reliabilityState"] == "unknown"
+        assert closed_no_source_exhaustion_projection["managerSummary"]["sourceExhausted"] is False
+        assert closed_no_source_exhaustion_projection["managerSummary"]["dispatchableQueueCount"] == 0
+        assert closed_no_source_exhaustion_projection["managerSummary"]["blockedQueueCount"] == 0
+        assert closed_no_source_exhaustion_projection["managerSummary"]["closedQueueCount"] == 3
+        assert closed_no_source_exhaustion_projection["sourceStates"]
+        assert all(source_state["state"] != "exhausted" for source_state in closed_no_source_exhaustion_projection["sourceStates"])
+        complete_detail = next(detail for detail in closed_no_source_exhaustion_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
+        assert complete_detail["latestTransitionEventRef"] == review_event_ref
+        assert complete_detail["canSatisfyLiveMovementProof"] is False
 
         from supervisor.application.service import SupervisorService
 
@@ -875,10 +1248,811 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert unavailable_projection["truthSummary"]["backendEmpty"] is False
         assert unavailable_projection["truthSummary"]["emptyReason"] == "backend_unavailable"
         assert unavailable_projection["managerSummary"]["stateSource"] == "unavailable"
+        assert unavailable_projection["managerSummary"]["reliabilityState"] == "unavailable"
         assert unavailable_projection["managerSummary"]["activeLeaseCount"] is None
         assert unavailable_projection["managerSummary"]["dispatchableQueueCount"] is None
+        assert unavailable_projection["managerSummary"]["healthySourceCount"] is None
+        assert unavailable_projection["managerSummary"]["unknownSourceCount"] is None
+        assert unavailable_projection["managerSummary"]["evidenceRefs"] == []
+        assert unavailable_projection["workerSummary"]["stateSource"] == "unavailable"
+        assert unavailable_projection["workerSummary"]["freshnessState"] == "unavailable"
+        assert unavailable_projection["workerSummary"]["warmCount"] is None
+        assert unavailable_projection["workerSummary"]["evidenceRefs"] == []
+        assert unavailable_projection["reliabilityProblems"] == []
         assert unavailable_projection["queueSummary"]["emptyReason"] == "backend_unavailable"
         assert unavailable_projection["queueSummary"]["dispatchableCount"] is None
+
+
+def test_pipeline_dashboard_projection_proves_zero_packet_source_exhaustion(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-zero-packet-source-exhausted.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        no_record_response = client.get("/pipeline-control-plane/projection")
+        assert no_record_response.status_code == 200
+        no_record_projection = no_record_response.json()["data"]
+        assert no_record_projection["workPackets"] == []
+        assert no_record_projection["sourceStates"] == []
+        assert no_record_projection["truthSummary"]["emptyReason"] == "healthy_empty"
+        assert no_record_projection["queueSummary"]["sourceExhausted"] is False
+        assert no_record_projection["managerSummary"]["sourceExhausted"] is False
+
+        no_evidence_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "No-evidence source-state-only record",
+                "requestedOutcome": "Record source exhaustion metadata without creating visible pipeline work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "source_state_only",
+                    "pipelineSourceState": {
+                        "sourceId": "prd:pipeline:empty:no-evidence",
+                        "sourceRef": "prd:pipeline:empty:no-evidence",
+                        "sourceKind": "prd",
+                        "state": "exhausted",
+                        "summary": "Approved source is empty, but evidence is missing.",
+                        "evidenceRefs": [],
+                    },
+                },
+            },
+        )
+        assert no_evidence_response.status_code == 200
+        no_evidence_projection_response = client.get("/pipeline-control-plane/projection")
+        assert no_evidence_projection_response.status_code == 200
+        no_evidence_projection = no_evidence_projection_response.json()["data"]
+        assert no_evidence_projection["workPackets"] == []
+        assert no_evidence_projection["sourceStates"] == []
+        assert no_evidence_projection["truthSummary"]["emptyReason"] == "healthy_empty"
+        assert no_evidence_projection["queueSummary"]["sourceExhausted"] is False
+
+        exhausted_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Source-state-only exhausted record",
+                "requestedOutcome": "Record source exhaustion metadata without creating visible pipeline work.",
+                "source": "operator",
+                "sourceArtifactPath": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "source_state_only",
+                    "pipelineSourceState": {
+                        "sourceId": "prd:pipeline-execution-loop-reliability",
+                        "sourceRef": "prd:pipeline-execution-loop-reliability",
+                        "sourceKind": "prd",
+                        "state": "exhausted",
+                        "summary": "Approved source work is exhausted after refill.",
+                        "evidenceRefs": ["evidence:source-exhausted", "tmux-pane-scrollback:must-not-project"],
+                    },
+                },
+            },
+        )
+        assert exhausted_response.status_code == 200
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["sourceLabel"] == "live"
+        assert projection["freshnessState"] == "live"
+        assert projection["workPackets"] == []
+        assert projection["selectedPacketDetails"] == []
+        assert projection["truthSummary"]["backendEmpty"] is True
+        assert projection["truthSummary"]["emptyReason"] == "source_exhausted"
+        assert projection["queueSummary"]["dispatchableCount"] == 0
+        assert projection["queueSummary"]["sourceExhausted"] is True
+        assert projection["queueSummary"]["emptyReason"] == "source_exhausted"
+        assert projection["managerSummary"]["sourceExhausted"] is True
+        assert projection["managerSummary"]["inactivityReason"] == "source_exhausted"
+        assert projection["managerSummary"]["reliabilityState"] == "source_exhausted"
+        assert projection["managerSummary"]["exhaustedSourceCount"] == 1
+        assert projection["managerSummary"]["evidenceRefs"] == ["evidence:source-exhausted"]
+        assert projection["evidenceRefs"] == ["evidence:source-exhausted"]
+        assert "tmux-pane-scrollback:must-not-project" not in projection["evidenceRefs"]
+        assert len(projection["sourceStates"]) == 1
+        source_state = projection["sourceStates"][0]
+        assert source_state["sourceId"] == "prd:pipeline-execution-loop-reliability"
+        assert source_state["sourceRef"] == "prd:pipeline-execution-loop-reliability"
+        assert source_state["sourceKind"] == "prd"
+        assert source_state["state"] == "exhausted"
+        assert source_state["summary"] == "Approved source work is exhausted after refill."
+        assert source_state["evidenceRefs"] == ["evidence:source-exhausted"]
+        assert source_state["metadataOnly"] is True
+
+        _update_candidate_fixture(db_path, exhausted_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
+        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        assert stale_projection_response.status_code == 200
+        stale_projection = stale_projection_response.json()["data"]
+        assert stale_projection["sourceLabel"] == "stale"
+        assert stale_projection["freshnessState"] == "stale"
+        assert stale_projection["truthSummary"]["emptyReason"] == "projection_stale"
+        assert stale_projection["queueSummary"]["sourceExhausted"] is False
+        assert stale_projection["managerSummary"]["sourceExhausted"] is False
+        assert stale_projection["managerSummary"]["reliabilityState"] == "degraded"
+        assert stale_projection["managerSummary"]["exhaustedSourceCount"] == 1
+
+        approved_response = client.patch(f"/candidate-work/{exhausted_response.json()['data']['id']}", json={"status": "approved"})
+        assert approved_response.status_code == 200
+        promote_response = client.post(f"/candidate-work/{exhausted_response.json()['data']['id']}/promote")
+        assert promote_response.status_code == 400
+        assert "metadata-only Candidate Work cannot be promoted" in promote_response.text
+
+
+def test_pipeline_dashboard_projection_uses_non_exhausted_source_state_only_reasons(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-zero-packet-source-state-reasons.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        blocked_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Source-state-only blocked record",
+                "requestedOutcome": "Record blocked source metadata without creating visible pipeline work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "source_state_only",
+                    "pipelineSourceState": {
+                        "sourceId": "manual:blocked-source",
+                        "sourceRef": "manual:blocked-source",
+                        "sourceKind": "manual",
+                        "state": "blocked",
+                        "summary": "Source is blocked by operator-owned input.",
+                        "evidenceRefs": ["evidence:blocked-source"],
+                    },
+                },
+            },
+        )
+        assert blocked_response.status_code == 200
+        blocked_projection_response = client.get("/pipeline-control-plane/projection")
+        assert blocked_projection_response.status_code == 200
+        blocked_projection = blocked_projection_response.json()["data"]
+        assert blocked_projection["workPackets"] == []
+        assert blocked_projection["sourceStates"][0]["state"] == "blocked"
+        assert blocked_projection["queueSummary"]["blockedCount"] == 1
+        assert blocked_projection["queueSummary"]["emptyReason"] == "blocked"
+        assert blocked_projection["managerSummary"]["inactivityReason"] == "blocked"
+        assert blocked_projection["managerSummary"]["reliabilityState"] == "blocked"
+        assert blocked_projection["queueSummary"]["sourceExhausted"] is False
+
+        rejected_response = client.patch(f"/candidate-work/{blocked_response.json()['data']['id']}", json={"status": "rejected"})
+        assert rejected_response.status_code == 200
+        rejected_projection_response = client.get("/pipeline-control-plane/projection")
+        assert rejected_projection_response.status_code == 200
+        rejected_projection = rejected_projection_response.json()["data"]
+        assert rejected_projection["workPackets"] == []
+        assert rejected_projection["sourceStates"] == []
+        assert rejected_projection["queueSummary"]["blockedCount"] == 0
+        assert rejected_projection["queueSummary"]["emptyReason"] == "healthy_empty"
+        assert rejected_projection["managerSummary"]["reliabilityState"] == "healthy_idle"
+
+    with _client(tmp_path, monkeypatch, "pipeline-dashboard-zero-packet-refilling-source.db") as client:
+        refilling_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Source-state-only refilling record",
+                "requestedOutcome": "Record refilling source metadata without creating visible pipeline work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "source_state_only",
+                    "pipelineSourceState": {
+                        "sourceId": "manual:refilling-source",
+                        "sourceRef": "manual:refilling-source",
+                        "sourceKind": "manual",
+                        "state": "refilling",
+                        "summary": "Source refill is running.",
+                        "evidenceRefs": ["evidence:refilling-source"],
+                    },
+                },
+            },
+        )
+        assert refilling_response.status_code == 200
+        refilling_projection_response = client.get("/pipeline-control-plane/projection")
+        assert refilling_projection_response.status_code == 200
+        refilling_projection = refilling_projection_response.json()["data"]
+        assert refilling_projection["workPackets"] == []
+        assert refilling_projection["sourceStates"][0]["state"] == "refilling"
+        assert refilling_projection["queueSummary"]["refillingCount"] == 1
+        assert refilling_projection["queueSummary"]["emptyReason"] == "refilling"
+        assert refilling_projection["managerSummary"]["inactivityReason"] == "refilling"
+        assert refilling_projection["managerSummary"]["reliabilityState"] == "refilling"
+        assert refilling_projection["queueSummary"]["sourceExhausted"] is False
+
+
+def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-worker-summary-only.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        worker_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Worker-summary-only metadata",
+                "requestedOutcome": "Record worker reliability metadata without creating visible or dispatchable work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerState": {
+                        "workerId": "codex-2",
+                        "state": "stalled",
+                        "summary": "Worker has not reported progress inside the expected window.",
+                        "evidenceRefs": ["worker:codex-2", "tmux-pane-scrollback:must-not-project"],
+                    },
+                },
+            },
+        )
+        assert worker_response.status_code == 200
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["workPackets"] == []
+        assert projection["queueSummary"]["dispatchableCount"] == 0
+        assert projection["queueSummary"]["emptyReason"] == "healthy_empty"
+        assert projection["managerSummary"]["reliabilityState"] == "healthy_idle"
+        assert projection["workerSummary"]["stateSource"] == "manager_summary"
+        assert projection["workerSummary"]["freshnessState"] == "live"
+        assert projection["workerSummary"]["warmCount"] == 0
+        assert projection["workerSummary"]["activeCount"] == 0
+        assert projection["workerSummary"]["stalledCount"] == 1
+        assert projection["workerSummary"]["unknownCount"] == 0
+        assert projection["workerSummary"]["workerRefs"] == ["worker:codex-2"]
+        assert projection["workerSummary"]["evidenceRefs"] == ["worker:codex-2"]
+        assert "tmux-pane-scrollback:must-not-project" not in projection["evidenceRefs"]
+        candidate_response = client.get("/candidate-work")
+        assert candidate_response.status_code == 200
+        retained_candidate = next(candidate for candidate in candidate_response.json()["data"] if candidate["id"] == worker_response.json()["data"]["id"])
+        retained_metadata_text = json.dumps(retained_candidate["importMetadata"])
+        assert "tmux-pane-scrollback:must-not-project" not in retained_metadata_text
+
+        invalid_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Invalid anonymous worker metadata",
+                "requestedOutcome": "Invalid worker metadata should not inflate worker counts.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerState": {
+                        "state": "active",
+                        "evidenceRefs": ["terminal-output:must-not-project"],
+                    },
+                },
+            },
+        )
+        assert invalid_response.status_code == 200
+
+        duplicate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Duplicate worker metadata",
+                "requestedOutcome": "Latest worker metadata should win for the same worker.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerStates": [
+                        {"workerId": "codex-3", "state": "warm", "evidenceRefs": ["worker:codex-3:warm"]},
+                        {"workerId": "codex-3", "state": "active", "evidenceRefs": ["worker:codex-3:active"]},
+                    ],
+                },
+            },
+        )
+        assert duplicate_response.status_code == 200
+
+        deduped_projection_response = client.get("/pipeline-control-plane/projection")
+        assert deduped_projection_response.status_code == 200
+        deduped_projection = deduped_projection_response.json()["data"]
+        assert deduped_projection["workerSummary"]["warmCount"] == 0
+        assert deduped_projection["workerSummary"]["activeCount"] == 1
+        assert deduped_projection["workerSummary"]["stalledCount"] == 1
+        assert deduped_projection["workerSummary"]["unknownCount"] == 0
+        assert deduped_projection["workerSummary"]["workerRefs"] == ["worker:codex-2", "worker:codex-3"]
+        assert "terminal-output:must-not-project" not in deduped_projection["workerSummary"]["evidenceRefs"]
+
+        _update_candidate_fixture(db_path, worker_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
+        _update_candidate_fixture(db_path, duplicate_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
+        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        assert stale_projection_response.status_code == 200
+        stale_projection = stale_projection_response.json()["data"]
+        assert stale_projection["workerSummary"]["freshnessState"] == "stale"
+
+        promote_response = client.patch(f"/candidate-work/{worker_response.json()['data']['id']}", json={"status": "approved"})
+        assert promote_response.status_code == 200
+        blocked_promote_response = client.post(f"/candidate-work/{worker_response.json()['data']['id']}/promote")
+        assert blocked_promote_response.status_code == 400
+        assert "metadata-only Candidate Work cannot be promoted" in blocked_promote_response.text
+
+
+def test_pipeline_dashboard_projection_detects_idle_with_ready_work(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-idle-with-ready-work.db"
+    source_ref = {
+        "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+        "sourceType": "prd",
+        "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
+        "title": "Pipeline execution loop reliability",
+    }
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-idle-ready-work",
+                "title": "Ready work with idle workers",
+                "initialStage": "route",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "idle-ready-work-create",
+                "payloadSummary": "Created waiting route packet for idle-with-ready-work proof.",
+                "evidenceRefs": ["story:3-3", "proof:idle-ready-work"],
+            },
+        )
+        assert create_response.status_code == 200
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["workerSummary"]["activeCount"] is None
+        assert projection["reliabilityProblems"] == [
+            {
+                "problemId": "problem:idle-with-ready-work",
+                "kind": "idle_with_ready_work",
+                "severity": "attention",
+                "likelyIssue": "manager",
+                "summary": "Dispatchable work exists, but no active or progressing worker is visible in backend projection metadata.",
+                "evidenceRefs": ["queue:dispatchable", "worker:no-live-progress"],
+                "metadataOnly": True,
+            }
+        ]
+
+    with _client(tmp_path, monkeypatch, "pipeline-dashboard-idle-with-ready-work-active-worker.db") as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-ready-work-active-worker",
+                "title": "Ready work with active worker",
+                "initialStage": "route",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "ready-work-active-worker-create",
+                "payloadSummary": "Created waiting route packet for active-worker proof.",
+                "evidenceRefs": ["story:3-3", "proof:active-worker"],
+            },
+        )
+        assert create_response.status_code == 200
+        worker_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Active worker metadata",
+                "requestedOutcome": "Record active worker metadata without creating visible work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerState": {
+                        "workerId": "codex-2",
+                        "state": "active",
+                        "evidenceRefs": ["worker:codex-2"],
+                    },
+                },
+            },
+        )
+        assert worker_response.status_code == 200
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["workerSummary"]["activeCount"] == 1
+        assert projection["reliabilityProblems"] == []
+
+    with _client(tmp_path, monkeypatch, "pipeline-dashboard-idle-with-ready-work-waiting-worker.db") as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-ready-work-waiting-worker",
+                "title": "Ready work with waiting worker",
+                "initialStage": "route",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "ready-work-waiting-worker-create",
+                "payloadSummary": "Created waiting route packet for waiting-worker proof.",
+                "evidenceRefs": ["story:3-3", "proof:waiting-worker"],
+            },
+        )
+        assert create_response.status_code == 200
+        worker_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Waiting worker metadata",
+                "requestedOutcome": "Record waiting worker metadata without creating visible work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerState": {
+                        "workerId": "codex-3",
+                        "state": "waiting",
+                        "evidenceRefs": ["worker:codex-3"],
+                    },
+                },
+            },
+        )
+        assert worker_response.status_code == 200
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["workerSummary"]["waitingCount"] == 1
+        assert projection["reliabilityProblems"][0]["kind"] == "idle_with_ready_work"
+        assert projection["reliabilityProblems"][0]["likelyIssue"] == "worker"
+
+    stale_db_name = "pipeline-dashboard-idle-with-ready-work-stale-worker.db"
+    stale_db_path = _db_path(tmp_path, stale_db_name)
+    with _client(tmp_path, monkeypatch, stale_db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-ready-work-stale-worker",
+                "title": "Ready work with stale active worker metadata",
+                "initialStage": "route",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "ready-work-stale-worker-create",
+                "payloadSummary": "Created waiting route packet for stale-worker proof.",
+                "evidenceRefs": ["story:3-3", "proof:stale-worker"],
+            },
+        )
+        assert create_response.status_code == 200
+        worker_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Stale active worker metadata",
+                "requestedOutcome": "Record stale active worker metadata without creating visible work.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerState": {
+                        "workerId": "codex-4",
+                        "state": "active",
+                        "evidenceRefs": ["worker:codex-4"],
+                    },
+                },
+            },
+        )
+        assert worker_response.status_code == 200
+        _update_candidate_fixture(stale_db_path, worker_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["workerSummary"]["freshnessState"] == "stale"
+        assert projection["workerSummary"]["activeCount"] == 1
+        assert projection["reliabilityProblems"][0]["kind"] == "idle_with_ready_work"
+        assert projection["reliabilityProblems"][0]["likelyIssue"] == "worker"
+
+    with _client(tmp_path, monkeypatch, "pipeline-dashboard-idle-with-ready-work-anonymous-summary.db") as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-ready-work-anonymous-worker-summary",
+                "title": "Ready work with anonymous worker summary",
+                "initialStage": "route",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "ready-work-anonymous-worker-summary-create",
+                "payloadSummary": "Created waiting route packet for anonymous-summary proof.",
+                "evidenceRefs": ["story:3-3", "proof:anonymous-worker-summary"],
+            },
+        )
+        assert create_response.status_code == 200
+        worker_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Anonymous worker summary",
+                "requestedOutcome": "Record aggregate worker metadata without safe identity or evidence.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerSummary": {
+                        "activeCount": 1,
+                    },
+                },
+            },
+        )
+        assert worker_response.status_code == 200
+        assert worker_response.json()["data"]["importMetadata"]["pipelineWorkerSummary"] == {}
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["queueSummary"]["dispatchableCount"] == 1
+        assert projection["workerSummary"]["activeCount"] is None
+        assert projection["reliabilityProblems"][0]["kind"] == "idle_with_ready_work"
+        assert projection["reliabilityProblems"][0]["likelyIssue"] == "manager"
+
+
+def test_pipeline_dashboard_projection_projects_gated_controls_as_metadata_only(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-gated-controls.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        gated_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Worker kill gated control",
+                "requestedOutcome": "Show worker kill as gated reliability metadata only.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "gated_control_only",
+                    "pipelineGatedControl": {
+                        "controlId": "control:kill-codex-2",
+                        "operation": "kill_worker",
+                        "status": "gated",
+                        "authorityFamily": "worker-process-control",
+                        "stopLine": "Do not kill workers from pipeline reliability metadata.",
+                        "nextAction": "Request explicit worker-control approval before any kill action.",
+                        "packetId": "packet-needs-worker-attention",
+                        "workerRefs": ["worker:codex-2"],
+                        "evidenceRefs": ["control:kill-codex-2", "worker:codex-2"],
+                        "command": "tmux kill-session must not persist",
+                    },
+                },
+            },
+        )
+        assert gated_response.status_code == 200
+        gated_metadata = gated_response.json()["data"]["importMetadata"]["pipelineGatedControl"]
+        assert "command" not in gated_metadata
+        assert gated_metadata["metadataOnly"] is True
+
+        unsafe_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Unsafe provider gated control",
+                "requestedOutcome": "Unsafe refs are stripped from gated control metadata.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "gated_control_only",
+                    "pipelineGatedControl": {
+                        "controlId": "control:provider-call",
+                        "operation": "provider_call",
+                        "status": "action_needed",
+                        "authorityFamily": "local-provider-execution",
+                        "stopLine": "Provider calls remain gated until provider-specific approval exists.",
+                        "nextAction": "Request provider approval with rollback and redaction policy.",
+                        "workerRefs": ["worker:codex-3", "terminal-output:must-not-project"],
+                        "evidenceRefs": ["provider-payload:must-not-project", "control:provider-call"],
+                        "script": "tmux kill-session must not persist",
+                    },
+                },
+            },
+        )
+        assert unsafe_response.status_code == 200
+        unsafe_metadata = unsafe_response.json()["data"]["importMetadata"]["pipelineGatedControl"]
+        assert "script" not in unsafe_metadata
+        malformed_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Malformed gated control",
+                "requestedOutcome": "Malformed gated control metadata does not break projection.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "gated_control_only",
+                    "pipelineGatedControl": {
+                        "controlId": "control:bad-operation",
+                        "operation": "run_shell",
+                        "status": "running",
+                        "authorityFamily": "shell-execution",
+                        "stopLine": "Do not execute shell commands from projection metadata.",
+                        "nextAction": "Ignore malformed control metadata.",
+                    },
+                },
+            },
+        )
+        assert malformed_response.status_code == 200
+        executable_text_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Executable text gated control",
+                "requestedOutcome": "Executable text is stripped from gated control metadata.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "gated_control_only",
+                    "pipelineGatedControl": {
+                        "controlId": "control:executable-text",
+                        "operation": "terminal_access",
+                        "status": "blocked",
+                        "authorityFamily": "terminal-access",
+                        "stopLine": "Run tmux capture-pane now.",
+                        "nextAction": "Run gh pr merge now.",
+                        "evidenceRefs": ["control:executable-text"],
+                    },
+                },
+            },
+        )
+        assert executable_text_response.status_code == 200
+        executable_metadata = executable_text_response.json()["data"]["importMetadata"]["pipelineGatedControl"]
+        assert "stopLine" not in executable_metadata
+        assert "nextAction" not in executable_metadata
+        duplicate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Duplicate gated controls",
+                "requestedOutcome": "Multiple fallback-only gated controls receive distinct ids.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "gated_control_only",
+                    "pipelineGatedControls": [
+                        {
+                            "operation": "terminal_access",
+                            "status": "gated",
+                            "authorityFamily": "terminal-access",
+                            "stopLine": "Terminal access remains gated by explicit operator approval.",
+                            "nextAction": "Request terminal-access approval before reading pane output.",
+                            "evidenceRefs": ["control:terminal-access"],
+                        },
+                        {
+                            "operation": "raw_payload_retention",
+                            "status": "blocked",
+                            "authorityFamily": "raw-payload-retention",
+                            "stopLine": "Raw payload retention remains blocked by metadata-only policy.",
+                            "nextAction": "Use metadata refs instead of retaining raw payloads.",
+                            "evidenceRefs": ["control:raw-payload-retention"],
+                        },
+                    ],
+                },
+            },
+        )
+        assert duplicate_response.status_code == 200
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        projected_controls = projection["gatedControls"]
+        assert len(projected_controls) == 4
+        assert len({control["controlId"] for control in projected_controls}) == 4
+        projected_by_id = {control["controlId"]: control for control in projected_controls}
+        assert projected_by_id["control:kill-codex-2"] == {
+            "controlId": "control:kill-codex-2",
+            "operation": "kill_worker",
+            "status": "gated",
+            "authorityFamily": "worker-process-control",
+            "stopLine": "Do not kill workers from pipeline reliability metadata.",
+            "nextAction": "Request explicit worker-control approval before any kill action.",
+            "packetId": "packet-needs-worker-attention",
+            "workerRefs": ["worker:codex-2"],
+            "evidenceRefs": ["control:kill-codex-2", "worker:codex-2"],
+            "metadataOnly": True,
+        }
+        assert projected_by_id["control:provider-call"] == {
+            "controlId": "control:provider-call",
+            "operation": "provider_call",
+            "status": "action_needed",
+            "authorityFamily": "local-provider-execution",
+            "stopLine": "Provider calls remain gated until provider-specific approval exists.",
+            "nextAction": "Request provider approval with rollback and redaction policy.",
+            "packetId": None,
+            "workerRefs": ["worker:codex-3"],
+            "evidenceRefs": ["control:provider-call"],
+            "metadataOnly": True,
+        }
+        assert sorted(control["operation"] for control in projected_controls) == [
+            "kill_worker",
+            "provider_call",
+            "raw_payload_retention",
+            "terminal_access",
+        ]
+
+        _update_candidate_fixture(
+            _db_path(tmp_path, db_name),
+            gated_response.json()["data"]["id"],
+            updated_at="2026-07-04 00:00:00.000000",
+        )
+        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        assert stale_projection_response.status_code == 200
+        stale_projection = stale_projection_response.json()["data"]
+        assert "control:kill-codex-2" in {control["controlId"] for control in stale_projection["gatedControls"]}
+
+        promote_response = client.patch(f"/candidate-work/{gated_response.json()['data']['id']}", json={"status": "approved"})
+        assert promote_response.status_code == 200
+        blocked_promote_response = client.post(f"/candidate-work/{gated_response.json()['data']['id']}/promote")
+        assert blocked_promote_response.status_code == 400
+        assert "metadata-only Candidate Work cannot be promoted" in blocked_promote_response.text
+
+    stale_db_name = "pipeline-dashboard-stale-gated-controls.db"
+    stale_db_path = _db_path(tmp_path, stale_db_name)
+    with _client(tmp_path, monkeypatch, stale_db_name) as client:
+        stale_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Stale gated terminal access",
+                "requestedOutcome": "Show stale terminal access as gated metadata only.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "gated_control_only",
+                    "pipelineGatedControl": {
+                        "controlId": "control:stale-terminal-access",
+                        "operation": "terminal_access",
+                        "status": "gated",
+                        "authorityFamily": "terminal-access",
+                        "stopLine": "Terminal access remains gated by explicit operator approval.",
+                        "nextAction": "Request terminal-access approval before reading pane output.",
+                        "evidenceRefs": ["control:stale-terminal-access"],
+                    },
+                },
+            },
+        )
+        assert stale_response.status_code == 200
+        _update_candidate_fixture(stale_db_path, stale_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
+        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        assert stale_projection_response.status_code == 200
+        stale_projection = stale_projection_response.json()["data"]
+        assert stale_projection["sourceLabel"] == "stale"
+        assert stale_projection["freshnessState"] == "stale"
+        assert stale_projection["gatedControls"][0]["operation"] == "terminal_access"
+        assert stale_projection["gatedControls"][0]["metadataOnly"] is True
 
 
 def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tmp_path, monkeypatch) -> None:
@@ -917,12 +2091,29 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
                 "sourceRef": None,
                 "blocker": None,
                 "nextAction": "Advance toward Classify.",
+                "readyToTest": None,
                 "evidenceRefs": [],
                 "updatedAt": create_response.json()["data"]["updatedAt"],
                 "metadataOnly": True,
             }
         ]
         assert projection["selectedPacketDetails"][0]["sourceRefs"] == []
+        assert projection["selectedPacketDetails"][0]["latestTransitionEventRef"] is None
+        assert projection["selectedPacketDetails"][0]["recentTransitionEventRefs"] == []
+        assert projection["selectedPacketDetails"][0]["latestMovementSummary"] is None
+        assert projection["selectedPacketDetails"][0]["canSatisfyLiveMovementProof"] is False
+        assert projection["sourceStates"] == [
+            {
+                "sourceId": f"candidate_work:{candidate_id}",
+                "sourceRef": f"candidate_work:{candidate_id}",
+                "sourceKind": "candidate_work",
+                "state": "healthy",
+                "summary": "Candidate Work: Legacy backend packet",
+                "evidenceRefs": [],
+                "updatedAt": create_response.json()["data"]["updatedAt"],
+                "metadataOnly": True,
+            }
+        ]
 
 
 def test_pipeline_dashboard_projection_blocks_legacy_packets_from_superseded_prd_sources(tmp_path, monkeypatch) -> None:
@@ -948,11 +2139,175 @@ def test_pipeline_dashboard_projection_blocks_legacy_packets_from_superseded_prd
         projection = projection_response.json()["data"]
         packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"candidate_work:{candidate_id}")
         assert packet["truthLabel"] == "stale"
-        assert "superseded by the July 1 authoritative PRD" in packet["blocker"]
+        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in packet["blocker"]
         detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"])
         assert detail["truthLabel"] == "stale"
-        assert "superseded by the July 1 authoritative PRD" in detail["blocker"]
+        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in detail["blocker"]
         assert detail["sourceRefs"] == []
+        source_state = next(source_state for source_state in projection["sourceStates"] if source_state["sourceRef"] == f"candidate_work:{candidate_id}")
+        assert source_state["state"] == "blocked"
+        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in source_state["summary"]
+        assert source_state["metadataOnly"] is True
+
+
+def test_pipeline_dashboard_projection_counts_stale_legacy_queue_state(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-legacy-stale-queue-state.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Legacy stale queue packet",
+                "requestedOutcome": "Show stale queue state without making the packet dispatchable.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+            },
+        )
+        assert create_response.status_code == 200
+        candidate_id = create_response.json()["data"]["id"]
+        unknown_create_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Legacy unknown queue packet",
+                "requestedOutcome": "Show unknown queue state without making the packet dispatchable.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+            },
+        )
+        assert unknown_create_response.status_code == 200
+        unknown_candidate_id = unknown_create_response.json()["data"]["id"]
+        _update_candidate_fixture(
+            db_path,
+            candidate_id,
+            import_metadata_json={
+                "workPacketSourceRefs": [
+                    {
+                        "refId": "fixture:source:stale-queue",
+                        "sourceType": "research",
+                        "label": "Stale research queue source",
+                        "freshness": "stale",
+                        "accessState": "allowed",
+                    }
+                ],
+            },
+        )
+        _update_candidate_fixture(
+            db_path,
+            unknown_candidate_id,
+            import_metadata_json={
+                "workPacketSourceRefs": [
+                    {
+                        "refId": "fixture:source:unknown-queue",
+                        "sourceType": "research",
+                        "label": "Unknown research queue source",
+                        "freshness": "unknown",
+                        "accessState": "allowed",
+                    }
+                ],
+            },
+        )
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"candidate_work:{candidate_id}")
+        unknown_packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"candidate_work:{unknown_candidate_id}")
+        assert packet["truthLabel"] == "stale"
+        assert unknown_packet["truthLabel"] == "live"
+        assert projection["queueSummary"]["dispatchableCount"] == 0
+        assert projection["queueSummary"]["staleCount"] == 1
+        assert projection["queueSummary"]["unknownCount"] == 1
+        assert projection["queueSummary"]["emptyReason"] == "unknown"
+        stale_source = next(source_state for source_state in projection["sourceStates"] if source_state["sourceId"] == "fixture:source:stale-queue")
+        unknown_source = next(source_state for source_state in projection["sourceStates"] if source_state["sourceId"] == "fixture:source:unknown-queue")
+        assert stale_source["state"] == "stale"
+        assert unknown_source["state"] == "unknown"
+
+
+def test_pipeline_dashboard_projection_bridges_learn_refill_source_states(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-learn-refill-source-states.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        refilling_candidate = _create_candidate(client, title="Refilling source packet")
+
+        _update_candidate_fixture(
+            db_path,
+            refilling_candidate["id"],
+            import_metadata_json={
+                "evidenceRefs": ["evidence:refilling-source", "tmux-pane-scrollback:must-not-project"],
+                "learnRefill": {
+                    "state": "refilling",
+                    "explanation": "Learn is creating follow-up Candidate Work.",
+                },
+            },
+        )
+        refilling_projection_response = client.get("/pipeline-control-plane/projection")
+        assert refilling_projection_response.status_code == 200
+        refilling_projection = refilling_projection_response.json()["data"]
+        refilling_source_states = {source_state["sourceId"]: source_state for source_state in refilling_projection["sourceStates"]}
+        refilling_source = refilling_source_states[f"candidate_work:{refilling_candidate['id']}"]
+        assert refilling_source["state"] == "refilling"
+        assert refilling_source["evidenceRefs"] == ["evidence:refilling-source"]
+        assert "tmux-pane-scrollback:must-not-project" not in refilling_projection["evidenceRefs"]
+        assert refilling_projection["queueSummary"]["dispatchableCount"] == 0
+        assert refilling_projection["queueSummary"]["refillingCount"] == 1
+        assert refilling_projection["queueSummary"]["sourceExhausted"] is False
+        assert refilling_projection["queueSummary"]["emptyReason"] == "refilling"
+
+        _update_candidate_fixture(db_path, refilling_candidate["id"], status="deferred")
+        active_exhausted_candidate = _create_candidate(client, title="Active exhausted source packet")
+        no_evidence_exhausted_candidate = _create_candidate(client, title="No-evidence exhausted source packet")
+        _update_candidate_fixture(
+            db_path,
+            active_exhausted_candidate["id"],
+            import_metadata_json={
+                "evidenceRefs": ["evidence:active-source-exhausted"],
+                "learnRefill": {
+                    "state": "source_exhausted",
+                    "explanation": "Approved source is empty after promotion.",
+                },
+            },
+        )
+        _update_candidate_fixture(
+            db_path,
+            no_evidence_exhausted_candidate["id"],
+            status="deferred",
+            import_metadata_json={
+                "learnRefill": {
+                    "state": "source_exhausted",
+                    "explanation": "Source exhaustion without evidence must not drive queue truth.",
+                },
+            },
+        )
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        source_states = {source_state["sourceId"]: source_state for source_state in projection["sourceStates"]}
+        refilling_source = source_states[f"candidate_work:{refilling_candidate['id']}"]
+        active_exhausted_source = source_states[f"candidate_work:{active_exhausted_candidate['id']}"]
+        no_evidence_source = source_states[f"candidate_work:{no_evidence_exhausted_candidate['id']}"]
+
+        assert refilling_source["state"] == "refilling"
+        assert refilling_source["evidenceRefs"] == ["evidence:refilling-source"]
+        assert active_exhausted_source["state"] == "exhausted"
+        assert active_exhausted_source["evidenceRefs"] == ["evidence:active-source-exhausted"]
+        assert no_evidence_source["state"] == "healthy"
+        assert no_evidence_source["evidenceRefs"] == []
+        assert projection["queueSummary"]["dispatchableCount"] == 0
+        assert projection["queueSummary"]["refillingCount"] == 0
+        assert projection["queueSummary"]["closedCount"] == 2
+        assert projection["queueSummary"]["unknownCount"] == 1
+        assert projection["queueSummary"]["sourceExhausted"] is False
+        assert projection["queueSummary"]["emptyReason"] == "unknown"
+        assert projection["managerSummary"]["sourceExhausted"] is False
+        assert projection["managerSummary"]["inactivityReason"] == "unknown"
 
 
 def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata(tmp_path, monkeypatch) -> None:
@@ -2286,7 +3641,7 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert canonical_ref["accessState"] == "blocked"
         assert canonical_ref["freshness"] == "stale"
         assert canonical_ref["pathOrUrl"] is None
-        assert "superseded by the July 1 authoritative PRD" in canonical_ref["blockedReason"]
+        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in canonical_ref["blockedReason"]
         assert blocked_source_refs["fixture:source:stale"]["freshness"] == "stale"
         assert blocked_source_refs["fixture:source:missing"]["accessState"] == "missing"
         assert blocked_source_refs["fixture:source:excluded"]["accessState"] == "excluded"
@@ -2295,7 +3650,7 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert blocked_source_refs["fixture:source:superseded-prd"]["accessState"] == "blocked"
         assert blocked_source_refs["fixture:source:superseded-prd"]["freshness"] == "stale"
         assert blocked_source_refs["fixture:source:superseded-prd"]["pathOrUrl"] is None
-        assert "superseded by the July 1 authoritative PRD" in blocked_source_refs["fixture:source:superseded-prd"]["blockedReason"]
+        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in blocked_source_refs["fixture:source:superseded-prd"]["blockedReason"]
         assert blocked_source_refs["fixture:source:malformed-type"]["sourceType"] == "manual"
         assert blocked_source_refs["fixture:source:malformed-type"]["accessState"] == "blocked"
         assert "invalid source type" in blocked_source_refs["fixture:source:malformed-type"]["label"]
@@ -2840,6 +4195,13 @@ def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(t
                 "learnRefill": {
                     "state": "source_exhausted",
                     "explanation": "Approved source is empty after promotion.",
+                    "readyToTest": {
+                        "readyId": "ready:promoted-learn-refill",
+                        "userFacingSummary": "Promoted Learn/refill projection is ready to test.",
+                        "testableSurface": "/pipeline selected packet",
+                        "verificationRefs": ["pytest tests/integration/test_work_packets.py"],
+                        "evidenceRefs": ["evidence:promoted-ready"],
+                    },
                     "followUpCandidates": [
                         {
                             "followUpId": "learn-follow-up:promoted",
@@ -2886,6 +4248,23 @@ def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(t
         assert projection["readyToTest"]["userFacingSummary"] == "Promoted Learn/refill projection is ready to test."
         assert projection["readyToTest"]["testableSurface"] == "/pipeline selected packet"
         assert projection["readyToTest"]["verificationRefs"] == ["pytest tests/integration/test_work_packets.py"]
+        assert projection["readyToTest"]["evidenceRefs"] == ["evidence:promoted-ready"]
         assert projection["providerCallsAllowed"] is False
         assert projection["workerLaunchAllowed"] is False
         assert projection["githubMutationAllowed"] is False
+
+        dashboard_projection_response = client.get("/pipeline-control-plane/projection")
+        assert dashboard_projection_response.status_code == 200
+        dashboard_projection = dashboard_projection_response.json()["data"]
+        dashboard_packet = next(
+            packet
+            for packet in dashboard_projection["workPackets"]
+            if packet["packetId"] == f"work_item:{work_item['id']}"
+        )
+        dashboard_detail = next(
+            detail
+            for detail in dashboard_projection["selectedPacketDetails"]
+            if detail["packetId"] == f"work_item:{work_item['id']}"
+        )
+        assert dashboard_packet["readyToTest"] == projection["readyToTest"]
+        assert dashboard_detail["readyToTest"] == projection["readyToTest"]
