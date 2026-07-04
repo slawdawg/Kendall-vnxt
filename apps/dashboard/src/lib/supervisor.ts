@@ -224,6 +224,9 @@ function isPipelineDashboardProjection(value: unknown): value is PipelineDashboa
     isQueueSummary(projection.queueSummary) &&
     isProjectionFreshnessConsistent(projection) &&
     isProjectionFixtureTruthConsistent(projection) &&
+    (projection.sourceLabel !== "live" ||
+      (Array.isArray(projection.workPackets) &&
+        projection.workPackets.some((candidate) => ["active", "waiting", "blocked", "failed"].includes(candidate.status)))) &&
     Array.isArray(projection.workPackets) &&
     projection.workPackets.every(isProjectionWorkPacket) &&
     Array.isArray(projection.stageSummaries) &&

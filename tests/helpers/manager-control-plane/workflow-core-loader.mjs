@@ -7,10 +7,9 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 function resolveTscCommand() {
-  const binaryName = process.platform === "win32" ? "tsc.cmd" : "tsc";
   for (const candidate of [
-    join("apps", "dashboard", "node_modules", ".bin", binaryName),
-    join("node_modules", ".bin", binaryName)
+    join("apps", "dashboard", "node_modules", ".bin", "tsc"),
+    join("node_modules", ".bin", "tsc")
   ]) {
     if (existsSync(candidate)) {
       return [candidate, []];
