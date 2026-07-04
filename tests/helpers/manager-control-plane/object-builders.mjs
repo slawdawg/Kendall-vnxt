@@ -1,0 +1,37 @@
+export function buildCandidateWorkPacket(overrides = {}) {
+  return {
+    candidateWorkPacketId: "candidate-1",
+    runId: "run-1",
+    sourceRefs: [
+      {
+        sourceRefId: "source-1",
+        sourceType: "prd",
+        label: "Story 1.3",
+        pathOrUrl: "_bmad-output/planning-artifacts/epics.md",
+        sourceSpan: "Story 1.3",
+        summaryOnly: true
+      }
+    ],
+    proposedSlice: "Prove in-memory dispatcher lease loop",
+    acceptanceCriteria: ["fake worker completes an active dispatcher lease"],
+    verificationTargets: [
+      {
+        verificationTargetId: "verify-1",
+        commandId: "manager-dispatcher-port-test",
+        command: "node --test tests/manager-control-plane.dispatcher-port.test.mjs",
+        expectedResult: "passes"
+      }
+    ],
+    riskClass: "low",
+    dependencyHints: ["packages/workflow-core/src/ports/dispatcher-port.ts"],
+    dedupeKey: "story-1.3:dispatcher-loop",
+    authorityClass: "allowed_unattended",
+    authorityStage: "backend_proof",
+    status: "blocked",
+    policyId: "policy-1",
+    evidenceRefs: ["evidence-source"],
+    createdAt: "2026-06-30T00:00:00.000Z",
+    updatedAt: "2026-06-30T00:00:00.000Z",
+    ...overrides
+  };
+}

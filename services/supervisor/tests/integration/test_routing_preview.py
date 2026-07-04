@@ -1988,6 +1988,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-manager-control-plane-dispatcher-port",
         "test-manager-control-plane-forbidden-boundary",
         "test-manager-control-plane-run-contract",
+        "test-manager-worker-clean-cycle-observer",
         "test-manager-throughput",
         "test-manager-live-worker-proof",
         "check-manager-throughput",
@@ -2065,6 +2066,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-manager-control-plane-dispatcher-port" in static_group["commandIds"]
     assert "test-manager-control-plane-forbidden-boundary" in static_group["commandIds"]
     assert "test-manager-control-plane-run-contract" in static_group["commandIds"]
+    assert "test-manager-worker-clean-cycle-observer" in static_group["commandIds"]
     assert "test-manager-throughput" in static_group["commandIds"]
     assert "test-manager-live-worker-proof" in static_group["commandIds"]
     assert "check-manager-throughput" in static_group["commandIds"]

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "manager-control-plane.summary-states.v1",
+  "states": [
+    {
+      "state": "queued",
+      "expectedPhase": "queued",
+      "expectedLabels": ["work:queued"]
+    },
+    {
+      "state": "leased_running",
+      "expectedPhase": "running",
+      "expectedLabels": ["work:running", "lease:running", "attempt:running"]
+    },
+    {
+      "state": "completed",
+      "expectedPhase": "completed",
+      "expectedLabels": ["work:completed", "lease:completed", "attempt:completed"]
+    },
+    {
+      "state": "failed",
+      "expectedPhase": "failed",
+      "expectedLabels": ["work:failed"]
+    },
+    {
+      "state": "expired_recovered",
+      "expectedPhase": "queued",
+      "expectedLabels": ["work:queued", "lease:expired", "attempt:expired"]
+    },
+    {
+      "state": "authority_blocked",
+      "expectedPhase": "blocked",
+      "expectedLabels": ["candidate:blocked"]
+    },
+    {
+      "state": "duplicate_only",
+      "expectedPhase": "queued",
+      "expectedLabels": ["candidate:duplicate"]
+    },
+    {
+      "state": "empty_no_safe_work",
+      "expectedPhase": "no_safe_work",
+      "expectedLabels": ["supply:no_safe_work"]
+    },
+    {
+      "state": "stale",
+      "expectedFreshness": "stale",
+      "expectedLabels": ["freshness:stale"]
+    },
+    {
+      "state": "unknown",
+      "expectedFreshness": "unknown",
+      "expectedLabels": ["freshness:unknown"]
+    }
+  ]
+}

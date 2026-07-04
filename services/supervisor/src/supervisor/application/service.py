@@ -3337,6 +3337,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-manager-worker-clean-cycle-observer",
+                label="Manager worker clean-cycle observer tests",
+                command="pnpm run test:manager-worker-clean-cycle-observer",
+                status="required",
+                requiredFor=["manager control plane changes", "worker clean-cycle proof changes", "continuous manager verification changes"],
+                evidence=[
+                    "Validates ten-clean-cycle worker observation, unresolved question handling, restart resets, missing sessions, and blocked checkpoint behavior.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-manager-throughput",
                 label="Manager throughput harness tests",
                 command="pnpm run test:manager-throughput",
@@ -3895,6 +3906,7 @@ class SupervisorService:
                     "test-manager-control-plane-dispatcher-port",
                     "test-manager-control-plane-forbidden-boundary",
                     "test-manager-control-plane-run-contract",
+                    "test-manager-worker-clean-cycle-observer",
                     "test-manager-throughput",
                     "test-manager-live-worker-proof",
                     "check-manager-throughput",
