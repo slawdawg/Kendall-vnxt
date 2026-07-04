@@ -8567,6 +8567,52 @@ test("worker question answer gate blocks unsafe manual answers and normalized du
   }
 });
 
+test("worker question answer apply records sent answers before later paste failures", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-question-answer-partial-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerStatus = {
+      summary: {
+        workers: [
+          { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "active", assignmentId: "lane-1", taskId: "task-1" },
+          { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "active", assignmentId: "lane-2", taskId: "task-2" },
+        ],
+      },
+    };
+    const questions = [
+      { questionId: "question-1", actor: "codex-1", questionType: "implementation", summary: "May I continue?", sourceRefs: ["assignment:lane-1"], materialDecision: false },
+      { questionId: "question-2", actor: "codex-2", questionType: "implementation", summary: "May I continue?", sourceRefs: ["assignment:lane-2"], materialDecision: false },
+    ];
+    const result = buildWorkerQuestionAnswerPlan(
+      { runId: "manager-test", stateRoot, apply: true },
+      {
+        workerStatus,
+        questions,
+        events: [],
+        tmuxRunner(_cmd, args) {
+          if (args[0] === "list-panes" && args[2] === "codex-1") return { status: 0, stdout: "1:%1\n", stderr: "" };
+          if (args[0] === "list-panes" && args[2] === "codex-2") return { status: 0, stdout: "1:%2\n", stderr: "" };
+          if (args[0] === "paste-buffer" && args.includes("%2")) return { status: 1, stdout: "", stderr: "paste failed" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.summary.mutation, "partial");
+    assert.equal(result.summary.results[0].status, "answer_sent");
+    assert.equal(result.summary.results[1].status, "failed");
+    const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
+    const event = ledger.summary.events.find((entry) => entry.eventType === "worker_question_answer_apply");
+    assert.ok(event);
+    assert.match(event.summary, /Partially answered 1/);
+    assert.ok(event.sourceRefs.includes("question:question-1"));
+    assert.equal(event.sourceRefs.includes("question:question-2"), false);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker question answer gate synthesizes source-context answers from blocked checkpoints", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-blocked-checkpoint-answer-"));
   try {
@@ -12191,9 +12237,47 @@ test("continuous run plan blocks manager-only usage before worker mutation", () 
   assert.equal(criticalResource.nextActions.some((action) => /--apply/.test(action.nextAction || "")), false);
 });
 
+test("continuous prompt-probe strips apply from dry-run command", () => {
+  const plan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          continuation: { workerMutationAllowed: true },
+        },
+        warnings: [],
+        nextActions: [],
+      },
+      promptProbe: {
+        status: "attention",
+        summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-prompt-probe-submit-ready",
+            summary: "Submit pending manager pointer.",
+            nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(plan.summary.selectedAction.code, "continuous-worker-prompt-probe");
+  assert.equal(plan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1");
+  assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply");
+});
+
 test("continuous run loop requires machine-readable summary JSON for selected commands", () => {
   const runLoopSource = readFileSync(new URL("../scripts/manager-run-loop.mjs", import.meta.url), "utf8");
-  assert.match(runLoopSource, /args\.includes\("--summary-json"\)/);
+  assert.match(runLoopSource, /workspaceDispatchApply/);
+  assert.match(runLoopSource, /!workspaceDispatchApply && !args\.includes\("--summary-json"\)/);
   assert.match(runLoopSource, /Continuous command must emit --summary-json/);
   assert.match(runLoopSource, /Continuous command did not emit parseable summary JSON/);
   assert.match(runLoopSource, /Continuous command emitted non-object summary JSON/);
@@ -15945,6 +16029,47 @@ test("cycle keeps safe work moving when retry lane is parked with continuation e
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"));
     assert.match(cycle.summary.progress.heartbeat.operatorActionState, /run dispatch-next --apply/);
     assert.doesNotMatch(cycle.summary.progress.heartbeat.operatorActionState, /global stop|cycle blocked/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker owner delegation apply records sent delegations before later paste failures", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-owner-delegation-partial-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const progressStatus = {
+      status: "ready",
+      summary: {
+        workerProgress: [
+          { workerId: "codex-1", sessionName: "codex-1", assignmentId: "lane-1", taskId: "task-1", laneOwner: "manager-runner", progressState: "checkpoint_seen" },
+          { workerId: "codex-2", sessionName: "codex-2", assignmentId: "lane-2", taskId: "task-2", laneOwner: "manager-runner", progressState: "checkpoint_seen" },
+        ],
+      },
+    };
+    const result = buildWorkerOwnerDelegationPlan(
+      { runId: "manager-test", stateRoot, apply: true },
+      {
+        progressStatus,
+        tmuxRunner(_cmd, args) {
+          if (args[0] === "list-panes" && args[2] === "codex-1") return { status: 0, stdout: "1:%1\n", stderr: "" };
+          if (args[0] === "list-panes" && args[2] === "codex-2") return { status: 0, stdout: "1:%2\n", stderr: "" };
+          if (args[0] === "paste-buffer" && args.includes("%2")) return { status: 1, stdout: "", stderr: "paste failed" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.summary.mutation, "partial");
+    assert.equal(result.summary.results[0].status, "owner_delegation_sent");
+    assert.equal(result.summary.results[1].status, "failed");
+    const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
+    const event = ledger.summary.events.find((entry) => entry.eventType === "worker_owner_delegation_apply");
+    assert.ok(event);
+    assert.match(event.summary, /Partially sent 1/);
+    assert.ok(event.sourceRefs.includes("assignment:lane-1"));
+    assert.equal(event.sourceRefs.includes("assignment:lane-2"), false);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }

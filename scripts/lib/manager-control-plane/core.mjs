@@ -3525,6 +3525,20 @@ export function buildWorkerQuestionAnswerPlan(options = {}, context = {}) {
   }
   const failed = results.find((result) => result.status === "failed");
   if (failed) {
+    const sent = results.filter((result) => result.status === "answer_sent");
+    if (sent.length > 0) {
+      ledgerCommand({
+        command: "append-event",
+        runId,
+        stateRoot: runOptions.stateRoot,
+        eventType: "worker_question_answer_apply",
+        authorityBasis: "manager-owned-worker-question-answer-existing-gates",
+        summary: `Partially answered ${sent.length} compact worker question(s) before a later paste failure.`,
+        sourceRefs: sent.flatMap((result) => [`question:${result.questionId}`, `assignment:${result.assignmentId}`]),
+        evidenceRefs: sent.map((result) => `question-answer:${result.answerPath || result.questionId || result.assignmentId}`),
+        recoveryPath: "inspect manager question answer files and tmux paste results before retrying only failed answers",
+      }, context);
+    }
     return packet({
       ok: false,
       status: "blocked",
@@ -3598,6 +3612,20 @@ export function buildWorkerOwnerDelegationPlan(options = {}, context = {}) {
   }
   const failed = results.find((result) => result.status === "failed");
   if (failed) {
+    const sent = results.filter((result) => result.status === "owner_delegation_sent");
+    if (sent.length > 0) {
+      ledgerCommand({
+        command: "append-event",
+        runId,
+        stateRoot: runOptions.stateRoot,
+        eventType: "worker_owner_delegation_apply",
+        authorityBasis: "manager-owned-worker-delegated-lane-owner-existing-gates",
+        summary: `Partially sent ${sent.length} manager-owned worker owner delegation(s) before a later paste failure.`,
+        sourceRefs: sent.flatMap((result) => [`assignment:${result.assignmentId}`, `worker:${result.workerId}`, ...receiptSourceRefs(result)]),
+        evidenceRefs: sent.map((result) => `owner-delegation:${result.requestPath || result.workerId || result.assignmentId}`),
+        recoveryPath: "inspect manager owner delegation files and tmux paste results before retrying only failed delegations",
+      }, context);
+    }
     return packet({
       ok: false,
       status: "blocked",
@@ -14208,10 +14236,11 @@ function percentMetric(percentValue, ratioValue) {
 function buildContinuousAction(action = {}, cycle = {}) {
   const nextAction = String(action.nextAction || "").trim();
   if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
+    const dryRunCommand = nextAction.replace(/\s+--apply\b/g, "");
     return {
       code: "continuous-worker-prompt-probe",
       summary: action.summary || "Submit visible manager pointers in worker input regions.",
-      dryRunCommand: nextAction,
+      dryRunCommand,
       applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
       authority: "manager-owned-worker-enter-only-repair-existing-gates",
       mutationClass: "manager_owned_worker_enter_only_prompt_region_probe",

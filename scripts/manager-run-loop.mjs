@@ -64,7 +64,8 @@ function runKnownNodeCommand(command = "") {
     return { ok: false, error: `Unsupported continuous command: ${command}` };
   }
   const [cmd, args] = parsed;
-  if (!args.includes("--summary-json")) {
+  const workspaceDispatchApply = args[0] === "./scripts/codex-workspace.mjs" && args[1] === "dispatch-next" && args.includes("--apply");
+  if (!workspaceDispatchApply && !args.includes("--summary-json")) {
     return { ok: false, error: `Continuous command must emit --summary-json: ${command}` };
   }
   const result = spawnSync(cmd, args, {
