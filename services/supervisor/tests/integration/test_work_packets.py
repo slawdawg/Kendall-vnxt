@@ -1404,7 +1404,7 @@ def test_pipeline_dashboard_projection_uses_non_exhausted_source_state_only_reas
                     "pipelineSourceState": {
                         "sourceId": "manual:blocked-source",
                         "sourceRef": "manual:blocked-source",
-                        "sourceKind": "manual",
+                        "sourceKind": "bmad_story",
                         "state": "blocked",
                         "summary": "Source is blocked by operator-owned input.",
                         "evidenceRefs": ["evidence:blocked-source"],
@@ -1418,6 +1418,7 @@ def test_pipeline_dashboard_projection_uses_non_exhausted_source_state_only_reas
         blocked_projection = blocked_projection_response.json()["data"]
         assert blocked_projection["workPackets"] == []
         assert blocked_projection["sourceStates"][0]["state"] == "blocked"
+        assert blocked_projection["sourceStates"][0]["sourceKind"] == "bmad_story"
         assert blocked_projection["queueSummary"]["blockedCount"] == 1
         assert blocked_projection["queueSummary"]["emptyReason"] == "blocked"
         assert blocked_projection["managerSummary"]["inactivityReason"] == "blocked"
@@ -1534,6 +1535,7 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
                 "importMetadata": {
                     "projectionVisibility": "worker_summary_only",
                     "pipelineWorkerState": {
+                        "workerId": "rawPrompt-secret-worker",
                         "state": "active",
                         "evidenceRefs": ["terminal-output:must-not-project"],
                     },
@@ -1541,6 +1543,11 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
             },
         )
         assert invalid_response.status_code == 200
+        invalid_candidate_response = client.get("/candidate-work")
+        assert invalid_candidate_response.status_code == 200
+        invalid_retained_candidate = next(candidate for candidate in invalid_candidate_response.json()["data"] if candidate["id"] == invalid_response.json()["data"]["id"])
+        invalid_retained_metadata_text = json.dumps(invalid_retained_candidate["importMetadata"])
+        assert "rawPrompt-secret-worker" not in invalid_retained_metadata_text
 
         duplicate_response = client.post(
             "/candidate-work",
@@ -4240,8 +4247,8 @@ def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(t
                         "readyId": "ready:promoted-learn-refill",
                         "userFacingSummary": "Promoted Learn/refill projection is ready to test.",
                         "testableSurface": "/pipeline selected packet",
-                        "verificationRefs": ["pytest tests/integration/test_work_packets.py"],
-                        "evidenceRefs": ["evidence:promoted-ready"],
+                        "verificationRefs": ["pytest tests/integration/test_work_packets.py", "terminal-output:must-not-project"],
+                        "evidenceRefs": ["evidence:promoted-ready", "tmux-stdout:must-not-project"],
                     },
                     "followUpCandidates": [
                         {
@@ -4290,6 +4297,8 @@ def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(t
         assert projection["readyToTest"]["testableSurface"] == "/pipeline selected packet"
         assert projection["readyToTest"]["verificationRefs"] == ["pytest tests/integration/test_work_packets.py"]
         assert projection["readyToTest"]["evidenceRefs"] == ["evidence:promoted-ready"]
+        assert "terminal-output:must-not-project" not in json.dumps(projection["readyToTest"])
+        assert "tmux-stdout:must-not-project" not in json.dumps(projection["readyToTest"])
         assert projection["providerCallsAllowed"] is False
         assert projection["workerLaunchAllowed"] is False
         assert projection["githubMutationAllowed"] is False

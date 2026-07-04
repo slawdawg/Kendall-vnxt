@@ -196,7 +196,7 @@ test("active board view model separates active work, stale history, ready-to-tes
   assert.equal(viewModel.summary.actionablePacketCount, 7);
   assert.equal(viewModel.summary.historicalPacketCount, 3);
   assert.equal(viewModel.summary.readyToTestCount, 1);
-  assert.equal(viewModel.summary.executionLoopHealth.state, "action_needed");
+  assert.equal(viewModel.summary.executionLoopHealth.state, "blocked");
   assert.equal(viewModel.summary.executionLoopHealth.counts.moving, 7);
   assert.equal(viewModel.summary.executionLoopHealth.counts.actionNeeded, 5);
   assert.equal(viewModel.summary.executionLoopHealth.counts.readyToTest, 1);
@@ -727,7 +727,7 @@ test("source exhaustion and dispatchability are driven by backend source and que
     ],
   }));
   assert.equal(unhealthyWorkerModel.summary.attentionCount, 1);
-  assert.equal(unhealthyWorkerModel.summary.executionLoopHealth.state, "unhealthy");
+  assert.equal(unhealthyWorkerModel.summary.executionLoopHealth.state, "blocked");
 
   const failedRecoveryModel = buildPipelineActiveBoardViewModel(projectionFixture({
     workPackets: [
@@ -982,6 +982,9 @@ test("source exhaustion and dispatchability are driven by backend source and que
   assert.equal(JSON.stringify(gatedCard).includes("control:kill-worker"), false);
   assert.equal(JSON.stringify(gatedCard).includes("worker:codex-2"), false);
   assert.equal(JSON.stringify(gatedCard).includes("Do not kill workers"), false);
+  assert.equal(gatedControlModel.summary.attentionCount, 1);
+  assert.equal(gatedControlModel.summary.executionLoopHealth.counts.actionNeeded, 1);
+  assert.equal(gatedControlModel.summary.executionLoopHealth.state, "blocked");
 
   const activeGatedControlModel = buildPipelineActiveBoardViewModel(projectionFixture({
     gatedControls: [
@@ -1013,6 +1016,64 @@ test("source exhaustion and dispatchability are driven by backend source and que
   assert.equal(activeGatedControlModel.attentionItems[0].attentionKind, "gated");
   assert.equal(activeGatedControlModel.attentionItems[0].nextOperatorActionLabel, "Request explicit approval.");
   assert.equal(JSON.stringify(activeGatedControlModel.attentionItems[0]).includes("codex-2"), false);
+  assert.equal(activeGatedControlModel.summary.attentionCount, 1);
+  assert.equal(activeGatedControlModel.summary.executionLoopHealth.counts.actionNeeded, 1);
+
+  const blockedHealthModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    managerSummary: {
+      ...managerSummaryFixture(),
+      reliabilityState: "blocked",
+      blockedQueueCount: 1,
+      summary: "One packet is blocked.",
+    },
+    queueSummary: {
+      ...queueSummaryFixture(),
+      blockedCount: 1,
+      emptyReason: "blocked",
+    },
+    workPackets: [
+      packetFixture({
+        packetId: "blocked-health",
+        currentStage: "execute",
+        status: "blocked",
+        blocker: "Waiting for operator input.",
+        nextAction: "Clear blocker.",
+      }),
+    ],
+  }));
+  assert.equal(blockedHealthModel.summary.executionLoopHealth.state, "blocked");
+  assert.equal(blockedHealthModel.summary.executionLoopHealth.label, "Work blocked");
+
+  const deliverReadyModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    selectedPacketDetails: [
+      detailFixture({
+        packetId: "deliver-ready",
+        currentStage: "deliver",
+        status: "complete",
+        nextAction: "Operator can test in /pipeline.",
+        readyToTest: readyToTestFixture({
+          readyId: "ready:deliver",
+          evidenceRefs: ["proof:deliver"],
+          verificationRefs: ["check:dashboard"],
+        }),
+      }),
+    ],
+    workPackets: [
+      packetFixture({
+        packetId: "deliver-ready",
+        currentStage: "deliver",
+        status: "complete",
+        nextAction: "Delivery handoff is waiting for the operator.",
+        readyToTest: readyToTestFixture({
+          readyId: "ready:deliver",
+          evidenceRefs: ["proof:deliver"],
+          verificationRefs: ["check:dashboard"],
+        }),
+      }),
+    ],
+  }));
+  assert.equal(deliverReadyModel.summary.readyToTestCount, 1);
+  assert.equal(deliverReadyModel.readyToTestItems[0].packetId, "deliver-ready");
 
   const packetCountOnlyModel = buildPipelineActiveBoardViewModel(projectionFixture({
     stageSummaries: projectionStageSummariesFixture({

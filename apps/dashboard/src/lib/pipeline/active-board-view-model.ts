@@ -228,6 +228,7 @@ export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardP
     projection,
     activePacketCount,
     attentionCount,
+    new Set(attentionItems.map((item) => item.packetId)),
     readyToTestCount,
     staleHistoryItems.length
   );
@@ -264,10 +265,11 @@ function buildExecutionLoopHealthSummary(
   projection: PipelineDashboardProjectionV0,
   movingCount: number,
   visibleAttentionCount: number,
+  visibleAttentionPacketIds: ReadonlySet<string>,
   readyToTestCount: number,
   staleHistoryCount: number
 ): PipelineExecutionLoopHealthSummary {
-  const gatedControlCount = projection.gatedControls.length;
+  const gatedControlCount = projection.gatedControls.filter((control) => !control.packetId || !visibleAttentionPacketIds.has(control.packetId)).length;
   const reliabilityProblemCount = projection.reliabilityProblems.length;
   const actionNeededCount = visibleAttentionCount + gatedControlCount + reliabilityProblemCount;
   const sourceStateCounts = countSourceStates(projection);
@@ -329,14 +331,14 @@ function buildExecutionLoopHealthSummary(
   if (exhaustionProven) {
     return compactHealth("exhausted", "Source exhausted", counts, projection.sourceLabel);
   }
+  if (blockedCount > 0) {
+    return compactHealth("blocked", "Work blocked", counts, projection.sourceLabel);
+  }
   if (unhealthyCount > 0) {
     return compactHealth("unhealthy", "Execution loop unhealthy", counts, projection.sourceLabel);
   }
   if (actionNeededCount > 0) {
     return compactHealth("action_needed", "Action needed", counts, projection.sourceLabel);
-  }
-  if (blockedCount > 0) {
-    return compactHealth("blocked", "Work blocked", counts, projection.sourceLabel);
   }
   if (readyToTestCount > 0) {
     return compactHealth("ready_to_test", "Ready to test", counts, projection.sourceLabel);
@@ -371,7 +373,6 @@ function countSourceStates(projection: PipelineDashboardProjectionV0) {
 
 function managerSummaryIsUnhealthy(managerSummary: PipelineManagerSummaryV0) {
   return managerSummary.reliabilityState === "degraded"
-    || managerSummary.reliabilityState === "blocked"
     || managerSummary.inactivityReason === "failure_budget_hit";
 }
 
@@ -445,14 +446,14 @@ export function derivePacketActionability(
   if (mentionsStalled(packet)) {
     return "operator_attention";
   }
-  if (hasDeliveryOrLearnHandoff(packet)) {
-    return "actionable";
-  }
   if (isReadyToTestPacket(packet, projection)) {
     return "ready_to_test";
   }
   if (hasReadyToTestClaim(packet, projection)) {
     return "operator_attention";
+  }
+  if (hasDeliveryOrLearnHandoff(packet)) {
+    return "actionable";
   }
   if (operatorCanAct(packet)) {
     return "operator_attention";

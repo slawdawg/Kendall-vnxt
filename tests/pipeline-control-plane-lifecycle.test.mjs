@@ -314,6 +314,7 @@ test("authoritative lifecycle stage contract maps PRD semantics and blocks non-d
 
   assert.equal(isDispatchableAuthoritativePacketState({ currentStage: "route", status: "waiting" }), true);
   assert.equal(isLiveProgressAuthoritativePacketState({ currentStage: "execute", status: "active" }), true);
+  assert.equal(isLiveProgressAuthoritativePacketState({ currentStage: "needs_approval", status: "active" }), false);
 
   for (const state of [
     null,

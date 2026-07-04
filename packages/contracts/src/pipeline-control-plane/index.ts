@@ -99,7 +99,6 @@ export const AUTHORITATIVE_PACKET_LIVE_PROGRESS_STAGES = [
   "classify",
   "route",
   "shape",
-  "needs_approval",
   "execute",
   "review",
   "promote",

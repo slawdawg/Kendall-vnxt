@@ -967,9 +967,10 @@ class SupervisorService:
         allowed_states = {"healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown"}
         allowed_kinds = {
             "prd",
-            "story",
-            "architecture",
-            "sprint",
+            "bmad_story",
+            "operator_input",
+            "workflow",
+            "repo_doc",
             "candidate_work",
             "work_item",
             "bmad_artifact",
@@ -1061,7 +1062,7 @@ class SupervisorService:
         if isinstance(state, str) and state in allowed_states:
             safe_state["state"] = state
         worker_id = raw_worker_state.get("workerId")
-        if isinstance(worker_id, str) and worker_id.strip():
+        if isinstance(worker_id, str) and worker_id.strip() and not UNSAFE_LIFECYCLE_TEXT_RE.search(worker_id):
             safe_state["workerId"] = worker_id.strip()[:120]
         worker_ref = raw_worker_state.get("workerRef")
         if isinstance(worker_ref, str) and self._is_safe_worker_ref(worker_ref):
@@ -25245,8 +25246,10 @@ class SupervisorService:
             readyId=self._learn_refill_metadata_text(raw_ready, "readyId") or f"ready-to-test:{packet_id}",
             userFacingSummary=self._learn_refill_metadata_text(raw_ready, "userFacingSummary") or self._learn_refill_metadata_text(metadata, "readyToTestSummary") or "Completed user-facing work is ready to test.",
             testableSurface=self._learn_refill_metadata_text(raw_ready, "testableSurface") or self._learn_refill_metadata_text(metadata, "testableSurface") or "user-facing workflow",
-            verificationRefs=self._metadata_string_list(raw_ready, "verificationRefs") or self._metadata_string_list(metadata, "verificationRefs"),
-            evidenceRefs=self._metadata_string_list(raw_ready, "evidenceRefs") or evidence_ids,
+            verificationRefs=self._projection_safe_lifecycle_refs(
+                self._metadata_string_list(raw_ready, "verificationRefs") or self._metadata_string_list(metadata, "verificationRefs")
+            ),
+            evidenceRefs=self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_ready, "evidenceRefs")) or self._projection_safe_lifecycle_refs(evidence_ids),
         )
 
     def _learn_refill_state(self, raw_projection: dict, memory_proposals: list[MemoryProposalV0View], item: WorkItemView | None) -> str:
