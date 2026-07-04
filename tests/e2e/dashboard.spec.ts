@@ -1521,6 +1521,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:workspace-coordination", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:tmux-orientation-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:tmux-orientation-report", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-control-plane", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-control-plane-contract", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-control-plane-dispatcher-port", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-control-plane-forbidden-boundary", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-control-plane-run-contract", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-worker-clean-cycle-observer", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:manager-control-plane", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:mise-workflow", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:linux-install-lane", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:bmad-work-products", { exact: true })).toBeVisible();
