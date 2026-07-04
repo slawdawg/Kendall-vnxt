@@ -1906,6 +1906,7 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
     const launch = runTmuxWorkerWarm(action, context);
     results.push({ ...action, status: launch.ok ? (recoverExisting ? "recovered_started" : "started") : "failed", launch });
     if (!launch.ok) {
+      writeFileSync(paths.workers, `${JSON.stringify(existingWorkers, null, 2)}\n`);
       return packet({
         ok: false,
         status: "blocked",
@@ -1986,7 +1987,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
   const limit = nonNegativeInteger(options.limit) ?? 6;
   const now = context.now || runOptions.now || "";
   const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
-  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(["assignment-report", "--summary-json"], context);
+  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(workspaceJsonArgs(["assignment-report", "--summary-json"], runOptions), context);
   const assignmentSummary = assignmentPacket.summary || assignmentPacket || {};
   const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
   const storyStatuses = managerHandoffStoryStatuses(runOptions, context);
@@ -2495,7 +2496,7 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
   const runId = safeRunId(runOptions.runId || defaultRunId());
   const paths = managerRunPaths(runId, runOptions, context);
   const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
-  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(["assignment-report", "--summary-json"], context);
+  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(workspaceJsonArgs(["assignment-report", "--summary-json"], runOptions), context);
   const assignmentSummary = assignmentPacket.summary || assignmentPacket || {};
   const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
   const questions = Array.isArray(context.questions) ? context.questions : readNdjsonStrict(paths.questions).value;
@@ -2557,7 +2558,7 @@ export function buildLaneAdvancementPlan(options = {}, context = {}) {
   const apply = options.apply === true;
   const limit = Math.max(1, Math.min(6, nonNegativeInteger(options.limit ?? context.limit) ?? 6));
   const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, context);
-  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(["assignment-report", "--summary-json"], context);
+  const assignmentPacket = context.assignmentSummary || runWorkspaceJson(workspaceJsonArgs(["assignment-report", "--summary-json"], runOptions), context);
   const assignmentSummary = assignmentPacket.summary || assignmentPacket || {};
   const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
   const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
@@ -3599,12 +3600,12 @@ function buildWorkerQuestionAnswerRequest(question = {}, workers = [], paths = {
   const answerPolicyDecision = options.answer ? buildQuestionDecision({
     questionId,
     workerId: worker.workerId,
-    type: question.questionType || question.type || "implementation",
+    type: "implementation",
     summary: options.answer,
     sourceRefs,
     materialDecision: true,
   }) : null;
-  const effectivePolicyDecision = answerPolicyDecision && !questionDecisionAllowsAnswer(answerPolicyDecision) ? answerPolicyDecision : policyDecision;
+  const effectivePolicyDecision = answerPolicyDecision || policyDecision;
   const answer = sanitizeLedgerField(options.answer || effectivePolicyDecision.compactAnswer || compactQuestionAnswer(question), "Apply source context and repo policy with best judgment.", 500);
   const safeQuestionId = questionId.replace(/[^a-z0-9_.-]/gi, "-").slice(0, 100);
   const answerPath = join(paths.root, "question-answers", `${worker.workerId}-${safeQuestionId}.md`);
@@ -9088,7 +9089,7 @@ function escapeRegExp(value = "") {
 }
 
 export function buildDispatchPreview(options = {}, context = {}) {
-  const preview = context.dispatchPreview || runWorkspaceJson(["dispatch-next", "--dry-run", "--summary-json"], context);
+  const preview = context.dispatchPreview || runWorkspaceJson(workspaceJsonArgs(["dispatch-next", "--dry-run", "--summary-json"], options), context);
   if (preview?.ok === false) {
     return packet({
       ok: false,
@@ -9120,7 +9121,19 @@ export function buildDispatchPreview(options = {}, context = {}) {
   const nextActionGuidance =
     dispatch.nextActionGuidance || dispatch.next_action_guidance || selected?.nextAction || preview?.nextActionGuidance || preview?.next_action_guidance || null;
   const recoveryPath =
-    dispatch.recoveryPath || dispatch.recovery_path || selected?.recoveryPath || selected?.recovery_path || preview?.recoveryPath || preview?.recovery_path || null;
+    dispatch.recoveryPath ||
+    dispatch.recovery_path ||
+    dispatch.authorityDecision?.recoveryPath ||
+    dispatch.authority_decision?.recovery_path ||
+    selected?.recoveryPath ||
+    selected?.recovery_path ||
+    selected?.authorityDecision?.recoveryPath ||
+    selected?.authority_decision?.recovery_path ||
+    preview?.recoveryPath ||
+    preview?.recovery_path ||
+    preview?.authorityDecision?.recoveryPath ||
+    preview?.authority_decision?.recovery_path ||
+    null;
   const requestedAllowed = Boolean(dispatch.allowed ?? preview?.allowed ?? selected?.claimable);
   const evidenceBlockers = [];
   if (requestedAllowed && !baseBranch) {
@@ -13704,13 +13717,22 @@ export function buildCyclePacket(options = {}, context = {}) {
     }))
     .filter((action) => action.nextAction);
   const takeoverInspectionActions = takeoverInspectionNextActions(resume.summary.takeoverInspection);
+  const workerWarmCommand = [
+    "node ./scripts/manager-worker-warm.mjs",
+    "--summary-json",
+    "--run-id",
+    shellSingleQuote(runOptions.runId),
+    "--limit",
+    String(continuation.startWarmCandidates),
+    ...(runOptions.stateRoot ? ["--state-root", shellSingleQuote(runOptions.stateRoot)] : []),
+  ].join(" ");
   const workerWarmActions =
     continuation.state === "worker_warm_ready"
       ? [
           {
             code: "manager-owned-worker-warm-ready",
             summary: `Warm ${continuation.startWarmCandidates} manager-owned worker(s) through existing gates.`,
-            nextAction: `node ./scripts/manager-worker-warm.mjs --summary-json --limit ${continuation.startWarmCandidates}`,
+            nextAction: workerWarmCommand,
           },
         ]
       : [];
@@ -14324,7 +14346,7 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   );
   const blockedDeliveryTargets = new Set(
     blockers
-      .filter((blocker) => ["delivery-phase-authority-missing", "delivery-phase-authority-invalid", "pr-stewardship-evidence-missing", "pr-stewardship-high-risk"].includes(blocker.code))
+      .filter((blocker) => ["delivery-phase-authority-missing", "delivery-phase-authority-invalid", "pr-stewardship-evidence-missing", "pr-stewardship-high-risk", "feedback-blocking-delivery"].includes(blocker.code))
       .flatMap((blocker) => [blocker.affectedLane, blocker.affectedBranch])
       .map((value) => String(value || "").trim())
       .filter(Boolean),
@@ -14349,8 +14371,10 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   const onlyWorkerQuestionBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => code === "worker-question-operator-interruption");
   const deliveryAuthorityBlockerCodes = new Set(["delivery-phase-authority-missing", "delivery-phase-authority-invalid"]);
   const prStewardshipBlockerCodes = new Set(["pr-stewardship-evidence-missing", "pr-stewardship-high-risk"]);
+  const feedbackDeliveryBlockerCodes = new Set(["feedback-blocking-delivery"]);
   const onlyDeliveryAuthorityBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => deliveryAuthorityBlockerCodes.has(code));
   const onlyPrStewardshipBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => prStewardshipBlockerCodes.has(code));
+  const onlyFeedbackDeliveryBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => feedbackDeliveryBlockerCodes.has(code));
   const onlyDeliveryScopedBlocked = blockerCodes.length > 0 && blockerCodes.every((code) => deliveryAuthorityBlockerCodes.has(code) || prStewardshipBlockerCodes.has(code));
   const managerOwnedWarmStartAvailable = Boolean(
       !hardWorkerMutationBlocked &&
@@ -14501,6 +14525,31 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "A worker question requires operator authority, but the blocker is scoped to the affected worker or lane and unrelated safe work can continue through existing gates.",
+      selectedLane: dispatchPreview.summary?.selectedLane || null,
+      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      blockerCodes,
+      blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+      blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    };
+  }
+  if (onlyFeedbackDeliveryBlocked && resourceState !== "critical") {
+    const allowedActions = ["feedback_routing", "status_reporting", "read_only_inspection"];
+    const blockedActions = ["affected_delivery", "affected_pr_merge"];
+    if (safeDispatchApplyAvailable) {
+      allowedActions.push("dispatch_apply_existing_gates");
+    } else {
+      blockedActions.push("dispatch_apply");
+    }
+    if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
+    return {
+      state: "feedback_delivery_blocked",
+      canContinue: true,
+      progressRunState: "feedback-delivery-blocked",
+      workerMutationAllowed: false,
+      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      allowedActions,
+      blockedActions,
+      reason: "Blocking feedback pauses affected delivery and PR merge, but unrelated safe work can continue through existing gates.",
       selectedLane: dispatchPreview.summary?.selectedLane || null,
       selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
@@ -15408,6 +15457,12 @@ export function ledgerCommand(options = {}, context = {}) {
 
 function isMaterialQuestionRecord(options = {}) {
   return options.materialDecision === true || options.materialDecision === "true" || options.recordPolicy === "material_decision_only";
+}
+
+function workspaceJsonArgs(args = [], options = {}) {
+  const nextArgs = [...args];
+  if (options.stateRoot) nextArgs.push("--state-root", options.stateRoot);
+  return nextArgs;
 }
 
 function runWorkspaceJson(args, context = {}) {

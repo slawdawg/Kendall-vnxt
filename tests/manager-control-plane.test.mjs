@@ -3554,6 +3554,36 @@ test("builds dispatch preview from raw snake_case dispatch packet evidence", () 
   assert.equal(preview.summary.stopLines.length, 2);
 });
 
+test("dispatch preview reads recovery evidence from nested authority decision and forwards state root", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-dispatch-state-root-"));
+  try {
+    const calls = [];
+    const preview = buildDispatchPreview(
+      { stateRoot },
+      {
+        workspaceRunner(args) {
+          calls.push(args);
+          return readyDispatchPreviewFixture({
+            dispatch: {
+              ...readyDispatchPreviewFixture().dispatch,
+              recoveryPath: "",
+              authorityDecision: {
+                recoveryPath: "restore manager-owned assignment and rerun dispatch preview",
+              },
+            },
+          });
+        },
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.recoveryPath, "restore manager-owned assignment and rerun dispatch preview");
+    assert.deepEqual(calls[0], ["dispatch-next", "--dry-run", "--summary-json", "--state-root", stateRoot]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("dispatch preview blocks allowed evidence with missing recovery or conflicting lane", () => {
   const missingRecovery = readyDispatchPreviewFixture({
     dispatch: {
@@ -3575,6 +3605,40 @@ test("dispatch preview blocks allowed evidence with missing recovery or conflict
   });
   assert.equal(conflicting.status, "blocked");
   assert.equal(conflicting.blockers[0].code, "dispatch-preview-selected-lane-conflict");
+});
+
+test("manager worker assignment reads forward explicit state root", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-assignment-state-root-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const calls = [];
+    const context = {
+      workerStatus: { summary: { workers: [] } },
+      workspaceRunner(args) {
+        calls.push(args);
+        return {
+          summary: {
+            currentOwner: "manager-test",
+            laneAssignments: [],
+            backlogStatusCounts: {},
+            laneAssignmentStatusCounts: {},
+          },
+        };
+      },
+    };
+
+    buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 1 }, context);
+    buildWorkerProgressStatus({ runId: "manager-test", stateRoot }, context);
+    buildLaneAdvancementPlan({ runId: "manager-test", stateRoot, limit: 1 }, context);
+
+    assert.deepEqual(calls, [
+      ["assignment-report", "--summary-json", "--state-root", stateRoot],
+      ["assignment-report", "--summary-json", "--state-root", stateRoot],
+      ["assignment-report", "--summary-json", "--state-root", stateRoot],
+    ]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("refill source evidence supports structured refs and warns on rejected mixed refs", () => {
@@ -5618,6 +5682,67 @@ test("worker warm gate blocks apply before partial launch when a target session 
     assert.equal(launches[0].args[0], "has-session");
     const workers = JSON.parse(readFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), "utf8"));
     assert.deepEqual(workers, []);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm apply preserves started worker records when a later launch fails", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-partial-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const passedFakeWorkerHarness = {
+      twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+      sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+    };
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: {
+          summary: {
+            backlogStatusCounts: { assignable: 0 },
+            laneAssignmentStatusCounts: { active: 6, blocked_stale_owner_needs_takeover: 1 },
+          },
+        },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: passedFakeWorkerHarness,
+      },
+    );
+    let launchAttempts = 0;
+    const blocked = buildWorkerWarmPlan(
+      { runId: "manager-test", stateRoot, apply: true, limit: 2 },
+      {
+        cyclePacket,
+        tmuxRunner(_command, args) {
+          if (args[0] === "has-session") return { status: 1, stdout: "", stderr: "not found" };
+          if (args[0] === "new-session") {
+            launchAttempts += 1;
+            return launchAttempts === 1
+              ? { status: 0, stdout: "", stderr: "" }
+              : { status: 1, stdout: "", stderr: "second launch failed" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(blocked.status, "blocked");
+    assert.equal(blocked.summary.mutation, "partial");
+    assert.ok(blocked.blockers.some((blocker) => blocker.code === "worker-warm-launch-failed"));
+    const workers = JSON.parse(readFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), "utf8"));
+    assert.equal(workers.length, 1);
+    assert.equal(workers[0].workerId, "codex-1");
+    assert.equal(workers[0].sessionName, "codex-1");
+    assert.equal(workers[0].state, "warm");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -8279,6 +8404,16 @@ test("worker question answer gate blocks unsafe manual answers and normalized du
     assert.ok(unsafeAnswer.summary.blockedQuestions[0].stopLines.includes("provider_calls_require_operator_approval"));
     assert.ok(unsafeAnswer.summary.blockedQuestions[0].stopLines.includes("delivery_requires_delivery_phase_authority"));
 
+    const safeAnswer = buildWorkerQuestionAnswerPlan(
+      { runId: "manager-test", stateRoot, answer: "Continue only the source-backed local implementation and record a compact checkpoint before asking again." },
+      { workerStatus, questions, events: [] },
+    );
+    assert.equal(safeAnswer.status, "ready");
+    assert.equal(safeAnswer.summary.planned, 1);
+    assert.equal(safeAnswer.summary.requests[0].decision, "answer_with_best_judgment");
+    assert.equal(safeAnswer.summary.requests[0].leaseContinuation, "allowed");
+    assert.equal(safeAnswer.summary.requests[0].compactAnswer, "Continue only the source-backed local implementation and record a compact checkpoint before asking again.");
+
     const answered = buildWorkerQuestionAnswerPlan(
       { runId: "manager-test", stateRoot },
       {
@@ -9714,7 +9849,7 @@ test("cycle continuation permits manager-owned warm starts despite stale assignm
     assert.ok(cycle.summary.continuation.allowedActions.includes("manager_owned_worker_warm_existing_gates"));
     assert.equal(cycle.summary.continuation.blockedActions.includes("ownership_takeover"), true);
     assert.equal(cycle.summary.recommendedActions[0].code, "manager-owned-worker-warm-ready");
-    assert.match(cycle.summary.progress.heartbeat.operatorActionState, /manager-worker-warm\.mjs --summary-json --limit 6/);
+    assert.match(cycle.summary.progress.heartbeat.operatorActionState, /manager-worker-warm\.mjs --summary-json --run-id 'manager-test' --limit 6 --state-root '/);
     assert.ok(cycle.blockers.some((blocker) => blocker.code === "assignment-ambiguous-status"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
@@ -11341,7 +11476,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           {
             code: "manager-owned-worker-warm-ready",
             summary: "Warm 1 manager-owned worker.",
-            nextAction: "node ./scripts/manager-worker-warm.mjs --summary-json --limit 1",
+            nextAction: "node ./scripts/manager-worker-warm.mjs --summary-json --run-id 'manager-test' --limit 1 --state-root '/tmp/manager-state'",
           },
           {
             code: "worker-progress-checkpoint_stale",
@@ -11354,7 +11489,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(warmPlan.summary.selectedAction.code, "continuous-worker-warm");
-  assert.equal(warmPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-warm.mjs --summary-json --limit 1 --apply");
+  assert.equal(warmPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-warm.mjs --summary-json --run-id 'manager-test' --limit 1 --state-root '/tmp/manager-state' --apply");
 
   const handoffPlan = buildContinuousRunPlan(
     {},
@@ -12758,6 +12893,7 @@ test("feedback plan routes non-blocking feedback while unrelated lanes continue"
 test("cycle packet exposes feedback gates and keeps unrelated safe lanes moving", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-feedback-"));
   try {
+    seedManagerLedgerForPreflight(stateRoot);
     const cycle = buildCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
@@ -12765,6 +12901,7 @@ test("cycle packet exposes feedback gates and keeps unrelated safe lanes moving"
         usageContext: { status: "normal" },
         resourceContext: { status: "normal" },
         assignmentSummary: { summary: { backlogStatusCounts: { assignable: 6, closed: 78 } } },
+        dispatchPreview: readyDispatchPreviewFixture(),
         feedback: { classification: "blocking", text: "Blocking issue found on /pipeline, prevent merge", affectedLane: "lane-pipeline", whereToTest: "/pipeline" },
         tmuxContext: {
           tmuxResult: { ok: true, panes: [], error: "" },
