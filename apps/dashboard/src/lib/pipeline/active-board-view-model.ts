@@ -589,7 +589,6 @@ function containsStopLineOrRawControlText(value: string) {
     || text.includes("control:")
     || text.includes("worker:")
     || text.includes("kill worker")
-    || text.includes("provider call")
     || text.includes("github mutation");
 }
 
@@ -607,7 +606,7 @@ function containsDenseReliabilityText(value: string) {
     || text.includes("worker codex")
     || text.includes("worker internals")
     || text.includes("rawpayload")
-    || text.includes("provider payload")
+    || text.includes("unsafe payload")
     || text.includes("reasoning trace")
     || text.includes("terminal scrollback")
     || collapsed.includes("fivewhys")
@@ -622,7 +621,7 @@ function containsDenseReliabilityText(value: string) {
     || collapsed.includes("rawprompt")
     || collapsed.includes("rawcompletion")
     || collapsed.includes("rawtranscript")
-    || collapsed.includes("providerpayload")
+    || collapsed.includes("unsafepayload")
     || collapsed.includes("reasoningtrace")
     || collapsed.includes("terminalscrollback");
 }
