@@ -103,7 +103,7 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(coreSource, /createWorkPacketCreatedEvent/);
   assert.match(coreSource, /createWorkPacketTransitionEvent/);
   assert.match(coreSource, /raw\[\\s_-\]\*\(\?:prompts\?\|completions\?\|transcripts\?\)/);
-  assert.match(coreSource, /\(\?:terminal\|tmux\|pane\)\[\\s_-\]\*scrollbacks\?/);
+  assert.match(coreSource, /\(\?:terminal\|tmux\|pane\)\[\\s_-\]\*\(\?:scrollbacks\?\|texts\?\|outputs\?\|stdouts\?\|stderrs\?\)/);
   assert.doesNotMatch(contractSource, /\brawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential\b/);
   assert.match(contractsIndex, /export \* from "\.\/pipeline-control-plane";/);
   assert.match(workflowCoreIndex, /export \* from "\.\/pipeline-control-plane";/);
@@ -183,9 +183,14 @@ test("authoritative lifecycle rules create metadata-only creation and transition
     ["credential-id", "credential_id must not be stored"],
     ["terminal-scrollback", "terminal scrollback must not be stored"],
     ["terminal-scrollback-plural", "terminal scrollbacks must not be stored"],
+    ["terminal-output", "terminal output must not be stored"],
+    ["terminal-stdout", "terminal stdout must not be stored"],
+    ["terminal-stderr", "terminal stderr must not be stored"],
     ["tmux-scrollback", "tmux scrollback must not be stored"],
+    ["tmux-output", "tmux output must not be stored"],
     ["tmux-underscore-scrollback", "tmux_scrollback must not be stored"],
     ["pane-scrollback", "pane scrollback must not be stored"],
+    ["pane-text", "pane text must not be stored"],
     ["raw-transcript", "raw transcript must not be stored"],
   ];
 

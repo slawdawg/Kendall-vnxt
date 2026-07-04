@@ -36,7 +36,7 @@ export const LEGACY_TO_AUTHORITATIVE_STAGE = {
 } as const;
 
 const FORBIDDEN_LIFECYCLE_TEXT =
-  /\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?(?:[\s_-]*(?:key|token|value|id))?|credentials?(?:[\s_-]*(?:key|token|value|id))?|(?:terminal|tmux|pane)[\s_-]*scrollbacks?)\b/i;
+  /\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?(?:[\s_-]*(?:key|token|value|id))?|credentials?(?:[\s_-]*(?:key|token|value|id))?|(?:terminal|tmux|pane)[\s_-]*(?:scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
 
 export interface CreateLifecycleEventInput {
   packetId: string;

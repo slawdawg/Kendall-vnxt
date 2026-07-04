@@ -1361,6 +1361,11 @@ def test_pipeline_dashboard_projection_proves_zero_packet_source_exhaustion(tmp_
         assert source_state["summary"] == "Approved source work is exhausted after refill."
         assert source_state["evidenceRefs"] == ["evidence:source-exhausted"]
         assert source_state["metadataOnly"] is True
+        candidate_response = client.get("/candidate-work")
+        assert candidate_response.status_code == 200
+        retained_candidate = next(candidate for candidate in candidate_response.json()["data"] if candidate["id"] == exhausted_response.json()["data"]["id"])
+        retained_metadata_text = json.dumps(retained_candidate["importMetadata"])
+        assert "tmux-pane-scrollback:must-not-project" not in retained_metadata_text
 
         _update_candidate_fixture(db_path, exhausted_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
         stale_projection_response = client.get("/pipeline-control-plane/projection")
@@ -1568,8 +1573,44 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
         assert deduped_projection["workerSummary"]["workerRefs"] == ["worker:codex-2", "worker:codex-3"]
         assert "terminal-output:must-not-project" not in deduped_projection["workerSummary"]["evidenceRefs"]
 
+        aggregate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Aggregate worker metadata with per-worker state",
+                "requestedOutcome": "Aggregate worker counts should not be replaced by a matching per-worker state.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {
+                    "projectionVisibility": "worker_summary_only",
+                    "pipelineWorkerSummary": {
+                        "activeCount": 5,
+                        "workerRefs": ["worker:codex-4"],
+                        "evidenceRefs": ["worker:codex-4:aggregate"],
+                    },
+                    "pipelineWorkerState": {
+                        "workerId": "codex-4",
+                        "state": "warm",
+                        "evidenceRefs": ["worker:codex-4:state"],
+                    },
+                },
+            },
+        )
+        assert aggregate_response.status_code == 200
+        aggregate_projection_response = client.get("/pipeline-control-plane/projection")
+        assert aggregate_projection_response.status_code == 200
+        aggregate_projection = aggregate_projection_response.json()["data"]
+        assert aggregate_projection["workerSummary"]["activeCount"] == 6
+        assert aggregate_projection["workerSummary"]["warmCount"] == 1
+        assert aggregate_projection["workerSummary"]["stalledCount"] == 1
+        assert "worker:codex-4:aggregate" in aggregate_projection["workerSummary"]["evidenceRefs"]
+        assert "worker:codex-4:state" in aggregate_projection["workerSummary"]["evidenceRefs"]
+
         _update_candidate_fixture(db_path, worker_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
         _update_candidate_fixture(db_path, duplicate_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
+        _update_candidate_fixture(db_path, aggregate_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
         stale_projection_response = client.get("/pipeline-control-plane/projection")
         assert stale_projection_response.status_code == 200
         stale_projection = stale_projection_response.json()["data"]

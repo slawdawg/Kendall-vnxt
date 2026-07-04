@@ -929,6 +929,12 @@ class SupervisorService:
         if not isinstance(metadata, dict):
             return {}
         safe_metadata = dict(metadata)
+        if safe_metadata.get("projectionVisibility") == "source_state_only":
+            if isinstance(safe_metadata.get("pipelineSourceState"), dict):
+                safe_metadata["pipelineSourceState"] = self._safe_pipeline_source_state_metadata(
+                    safe_metadata["pipelineSourceState"]
+                )
+            return safe_metadata
         if safe_metadata.get("projectionVisibility") == "gated_control_only":
             if isinstance(safe_metadata.get("pipelineGatedControl"), dict):
                 safe_metadata["pipelineGatedControl"] = self._safe_pipeline_gated_control_metadata(
@@ -956,6 +962,44 @@ class SupervisorService:
                 safe_metadata["pipelineWorkerSummary"]
             )
         return safe_metadata
+
+    def _safe_pipeline_source_state_metadata(self, raw_source_state: dict[str, object]) -> dict[str, object]:
+        allowed_states = {"healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown"}
+        allowed_kinds = {
+            "prd",
+            "story",
+            "architecture",
+            "sprint",
+            "candidate_work",
+            "work_item",
+            "bmad_artifact",
+            "obsidian",
+            "llm_wiki",
+            "github",
+            "research",
+            "manual",
+            "unknown",
+        }
+        safe_state: dict[str, object] = {}
+        for source_key in ["sourceId", "sourceRef"]:
+            value = raw_source_state.get(source_key)
+            if isinstance(value, str):
+                safe_refs = self._projection_safe_lifecycle_refs([value])
+                if safe_refs:
+                    safe_state[source_key] = safe_refs[0]
+        source_kind = raw_source_state.get("sourceKind")
+        if isinstance(source_kind, str) and source_kind in allowed_kinds:
+            safe_state["sourceKind"] = source_kind
+        state = raw_source_state.get("state")
+        if isinstance(state, str) and state in allowed_states:
+            safe_state["state"] = state
+        summary = raw_source_state.get("summary")
+        if isinstance(summary, str):
+            safe_state["summary"] = self._projection_safe_lifecycle_summary(summary)
+        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_source_state, "evidenceRefs"))
+        if evidence_refs:
+            safe_state["evidenceRefs"] = evidence_refs
+        return safe_state
 
     def _safe_pipeline_gated_control_metadata(self, raw_control: dict[str, object]) -> dict[str, object]:
         allowed_operations = {
@@ -3057,6 +3101,7 @@ class SupervisorService:
             "worker_refs": worker_refs,
             "evidence_refs": evidence_refs,
             "updated_at": fallback_updated_at,
+            "aggregate": True,
         }
 
     def _pipeline_projection_worker_record_from_metadata(
@@ -3091,6 +3136,9 @@ class SupervisorService:
         keyed: dict[str, dict[str, object]] = {}
         unkeyed: list[dict[str, object]] = []
         for record in records:
+            if record.get("aggregate") is True:
+                unkeyed.append(record)
+                continue
             worker_refs = record.get("worker_refs", [])
             key = worker_refs[0] if isinstance(worker_refs, list) and worker_refs and isinstance(worker_refs[0], str) else None
             if not key:

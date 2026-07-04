@@ -320,6 +320,38 @@ test("active board view model separates active work, stale history, ready-to-tes
   }));
   assert.equal(maskedStopLineModel.attentionItems[0].nextOperatorActionLabel, "Request explicit approval.");
 
+  const standaloneProviderCallModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "standalone-provider-call",
+        currentStage: "execute",
+        status: "active",
+        nextAction: "provider call from dashboard",
+      }),
+    ],
+  }));
+  const standaloneProviderCallCard = standaloneProviderCallModel.activeBoard.stageLanes
+    .flatMap((lane) => lane.packetCards)
+    .find((item) => item.packetId === "standalone-provider-call");
+  assert.ok(standaloneProviderCallCard);
+  assert.equal(standaloneProviderCallCard.nextActionLabel, "Request explicit approval.");
+
+  const providerPayloadModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "provider-payload-action",
+        currentStage: "execute",
+        status: "active",
+        nextAction: "inspect raw provider payload",
+      }),
+    ],
+  }));
+  const providerPayloadCard = providerPayloadModel.activeBoard.stageLanes
+    .flatMap((lane) => lane.packetCards)
+    .find((item) => item.packetId === "provider-payload-action");
+  assert.ok(providerPayloadCard);
+  assert.equal(providerPayloadCard.nextActionLabel, "Inspect packet detail.");
+
   const denseStaleHistoryModel = buildPipelineActiveBoardViewModel(projectionFixture({
     workPackets: [
       packetFixture({
@@ -494,11 +526,11 @@ test("fixture, unavailable, and stale-only projections cannot satisfy live or re
     ],
   });
   const agedModel = buildPipelineActiveBoardViewModel(agedProjection);
-  assert.equal(derivePacketPlacement(agedProjection.workPackets[0], agedProjection), "stale_history");
-  assert.equal(derivePacketPlacement(agedProjection.workPackets[1], agedProjection), "stale_history");
-  assert.equal(agedModel.summary.activePacketCount, 0);
+  assert.equal(derivePacketPlacement(agedProjection.workPackets[0], agedProjection), "attention");
+  assert.equal(derivePacketPlacement(agedProjection.workPackets[1], agedProjection), "hidden");
+  assert.equal(agedModel.summary.activePacketCount, 1);
   assert.equal(agedModel.summary.readyToTestCount, 0);
-  assert.equal(agedModel.summary.staleHistoryCount, 2);
+  assert.equal(agedModel.summary.staleHistoryCount, 0);
 
   const staleProjection = projectionFixture({
     freshnessState: "stale",
@@ -810,6 +842,38 @@ test("source exhaustion and dispatchability are driven by backend source and que
   }));
   assert.equal(structuredReadyModel.summary.readyToTestCount, 1);
   assert.equal(structuredReadyModel.readyToTestItems[0].packetId, "structured-ready");
+  assert.equal(structuredReadyModel.readyToTestItems[0].attention, false);
+
+  const operatorWordedStructuredReadyModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    selectedPacketDetails: [
+      detailFixture({
+        packetId: "operator-worded-ready",
+        currentStage: "execute",
+        status: "complete",
+        nextAction: "Operator can test in /pipeline.",
+        readyToTest: readyToTestFixture({
+          readyId: "ready:operator-worded",
+          evidenceRefs: ["proof:operator-worded"],
+          verificationRefs: ["check:dashboard"],
+        }),
+      }),
+    ],
+    workPackets: [
+      packetFixture({
+        packetId: "operator-worded-ready",
+        currentStage: "execute",
+        status: "complete",
+        nextAction: "Operator can test in /pipeline.",
+        readyToTest: readyToTestFixture({
+          readyId: "ready:operator-worded",
+          evidenceRefs: ["proof:operator-worded"],
+          verificationRefs: ["check:dashboard"],
+        }),
+      }),
+    ],
+  }));
+  assert.equal(operatorWordedStructuredReadyModel.summary.readyToTestCount, 1);
+  assert.equal(operatorWordedStructuredReadyModel.attentionItems.some((item) => item.packetId === "operator-worded-ready"), false);
 
   const approvalReadyModel = buildPipelineActiveBoardViewModel(projectionFixture({
     workPackets: [

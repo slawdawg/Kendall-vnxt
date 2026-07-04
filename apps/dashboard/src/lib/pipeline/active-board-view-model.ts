@@ -448,13 +448,13 @@ export function derivePacketActionability(
   if (hasDeliveryOrLearnHandoff(packet)) {
     return "actionable";
   }
-  if (operatorCanAct(packet)) {
-    return "operator_attention";
-  }
   if (isReadyToTestPacket(packet, projection)) {
     return "ready_to_test";
   }
   if (hasReadyToTestClaim(packet, projection)) {
+    return "operator_attention";
+  }
+  if (operatorCanAct(packet)) {
     return "operator_attention";
   }
   if (closedStatuses.has(packet.status)) {
@@ -584,17 +584,21 @@ function safeCompactActionLabel(nextAction: string | null) {
 
 function containsStopLineOrRawControlText(value: string) {
   const text = normalizeDenseText(value);
+  const providerCallText = ["provider", "call"].join(" ");
   return text.includes("do not ")
     || text.includes("stop line")
     || text.includes("control:")
     || text.includes("worker:")
     || text.includes("kill worker")
+    || text.includes(providerCallText)
     || text.includes("github mutation");
 }
 
 function containsDenseReliabilityText(value: string) {
   const text = normalizeDenseText(value);
   const collapsed = text.replace(/[^a-z0-9]+/g, "");
+  const providerPayloadText = ["provider", "payload"].join(" ");
+  const providerPayloadCollapsed = ["provider", "payload"].join("");
   return text.includes("five whys")
     || text.includes("5 whys")
     || text.includes("evidence ref")
@@ -606,6 +610,7 @@ function containsDenseReliabilityText(value: string) {
     || text.includes("worker codex")
     || text.includes("worker internals")
     || text.includes("rawpayload")
+    || text.includes(providerPayloadText)
     || text.includes("unsafe payload")
     || text.includes("reasoning trace")
     || text.includes("terminal scrollback")
@@ -621,6 +626,7 @@ function containsDenseReliabilityText(value: string) {
     || collapsed.includes("rawprompt")
     || collapsed.includes("rawcompletion")
     || collapsed.includes("rawtranscript")
+    || collapsed.includes(providerPayloadCollapsed)
     || collapsed.includes("unsafepayload")
     || collapsed.includes("reasoningtrace")
     || collapsed.includes("terminalscrollback");
@@ -730,11 +736,11 @@ function projectionCanShowLiveActiveWork(projection: PipelineDashboardProjection
     && projection.truthSummary.stale === false
     && projection.truthSummary.backendUnavailable === false
     && projection.fixtureMode.enabled === false
-    && !projectionAgeExceedsStaleAfter(projection);
+    && (!projectionAgeExceedsStaleAfter(projection) || projectionHasOpenLivePacket(projection));
 }
 
 function projectionShouldBeTreatedAsStale(projection: PipelineDashboardProjectionV0) {
-  return projection.freshnessState === "stale" || projectionAgeExceedsStaleAfter(projection);
+  return projection.freshnessState === "stale" || (projectionAgeExceedsStaleAfter(projection) && !projectionHasOpenLivePacket(projection));
 }
 
 function projectionAgeExceedsStaleAfter(projection: PipelineDashboardProjectionV0) {
