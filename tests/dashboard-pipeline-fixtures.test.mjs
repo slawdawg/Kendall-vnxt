@@ -1006,8 +1006,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(supervisorLibSource, /Invalid projection payload/);
   assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
   assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);
-  assert.match(supervisorLibSource, /projection\.workPackets\)\s*&&\s*projection\.workPackets\.some/);
-  assert.match(supervisorLibSource, /\["active", "waiting", "blocked", "failed"\]\.includes\(candidate\.status\)/);
+  assert.match(supervisorLibSource, /isLiveProjectionRenderable\(projection\)/);
+  assert.match(supervisorLibSource, /function projectionHasOpenPacket/);
+  assert.match(supervisorLibSource, /\["active", "waiting", "blocked", "failed"\]\.includes\(\(candidate as \{ status\?: string \}\)\.status \|\| ""\)/);
+  assert.match(supervisorLibSource, /projection\.truthSummary\?\.backendEmpty === true/);
+  assert.match(supervisorLibSource, /projection\.truthSummary\.emptyReason === "healthy_empty"/);
   assert.match(supervisorLibSource, /isProjectionStage\(packet\.currentStage\)/);
   assert.match(supervisorLibSource, /Array\.isArray\(packet\.evidenceRefs\)/);
   assert.match(supervisorLibSource, /packet\.metadataOnly === true/);

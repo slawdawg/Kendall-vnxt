@@ -224,9 +224,7 @@ function isPipelineDashboardProjection(value: unknown): value is PipelineDashboa
     isQueueSummary(projection.queueSummary) &&
     isProjectionFreshnessConsistent(projection) &&
     isProjectionFixtureTruthConsistent(projection) &&
-    (projection.sourceLabel !== "live" ||
-      (Array.isArray(projection.workPackets) &&
-        projection.workPackets.some((candidate) => ["active", "waiting", "blocked", "failed"].includes(candidate.status)))) &&
+    (projection.sourceLabel !== "live" || isLiveProjectionRenderable(projection)) &&
     Array.isArray(projection.workPackets) &&
     projection.workPackets.every(isProjectionWorkPacket) &&
     Array.isArray(projection.stageSummaries) &&
@@ -307,7 +305,26 @@ function isProjectionFreshnessConsistent(projection: Partial<PipelineDashboardPr
     return false;
   }
   const ageMs = Date.parse(generatedAt) - Date.parse(sourceUpdatedAt);
-  return projection.freshnessState !== "live" || (ageMs >= 0 && ageMs <= staleAfterSeconds * 1000);
+  return projection.freshnessState !== "live" || (ageMs >= 0 && (ageMs <= staleAfterSeconds * 1000 || projectionHasOpenPacket(projection)));
+}
+
+function isLiveProjectionRenderable(projection: Partial<PipelineDashboardProjectionV0>) {
+  if (!Array.isArray(projection.workPackets)) {
+    return false;
+  }
+  return projectionHasOpenPacket(projection) || (
+    projection.workPackets.length === 0 &&
+    projection.truthSummary?.backendEmpty === true &&
+    projection.truthSummary.emptyReason === "healthy_empty"
+  );
+}
+
+function projectionHasOpenPacket(projection: Partial<PipelineDashboardProjectionV0>) {
+  return Array.isArray(projection.workPackets) && projection.workPackets.some((candidate) => (
+    candidate &&
+    typeof candidate === "object" &&
+    ["active", "waiting", "blocked", "failed"].includes((candidate as { status?: string }).status || "")
+  ));
 }
 
 function isProjectionFixtureTruthConsistent(projection: Partial<PipelineDashboardProjectionV0>) {

@@ -89,6 +89,59 @@ test("throughput harness writes compact live-readiness proof under manager run s
   }
 });
 
+test("throughput proof write targets the latest active manager run when run id is omitted", () => {
+  const stateRoot = tempStateRoot();
+  try {
+    const activeRunId = "manager-live-proof-active";
+    const activePaths = managerRunPaths(activeRunId, { stateRoot });
+    mkdirSync(activePaths.root, { recursive: true });
+    writeFileSync(activePaths.mission, `${JSON.stringify({ runId: activeRunId, status: "active" })}\n`);
+
+    const { result } = runManagerThroughputHarness([
+      "--workers",
+      "6",
+      "--cycles",
+      "10",
+      "--state-root",
+      stateRoot,
+      "--write-proof",
+      "--summary-json",
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.proof?.runId, activeRunId);
+    assert.equal(result.summary.proof?.path, activePaths.throughputProof);
+    assert.equal(existsSync(activePaths.throughputProof), true);
+    const proof = JSON.parse(readFileSync(activePaths.throughputProof, "utf8"));
+    assert.equal(proof.runId, activeRunId);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("throughput proof write blocks unsafe workspace state roots before creating files", () => {
+  const unsafeStateRoot = join(process.cwd(), "manager-throughput-proof-unsafe-state");
+  try {
+    const { result } = runManagerThroughputHarness([
+      "--workers",
+      "6",
+      "--cycles",
+      "10",
+      "--state-root",
+      unsafeStateRoot,
+      "--write-proof",
+      "--summary-json",
+    ]);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.summary.proof?.written, false);
+    assert.ok(result.blockers.some((blocker) => blocker.code === "workspace-state-unsafe"));
+    assert.equal(existsSync(unsafeStateRoot), false);
+  } finally {
+    rmSync(unsafeStateRoot, { recursive: true, force: true });
+  }
+});
+
 test("throughput proof requires explicit raw-payload retention evidence", () => {
   const proof = buildThroughputProof({
     ok: true,

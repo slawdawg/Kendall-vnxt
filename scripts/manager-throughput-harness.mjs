@@ -8,6 +8,7 @@ import {
   MANAGER_WORKER_LIFECYCLE_STATES,
   parseCommonArgs,
   printPacket,
+  resolveManagerRunId,
 } from "./lib/manager-control-plane/core.mjs";
 
 export const THROUGHPUT_LIFECYCLE_STATES = MANAGER_WORKER_LIFECYCLE_STATES;
@@ -488,6 +489,18 @@ export function runManagerThroughputHarness(argv = process.argv.slice(2), contex
   const result = runThroughputHarness({ ...context, ...options });
   if (options.writeProof) {
     const proof = writeThroughputProof(result, options, context);
+    if (proof.ok === false) {
+      result.ok = false;
+      result.status = "blocked";
+      result.blockers = [...(result.blockers || []), ...(proof.blockers || [])];
+      result.summary.proof = {
+        written: false,
+        path: proof.path,
+        status: proof.proof.status,
+        runId: proof.proof.runId,
+      };
+      return { options, result };
+    }
     result.summary.proof = {
       written: true,
       path: proof.path,
@@ -499,7 +512,15 @@ export function runManagerThroughputHarness(argv = process.argv.slice(2), contex
 }
 
 export function writeThroughputProof(result, options = {}, context = {}) {
-  const paths = managerRunPaths(options.runId || context.runId, options, context);
+  const paths = managerRunPaths(resolveManagerRunId(options, context), options, context);
+  if (!paths.proof.ok) {
+    return {
+      ok: false,
+      path: paths.throughputProof,
+      proof: { status: "blocked", runId: paths.runId },
+      blockers: [{ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root before writing throughput proof." }],
+    };
+  }
   mkdirSync(paths.root, { recursive: true });
   const proof = buildThroughputProof(result, {
     runId: paths.runId,
@@ -507,7 +528,7 @@ export function writeThroughputProof(result, options = {}, context = {}) {
     createdAt: context.now || new Date().toISOString(),
   });
   writeFileSync(paths.throughputProof, `${JSON.stringify(proof, null, 2)}\n`);
-  return { path: paths.throughputProof, proof };
+  return { ok: true, path: paths.throughputProof, proof };
 }
 
 export function buildThroughputProof(result, metadata = {}) {

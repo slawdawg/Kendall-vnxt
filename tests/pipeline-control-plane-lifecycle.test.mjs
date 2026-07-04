@@ -218,12 +218,45 @@ test("dashboard projection contract validator accepts explicit states and reject
   assert.equal(acceptedFixtureProjection.fixtureMode.canSatisfyLiveProof, false);
   assert.equal(acceptedFixtureProjection.truthSummary.fixtureBacked, true);
 
+  const healthyEmptyLiveProjection = projectionContractFixture({
+    truthSummary: {
+      ...liveProjection.truthSummary,
+      emptyReason: "healthy_empty",
+      backendEmpty: true,
+      summary: "Live backend projection has no queued work.",
+    },
+    queueSummary: {
+      ...liveProjection.queueSummary,
+      dispatchableCount: 0,
+      emptyReason: "healthy_empty",
+      summary: "Queue is healthy and empty.",
+    },
+    workPackets: [],
+    selectedPacketDetails: [],
+    evidenceRefs: ["supervisor:healthy-empty"],
+  });
+  setProjectionPayload(healthyEmptyLiveProjection);
+  assert.deepEqual(await getPipelineDashboardProjection(), healthyEmptyLiveProjection);
+
+  const staleOpenLiveProjection = projectionContractFixture({
+    sourceUpdatedAt: "2026-07-02T16:59:00.000Z",
+  });
+  setProjectionPayload(staleOpenLiveProjection);
+  assert.deepEqual(await getPipelineDashboardProjection(), staleOpenLiveProjection);
+
   for (const [caseId, override] of [
     ["bad-source-label", { sourceLabel: "tmux_active" }],
     ["bad-freshness-state", { freshnessState: "terminal_idle" }],
     ["fixture-live-proof", { fixtureMode: { ...liveProjection.fixtureMode, canSatisfyLiveProof: true } }],
     ["fixture-live-labels", { fixtureMode: { ...liveProjection.fixtureMode, enabled: true, canSatisfyLiveProof: false } }],
-    ["stale-timestamp-live-freshness", { sourceUpdatedAt: "2026-07-02T16:59:00.000Z" }],
+    [
+      "stale-timestamp-without-open-packet",
+      {
+        sourceUpdatedAt: "2026-07-02T16:59:00.000Z",
+        workPackets: [{ ...liveProjection.workPackets[0], status: "complete" }],
+        selectedPacketDetails: [{ ...liveProjection.selectedPacketDetails[0], status: "complete" }],
+      },
+    ],
     ["future-timestamp-live-freshness", { sourceUpdatedAt: "2026-07-02T17:00:01.000Z" }],
     ["missing-stage-summary", { stageSummaries: liveProjection.stageSummaries.slice(1) }],
     ["duplicate-stage-summary", { stageSummaries: [liveProjection.stageSummaries[0], ...liveProjection.stageSummaries.slice(0, -1)] }],

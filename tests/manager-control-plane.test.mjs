@@ -6123,6 +6123,71 @@ test("worker handoff apply marks BMAD ready story in progress after receipt", ()
   }
 });
 
+test("worker handoff apply persists successful records when a later paste fails", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-partial-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    writeFileSync(
+      workerPath,
+      `${JSON.stringify([
+        { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+        { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+      ], null, 2)}\n`,
+    );
+    let pasteAttempts = 0;
+    const applied = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 2, apply: true },
+      {
+        receiptCheck: false,
+        tmuxRunner: (_command, args) => {
+          if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+          if (args[0] === "paste-buffer") {
+            pasteAttempts += 1;
+            return pasteAttempts === 1
+              ? { status: 0, stdout: "", stderr: "" }
+              : { status: 1, stdout: "", stderr: "second paste failed" };
+          }
+          if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        workerStatus: {
+          status: "ready",
+          summary: {
+            targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+            workers: [
+              { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+              { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+            ],
+          },
+        },
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [
+              { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.summary.mutation, "partial");
+    assert.ok(applied.blockers.some((blocker) => blocker.code === "worker-handoff-paste-failed"));
+    const records = JSON.parse(readFileSync(workerPath, "utf8"));
+    assert.equal(records.find((worker) => worker.workerId === "codex-1").state, "active");
+    assert.equal(records.find((worker) => worker.workerId === "codex-1").assignmentId, "lane-1");
+    assert.equal(records.find((worker) => worker.workerId === "codex-2").state, "warm");
+    const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
+    assert.equal(ledger.summary.events.at(-1).eventType, "worker_handoff_apply");
+    assert.equal(ledger.summary.events.at(-1).result, "blocked_partial");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker handoff blocks fallback recovery during pressure and drain stop lines", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-governor-"));
   try {
@@ -7957,6 +8022,75 @@ test("worker retire gate retires only recovery-stuck manager-owned active worker
     const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
     assert.equal(ledger.summary.events.at(-1).eventType, "worker_retire_apply");
     assert.doesNotMatch(JSON.stringify(applied), /capture-pane|provider payload|reasoning trace|raw prompt/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire apply persists successful records when a later kill fails", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-partial-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    const workers = [
+      {
+        workerId: "codex-1",
+        owner: "manager-test/codex-1",
+        runId: "manager-test",
+        sessionName: "codex-1",
+        state: "active",
+        assignmentId: "lane-1",
+        taskId: "task-1",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+      {
+        workerId: "codex-2",
+        owner: "manager-test/codex-2",
+        runId: "manager-test",
+        sessionName: "codex-2",
+        state: "active",
+        assignmentId: "lane-2",
+        taskId: "task-2",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+    ];
+    writeFileSync(workerPath, `${JSON.stringify(workers, null, 2)}\n`);
+    const progressStatus = {
+      status: "attention",
+      summary: {
+        workerProgress: [
+          { workerId: "codex-1", sessionName: "codex-1", assignmentId: "lane-1", taskId: "task-1", progressState: "recovery_submit_unanswered", questionCount: 0 },
+          { workerId: "codex-2", sessionName: "codex-2", assignmentId: "lane-2", taskId: "task-2", progressState: "recovery_submit_unanswered", questionCount: 0 },
+        ],
+      },
+    };
+    let killAttempts = 0;
+    const applied = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, apply: true, limit: 2 },
+      {
+        progressStatus,
+        workerStatus: { summary: { workers } },
+        tmuxRunner: (_cmd, args) => {
+          if (args[0] !== "kill-session") return { status: 0, stdout: "", stderr: "" };
+          killAttempts += 1;
+          return killAttempts === 1
+            ? { status: 0, stdout: "", stderr: "" }
+            : { status: 1, stdout: "", stderr: "second kill failed" };
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.summary.mutation, "partial");
+    assert.ok(applied.blockers.some((blocker) => blocker.code === "worker-retire-kill-failed"));
+    const records = JSON.parse(readFileSync(workerPath, "utf8"));
+    assert.equal(records.find((worker) => worker.workerId === "codex-1").state, "retired");
+    assert.equal(records.find((worker) => worker.workerId === "codex-1").recoveryState, "retired_after_recovery_submit_unanswered");
+    assert.equal(records.find((worker) => worker.workerId === "codex-2").state, "active");
+    const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
+    assert.equal(ledger.summary.events.at(-1).eventType, "worker_retire_apply");
+    assert.equal(ledger.summary.events.at(-1).authorityBasis, "manager-owned-worker-retire-after-recovery-existing-gates");
+    assert.match(ledger.summary.events.at(-1).summary, /Partially retired 1/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -11914,7 +12048,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(dispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
   assert.equal(dispatchPlan.summary.selectedAction.dryRunCommand, "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner manager-test");
-  assert.equal(dispatchPlan.summary.selectedAction.applyCommand, "node ./scripts/codex-workspace.mjs dispatch-next --summary-json --apply --owner manager-test");
+  assert.equal(dispatchPlan.summary.selectedAction.applyCommand, "node ./scripts/codex-workspace.mjs dispatch-next --owner manager-test --apply");
+  assert.doesNotMatch(dispatchPlan.summary.selectedAction.applyCommand, /--summary-json/);
   assert.equal(dispatchPlan.summary.selectedAction.authority, "codex-workspace-dispatch-existing-gates");
   assert.equal(dispatchPlan.summary.selectedAction.mutationClass, "assignment_workspace_claim_only");
 

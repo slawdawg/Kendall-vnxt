@@ -283,7 +283,7 @@ function safeRunId(runId) {
   return value;
 }
 
-function resolveManagerRunId(options = {}, context = {}) {
+export function resolveManagerRunId(options = {}, context = {}) {
   if (options.runId || context.runId) {
     return safeRunId(options.runId || context.runId);
   }
@@ -2116,6 +2116,29 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     results.push({ ...pairing, status: paste.ok ? "handoff_sent" : "failed", paste, statusUpdate });
     if (!paste.ok) {
       recordPointerReceiptFailure({ ...runOptions, runId }, results[results.length - 1], context, "handoff");
+      const sentCount = results.filter((result) => result.status === "handoff_sent").length;
+      if (sentCount > 0) {
+        writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+        const event = ledgerRecord({
+          idPrefix: "evt",
+          idName: "eventId",
+          actor: "manager",
+          typeName: "eventType",
+          typeValue: "worker_handoff_apply",
+          eventName: "worker_handoff_apply",
+          fallbackSummary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
+          options: {
+            authorityBasis: "manager-owned-worker-handoff-existing-gates",
+            summary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
+            sourceRefs: ["assignment-report", "manager-workers", ...results.flatMap((result) => receiptSourceRefs(result))],
+            evidenceRefs: [paths.workers, ...results.filter((result) => result.status === "handoff_sent").map((result) => result.handoffPath).filter(Boolean)],
+            recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
+            result: "blocked_partial",
+            idempotencyKey: `worker_handoff_apply_partial:${runId}:${results.map((result) => result.workerId).join(",")}:${results.map((result) => result.assignmentId).join(",")}`,
+          },
+        });
+        appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+      }
       return packet({
         ok: false,
         status: "blocked",
@@ -3355,6 +3378,22 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
     const killOk = !kill?.error && (kill?.status ?? 0) === 0;
     results.push({ ...request, status: killOk ? "retired" : "failed", sessionName: record.sessionName, kill: killOk ? { ok: true, sessionName: record.sessionName } : { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status } });
     if (!killOk) {
+      const retiredCount = results.filter((result) => result.status === "retired").length;
+      if (retiredCount > 0) {
+        writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+        ledgerCommand({
+          command: "append-event",
+          runId,
+          stateRoot: runOptions.stateRoot,
+          eventType: "worker_retire_apply",
+          authorityBasis: resourceState === "critical" ? "manager-owned-worker-critical-resource-existing-gates" : "manager-owned-worker-retire-after-recovery-existing-gates",
+          summary: resourceState === "critical" ? `Partially terminated ${retiredCount} manager-owned worker(s) for critical resource pressure before a later failure.` : `Partially retired ${retiredCount} recovery-stuck manager-owned worker(s) before a later failure.`,
+          sourceRefs: results.filter((result) => result.status === "retired").map((result) => `assignment:${result.assignmentId}`),
+          evidenceRefs: results.filter((result) => result.status === "retired").map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
+          recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the still-active source-owned lane through existing gates",
+          recordPolicy: resourceState === "critical" ? "metadata_only_critical_resource_worker_retire_partial" : "metadata_only_worker_retire_partial",
+        }, context);
+      }
       return packet({
         ok: false,
         status: "blocked",
@@ -14273,7 +14312,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
     const routingDecision = buildContinuousDispatchRoutingDecision(cycle);
     if (!routingDecision.allowed) return null;
     const dryRunCommand = routingDecision.selectedAction.command;
-    const applyCommand = dryRunCommand.replace(" --dry-run --summary-json", " --summary-json --apply");
+    const applyCommand = `${dryRunCommand.replace(/\s--dry-run\b/g, "").replace(/\s--summary-json\b/g, "")} --apply`;
     return {
       code: "continuous-dispatch-apply",
       summary: action.summary || "Claim the next source-owned safe backlog lane through existing dispatch gates.",
