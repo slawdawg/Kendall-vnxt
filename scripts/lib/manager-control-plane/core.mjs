@@ -16253,7 +16253,7 @@ function currentLedgerLockProcessMetadata() {
     execPath: process.execPath,
     argv0: process.argv[0] || "",
     cwd: process.cwd(),
-    cmdlineDigest: metadata.cmdlineDigest || ledgerValueDigest(process.argv.join("\u0000")),
+    commandLineDigest: metadata.commandLineDigest || ledgerValueDigest(process.argv.join("\u0000")),
     startTime: metadata.startTime || "",
   };
 }
@@ -16265,7 +16265,7 @@ function ledgerLockOwnerProcessDiverged(owner = {}) {
   if (!current) return false;
   const recorded = owner.process || {};
   if (recorded.startTime && current.startTime && recorded.startTime !== current.startTime) return true;
-  if (recorded.cmdlineDigest && current.cmdlineDigest && recorded.cmdlineDigest !== current.cmdlineDigest) return true;
+  if (recorded.commandLineDigest && current.commandLineDigest && recorded.commandLineDigest !== current.commandLineDigest) return true;
   return false;
 }
 
@@ -16277,7 +16277,7 @@ function readProcessMetadata(pid) {
     const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
     return {
       startTime,
-      cmdlineDigest: ledgerValueDigest(cmdline),
+      commandLineDigest: ledgerValueDigest(cmdline),
     };
   } catch {
     return null;
