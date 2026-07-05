@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const LEDGER_ACTION_FINGERPRINT_VERSION = "manager-ledger-action-fingerprint.v2";
 export const agentUsageRelativePath = ".tmux/plugins/agent-usage-tmux/scripts/agent_usage.sh";
 export const codexUsageFetcherFile = "fetch_codex_usage.py";
 
@@ -101,6 +103,10 @@ export function parseCommonArgs(argv = []) {
     recoveryPath: "",
     sourceRefs: [],
     evidenceRefs: [],
+    correlationId: "",
+    causationId: "",
+    orderingKey: "",
+    idempotencyKey: "",
     materialDecision: false,
     recordPolicy: "",
     assignmentSummaryFile: "",
@@ -174,6 +180,22 @@ export function parseCommonArgs(argv = []) {
       options.evidenceRefs.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
     } else if (arg.startsWith("--evidence-refs=")) {
       options.evidenceRefs.push(...arg.slice("--evidence-refs=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--correlation-id") {
+      options.correlationId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--correlation-id=")) {
+      options.correlationId = arg.slice("--correlation-id=".length);
+    } else if (arg === "--causation-id") {
+      options.causationId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--causation-id=")) {
+      options.causationId = arg.slice("--causation-id=".length);
+    } else if (arg === "--ordering-key") {
+      options.orderingKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--ordering-key=")) {
+      options.orderingKey = arg.slice("--ordering-key=".length);
+    } else if (arg === "--idempotency-key") {
+      options.idempotencyKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--idempotency-key=")) {
+      options.idempotencyKey = arg.slice("--idempotency-key=".length);
     } else if (arg === "--material-decision") {
       options.materialDecision = true;
     } else if (arg === "--record-policy") {
@@ -1888,6 +1910,31 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
   const existingWorkers = workerRead.value.filter(isPlainObject).map(projectWorker);
   const existingIds = new Set(existingWorkers.map((worker) => worker.workerId));
   const existingSessions = new Set(existingWorkers.map((worker) => worker.sessionName).filter(Boolean));
+  const warmActionMaterial = warmWorkerActionMaterial(planned);
+  const warmReserveArgs = {
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: "worker_warm_apply",
+    eventName: "worker_warm_apply",
+    fallbackSummary: `Warmed ${planned.length} manager-owned worker(s).`,
+    options: {
+      authorityBasis: "manager-owned-worker-warm-existing-gates",
+      summary: `Warmed ${planned.length} manager-owned worker(s).`,
+      sourceRefs: ["manager-cycle-packet", "kendall-manager-control-plane"],
+      evidenceRefs: [paths.workers],
+      recoveryPath: "inspect tmux sessions and manager workers.json before retrying",
+      result: "ready",
+      idempotencyKey: `worker_warm_apply:${runId}:${planned.map((result) => result.workerId).join(",")}`,
+      actionMaterial: warmActionMaterial,
+    },
+    actionPlan: { kind: "worker_warm_apply", workers: warmActionMaterial },
+  };
+  const warmReservation = reserveLedgerAction(paths, runId, warmReserveArgs, {
+    duplicateReconciler: (record) => reconcileWarmLedgerDuplicate(paths, runId, planned, record, context),
+  });
+  if (warmReservation.packet) return warmReservation.packet;
   const results = [];
   for (const action of planned) {
     const existingIndex = existingWorkers.findIndex((worker) => worker.workerId === action.workerId || worker.sessionName === action.sessionName);
@@ -1907,6 +1954,17 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
     results.push({ ...action, status: launch.ok ? (recoverExisting ? "recovered_started" : "started") : "failed", launch });
     if (!launch.ok) {
       writeFileSync(paths.workers, `${JSON.stringify(existingWorkers, null, 2)}\n`);
+      finalizeLedgerAction(paths, runId, warmReservation.record, {
+        ...warmReserveArgs,
+        fallbackSummary: `Failed warming ${results.length} manager-owned worker(s).`,
+        options: {
+          ...warmReserveArgs.options,
+          summary: `Failed warming ${results.length} manager-owned worker(s).`,
+          result: "blocked_partial",
+          actionMaterial: warmActionMaterial,
+        },
+        actionPlan: { kind: "worker_warm_apply", workers: warmActionMaterial, results: workerResultMaterial(results) },
+      });
       return packet({
         ok: false,
         status: "blocked",
@@ -1948,7 +2006,7 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
   }
   writeFileSync(paths.workers, `${JSON.stringify(existingWorkers, null, 2)}\n`);
   const warmedCount = results.filter((result) => result.status === "started" || result.status === "recovered_started").length;
-  const event = ledgerRecord({
+  const warmEventArgs = {
     idPrefix: "evt",
     idName: "eventId",
     actor: "manager",
@@ -1964,9 +2022,12 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
       recoveryPath: "inspect tmux sessions and manager workers.json before retrying",
       result: "ready",
       idempotencyKey: `worker_warm_apply:${runId}:${results.map((result) => result.workerId).join(",")}`,
+      actionMaterial: warmActionMaterial,
     },
-  });
-  appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+    actionPlan: { kind: "worker_warm_apply", workers: warmActionMaterial, results: workerResultMaterial(results) },
+  };
+  const eventAppend = finalizeLedgerAction(paths, runId, warmReservation.record, warmEventArgs);
+  if (eventAppend.packet?.ok === false) return eventAppend.packet;
   return packet({
     status: "ready",
     summary: {
@@ -2106,6 +2167,31 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     });
   }
   const workerRecords = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const handoffActionMaterial = handoffPairingActionMaterial(pairings);
+  const handoffReserveArgs = {
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: "worker_handoff_apply",
+    eventName: "worker_handoff_apply",
+    fallbackSummary: `Sent ${pairings.length} manager-owned worker handoff(s).`,
+    options: {
+      authorityBasis: "manager-owned-worker-handoff-existing-gates",
+      summary: `Sent ${pairings.length} manager-owned worker handoff(s).`,
+      sourceRefs: ["assignment-report", "manager-workers", ...pairings.flatMap((pairing) => receiptSourceRefs(pairing))],
+      evidenceRefs: [paths.workers, ...pairings.map((pairing) => pairing.handoffPath).filter(Boolean)],
+      recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
+      result: "ready",
+      idempotencyKey: `worker_handoff_apply:${runId}:${pairings.map((pairing) => pairing.workerId).join(",")}:${pairings.map((pairing) => pairing.assignmentId).join(",")}`,
+      actionMaterial: handoffActionMaterial,
+    },
+    actionPlan: { kind: "worker_handoff_apply", handoffs: handoffActionMaterial },
+  };
+  const handoffReservation = reserveLedgerAction(paths, runId, handoffReserveArgs, {
+    duplicateReconciler: (record) => reconcileHandoffLedgerDuplicate(paths, runId, pairings, record, context),
+  });
+  if (handoffReservation.packet) return handoffReservation.packet;
   const results = [];
   for (const pairing of pairings) {
     const handoffBody = renderWorkerHandoffFile(pairing);
@@ -2119,26 +2205,20 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       const sentCount = results.filter((result) => result.status === "handoff_sent").length;
       if (sentCount > 0) {
         writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
-        const event = ledgerRecord({
-          idPrefix: "evt",
-          idName: "eventId",
-          actor: "manager",
-          typeName: "eventType",
-          typeValue: "worker_handoff_apply",
-          eventName: "worker_handoff_apply",
-          fallbackSummary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
-          options: {
-            authorityBasis: "manager-owned-worker-handoff-existing-gates",
-            summary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
-            sourceRefs: ["assignment-report", "manager-workers", ...results.flatMap((result) => receiptSourceRefs(result))],
-            evidenceRefs: [paths.workers, ...results.filter((result) => result.status === "handoff_sent").map((result) => result.handoffPath).filter(Boolean)],
-            recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
-            result: "blocked_partial",
-            idempotencyKey: `worker_handoff_apply_partial:${runId}:${results.map((result) => result.workerId).join(",")}:${results.map((result) => result.assignmentId).join(",")}`,
-          },
-        });
-        appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
       }
+      finalizeLedgerAction(paths, runId, handoffReservation.record, {
+        ...handoffReserveArgs,
+        fallbackSummary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
+        options: {
+          ...handoffReserveArgs.options,
+          summary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
+          sourceRefs: ["assignment-report", "manager-workers", ...results.flatMap((result) => receiptSourceRefs(result))],
+          evidenceRefs: [paths.workers, ...results.filter((result) => result.status === "handoff_sent").map((result) => result.handoffPath).filter(Boolean)],
+          result: "blocked_partial",
+          actionMaterial: handoffActionMaterial,
+        },
+        actionPlan: { kind: "worker_handoff_apply", handoffs: handoffActionMaterial, results: workerResultMaterial(results) },
+      });
       return packet({
         ok: false,
         status: "blocked",
@@ -2170,7 +2250,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
   }
   writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
   const sentCount = results.filter((result) => result.status === "handoff_sent").length;
-  const event = ledgerRecord({
+  const handoffEventArgs = {
     idPrefix: "evt",
     idName: "eventId",
     actor: "manager",
@@ -2186,9 +2266,12 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
       result: "ready",
       idempotencyKey: `worker_handoff_apply:${runId}:${results.map((result) => result.workerId).join(",")}:${results.map((result) => result.assignmentId).join(",")}`,
+      actionMaterial: handoffActionMaterial,
     },
-  });
-  appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+    actionPlan: { kind: "worker_handoff_apply", handoffs: handoffActionMaterial, results: workerResultMaterial(results) },
+  };
+  const eventAppend = finalizeLedgerAction(paths, runId, handoffReservation.record, handoffEventArgs);
+  if (eventAppend.packet?.ok === false) return eventAppend.packet;
   return packet({
     status: "ready",
     summary: {
@@ -4362,6 +4445,48 @@ function buildWarmWorkerAction(candidate = {}, paths = {}, options = {}) {
   };
   Object.defineProperty(action, "launchCommand", { value: launchCommand, enumerable: false });
   return action;
+}
+
+function warmWorkerActionMaterial(actions = []) {
+  return actions.map((action) => ({
+    workerId: action.workerId,
+    sessionName: action.sessionName,
+    owner: action.owner,
+    runId: action.runId,
+    recoveryMode: action.recoveryMode,
+    previousAssignmentId: action.previousAssignmentId || null,
+    previousTaskId: action.previousTaskId || null,
+    cwd: action.cwd,
+    commandDigest: ledgerValueDigest(action.launchCommand || action.command || ""),
+    envDigest: ledgerValueDigest(action.env || {}),
+  }));
+}
+
+function handoffPairingActionMaterial(pairings = []) {
+  return pairings.map((pairing) => ({
+    workerId: pairing.workerId,
+    sessionName: pairing.sessionName,
+    owner: pairing.owner,
+    assignmentId: pairing.assignmentId,
+    taskId: pairing.taskId,
+    worktreePath: pairing.worktreePath || "",
+    handoffPath: pairing.handoffPath,
+    pastePath: pairing.pastePath,
+    handoffBodyDigest: ledgerValueDigest(renderWorkerHandoffFile(pairing)),
+    pasteTextDigest: ledgerValueDigest(pairing.pasteText || ""),
+  }));
+}
+
+function workerResultMaterial(results = []) {
+  return results.map((result) => ({
+    workerId: result.workerId,
+    sessionName: result.sessionName,
+    assignmentId: result.assignmentId || null,
+    taskId: result.taskId || null,
+    status: result.status,
+    pasteOk: result.paste?.ok ?? null,
+    launchOk: result.launch?.ok ?? null,
+  }));
 }
 
 function defaultWarmWorkerCommand(stateRoot = "") {
@@ -15404,11 +15529,7 @@ export function ledgerCommand(options = {}, context = {}) {
     if (blocked) return blocked;
     const normalizedEventName = normalizeLedgerEventName(options.eventType || "manager.ledger.appended");
     if (!normalizedEventName) return unknownLedgerEvent(paths, options.eventType || "");
-    const duplicate = findDuplicateLedgerEvent(paths.events, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, event: duplicate, duplicateIgnored: true } });
-    }
-    const event = ledgerRecord({
+    const appended = appendLedgerEvent(paths, runId, {
       idPrefix: "evt",
       idName: "eventId",
       actor: "manager",
@@ -15418,16 +15539,12 @@ export function ledgerCommand(options = {}, context = {}) {
       fallbackSummary: "manager event",
       eventName: normalizedEventName,
     });
-    appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
-    return packet({ status: "ready", summary: { runId, event } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, event: appended.record } });
   }
   if (options.command === "append-question") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
     if (blocked) return blocked;
-    const duplicate = findDuplicateLedgerRecord(paths.questions, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, question: duplicate, duplicateIgnored: true } });
-    }
     if (!isMaterialQuestionRecord(options)) {
       return packet({
         ok: false,
@@ -15442,86 +15559,154 @@ export function ledgerCommand(options = {}, context = {}) {
         ],
       });
     }
-    const question = ledgerRecord({
-      idPrefix: "question",
-      idName: "questionId",
-      actor: options.workerId || "worker",
-      typeName: "questionType",
-      typeValue: options.eventType || "worker_question",
-      options,
-      fallbackSummary: "worker question",
-      eventName: "manager.question.recorded",
+    const appended = withLedgerAppendLock(paths, () => {
+      const questionsRead = readNdjsonStrict(paths.questions);
+      if (questionsRead.status !== "ready") {
+        return { packet: malformedLedgerFile(paths, "questions", paths.questions, questionsRead.message) };
+      }
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.question.recorded",
+        typeValue: options.eventType || "worker_question",
+        actor: options.workerId || "worker",
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(questionsRead.value, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "question");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "question", duplicate) };
+      }
+      const question = ledgerRecord({
+        idPrefix: "question",
+        idName: "questionId",
+        actor: options.workerId || "worker",
+        typeName: "questionType",
+        typeValue: options.eventType || "worker_question",
+        options,
+        fallbackSummary: "worker question",
+        eventName: "manager.question.recorded",
+        uniqueAutoIdempotency: !hasExplicitLedgerIdempotencyKey(options),
+      });
+      appendFileSync(paths.questions, `${JSON.stringify(question)}\n`);
+      return { record: question };
     });
-    appendFileSync(paths.questions, `${JSON.stringify(question)}\n`);
-    return packet({ status: "ready", summary: { runId, question } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, question: appended.record } });
   }
   if (options.command === "append-checkpoint") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
     if (blocked) return blocked;
-    const checkpointRead = readJsonStrict(paths.checkpoints);
-    if (checkpointRead.status !== "ready" || !Array.isArray(checkpointRead.value)) {
-      return malformedLedgerFile(paths, "checkpoints", paths.checkpoints, "checkpoints.json must contain an array.");
-    }
-    const checkpoints = checkpointRead.value;
-    const duplicate = findDuplicateLedgerRecordFromArray(checkpoints, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, checkpoint: duplicate, duplicateIgnored: true } });
-    }
-    const checkpoint = ledgerRecord({
-      idPrefix: "checkpoint",
-      idName: "checkpointId",
-      actor: "manager",
-      typeName: "checkpointType",
-      typeValue: options.eventType || "manager_checkpoint",
-      options,
-      fallbackSummary: "manager checkpoint",
-      eventName: "manager.checkpoint.recorded",
+    const appended = withLedgerAppendLock(paths, () => {
+      const checkpointRead = readJsonStrict(paths.checkpoints);
+      if (checkpointRead.status !== "ready" || !Array.isArray(checkpointRead.value)) {
+        return { packet: malformedLedgerFile(paths, "checkpoints", paths.checkpoints, "checkpoints.json must contain an array.") };
+      }
+      const checkpoints = checkpointRead.value;
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.checkpoint.recorded",
+        typeValue: options.eventType || "manager_checkpoint",
+        actor: "manager",
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(checkpoints, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "checkpoint");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "checkpoint", duplicate) };
+      }
+      const checkpoint = ledgerRecord({
+        idPrefix: "checkpoint",
+        idName: "checkpointId",
+        actor: "manager",
+        typeName: "checkpointType",
+        typeValue: options.eventType || "manager_checkpoint",
+        options,
+        fallbackSummary: "manager checkpoint",
+        eventName: "manager.checkpoint.recorded",
+        uniqueAutoIdempotency: !hasExplicitLedgerIdempotencyKey(options),
+      });
+      checkpoints.push(checkpoint);
+      writeFileSync(paths.checkpoints, `${JSON.stringify(checkpoints, null, 2)}\n`);
+      return { record: checkpoint };
     });
-    checkpoints.push(checkpoint);
-    writeFileSync(paths.checkpoints, `${JSON.stringify(checkpoints, null, 2)}\n`);
-    return packet({ status: "ready", summary: { runId, checkpoint } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, checkpoint: appended.record } });
   }
   if (options.command === "append-resource-snapshot") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: false });
     if (blocked) return blocked;
-    const duplicate = findDuplicateLedgerRecord(paths.resourceSnapshots, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, snapshot: duplicate, duplicateIgnored: true } });
-    }
-    const snapshot = ledgerRecord({
-      idPrefix: "resource",
-      idName: "snapshotId",
-      actor: "manager",
-      typeName: "snapshotType",
-      typeValue: "resource",
-      options,
-      fallbackSummary: "resource snapshot",
-      eventName: "manager.resource.snapshot",
-      extra: { resourceState: sanitizeLedgerField(options.resourceState || "unknown", "unknown", 40) },
+    const appended = withLedgerAppendLock(paths, () => {
+      const snapshotsRead = readNdjsonStrict(paths.resourceSnapshots);
+      if (snapshotsRead.status !== "ready") {
+        return { packet: malformedLedgerFile(paths, "resourceSnapshots", paths.resourceSnapshots, snapshotsRead.message) };
+      }
+      const extra = { resourceState: sanitizeLedgerField(options.resourceState || "unknown", "unknown", 40) };
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.resource.snapshot",
+        typeValue: "resource",
+        actor: "manager",
+        extraParts: Object.values(extra),
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(snapshotsRead.value, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "snapshot");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "snapshot", duplicate) };
+      }
+      const snapshot = ledgerRecord({
+        idPrefix: "resource",
+        idName: "snapshotId",
+        actor: "manager",
+        typeName: "snapshotType",
+        typeValue: "resource",
+        options,
+        fallbackSummary: "resource snapshot",
+        eventName: "manager.resource.snapshot",
+        extra,
+        uniqueAutoIdempotency: true,
+      });
+      appendFileSync(paths.resourceSnapshots, `${JSON.stringify(snapshot)}\n`);
+      return { record: snapshot };
     });
-    appendFileSync(paths.resourceSnapshots, `${JSON.stringify(snapshot)}\n`);
-    return packet({ status: "ready", summary: { runId, snapshot } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, snapshot: appended.record } });
   }
   if (options.command === "append-usage-snapshot") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: false });
     if (blocked) return blocked;
-    const duplicate = findDuplicateLedgerRecord(paths.usageSnapshots, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, snapshot: duplicate, duplicateIgnored: true } });
-    }
-    const snapshot = ledgerRecord({
-      idPrefix: "usage",
-      idName: "snapshotId",
-      actor: "manager",
-      typeName: "snapshotType",
-      typeValue: "usage",
-      options,
-      fallbackSummary: "usage snapshot",
-      eventName: "manager.usage.snapshot",
-      extra: { usageState: sanitizeLedgerField(options.usageState || "unknown", "unknown", 40) },
+    const appended = withLedgerAppendLock(paths, () => {
+      const snapshotsRead = readNdjsonStrict(paths.usageSnapshots);
+      if (snapshotsRead.status !== "ready") {
+        return { packet: malformedLedgerFile(paths, "usageSnapshots", paths.usageSnapshots, snapshotsRead.message) };
+      }
+      const extra = { usageState: sanitizeLedgerField(options.usageState || "unknown", "unknown", 40) };
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.usage.snapshot",
+        typeValue: "usage",
+        actor: "manager",
+        extraParts: Object.values(extra),
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(snapshotsRead.value, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "snapshot");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "snapshot", duplicate) };
+      }
+      const snapshot = ledgerRecord({
+        idPrefix: "usage",
+        idName: "snapshotId",
+        actor: "manager",
+        typeName: "snapshotType",
+        typeValue: "usage",
+        options,
+        fallbackSummary: "usage snapshot",
+        eventName: "manager.usage.snapshot",
+        extra,
+        uniqueAutoIdempotency: true,
+      });
+      appendFileSync(paths.usageSnapshots, `${JSON.stringify(snapshot)}\n`);
+      return { record: snapshot };
     });
-    appendFileSync(paths.usageSnapshots, `${JSON.stringify(snapshot)}\n`);
-    return packet({ status: "ready", summary: { runId, snapshot } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, snapshot: appended.record } });
   }
   if (options.command === "read") {
     const readiness = buildLedgerReadiness(options, context);
@@ -15794,13 +15979,342 @@ function malformedLedgerFile(paths, file, path, message) {
   });
 }
 
-function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = {}, fallbackSummary, eventName = "", extra = {} }) {
+function readLedgerEventsStrict(paths) {
+  const eventsRead = readNdjsonStrict(paths.events);
+  if (eventsRead.status !== "ready") return eventsRead;
+  for (let index = 0; index < eventsRead.value.length; index += 1) {
+    const message = validateRuntimeLedgerEventRecord(eventsRead.value[index]);
+    if (message) {
+      return {
+        status: "malformed",
+        value: [],
+        message: `line ${index + 1}: ${message}`,
+      };
+    }
+  }
+  return eventsRead;
+}
+
+function appendLedgerEvent(paths, runId, recordArgs) {
+  return withLedgerAppendLock(paths, () => {
+    const eventsRead = readLedgerEventsStrict(paths);
+    if (eventsRead.status !== "ready") {
+      return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
+    }
+    const identity = ledgerRecordIdentity(recordArgs.options || {}, {
+      normalizedEventName: normalizeLedgerEventName(recordArgs.eventName || recordArgs.typeValue) || "manager.ledger.appended",
+      typeValue: recordArgs.typeValue,
+      actor: recordArgs.actor,
+      extraParts: Object.values(recordArgs.extra || {}),
+    });
+    const duplicate = hasExplicitLedgerIdempotencyKey(recordArgs.options) ? findDuplicateLedgerRecordFromArray(eventsRead.value, identity.idempotencyKey) : null;
+    if (duplicate) {
+      const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event");
+      if (conflict) return { packet: conflict };
+      return { packet: duplicateLedgerPacket(runId, "event", duplicate) };
+    }
+    const record = ledgerRecord({
+      ...recordArgs,
+      uniqueAutoIdempotency: !hasExplicitLedgerIdempotencyKey(recordArgs.options),
+    });
+    appendFileSync(paths.events, `${JSON.stringify(record)}\n`);
+    return { record };
+  });
+}
+
+function reserveLedgerAction(paths, runId, recordArgs, { duplicateReconciler = null } = {}) {
+  return withLedgerAppendLock(paths, () => {
+    const eventsRead = readLedgerEventsStrict(paths);
+    if (eventsRead.status !== "ready") {
+      return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
+    }
+    const identity = ledgerRecordIdentity(recordArgs.options || {}, {
+      normalizedEventName: normalizeLedgerEventName(recordArgs.eventName || recordArgs.typeValue) || "manager.ledger.appended",
+      typeValue: recordArgs.typeValue,
+      actor: recordArgs.actor,
+      extraParts: Object.values(recordArgs.extra || {}),
+    });
+    const duplicate = hasExplicitLedgerIdempotencyKey(recordArgs.options) ? findDuplicateLedgerRecordFromArray(eventsRead.value, identity.idempotencyKey) : null;
+    if (duplicate) {
+      const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event", { skipResult: duplicate.actionState === "reserved" });
+      if (conflict) return { packet: conflict };
+      if (duplicate.actionState === "reserved") {
+        return { packet: blockedLedgerActionState(runId, duplicate, "ledger-action-reserved", "Existing ledger action reservation has not been finalized.") };
+      }
+      if (duplicate.result && duplicate.result !== "ready") {
+        return { packet: blockedLedgerActionState(runId, duplicate, "ledger-action-partial-side-effects", "Existing ledger action did not complete cleanly.") };
+      }
+      const reconciled = duplicateReconciler ? duplicateReconciler(duplicate) : null;
+      if (reconciled?.packet) return reconciled;
+      return { packet: duplicateLedgerPacket(runId, "event", duplicate) };
+    }
+    const record = ledgerRecord({
+      ...recordArgs,
+      options: { ...(recordArgs.options || {}), result: "reserved" },
+    });
+    record.result = "reserved";
+    record.actionState = "reserved";
+    record.reservationId = record.eventId;
+    record.reservedAt = record.createdAt;
+    record.actionPlan = safeLedgerStructuredMetadata(recordArgs.actionPlan || {});
+    appendFileSync(paths.events, `${JSON.stringify(record)}\n`);
+    return { record };
+  });
+}
+
+function finalizeLedgerAction(paths, runId, reservation, recordArgs) {
+  return withLedgerAppendLock(paths, () => {
+    const eventsRead = readLedgerEventsStrict(paths);
+    if (eventsRead.status !== "ready") {
+      return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
+    }
+    const index = eventsRead.value.findIndex((event) => event?.eventId === reservation?.eventId && event?.idempotencyKey === reservation?.idempotencyKey);
+    if (index < 0) {
+      return { packet: blockedLedgerActionState(runId, reservation, "ledger-action-reservation-missing", "Ledger action reservation disappeared before finalization.") };
+    }
+    const existing = eventsRead.value[index];
+    const next = ledgerRecord(recordArgs);
+    const finalized = {
+      ...existing,
+      summary: next.summary,
+      sourceRefs: next.sourceRefs,
+      evidenceRefs: next.evidenceRefs,
+      recoveryPath: next.recoveryPath,
+      result: next.result,
+      authorityBasis: next.authorityBasis,
+      correlationId: next.correlationId,
+      causationId: next.causationId,
+      orderingKey: next.orderingKey,
+      actionFingerprint: next.actionFingerprint,
+      actionFingerprintVersion: next.actionFingerprintVersion,
+      projectionBehavior: next.projectionBehavior,
+      actionState: "finalized",
+      finalizedAt: new Date().toISOString(),
+      actionPlan: safeLedgerStructuredMetadata(recordArgs.actionPlan || existing.actionPlan || {}),
+    };
+    eventsRead.value[index] = finalized;
+    writeNdjson(paths.events, eventsRead.value);
+    return { record: finalized };
+  });
+}
+
+function blockedLedgerActionState(runId, record = {}, code, message) {
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: { runId, actionResult: ledgerActionResult("blocked", record, "event") },
+    blockers: [
+      {
+        code,
+        message,
+        nextAction: "Inspect and reconcile the existing ledger action side effects before retrying.",
+      },
+    ],
+  });
+}
+
+function blockedLedgerReconciliation(runId, record = {}, blockers = []) {
+  return {
+    packet: packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, actionResult: ledgerActionResult("reconciliation_blocked", record, "event") },
+      blockers: blockers.length > 0
+        ? blockers
+        : [{ code: "ledger-action-side-effects-missing", message: "Existing ledger action side effects could not be reconciled.", nextAction: "Inspect worker state and ledger action before retrying." }],
+    }),
+  };
+}
+
+function reconcileWarmLedgerDuplicate(paths, runId, planned = [], record = {}, context = {}) {
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return blockedLedgerReconciliation(runId, record, [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before retrying warm apply." }]);
+  }
+  const workers = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const blockers = [];
+  const runner = context.tmuxRunner || spawnSync;
+  for (const action of planned) {
+    const worker = workers.find((candidate) => candidate.workerId === action.workerId && candidate.owner === action.owner);
+    if (!worker) {
+      blockers.push({ code: "ledger-action-worker-missing", message: `Warm worker record is missing for ${action.workerId}.`, nextAction: "Reconcile workers.json before retrying warm apply." });
+      continue;
+    }
+    if (worker.sessionName !== action.sessionName || worker.runId !== runId || worker.assignmentState !== "warm") {
+      blockers.push({ code: "ledger-action-worker-diverged", message: `Warm worker record diverged for ${action.workerId}.`, nextAction: "Inspect worker record before retrying warm apply." });
+    }
+    const session = runner("tmux", ["has-session", "-t", action.sessionName], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+    if ((session?.status ?? 1) !== 0) {
+      blockers.push({ code: "ledger-action-worker-session-missing", message: `Warm tmux session is missing for ${action.sessionName}.`, nextAction: "Repair or retire the worker before retrying warm apply." });
+    }
+  }
+  return blockers.length > 0 ? blockedLedgerReconciliation(runId, record, blockers) : null;
+}
+
+function reconcileHandoffLedgerDuplicate(paths, runId, pairings = [], record = {}, context = {}) {
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return blockedLedgerReconciliation(runId, record, [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before retrying handoff apply." }]);
+  }
+  const workers = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const blockers = [];
+  for (const pairing of pairings) {
+    const worker = workers.find((candidate) => candidate.workerId === pairing.workerId && candidate.owner === pairing.owner);
+    if (!worker) {
+      blockers.push({ code: "ledger-action-handoff-worker-missing", message: `Handoff worker record is missing for ${pairing.workerId}.`, nextAction: "Reconcile workers.json before retrying handoff apply." });
+      continue;
+    }
+    if (worker.assignmentId !== pairing.assignmentId || worker.taskId !== pairing.taskId || worker.assignmentState !== "active") {
+      blockers.push({ code: "ledger-action-handoff-worker-diverged", message: `Handoff worker assignment diverged for ${pairing.workerId}.`, nextAction: "Inspect worker assignment before retrying handoff apply." });
+    }
+    if (!existsSync(pairing.handoffPath)) {
+      blockers.push({ code: "ledger-action-handoff-file-missing", message: `Handoff file is missing for ${pairing.workerId}.`, nextAction: "Regenerate or reconcile handoff evidence before retrying." });
+    } else {
+      const expectedDigest = ledgerValueDigest(renderWorkerHandoffFile(pairing));
+      const actualDigest = ledgerValueDigest(readFileSync(pairing.handoffPath, "utf8"));
+      if (expectedDigest !== actualDigest) {
+        blockers.push({ code: "ledger-action-handoff-file-diverged", message: `Handoff file content diverged for ${pairing.workerId}.`, nextAction: "Inspect handoff file before retrying." });
+      }
+    }
+    if (!existsSync(pairing.pastePath)) {
+      blockers.push({ code: "ledger-action-handoff-pointer-missing", message: `Handoff paste pointer is missing for ${pairing.workerId}.`, nextAction: "Regenerate or reconcile handoff pointer before retrying." });
+    }
+  }
+  return blockers.length > 0 ? blockedLedgerReconciliation(runId, record, blockers) : null;
+}
+
+function writeNdjson(path, records = []) {
+  writeFileSync(path, records.map((record) => JSON.stringify(record)).join("\n") + (records.length > 0 ? "\n" : ""));
+}
+
+function withLedgerAppendLock(paths, fn) {
+  const lockDir = join(paths.root, ".ledger-append.lock");
+  const ownerPath = join(lockDir, "owner.json");
+  const owner = {
+    runId: paths.runId,
+    pid: process.pid,
+    process: currentLedgerLockProcessMetadata(),
+    token: `${paths.runId}:${process.pid}:${Date.now()}:${process.hrtime.bigint().toString(36)}`,
+    createdAt: new Date().toISOString(),
+  };
+  const started = Date.now();
+  while (true) {
+    try {
+      mkdirSync(lockDir);
+      writeFileSync(ownerPath, `${JSON.stringify(owner, null, 2)}\n`);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (recoverStaleLedgerAppendLock(lockDir, ownerPath)) continue;
+      if (Date.now() - started > 5000) {
+        const existingOwner = readJson(ownerPath, null);
+        return {
+          packet: packet({
+            ok: false,
+            status: "blocked",
+            summary: { runId: paths.runId, lock: lockDir, owner: existingOwner },
+            blockers: [
+              {
+                code: "ledger-append-lock-timeout",
+                message: "Timed out waiting for manager runtime ledger append lock.",
+                nextAction: "Inspect the manager ledger lock before retrying append.",
+              },
+            ],
+          }),
+        };
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    const currentOwner = readJson(ownerPath, null);
+    if (currentOwner?.token === owner.token && currentOwner?.pid === owner.pid && currentOwner?.runId === owner.runId) {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  }
+}
+
+function recoverStaleLedgerAppendLock(lockDir, ownerPath) {
+  const owner = readJson(ownerPath, null);
+  const ageMs = Date.now() - (parseTimeMs(owner?.createdAt) || safeMtimeMs(lockDir) || 0);
+  const pid = Number(owner?.pid);
+  const pidAlive = Number.isInteger(pid) && pid > 0 ? processAlive(pid) : false;
+  if (ageMs < 30000) return false;
+  if (pidAlive && !ledgerLockOwnerProcessDiverged(owner)) return false;
+  rmSync(lockDir, { recursive: true, force: true });
+  return true;
+}
+
+function currentLedgerLockProcessMetadata() {
+  const metadata = readProcessMetadata(process.pid) || {};
+  return {
+    execPath: process.execPath,
+    argv0: process.argv[0] || "",
+    cwd: process.cwd(),
+    cmdlineDigest: metadata.cmdlineDigest || ledgerValueDigest(process.argv.join("\u0000")),
+    startTime: metadata.startTime || "",
+  };
+}
+
+function ledgerLockOwnerProcessDiverged(owner = {}) {
+  const pid = Number(owner?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  const current = readProcessMetadata(pid);
+  if (!current) return false;
+  const recorded = owner.process || {};
+  if (recorded.startTime && current.startTime && recorded.startTime !== current.startTime) return true;
+  if (recorded.cmdlineDigest && current.cmdlineDigest && recorded.cmdlineDigest !== current.cmdlineDigest) return true;
+  return false;
+}
+
+function readProcessMetadata(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const afterName = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    const startTime = afterName[19] || "";
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return {
+      startTime,
+      cmdlineDigest: ledgerValueDigest(cmdline),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function safeMtimeMs(path) {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = {}, fallbackSummary, eventName = "", extra = {}, uniqueAutoIdempotency = false }) {
   const recordId = `${idPrefix}-${Date.now()}-${process.hrtime.bigint().toString(36)}`;
   const createdAt = new Date().toISOString();
   const normalizedEventName = normalizeLedgerEventName(eventName || typeValue) || "manager.ledger.appended";
   const sanitizedSourceRefs = sanitizeSourceRefs(options.sourceRefs || defaultLedgerSourceRefs(normalizedEventName));
   const sanitizedEvidenceRefs = sanitizeSourceRefs(options.evidenceRefs || options.evidenceRef || defaultLedgerEvidenceRefs(normalizedEventName, recordId));
-  const correlationId = sanitizeLedgerField(options.correlationId || options.correlationID || recordId, recordId, 120);
+  const identity = ledgerRecordIdentity(options, {
+    normalizedEventName,
+    typeValue,
+    actor,
+    extraParts: Object.values(extra || {}),
+    uniqueAutoPart: uniqueAutoIdempotency ? recordId : "",
+  });
+  const correlationId = sanitizeLedgerField(options.correlationId || options.correlationID || identity.idempotencyKey, identity.idempotencyKey, 120);
   return {
     [idName]: recordId,
     ...safeLedgerExtra(extra),
@@ -15821,12 +16335,229 @@ function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = 
     evidenceRefs: sanitizedEvidenceRefs,
     correlationId,
     causationId: sanitizeLedgerField(options.causationId || options.causationID || correlationId, correlationId, 120),
-    orderingKey: sanitizeLedgerField(options.orderingKey || createdAt, createdAt, 120),
-    idempotencyKey: sanitizeLedgerField(options.idempotencyKey || `${normalizedEventName}:${recordId}`, `${normalizedEventName}:${recordId}`, 160),
+    orderingKey: sanitizeLedgerField(options.orderingKey || identity.idempotencyKey, identity.idempotencyKey, 120),
+    idempotencyKey: identity.idempotencyKey,
+    actionFingerprint: identity.actionFingerprint,
+    actionFingerprintVersion: identity.actionFingerprintVersion,
     redactionBoundary: sanitizeLedgerField(options.redactionBoundary || "metadata_only", "metadata_only", 40),
     projectionBehavior: sanitizeLedgerField(options.projectionBehavior || defaultLedgerProjectionBehavior(normalizedEventName), "records_evidence", 80),
     rawPayloadRetained: false,
   };
+}
+
+function ledgerRecordIdentity(options = {}, { normalizedEventName, typeValue, actor, sourceRefs = null, evidenceRefs = null, extraParts = [], uniqueAutoPart = "" } = {}) {
+  const fingerprintSource = ledgerActionFingerprintSource(options, { normalizedEventName, typeValue, actor, sourceRefs, evidenceRefs, extraParts });
+  const actionFingerprint = createHash("sha256").update(JSON.stringify(fingerprintSource)).digest("hex");
+  const idempotencyKey = ledgerIdempotencyKey(options, {
+    normalizedEventName: fingerprintSource.eventName,
+    actionFingerprint,
+    uniqueAutoPart,
+  });
+  return {
+    idempotencyKey,
+    actionFingerprint,
+    actionFingerprintVersion: LEDGER_ACTION_FINGERPRINT_VERSION,
+    eventName: fingerprintSource.eventName,
+    retryMetadata: {
+      authorityBasis: sanitizeLedgerField(options.authorityBasis || "manager-owned-ledger-append", "manager-owned-ledger-append", 120),
+      summary: sanitizeLedgerField(options.summary || "", "", 240),
+      result: sanitizeLedgerField(options.result || "recorded", "recorded", 40),
+      recoveryPath: sanitizeLedgerField(options.recoveryPath || "inspect manager ledger and rerun resume state", "inspect manager ledger and rerun resume state", 240),
+      correlationId: sanitizeLedgerField(options.correlationId || options.correlationID || idempotencyKey, idempotencyKey, 120),
+      causationId: sanitizeLedgerField(options.causationId || options.causationID || options.correlationId || options.correlationID || idempotencyKey, idempotencyKey, 120),
+      orderingKey: sanitizeLedgerField(options.orderingKey || idempotencyKey, idempotencyKey, 120),
+    },
+    canonical: fingerprintSource,
+  };
+}
+
+function ledgerIdempotencyKey(options = {}, { normalizedEventName, actionFingerprint, uniqueAutoPart = "" } = {}) {
+  const explicit = explicitLedgerIdempotencyKey(options);
+  if (explicit) return explicit;
+  const safeEventName = normalizeLedgerEventName(normalizedEventName) || "manager.ledger.appended";
+  const uniquePart = uniqueAutoPart ? `:${hashLedgerValue(uniqueAutoPart).slice(0, 12)}` : "";
+  return `auto:${safeEventName}:${String(actionFingerprint || hashLedgerValue(safeEventName)).slice(0, 24)}${uniquePart}`;
+}
+
+function ledgerActionFingerprintSource(options = {}, { normalizedEventName, typeValue, actor, sourceRefs = null, evidenceRefs = null, extraParts = [] } = {}) {
+  const safeEventName = normalizeLedgerEventName(normalizedEventName || typeValue) || "manager.ledger.appended";
+  return {
+    schemaVersion: LEDGER_ACTION_FINGERPRINT_VERSION,
+    eventName: safeEventName,
+    actorDigest: ledgerValueDigest(actor || "manager"),
+    typeValueDigest: ledgerValueDigest(typeValue || safeEventName),
+    sourceRefDigests: canonicalLedgerDigests(sourceRefs || options.sourceRefs || defaultLedgerSourceRefs(safeEventName)),
+    evidenceRefDigests: canonicalLedgerDigests(evidenceRefs || options.evidenceRefs || options.evidenceRef || defaultLedgerEvidenceRefs(safeEventName, "pending")),
+    actionMaterialDigests: canonicalLedgerDigests(options.actionMaterial || []),
+    extraPartDigests: canonicalLedgerDigests(extraParts),
+  };
+}
+
+function canonicalLedgerRefs(refs = []) {
+  const list = Array.isArray(refs) ? refs : [refs];
+  return [...new Set(list.map((ref) => ledgerFingerprintField(ref)).filter(Boolean))].sort();
+}
+
+function canonicalLedgerDigests(values = []) {
+  const list = Array.isArray(values) ? values : [values];
+  return [...new Set(list.map((value) => ledgerValueDigest(value)).filter(Boolean))].sort();
+}
+
+function ledgerValueDigest(value) {
+  return createHash("sha256").update(stableLedgerValue(value)).digest("hex");
+}
+
+function stableLedgerValue(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return `[${value.map((entry) => stableLedgerValue(entry)).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableLedgerValue(value[key])}`).join(",")}}`;
+  }
+  return String(value)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, (match) => `[protected-token:${hashLedgerValue(match).slice(0, 24)}]`)
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ledgerFingerprintField(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, (match) => `[protected-token:${hashLedgerValue(match).slice(0, 24)}]`)
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hashLedgerValue(value) {
+  return createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function hasExplicitLedgerIdempotencyKey(options = {}) {
+  return Boolean(explicitLedgerIdempotencyKey(options));
+}
+
+function explicitLedgerIdempotencyKey(options = {}) {
+  const raw = String(options.idempotencyKey || options.idempotency_key || "").trim();
+  if (!raw) return "";
+  const normalized = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (normalized.length > 160 || ledgerValueContainsProtectedMaterial(normalized)) return `explicit:${ledgerValueDigest(normalized).slice(0, 48)}`;
+  const sanitized = sanitizeLedgerField(normalized, "", 160);
+  if (sanitized) return sanitized;
+  return `explicit:${ledgerValueDigest(raw).slice(0, 48)}`;
+}
+
+function ledgerValueContainsProtectedMaterial(value = "") {
+  return /\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+|OPENAI_API_KEY|password|secret)\b/i.test(String(value || ""));
+}
+
+function duplicateLedgerPacket(runId, recordName, record) {
+  const existingRecordId = ledgerRecordId(record, recordName);
+  const actionResult = ledgerActionResult("duplicate_ignored", record, recordName);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      [recordName]: record,
+      duplicateIgnored: true,
+      actionResult: { ...actionResult, existingRecordId },
+    },
+  });
+}
+
+function duplicateLedgerConflict(runId, duplicate, identity = {}, recordName = "event", options = {}) {
+  const conflictReasons = [];
+  if (identity.eventName && duplicate.eventName && duplicate.eventName !== identity.eventName) {
+    conflictReasons.push("eventName");
+  }
+  if (!duplicate.actionFingerprint || !duplicate.actionFingerprintVersion) {
+    conflictReasons.push("legacyActionFingerprint");
+  } else if (duplicate.actionFingerprintVersion !== identity.actionFingerprintVersion) {
+    conflictReasons.push("actionFingerprintVersion");
+  } else if (identity.actionFingerprint && duplicate.actionFingerprint !== identity.actionFingerprint) {
+    conflictReasons.push("actionFingerprint");
+  }
+  const retryMetadata = identity.retryMetadata || {};
+  if (retryMetadata.authorityBasis && duplicate.authorityBasis && duplicate.authorityBasis !== retryMetadata.authorityBasis) {
+    conflictReasons.push("authorityBasis");
+  }
+  if (retryMetadata.summary && duplicate.summary && duplicate.summary !== retryMetadata.summary) {
+    conflictReasons.push("summary");
+  }
+  if (!options.skipResult && retryMetadata.result && duplicate.result && duplicate.result !== retryMetadata.result) {
+    conflictReasons.push("result");
+  }
+  if (retryMetadata.recoveryPath && duplicate.recoveryPath && duplicate.recoveryPath !== retryMetadata.recoveryPath) {
+    conflictReasons.push("recoveryPath");
+  }
+  if (retryMetadata.correlationId && duplicate.correlationId && duplicate.correlationId !== retryMetadata.correlationId) {
+    conflictReasons.push("correlationId");
+  }
+  if (retryMetadata.causationId && duplicate.causationId && duplicate.causationId !== retryMetadata.causationId) {
+    conflictReasons.push("causationId");
+  }
+  if (retryMetadata.orderingKey && duplicate.orderingKey && duplicate.orderingKey !== retryMetadata.orderingKey) {
+    conflictReasons.push("orderingKey");
+  }
+  if (conflictReasons.length === 0) return null;
+  const existingRecordId = ledgerRecordId(duplicate, recordName);
+  const actionResult = ledgerActionResult("conflict", duplicate, recordName);
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: {
+      runId,
+      actionResult: {
+        ...actionResult,
+        conflictFields: conflictReasons,
+        existingRecordId,
+        existingEventId: duplicate.eventId || existingRecordId,
+      },
+    },
+    blockers: [
+      {
+        code: "ledger-idempotency-conflict",
+        message: `Ledger idempotency key conflicts with existing record fields: ${conflictReasons.join(", ")}.`,
+        nextAction: `Resolve ${conflictReasons[0]} for the existing ledger record or submit a new idempotency key.`,
+      },
+    ],
+  });
+}
+
+function ledgerActionResult(status, record = {}, recordName = "event") {
+  return {
+    status,
+    existingRecordId: ledgerRecordId(record, recordName),
+    eventId: record.eventId || "",
+    questionId: record.questionId || "",
+    checkpointId: record.checkpointId || "",
+    snapshotId: record.snapshotId || "",
+    eventName: record.eventName || "",
+    authorityBasis: record.authorityBasis || "",
+    result: record.result || "",
+    sourceRefs: Array.isArray(record.sourceRefs) ? record.sourceRefs : [],
+    evidenceRefs: Array.isArray(record.evidenceRefs) ? record.evidenceRefs : [],
+    recoveryPath: record.recoveryPath || "",
+    projectionBehavior: record.projectionBehavior || "",
+    idempotencyKey: record.idempotencyKey || "",
+    correlationId: record.correlationId || "",
+    causationId: record.causationId || "",
+    orderingKey: record.orderingKey || "",
+    actionFingerprintVersion: record.actionFingerprintVersion || "",
+  };
+}
+
+function ledgerRecordId(record = {}, recordName = "event") {
+  const field = {
+    event: "eventId",
+    question: "questionId",
+    checkpoint: "checkpointId",
+    snapshot: "snapshotId",
+  }[recordName] || "eventId";
+  return record[field] || record.eventId || record.questionId || record.checkpointId || record.snapshotId || "";
 }
 
 function safeLedgerExtra(extra = {}) {
@@ -15838,6 +16569,21 @@ function safeLedgerExtra(extra = {}) {
     safe.usageState = sanitizeLedgerField(extra.usageState, "unknown", 40);
   }
   return safe;
+}
+
+function safeLedgerStructuredMetadata(value, depth = 0) {
+  if (depth > 4) return "[depth-limit]";
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value.slice(0, 24).map((entry) => safeLedgerStructuredMetadata(entry, depth + 1));
+  if (typeof value === "object") {
+    const safe = {};
+    for (const key of Object.keys(value).sort().slice(0, 32)) {
+      safe[sanitizeLedgerField(key, "field", 80)] = safeLedgerStructuredMetadata(value[key], depth + 1);
+    }
+    return safe;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  return sanitizeLedgerField(stableLedgerValue(value), "", 240);
 }
 
 function defaultLedgerSourceRefs(eventName) {
@@ -15930,7 +16676,9 @@ function findDuplicateLedgerEvent(eventsPath, idempotencyKey) {
 function findDuplicateLedgerRecord(recordsPath, idempotencyKey) {
   const key = sanitizeLedgerField(idempotencyKey || "", "", 160);
   if (!key) return null;
-  return readNdjsonStrict(recordsPath).value.find((event) => event?.idempotencyKey === key) || null;
+  const recordsRead = readNdjsonStrict(recordsPath);
+  if (recordsRead.status !== "ready") return null;
+  return recordsRead.value.find((event) => event?.idempotencyKey === key) || null;
 }
 
 function findDuplicateLedgerRecordFromArray(records = [], idempotencyKey) {
