@@ -6,44 +6,45 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-function resolveTscCommand() {
+function resolveTscCommands(outDir) {
+  const commonArgs = [
+    "--target",
+    "ES2022",
+    "--module",
+    "ESNext",
+    "--moduleResolution",
+    "Bundler",
+    "--strict",
+    "--verbatimModuleSyntax"
+  ];
+  const rootFiles = ["packages/contracts/src/index.ts", "packages/workflow-core/src/index.ts"];
+  const dashboardRelativeFiles = ["../../packages/contracts/src/index.ts", "../../packages/workflow-core/src/index.ts"];
+  const commands = [];
   for (const candidate of [
     join("apps", "dashboard", "node_modules", ".bin", "tsc"),
     join("node_modules", ".bin", "tsc")
   ]) {
     if (existsSync(candidate)) {
-      return [candidate, []];
+      commands.push([candidate, [...commonArgs, "--rootDir", ".", "--outDir", outDir, ...rootFiles]]);
     }
   }
-  return ["pnpm", ["--dir", "apps/dashboard", "exec", "tsc"]];
+  commands.push(["pnpm", ["--dir", ".", "exec", "tsc", ...commonArgs, "--rootDir", ".", "--outDir", outDir, ...rootFiles]]);
+  commands.push(["pnpm", ["--dir", "apps/dashboard", "exec", "tsc", ...commonArgs, "--rootDir", "../..", "--outDir", outDir, ...dashboardRelativeFiles]]);
+  return commands;
 }
 
 export async function loadWorkflowCoreManagerControlPlane() {
+  assert.equal(existsSync("packages/workflow-core/src/index.ts"), true, "workflow-core loader must run from the repository root");
+  assert.equal(existsSync("packages/contracts/src/index.ts"), true, "workflow-core loader must compile the repository contracts package");
   const outDir = await mkdtemp(join(tmpdir(), "manager-dispatcher-"));
   await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
 
-  const [tscCommand, tscPrefixArgs] = resolveTscCommand();
-  const result = spawnSync(
-    tscCommand,
-    [
-      ...tscPrefixArgs,
-      "--target",
-      "ES2022",
-      "--module",
-      "ESNext",
-      "--moduleResolution",
-      "Bundler",
-      "--strict",
-      "--verbatimModuleSyntax",
-      "--rootDir",
-      ".",
-      "--outDir",
-      outDir,
-      "packages/contracts/src/index.ts",
-      "packages/workflow-core/src/index.ts"
-    ],
-    { encoding: "utf8" }
-  );
+  const attempts = resolveTscCommands(outDir);
+  let result = null;
+  for (const [command, args] of attempts) {
+    result = spawnSync(command, args, { encoding: "utf8" });
+    if (result.status === 0) break;
+  }
   assert.equal(result.status, 0, result.stderr || result.stdout);
 
   await rewriteCompiledImports(outDir);
