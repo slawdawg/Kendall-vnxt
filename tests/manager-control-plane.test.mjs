@@ -6293,42 +6293,40 @@ test("worker handoff apply persists successful records when a later paste fails"
       ], null, 2)}\n`,
     );
     let pasteAttempts = 0;
-    const applied = buildWorkerHandoffPlan(
-      { runId: "manager-test", stateRoot, limit: 2, apply: true },
-      {
-        receiptCheck: false,
-        tmuxRunner: (_command, args) => {
-          if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
-          if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
-          if (args[0] === "paste-buffer") {
-            pasteAttempts += 1;
-            return pasteAttempts === 1
-              ? { status: 0, stdout: "", stderr: "" }
-              : { status: 1, stdout: "", stderr: "second paste failed" };
-          }
-          if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
-          return { status: 0, stdout: "", stderr: "" };
-        },
-        workerStatus: {
-          status: "ready",
-          summary: {
-            targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
-            workers: [
-              { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
-              { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
-            ],
-          },
-        },
-        assignmentSummary: {
-          summary: {
-            laneAssignments: [
-              { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
-              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
-            ],
-          },
+    const context = {
+      receiptCheck: false,
+      tmuxRunner: (_command, args) => {
+        if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "paste-buffer") {
+          pasteAttempts += 1;
+          return pasteAttempts === 1
+            ? { status: 0, stdout: "", stderr: "" }
+            : { status: 1, stdout: "", stderr: "second paste failed" };
+        }
+        if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      workerStatus: {
+        status: "ready",
+        summary: {
+          targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+          workers: [
+            { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+            { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+          ],
         },
       },
-    );
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+            { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+          ],
+        },
+      },
+    };
+    const applied = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
 
     assert.equal(applied.status, "blocked");
     assert.equal(applied.summary.mutation, "partial");
@@ -6340,6 +6338,32 @@ test("worker handoff apply persists successful records when a later paste fails"
     const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
     assert.equal(ledger.summary.events.at(-1).eventType, "worker_handoff_apply");
     assert.equal(ledger.summary.events.at(-1).result, "blocked_partial");
+    const retry = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
+    assert.equal(retry.status, "blocked");
+    assert.equal(retry.blockers[0].code, "ledger-action-partial-side-effects");
+    assert.deepEqual(retry.summary.actionResult.conflictFields, []);
+    assert.equal(retry.summary.actionResult.fingerprintDrift, true);
+    assert.equal(retry.summary.actionResult.idempotencyConflict, false);
+    assert.notEqual(retry.blockers[0].code, "ledger-idempotency-conflict");
+    const changedIdentityRetry = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 2, apply: true },
+      {
+        ...context,
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [
+              { assignmentId: "lane-1", taskId: "task-1-changed", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+            ],
+          },
+        },
+      },
+    );
+    assert.equal(changedIdentityRetry.status, "blocked");
+    assert.equal(changedIdentityRetry.blockers[0].code, "ledger-action-partial-side-effects");
+    assert.deepEqual(changedIdentityRetry.summary.actionResult.conflictFields, ["actionFingerprint"]);
+    assert.equal(changedIdentityRetry.summary.actionResult.fingerprintDrift, true);
+    assert.equal(changedIdentityRetry.summary.actionResult.idempotencyConflict, true);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }

@@ -16036,14 +16036,23 @@ function reserveLedgerAction(paths, runId, recordArgs, { duplicateReconciler = n
     });
     const duplicate = hasExplicitLedgerIdempotencyKey(recordArgs.options) ? findDuplicateLedgerRecordFromArray(eventsRead.value, identity.idempotencyKey) : null;
     if (duplicate) {
-      const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event", { skipResult: duplicate.actionState === "reserved" });
-      if (conflict) return { packet: conflict };
       if (duplicate.actionState === "reserved") {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event", { skipResult: true });
+        if (conflict) return { packet: conflict };
         return { packet: blockedLedgerActionState(runId, duplicate, "ledger-action-reserved", "Existing ledger action reservation has not been finalized.") };
       }
       if (duplicate.result && duplicate.result !== "ready") {
-        return { packet: blockedLedgerActionState(runId, duplicate, "ledger-action-partial-side-effects", "Existing ledger action did not complete cleanly.") };
+        const conflict = partialLedgerActionConflictEvidence(duplicate, identity, recordArgs);
+        return {
+          packet: blockedLedgerActionState(runId, duplicate, "ledger-action-partial-side-effects", "Existing ledger action did not complete cleanly.", {
+            conflictFields: conflict.conflictFields,
+            fingerprintDrift: conflict.fingerprintDrift,
+            idempotencyConflict: conflict.conflictFields.length > 0,
+          }),
+        };
       }
+      const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event");
+      if (conflict) return { packet: conflict };
       const reconciled = duplicateReconciler ? duplicateReconciler(duplicate) : null;
       if (reconciled?.packet) return reconciled;
       return { packet: duplicateLedgerPacket(runId, "event", duplicate) };
@@ -16098,11 +16107,11 @@ function finalizeLedgerAction(paths, runId, reservation, recordArgs) {
   });
 }
 
-function blockedLedgerActionState(runId, record = {}, code, message) {
+function blockedLedgerActionState(runId, record = {}, code, message, actionResultExtras = {}) {
   return packet({
     ok: false,
     status: "blocked",
-    summary: { runId, actionResult: ledgerActionResult("blocked", record, "event") },
+    summary: { runId, actionResult: { ...ledgerActionResult("blocked", record, "event"), ...actionResultExtras } },
     blockers: [
       {
         code,
@@ -16525,6 +16534,54 @@ function duplicateLedgerConflict(runId, duplicate, identity = {}, recordName = "
       },
     ],
   });
+}
+
+function partialLedgerActionConflictEvidence(duplicate = {}, identity = {}, recordArgs = {}) {
+  const conflictReasons = [];
+  const fingerprintDrift = Boolean(
+    duplicate.actionFingerprint &&
+    identity.actionFingerprint &&
+    duplicate.actionFingerprint !== identity.actionFingerprint,
+  );
+  if (identity.eventName && duplicate.eventName && duplicate.eventName !== identity.eventName) {
+    conflictReasons.push("eventName");
+  }
+  if (!duplicate.actionFingerprint || !duplicate.actionFingerprintVersion) {
+    conflictReasons.push("legacyActionFingerprint");
+  } else if (duplicate.actionFingerprintVersion !== identity.actionFingerprintVersion) {
+    conflictReasons.push("actionFingerprintVersion");
+  } else if (partialLedgerActionMaterialChanged(duplicate.actionPlan, recordArgs.actionPlan)) {
+    conflictReasons.push("actionFingerprint");
+  }
+  const retryMetadata = identity.retryMetadata || {};
+  if (retryMetadata.authorityBasis && duplicate.authorityBasis && duplicate.authorityBasis !== retryMetadata.authorityBasis) {
+    conflictReasons.push("authorityBasis");
+  }
+  if (retryMetadata.recoveryPath && duplicate.recoveryPath && duplicate.recoveryPath !== retryMetadata.recoveryPath) {
+    conflictReasons.push("recoveryPath");
+  }
+  if (retryMetadata.correlationId && duplicate.correlationId && duplicate.correlationId !== retryMetadata.correlationId) {
+    conflictReasons.push("correlationId");
+  }
+  if (retryMetadata.causationId && duplicate.causationId && duplicate.causationId !== retryMetadata.causationId) {
+    conflictReasons.push("causationId");
+  }
+  if (retryMetadata.orderingKey && duplicate.orderingKey && duplicate.orderingKey !== retryMetadata.orderingKey) {
+    conflictReasons.push("orderingKey");
+  }
+  return { conflictFields: conflictReasons, fingerprintDrift };
+}
+
+function partialLedgerActionMaterialChanged(existingActionPlan = {}, retryActionPlan = {}) {
+  const safeRetryActionPlan = safeLedgerStructuredMetadata(retryActionPlan || {});
+  const existingMaterial = isPlainObject(existingActionPlan)
+    ? existingActionPlan.handoffs || existingActionPlan.workers || existingActionPlan.requests || existingActionPlan.answers || existingActionPlan.signals || null
+    : null;
+  const retryMaterial = isPlainObject(safeRetryActionPlan)
+    ? safeRetryActionPlan.handoffs || safeRetryActionPlan.workers || safeRetryActionPlan.requests || safeRetryActionPlan.answers || safeRetryActionPlan.signals || null
+    : null;
+  if (existingMaterial === null || retryMaterial === null) return false;
+  return stableLedgerValue(existingMaterial) !== stableLedgerValue(retryMaterial);
 }
 
 function ledgerActionResult(status, record = {}, recordName = "event") {
