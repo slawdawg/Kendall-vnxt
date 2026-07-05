@@ -5334,6 +5334,160 @@ test("worker warm gate apply starts only manager-owned workers and records heart
   }
 });
 
+test("worker warm apply blocks before tmux mutation when ledger action preflight fails", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-preflight-block-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    writeFileSync(join(runRoot, "events.ndjson"), "{bad json\n");
+    const launches = [];
+    const applied = buildWorkerWarmPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        apply: true,
+        limit: 1,
+        workerCommand: "bash -lc 'echo warm'",
+      },
+      {
+        cyclePacket,
+        tmuxRunner(command, args) {
+          launches.push({ command, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "ledger-file-malformed");
+    assert.equal(launches.length, 0);
+    assert.equal(JSON.parse(readFileSync(join(runRoot, "workers.json"), "utf8")).length, 0);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm duplicate retries reconcile worker records and tmux sessions", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-duplicate-reconcile-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    const liveSessions = new Set();
+    const tmuxRunner = (_command, args) => {
+      if (args[0] === "has-session") return { status: liveSessions.has(args[2]) ? 0 : 1, stdout: "", stderr: "" };
+      if (args[0] === "new-session") {
+        liveSessions.add(args[3]);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const options = { runId: "manager-test", stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" };
+    const first = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    const duplicate = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+
+    assert.equal(first.status, "ready");
+    assert.equal(duplicate.status, "ready");
+    assert.equal(duplicate.summary.duplicateIgnored, true);
+    assert.equal(duplicate.summary.actionResult.result, "ready");
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8").trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actionState, "finalized");
+
+    writeFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), "[]\n");
+    const missingRecord = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    assert.equal(missingRecord.status, "blocked");
+    assert.ok(missingRecord.blockers.some((blocker) => blocker.code === "ledger-action-worker-missing"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm retry blocks while same-key action reservation is in progress", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-reserved-retry-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const liveSessions = new Set();
+    const tmuxRunner = (_command, args) => {
+      if (args[0] === "has-session") return { status: liveSessions.has(args[2]) ? 0 : 1, stdout: "", stderr: "" };
+      if (args[0] === "new-session") {
+        liveSessions.add(args[3]);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: { tmuxResult: { ok: true, panes: [], error: "" }, workspaceResult: { stateRoot, manifests: [], manifestErrors: [] } },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    const options = { runId: "manager-test", stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" };
+    const first = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    assert.equal(first.status, "ready");
+    const eventsPath = join(runRoot, "events.ndjson");
+    const record = JSON.parse(readFileSync(eventsPath, "utf8").trim());
+    record.actionState = "reserved";
+    record.result = "reserved";
+    writeFileSync(eventsPath, `${JSON.stringify(record)}\n`);
+    const retry = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    assert.equal(retry.status, "blocked");
+    assert.equal(retry.blockers[0].code, "ledger-action-reserved");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker warm gate records complete warm pool metadata without raw retention", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-metadata-"));
   try {
@@ -6139,42 +6293,40 @@ test("worker handoff apply persists successful records when a later paste fails"
       ], null, 2)}\n`,
     );
     let pasteAttempts = 0;
-    const applied = buildWorkerHandoffPlan(
-      { runId: "manager-test", stateRoot, limit: 2, apply: true },
-      {
-        receiptCheck: false,
-        tmuxRunner: (_command, args) => {
-          if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
-          if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
-          if (args[0] === "paste-buffer") {
-            pasteAttempts += 1;
-            return pasteAttempts === 1
-              ? { status: 0, stdout: "", stderr: "" }
-              : { status: 1, stdout: "", stderr: "second paste failed" };
-          }
-          if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
-          return { status: 0, stdout: "", stderr: "" };
-        },
-        workerStatus: {
-          status: "ready",
-          summary: {
-            targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
-            workers: [
-              { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
-              { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
-            ],
-          },
-        },
-        assignmentSummary: {
-          summary: {
-            laneAssignments: [
-              { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
-              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
-            ],
-          },
+    const context = {
+      receiptCheck: false,
+      tmuxRunner: (_command, args) => {
+        if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "paste-buffer") {
+          pasteAttempts += 1;
+          return pasteAttempts === 1
+            ? { status: 0, stdout: "", stderr: "" }
+            : { status: 1, stdout: "", stderr: "second paste failed" };
+        }
+        if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      workerStatus: {
+        status: "ready",
+        summary: {
+          targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+          workers: [
+            { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+            { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+          ],
         },
       },
-    );
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+            { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+          ],
+        },
+      },
+    };
+    const applied = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
 
     assert.equal(applied.status, "blocked");
     assert.equal(applied.summary.mutation, "partial");
@@ -6186,6 +6338,86 @@ test("worker handoff apply persists successful records when a later paste fails"
     const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
     assert.equal(ledger.summary.events.at(-1).eventType, "worker_handoff_apply");
     assert.equal(ledger.summary.events.at(-1).result, "blocked_partial");
+    const retry = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
+    assert.equal(retry.status, "blocked");
+    assert.equal(retry.blockers[0].code, "ledger-action-partial-side-effects");
+    assert.deepEqual(retry.summary.actionResult.conflictFields, []);
+    assert.equal(retry.summary.actionResult.fingerprintDrift, true);
+    assert.equal(retry.summary.actionResult.idempotencyConflict, false);
+    assert.notEqual(retry.blockers[0].code, "ledger-idempotency-conflict");
+    const changedIdentityRetry = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 2, apply: true },
+      {
+        ...context,
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [
+              { assignmentId: "lane-1", taskId: "task-1-changed", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+            ],
+          },
+        },
+      },
+    );
+    assert.equal(changedIdentityRetry.status, "blocked");
+    assert.equal(changedIdentityRetry.blockers[0].code, "ledger-action-partial-side-effects");
+    assert.deepEqual(changedIdentityRetry.summary.actionResult.conflictFields, ["actionFingerprint"]);
+    assert.equal(changedIdentityRetry.summary.actionResult.fingerprintDrift, true);
+    assert.equal(changedIdentityRetry.summary.actionResult.idempotencyConflict, true);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff duplicate retries reconcile worker assignment and handoff files", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-duplicate-reconcile-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    const initialWorkers = [
+      { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", assignmentState: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+    ];
+    writeFileSync(workerPath, `${JSON.stringify(initialWorkers, null, 2)}\n`);
+    const context = {
+      receiptCheck: false,
+      tmuxRunner: (_command, args) => {
+        if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "paste-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      workerStatus: {
+        status: "ready",
+        summary: {
+          targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+          workers: initialWorkers,
+        },
+      },
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+          ],
+        },
+      },
+    };
+    const options = { runId: "manager-test", stateRoot, limit: 1, apply: true };
+    const first = buildWorkerHandoffPlan(options, context);
+    const duplicate = buildWorkerHandoffPlan(options, context);
+
+    assert.equal(first.status, "ready");
+    assert.equal(duplicate.status, "ready");
+    assert.equal(duplicate.summary.duplicateIgnored, true);
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8").trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actionState, "finalized");
+
+    const handoffPath = join(stateRoot, "manager-runs", "manager-test", "handoffs", "codex-1-lane-1.md");
+    writeFileSync(handoffPath, "diverged handoff\n");
+    const divergent = buildWorkerHandoffPlan(options, context);
+    assert.equal(divergent.status, "blocked");
+    assert.ok(divergent.blockers.some((blocker) => blocker.code === "ledger-action-handoff-file-diverged"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -16432,12 +16664,14 @@ test("ledger init and append-event write only manager-owned runtime state", () =
       runId: "manager-test",
       stateRoot,
       eventType: "manager.run.steered",
-      summary: "Duplicate steering record.",
+      summary: "Reduced target workers for pressure.",
       authorityBasis: "operator-live-steering",
       recoveryPath: "inspect steering evidence",
       sourceRefs: ["story:2.3"],
       evidenceRefs: ["evidence:steering"],
       idempotencyKey: "steering-1",
+      correlationId: "corr-1",
+      causationId: "cause-1",
     });
     assert.equal(duplicate.status, "ready");
     assert.equal(duplicate.summary.duplicateIgnored, true);
@@ -16472,6 +16706,621 @@ test("ledger init and append-event write only manager-owned runtime state", () =
   }
 });
 
+test("ledger append-event keeps ordinary appends unique and explicit retries idempotent", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-derived-action-"));
+  try {
+    const parsed = parseCommonArgs([
+      "append-event",
+      "--idempotency-key",
+      "action-1",
+      "--correlation-id",
+      "corr-1",
+      "--causation-id",
+      "cause-1",
+      "--ordering-key",
+      "order-1",
+    ]);
+    assert.equal(parsed.idempotencyKey, "action-1");
+    assert.equal(parsed.correlationId, "corr-1");
+    assert.equal(parsed.causationId, "cause-1");
+    assert.equal(parsed.orderingKey, "order-1");
+
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+
+    const input = {
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Repeated steering action.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:steering-action"],
+    };
+
+    const first = ledgerCommand(input);
+    assert.equal(first.status, "ready");
+    assert.match(first.summary.event.idempotencyKey, /^auto:manager\.run\.steered:/);
+    assert.equal(first.summary.event.correlationId, first.summary.event.idempotencyKey);
+    assert.equal(first.summary.event.causationId, first.summary.event.correlationId);
+    assert.match(first.summary.event.actionFingerprint, /^[a-f0-9]{64}$/);
+
+    const ordinaryRepeat = ledgerCommand({ ...input });
+    assert.equal(ordinaryRepeat.status, "ready");
+    assert.notEqual(ordinaryRepeat.summary.event.eventId, first.summary.event.eventId);
+    assert.notEqual(ordinaryRepeat.summary.event.idempotencyKey, first.summary.event.idempotencyKey);
+
+    const explicit = ledgerCommand({ ...input, idempotencyKey: "steering-explicit-retry", correlationId: "corr-1", causationId: "cause-1", orderingKey: "order-1" });
+    assert.equal(explicit.status, "ready");
+    const retry = ledgerCommand({ ...input, idempotencyKey: "steering-explicit-retry", correlationId: "corr-1", causationId: "cause-1", orderingKey: "order-1" });
+    assert.equal(retry.status, "ready");
+    assert.equal(retry.summary.duplicateIgnored, true);
+    assert.equal(retry.summary.actionResult.status, "duplicate_ignored");
+    assert.equal(retry.summary.actionResult.existingRecordId, explicit.summary.event.eventId);
+    assert.equal(retry.summary.actionResult.eventId, explicit.summary.event.eventId);
+    assert.equal(retry.summary.actionResult.authorityBasis, "operator-live-steering");
+    assert.deepEqual(retry.summary.actionResult.sourceRefs, ["story:1.3"]);
+    assert.deepEqual(retry.summary.actionResult.evidenceRefs, ["evidence:steering-action"]);
+    assert.equal(retry.summary.actionResult.recoveryPath, "inspect steering evidence");
+    assert.equal(retry.summary.actionResult.projectionBehavior, "updates_summary");
+    assert.equal(retry.summary.actionResult.correlationId, "corr-1");
+
+    const conflict = ledgerCommand({ ...input, idempotencyKey: "steering-explicit-retry", correlationId: "different-correlation", causationId: "cause-1", orderingKey: "order-1" });
+    assert.equal(conflict.status, "blocked");
+    assert.equal(conflict.blockers[0].code, "ledger-idempotency-conflict");
+    assert.equal(conflict.summary.actionResult.status, "conflict");
+    assert.deepEqual(conflict.summary.actionResult.conflictFields, ["correlationId"]);
+    assert.match(conflict.blockers[0].nextAction, /correlationId/);
+
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8");
+    assert.equal(events.trim().split("\n").length, 3);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger idempotency detects material conflicts and canonicalizes retry refs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-conflicts-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+
+    const longSummaryA = `${"x".repeat(260)}A`;
+    const longSummaryB = `${"x".repeat(260)}B`;
+    const explicit = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: longSummaryA,
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:steering"],
+      idempotencyKey: "same-key-different-evidence",
+    });
+    assert.equal(explicit.status, "ready");
+
+    const summaryOnlyRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: longSummaryB,
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:steering"],
+      idempotencyKey: "same-key-different-evidence",
+    });
+    assert.equal(summaryOnlyRetry.status, "ready");
+    assert.equal(summaryOnlyRetry.summary.duplicateIgnored, true);
+
+    const explicitConflict = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: longSummaryB,
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:changed-steering"],
+      idempotencyKey: "same-key-different-evidence",
+    });
+    assert.equal(explicitConflict.status, "blocked");
+    assert.equal(explicitConflict.blockers[0].code, "ledger-idempotency-conflict");
+    assert.deepEqual(explicitConflict.summary.actionResult.conflictFields, ["actionFingerprint"]);
+    assert.equal(explicitConflict.summary.actionResult.existingRecordId, explicit.summary.event.eventId);
+
+    const checkpoint = ledgerCommand({
+      command: "append-checkpoint",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Canonical refs checkpoint.",
+      authorityBasis: "manager-checkpoint",
+      recoveryPath: "rerun manager:resume",
+      sourceRefs: ["story:b", "story:a", "story:a"],
+      evidenceRefs: ["evidence:2", "evidence:1"],
+      idempotencyKey: "checkpoint-canonical-refs",
+    });
+    assert.equal(checkpoint.status, "ready");
+
+    const checkpointRetry = ledgerCommand({
+      command: "append-checkpoint",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Canonical refs checkpoint.",
+      authorityBasis: "manager-checkpoint",
+      recoveryPath: "rerun manager:resume",
+      sourceRefs: ["story:a", "story:b"],
+      evidenceRefs: ["evidence:1", "evidence:2", "evidence:1"],
+      idempotencyKey: "checkpoint-canonical-refs",
+    });
+    assert.equal(checkpointRetry.status, "ready");
+    assert.equal(checkpointRetry.summary.duplicateIgnored, true);
+    assert.equal(checkpointRetry.summary.actionResult.existingRecordId, checkpoint.summary.checkpoint.checkpointId);
+    assert.equal(checkpointRetry.summary.actionResult.eventId, checkpoint.summary.checkpoint.eventId);
+
+    const question = ledgerCommand({
+      command: "append-question",
+      runId: "manager-test",
+      stateRoot,
+      workerId: "codex-1",
+      summary: "Material decision required.",
+      authorityBasis: "manager-best-judgment",
+      recoveryPath: "inspect parked worker state",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:question"],
+      idempotencyKey: "question-conflict",
+      recordPolicy: "material_decision_only",
+    });
+    assert.equal(question.status, "ready");
+
+    const questionConflict = ledgerCommand({
+      command: "append-question",
+      runId: "manager-test",
+      stateRoot,
+      workerId: "codex-1",
+      summary: "Material decision required.",
+      authorityBasis: "manager-best-judgment",
+      recoveryPath: "inspect parked worker state",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:different-question"],
+      idempotencyKey: "question-conflict",
+      recordPolicy: "material_decision_only",
+    });
+    assert.equal(questionConflict.status, "blocked");
+    assert.equal(questionConflict.summary.actionResult.existingRecordId, question.summary.question.questionId);
+
+    const recoveryOnlyRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovery wording should not change identity.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "first recovery path",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:recovery-stable"],
+      idempotencyKey: "recovery-wording-stable",
+    });
+    assert.equal(recoveryOnlyRetry.status, "ready");
+    const recoveryOnlyDuplicate = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovery wording should not change identity.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "different recovery path",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:recovery-stable"],
+      idempotencyKey: "recovery-wording-stable",
+    });
+    assert.equal(recoveryOnlyDuplicate.status, "blocked");
+    assert.deepEqual(recoveryOnlyDuplicate.summary.actionResult.conflictFields, ["recoveryPath"]);
+
+    const authorityConflict = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovery wording should not change identity.",
+      authorityBasis: "different authority wording",
+      recoveryPath: "first recovery path",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:recovery-stable"],
+      idempotencyKey: "recovery-wording-stable",
+    });
+    assert.equal(authorityConflict.status, "blocked");
+    assert.deepEqual(authorityConflict.summary.actionResult.conflictFields, ["authorityBasis"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger snapshots preserve repeated samples and explicit snapshot conflicts", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-snapshot-idempotency-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+
+    const resourceA = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "CPU/RAM normal",
+      resourceState: "normal",
+    });
+    const resourceB = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "CPU/RAM normal",
+      resourceState: "normal",
+    });
+    assert.equal(resourceA.status, "ready");
+    assert.equal(resourceB.status, "ready");
+    assert.notEqual(resourceA.summary.snapshot.idempotencyKey, resourceB.summary.snapshot.idempotencyKey);
+
+    const usageA = ledgerCommand({
+      command: "append-usage-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Usage normal",
+      usageState: "normal",
+    });
+    const usageB = ledgerCommand({
+      command: "append-usage-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Usage normal",
+      usageState: "normal",
+    });
+    assert.equal(usageA.status, "ready");
+    assert.equal(usageB.status, "ready");
+    assert.notEqual(usageA.summary.snapshot.idempotencyKey, usageB.summary.snapshot.idempotencyKey);
+
+    const explicitResource = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Windowed resource sample",
+      resourceState: "normal",
+      idempotencyKey: "resource-window-1",
+    });
+    assert.equal(explicitResource.status, "ready");
+    const explicitResourceRetry = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Windowed resource sample",
+      resourceState: "normal",
+      idempotencyKey: "resource-window-1",
+    });
+    assert.equal(explicitResourceRetry.status, "ready");
+    assert.equal(explicitResourceRetry.summary.duplicateIgnored, true);
+
+    const explicitResourceConflict = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Windowed resource sample",
+      resourceState: "critical",
+      idempotencyKey: "resource-window-1",
+    });
+    assert.equal(explicitResourceConflict.status, "blocked");
+    assert.equal(explicitResourceConflict.summary.actionResult.existingRecordId, explicitResource.summary.snapshot.snapshotId);
+
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    assert.equal(readFileSync(join(runRoot, "resource-snapshots.ndjson"), "utf8").trim().split("\n").length, 3);
+    assert.equal(readFileSync(join(runRoot, "usage-snapshots.ndjson"), "utf8").trim().split("\n").length, 2);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger explicit keys avoid truncation collisions and malformed event logs fail closed", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-key-and-malformed-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const keyA = `${"k".repeat(180)}A`;
+    const keyB = `${"k".repeat(180)}B`;
+    const first = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Long explicit key A.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:key-a"],
+      idempotencyKey: keyA,
+    });
+    const second = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Long explicit key B.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:key-b"],
+      idempotencyKey: keyB,
+    });
+    assert.equal(first.status, "ready");
+    assert.equal(second.status, "ready");
+    assert.match(first.summary.event.idempotencyKey, /^explicit:/);
+    assert.match(second.summary.event.idempotencyKey, /^explicit:/);
+    assert.notEqual(first.summary.event.idempotencyKey, second.summary.event.idempotencyKey);
+
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    writeFileSync(join(runRoot, "events.ndjson"), "{bad json\n");
+    const malformed = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Malformed event log must block.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:malformed"],
+      idempotencyKey: "malformed-block",
+    });
+    assert.equal(malformed.status, "blocked");
+    assert.equal(malformed.blockers[0].code, "ledger-file-malformed");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger append lock writes owner metadata and recovers stale owners", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-lock-owner-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const lockDir = join(runRoot, ".ledger-append.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify({
+      runId: "manager-test",
+      pid: 999999999,
+      token: "stale-owner",
+      createdAt: "2000-01-01T00:00:00.000Z",
+    })}\n`);
+
+    const append = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovered stale lock before append.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:lock"],
+      idempotencyKey: "lock-recovery",
+    });
+    assert.equal(append.status, "ready");
+    assert.equal(existsSync(lockDir), false);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger blocks legacy or mismatched fingerprint duplicates before suppression", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-legacy-fingerprint-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const legacy = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Legacy duplicate fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:legacy"],
+      idempotencyKey: "legacy-key",
+    });
+    assert.equal(legacy.status, "ready");
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const legacyRecord = { ...legacy.summary.event };
+    delete legacyRecord.actionFingerprint;
+    delete legacyRecord.actionFingerprintVersion;
+    writeFileSync(join(runRoot, "events.ndjson"), `${JSON.stringify(legacyRecord)}\n`);
+
+    const legacyRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Legacy duplicate fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:legacy"],
+      idempotencyKey: "legacy-key",
+    });
+    assert.equal(legacyRetry.status, "blocked");
+    assert.deepEqual(legacyRetry.summary.actionResult.conflictFields, ["legacyActionFingerprint"]);
+
+    writeFileSync(join(runRoot, "events.ndjson"), `${JSON.stringify({ ...legacy.summary.event, actionFingerprintVersion: "old-version" })}\n`);
+    const versionRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Legacy duplicate fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:legacy"],
+      idempotencyKey: "legacy-key",
+    });
+    assert.equal(versionRetry.status, "blocked");
+    assert.deepEqual(versionRetry.summary.actionResult.conflictFields, ["actionFingerprintVersion"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger fingerprints distinguish redacted and structured material inputs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-fingerprint-digests-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const redactedA = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Sensitive value sk-alpha should hash distinctly.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:redaction"],
+      idempotencyKey: "redaction-key",
+    });
+    assert.equal(redactedA.status, "ready");
+    const redactedB = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Sensitive value sk-beta should hash distinctly.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:redaction"],
+      idempotencyKey: "redaction-key",
+    });
+    assert.equal(redactedB.status, "ready");
+    assert.equal(redactedB.summary.duplicateIgnored, true);
+
+    const structuredA = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Structured source ref fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: [{ kind: "story", id: "1.3", nested: { a: 1 } }],
+      evidenceRefs: ["evidence:structured"],
+      idempotencyKey: "structured-key",
+    });
+    assert.equal(structuredA.status, "ready");
+    const structuredB = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Structured source ref fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: [{ kind: "story", id: "1.3", nested: { a: 2 } }],
+      evidenceRefs: ["evidence:structured"],
+      idempotencyKey: "structured-key",
+    });
+    assert.equal(structuredB.status, "blocked");
+    assert.deepEqual(structuredB.summary.actionResult.conflictFields, ["actionFingerprint"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger ordinary repeated questions and checkpoints persist separately", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-ordinary-repeats-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const questionInput = {
+      command: "append-question",
+      runId: "manager-test",
+      stateRoot,
+      workerId: "codex-1",
+      summary: "Repeated material question can be separate without an explicit retry key.",
+      authorityBasis: "manager-best-judgment",
+      recoveryPath: "inspect source refs",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:question"],
+      recordPolicy: "material_decision_only",
+    };
+    const questionA = ledgerCommand(questionInput);
+    const questionB = ledgerCommand(questionInput);
+    assert.equal(questionA.status, "ready");
+    assert.equal(questionB.status, "ready");
+    assert.notEqual(questionA.summary.question.questionId, questionB.summary.question.questionId);
+
+    const checkpointInput = {
+      command: "append-checkpoint",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Repeated checkpoint can be separate without an explicit retry key.",
+      authorityBasis: "manager-checkpoint",
+      recoveryPath: "rerun manager-worker-progress",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:checkpoint"],
+    };
+    const checkpointA = ledgerCommand(checkpointInput);
+    const checkpointB = ledgerCommand(checkpointInput);
+    assert.equal(checkpointA.status, "ready");
+    assert.equal(checkpointB.status, "ready");
+    assert.notEqual(checkpointA.summary.checkpoint.checkpointId, checkpointB.summary.checkpoint.checkpointId);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager mutation blocks schema-invalid event logs before side effects", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-schema-invalid-before-mutation-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    writeFileSync(join(runRoot, "events.ndjson"), `${JSON.stringify({ eventId: "evt-invalid", schemaVersion: "wrong" })}\n`);
+    const launches = [];
+    const applied = buildWorkerWarmPlan(
+      { runId: "manager-test", stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" },
+      {
+        cyclePacket,
+        tmuxRunner(command, args) {
+          launches.push({ command, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "ledger-file-malformed");
+    assert.equal(launches.length, 0);
+    assert.equal(JSON.parse(readFileSync(join(runRoot, "workers.json"), "utf8")).length, 0);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("ledger stores compact questions, checkpoints, and snapshots without raw retention", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-records-"));
   try {
@@ -16500,7 +17349,7 @@ test("ledger stores compact questions, checkpoints, and snapshots without raw re
       runId: "manager-test",
       stateRoot,
       workerId: "codex-1",
-      summary: "Duplicate material question",
+      summary: "Worker asked about provider payload sk-testtoken",
       authorityBasis: "manager-best-judgment",
       recoveryPath: "inspect source refs and parked worker state",
       sourceRefs: ["story-1.2"],
