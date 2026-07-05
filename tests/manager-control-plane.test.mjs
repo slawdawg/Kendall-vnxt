@@ -2846,15 +2846,40 @@ test("mature tool evaluation classifies candidates with bounded decision evidenc
   assert.equal(bullmq.rollbackPath, "Disable the adapter and use the local lease harness.");
   assert.equal(bullmq.fallback, "sqlite-lease-harness");
   assert.equal(bullmq.rawPayloadRetained, false);
+  assert.equal(bullmq.decisionRecord.recordId, "mature-tool-decision:manager-test:bullmq-redis");
+  assert.equal(bullmq.decisionRecord.decision, "adapter_only_reference");
+  assert.equal(bullmq.decisionRecord.directProductTruth, "rejected_adapter_only");
+  assert.equal(bullmq.decisionRecord.localFirstBehavior, "local_service_required");
+  assert.equal(bullmq.decisionRecord.restartRecovery, "passed");
+  assert.equal(bullmq.decisionRecord.concurrencySafety, "lease_semantics_passed");
+  assert.equal(bullmq.decisionRecord.installChurn, "local_service_required");
+  assert.equal(bullmq.decisionRecord.pipelineNormalization, "kendall_summary_packets");
+  assert.equal(bullmq.decisionRecord.license, "acceptable");
+  assert.equal(bullmq.decisionRecord.telemetryDataResidency, "local_metadata_only");
+  assert.equal(bullmq.decisionRecord.adapterBoundary, "DispatcherPort");
+  assert.equal(bullmq.decisionRecord.rollbackPath, bullmq.rollbackPath);
+  assert.equal(bullmq.decisionRecord.fallback, "sqlite-lease-harness");
+  assert.deepEqual(bullmq.decisionRecord.evidenceRefs, ["evidence:bullmq-local-proof"]);
+  assert.equal(bullmq.decisionRecord.rawPayloadRetained, false);
 
   const conftest = plan.summary.candidates.find((candidate) => candidate.candidateId === "opa-conftest");
   assert.equal(conftest.decision, "adopt");
   assert.equal(conftest.category, "policy_engine");
+  assert.equal(conftest.decisionRecord.decision, "adapter_only_reference");
+  assert.equal(conftest.decisionRecord.concurrencySafety, "not_applicable");
+  assert.equal(conftest.decisionRecord.directProductTruth, "rejected_adapter_only");
 
   assert.equal(plan.summary.selectedPaths.queueBackend.candidateId, "bullmq-redis");
   assert.equal(plan.summary.selectedPaths.policyEngine.candidateId, "opa-conftest");
   assert.equal(plan.summary.selectedPaths.queueBackend.adapterBoundary, "DispatcherPort");
   assert.equal(plan.summary.selectedPaths.queueBackend.fallback, "sqlite-lease-harness");
+  assert.equal(plan.summary.decisionRecords.length, plan.summary.candidates.length);
+  assert.ok(plan.summary.decisionRecords.every((record) => record.schemaVersion === "mature-tool-decision-record/v0"));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.rawPayloadRetained === false));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.pipelineNormalization === "kendall_summary_packets"));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.rollbackPath));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.fallback));
+  assert.deepEqual(plan.summary.decisionRecordsByCategory.queue_backend.map((record) => record.candidateId), ["bullmq-redis", "hatchet", "sqlite-lease-harness"]);
   assert.equal(plan.summary.fallbackSelected, false);
   assert.equal(plan.summary.noAdditionalPlanningCycleRequired, true);
   assert.equal(plan.summary.mutationMode, "none; read-only mature-tool evaluation summary");
@@ -2868,6 +2893,12 @@ test("mature tool path falls back to local lease harness without another plannin
   assert.equal(plan.summary.selectedPaths.queueBackend.candidateId, "sqlite-lease-harness");
   assert.equal(plan.summary.selectedPaths.queueBackend.decision, "adopt");
   assert.equal(plan.summary.selectedPaths.queueBackend.adapterBoundary, "DispatcherPort");
+  assert.equal(plan.summary.selectedPaths.queueBackend.decisionRecord.decision, "adopted");
+  assert.equal(plan.summary.selectedPaths.queueBackend.decisionRecord.directProductTruth, "accepted_fallback_product_truth");
+  assert.equal(plan.summary.selectedPaths.policyEngine.decisionRecord.decision, "adopted");
+  assert.equal(plan.summary.selectedPaths.policyEngine.decisionRecord.fallback, "deterministic-policy-checks");
+  assert.equal(plan.summary.selectedPaths.sessionWorktree.decisionRecord.decision, "adopted");
+  assert.equal(plan.summary.selectedPaths.sessionWorktree.decisionRecord.fallback, "codex-workspace-protocol");
   assert.equal(plan.summary.noAdditionalPlanningCycleRequired, true);
   assert.equal(plan.summary.nextAction, "continue_backend_proof_on_selected_fallback");
   assert.ok(plan.summary.candidates.find((candidate) => candidate.candidateId === "bullmq-redis" && candidate.decision === "defer"));
@@ -2875,6 +2906,10 @@ test("mature tool path falls back to local lease harness without another plannin
   for (const candidate of plan.summary.candidates) {
     assert.ok(candidate.fallback, `${candidate.candidateId} must record fallback`);
     assert.ok(candidate.rollbackPath, `${candidate.candidateId} must record rollback path`);
+    assert.ok(candidate.decisionRecord, `${candidate.candidateId} must record decision`);
+    assert.equal(candidate.decisionRecord.rawPayloadRetained, false);
+    assert.equal(candidate.decisionRecord.adapterBoundary, "DispatcherPort");
+    assert.ok(candidate.decisionRecord.stopLines.length > 0, `${candidate.candidateId} must record stop lines`);
   }
   assert.ok(plan.nextActions.some((action) => action.code === "mature-tool-fallback-selected"));
 });
@@ -2942,6 +2977,26 @@ test("mature tool evaluation blocks unsafe adoption claims and invalid gate meta
   const squad = blockedLicense.summary.candidates.find((candidate) => candidate.candidateId === "claude-squad");
   assert.equal(squad.decision, "reject");
   assert.ok(squad.rejectionReasons.includes("license_blocked"));
+
+  const failedLeaseNonQueue = buildMatureToolEvaluationPlan(
+    { runId: "manager-test" },
+    {
+      toolEvidence: {
+        dagger: {
+          runnableEvidenceRefs: ["evidence:dagger-local-verification-proof"],
+          localDependencyPosture: "local_binary_optional",
+          licensePosture: "acceptable",
+          dataBoundaryPosture: "local_only",
+          recoveryPosture: "passed",
+          leaseSemanticsPosture: "failed",
+          rollbackPath: "Use existing pnpm verification commands.",
+        },
+      },
+    },
+  );
+  const failedLeaseDagger = failedLeaseNonQueue.summary.candidates.find((candidate) => candidate.candidateId === "dagger");
+  assert.equal(failedLeaseDagger.decision, "reject");
+  assert.equal(failedLeaseDagger.decisionRecord.concurrencySafety, "lease_semantics_failed");
 
   const rawPayload = buildMatureToolEvaluationPlan(
     { runId: "manager-test" },
@@ -3017,6 +3072,8 @@ test("mature tool evaluation blocks unsafe adoption claims and invalid gate meta
   );
   assert.equal(duplicateCandidate.status, "blocked");
   assert.equal(duplicateCandidate.blockers[0].code, "mature-tool-duplicate-candidate-id");
+  const duplicateRecordIds = duplicateCandidate.summary.decisionRecords.map((record) => record.recordId);
+  assert.equal(new Set(duplicateRecordIds).size, duplicateRecordIds.length);
 
   const unsupportedCategoryAndMissingFallback = buildMatureToolEvaluationPlan(
     { runId: "manager-test" },
@@ -3027,6 +3084,46 @@ test("mature tool evaluation blocks unsafe adoption claims and invalid gate meta
   assert.equal(unsupportedCategoryAndMissingFallback.status, "blocked");
   assert.ok(unsupportedCategoryAndMissingFallback.blockers.some((blocker) => blocker.code === "mature-tool-unsupported-category"));
   assert.ok(unsupportedCategoryAndMissingFallback.blockers.some((blocker) => blocker.code === "mature-tool-fallback-missing"));
+  assert.equal(unsupportedCategoryAndMissingFallback.summary.decisionRecordsByCategory.external_scheduler.length, 1);
+
+  const prototypeCategory = buildMatureToolEvaluationPlan(
+    { runId: "manager-test" },
+    {
+      candidates: [{ candidateId: "prototype-tool", name: "Prototype Tool", category: "__proto__", fallback: "sqlite-lease-harness", defaultDecision: "defer" }],
+    },
+  );
+  assert.equal(prototypeCategory.status, "blocked");
+  assert.ok(prototypeCategory.blockers.some((blocker) => blocker.code === "mature-tool-unsupported-category"));
+  assert.equal(prototypeCategory.summary.decisionRecordsByCategory.__proto__.length, 1);
+
+  const adoptedWithoutFallback = buildMatureToolEvaluationPlan(
+    { runId: "manager-test" },
+    {
+      candidates: [{
+        candidateId: "custom-adopter",
+        name: "Custom Adopter",
+        category: "policy_engine",
+        decision: "adopt",
+        rollbackPath: "Disable custom adapter.",
+        stopLines: ["do_not_install_dependency"],
+      }],
+      toolEvidence: {
+        "custom-adopter": {
+          runnableEvidenceRefs: ["evidence:custom-adopter"],
+          localDependencyPosture: "repo_existing",
+          licensePosture: "acceptable",
+          dataBoundaryPosture: "local_only",
+          recoveryPosture: "passed",
+          leaseSemanticsPosture: "passed",
+        },
+      },
+    },
+  );
+  const customAdopter = adoptedWithoutFallback.summary.candidates.find((candidate) => candidate.candidateId === "custom-adopter");
+  assert.equal(adoptedWithoutFallback.status, "blocked");
+  assert.ok(adoptedWithoutFallback.blockers.some((blocker) => blocker.code === "mature-tool-fallback-missing"));
+  assert.equal(customAdopter.decision, "defer");
+  assert.equal(customAdopter.decisionRecord.localProofFallbackValid, false);
 
   const missingRollback = buildMatureToolEvaluationPlan(
     { runId: "manager-test" },

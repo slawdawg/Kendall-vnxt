@@ -7805,9 +7805,21 @@ export function buildMatureToolEvaluationPlan(options = {}, context = {}) {
       nextAction: "Remove or rename duplicate candidate overrides before selecting an adapter path.",
     });
   }
-  const candidates = candidateDefinitions.map((definition) =>
+  const evaluatedCandidates = candidateDefinitions.map((definition) =>
     evaluateMatureToolCandidate(definition, evidenceByCandidate.get(definition.candidateId), blockers),
   );
+  const duplicateRecordIds = duplicateMatureToolCandidateIds(evaluatedCandidates);
+  const duplicateRecordOrdinal = new Map();
+  const decisionRecords = evaluatedCandidates.map((candidate) => {
+    const duplicateOrdinal = duplicateRecordIds.includes(candidate.candidateId)
+      ? (duplicateRecordOrdinal.set(candidate.candidateId, (duplicateRecordOrdinal.get(candidate.candidateId) || 0) + 1), duplicateRecordOrdinal.get(candidate.candidateId))
+      : 0;
+    return buildMatureToolDecisionRecord(runId, candidate, { duplicateOrdinal });
+  });
+  const candidates = evaluatedCandidates.map((candidate, index) => ({
+    ...candidate,
+    decisionRecord: decisionRecords[index],
+  }));
   const selectedPaths = selectMatureToolPaths(candidates);
   const fallbackSelected = selectedPaths.queueBackend?.candidateId === "sqlite-lease-harness";
   const blocked = blockers.length > 0;
@@ -7825,6 +7837,8 @@ export function buildMatureToolEvaluationPlan(options = {}, context = {}) {
     summary: {
       runId,
       candidates,
+      decisionRecords,
+      decisionRecordsByCategory: groupMatureToolDecisionRecordsByCategory(decisionRecords),
       selectedPaths,
       fallbackSelected,
       noAdditionalPlanningCycleRequired: true,
@@ -7980,13 +7994,14 @@ function evaluateMatureToolCandidate(definition, evidence = {}, blockers = []) {
   )) {
     decision = gateResults.blocked ? "reject" : "defer";
   }
-  if (["defer", "reject"].includes(decision) && !fallback) {
+  if (!fallback) {
     blockers.push({
       code: "mature-tool-fallback-missing",
       candidateId: definition.candidateId,
-      message: "Deferred or rejected mature-tool candidates require an implementation fallback.",
+      message: "Mature-tool candidates require an implementation fallback.",
       nextAction: "Name the fallback path so backend work can continue.",
     });
+    if (decision === "adopt") decision = "defer";
   }
 
   return {
@@ -8006,9 +8021,91 @@ function evaluateMatureToolCandidate(definition, evidence = {}, blockers = []) {
     fallback,
     adapterBoundary: "DispatcherPort",
     stopLines: (definition.stopLines || []).slice(0, 8),
+    fallbackCandidate: definition.fallbackCandidate === true,
     mutationMode: "none; evaluation metadata only",
     rawPayloadRetained: false,
   };
+}
+
+function buildMatureToolDecisionRecord(runId, candidate = {}, options = {}) {
+  const recordDecision = matureToolDecisionRecordState(candidate);
+  const duplicateSuffix = options.duplicateOrdinal > 0 ? `:${options.duplicateOrdinal}` : "";
+  return {
+    schemaVersion: "mature-tool-decision-record/v0",
+    recordId: `mature-tool-decision:${runId}:${candidate.candidateId}${duplicateSuffix}`,
+    runId,
+    candidateId: candidate.candidateId,
+    name: candidate.name,
+    category: candidate.category,
+    decision: recordDecision,
+    evaluationDecision: candidate.decision,
+    directProductTruth: matureToolDirectProductTruthDecision(candidate, recordDecision),
+    localFirstBehavior: candidate.localDependencyPosture,
+    restartRecovery: candidate.recoveryPosture,
+    concurrencySafety: matureToolConcurrencySafety(candidate),
+    installChurn: matureToolInstallChurn(candidate),
+    pipelineNormalization: "kendall_summary_packets",
+    license: candidate.licensePosture,
+    telemetryDataResidency: matureToolTelemetryDataResidency(candidate),
+    adapterBoundary: candidate.adapterBoundary,
+    rollbackPath: candidate.rollbackPath,
+    fallback: candidate.fallback,
+    evidenceRefs: (candidate.runnableEvidenceRefs || []).slice(0, 8),
+    rejectionReasons: (candidate.rejectionReasons || []).slice(0, 12),
+    stopLines: (candidate.stopLines || []).slice(0, 8),
+    contractTestsRequired: candidate.decision === "adopt" && !candidate.fallbackCandidate ? "before_live_adapter" : "not_required_for_current_metadata_only_path",
+    sourceRefs: ["requirement:FR-4", "architecture:mature-tool-decision-pattern"],
+    localProofFallbackValid: Boolean(candidate.fallback),
+    mutationMode: "none; decision record metadata only",
+    rawPayloadRetained: false,
+  };
+}
+
+function matureToolDecisionRecordState(candidate = {}) {
+  if (candidate.decision === "adopt") return candidate.fallbackCandidate ? "adopted" : "adapter_only_reference";
+  if (candidate.decision === "reject") return "rejected";
+  return "deferred";
+}
+
+function matureToolDirectProductTruthDecision(candidate = {}, recordDecision = "") {
+  if (candidate.fallbackCandidate && candidate.decision === "adopt") return "accepted_fallback_product_truth";
+  if (recordDecision === "adapter_only_reference") return "rejected_adapter_only";
+  if (recordDecision === "rejected") return "rejected";
+  return "not_accepted_deferred";
+}
+
+function matureToolConcurrencySafety(candidate = {}) {
+  if (candidate.leaseSemanticsPosture === "passed") return "lease_semantics_passed";
+  if (candidate.leaseSemanticsPosture === "failed") return "lease_semantics_failed";
+  if (candidate.leaseSemanticsPosture === "missing") return "lease_semantics_missing";
+  if (candidate.category !== "queue_backend") return "not_applicable";
+  return sanitizeLedgerField(candidate.leaseSemanticsPosture || "unproven", "unproven", 80);
+}
+
+function matureToolInstallChurn(candidate = {}) {
+  const posture = candidate.localDependencyPosture;
+  if (["built_in", "repo_existing", "existing_repo_scripts"].includes(posture)) return "none_existing_repo_path";
+  if (posture === "local_service_required") return "local_service_required";
+  if (posture === "local_binary_optional") return "optional_local_binary";
+  if (["remote_only", "remote_required"].includes(posture)) return "blocked_remote_dependency";
+  return "unproven";
+}
+
+function matureToolTelemetryDataResidency(candidate = {}) {
+  if (candidate.dataBoundaryPosture === "local_only") return "local_metadata_only";
+  if (candidate.dataBoundaryPosture === "remote_data_required") return "blocked_remote_data";
+  if (candidate.dataBoundaryPosture === "blocked") return "blocked";
+  return "unknown";
+}
+
+function groupMatureToolDecisionRecordsByCategory(records = []) {
+  const grouped = Object.create(null);
+  for (const record of records) {
+    if (!record?.category) continue;
+    if (!grouped[record.category]) grouped[record.category] = [];
+    grouped[record.category].push(record);
+  }
+  return grouped;
 }
 
 function matureToolGateResults(definition, evidence = {}) {
@@ -8049,12 +8146,14 @@ function selectMatureToolPaths(candidates = []) {
     decision: "fallback",
     adapterBoundary: "CandidateWorkPacketPolicy",
     fallback: "deterministic-policy-checks",
+    decisionRecord: buildMatureToolSyntheticFallbackDecisionRecord("policy_engine", "deterministic-policy-checks", "CandidateWorkPacketPolicy"),
   };
   const sessionWorktree = byCategory("session_worktree")[0] || {
     candidateId: "codex-workspace-protocol",
     decision: "fallback",
     adapterBoundary: "WorkspaceSessionAdapter",
     fallback: "codex-workspace-protocol",
+    decisionRecord: buildMatureToolSyntheticFallbackDecisionRecord("session_worktree", "codex-workspace-protocol", "WorkspaceSessionAdapter"),
   };
   const verificationRunner = byCategory("verification_runner").find((candidate) => candidate.candidateId !== "existing-pnpm-scripts") ||
     byCategory("verification_runner").find((candidate) => candidate.candidateId === "existing-pnpm-scripts") ||
@@ -8064,6 +8163,38 @@ function selectMatureToolPaths(candidates = []) {
     policyEngine,
     sessionWorktree,
     verificationRunner,
+  };
+}
+
+function buildMatureToolSyntheticFallbackDecisionRecord(category, candidateId, adapterBoundary) {
+  return {
+    schemaVersion: "mature-tool-decision-record/v0",
+    recordId: `mature-tool-decision:selected-fallback:${category}:${candidateId}`,
+    runId: "selected-fallback",
+    candidateId,
+    name: candidateId,
+    category,
+    decision: "adopted",
+    evaluationDecision: "fallback",
+    directProductTruth: "accepted_fallback_product_truth",
+    localFirstBehavior: "repo_existing",
+    restartRecovery: "passed",
+    concurrencySafety: "not_applicable",
+    installChurn: "none_existing_repo_path",
+    pipelineNormalization: "kendall_summary_packets",
+    license: "acceptable",
+    telemetryDataResidency: "local_metadata_only",
+    adapterBoundary,
+    rollbackPath: `Continue using ${candidateId}.`,
+    fallback: candidateId,
+    evidenceRefs: [],
+    rejectionReasons: [],
+    stopLines: ["do_not_install_dependency", "do_not_bypass_dispatcher_port", "do_not_replace_existing_fallback"],
+    contractTestsRequired: "not_required_for_current_metadata_only_path",
+    sourceRefs: ["requirement:FR-4", "architecture:mature-tool-decision-pattern"],
+    localProofFallbackValid: true,
+    mutationMode: "none; decision record metadata only",
+    rawPayloadRetained: false,
   };
 }
 
