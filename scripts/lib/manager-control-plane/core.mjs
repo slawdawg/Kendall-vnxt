@@ -272,11 +272,19 @@ function boundedDesiredWorkers(value) {
 }
 
 function validRunId(runId) {
-  return /^[a-z0-9][a-z0-9-]{0,80}$/i.test(String(runId || ""));
+  return /^[a-z0-9][a-z0-9-]{0,80}$/i.test(safeString(runId, ""));
 }
 
 function safeRunId(runId) {
-  const value = String(runId || defaultRunId());
+  if (runId === undefined || runId === null || runId === "") {
+    return defaultRunId();
+  }
+  let value = "";
+  try {
+    value = String(runId);
+  } catch {
+    throw new Error("Invalid manager run id: uncoercible value");
+  }
   if (!validRunId(value)) {
     throw new Error(`Invalid manager run id: ${value}`);
   }
@@ -284,8 +292,10 @@ function safeRunId(runId) {
 }
 
 export function resolveManagerRunId(options = {}, context = {}) {
-  if (options.runId || context.runId) {
-    return safeRunId(options.runId || context.runId);
+  const optionRunId = safeReadProperty(options, "runId", "");
+  const contextRunId = safeReadProperty(context, "runId", "");
+  if (optionRunId || contextRunId) {
+    return safeRunId(optionRunId || contextRunId);
   }
   return latestExistingManagerRunId(options, context) || defaultRunId();
 }
@@ -9162,6 +9172,7 @@ function escapeRegExp(value = "") {
 }
 
 export function buildDispatchPreview(options = {}, context = {}) {
+  const callerSuppliedPreview = Boolean(context.dispatchPreview);
   const preview = context.dispatchPreview || runWorkspaceJson(workspaceJsonArgs(["dispatch-next", "--dry-run", "--summary-json"], options), context);
   if (preview?.ok === false) {
     return packet({
@@ -9207,7 +9218,16 @@ export function buildDispatchPreview(options = {}, context = {}) {
     preview?.authorityDecision?.recoveryPath ||
     preview?.authority_decision?.recovery_path ||
     null;
-  const requestedAllowed = Boolean(dispatch.allowed ?? preview?.allowed ?? selected?.claimable);
+  const requestedAllowed = (dispatch.allowed ?? preview?.allowed ?? selected?.claimable) === true;
+  const operationalDispatchAuthority = normalizeOperationalDispatchAuthority(
+    dispatch.operationalDispatchAuthority ||
+      dispatch.operational_dispatch_authority ||
+      preview?.operationalDispatchAuthority ||
+      preview?.operational_dispatch_authority ||
+      selected?.operationalDispatchAuthority ||
+      selected?.operational_dispatch_authority,
+    { allowed: requestedAllowed, selectedLane },
+  );
   const evidenceBlockers = [];
   if (requestedAllowed && !baseBranch) {
     evidenceBlockers.push({ code: "dispatch-preview-base-branch-missing", message: "Allowed dispatch preview is missing base branch evidence." });
@@ -9219,8 +9239,11 @@ export function buildDispatchPreview(options = {}, context = {}) {
     evidenceBlockers.push({ code: "dispatch-preview-selected-lane-conflict", message: "Dispatch and selected lane evidence disagree." });
   }
   const allowed = requestedAllowed && evidenceBlockers.length === 0;
+  const trustedOperationalDispatchAuthority = !callerSuppliedPreview && operationalDispatchAuthority
+    ? { ...operationalDispatchAuthority, producer: "codex-workspace-dispatch-next-dry-run" }
+    : operationalDispatchAuthority;
   const dispatchBlockers = Array.isArray(dispatch.blockers) ? dispatch.blockers : Array.isArray(preview?.blockers) ? preview.blockers : [];
-  return packet({
+  const result = packet({
     status: allowed ? "ready" : "blocked",
     summary: {
       available: true,
@@ -9233,6 +9256,7 @@ export function buildDispatchPreview(options = {}, context = {}) {
       workspaceAction,
       nextCommand,
       nextActionGuidance,
+      operationalDispatchAuthority: trustedOperationalDispatchAuthority,
       recoveryPath,
       blockers: [...evidenceBlockers, ...dispatchBlockers],
       stopLines: Array.isArray(dispatch.stopLines)
@@ -9255,6 +9279,8 @@ export function buildDispatchPreview(options = {}, context = {}) {
       ? [{ code: "dispatch-preview-ready", nextAction: nextActionGuidance || "Review dispatch preview before applying existing gates." }]
       : [],
   });
+  if (!callerSuppliedPreview) markTrustedDispatchPreviewAuthority(result);
+  return result;
 }
 
 function summarizeActiveLaneEvidence(assignment = {}, options = {}) {
@@ -13677,6 +13703,225 @@ function buildRecoveryNotRequestedPlan(options = {}, context = {}) {
   });
 }
 
+const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0";
+const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0";
+const OPERATIONAL_ACTION_READINESS_TTL_MS = 5 * 60 * 1000;
+const OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS = 60 * 1000;
+const PIPELINE_OPERATIONAL_ACTION_IDS = [
+  "inspect",
+  "refresh_projection",
+  "dispatch_apply",
+  "mark_viewed",
+  "retry_verification",
+  "requeue",
+  "mark_tested",
+  "kill_worker",
+  "mutate_source",
+  "push_branch",
+  "open_pr",
+  "merge",
+  "delete_branch",
+  "cleanup",
+  "credential_or_provider_change",
+];
+const FORBIDDEN_OPERATIONAL_ACTION_METADATA =
+  /\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?|logs?|sources?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|source[\s_-]*(?:dumps?|copies?|snapshots?)|stack[\s_-]*dumps?|console[\s_-]*logs?|secrets?(?:[\s_-]*(?:key|token|value|id))?|credentials?(?:[\s_-]*(?:key|token|value|id))?|passwords?|api[\s_-]*keys?|access[\s_-]*tokens?|auth[\s_-]*tokens?|private[\s_-]*keys?|passphrases?|(?:terminal|tmux|pane)[\s_-]*(?:scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const SECRET_LIKE_OPERATIONAL_ACTION_REF =
+  /\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])/i;
+const OPERATIONAL_ACTION_EVIDENCE_REF =
+  /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$/;
+const OPERATIONAL_ACTION_IDENTIFIER =
+  /^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/;
+const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
+const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
+const TRUSTED_OPERATIONAL_READINESS = Symbol("trustedOperationalReadiness");
+const TRUSTED_DISPATCH_PREVIEW_AUTHORITY = Symbol("trustedDispatchPreviewAuthority");
+const TRUSTED_DISPATCH_PREVIEW_AUTHORITY_RECORDS = new WeakSet();
+
+function buildOperationalActionReadinessProjection({ runOptions = {}, usage = {}, resources = {}, preflight = {}, workers = {}, delivery = {}, cleanup = {}, context = {} } = {}) {
+  const safeRunOptions = safePlainObjectSnapshot(runOptions) || {};
+  const safeContext = safePlainObjectSnapshot(context) || {};
+  const safeUsage = safeProjectionPacket(usage);
+  const safeResources = safeProjectionPacket(resources);
+  const safePreflight = safeProjectionPacket(preflight);
+  const safeWorkers = safeProjectionPacket(workers);
+  const safeDelivery = safeProjectionPacket(delivery);
+  const safeCleanup = safeProjectionPacket(cleanup);
+  const contextNow = safeReadProperty(safeContext, "now", undefined);
+  const runOptionsNow = safeReadProperty(safeRunOptions, "now", undefined);
+  const suppliedCheckedAt = contextNow !== undefined || runOptionsNow !== undefined;
+  const requestedCheckedAtInput = operationalTimestampInput(contextNow ?? runOptionsNow ?? new Date().toISOString(), new Date().toISOString());
+  const requestedCheckedAt = requestedCheckedAtInput.value;
+  const requestedCheckedAtMs = Date.parse(requestedCheckedAt);
+  const nowMs = Date.now();
+  const requestedTimestampUnparseable = suppliedCheckedAt && (!requestedCheckedAtInput.readable || !Number.isFinite(requestedCheckedAtMs));
+  const requestedTimestampStale = Number.isFinite(requestedCheckedAtMs) && requestedCheckedAtMs + OPERATIONAL_ACTION_READINESS_TTL_MS <= nowMs;
+  const requestedTimestampFuture = Number.isFinite(requestedCheckedAtMs) && requestedCheckedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS;
+  const requestedTimestampInvalid = requestedTimestampUnparseable || requestedTimestampStale || requestedTimestampFuture;
+  const checkedAtMs = requestedTimestampUnparseable
+    ? nowMs - OPERATIONAL_ACTION_READINESS_TTL_MS - 1
+    : Number.isFinite(requestedCheckedAtMs)
+      ? requestedCheckedAtMs
+      : nowMs;
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const expiresAt = new Date(checkedAtMs + OPERATIONAL_ACTION_READINESS_TTL_MS).toISOString();
+  const evidenceRefs = [
+    `manager-cycle:${operationalActionEvidenceToken(safeReadProperty(safeRunOptions, "runId", "unknown"), "unknown", 100)}`,
+    `preflight:${operationalActionEvidenceToken(safeReadProperty(safePreflight, "status", "unknown"), "unknown", 40)}`,
+    `usage:${operationalActionEvidenceToken(safeReadProperty(safeUsage, "status", "unknown"), "unknown", 40)}`,
+    `resources:${operationalActionEvidenceToken(safeReadProperty(safeResources, "status", "unknown"), "unknown", 40)}`,
+  ];
+  const actionEvidence = (actionId) => [`operational-action:${actionId}`, ...evidenceRefs];
+  const preflightStatus = safeReadProperty(safePreflight, "status", "unknown");
+  const usageStatus = safeString(safeReadProperty(safeUsage, "status", ""), "");
+  const resourceStatus = safeString(safeReadProperty(safeResources, "status", ""), "");
+  const preflightReady = preflightStatus === "ready" && !hasOperationalActionReadinessBlockers(safePreflight);
+  const usageReady = ["normal", "ready"].includes(usageStatus) && !hasOperationalActionReadinessBlockers(safeUsage);
+  const resourceReady = ["normal", "ready"].includes(resourceStatus) && !hasOperationalActionReadinessBlockers(safeResources);
+  const readOnlyReady = preflightReady && usageReady && resourceReady && !requestedTimestampInvalid;
+  const workerReady = safeReadProperty(safeWorkers, "status", "unknown") === "ready" && !hasOperationalActionReadinessBlockers(safeWorkers);
+  const deliveryReady = safeReadProperty(safeDelivery, "status", "unknown") === "ready" && !hasOperationalActionReadinessBlockers(safeDelivery);
+  const cleanupReady = safeReadProperty(safeCleanup, "status", "unknown") === "ready" && !hasOperationalActionReadinessBlockers(safeCleanup);
+  const workerMutationGate = workerReady && readOnlyReady ? "needs_authority_approval" : "blocked";
+  const deliveryGate = deliveryReady && readOnlyReady ? "needs_authority_approval" : "blocked";
+  const cleanupGate = cleanupReady && readOnlyReady ? "needs_safety_approval" : "blocked";
+  const mergeGate = deliveryReady && readOnlyReady ? "needs_safety_approval" : "blocked";
+  const typedReason = readOnlyReady ? null : requestedTimestampInvalid ? "projection_stale" : "runtime_unavailable";
+  const refreshProjectionTypedReason = readOnlyReady ? null : requestedTimestampInvalid ? "projection_stale" : "runtime_unavailable";
+
+  return {
+    schemaVersion: PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION,
+    actionSchemaVersion: PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION,
+    readinessState: readOnlyReady ? "ready" : "degraded",
+    operationalMode: "read_only",
+    freshnessState: requestedTimestampInvalid ? "stale" : "live",
+    capabilityState: readOnlyReady ? "available" : "gated",
+    typedReason,
+    checkedAt,
+    expiresAt,
+    summary: readOnlyReady
+      ? "Read-only operational action capability projection is available for manager-cycle dogfooding."
+      : requestedTimestampInvalid
+        ? "Operational action projection is degraded because supplied cycle time was outside the freshness window; action execution remains gated."
+        : "Operational action projection is degraded; action execution remains gated by existing manager-control-plane blockers.",
+    actionCapabilities: [
+      operationalActionCapability("inspect", "manager_run", "available", "allowed", "low", null, "Inspect compact manager cycle state without mutation.", actionEvidence("inspect")),
+      operationalActionCapability("refresh_projection", "projection", readOnlyReady ? "available" : "gated", readOnlyReady ? "allowed" : "blocked", "low", refreshProjectionTypedReason, "Refresh compact read-only manager projection evidence.", actionEvidence("refresh_projection")),
+      operationalActionCapability("dispatch_apply", "work_item", "gated", "needs_authority_approval", "high", "blocked_by_approval", "Apply dispatch decisions only through explicit manager-control-plane authority gates.", actionEvidence("dispatch_apply")),
+      operationalActionCapability("mark_viewed", "work_packet", "simulated", "needs_product_approval", "low", "blocked_by_approval", "Record viewed state only after backend ownership exists.", actionEvidence("mark_viewed")),
+      operationalActionCapability("retry_verification", "execution_attempt", "gated", "needs_authority_approval", "medium", "blocked_by_approval", "Retry verification only through explicit authority and evidence gates.", actionEvidence("retry_verification")),
+      operationalActionCapability("requeue", "work_item", "gated", "needs_authority_approval", "medium", "blocked_by_approval", "Requeue only through manager-control-plane authority gates.", actionEvidence("requeue")),
+      operationalActionCapability("mark_tested", "work_packet", "gated", "needs_product_approval", "medium", "blocked_by_approval", "Mark tested only through operator test result evidence.", actionEvidence("mark_tested")),
+      operationalActionCapability("kill_worker", "worker", "gated", workerMutationGate, "high", workerMutationGate === "blocked" ? "runtime_unavailable" : "blocked_by_approval", "Worker termination remains blocked without explicit safety evidence.", actionEvidence("kill_worker")),
+      operationalActionCapability("mutate_source", "work_packet", "gated", "needs_authority_approval", "high", "blocked_by_policy", "Source mutation is not available from the continuous cycle projection.", actionEvidence("mutate_source")),
+      operationalActionCapability("push_branch", "branch", "gated", deliveryGate, "high", deliveryGate === "blocked" ? "delivery_blocked" : "blocked_by_approval", "Branch push remains behind delivery gates.", actionEvidence("push_branch")),
+      operationalActionCapability("open_pr", "branch", "gated", deliveryGate, "high", deliveryGate === "blocked" ? "delivery_blocked" : "blocked_by_approval", "PR creation remains behind delivery gates.", actionEvidence("open_pr")),
+      operationalActionCapability("merge", "branch", "gated", mergeGate, "extreme", mergeGate === "blocked" ? "delivery_blocked" : "blocked_by_approval", "Merge requires exact-head delivery evidence and is not continuous-cycle executable.", actionEvidence("merge")),
+      operationalActionCapability("delete_branch", "branch", "gated", cleanupGate, "extreme", cleanupGate === "blocked" ? "blocked_by_policy" : "blocked_by_approval", "Branch deletion remains behind cleanup gates.", actionEvidence("delete_branch")),
+      operationalActionCapability("cleanup", "workspace", "gated", cleanupGate, "extreme", cleanupGate === "blocked" ? "blocked_by_policy" : "blocked_by_approval", "Cleanup remains behind merged-lane cleanup evidence.", actionEvidence("cleanup")),
+      operationalActionCapability("credential_or_provider_change", "runtime", "unavailable", "blocked", "extreme", "blocked_by_policy", "Provider account changes are outside continuous manager authority.", actionEvidence("credential_or_provider_change")),
+    ],
+    evidenceRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function operationalTimestampInput(value, fallback) {
+  try {
+    const text = String(value ?? fallback ?? "");
+    return { readable: true, value: sanitizeLedgerField(text, fallback, 80) };
+  } catch {
+    return { readable: false, value: fallback };
+  }
+}
+
+function hasOperationalActionReadinessBlockers(packet = {}) {
+  const safePacket = safeProjectionPacket(packet);
+  const summary = safePlainObjectSnapshot(safeReadProperty(safePacket, "summary", {})) || {};
+  if (safeReadProperty(safePacket, "ok", true) === false || safeReadProperty(summary, "ok", true) === false) return true;
+  const blockers = operationalArrayEvidence(safePacket, "blockers");
+  const summaryBlockers = operationalArrayEvidence(summary, "blockers");
+  if (!blockers.readable || !summaryBlockers.readable) return true;
+  if (blockers.values.length > 0) return true;
+  if (summaryBlockers.values.length > 0) return true;
+  const packetWarnings = operationalArrayEvidence(safePacket, "warnings");
+  const summaryWarnings = operationalArrayEvidence(summary, "warnings");
+  if (!packetWarnings.readable || !summaryWarnings.readable) return true;
+  const warnings = [...packetWarnings.values, ...summaryWarnings.values];
+  return warnings.some((warning) => {
+    if (typeof warning === "string") {
+      return /^(?:critical|error|fatal)(?::|\b)/i.test(warning.trim());
+    }
+    if (!warning || typeof warning !== "object") return false;
+    const warningRecord = safePlainObjectSnapshot(warning) || {};
+    const severity = safeString(safeReadProperty(warningRecord, "severity", ""), "").toLowerCase();
+    const level = safeString(safeReadProperty(warningRecord, "level", ""), "").toLowerCase();
+    const state = safeString(safeReadProperty(warningRecord, "state", ""), "").toLowerCase();
+    const status = safeString(safeReadProperty(warningRecord, "status", ""), "").toLowerCase();
+    return (
+      ["critical", "error", "fatal"].includes(severity) ||
+      ["critical", "error", "fatal"].includes(level) ||
+      ["blocked", "failed", "unavailable", "critical"].includes(state) ||
+      ["blocked", "failed", "unavailable", "critical"].includes(status)
+    );
+  });
+}
+
+function operationalArrayEvidence(record = {}, key = "") {
+  try {
+    if (!record || typeof record !== "object") return { readable: true, values: [] };
+    if (!Object.prototype.hasOwnProperty.call(record, key)) return { readable: true, values: [] };
+    const value = record[key];
+    if (value === undefined || value === null) return { readable: true, values: [] };
+    if (!Array.isArray(value)) return { readable: false, values: [] };
+    return { readable: true, values: Array.from(value) };
+  } catch {
+    return { readable: false, values: [] };
+  }
+}
+
+function operationalActionCapability(actionId, targetType, capabilityState, authorityState, riskTier, typedReason, expectedResultSummary, evidenceRefs) {
+  return {
+    actionId,
+    targetType,
+    targetId: null,
+    capabilityState,
+    authorityState,
+    riskTier,
+    typedReason,
+    expectedResultSummary,
+    correlationRequired: true,
+    idempotencyRequired: true,
+    evidenceRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function operationalActionEvidenceToken(value, fallback = "unknown", maxLength = 100) {
+  const sanitized = sanitizeLedgerField(value, fallback, maxLength);
+  const rawValue = safeString(value, "");
+  if (
+    FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(rawValue) ||
+    SECRET_LIKE_OPERATIONAL_ACTION_REF.test(rawValue) ||
+    FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(sanitized) ||
+    SECRET_LIKE_OPERATIONAL_ACTION_REF.test(sanitized)
+  ) {
+    return fallback;
+  }
+  const normalized = sanitized
+    .replace(/[^A-Za-z0-9._/@:-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLength);
+  return normalized || fallback;
+}
+
+function safeProjectionPacket(value) {
+  return safePlainObjectSnapshot(value) || {};
+}
+
 function summarizeLedgerDispatcherSummary(summary = null) {
   if (!isPlainObject(summary)) return null;
   return {
@@ -13711,22 +13956,29 @@ function runReadOnlyTool(runner, command, args, context = {}) {
 }
 
 export function buildCyclePacket(options = {}, context = {}) {
+  options = safePlainObjectSnapshot(options) || {};
+  context = safePlainObjectSnapshot(context) || {};
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const readOnlyRunOptions = { ...runOptions, apply: false };
+  const usageContext = safePlainObjectSnapshot(safeReadProperty(context, "usageContext", {})) || {};
+  const resourceContext = safePlainObjectSnapshot(safeReadProperty(context, "resourceContext", {})) || {};
+  const preflightStatus = safeReadProperty(context, "preflightStatus", null);
+  const workerStatus = safeReadProperty(context, "workerStatus", null);
+  const dispatchPreviewContext = safeReadProperty(context, "dispatchPreview", null);
   const usageInput = {
-    ...(isPlainObject(context.usageContext) ? context.usageContext : {}),
-    weeklyUsage: context.usageContext?.weeklyUsage ?? context.weeklyUsage,
-    weeklyUsageContext: context.usageContext?.weeklyUsageContext ?? context.weeklyUsageContext,
-    weeklyUsagePressure: context.usageContext?.weeklyUsagePressure ?? context.weeklyUsagePressure,
+    ...usageContext,
+    weeklyUsage: safeReadProperty(usageContext, "weeklyUsage", undefined) ?? safeReadProperty(context, "weeklyUsage", undefined),
+    weeklyUsageContext: safeReadProperty(usageContext, "weeklyUsageContext", undefined) ?? safeReadProperty(context, "weeklyUsageContext", undefined),
+    weeklyUsagePressure: safeReadProperty(usageContext, "weeklyUsagePressure", undefined) ?? safeReadProperty(context, "weeklyUsagePressure", undefined),
   };
-  const usage = usageInput && (usageInput.status || usageInput.state)
+  const usage = usageInput && (safeReadProperty(usageInput, "status", null) || safeReadProperty(usageInput, "state", null))
     ? normalizeUsagePacketContext(usageInput, context)
     : buildUsageStatus(usageInput);
-  const resources = context.resourceContext && (context.resourceContext.status || context.resourceContext.state) ? normalizePacketContext(context.resourceContext) : buildResourceStatus(context.resourceContext || {});
-  const preflight = context.preflightStatus ? normalizePacketContext(context.preflightStatus) : buildPreflight(readOnlyRunOptions, context);
-  const dispatchPreview = context.dispatchPreview ? normalizeDispatchPreviewContext(context.dispatchPreview) : buildDispatchPreview(readOnlyRunOptions, context);
+  const resources = resourceContext && (safeReadProperty(resourceContext, "status", null) || safeReadProperty(resourceContext, "state", null)) ? normalizePacketContext(resourceContext) : buildResourceStatus(resourceContext || {});
+  const preflight = preflightStatus ? normalizePacketContext(preflightStatus) : buildPreflight(readOnlyRunOptions, context);
+  const dispatchPreview = dispatchPreviewContext ? normalizeDispatchPreviewContext(dispatchPreviewContext) : buildDispatchPreview(readOnlyRunOptions, context);
   const runway = buildRefillPlan(readOnlyRunOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
-  const workers = context.workerStatus ? normalizePacketContext(context.workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
+  const workers = workerStatus ? normalizePacketContext(workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
   const workerHandoff = buildWorkerHandoffPlan(readOnlyRunOptions, {
     ...context,
     workerStatus: workers,
@@ -13752,7 +14004,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   });
   const steering = buildSteeringPlan(readOnlyRunOptions, context);
   const cleanup = context.cleanupPlan || buildCleanupPlan(readOnlyRunOptions, context);
-  const resume = buildResumeState(readOnlyRunOptions, context);
+  const resume = context.resumeState ? normalizePacketContext(context.resumeState) : buildResumeState(readOnlyRunOptions, context);
   const hasRecoverySignals = Boolean(context.stateSignals || context.reconciliationStateSignals);
   const recovery = context.recoveryPlan
     ? normalizePacketContext(context.recoveryPlan)
@@ -13762,7 +14014,19 @@ export function buildCyclePacket(options = {}, context = {}) {
   const workspace = getWorkspaceProof(readOnlyRunOptions, context);
   const feedback = buildFeedbackPlan(readOnlyRunOptions, context);
   const delivery = context.deliveryPlan ? normalizePacketContext(context.deliveryPlan) : buildDeliveryPlan(readOnlyRunOptions, { ...context, feedbackPlan: feedback });
+  const operationalActions = buildOperationalActionReadinessProjection({
+    runOptions: readOnlyRunOptions,
+    usage,
+    resources,
+    preflight,
+    workers,
+    delivery,
+    cleanup,
+    context,
+  });
   const dispatcherState = buildCycleDispatcherState(dispatchPreview);
+  const dispatchTrustProof = bindTrustedOperationalDispatchAuthority(operationalActions, dispatchPreview);
+  markTrustedOperationalReadiness(operationalActions, { dispatchApply: dispatchTrustProof });
   const queueLeaseSummary = buildCycleQueueLeaseSummary(dispatcherState);
   const signalGaps = buildCycleSignalGaps({ usage, resources, dispatchPreview, workers, cleanup, preflight, context });
   const observations = buildCycleObservations({ dispatchPreview, workers, context });
@@ -13786,11 +14050,12 @@ export function buildCyclePacket(options = {}, context = {}) {
   if (preflightBlockers.length > 0 && !frictionAttention && !workerProgressAttention && !laneAdvanceAttention && activeWorkerCount === 0) {
     blockers.push(...preflightBlockers);
   }
-  blockers.push(...signalGaps.blockers);
-  blockers.push(...(resume.blockers || []));
-  blockers.push(...(recovery.blockers || []));
-  blockers.push(...(runway.blockers || []));
-  blockers.push(...(workers.blockers || []));
+  blockers.push(...safeBlockerArray(signalGaps.blockers, "signal-gap-blocker-unreadable"));
+  blockers.push(...safeBlockerArray(usage.blockers, "usage-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(resume.blockers, "resume-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(recovery.blockers, "recovery-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(runway.blockers, "runway-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(workers.blockers, "worker-blockers-unreadable"));
   const dispatchPosture = applySteeringToDispatchPosture(buildDispatchPosture(usage.status, resources.status, usage.summary?.weekly), steering.summary);
   const dispatchPostureAllowsNewDispatch = dispatchPosture.summary?.newDispatchAllowed !== false;
   blockers.push(...dispatchPosture.blockers);
@@ -13799,8 +14064,11 @@ export function buildCyclePacket(options = {}, context = {}) {
   blockers.push(...(feedback.blockers || []));
   blockers.push(...(delivery.blockers || []));
   const baseStatus = blockers.length > 0 ? "blocked" : frictionAttention || steeringAttention || feedbackAttention || workerProgressAttention || laneAdvanceAttention ? "attention" : "ready";
-  const continuation = buildContinuationPlan({ status: baseStatus, blockers, runway, usage, resources, workers, resume, dispatchPreview });
-  const status = baseStatus === "blocked" && continuation.canContinue ? "attention" : baseStatus;
+  const continuation = buildContinuationPlan({ status: baseStatus, blockers, runway, usage, resources, workers, resume, dispatchPreview, operationalActions });
+  const deliveryOrPrOperationBlocked = blockers.some((blocker) =>
+    ["delivery-phase-authority-missing", "delivery-phase-authority-invalid", "pr-stewardship-evidence-missing", "pr-stewardship-high-risk"].includes(blocker.code),
+  );
+  const status = baseStatus === "blocked" && continuation.canContinue && !deliveryOrPrOperationBlocked ? "attention" : baseStatus;
   const reportedBlockers = suppressSupersededCycleBlockers({ blockers, cleanup });
   const recoveryMutationBlocked = recoveryBlocksManagerMutation(recovery);
   const autoApply = [
@@ -13862,6 +14130,11 @@ export function buildCyclePacket(options = {}, context = {}) {
     code: action.code || "cleanup-action",
   }));
   const supersededActions = supersededCycleActionCodes({ cleanup });
+  const dispatchApplyOperationallyAllowed = operationalActionCapabilityAllows(
+    { summary: { operationalActions, dispatchPreview: dispatchPreview.summary, dispatcher: dispatcherState.dispatcher } },
+    "dispatch_apply",
+  );
+  const dispatchPreviewActions = continuation.canContinue && dispatchApplyOperationallyAllowed ? (dispatchPreview.nextActions || []) : [];
   const nextActions = uniqueActions([
     ...(recoveryMutationBlocked ? [] : workerQuestionBlockerActions),
     ...(recoveryMutationBlocked ? [] : workerWarmActions),
@@ -13869,7 +14142,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     ...(recoveryMutationBlocked ? [] : laneAdvanceActions),
     ...(recoveryMutationBlocked ? [] : workerProgressActions),
     ...signalGaps.nextActions,
-    ...(recoveryMutationBlocked ? [] : dispatchPostureAllowsNewDispatch ? (dispatchPreview.nextActions || []) : []),
+    ...(recoveryMutationBlocked ? [] : dispatchPostureAllowsNewDispatch ? dispatchPreviewActions : []),
     ...(recoveryMutationBlocked ? [] : runway.nextActions || []),
     ...activeWorkerActions,
     ...(usage.nextActions || []),
@@ -13882,12 +14155,12 @@ export function buildCyclePacket(options = {}, context = {}) {
   ].filter((action) => !supersededActions.has(action.code)));
   const sourceBackedRefillAction =
     !recoveryMutationBlocked && runway.summary.dispatchableLanes === 0 && runway.summary.sourceSlice ? runway.nextActions?.[0]?.nextAction : null;
-  const safeDispatchAction = !recoveryMutationBlocked && dispatchPostureAllowsNewDispatch && dispatchPreview.summary?.allowed ? dispatchPreview.nextActions?.[0]?.nextAction : null;
+  const safeDispatchAction = continuation.canContinue && !recoveryMutationBlocked && dispatchPostureAllowsNewDispatch && dispatchApplyOperationallyAllowed && dispatchPreview.summary?.allowed === true ? dispatchPreview.nextActions?.[0]?.nextAction : null;
   const activeWorkerAction = activeWorkerActions[0]?.nextAction || null;
   const workerWarmAction = recoveryMutationBlocked ? null : workerWarmActions[0]?.nextAction || null;
   const workerHandoffAction = recoveryMutationBlocked ? null : workerHandoffActions[0]?.nextAction || null;
   const laneAdvanceAction = recoveryMutationBlocked ? null : laneAdvanceActions[0]?.nextAction || null;
-  const cleanupAction = recoveryMutationBlocked ? null : cleanupActions[0]?.nextAction || null;
+  const cleanupAction = recoveryMutationBlocked || !continuation.canContinue ? null : cleanupActions[0]?.nextAction || null;
   const actionNeeded =
     (recoveryMutationBlocked ? null : workerQuestionBlockerActions[0]?.nextAction) ||
     (recoveryMutationBlocked ? null : steering.blockers?.[0]?.nextAction) ||
@@ -13906,6 +14179,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     resume.blockers?.[0]?.nextAction ||
     runway.blockers?.[0]?.nextAction ||
     (recoveryMutationBlocked ? null : runway.nextActions?.[0]?.nextAction) ||
+    (status === "blocked" ? "cycle blocked; inspect blockers before manager mutation." : null) ||
     "none";
   const progress = buildProgressBeaconPlan(runOptions, {
     runState: continuation.progressRunState,
@@ -13930,7 +14204,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   const report = progress.summary.heartbeat.text;
   const preflightSummary = preflight.summary || {};
   const cycleRecommendedActions = sanitizeCycleActions(nextActions);
-  return packet({
+  const cyclePacket = packet({
     ok: status !== "blocked",
     status,
     summary: {
@@ -13980,6 +14254,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       },
       progress: sanitizeCyclePacketValue(progress.summary),
       feedback: sanitizeCyclePacketValue(feedback.summary),
+      operationalActions: sanitizeCyclePacketValue(operationalActions),
       signalGaps: {
         status: signalGaps.status,
         gapCount: signalGaps.gapCount,
@@ -14010,6 +14285,8 @@ export function buildCyclePacket(options = {}, context = {}) {
     warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
     nextActions: cycleRecommendedActions,
   });
+  markTrustedOperationalReadiness(cyclePacket.summary?.operationalActions, { dispatchApply: dispatchTrustProof });
+  return cyclePacket;
 }
 
 export function buildContinuousRunPlan(options = {}, context = {}) {
@@ -14033,6 +14310,7 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
     .map((action) => buildContinuousAction(action, cycle))
     .filter(Boolean)
     .filter((action) => continuousActionAllowedByContinuation(action, cycle))
+    .filter((action) => continuousActionAllowedByOperationalCapability(action, cycle))
     .sort((left, right) => continuousActionPriority(left) - continuousActionPriority(right));
   const selected = actionable.find((action) => !action.readOnly) || actionable[0] || null;
   const workers = cycle.summary?.workers?.workerCounts || {};
@@ -14051,11 +14329,7 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
   const effectiveSelected = stopReasons.length > 0 ? null : selected;
   const status = stopReasons.length > 0 ? "blocked" : effectiveSelected || cycle.status === "attention" ? "attention" : "ready";
   const selectedAction = sanitizeCyclePacketValue(effectiveSelected);
-  const attentionNextAction = sanitizeLedgerField(
-    dispatchRoutingHold?.nextAction || cycle.nextActions?.[0]?.nextAction || "Inspect the latest manager-cycle-packet recommended actions.",
-    "Inspect the latest manager-cycle-packet recommended actions.",
-    260,
-  );
+  const attentionNextAction = continuousAttentionNextAction(cycle, dispatchRoutingHold);
   return packet({
     ok: stopReasons.length === 0,
     status,
@@ -14074,6 +14348,7 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
       resourceState: resources.state || "unknown",
       cycleStatus: cycle.status,
       selectedAction,
+      operationalActions: sanitizeCyclePacketValue(cycle.summary?.operationalActions || null),
       reviewResourcePolicy: sanitizeCyclePacketValue(cycle.summary?.reviewResourcePolicy || null),
       dispatchRouting: sanitizeCyclePacketValue(dispatchRoutingHold?.decision || null),
       allowedActionCount: stopReasons.length > 0 ? 0 : actionable.length,
@@ -14089,6 +14364,41 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
         : cycle.status === "attention"
         ? [{ code: "continuous-attention-monitor", summary: "Manager attention remains, but no auto-safe action is currently available.", nextAction: attentionNextAction }]
         : [{ code: "continuous-monitor", summary: "No manager-owned auto action is currently needed.", nextAction: "Sleep until the next continuous manager poll." }],
+  });
+}
+
+function continuousAttentionNextAction(cycle = {}, dispatchRoutingHold = null) {
+  if (dispatchRoutingHold?.nextAction && !isDispatchApplyCommandText(dispatchRoutingHold.nextAction)) {
+    return sanitizeLedgerField(dispatchRoutingHold.nextAction, "Inspect the latest manager-cycle-packet recommended actions.", 260);
+  }
+  const safeAction = (Array.isArray(cycle.nextActions) ? cycle.nextActions : []).find((action) => {
+    if (action?.code === "dispatch-preview-ready") return false;
+    return action?.nextAction && !isDispatchApplyCommandText(action.nextAction);
+  });
+  return sanitizeLedgerField(
+    safeAction?.nextAction || "Inspect the latest manager-cycle-packet recommended actions.",
+    "Inspect the latest manager-cycle-packet recommended actions.",
+    260,
+  );
+}
+
+function isDispatchApplyCommandText(value = "") {
+  const text = safeString(value, "").toLowerCase();
+  return /\bdispatch-next\b/.test(text) && /\b--apply\b/.test(text);
+}
+
+function safeBlockerArray(value = [], fallbackCode = "blocker-unreadable") {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    return [{ code: fallbackCode, message: "Blocker evidence was not a readable array.", nextAction: "Inspect compact manager packet evidence before continuing." }];
+  }
+  return value.map((blocker, index) => {
+    if (blocker && typeof blocker === "object" && !Array.isArray(blocker)) return blocker;
+    return {
+      code: fallbackCode,
+      message: `Blocker evidence entry ${index} was not a readable object.`,
+      nextAction: "Inspect compact manager packet evidence before continuing.",
+    };
   });
 }
 
@@ -14122,6 +14432,426 @@ function continuousActionAllowedByContinuation(action = {}, cycle = {}) {
   }
   if (continuation.dispatchApplyAllowed === false && action.mutationClass === "assignment_workspace_claim_only") {
     return false;
+  }
+  return true;
+}
+
+function continuousActionAllowedByOperationalCapability(action = {}, cycle = {}) {
+  if (action.readOnly === true || !action.mutationClass) return true;
+  const readiness = cycle.summary?.operationalActions || null;
+  if (!readiness) return true;
+  const actionId = operationalActionIdForContinuousMutation(action);
+  if (!actionId) return operationalReadinessFreshAndComplete(readiness) && existingGateContinuousMutationAllowed(action);
+  return operationalActionCapabilityAllows(cycle, actionId);
+}
+
+function operationalActionIdForContinuousMutation(action = {}) {
+  switch (action.code) {
+    case "continuous-dispatch-apply":
+      return "dispatch_apply";
+    case "continuous-worker-retire":
+      return "kill_worker";
+    case "continuous-refill-apply":
+      return "mutate_source";
+    case "continuous-worker-recovery-inspection":
+    case "continuous-lane-advance-apply":
+    case "continuous-bmad-code-review-request":
+      return "refresh_projection";
+    default:
+      return null;
+  }
+}
+
+function existingGateContinuousMutationAllowed(action = {}) {
+  return [
+    "continuous-worker-answer-question",
+    "continuous-worker-prompt-probe",
+    "continuous-worker-submit-pending",
+    "continuous-worker-warm",
+    "continuous-worker-handoff",
+    "continuous-worker-progress-signal",
+    "continuous-worker-prompt-idle-progress-signal",
+  ].includes(action.code);
+}
+
+function operationalActionCapabilityAllows(cycle = {}, actionId = "") {
+  const readiness = cycle.summary?.operationalActions || null;
+  if (!operationalReadinessFreshAndComplete(readiness)) return false;
+  if (actionId === "dispatch_apply" && (!isTrustedOperationalReadiness(readiness) || readiness.operationalMode !== "bounded_write")) return false;
+  const capabilities = Array.isArray(readiness?.actionCapabilities) ? readiness.actionCapabilities : [];
+  const capability = capabilities.find((candidate) => candidate?.actionId === actionId);
+  if (!capability) return false;
+  if (actionId === "dispatch_apply" && !operationalDispatchCapabilityContractValid(capability)) return false;
+  return (
+    capability.capabilityState === "available" &&
+    capability.authorityState === "allowed" &&
+    capability.typedReason === null &&
+    capability.metadataOnly === true &&
+    capability.rawPayloadRetained === false &&
+    Array.isArray(capability.evidenceRefs) &&
+    capability.evidenceRefs.length > 0 &&
+    operationalCapabilityEvidenceAllows(capability, cycle)
+  );
+}
+
+function markTrustedOperationalReadiness(readiness = null, proof = {}) {
+  if (!readiness || typeof readiness !== "object") return;
+  try {
+    Object.defineProperty(readiness, TRUSTED_OPERATIONAL_READINESS, {
+      value: Object.freeze({ ...(proof || {}) }),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {
+    // Trust marks are best-effort and must never weaken the fail-closed gate.
+  }
+}
+
+function isTrustedOperationalReadiness(readiness = null) {
+  try {
+    return Boolean(readiness && typeof readiness === "object" && readiness[TRUSTED_OPERATIONAL_READINESS]);
+  } catch {
+    return false;
+  }
+}
+
+function trustedOperationalReadinessProof(readiness = null) {
+  try {
+    return readiness && typeof readiness === "object" ? readiness[TRUSTED_OPERATIONAL_READINESS] || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function markTrustedDispatchPreviewAuthority(dispatchPreview = null) {
+  if (!dispatchPreview || typeof dispatchPreview !== "object") return;
+  try {
+    TRUSTED_DISPATCH_PREVIEW_AUTHORITY_RECORDS.add(dispatchPreview);
+  } catch {
+    // WeakSet trust marks are best-effort and must fail closed if unavailable.
+  }
+  try {
+    Object.defineProperty(dispatchPreview, TRUSTED_DISPATCH_PREVIEW_AUTHORITY, {
+      value: true,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {
+    // Symbol trust marks are best-effort; frozen packets still use WeakSet trust.
+  }
+}
+
+function isTrustedDispatchPreviewAuthority(dispatchPreview = null) {
+  try {
+    const producer = safeReadProperty(dispatchPreview?.summary?.operationalDispatchAuthority || {}, "producer", "");
+    return Boolean(
+      dispatchPreview &&
+        typeof dispatchPreview === "object" &&
+        (producer === "codex-workspace-dispatch-next-dry-run" ||
+          dispatchPreview[TRUSTED_DISPATCH_PREVIEW_AUTHORITY] ||
+          TRUSTED_DISPATCH_PREVIEW_AUTHORITY_RECORDS.has(dispatchPreview)),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function bindTrustedOperationalDispatchAuthority(readiness = null, dispatchPreview = {}) {
+  if (!isTrustedDispatchPreviewAuthority(dispatchPreview)) return null;
+  const summary = dispatchPreview.summary || {};
+  const authority = normalizeOperationalDispatchAuthority(summary?.operationalDispatchAuthority, summary);
+  if (!authority || !readiness || typeof readiness !== "object") return null;
+  if (readiness.readinessState !== "ready" || readiness.capabilityState !== "available" || readiness.freshnessState !== "live") return null;
+  if (readiness.typedReason !== null) return null;
+  const capabilities = Array.isArray(readiness.actionCapabilities) ? readiness.actionCapabilities : [];
+  const capability = capabilities.find((candidate) => candidate?.actionId === "dispatch_apply");
+  if (!capability || typeof capability !== "object") return null;
+  capability.targetType = authority.targetType;
+  capability.targetId = authority.targetId;
+  capability.capabilityState = "available";
+  capability.authorityState = "allowed";
+  capability.riskTier = "high";
+  capability.typedReason = null;
+  capability.expectedResultSummary = "Apply dispatch decision for the selected work item through bounded write authority proof.";
+  capability.evidenceRefs = uniqueStrings([...(Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : []), ...authority.evidenceRefs]);
+  readiness.operationalMode = "bounded_write";
+  readiness.summary = "Bounded-write operational action readiness is available for the selected dispatch work item.";
+  return Object.freeze({
+    actionId: "dispatch_apply",
+    targetId: authority.targetId,
+    targetType: authority.targetType,
+    approvalEvidenceRef: authority.approvalEvidenceRef,
+    evidenceRefs: Object.freeze([...authority.evidenceRefs]),
+  });
+}
+
+function normalizeOperationalDispatchAuthority(authority = null, dispatchPreview = {}) {
+  if (!authority || typeof authority !== "object") return null;
+  const record = safePlainObjectSnapshot(authority);
+  if (!record) return null;
+  const selectedLane = safeDispatchWorkTargetString(dispatchPreview.selectedLane);
+  if (dispatchPreview.allowed !== true || !selectedLane) return null;
+  const targetId = safeDispatchWorkTargetString(safeReadProperty(record, "targetId", ""));
+  if (!targetId || targetId !== selectedLane || !operationalIdentifierCanonical(targetId)) return null;
+  const targetType = safeString(safeReadProperty(record, "targetType", "work_item"), "work_item");
+  if (!["work_item", "candidate_work"].includes(targetType)) return null;
+  const actionId = safeReadProperty(record, "actionId", "dispatch_apply");
+  if (actionId && actionId !== "dispatch_apply") return null;
+  if (safeReadProperty(record, "capabilityState", "") !== "available" || safeReadProperty(record, "authorityState", "") !== "allowed") return null;
+  if (safeReadProperty(record, "riskTier", "") !== "high") return null;
+  const approvalEvidenceRef = `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalCapabilityContextToken(targetId)}`;
+  if (safeReadProperty(record, "approvalEvidenceRef", "") !== approvalEvidenceRef) return null;
+  const refs = Array.isArray(record.evidenceRefs) ? record.evidenceRefs : [];
+  if (!refs.includes(approvalEvidenceRef)) return null;
+  const safeRefs = refs.filter((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref));
+  if (safeRefs.length !== refs.length || safeRefs.length === 0 || safeRefs.length > 24) return null;
+  return {
+    actionId: "dispatch_apply",
+    targetId,
+    targetType,
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "high",
+    approvalEvidenceRef,
+    evidenceRefs: safeRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function operationalDispatchCapabilityContractValid(capability = {}) {
+  if (!capability || typeof capability !== "object" || Array.isArray(capability)) return false;
+  const allowedKeys = new Set([
+    "actionId",
+    "targetType",
+    "targetId",
+    "capabilityState",
+    "authorityState",
+    "riskTier",
+    "typedReason",
+    "expectedResultSummary",
+    "correlationRequired",
+    "idempotencyRequired",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]);
+  const entries = safeObjectEntries(capability);
+  if (!entries || entries.some(([key]) => !allowedKeys.has(key))) return false;
+  if (capability.actionId !== "dispatch_apply") return false;
+  if (!["work_item", "candidate_work"].includes(capability.targetType)) return false;
+  if (capability.capabilityState !== "available") return false;
+  if (capability.authorityState !== "allowed") return false;
+  if (capability.riskTier !== "high" && capability.riskTier !== "extreme") return false;
+  if (capability.typedReason !== null) return false;
+  if (capability.correlationRequired !== true || capability.idempotencyRequired !== true) return false;
+  if (capability.metadataOnly !== true || capability.rawPayloadRetained !== false) return false;
+  if (typeof capability.targetId !== "string" || !operationalIdentifierCanonical(capability.targetId)) return false;
+  if (typeof capability.expectedResultSummary !== "string" || !safeOperationalMetadataText(capability.expectedResultSummary)) return false;
+  const refs = Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : null;
+  if (!refs || refs.length === 0 || refs.length > 24) return false;
+  return refs.every((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref));
+}
+
+function safeObjectEntries(value = {}) {
+  try {
+    return Object.entries(value);
+  } catch {
+    return null;
+  }
+}
+
+function operationalIdentifierCanonical(value = "") {
+  if (typeof value !== "string") return false;
+  if (value.trim() !== value) return false;
+  if (value.toLowerCase() !== value) return false;
+  if (!OPERATIONAL_ACTION_IDENTIFIER.test(value)) return false;
+  if (OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR.test(value)) return false;
+  if (OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT.test(value)) return false;
+  return safeOperationalMetadataText(value);
+}
+
+function safeOperationalMetadataText(value = "") {
+  try {
+    const text = String(value);
+    return (
+      text.trim() === text &&
+      text.length > 0 &&
+      text.length <= 500 &&
+      !/[\u0000-\u001f\u007f]/.test(text) &&
+      !FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(text) &&
+      !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(text)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function operationalCapabilityEvidenceAllows(capability = {}, cycle = {}) {
+  if (capability.actionId !== "dispatch_apply") return true;
+  const proof = trustedOperationalReadinessProof(cycle.summary?.operationalActions || null)?.dispatchApply || null;
+  if (!proof || proof.actionId !== "dispatch_apply") return false;
+  const targetId = safeString(safeReadProperty(capability, "targetId", ""), "");
+  if (!targetId || targetId !== proof.targetId || capability.targetType !== proof.targetType) return false;
+  if (!operationalCapabilityMatchesSelectedDispatchTarget(targetId, cycle)) return false;
+  const targetToken = operationalCapabilityContextToken(targetId);
+  if (targetToken === "unknown-0") return false;
+  const refs = Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : [];
+  return refs.includes(proof.approvalEvidenceRef) && refs.includes(`evidence:capability-approval-needs_authority_approval:dispatch_apply:${targetToken}`);
+}
+
+function operationalCapabilityMatchesSelectedDispatchTarget(targetId = "", cycle = {}) {
+  const target = safeDispatchWorkTargetString(targetId);
+  if (!target) return false;
+  const dispatchPreview = cycle.summary?.dispatchPreview || {};
+  const dispatcher = cycle.summary?.dispatcher || {};
+  const previewTargets = [
+    dispatchPreview.selectedLane,
+    dispatchPreview.selectedWorkItem,
+    dispatchPreview.selectedWorkItemId,
+    dispatchPreview.selectedTarget,
+    dispatchPreview.selectedTargetId,
+  ].map((value) => safeDispatchWorkTargetString(value)).filter(Boolean);
+  const dispatcherTargets = [
+    dispatcher.selectedLane,
+    dispatcher.selectedWorkItem,
+    dispatcher.selectedWorkItemId,
+    dispatcher.selectedTarget,
+    dispatcher.selectedTargetId,
+  ].map((value) => safeDispatchWorkTargetString(value)).filter(Boolean);
+  const previewTarget = previewTargets[0] || "";
+  const dispatcherTarget = dispatcherTargets[0] || "";
+  if (!previewTarget) return false;
+  if (dispatcherTarget && dispatcherTarget !== previewTarget) return false;
+  return target === previewTarget;
+}
+
+function safeDispatchWorkTargetString(value = "") {
+  try {
+    const text = String(value || "").trim();
+    return operationalIdentifierCanonical(text) ? text : "";
+  } catch {
+    return "";
+  }
+}
+
+function operationalCapabilityContextToken(value = "") {
+  const text = safeString(value, "");
+  if (!text || !/^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/i.test(text)) return "unknown-0";
+  return boundedOperationalEvidenceToken(text);
+}
+
+function boundedOperationalEvidenceToken(value = "") {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const normalized = value
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24) || "id";
+  return `${normalized}-${(hash >>> 0).toString(36).padStart(7, "0").slice(0, 7)}`;
+}
+
+function operationalReadinessFreshAndComplete(readiness = null) {
+  if (!readiness || typeof readiness !== "object") return false;
+  if (!operationalReadinessShapeValid(readiness)) return false;
+  if (readiness.schemaVersion !== PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION) return false;
+  if (readiness.actionSchemaVersion !== PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION) return false;
+  if (readiness.readinessState !== "ready") return false;
+  if (!["read_only", "bounded_write"].includes(readiness.operationalMode)) return false;
+  if (readiness.freshnessState !== "live") return false;
+  if (readiness.capabilityState !== "available") return false;
+  if (readiness.typedReason !== null) return false;
+  if (readiness.metadataOnly !== true || readiness.rawPayloadRetained !== false) return false;
+  if (!Array.isArray(readiness.evidenceRefs) || readiness.evidenceRefs.length === 0 || readiness.evidenceRefs.length > 24) return false;
+  if (!readiness.evidenceRefs.every((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref))) return false;
+  const checkedAtMs = Date.parse(typeof readiness.checkedAt === "string" ? readiness.checkedAt : "");
+  const expiresAtMs = Date.parse(typeof readiness.expiresAt === "string" ? readiness.expiresAt : "");
+  const nowMs = Date.now();
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs)) return false;
+  if (checkedAtMs > expiresAtMs) return false;
+  if (checkedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS) return false;
+  if (expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_TTL_MS) return false;
+  if (expiresAtMs <= nowMs) return false;
+  if (!Array.isArray(readiness.actionCapabilities)) return false;
+  if (readiness.actionCapabilities.length !== PIPELINE_OPERATIONAL_ACTION_IDS.length) return false;
+  const seen = new Set();
+  for (const capability of readiness.actionCapabilities) {
+    if (!capability || typeof capability !== "object") return false;
+    if (!PIPELINE_OPERATIONAL_ACTION_IDS.includes(capability.actionId)) return false;
+    if (seen.has(capability.actionId)) return false;
+    seen.add(capability.actionId);
+    if (capability.metadataOnly !== true || capability.rawPayloadRetained !== false) return false;
+    if (capability.correlationRequired !== true || capability.idempotencyRequired !== true) return false;
+    if (!operationalCapabilityShapeValid(capability)) return false;
+  }
+  const inspect = readiness.actionCapabilities.find((capability) => capability.actionId === "inspect");
+  const refresh = readiness.actionCapabilities.find((capability) => capability.actionId === "refresh_projection");
+  return (
+    inspect?.capabilityState === "available" &&
+    inspect?.authorityState === "allowed" &&
+    inspect?.typedReason === null &&
+    refresh?.capabilityState === "available" &&
+    refresh?.authorityState === "allowed" &&
+    refresh?.typedReason === null
+  );
+}
+
+function operationalReadinessShapeValid(readiness = {}) {
+  const allowedKeys = new Set([
+    "schemaVersion",
+    "actionSchemaVersion",
+    "readinessState",
+    "operationalMode",
+    "freshnessState",
+    "capabilityState",
+    "typedReason",
+    "checkedAt",
+    "expiresAt",
+    "summary",
+    "actionCapabilities",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]);
+  const entries = safeObjectEntries(readiness);
+  if (!entries || entries.some(([key]) => !allowedKeys.has(key))) return false;
+  return typeof readiness.summary === "string" && safeOperationalMetadataText(readiness.summary);
+}
+
+function operationalCapabilityShapeValid(capability = {}) {
+  if (!capability || typeof capability !== "object" || Array.isArray(capability)) return false;
+  const allowedKeys = new Set([
+    "actionId",
+    "targetType",
+    "targetId",
+    "capabilityState",
+    "authorityState",
+    "riskTier",
+    "typedReason",
+    "expectedResultSummary",
+    "correlationRequired",
+    "idempotencyRequired",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]);
+  const entries = safeObjectEntries(capability);
+  if (!entries || entries.some(([key]) => !allowedKeys.has(key))) return false;
+  if (typeof capability.expectedResultSummary !== "string" || !safeOperationalMetadataText(capability.expectedResultSummary)) return false;
+  const refs = Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : null;
+  if (!refs || refs.length === 0 || refs.length > 24) return false;
+  if (!refs.every((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref))) return false;
+  const availableAllowed = capability.capabilityState === "available" && capability.authorityState === "allowed";
+  if (availableAllowed && capability.typedReason !== null) return false;
+  if (["gated", "unavailable", "simulated"].includes(capability.capabilityState) && !capability.typedReason) return false;
+  if (availableAllowed && ["medium", "high", "extreme"].includes(capability.riskTier)) {
+    if (typeof capability.targetId !== "string" || !operationalIdentifierCanonical(capability.targetId)) return false;
   }
   return true;
 }
@@ -14365,9 +15095,12 @@ function buildContinuousAction(action = {}, cycle = {}) {
     };
   }
   if (action.code === "dispatch-preview-ready") {
+    if (!operationalActionCapabilityAllows(cycle, "dispatch_apply")) {
+      return null;
+    }
     const dispatcher = cycle.summary?.dispatcher || {};
     const dispatchPreview = cycle.summary?.dispatchPreview || {};
-    if ((dispatcher.allowed === false || dispatchPreview.allowed === false) || !(dispatcher.selectedLane || dispatchPreview.selectedLane)) {
+    if (dispatcher.allowed !== true || dispatchPreview.allowed !== true || !(dispatcher.selectedLane || dispatchPreview.selectedLane)) {
       return null;
     }
     const routingDecision = buildContinuousDispatchRoutingDecision(cycle);
@@ -14405,7 +15138,7 @@ function sanitizeContinuousFlagValue(value = "") {
   return /^[A-Za-z0-9_-]+$/.test(text) ? text : "";
 }
 
-function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, resume = {}, dispatchPreview = {} } = {}) {
+function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, resume = {}, dispatchPreview = {}, operationalActions = null } = {}) {
   const blockerCodes = blockers.map((blocker) => blocker.code).filter(Boolean);
   const usageState = normalizePosture(usage, "unknown");
   const resourceState = normalizePosture(resources, "unknown");
@@ -14453,13 +15186,13 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   );
   const dispatchSelectedTargets = [
     dispatchPreview.summary?.selectedLane,
-    dispatchPreview.summary?.selectedBranch,
   ].map((value) => String(value || "").trim()).filter(Boolean);
   const dispatchTargetsDeliveryBlocked = dispatchSelectedTargets.some((target) => blockedDeliveryTargets.has(target));
   const safeDispatchApplyAvailable = Boolean(
-    dispatchPreview.summary?.allowed &&
+    dispatchPreview.summary?.allowed === true &&
     dispatchPreview.summary?.selectedLane &&
     dispatchPreview.summary?.claimMutation &&
+    operationalActionCapabilityAllows({ summary: { operationalActions, dispatchPreview: dispatchPreview.summary } }, "dispatch_apply") &&
     !dispatchTargetsDeliveryBlocked &&
     !["manager_only", "drain", "unknown"].includes(usageState) &&
     !["critical", "pressured", "unknown"].includes(resourceState),
@@ -14521,8 +15254,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       reason: safeDispatchApplyAvailable
         ? "Active manager-owned workers can continue, and existing dispatch gates have selected a safe lane for assignment/workspace preparation while takeover and worker kill remain blocked."
         : "Active manager-owned workers can continue while stale ownership inspection remains blocked for takeover, dispatch apply, and worker kill.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       activeWorkers: activeWorkerCount,
       warmWorkers: warmWorkerCount,
       blockerCodes,
@@ -14600,8 +15333,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       reason: safeDispatchApplyAvailable
         ? "Worker mutation is blocked, but existing dispatch gates have selected a safe lane for assignment/workspace preparation."
         : "Worker mutation is blocked, but source-owned backlog creation can continue from the compact BMAD handoff.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14625,8 +15358,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "A worker question requires operator authority, but the blocker is scoped to the affected worker or lane and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14650,8 +15383,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "Blocking feedback pauses affected delivery and PR merge, but unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14659,24 +15392,17 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   }
   if (onlyDeliveryScopedBlocked && !onlyDeliveryAuthorityBlocked && !onlyPrStewardshipBlocked && resourceState !== "critical") {
     const allowedActions = ["delivery_authority_operator_interruption", "pr_stewardship_operator_interruption", "status_reporting", "read_only_inspection"];
-    const blockedActions = ["pr_create", "pr_update", "delivery", "cleanup"];
-    if (safeDispatchApplyAvailable) {
-      allowedActions.push("dispatch_apply_existing_gates");
-    } else {
-      blockedActions.push("dispatch_apply");
-    }
+    const blockedActions = ["pr_create", "pr_update", "delivery", "cleanup", "dispatch_apply"];
     if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
     return {
       state: "delivery_scoped_blocked",
-      canContinue: true,
+      canContinue: false,
       progressRunState: "delivery-scoped-blocked",
       workerMutationAllowed: false,
-      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      dispatchApplyAllowed: false,
       allowedActions,
       blockedActions,
       reason: "Delivery authority or PR stewardship evidence is blocked for the affected lane, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14684,24 +15410,17 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   }
   if (onlyDeliveryAuthorityBlocked && resourceState !== "critical") {
     const allowedActions = ["delivery_authority_operator_interruption", "status_reporting", "read_only_inspection"];
-    const blockedActions = ["delivery", "cleanup"];
-    if (safeDispatchApplyAvailable) {
-      allowedActions.push("dispatch_apply_existing_gates");
-    } else {
-      blockedActions.push("dispatch_apply");
-    }
+    const blockedActions = ["delivery", "cleanup", "dispatch_apply"];
     if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
     return {
       state: "delivery_authority_blocked",
-      canContinue: true,
+      canContinue: false,
       progressRunState: "delivery-authority-blocked",
       workerMutationAllowed: false,
-      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      dispatchApplyAllowed: false,
       allowedActions,
       blockedActions,
       reason: "Delivery requires an active delivery_phase contract, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14709,24 +15428,17 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   }
   if (onlyPrStewardshipBlocked && resourceState !== "critical") {
     const allowedActions = ["pr_stewardship_operator_interruption", "status_reporting", "read_only_inspection"];
-    const blockedActions = ["pr_create", "pr_update", "delivery"];
-    if (safeDispatchApplyAvailable) {
-      allowedActions.push("dispatch_apply_existing_gates");
-    } else {
-      blockedActions.push("dispatch_apply");
-    }
+    const blockedActions = ["pr_create", "pr_update", "delivery", "dispatch_apply"];
     if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
     return {
       state: "pr_stewardship_blocked",
-      canContinue: true,
+      canContinue: false,
       progressRunState: "pr-stewardship-blocked",
       workerMutationAllowed: false,
-      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      dispatchApplyAllowed: false,
       allowedActions,
       blockedActions,
       reason: "PR creation or update requires scoped dry-run evidence and delivery authority, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14754,8 +15466,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "A retry lane is parked with visible resume criteria, but unrelated safe work can continue through existing dispatcher/refill gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -14766,9 +15478,13 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
     canContinue: status !== "blocked",
     progressRunState: status,
     workerMutationAllowed: status !== "blocked",
-    dispatchApplyAllowed: status !== "blocked" && Boolean(dispatchPreview.summary?.allowed),
+    dispatchApplyAllowed: status !== "blocked" && safeDispatchApplyAvailable,
     allowedActions: status === "blocked" ? ["status_reporting", "read_only_inspection"] : ["governed_manager_actions"],
-    blockedActions: status === "blocked" ? ["worker_start", "worker_kill", "dispatch_apply", "ownership_takeover"] : [],
+    blockedActions: status === "blocked"
+      ? ["worker_start", "worker_kill", "dispatch_apply", "ownership_takeover"]
+      : safeDispatchApplyAvailable
+        ? []
+        : ["dispatch_apply"],
     reason: status === "blocked" ? "Manager mutation is blocked until blockers are resolved." : "Manager can continue under existing governors.",
     blockerCodes,
     blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
@@ -14873,43 +15589,63 @@ function buildDispatchPosture(usageState = "unknown", resourceState = "unknown",
 }
 
 function normalizePacketContext(context = {}) {
-  const status = context.status || context.state || context.summary?.state || "unknown";
+  const packetContext = safePlainObjectSnapshot(context) || {};
+  const summary = safePlainObjectSnapshot(safeReadProperty(packetContext, "summary", {})) || {};
+  const status = safeReadProperty(packetContext, "status", null) || safeReadProperty(packetContext, "state", null) || safeReadProperty(summary, "state", "unknown");
+  const blockers = safeArrayValuesWithStatus(safeReadProperty(packetContext, "blockers", []), "blockers");
+  const warnings = safeArrayValuesWithStatus(safeReadProperty(packetContext, "warnings", []), "warnings");
+  const nextActions = safeArrayValuesWithStatus(safeReadProperty(packetContext, "nextActions", []), "nextActions");
+  const unreadableBlockers = [blockers, warnings, nextActions]
+    .filter((entry) => !entry.readable)
+    .map((entry) => ({ code: `packet-${entry.field}-unreadable`, message: `Packet ${entry.field} evidence could not be read safely.` }));
   return packet({
-    ok: context.ok ?? true,
+    ok: safeReadProperty(packetContext, "ok", true),
     status,
-    summary: context.summary || { state: status },
-    blockers: context.blockers || [],
-    warnings: context.warnings || [],
-    nextActions: context.nextActions || [],
+    summary: Object.keys(summary).length > 0 ? summary : { state: status },
+    blockers: [...blockers.values, ...unreadableBlockers],
+    warnings: warnings.values,
+    nextActions: nextActions.values,
   });
 }
 
+function safeArrayValuesWithStatus(value, field) {
+  try {
+    if (value === undefined || value === null) return { readable: true, field, values: [] };
+    if (!Array.isArray(value)) return { readable: false, field, values: [] };
+    return { readable: true, field, values: Array.from(value) };
+  } catch {
+    return { readable: false, field, values: [] };
+  }
+}
+
 function normalizeUsagePacketContext(context = {}, outer = {}) {
-  const base = isPlainObject(context.summary) ? context.summary : {};
-  const status = sanitizeLedgerField(context.status || context.state || base.state || "unknown", "unknown", 80);
+  const usageContext = safePlainObjectSnapshot(context) || {};
+  const outerContext = safePlainObjectSnapshot(outer) || {};
+  const base = safePlainObjectSnapshot(safeReadProperty(usageContext, "summary", {})) || {};
+  const status = sanitizeLedgerField(safeReadProperty(usageContext, "status", null) || safeReadProperty(usageContext, "state", null) || safeReadProperty(base, "state", "unknown"), "unknown", 80);
   const weekly = selectWeeklyUsagePressure(
-    base.weekly,
-    context.weekly,
-    context.weeklyUsage,
-    context.weeklyUsageContext,
-    context.weeklyUsagePressure,
-    outer.weeklyUsage,
-    outer.weeklyUsageContext,
-    outer.weeklyUsagePressure,
+    safeReadProperty(base, "weekly", null),
+    safeReadProperty(usageContext, "weekly", null),
+    safeReadProperty(usageContext, "weeklyUsage", null),
+    safeReadProperty(usageContext, "weeklyUsageContext", null),
+    safeReadProperty(usageContext, "weeklyUsagePressure", null),
+    safeReadProperty(outerContext, "weeklyUsage", null),
+    safeReadProperty(outerContext, "weeklyUsageContext", null),
+    safeReadProperty(outerContext, "weeklyUsagePressure", null),
   );
-  const rawRemaining = Number(base.remainingPercent ?? context.remainingPercent);
-  const rawResetSeconds = Number(base.resetInSeconds ?? context.resetInSeconds);
-  const resetTime = sanitizeLedgerField(base.resetTime || context.resetTime || "", "", 40) || null;
+  const rawRemaining = Number(safeReadProperty(base, "remainingPercent", undefined) ?? safeReadProperty(usageContext, "remainingPercent", undefined));
+  const rawResetSeconds = Number(safeReadProperty(base, "resetInSeconds", undefined) ?? safeReadProperty(usageContext, "resetInSeconds", undefined));
+  const resetTime = sanitizeLedgerField(safeReadProperty(base, "resetTime", null) || safeReadProperty(usageContext, "resetTime", null) || "", "", 40) || null;
   const resetInSeconds = Number.isFinite(rawResetSeconds) ? Math.max(0, Math.floor(rawResetSeconds)) : null;
   const parsedForResume = { resetTime, resetInSeconds };
   const managerOnly = status === "manager_only";
   const sampledAt = sanitizeLedgerField(
-    base.sampledAt || context.sampledAt || base.timestamp || context.timestamp || outer.now || new Date().toISOString(),
+    safeReadProperty(base, "sampledAt", null) || safeReadProperty(usageContext, "sampledAt", null) || safeReadProperty(base, "timestamp", null) || safeReadProperty(usageContext, "timestamp", null) || safeReadProperty(outerContext, "now", null) || new Date().toISOString(),
     new Date(0).toISOString(),
     80,
   );
   const summary = {
-    source: sanitizeLedgerField(base.source || context.source || "injected-usage-context", "injected-usage-context", 80),
+    source: sanitizeLedgerField(safeReadProperty(base, "source", null) || safeReadProperty(usageContext, "source", null) || "injected-usage-context", "injected-usage-context", 80),
     state: status,
     remainingPercent: Number.isFinite(rawRemaining) ? boundedPercent(rawRemaining) : null,
     sampledAt,
@@ -14917,22 +15653,28 @@ function normalizeUsagePacketContext(context = {}, outer = {}) {
     resetTime,
     resetInSeconds,
     weekly,
-    leaseIssuancePolicy: base.leaseIssuancePolicy || usageLeaseIssuancePolicy(status, weekly),
-    activeWorkPolicy: base.activeWorkPolicy || usageActiveWorkPolicy(status),
+    leaseIssuancePolicy: safeReadProperty(base, "leaseIssuancePolicy", null) || usageLeaseIssuancePolicy(status, weekly),
+    activeWorkPolicy: safeReadProperty(base, "activeWorkPolicy", null) || usageActiveWorkPolicy(status),
     modelQualityPolicy: "preserve_task_fit_quality",
-    managerOnlyReason: managerOnly ? sanitizeLedgerField(base.managerOnlyReason || "five_hour_usage_at_or_below_2_percent", "five_hour_usage_at_or_below_2_percent", 120) : "",
-    resumeTrigger: managerOnly ? sanitizeLedgerField(base.resumeTrigger || usageResumeTrigger(parsedForResume), usageResumeTrigger(parsedForResume), 120) : "",
-    available: typeof base.available === "boolean" ? base.available : typeof context.available === "boolean" ? context.available : undefined,
-    fetcherPath: base.fetcherPath || context.fetcherPath ? sanitizeLedgerField(base.fetcherPath || context.fetcherPath, "", 240) : undefined,
+    managerOnlyReason: managerOnly ? sanitizeLedgerField(safeReadProperty(base, "managerOnlyReason", null) || "five_hour_usage_at_or_below_2_percent", "five_hour_usage_at_or_below_2_percent", 120) : "",
+    resumeTrigger: managerOnly ? sanitizeLedgerField(safeReadProperty(base, "resumeTrigger", null) || usageResumeTrigger(parsedForResume), usageResumeTrigger(parsedForResume), 120) : "",
+    available: typeof safeReadProperty(base, "available", undefined) === "boolean" ? safeReadProperty(base, "available", undefined) : typeof safeReadProperty(usageContext, "available", undefined) === "boolean" ? safeReadProperty(usageContext, "available", undefined) : undefined,
+    fetcherPath: safeReadProperty(base, "fetcherPath", null) || safeReadProperty(usageContext, "fetcherPath", null) ? sanitizeLedgerField(safeReadProperty(base, "fetcherPath", null) || safeReadProperty(usageContext, "fetcherPath", null), "", 240) : undefined,
     rawPayloadRetained: false,
   };
+  const blockers = safeArrayValuesWithStatus(safeReadProperty(usageContext, "blockers", []), "blockers");
+  const warnings = safeArrayValuesWithStatus(safeReadProperty(usageContext, "warnings", []), "warnings");
+  const nextActions = safeArrayValuesWithStatus(safeReadProperty(usageContext, "nextActions", []), "nextActions");
+  const unreadableEvidence = [blockers, warnings, nextActions]
+    .filter((entry) => !entry.readable)
+    .map((entry) => ({ code: `usage-${entry.field}-unreadable`, message: `Usage ${entry.field} evidence could not be read safely.` }));
   return packet({
-    ok: context.ok ?? true,
+    ok: safeReadProperty(usageContext, "ok", true),
     status,
     summary,
-    blockers: context.blockers || [],
-    warnings: context.warnings || [],
-    nextActions: context.nextActions || [],
+    blockers: [...blockers.values, ...unreadableEvidence],
+    warnings: warnings.readable ? warnings.values : [{ code: "usage-warnings-unreadable", message: "Usage warnings evidence could not be read safely." }],
+    nextActions: nextActions.values,
   });
 }
 
@@ -14947,6 +15689,14 @@ function normalizeDispatchPreviewContext(context = {}) {
       ...(Array.isArray(dispatch.blockers) ? dispatch.blockers : []),
     ];
     const allowed = context.allowed ?? summary.allowed ?? dispatch.allowed ?? null;
+    const selectedLane = summary.selectedLane || dispatch.selectedLane || null;
+    const operationalDispatchAuthority = normalizeOperationalDispatchAuthority(
+      summary.operationalDispatchAuthority ||
+        summary.operational_dispatch_authority ||
+        dispatch.operationalDispatchAuthority ||
+        dispatch.operational_dispatch_authority,
+      { allowed, selectedLane },
+    );
     return packet({
       ...normalized,
       ok: normalized.ok && blockers.length === 0 && allowed !== false && normalized.status !== "blocked",
@@ -14954,10 +15704,12 @@ function normalizeDispatchPreviewContext(context = {}) {
       summary: {
         ...summary,
         allowed,
+        operationalDispatchAuthority,
         blockers,
         dispatch: {
           ...dispatch,
           allowed,
+          operationalDispatchAuthority,
           blockers,
         },
       },
@@ -14966,13 +15718,24 @@ function normalizeDispatchPreviewContext(context = {}) {
   }
   const dispatch = context.dispatch || {};
   const status = context.status || (dispatch.allowed === false ? "blocked" : "ready");
+  const selectedLane = context.selectedLane || dispatch.selectedLane || context.selected?.itemId || null;
+  const allowed = context.allowed ?? dispatch.allowed ?? null;
   const summary = {
     ...context,
-    allowed: context.allowed ?? dispatch.allowed ?? null,
-    selectedLane: context.selectedLane || dispatch.selectedLane || context.selected?.itemId || null,
+    allowed,
+    selectedLane,
     selectedBranch: context.selectedBranch || dispatch.branch || context.selected?.branch || null,
     baseBranch: context.baseBranch || context.base_branch || dispatch.baseBranch || dispatch.base_branch || context.selected?.baseBranch || context.selected?.base_branch || null,
     claimMutation: context.claimMutation || dispatch.claimMutation || context.selected?.mutation || null,
+    operationalDispatchAuthority: normalizeOperationalDispatchAuthority(
+      context.operationalDispatchAuthority ||
+        context.operational_dispatch_authority ||
+        dispatch.operationalDispatchAuthority ||
+        dispatch.operational_dispatch_authority ||
+        context.selected?.operationalDispatchAuthority ||
+        context.selected?.operational_dispatch_authority,
+      { allowed, selectedLane },
+    ),
     recoveryPath: context.recoveryPath || context.recovery_path || dispatch.recoveryPath || dispatch.recovery_path || context.selected?.recoveryPath || context.selected?.recovery_path || null,
   };
   return packet({
@@ -15352,10 +16115,18 @@ function uniqueWarnings(warnings = []) {
   const seen = new Set();
   const result = [];
   for (const warning of warnings) {
-    const key = `${warning.code || ""}:${warning.message || ""}`;
+    if (typeof warning === "string") {
+      const key = `string:${warning}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(warning);
+      continue;
+    }
+    const warningRecord = safePlainObjectSnapshot(warning) || {};
+    const key = `${safeString(safeReadProperty(warningRecord, "code", ""), "")}:${safeString(safeReadProperty(warningRecord, "message", ""), "")}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push(warning);
+    result.push(warningRecord);
   }
   return result;
 }
@@ -15666,7 +16437,51 @@ function writeJsonIfMissing(path, value) {
 }
 
 function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !safeIsArray(value);
+}
+
+function safePlainObjectSnapshot(value) {
+  if (!value || typeof value !== "object" || safeIsArray(value)) return null;
+  try {
+    return Object.fromEntries(Object.entries(value));
+  } catch {
+    return null;
+  }
+}
+
+function safeReadProperty(value, key, fallback = undefined) {
+  try {
+    if (!value || typeof value !== "object") return fallback;
+    const record = value;
+    return record[key] ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeString(value, fallback = "") {
+  try {
+    return String(value || fallback || "");
+  } catch {
+    return String(fallback || "");
+  }
+}
+
+function safeIsArray(value) {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function safeArrayValues(value) {
+  try {
+    if (!Array.isArray(value)) return [];
+    return Array.from(value);
+  } catch {
+    return [];
+  }
 }
 
 function projectWorker(worker) {
@@ -16043,10 +16858,10 @@ function sanitizeSourceRefs(refs) {
 }
 
 function sanitizeLedgerField(value, fallback, maxLength) {
-  const text = String(value || fallback || "")
+  const text = safeString(value, fallback)
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
-    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|source copy|raw source|console log|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
     .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
     .replace(/\s+/g, " ")
     .trim();
@@ -16054,7 +16869,7 @@ function sanitizeLedgerField(value, fallback, maxLength) {
 }
 
 function sanitizeIdentifierField(value, fallback = "", maxLength = 140) {
-  const text = String(value || fallback || "")
+  const text = safeString(value, fallback)
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
     .replace(/\s+/g, " ")
