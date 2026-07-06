@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { validateToolReadinessProbe } from "./lib/governed-worker-execution-dry-run.mjs";
 
@@ -127,6 +127,6 @@ function main() {
   process.exit(errors.length === 0 && results.every((result) => result.validation.ok) ? 0 : 1);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main();
 }

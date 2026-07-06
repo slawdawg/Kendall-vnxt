@@ -55,6 +55,25 @@ test("high host resource pressure holds dispatch and names recovery action", () 
   assert.equal(decision.policyInputs.resource.state, "high");
 });
 
+test("manager posture states keep granular usage and resource reasons", () => {
+  const decision = buildUsageResourceRoutingDecision({
+    owner: "manager-test/dispatcher",
+    usageSample: { state: "drain", provider: "codex", remainingPercent: 15, sampledAt: FRESH_SAMPLE },
+    resourceSample: { state: "critical", cpuLoadPercent: 80, memoryUsedPercent: 70, sampledAt: FRESH_SAMPLE },
+    readyQueueCount: 2,
+    nowMs: NOW_MS,
+  });
+
+  assert.equal(decision.status, "blocked");
+  assert.equal(decision.allowed, false);
+  assert.ok(decision.blockedReasons.includes("usage.drain"));
+  assert.ok(decision.blockedReasons.includes("resource.critical"));
+  assert.ok(!decision.blockedReasons.includes("usage.low"));
+  assert.ok(!decision.blockedReasons.includes("resource.high"));
+  assert.equal(decision.policyInputs.usage.state, "drain");
+  assert.equal(decision.policyInputs.resource.state, "critical");
+});
+
 test("healthy usage and resources can only route to dispatch-next dry-run", () => {
   const decision = buildUsageResourceRoutingDecision({
     owner: "runner-a",

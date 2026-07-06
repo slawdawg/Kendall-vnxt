@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const contractPath = "docs/workflows/governed-worker-execution-dry-run.md";
 const fixtureDir = "tests/fixtures/governed-worker-execution-dry-run";
@@ -119,6 +119,6 @@ function main() {
   console.log("OK: governed worker execution dry-run checks passed.");
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main();
 }

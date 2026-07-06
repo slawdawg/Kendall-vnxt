@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { buildCyclePacket, buildDeliveryPlan, buildFeedbackPlan, buildProgressBeaconPlan, buildRecoveryPlan, buildSteeringPlan, buildWorkerFrictionPlan, buildWorkerLifecyclePlan, buildWorkerQuestionAnswerPlan, classifyAutoApply, ledgerCommand } from "./lib/manager-control-plane/core.mjs";
+import { buildCodexAdvisorClassificationPlan, buildCodexAdvisorPacketPlan, buildContinuousRunPlan, buildCyclePacket, buildDeliveryPlan, buildFeedbackPlan, buildManagerSelfRepairSummary, buildProgressBeaconPlan, buildRecoveryPlan, buildSteeringPlan, buildWorkerFrictionPlan, buildWorkerLifecyclePlan, buildWorkerQuestionAnswerPlan, classifyAutoApply, ledgerCommand } from "./lib/manager-control-plane/core.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -84,6 +84,8 @@ const requiredFiles = [
   "scripts/manager-worker-owner-delegation.mjs",
   "scripts/manager-worker-progress.mjs",
   "scripts/manager-worker-progress-signal.mjs",
+  "scripts/manager-worker-code-review.mjs",
+  "scripts/manager-worker-review-feedback.mjs",
   "scripts/manager-worker-prompt-probe.mjs",
   "scripts/manager-worker-submit-pending.mjs",
   "scripts/manager-worker-retire.mjs",
@@ -91,6 +93,8 @@ const requiredFiles = [
   "scripts/manager-worker-warm.mjs",
   "scripts/manager-worker-handoff.mjs",
   "scripts/manager-lane-advance.mjs",
+  "scripts/manager-capability-posture.mjs",
+  "scripts/manager-codex-advisor-packet.mjs",
   "scripts/manager-refill-plan.mjs",
   "scripts/manager-cleanup-plan.mjs",
   "scripts/manager-dirty-workspace-preservation.mjs",
@@ -122,6 +126,8 @@ for (const [name, command] of [
   ["manager:worker:owner-delegation", "node ./scripts/manager-worker-owner-delegation.mjs --summary-json"],
   ["manager:worker:progress", "node ./scripts/manager-worker-progress.mjs --summary-json"],
   ["manager:worker:progress-signal", "node ./scripts/manager-worker-progress-signal.mjs --summary-json"],
+  ["manager:worker:code-review", "node ./scripts/manager-worker-code-review.mjs --summary-json"],
+  ["manager:worker:review-feedback", "node ./scripts/manager-worker-review-feedback.mjs --summary-json"],
   ["manager:worker:prompt-probe", "node ./scripts/manager-worker-prompt-probe.mjs --summary-json"],
   ["manager:worker:submit-pending", "node ./scripts/manager-worker-submit-pending.mjs --summary-json"],
   ["manager:worker:retire", "node ./scripts/manager-worker-retire.mjs --summary-json"],
@@ -129,6 +135,8 @@ for (const [name, command] of [
   ["manager:worker:warm", "node ./scripts/manager-worker-warm.mjs --summary-json"],
   ["manager:worker:handoff", "node ./scripts/manager-worker-handoff.mjs --summary-json"],
   ["manager:lane-advance", "node ./scripts/manager-lane-advance.mjs --summary-json"],
+  ["manager:capability-posture", "node ./scripts/manager-capability-posture.mjs --summary-json"],
+  ["manager:codex-advisor", "node ./scripts/manager-codex-advisor-packet.mjs --summary-json"],
   ["manager:cycle", "node ./scripts/manager-cycle-packet.mjs --summary-json"],
   ["manager:refill", "node ./scripts/manager-refill-plan.mjs --summary-json"],
   ["manager:cleanup", "node ./scripts/manager-cleanup-plan.mjs --summary-json"],
@@ -188,6 +196,22 @@ if (existsSync(join(rootDir, ".agents/skills/kendall-manager-control-plane/SKILL
     "Classify immediate operator feedback",
     "Stop for explicit operator approval",
     "Continuous Mode",
+    "Useful Work Priority",
+    "Degraded Capability Modes",
+    "managerCapabilityPosture",
+    "parked, degraded, or blocked",
+    "compact posture visibility",
+    "capability-posture.json",
+    "manager-capability-posture.mjs",
+    "tmuxWorkerMutation",
+    "dispatchApply",
+    "reviewDelegation",
+    "self_fix_churn",
+    "manager-codex-advisor-packet.mjs",
+    "It must not call a provider from the manager loop",
+    "edit manager code",
+    "At most one manager self-repair action may run in a cycle",
+    "Code or contract changes to the manager itself are not background work",
   ]) {
     assertCondition(skill.includes(requiredText), `Manager skill must include ${requiredText}`, failures);
   }
@@ -239,6 +263,13 @@ if (existsSync(join(rootDir, "scripts/lib/manager-control-plane/core.mjs"))) {
     "buildLaneAdvancementPlan",
     "buildDeliveryPlan",
     "buildFeedbackPlan",
+    "buildCodexAdvisorPacketPlan",
+    "buildCodexAdvisorClassificationPlan",
+    "metadata_only_codex_advisor_packet",
+    "do_not_edit_manager_code",
+    "do_not_call_provider_from_manager",
+    "codex-advisor-packet-ready",
+    "codex-advisor-posture-preview-ready",
     "buildProgressBeaconPlan",
     "buildRecoveryPlan",
     "buildSteeringPlan",
@@ -252,11 +283,36 @@ if (existsSync(join(rootDir, "scripts/lib/manager-control-plane/core.mjs"))) {
     "manager-owned-worker-handoff-existing-gates",
     "metadata-only-worker-recovery-inspection",
     "manager-owned-worker-retire-after-recovery-existing-gates",
+    "manager-owned-worker-retire-after-policy-blocked-question-existing-gates",
+    "retire_blocked_question",
     "source-owned-refill-planning-existing-gates",
     "codex-workspace-dispatch-existing-gates",
     "continuous-worker-warm",
     "continuous-worker-handoff",
     "continuous-worker-retire",
+    "continuous-worker-retire-blocked-question",
+    "task_work_before_manager_self_repair",
+    "continuous-codex-advisor-packet-ready",
+    "buildContinuousCodexAdvisorRecommendations",
+    "buildManagerCapabilityPosture",
+    "buildManagerCapabilityPostureControlPlan",
+    "readManagerCapabilityPosture",
+    "writeManagerCapabilityPosture",
+    "manager_capability_posture.v1",
+    "capability-posture.json",
+    "manager-capability-posture.mjs",
+    "capability_posture",
+    "managerCapabilityStatus",
+    "normalizeHeartbeatCapabilityPosture",
+    "capabilityPosture",
+    "tmuxWorkerMutation",
+    "dispatchApply",
+    "reviewDelegation",
+    "cleanupApply",
+    "workClass",
+    "self_fix_churn",
+    "manager.self_repair.attempted",
+    "buildManagerSelfRepairSummary",
     "continuous-lane-advance-apply",
     "continuous-refill-apply",
     "continuous-dispatch-apply",
@@ -1094,6 +1150,27 @@ assertCondition(blockedAnswer.summary.requests?.length === 0, "Worker question a
 const stateRoot = mkdtempSync(join(tmpdir(), "manager-contract-"));
 const contractInit = ledgerCommand({ command: "init", runId: "manager-contract", stateRoot });
 assertCondition(contractInit.status === "ready", "Manager ledger init behavior must be ready for a safe runtime state root", failures);
+for (const key of ["contract-self-repair-1", "contract-self-repair-2"]) {
+  const selfRepairAttempt = ledgerCommand({
+    command: "append-event",
+    runId: "manager-contract",
+    stateRoot,
+    eventType: "manager_self_repair_attempt",
+    summary: "Selected prompt probe repair.",
+    authorityBasis: "manager-owned-worker-enter-only-repair-existing-gates",
+    recoveryPath: "classify self repair churn before adding handlers",
+    advisorActionCode: "continuous-worker-prompt-probe",
+    advisorWorkClass: "direct_unblock_repair",
+    capabilityName: "tmuxWorkerMutation",
+    sourceRefs: ["manager:continuous-run"],
+    evidenceRefs: ["self-repair:continuous-worker-prompt-probe"],
+    idempotencyKey: key,
+  });
+  assertCondition(selfRepairAttempt.status === "ready", "Manager self-repair attempts must append as metadata-only ledger events", failures);
+}
+const selfRepairSummary = buildManagerSelfRepairSummary({ runId: "manager-contract", stateRoot });
+assertCondition(selfRepairSummary.summary.attemptsByAction?.["continuous-worker-prompt-probe"] === 2, "Manager self-repair budget must replay attempts from ledger events", failures);
+assertCondition(selfRepairSummary.summary.rawPayloadRetained === false, "Manager self-repair replay summary must retain metadata only", failures);
 writeFreshDispatcherSummary(stateRoot, "manager-contract");
 
 const lifecycleCritical = buildWorkerLifecyclePlan(
@@ -1243,6 +1320,101 @@ assertCondition(unsafeWorkerDependency.summary.failureLoops[0]?.blockedReasons.i
 assertCondition(unsafeWorkerDependency.summary.failureLoops[0]?.sourceRefs.length === 0, "Worker dependency loop must not retain rejected raw source refs", failures);
 assertCondition(!/stdout|raw prompt|provider payload|sk-contracttoken/i.test(JSON.stringify(unsafeWorkerDependency)), "Worker dependency loop packets must not retain raw output or provider payload markers", failures);
 assertCondition(!/raw prompt|sk-contracttoken/i.test(JSON.stringify(routingRiskOnly.summary.modelRouting)), "Worker friction model routing must not retain raw usage-state payloads", failures);
+
+const advisor = buildCodexAdvisorPacketPlan(
+  {
+    runId: "manager-contract",
+    advisorCondition: "prompt repair variant",
+    advisorActionCode: "continuous-worker-prompt-probe",
+    advisorWorkClass: "direct_unblock_repair",
+    evidenceRefs: ["events.ndjson", "checkpoint:manager-contract"],
+    sourceRefs: ["assignment:lane-contract", "worker:codex-1"],
+    summary: "Prompt repair looked different but safe dispatch can continue.",
+  },
+  { safeTaskWorkAvailable: true },
+);
+assertCondition(advisor.status === "ready", "Codex advisor packet must be ready for structured metadata evidence", failures);
+assertCondition(advisor.summary.requestPacket?.mutationMode === "none; advisor packet only", "Codex advisor packet must be read-only", failures);
+assertCondition(advisor.summary.requestPacket?.inputContract?.forbiddenOutputs?.includes("code_patch"), "Codex advisor packet must forbid code patch output", failures);
+assertCondition(advisor.summary.requestPacket?.condition?.existingHandler?.handler === "manager-worker-prompt-probe", "Codex advisor packet must identify existing deterministic handlers", failures);
+assertCondition(advisor.summary.requestPacket?.taskContinuity?.recommendedResponse === "use_existing_handler_if_it_directly_unblocks_task_work", "Codex advisor packet must not default to manager self-coding", failures);
+assertCondition(!/sk-contracttoken|raw prompt transcript|provider payload body/i.test(JSON.stringify(advisor.summary)), "Codex advisor packet must retain metadata only", failures);
+const blockedAdvisor = buildCodexAdvisorPacketPlan(
+  {
+    runId: "manager-contract",
+    advisorCondition: "novel issue",
+    evidenceRefs: ["raw prompt transcript"],
+    apply: true,
+  },
+);
+assertCondition(blockedAdvisor.status === "blocked", "Codex advisor packet must block raw evidence and apply attempts", failures);
+assertCondition(blockedAdvisor.blockers.some((blocker) => blocker.code === "codex-advisor-forbidden-mutation"), "Codex advisor packet must block mutation attempts", failures);
+const advisorClassification = buildCodexAdvisorClassificationPlan({
+  runId: "manager-contract",
+  command: "classify",
+  advisorCondition: "self_fix_churn continuous-worker-prompt-probe",
+  advisorRecommendation: "park_or_degrade_capability",
+  advisorFailureKind: "self_fix_churn",
+  advisorActionCode: "continuous-worker-prompt-probe",
+  advisorWorkClass: "direct_unblock_repair",
+  capabilityName: "tmuxWorkerMutation",
+  capabilityState: "parked",
+  capabilitySafeFallbacks: ["dispatch_apply_existing_gates"],
+  evidenceRefs: ["self-repair:continuous-worker-prompt-probe", "cycle:manager-contract"],
+  sourceRefs: ["manager:continuous-run"],
+});
+assertCondition(advisorClassification.status === "ready", "Codex advisor classification intake must accept structured metadata recommendations", failures);
+assertCondition(advisorClassification.summary.posturePatch?.tmuxWorkerMutation?.state === "parked", "Codex advisor classification must produce a posture patch for park/degrade recommendations", failures);
+assertCondition(advisorClassification.nextActions?.[0]?.code === "codex-advisor-posture-preview-ready", "Codex advisor classification must route posture changes through the posture gate", failures);
+assertCondition(!/raw prompt|provider payload|sk-contracttoken/i.test(JSON.stringify(advisorClassification.summary)), "Codex advisor classification must retain metadata only", failures);
+const blockedAdvisorClassification = buildCodexAdvisorClassificationPlan({
+  runId: "manager-contract",
+  command: "classify",
+  advisorCondition: "novel manager issue",
+  advisorRecommendation: "park_or_degrade_capability",
+  capabilityName: "tmuxWorkerMutation",
+  capabilityState: "parked",
+  capabilitySafeFallbacks: ["dispatch_apply_existing_gates"],
+  evidenceRefs: ["raw prompt transcript"],
+  apply: true,
+});
+assertCondition(blockedAdvisorClassification.status === "blocked", "Codex advisor classification must block raw evidence and direct apply", failures);
+assertCondition(blockedAdvisorClassification.blockers.some((blocker) => blocker.code === "codex-advisor-classification-forbidden-mutation"), "Codex advisor classification must remain plan-only", failures);
+const churnAdvisorPlan = buildContinuousRunPlan(
+  {},
+  {
+    cyclePacket: {
+      ok: true,
+      status: "attention",
+      summary: {
+        run: { runId: "manager-contract" },
+        usage: { state: "normal" },
+        resources: { state: "normal" },
+        workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+        selfRepair: { budget: 2, attemptsByAction: { "continuous-worker-prompt-probe": 2 } },
+        continuation: { workerMutationAllowed: true },
+      },
+      warnings: [],
+      nextActions: [],
+    },
+    promptProbe: {
+      status: "attention",
+      summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+      warnings: [],
+      nextActions: [
+        {
+          code: "worker-prompt-probe-submit-ready",
+          summary: "Submit pending manager pointer.",
+          nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+        },
+      ],
+    },
+  },
+);
+assertCondition(churnAdvisorPlan.summary.codexAdvisor?.status === "ready", "Continuous self-repair churn must produce a Codex advisor recommendation", failures);
+assertCondition(churnAdvisorPlan.summary.codexAdvisor?.recommendations?.[0]?.recommendedResponse === "park_or_degrade_capability", "Continuous self-repair churn advisor must recommend park/degrade when no task work remains", failures);
+assertCondition(churnAdvisorPlan.nextActions?.[0]?.code === "continuous-codex-advisor-packet-ready", "Continuous self-repair churn must expose advisor packet as the next visible action", failures);
+assertCondition(!/raw prompt|provider payload|sk-contracttoken/i.test(JSON.stringify(churnAdvisorPlan.summary.codexAdvisor)), "Continuous advisor recommendations must retain metadata only", failures);
 
 const cycleAttention = buildCyclePacket(
   { runId: "manager-contract", desiredWorkers: 6, stateRoot, failureBudget: 3 },

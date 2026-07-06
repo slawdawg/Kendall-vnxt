@@ -40,6 +40,26 @@ Manager runtime state lives under:
 
 Use `node ./scripts/manager-ledger.mjs init --run-id <run-id> --summary-json` before writing manager-owned runtime state. Ledger mutation is metadata-only and is allowed only for manager-owned summaries, events, worker state, questions, checkpoints, usage snapshots, and resource snapshots.
 
+## Durable PRD Goal Contract
+
+Use `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md` as the generic
+durable goal template for PRD execution runs. It is not allowed to bind the
+manager to a historical PRD by stale prose. Before sprint planning, worker
+launch, refill, or dispatch, resolve the active PRD source bundle from:
+
+1. an explicit operator-supplied PRD/source bundle;
+2. the current manager cycle/refill packet source bundle;
+3. the newest local BMAD PRD marked authoritative/final with matching completed
+   architecture, epics/stories, and implementation-readiness artifacts.
+
+If more than one PRD appears active, or if epics/stories/readiness evidence is
+missing, stop for a concise operator decision instead of reusing an older goal
+prompt. Once the source bundle is resolved, instantiate the generic goal
+contract and run the normal BMAD loop:
+`bmad-sprint-planning -> bmad-create-story -> bmad-dev-story ->
+bmad-code-review -> bmad-dev-story fixes -> bmad-correct-course when needed ->
+bmad-retrospective at epic close`.
+
 ## Decision Loop
 
 1. Build a fresh cycle packet.
@@ -50,6 +70,135 @@ Use `node ./scripts/manager-ledger.mjs init --run-id <run-id> --summary-json` be
 6. Use existing BMAD workflows for source-owned planning/story creation.
 7. Use existing `scripts/codex-workspace.mjs` gates for workspace, dispatch, delivery, merge, and cleanup behavior.
 8. Report heartbeat or checkpoint only when it helps the operator steer, test, or unblock.
+
+## Useful Work Priority
+
+The manager exists to move operator/task lanes forward. Self-repair is allowed
+only when it directly unblocks current task work, protects evidence/safety, or
+the operator explicitly asked to improve the manager itself.
+
+Before any manager self-repair, contract edit, prompt refinement, new diagnostic,
+or tooling hardening, classify the action as:
+
+- `direct_unblock`: fixes a current blocker so task work can continue in the
+  same or next cycle.
+- `safety_evidence`: preserves source/evidence boundaries, ownership,
+  retention, or recovery correctness before mutation.
+- `future_work`: useful manager improvement that does not unblock current task
+  work.
+- `self_fix_churn`: repeated manager/tool repair that is consuming cycles while
+  dispatchable task work, review, refill, delivery, or operator-visible
+  checkpoints remain available.
+
+Run `direct_unblock` and `safety_evidence` through the existing dry-run and
+auto-apply gates. Record `future_work` as compact feedback and return to task
+work. When `self_fix_churn` is detected, stop repairing, park or degrade the
+affected manager capability, surface the blocker, and continue any safe
+dispatch/refill/review/delivery work that does not depend on the broken
+capability.
+
+Self-repair budget:
+
+1. At most one manager self-repair action may run in a cycle before a useful
+   task-work action, checkpoint, or explicit blocker report.
+2. Do not attempt the same manager repair path more than twice in a run. A
+   third attempt must route to `docs/workflows/tool-churn-rca.md`, a parked
+   capability, or an operator decision.
+3. Code or contract changes to the manager itself are not background work during
+   an autonomous task run unless the operator task is specifically about the
+   manager, the change is a direct unblock, or safety/evidence would otherwise
+   be violated.
+4. Prefer reducing capability, using a known safe fallback, or parking the
+   broken path over spending the run improving manager internals while task
+   lanes can still progress.
+
+Every selected manager self-repair action must leave metadata-only ledger
+evidence as `manager_self_repair_attempt`. Cycle packets must replay those
+events into `summary.selfRepair.attemptsByAction` so the repair budget survives
+loop iterations, restarts, and context resets. Do not use raw prompts,
+provider payloads, scrollback, or stack dumps as self-repair evidence refs.
+
+When a manager condition is novel, similar-but-not-identical to a known repair,
+or parked as `self_fix_churn`, use a read-only Codex advisor packet before
+inventing another handler:
+
+```bash
+node ./scripts/manager-codex-advisor-packet.mjs --summary-json --condition "<condition>" --evidence-ref <metadata-ref>
+```
+
+The advisor packet is metadata-only classification input. It may ask Codex to
+identify an existing deterministic handler, recommend continuing task work,
+park/degrade the affected manager capability, ask the operator, or record
+future work. It must not call a provider from the manager loop, request raw
+prompts/completions/reasoning traces/provider payloads, edit manager code,
+expand authority, or treat the advisor response as executable permission.
+When a compact Codex advisor recommendation is available, feed it back through
+the same script in classification mode:
+
+```bash
+node ./scripts/manager-codex-advisor-packet.mjs --summary-json classify --condition "<condition>" --recommendation park_or_degrade_capability --capability tmuxWorkerMutation --state parked --safe-fallback dispatch_apply_existing_gates --evidence-ref evidence:advisor-classification
+```
+
+Classification intake is plan-only. It may preview a posture-gate command,
+point to an existing handler, record future work, continue task work, or ask
+the operator, but it must not apply posture, call providers, edit manager code,
+or retain raw advisor/provider payloads.
+In continuous mode, any self-repair action parked as `self_fix_churn` must make
+this advisor packet visible in the continuous summary. If no useful task action
+is currently selectable, the next visible action should be
+`continuous-codex-advisor-packet-ready`; if task work is still available, keep
+doing task work and retain the advisor recommendation as compact metadata.
+
+### Degraded Capability Modes
+
+Continuous mode must carry a metadata-only `managerCapabilityPosture` summary
+with capability states `enabled`, `degraded`, `parked`, or `blocked`. A parked
+or blocked capability suppresses only actions mapped to that capability; it
+must not block unrelated task work.
+The current posture persists under the manager run state as
+`capability-posture.json` so a parked capability survives context resets and
+loop iterations. Persisted posture is authoritative for the run until it is
+changed through the posture gate. Fresh cycle evidence and Codex advisor
+classification may recommend a clear, but they must route through
+`manager-capability-posture.mjs clear` and cannot silently re-enable a parked,
+degraded, or blocked capability.
+
+Use `node ./scripts/manager-capability-posture.mjs --summary-json show` to
+inspect the current posture. Use the same gate with `set` or `clear` to preview
+operator-visible posture changes, and add `--apply` only after reviewing the
+dry-run packet:
+
+```bash
+node ./scripts/manager-capability-posture.mjs --summary-json set --capability tmuxWorkerMutation --state parked --reason-code prompt_probe_churn --safe-fallback dispatch_apply_existing_gates --evidence-ref evidence:manager-observation
+node ./scripts/manager-capability-posture.mjs --summary-json clear --capability tmuxWorkerMutation --reason-code prompt_probe_verified --evidence-ref evidence:prompt-receipt
+```
+
+The posture CLI may write only metadata-only posture records. It must validate
+capability names and states, require reason and evidence refs for reduced
+states or clears, reject raw prompt/provider/secret refs, and preserve existing
+safe fallbacks unless the command supplies a new fallback.
+
+Core capabilities are:
+
+- `tmuxWorkerMutation`: prompt probe, submit-pending repair, warm worker,
+  handoff, progress signal, worker answer, recovery inspection, and retire
+  gates. If parked, skip worker tmux mutation and continue safe dispatch,
+  refill, lane advancement, heartbeat, and status reporting.
+- `dispatchApply`: source-owned assignment/workspace claim through
+  `codex-workspace dispatch-next --apply`. If parked, continue active worker
+  monitoring, refill materialization, review/lane-advance gates, and reporting.
+- `refillApply`: local source-owned BMAD refill materialization. If parked,
+  continue dispatch when already safe, active worker monitoring, and reporting.
+- `reviewDelegation`: manager-owned worker BMAD code-review request/resend
+  gates. If parked, continue lane advancement to review-held/delivery metadata,
+  dispatch/refill unrelated lanes, active worker monitoring, and reporting.
+- `cleanupApply`: blocked unless a separate cleanup gate and approval evidence
+  allow it; use cleanup dry-runs and delivery reports as fallbacks.
+
+Do not add a new edge-case handler when a capability can be degraded or parked
+with existing gates. Record reason codes and safe fallbacks in the posture
+summary, keep raw payload retention false, and continue the highest-priority
+allowed useful work.
 
 ## Continuous Mode
 
@@ -243,6 +392,35 @@ Avoid broad backlog searches. Prefer exact sprint trackers, package scripts, run
   workers. `--apply` may only update owner-checked assignment heartbeat metadata
   such as phase, command, and last result. Delivery, finish-pr, merge, and
   cleanup still use their existing approval and codex-workspace gates.
+- When a lane is review-ready, prefer delegating BMAD code review to a
+  manager-owned worker with
+  `node ./scripts/manager-worker-code-review.mjs --summary-json --assignment-id <id>`
+  instead of running review in the manager session. The gate must dry-run first,
+  write a durable review-request file, paste only the request-file pointer
+  through a tmux buffer, submit with explicit `C-m`, verify the prompt cleared,
+  and require the reviewer worker to write compact findings under manager run
+  state. It must not paste raw findings text, mutate the reviewed worktree,
+  merge, push, clean up, access secrets, retain raw provider payloads, or mutate
+  unknown sessions. If the request exists but the findings result is missing and
+  the reviewer prompt is visibly idle, rerun the same gate with
+  `--operator-visible-prompt --apply` to resend only the durable request pointer.
+- The manager session is not the default reviewer. It should schedule delegated
+  worker review, verify compact findings/evidence, route review feedback, and
+  advance delivery gates. Run BMAD code review in the manager session only when
+  no manager-owned worker can safely take the review or when a stop-line
+  investigation explicitly requires manager-local review.
+- Continuous/autonomous mode must not fall back to manager-local BMAD code
+  review merely because no reviewer worker is free. It should wait for a
+  completed prompt-idle worker, warm/reuse a manager-owned reviewer when gates
+  allow, or surface the no-reviewer hold; manager-local review requires an
+  explicit manual decision.
+- When BMAD code review finds patch issues for a manager-owned worker lane, use
+  `node ./scripts/manager-worker-review-feedback.mjs --summary-json --assignment-id <id> --review-findings-file <path>`
+  as the dry-run gate before any `--apply` feedback route. The gate must write a
+  durable review-feedback file, paste only the feedback-file pointer through a
+  tmux buffer, submit with explicit `C-m`, and verify the prompt cleared. It
+  must not paste raw findings text into tmux, inspect raw provider output, merge,
+  push, clean up, or mutate unknown sessions.
 - Default active-worker stale progress detection should nudge checkpointed
   workers after a few minutes, not wait through long idle periods while tmux
   sessions visibly sit at prompts.
@@ -255,6 +433,14 @@ Avoid broad backlog searches. Prefer exact sprint trackers, package scripts, run
   compact metadata, update manager worker records, and append metadata-only
   ledger evidence. It must not mutate unknown sessions, take over assignments,
   dispatch work, merge, clean up, or retain raw provider payloads.
+- Use `node ./scripts/manager-worker-retire.mjs --summary-json --retire-blocked-question`
+  only when the manager question-answer gate has already classified an active
+  manager-owned worker question as `block_unsafe_continuation` with
+  `unsafe_authority_request`, and no safe answer is available. This parks the
+  policy-blocked lane and frees worker capacity without answering the unsafe
+  question, taking over ownership, dispatching work, merging, cleaning up, or
+  mutating unknown sessions. Dry-run first; apply only if the selected worker,
+  assignment, and blocked-question summary are exactly the intended target.
 - When active manager-owned workers have compact material questions, use
   `node ./scripts/manager-worker-answer-question.mjs --summary-json` as the
   dry-run gate before any `--apply` answer. The gate must write a durable answer
@@ -365,6 +551,12 @@ Manager: active | workers 0 active / 0 warm / 0 paused | usage unknown | CPU/RAM
 ```
 
 Heartbeats must stay concise and include worker count, usage state, CPU/RAM state, current source, and operator-action state.
+When any capability is parked, degraded, or blocked, the same normal heartbeat
+and cycle packet must include compact posture visibility: counts and capability
+names for parked/degraded/blocked states, plus held-action capability and safe
+fallback metadata when an action is suppressed. This visibility is
+metadata-only and must not include raw prompts, completions, reasoning traces,
+provider payloads, secrets, or source dumps.
 
 Daily-use checkpoint reports include:
 

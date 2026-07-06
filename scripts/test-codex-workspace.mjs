@@ -2108,6 +2108,102 @@ try {
     }
   });
 
+  test("claim-next ingests only story-backed BMAD ready items with source evidence after static backlog", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const claimStateRoot = mkdtempSync(join(rootDir, ".codex-workspace-bmad-overlay-state-"));
+    try {
+      seedFixtureSafeBacklogSource(fixture.root, [
+        {
+          itemId: "static-ready",
+          status: "ready",
+          priority: "P1",
+          recommendedSliceSize: "small",
+          laneSlug: "static-ready",
+        },
+      ]);
+      seedFixtureBmadSprintStatus(fixture.root);
+
+      const staticFirst = runFixtureScript(fixture, [
+        "claim-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      assert(staticFirst.code === 0, staticFirst.stderr || staticFirst.stdout);
+      const staticFirstPacket = JSON.parse(staticFirst.stdout);
+      assert(staticFirstPacket.selected?.itemId === "static-ready", staticFirst.stdout || staticFirst.stderr);
+
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "static-ready", "runner-b");
+      const bmadSelected = runFixtureScript(fixture, [
+        "claim-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      assert(bmadSelected.code === 0, bmadSelected.stderr || bmadSelected.stdout);
+      const bmadPacket = JSON.parse(bmadSelected.stdout);
+      assert(bmadPacket.selected?.itemId === "bmad-9-9-ready-story", bmadSelected.stdout || bmadSelected.stderr);
+      assert(bmadPacket.selected.sourceType === "bmad_sprint_status", bmadSelected.stdout || bmadSelected.stderr);
+      assert(bmadPacket.selected.sourceKey === "pipeline-default", bmadSelected.stdout || bmadSelected.stderr);
+      assert(bmadPacket.selected.sourceRef === "https://example.test/spec#story-ready", bmadSelected.stdout || bmadSelected.stderr);
+      assert(bmadPacket.selected.sourcePath === "_bmad-output/implementation-artifacts/sprint-status.yaml", bmadSelected.stdout || bmadSelected.stderr);
+      assert(bmadPacket.selected.storyPath === "_bmad-output/implementation-artifacts/9-9-ready-story.md", bmadSelected.stdout || bmadSelected.stderr);
+      assert(bmadPacket.selected.priority === "P3", bmadSelected.stdout || bmadSelected.stderr);
+
+      const textPreview = runFixtureScript(fixture, ["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(textPreview.code === 0, textPreview.stderr || textPreview.stdout);
+      assert(textPreview.stdout.includes("bmad-9-9-ready-story"), textPreview.stdout || textPreview.stderr);
+      assert(!textPreview.stdout.includes("bmad-9-10-missing-story"), textPreview.stdout || textPreview.stderr);
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("claim-next ingests legacy BMAD stories mapping without source metadata", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const claimStateRoot = mkdtempSync(join(rootDir, ".codex-workspace-bmad-legacy-state-"));
+    try {
+      seedFixtureSafeBacklogSource(fixture.root, [
+        {
+          itemId: "static-ready",
+          status: "ready",
+          priority: "P1",
+          recommendedSliceSize: "small",
+          laneSlug: "static-ready",
+        },
+      ]);
+      seedFixtureLegacyBmadSprintStatus(fixture.root);
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "static-ready", "runner-b");
+
+      const result = runFixtureScript(fixture, [
+        "claim-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.selected?.itemId === "bmad-9-12-legacy-ready-story", result.stdout || result.stderr);
+      assert(packet.selected.sourceType === "bmad_sprint_status", result.stdout || result.stderr);
+      assert(packet.selected.sourceKey === "local-bmad-sprint-status", result.stdout || result.stderr);
+      assert(packet.selected.sourceRef === "_bmad-output/implementation-artifacts/sprint-status.yaml", result.stdout || result.stderr);
+      assert(packet.selected.storyPath === "_bmad-output/implementation-artifacts/9-12-legacy-ready-story.md", result.stdout || result.stderr);
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("claim-next summary-json explains blocked preview when no safe lane is claimable", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-no-safe-preview-"));
     try {
@@ -2896,6 +2992,105 @@ try {
       assert(!existsSync(join(claimStateRoot, "worktrees")), "failed dispatch-next apply created a worktree");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next bounds manager dispatcher owners to one active lane", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-manager-dispatcher-bounded-"));
+    try {
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      writeFileSync(
+        join(assignmentsDir, "manager-active-lane.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "manager-active-lane",
+            task_id: "manager-active-lane",
+            lane_slug: "manager-active-lane",
+            branch: "codex/manager-active-lane",
+            status: "claimed",
+            owner: "manager-alpha/dispatcher",
+            assigned_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            last_heartbeat_at: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const preview = run(["claim-next", "--dry-run", "--summary-json", "--owner", "manager-alpha/dispatcher", "--state-root", claimStateRoot]);
+
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.selected === null, preview.stdout || preview.stderr);
+      assert(packet.blockerStatusCounts.blocked_current_owner_active_lane === 1, preview.stdout || preview.stderr);
+      assert(packet.blockers[0].reasonCode === "current_runner_active_lane_exists", preview.stdout || preview.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "manager dispatcher claim preview mutated active assignment evidence");
+
+      const apply = run(["claim-next", "--apply", "--owner", "manager-alpha/dispatcher", "--state-root", claimStateRoot]);
+      assert(apply.code !== 0, "manager dispatcher claim-next apply unexpectedly claimed a second active lane");
+      assert(apply.stdout.includes("BLOCKED: claim-next"), apply.stdout || apply.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "manager dispatcher blocked claim mutated assignment evidence");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next apply summary-json returns a parseable blocked packet without mutation", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-apply-blocked-summary-json-"));
+    try {
+      const assignmentsDir = join(dispatchStateRoot, "assignments");
+      const tasksDir = join(dispatchStateRoot, "tasks");
+      mkdirSync(assignmentsDir, { recursive: true });
+      seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
+      writeFileSync(
+        join(assignmentsDir, "manual-active-lane.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "manual-active-lane",
+            task_id: "manual-active-lane",
+            lane_slug: "manual-active-lane",
+            branch: "codex/manual-active-lane",
+            status: "claimed",
+            owner: "runner-a",
+            assigned_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            last_heartbeat_at: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const beforeTasks = taskSnapshot(tasksDir);
+
+      const result = run([
+        "dispatch-next",
+        "--apply",
+        "--summary-json",
+        "--no-fetch",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ok === false, result.stdout || result.stderr);
+      assert(packet.status === "blocked", result.stdout || result.stderr);
+      assert(packet.dispatch.allowed === false, result.stdout || result.stderr);
+      assert(packet.selected === null, result.stdout || result.stderr);
+      assert(packet.mutation === "none; blocked apply made no assignment/workspace mutation", result.stdout || result.stderr);
+      assert(packet.rawPayloadRetained === false, result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch blocked apply summary-json mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch blocked apply summary-json mutated manifests");
+      assert(!existsSync(join(dispatchStateRoot, "worktrees")), "dispatch blocked apply summary-json created a worktree");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
     }
   });
 
@@ -5835,6 +6030,76 @@ function copyWorkspaceScriptFixture(fixtureRoot) {
   for (const name of readdirSync(sourceLibDir).filter((entry) => entry.endsWith(".mjs"))) {
     writeFileSync(join(fixtureLibDir, name), readFileSync(join(sourceLibDir, name), "utf8"));
   }
+}
+
+function seedFixtureSafeBacklogSource(fixtureRoot, items) {
+  const serviceDir = join(fixtureRoot, "services", "supervisor", "src", "supervisor", "application");
+  mkdirSync(serviceDir, { recursive: true });
+  const laneBlocks = items
+    .map(
+      (item) => `
+        ${item.itemId.replace(/[^A-Za-z0-9_]/g, "_")}_lane = self._safe_backlog_next_lane(
+            lane_slug="${item.laneSlug}",
+            stop_lines=["no worker launch"],
+        )`,
+    )
+    .join("\n");
+  const itemBlocks = items
+    .map((item) => {
+      const laneVariable = `${item.itemId.replace(/[^A-Za-z0-9_]/g, "_")}_lane`;
+      return `
+            SafeDevelopmentBacklogItemView(
+                itemId="${item.itemId}",
+                status="${item.status}",
+                priority="${item.priority}",
+                recommendedSliceSize="${item.recommendedSliceSize}",
+                nextLane=${laneVariable},
+            )`;
+    })
+    .join(",\n");
+  writeFileSync(
+    join(serviceDir, "service.py"),
+    `
+class SupervisorService:
+    def get_safe_development_backlog_report(self):
+${laneBlocks}
+        items = [
+${itemBlocks}
+        ]
+        return SafeDevelopmentBacklogReportView(items=items)
+`,
+  );
+}
+
+function seedFixtureBmadSprintStatus(fixtureRoot) {
+  const artifactsDir = join(fixtureRoot, "_bmad-output", "implementation-artifacts");
+  mkdirSync(artifactsDir, { recursive: true });
+  writeFileSync(
+    join(artifactsDir, "sprint-status.yaml"),
+    `
+source_key: pipeline-default
+source_ref: "https://example.test/spec#story-ready"
+development_status:
+    9-9-ready-story: "ready-for-dev" # quoted status must parse
+    9-10-missing-story: ready-for-dev
+    9-11-blocked-story: "blocked"
+`,
+  );
+  writeFileSync(join(artifactsDir, "9-9-ready-story.md"), "# Story 9.9: Ready Story\n\nReady story body.\n");
+}
+
+function seedFixtureLegacyBmadSprintStatus(fixtureRoot) {
+  const artifactsDir = join(fixtureRoot, "_bmad-output", "implementation-artifacts");
+  mkdirSync(artifactsDir, { recursive: true });
+  writeFileSync(
+    join(artifactsDir, "sprint-status.yaml"),
+    `
+stories:
+    9-12-legacy-ready-story: ready-for-dev
+    9-13-legacy-backlog-story: backlog
+`,
+  );
+  writeFileSync(join(artifactsDir, "9-12-legacy-ready-story.md"), "# Story 9.12: Legacy Ready Story\n\nReady story body.\n");
 }
 
 function runGit(cwd, args) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-const VALID_USAGE_STATES = new Set(["normal", "low", "stale", "unknown"]);
-const VALID_RESOURCE_STATES = new Set(["normal", "high", "stale", "unknown"]);
+const VALID_USAGE_STATES = new Set(["normal", "low", "conserve", "drain", "manager_only", "stale", "unknown"]);
+const VALID_RESOURCE_STATES = new Set(["normal", "warm", "pressured", "critical", "high", "stale", "unknown"]);
 const MAX_SAMPLE_AGE_MS = 5 * 60 * 1000;
 
 const DEFAULT_STOP_LINES = Object.freeze([
@@ -64,7 +64,7 @@ function normalizeUsageSample(rawSample = {}, nowMs = Date.now()) {
     state = "stale";
   } else if (remainingPercent.invalid || remainingPercent.missing) {
     state = "unknown";
-  } else if (remainingPercent.value <= 2) {
+  } else if (state === "normal" && remainingPercent.value <= 2) {
     state = "low";
   }
   return {
@@ -98,9 +98,9 @@ function normalizeResourceSample(rawSample = {}, nowMs = Date.now()) {
     state = "unknown";
   } else if (cpuLoadPercent.missing || memoryUsedPercent.missing) {
     state = "unknown";
-  } else if (cpuLoadPercent.value >= 90) {
+  } else if (state === "normal" && cpuLoadPercent.value >= 90) {
     state = "high";
-  } else if (memoryUsedPercent.value >= 90) {
+  } else if (state === "normal" && memoryUsedPercent.value >= 90) {
     state = "high";
   }
   return {
@@ -120,7 +120,7 @@ function normalizeResourceSample(rawSample = {}, nowMs = Date.now()) {
 function normalizeOwner(owner) {
   const provided = typeof owner === "string" && owner.trim();
   const value = provided ? owner.trim() : "unknown-owner";
-  const valid = Boolean(provided) && /^[A-Za-z0-9._:@-]+$/.test(value) && !value.startsWith("-");
+  const valid = Boolean(provided) && /^[A-Za-z0-9._:@/-]+$/.test(value) && !value.startsWith("-");
   return { value: valid ? value : "unknown-owner", valid };
 }
 
@@ -139,8 +139,14 @@ export function buildUsageResourceRoutingDecision(input = {}) {
 
   if (!owner.valid) blockedReasons.push("owner.invalid");
   if (usage.state === "low") blockedReasons.push("usage.low");
+  if (usage.state === "conserve") blockedReasons.push("usage.conserve");
+  if (usage.state === "drain") blockedReasons.push("usage.drain");
+  if (usage.state === "manager_only") blockedReasons.push("usage.manager_only");
   if (usage.state === "stale") blockedReasons.push("usage.stale");
   if (usage.state === "unknown") blockedReasons.push("usage.unknown");
+  if (resource.state === "warm") blockedReasons.push("resource.warm");
+  if (resource.state === "pressured") blockedReasons.push("resource.pressured");
+  if (resource.state === "critical") blockedReasons.push("resource.critical");
   if (resource.state === "high") blockedReasons.push("resource.high");
   if (resource.state === "stale") blockedReasons.push("resource.stale");
   if (resource.state === "unknown") blockedReasons.push("resource.unknown");
