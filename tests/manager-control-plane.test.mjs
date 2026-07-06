@@ -14520,11 +14520,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.code, "continuous-worker-code-review-no-reviewer");
-  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.readOnly, true);
-  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.applyCommand, "wait_for_or_warm_manager_owned_reviewer");
-  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.authority, "manager-owned-worker-code-review-delegation-required");
-  assert.doesNotMatch(reviewWorkflowNoReviewerPlan.summary.selectedAction.dryRunCommand, /manager-bmad-code-review/);
+  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction, null);
+  assert.equal(reviewWorkflowNoReviewerPlan.nextActions[0].code, "continuous-attention-monitor");
+  assert.doesNotMatch(reviewWorkflowNoReviewerPlan.nextActions[0].nextAction, /manager-worker-code-review\.mjs/);
 
   const preparedReviewRequestDir = join(reviewStateRoot, "manager-runs", "manager-stale-review", "review-requests");
   mkdirSync(preparedReviewRequestDir, { recursive: true });
@@ -22389,6 +22387,68 @@ test("review feedback apply validates metadata before tmux mutation", () => {
     assert.deepEqual(tmuxCalls, []);
     assert.equal(existsSync(join(stateRoot, "manager-runs", "manager-test", "review-feedback")), false);
   } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("review feedback apply keeps sprint review state when transport fails", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-feedback-retryable-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-review-feedback-retryable-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-22-review-feedback-retryable.md";
+  const resultsRoot = join(stateRoot, "manager-runs", "manager-test", "review-results");
+  const findingsPath = join(resultsRoot, "bmad-8-22-review-feedback-retryable.md");
+  try {
+    mkdirSync(resultsRoot, { recursive: true });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-22-review-feedback-retryable: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-22-review-feedback-retryable\n\nStatus: review\n");
+    writeFileSync(findingsPath, "# Review Findings\n\nStatus: FAIL\n\n- [High] Fix missing assertion at `src/app.js:12`.\n");
+
+    const applied = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        sprintStatusPath: sprintPath,
+        assignmentId: "bmad-8-22-review-feedback-retryable",
+        reviewFindingsFile: findingsPath,
+        apply: true,
+      },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "bmad-8-22-review-feedback-retryable",
+                taskId: "task-story-8-22",
+                laneOwner: "manager-test/dispatcher",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+        runner: () => ({ status: 0, stdout: "{}", stderr: "" }),
+        tmuxRunner: () => ({ status: 1, stdout: "", stderr: "tmux paste failed" }),
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-review-feedback-apply-incomplete");
+    assert.match(readFileSync(sprintPath, "utf8"), /8-22-review-feedback-retryable: review/);
+    assert.match(readFileSync(storyPath, "utf8"), /Status: review/);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });

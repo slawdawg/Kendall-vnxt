@@ -3558,10 +3558,10 @@ export function buildWorkerReviewFeedbackPlan(options = {}, context = {}) {
   for (const request of selected) {
     writeFileSync(request.requestPath, renderWorkerReviewFeedbackFile(request, findings));
     writeFileSync(request.pastePath, `${request.pasteText}\n`);
-    const statusUpdate = markManagerReviewFeedbackInProgress(request, runOptions, context);
-    const heartbeat = !statusUpdate?.skipped ? refreshReviewFeedbackAssignmentHeartbeat(request, runOptions, context) : null;
-    const metadataOk = !statusUpdate?.skipped && heartbeat?.ok === true;
-    const paste = metadataOk ? pasteWorkerPointer(request, `${request.workerId}-review-feedback`, context) : null;
+    const heartbeat = refreshReviewFeedbackAssignmentHeartbeat(request, runOptions, context);
+    const paste = heartbeat?.ok === true ? pasteWorkerPointer(request, `${request.workerId}-review-feedback`, context) : null;
+    const statusUpdate = paste?.ok === true ? markManagerReviewFeedbackInProgress(request, runOptions, context) : null;
+    const metadataOk = heartbeat?.ok === true && paste?.ok === true && !statusUpdate?.skipped;
     results.push({ ...request, status: metadataOk && paste?.ok === true ? "review_feedback_sent" : "failed", paste, statusUpdate, heartbeat });
   }
   const failed = results.find((result) => result.status === "failed");
@@ -18065,17 +18065,7 @@ function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = 
   const dryRunCommand = `node ./scripts/manager-worker-code-review.mjs --summary-json${scopedRun}${scopedStateRoot}${scopedAssignment}`;
   const request = workerReviewPlan.summary?.requests?.[0] || null;
   if (workerReviewPlan.status === "blocked") {
-    return {
-      code: "continuous-worker-code-review-no-reviewer",
-      summary: "BMAD code review is ready, but no manager-owned reviewer worker is currently available.",
-      dryRunCommand,
-      applyCommand: "wait_for_or_warm_manager_owned_reviewer",
-      authority: "manager-owned-worker-code-review-delegation-required",
-      mutationClass: "none",
-      readOnly: true,
-      blockerCode: workerReviewPlan.blockers?.[0]?.code || "worker-code-review-no-reviewer",
-      nextAction: workerReviewPlan.blockers?.[0]?.nextAction || "Wait for another prompt-idle manager-owned worker, warm a reviewer, or run review manually only by explicit operator choice.",
-    };
+    return null;
   }
   if (workerReviewPlan.summary?.alreadyPrepared === true) {
     const requestAgeSeconds = Number(workerReviewPlan.summary?.requestAgeSeconds);
