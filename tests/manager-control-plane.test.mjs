@@ -11446,6 +11446,263 @@ test("assignment resume derives stale-owner targets from detailed assignment row
   assert.equal(assignment.warnings.length, 0);
 });
 
+test("assignment resume prefers complete canonical inventory over truncated legacy samples", () => {
+  const assignment = buildAssignmentResume(
+    { stateRoot: "/tmp/manager-canonical-inventory-missing-state" },
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          stateRoot: "/tmp/manager-canonical-inventory-missing-state",
+          staleAfterSeconds: 86_400,
+          currentOwner: "manager-current",
+          counts: { backlogCandidates: 7, laneAssignments: 1, workspaceAssignments: 1 },
+          laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+          workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+          laneAssignmentsTruncated: true,
+          workspaceAssignmentsTruncated: true,
+          laneAssignments: [
+            {
+              assignmentId: "legacy-sampled-lane",
+              taskId: "legacy-sampled-task",
+              status: "active",
+              branch: "codex/legacy-sampled-lane",
+            },
+          ],
+          workspaceAssignments: [
+            {
+              taskId: "legacy-sampled-workspace",
+              status: "active",
+              branch: "codex/legacy-sampled-workspace",
+            },
+          ],
+          assignmentInventory: {
+            schemaVersion: "manager-assignment-inventory/v0",
+            complete: true,
+            blockers: [],
+            counts: {
+              laneAssignments: 2,
+              workspaceAssignments: 2,
+              staleOwnerTargets: 2,
+              ownedActiveTargets: 0,
+            },
+            laneAssignments: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-old",
+                assignmentId: "canonical-lane-old",
+                taskId: "canonical-task-old",
+                status: "blocked_stale_owner_needs_takeover",
+                owner: "old-owner",
+                branch: "codex/canonical-lane-old",
+                phase: "review_ready",
+                heartbeat: "2026-07-01T18:00:00.000Z",
+                reasonCode: "assignment_heartbeat_stale",
+                source: "assignment",
+              },
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-active",
+                assignmentId: "canonical-lane-active",
+                taskId: "canonical-task-active",
+                status: "active",
+                owner: "manager-current",
+                branch: "codex/canonical-lane-active",
+                phase: "active",
+                heartbeat: "2026-07-06T17:00:00.000Z",
+                source: "assignment",
+              },
+            ],
+            workspaceAssignments: [
+              {
+                kind: "workspace_assignment",
+                id: "canonical-workspace-old",
+                taskId: "canonical-workspace-old",
+                status: "blocked_stale_owner_needs_takeover",
+                owner: "old-owner",
+                branch: "codex/canonical-workspace-old",
+                heartbeat: "2026-07-01T18:00:00.000Z",
+                reasonCode: "owner_heartbeat_stale",
+                source: "manifest",
+              },
+              {
+                kind: "workspace_assignment",
+                id: "canonical-workspace-active",
+                taskId: "canonical-workspace-active",
+                status: "active",
+                owner: "manager-current",
+                branch: "codex/canonical-workspace-active",
+                heartbeat: "2026-07-06T17:00:00.000Z",
+                source: "manifest",
+              },
+            ],
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.summary.detailSource, "inventory");
+  assert.deepEqual(assignment.summary.legacyFallback, {
+    used: false,
+    reason: null,
+    laneFileRead: false,
+    workspaceFileRead: false,
+  });
+  assert.equal(assignment.summary.counts.laneAssignments, 2);
+  assert.equal(assignment.summary.counts.workspaceAssignments, 2);
+  assert.equal(assignment.summary.counts.backlogCandidates, 7);
+  assert.equal(assignment.summary.laneAssignmentsDetailedCount, 2);
+  assert.equal(assignment.summary.workspaceAssignmentsDetailedCount, 2);
+  assert.equal(assignment.summary.blockedLaneAssignments.length, 1);
+  assert.equal(assignment.summary.blockedLaneAssignments[0].assignmentId, "canonical-lane-old");
+  assert.equal(assignment.summary.blockedWorkspaceAssignments.length, 1);
+  assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "canonical-workspace-old");
+  assert.equal(assignment.summary.laneAssignments.some((row) => row.assignmentId === "legacy-sampled-lane"), false);
+});
+
+test("assignment resume treats malformed complete canonical inventory as unusable legacy fallback", () => {
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          staleAfterSeconds: 86_400,
+          laneAssignmentStatusCounts: {},
+          workspaceAssignmentStatusCounts: {},
+          laneAssignments: [
+            {
+              assignmentId: "legacy-lane-safe",
+              taskId: "legacy-task-safe",
+              status: "active",
+              branch: "codex/legacy-lane-safe",
+            },
+          ],
+          assignmentInventory: {
+            schemaVersion: "manager-assignment-inventory/v0",
+            complete: true,
+            blockers: [],
+            counts: { laneAssignments: 1 },
+            laneAssignments: [null],
+            workspaceAssignments: [],
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.summary.detailSource, "legacy");
+  assert.equal(assignment.summary.legacyFallback.reason, "inventory_unusable");
+  assert.equal(assignment.summary.laneAssignments[0].assignmentId, "legacy-lane-safe");
+});
+
+test("assignment resume uses canonical id as stale target identity when specific ids are absent", () => {
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          staleAfterSeconds: 86_400,
+          laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+          workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+          assignmentInventory: {
+            schemaVersion: "manager-assignment-inventory/v0",
+            complete: true,
+            blockers: [],
+            counts: { laneAssignments: 1, workspaceAssignments: 1 },
+            laneAssignments: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-id-only",
+                status: "blocked_stale_owner_needs_takeover",
+                owner: "old-owner",
+                branch: "codex/canonical-lane-id-only",
+                reasonCode: "assignment_heartbeat_stale",
+              },
+            ],
+            workspaceAssignments: [
+              {
+                kind: "workspace_assignment",
+                id: "canonical-workspace-id-only",
+                status: "blocked_stale_owner_needs_takeover",
+                owner: "old-owner",
+                branch: "codex/canonical-workspace-id-only",
+                reasonCode: "owner_heartbeat_stale",
+              },
+            ],
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.summary.blockedLaneAssignments[0].assignmentId, "canonical-lane-id-only");
+  assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "canonical-workspace-id-only");
+});
+
+test("assignment resume labels incomplete canonical inventory and preserves legacy filesystem fallback", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-assignment-incomplete-inventory-"));
+  try {
+    mkdirSync(join(stateRoot, "assignments"), { recursive: true });
+    writeFileSync(
+      join(stateRoot, "assignments", "lane-from-legacy-fallback.json"),
+      JSON.stringify(
+        {
+          assignment_id: "lane-from-legacy-fallback",
+          task_id: "task-from-legacy-fallback",
+          status: "active",
+          phase: "review_ready",
+          owner: "old-owner",
+          branch: "codex/lane-from-legacy-fallback",
+          last_heartbeat_at: "2026-07-01T18:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const assignment = buildAssignmentResume(
+      { stateRoot },
+      {
+        assignmentSummary: {
+          summary: {
+            generatedAt: "2026-07-06T18:00:00.000Z",
+            stateRoot,
+            staleAfterSeconds: 86_400,
+            currentOwner: "manager-current",
+            laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+            workspaceAssignmentStatusCounts: {},
+            laneAssignmentsTruncated: true,
+            laneAssignments: [],
+            assignmentInventory: {
+              schemaVersion: "manager-assignment-inventory/v0",
+              complete: false,
+              blockers: [{ code: "inventory-incomplete", message: "fixture incomplete" }],
+              counts: { laneAssignments: 0, workspaceAssignments: 0 },
+              laneAssignments: [],
+              workspaceAssignments: [],
+            },
+          },
+        },
+      },
+    );
+
+    assert.equal(assignment.summary.detailSource, "legacy");
+    assert.deepEqual(assignment.summary.legacyFallback, {
+      used: true,
+      reason: "inventory_incomplete",
+      laneFileRead: true,
+      workspaceFileRead: false,
+    });
+    assert.equal(assignment.summary.blockedLaneAssignments.length, 1);
+    assert.equal(assignment.summary.blockedLaneAssignments[0].assignmentId, "lane-from-legacy-fallback");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("assignment resume preserves report classifications instead of staling old report rows", () => {
   const assignment = buildAssignmentResume(
     {},
@@ -11626,6 +11883,87 @@ test("assignment resume backfills stale workspace targets from legacy timestamps
   }
 });
 
+test("assignment resume blocks when canonical stale-owner counts exceed exact targets", () => {
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          staleAfterSeconds: 86_400,
+          laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 2 },
+          workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 0 },
+          assignmentInventory: {
+            schemaVersion: "manager-assignment-inventory/v0",
+            complete: true,
+            blockers: [],
+            counts: { laneAssignments: 1, workspaceAssignments: 0, staleOwnerTargets: 1 },
+            laneAssignments: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-one",
+                assignmentId: "canonical-lane-one",
+                status: "blocked_stale_owner_needs_takeover",
+                owner: "old-owner",
+                branch: "codex/canonical-lane-one",
+                reasonCode: "assignment_heartbeat_stale",
+              },
+            ],
+            workspaceAssignments: [],
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.ok, false);
+  assert.equal(assignment.status, "blocked");
+  const staleEvidenceBlocker = assignment.blockers.find((blocker) => blocker.code === "stale-owner-target-evidence-unavailable");
+  assert.equal(staleEvidenceBlocker.sourceCode, "stale-owner-lane-detail-truncated");
+  assert.match(staleEvidenceBlocker.message, /counted 2 stale lane assignment/);
+  assert.equal(assignment.warnings[0].code, "stale-owner-lane-detail-truncated");
+});
+
+test("assignment resume blocks when canonical stale-owner target count exceeds exact rows without status counts", () => {
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          staleAfterSeconds: 86_400,
+          laneAssignmentStatusCounts: {},
+          workspaceAssignmentStatusCounts: {},
+          assignmentInventory: {
+            schemaVersion: "manager-assignment-inventory/v0",
+            complete: true,
+            blockers: [],
+            counts: { laneAssignments: 1, workspaceAssignments: 0, staleOwnerTargets: 2 },
+            laneAssignments: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-one",
+                assignmentId: "canonical-lane-one",
+                status: "blocked_stale_owner_needs_takeover",
+                owner: "old-owner",
+                branch: "codex/canonical-lane-one",
+                reasonCode: "assignment_heartbeat_stale",
+              },
+            ],
+            workspaceAssignments: [],
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.ok, false);
+  assert.equal(assignment.status, "blocked");
+  assert.equal(assignment.warnings[0].code, "stale-owner-detail-truncated");
+  assert.equal(assignment.blockers[0].sourceCode, "stale-owner-detail-truncated");
+  assert.match(assignment.blockers[0].message, /counted 2 stale-owner target/);
+});
+
 test("stale-owner inspection blocks when target evidence is unavailable", () => {
   const inspection = buildStaleOwnerInspection(
     {},
@@ -11650,6 +11988,145 @@ test("stale-owner inspection blocks when target evidence is unavailable", () => 
   assert.equal(inspection.blockers[0].code, "stale-owner-target-evidence-unavailable");
   assert.match(inspection.nextActions[0].summary, /assignment report hit a sandbox permission boundary/);
   assert.notEqual(inspection.nextActions[0].code, "stale-owner-inspection-not-needed");
+});
+
+test("stale-owner inspection does not let availability blockers bypass existing target evidence", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          takeoverInspection: {
+            targets: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-one",
+                dryRunCommand: "node ./scripts/codex-workspace.mjs takeover 'canonical-lane-one' --dry-run --summary-json",
+              },
+            ],
+          },
+        },
+        blockers: [
+          {
+            code: "assignment-report-unavailable",
+            message: "assignment report unavailable after target evidence was already captured",
+            nextAction: "Refresh assignment report.",
+          },
+        ],
+      },
+      takeoverResults: {
+        "canonical-lane-one": {
+          ok: true,
+          allowed: false,
+          worktree: { exists: false, status: "missing" },
+          branch: { status: "inspected" },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+        },
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, true);
+  assert.equal(inspection.status, "attention");
+  assert.equal(inspection.blockers.length, 0);
+  assert.equal(inspection.summary.cleanupCandidateCount, 1);
+});
+
+test("stale-owner inspection consumes resume stale-owner evidence blockers directly", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          takeoverInspection: {
+            targets: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-one",
+                dryRunCommand: "node ./scripts/codex-workspace.mjs takeover 'canonical-lane-one' --dry-run --summary-json",
+              },
+            ],
+          },
+        },
+        blockers: [
+          {
+            code: "stale-owner-target-evidence-unavailable",
+            sourceCode: "stale-owner-lane-detail-truncated",
+            message: "Stale-owner targets unavailable: Assignment report counted 2 stale lane assignment(s), but only 1 exact target row(s) were available for inspection.",
+            nextAction: "Refresh assignment report detail before takeover apply.",
+          },
+        ],
+      },
+      takeoverResults: {
+        "canonical-lane-one": {
+          ok: true,
+          allowed: false,
+          worktree: { exists: false, status: "missing" },
+          branch: { status: "inspected" },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+        },
+      },
+    },
+  );
+  const cleanup = buildCleanupPlan({ runId: "manager-test" }, { staleOwnerInspection: inspection });
+  const preservation = buildDirtyWorkspacePreservation({ runId: "manager-test" }, { staleOwnerInspection: inspection });
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.status, "blocked");
+  assert.equal(inspection.blockers[0].code, "stale-owner-target-evidence-unavailable");
+  assert.equal(inspection.summary.mutation, "none; dry-run takeover evidence only");
+  assert.equal(cleanup.status, "blocked");
+  assert.equal(cleanup.summary.staleOwnerCleanup.mutationMode, "blocked_until_exact_stale_owner_evidence");
+  assert.equal(preservation.status, "blocked");
+  assert.equal(preservation.blockers[0].code, "stale-owner-target-evidence-unavailable");
+});
+
+test("stale-owner inspection preserves direct evidence blockers without source code through cleanup and preservation", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          takeoverInspection: {
+            targets: [
+              {
+                kind: "lane_assignment",
+                id: "canonical-lane-one",
+                dryRunCommand: "node ./scripts/codex-workspace.mjs takeover 'canonical-lane-one' --dry-run --summary-json",
+              },
+            ],
+          },
+        },
+        blockers: [
+          {
+            code: "stale-owner-target-evidence-unavailable",
+            message: "Stale-owner targets unavailable: exact target evidence is incomplete.",
+            nextAction: "Refresh assignment report detail before takeover apply.",
+          },
+        ],
+      },
+      takeoverResults: {
+        "canonical-lane-one": {
+          ok: true,
+          allowed: false,
+          worktree: { exists: false, status: "missing" },
+          branch: { status: "inspected" },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+        },
+      },
+    },
+  );
+  const cleanup = buildCleanupPlan({ runId: "manager-test" }, { staleOwnerInspection: inspection });
+  const preservation = buildDirtyWorkspacePreservation({ runId: "manager-test" }, { staleOwnerInspection: inspection });
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.blockers[0].sourceCode, "stale-owner-target-evidence-unavailable");
+  assert.equal(cleanup.status, "blocked");
+  assert.equal(cleanup.summary.staleOwnerCleanup.mutationMode, "blocked_until_exact_stale_owner_evidence");
+  assert.equal(preservation.status, "blocked");
 });
 
 test("stale-owner inspection blocks when stale counts lack exact target rows", () => {
