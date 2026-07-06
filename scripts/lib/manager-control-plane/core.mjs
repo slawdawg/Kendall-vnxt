@@ -18204,11 +18204,27 @@ function buildContinuousAction(action = {}, cycle = {}, capabilityPosture = {}) 
     const progressStatus = { summary: cycle.summary?.workerProgress || {} };
     const reviewPlan = buildBmadCodeReviewRequestPlan(runId ? { runId } : {}, { cyclePacket: cycle, progressStatus });
     const reviewDelegationState = capabilityPosture.capabilities?.reviewDelegation?.state || "enabled";
+    const hasWorkerProgressSignal = Array.isArray(cycle.nextActions)
+      && cycle.nextActions.some((candidate) =>
+        String(candidate?.code || "").startsWith("worker-progress-") &&
+        String(candidate?.nextAction || "").startsWith("node ./scripts/manager-worker-progress-signal.mjs "),
+      );
+    const hasWorkerProgressRows = Array.isArray(cycle.summary?.workerProgress?.workerProgress)
+      && cycle.summary.workerProgress.workerProgress.length > 0;
     if (!["parked", "blocked"].includes(reviewDelegationState) && reviewPlan.ok !== false && reviewPlan.status === "ready") {
       const reviewAction = continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
-      if (reviewAction && (reviewAction.readOnly !== true || reviewAction.reviewResultFresh === true)) {
+      if (reviewAction?.reviewResultFresh === true) {
+        return null;
+      }
+      if (reviewAction?.readOnly === true && hasWorkerProgressSignal) {
+        return null;
+      }
+      if (reviewAction && reviewAction.readOnly !== true) {
         return reviewAction;
       }
+    }
+    if (hasWorkerProgressSignal && hasWorkerProgressRows) {
+      return null;
     }
     return {
       code: "continuous-lane-advance-apply",
