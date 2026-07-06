@@ -37,6 +37,7 @@ import {
   buildSourceWorkEligibilityPlan,
   buildManagerRunStartPlan,
   buildSteeringPlan,
+  buildAssignmentResume,
   buildStaleOwnerInspection,
   buildTmuxOrientationStatus,
   buildUsageStatus,
@@ -11394,6 +11395,362 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("assignment resume derives stale-owner targets from detailed assignment rows", () => {
+  const generatedAt = "2026-07-06T18:00:00.000Z";
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt,
+          staleAfterSeconds: 86_400,
+          currentOwner: "manager-current",
+          laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+          workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+          laneAssignments: [
+            {
+              assignmentId: "lane-old",
+              taskId: "task-old",
+              status: "blocked_stale_owner_needs_takeover",
+              owner: "old-owner",
+              branch: "codex/lane-old",
+              phase: "review_ready",
+              heartbeat: "2026-07-01T18:00:00.000Z",
+              reasonCode: "assignment_heartbeat_stale",
+            },
+          ],
+          workspaceAssignments: [
+            {
+              taskId: "task-workspace-old",
+              status: "blocked_stale_owner_needs_takeover",
+              owner: "old-owner",
+              branch: "codex/task-workspace-old",
+              worktreePath: "/tmp/task-workspace-old",
+              heartbeat: "2026-07-01T18:00:00.000Z",
+              reasonCode: "owner_heartbeat_stale",
+            },
+          ],
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.status, "blocked");
+  assert.equal(assignment.summary.blockedLaneAssignments.length, 1);
+  assert.equal(assignment.summary.blockedLaneAssignments[0].assignmentId, "lane-old");
+  assert.equal(assignment.summary.blockedLaneAssignments[0].status, "blocked_stale_owner_needs_takeover");
+  assert.equal(assignment.summary.blockedWorkspaceAssignments.length, 1);
+  assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "task-workspace-old");
+  assert.equal(assignment.warnings.length, 0);
+});
+
+test("assignment resume preserves report classifications instead of staling old report rows", () => {
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          staleAfterSeconds: 86_400,
+          laneAssignmentStatusCounts: { active: 1, blocked_stale_owner_needs_takeover: 0 },
+          workspaceAssignmentStatusCounts: {},
+          laneAssignments: [
+            {
+              assignmentId: "lane-active",
+              taskId: "task-active",
+              status: "active",
+              branch: "codex/lane-active",
+              heartbeat: "2026-07-01T18:00:00.000Z",
+            },
+          ],
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.summary.blockedLaneAssignments.length, 0);
+  assert.equal(assignment.summary.laneAssignments[0].status, "active");
+});
+
+test("assignment resume does not reclassify terminal rows as stale-owner targets", () => {
+  const assignment = buildAssignmentResume(
+    {},
+    {
+      assignmentSummary: {
+        summary: {
+          generatedAt: "2026-07-06T18:00:00.000Z",
+          staleAfterSeconds: 86_400,
+          laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 0 },
+          workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 0 },
+          laneAssignments: [
+            {
+              assignmentId: "lane-closed",
+              taskId: "task-closed",
+              status: "closed",
+              reasonCode: "assignment_heartbeat_stale",
+              branch: "codex/lane-closed",
+              heartbeat: "2026-07-01T18:00:00.000Z",
+            },
+          ],
+          workspaceAssignments: [
+            {
+              taskId: "task-merged",
+              status: "merged",
+              reasonCode: "owner_heartbeat_stale",
+              branch: "codex/task-merged",
+              heartbeat: "2026-07-01T18:00:00.000Z",
+            },
+          ],
+        },
+      },
+    },
+  );
+
+  assert.equal(assignment.summary.blockedLaneAssignments.length, 0);
+  assert.equal(assignment.summary.blockedWorkspaceAssignments.length, 0);
+  assert.equal(assignment.summary.laneAssignments[0].status, "closed");
+  assert.equal(assignment.summary.workspaceAssignments[0].status, "merged");
+});
+
+test("assignment resume backfills truncated stale-owner target detail from workspace state files", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-assignment-detail-"));
+  try {
+    mkdirSync(join(stateRoot, "assignments"), { recursive: true });
+    mkdirSync(join(stateRoot, "tasks"), { recursive: true });
+    writeFileSync(
+      join(stateRoot, "assignments", "lane-from-file.json"),
+      JSON.stringify(
+        {
+          assignment_id: "lane-from-file",
+          task_id: "task-from-file",
+          status: "active",
+          phase: "review_ready",
+          owner: "old-owner",
+          branch: "codex/lane-from-file",
+          last_heartbeat_at: "2026-07-01T18:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(
+      join(stateRoot, "tasks", "task-from-workspace-file.json"),
+      JSON.stringify(
+        {
+          task_id: "task-from-workspace-file",
+          status: "active",
+          owner: "old-owner",
+          branch: "codex/task-from-workspace-file",
+          worktree_path: join(stateRoot, "worktrees", "task-from-workspace-file"),
+          owner_updated_at: "2026-07-01T18:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const assignment = buildAssignmentResume(
+      { stateRoot },
+      {
+        assignmentSummary: {
+          summary: {
+            generatedAt: "2026-07-06T18:00:00.000Z",
+            stateRoot,
+            staleAfterSeconds: 86_400,
+            currentOwner: "manager-current",
+            laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+            workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+            laneAssignments: [],
+            workspaceAssignments: [],
+            laneAssignmentsTruncated: true,
+            workspaceAssignmentsTruncated: true,
+          },
+        },
+      },
+    );
+
+    assert.equal(assignment.summary.blockedLaneAssignments.length, 1);
+    assert.equal(assignment.summary.blockedLaneAssignments[0].assignmentId, "lane-from-file");
+    assert.equal(assignment.summary.blockedWorkspaceAssignments.length, 1);
+    assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "task-from-workspace-file");
+    assert.equal(assignment.warnings.length, 0);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("assignment resume backfills stale workspace targets from legacy timestamps", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-workspace-legacy-stale-"));
+  try {
+    mkdirSync(join(stateRoot, "tasks"), { recursive: true });
+    writeFileSync(
+      join(stateRoot, "tasks", "task-legacy.json"),
+      JSON.stringify(
+        {
+          task_id: "task-legacy",
+          status: "active",
+          owner: "old-owner",
+          branch: "codex/task-legacy",
+          worktree_path: join(stateRoot, "worktrees", "task-legacy"),
+          updated_at: "2026-07-01T18:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const assignment = buildAssignmentResume(
+      { stateRoot },
+      {
+        assignmentSummary: {
+          summary: {
+            generatedAt: "2026-07-06T18:00:00.000Z",
+            stateRoot,
+            staleAfterSeconds: 86_400,
+            laneAssignmentStatusCounts: {},
+            workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: 1 },
+            workspaceAssignments: [],
+            workspaceAssignmentsTruncated: true,
+          },
+        },
+      },
+    );
+
+    assert.equal(assignment.summary.blockedWorkspaceAssignments.length, 1);
+    assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "task-legacy");
+    assert.equal(assignment.summary.blockedWorkspaceAssignments[0].status, "blocked_stale_owner_needs_takeover");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale-owner inspection blocks when target evidence is unavailable", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          takeoverInspection: { targets: [] },
+        },
+        blockers: [
+          {
+            code: "assignment-report-unavailable",
+            message: "assignment report hit a sandbox permission boundary.",
+            nextAction: "Request approval to rerun outside the sandbox.",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.status, "blocked");
+  assert.equal(inspection.blockers[0].code, "stale-owner-target-evidence-unavailable");
+  assert.match(inspection.nextActions[0].summary, /assignment report hit a sandbox permission boundary/);
+  assert.notEqual(inspection.nextActions[0].code, "stale-owner-inspection-not-needed");
+});
+
+test("stale-owner inspection blocks when stale counts lack exact target rows", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          takeoverInspection: { targets: [] },
+        },
+        warnings: [
+          {
+            code: "stale-owner-lane-detail-truncated",
+            message: "Assignment report counted 2 stale lane assignment(s), but only 0 exact target row(s) were available for inspection.",
+            nextAction: "Refresh assignment report detail before takeover apply.",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.status, "blocked");
+  assert.equal(inspection.blockers[0].code, "stale-owner-target-evidence-unavailable");
+  assert.match(inspection.nextActions[0].summary, /counted 2 stale lane assignment/);
+});
+
+test("stale-owner inspection blocks partial target detail instead of inspecting a subset", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          ledger: { runId: "manager-test" },
+          takeoverInspection: {
+            targets: [
+              {
+                kind: "lane_assignment",
+                id: "lane-one",
+                dryRunCommand: "node ./scripts/codex-workspace.mjs takeover 'lane-one' --dry-run --summary-json",
+              },
+            ],
+          },
+        },
+        warnings: [
+          {
+            code: "stale-owner-lane-detail-truncated",
+            message: "Assignment report counted 2 stale lane assignment(s), but only 1 exact target row(s) were available for inspection.",
+            nextAction: "Refresh assignment report detail before takeover apply.",
+          },
+        ],
+      },
+      takeoverResults: {
+        "lane-one": {
+          ok: true,
+          allowed: false,
+          worktree: { exists: false, status: "missing" },
+          branch: { status: "inspected" },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+        },
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.status, "blocked");
+  assert.equal(inspection.summary.inspectedCount, 1);
+  assert.equal(inspection.blockers[0].code, "stale-owner-target-evidence-unavailable");
+  assert.match(inspection.nextActions[0].summary, /only 1 exact target/);
+});
+
+test("cleanup and dirty preservation propagate stale-owner inspection blockers", () => {
+  const staleOwnerInspection = {
+    ok: false,
+    status: "blocked",
+    summary: {
+      targetCount: 1,
+      cleanupCandidateCount: 0,
+      dirtyWorkspaceCount: 1,
+      takeoverApprovalCandidateCount: 0,
+      inspections: [],
+    },
+    blockers: [
+      {
+        code: "stale-owner-target-evidence-unavailable",
+        message: "Stale-owner targets unavailable.",
+        nextAction: "Refresh manager resume state.",
+      },
+    ],
+    warnings: [],
+  };
+
+  const cleanup = buildCleanupPlan({ runId: "manager-test" }, { staleOwnerInspection });
+  const preservation = buildDirtyWorkspacePreservation({ runId: "manager-test" }, { staleOwnerInspection });
+
+  assert.equal(cleanup.status, "blocked");
+  assert.equal(cleanup.blockers[0].code, "stale-owner-target-evidence-unavailable");
+  assert.equal(cleanup.summary.staleOwnerCleanup.mutationMode, "blocked_until_exact_stale_owner_evidence");
+  assert.equal(preservation.status, "blocked");
+  assert.equal(preservation.blockers[0].code, "stale-owner-target-evidence-unavailable");
 });
 
 test("cycle packet records schema gaps instead of inferring hidden progress", () => {

@@ -11398,6 +11398,57 @@ function readAssignmentFileLaneEvidence(stateRoot = "", _currentOwner = "") {
     .filter((lane) => lane.assignmentId && lane.taskId && lane.branch);
 }
 
+function readWorkspaceFileAssignmentEvidence(stateRoot = "") {
+  const root = resolve(stateRoot || "");
+  const tasksRoot = resolve(root, "tasks");
+  if (!stateRoot || !isInsideOrSame(tasksRoot, root) || !existsSync(tasksRoot)) return [];
+  let entries = [];
+  try {
+    entries = readdirSync(tasksRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .slice(0, 500)
+    .map((entry) => {
+      try {
+        return JSON.parse(readFileSync(join(tasksRoot, entry.name), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter(isPlainObject)
+    .map((record) => ({
+      taskId: sanitizeLedgerField(record.task_id || record.taskId || "", "", 140),
+      status: sanitizeLedgerField(record.status || "", "", 80),
+      manifestStatus: sanitizeLedgerField(record.status || record.manifestStatus || "", "", 80),
+      owner: sanitizeLedgerField(record.owner || "", "", 160),
+      branch: sanitizeLedgerField(record.branch || "", "", 160),
+      worktreePath: sanitizeLedgerField(record.worktree_path || record.worktreePath || "", "", 260),
+      phase: sanitizeLedgerField(record.phase || "", "", 80),
+      heartbeat: sanitizeLedgerField(record.last_heartbeat_at || record.lastHeartbeatAt || record.owner_updated_at || record.ownerUpdatedAt || "", "", 80),
+      updatedAt: sanitizeLedgerField(record.updated_at || record.updatedAt || "", "", 80),
+      createdAt: sanitizeLedgerField(record.created_at || record.createdAt || "", "", 80),
+    }))
+    .filter((workspace) => workspace.taskId && workspace.branch);
+}
+
+function mergeWorkspaceAssignmentEvidence(primary = [], fallback = []) {
+  const byTaskId = new Map();
+  for (const workspace of fallback) {
+    const id = String(workspace?.taskId || workspace?.task_id || "");
+    if (!id) continue;
+    byTaskId.set(id, workspace);
+  }
+  for (const workspace of primary) {
+    const id = String(workspace?.taskId || workspace?.task_id || "");
+    if (!id) continue;
+    byTaskId.set(id, mergePresentFields(byTaskId.get(id) || {}, workspace));
+  }
+  return [...byTaskId.values()];
+}
+
 function sourceRefList(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.flatMap((item) => sourceRefList(item));
@@ -13003,6 +13054,7 @@ export function buildCleanupPlan(options = {}, context = {}) {
   const paths = managerRunPaths(runId, runOptions, context);
   const oldManagerState = existsSync(paths.root);
   const staleOwner = context.staleOwnerInspection || buildStaleOwnerInspection(runOptions, context);
+  const staleOwnerBlockers = staleOwnerBlockersForCleanup(staleOwner);
   const cleanupCandidates = Array.isArray(staleOwner.summary?.inspections)
     ? staleOwner.summary.inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate")
     : [];
@@ -13018,6 +13070,35 @@ export function buildCleanupPlan(options = {}, context = {}) {
   const dirtyPreservation = dirtyWorkspaces.length > 0
     ? context.dirtyWorkspacePreservation || buildDirtyWorkspacePreservation(runOptions, { ...context, staleOwnerInspection: staleOwner })
     : null;
+  if (staleOwnerBlockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        managerStatePresent: oldManagerState,
+        mutationMode: "blocked_stale_owner_inspection",
+        cleanupScopes: ["manager-run-state", "merged-managed-lanes", "closed-assignments"],
+        staleOwnerCleanup: {
+          mutationMode: "blocked_until_exact_stale_owner_evidence",
+          targetCount: staleOwner.summary?.targetCount || 0,
+          cleanupCandidateCount,
+          dirtyWorkspaceCount,
+          takeoverApprovalCandidateCount: staleOwner.summary?.takeoverApprovalCandidateCount || 0,
+          closeoutPreview: null,
+          dirtyPreservation: null,
+          retention: "metadata_only_stale_owner_cleanup_summary",
+        },
+      },
+      blockers: staleOwnerBlockers,
+      warnings: staleOwner.warnings || [],
+      nextActions: staleOwnerBlockers.map((blocker) => ({
+        code: blocker.code,
+        summary: blocker.message || blocker.code,
+        nextAction: blocker.nextAction || "Refresh manager stale-owner inspection before cleanup planning.",
+      })),
+    });
+  }
   return packet({
     status: "ready",
     summary: {
@@ -13152,6 +13233,28 @@ export function buildDirtyWorkspacePreservation(options = {}, context = {}) {
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const runId = runOptions.runId;
   const staleOwner = context.staleOwnerInspection || buildStaleOwnerInspection(runOptions, context);
+  const staleOwnerBlockers = staleOwnerBlockersForCleanup(staleOwner);
+  if (staleOwnerBlockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        targetCount: staleOwner.summary?.dirtyWorkspaceCount || 0,
+        preservedCount: 0,
+        evidence: [],
+        mutation: "none; blocked stale-owner inspection",
+        retention: "metadata_only_dirty_workspace_preservation",
+      },
+      blockers: staleOwnerBlockers,
+      warnings: staleOwner.warnings || [],
+      nextActions: staleOwnerBlockers.map((blocker) => ({
+        code: blocker.code,
+        summary: blocker.message || blocker.code,
+        nextAction: blocker.nextAction || "Refresh manager stale-owner inspection before dirty workspace preservation.",
+      })),
+    });
+  }
   const dirtyWorkspaces = Array.isArray(staleOwner.summary?.inspections)
     ? staleOwner.summary.inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required")
     : [];
@@ -15309,6 +15412,7 @@ export function buildAssignmentResume(options = {}, context = {}) {
     laneAssignments: report.laneAssignmentStatusCounts || {},
     workspaceAssignments: report.workspaceAssignmentStatusCounts || {},
   };
+  const details = buildAssignmentResumeDetails(report, options);
   const ambiguous = ambiguousAssignmentStatusCounts(statusCounts);
   return packet({
     ok: ambiguous.length === 0,
@@ -15324,8 +15428,12 @@ export function buildAssignmentResume(options = {}, context = {}) {
         laneAssignments: Boolean(report.laneAssignmentsTruncated),
         workspaceAssignments: Boolean(report.workspaceAssignmentsTruncated),
       },
-      blockedLaneAssignments: Array.isArray(report.blockedLaneAssignments) ? report.blockedLaneAssignments : [],
-      blockedWorkspaceAssignments: Array.isArray(report.blockedWorkspaceAssignments) ? report.blockedWorkspaceAssignments : [],
+      laneAssignments: details.laneAssignments.slice(0, 24),
+      laneAssignmentsDetailedCount: details.laneAssignments.length,
+      workspaceAssignments: details.workspaceAssignments.slice(0, 24),
+      workspaceAssignmentsDetailedCount: details.workspaceAssignments.length,
+      blockedLaneAssignments: details.blockedLaneAssignments,
+      blockedWorkspaceAssignments: details.blockedWorkspaceAssignments,
       ambiguousStatusCounts: ambiguous,
     },
     blockers: ambiguous.map((item) => ({
@@ -15333,7 +15441,121 @@ export function buildAssignmentResume(options = {}, context = {}) {
       message: `${item.bucket} has ${item.count} ${item.status} item(s).`,
       nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
     })),
+    warnings: details.warnings,
   });
+}
+
+function buildAssignmentResumeDetails(report = {}, options = {}) {
+  const stateRoot = report.stateRoot || options.stateRoot || workspaceState(options).root;
+  const explicitBlockedLaneAssignments = Array.isArray(report.blockedLaneAssignments) ? report.blockedLaneAssignments : [];
+  const explicitBlockedWorkspaceAssignments = Array.isArray(report.blockedWorkspaceAssignments) ? report.blockedWorkspaceAssignments : [];
+  const reportLaneAssignments = [
+    ...(Array.isArray(report.laneAssignments) ? report.laneAssignments : []),
+    ...explicitBlockedLaneAssignments,
+  ];
+  const reportWorkspaceAssignments = [
+    ...(Array.isArray(report.workspaceAssignments) ? report.workspaceAssignments : []),
+    ...explicitBlockedWorkspaceAssignments,
+  ];
+  const fallbackLaneAssignments = report.laneAssignmentsTruncated
+    ? readAssignmentFileLaneEvidence(stateRoot, report.currentOwner)
+    : [];
+  const fallbackWorkspaceAssignments = report.workspaceAssignmentsTruncated
+    ? readWorkspaceFileAssignmentEvidence(stateRoot)
+    : [];
+  const normalizedReportLaneAssignments = reportLaneAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, "lane_assignment"));
+  const normalizedFallbackLaneAssignments = fallbackLaneAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, "lane_assignment", { allowTimestampStale: true }));
+  const normalizedReportWorkspaceAssignments = reportWorkspaceAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, "workspace_assignment"));
+  const normalizedFallbackWorkspaceAssignments = fallbackWorkspaceAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, "workspace_assignment", { allowTimestampStale: true }));
+  const laneAssignments = normalizedFallbackLaneAssignments.length > 0
+    ? mergeLaneEvidence(normalizedReportLaneAssignments, normalizedFallbackLaneAssignments)
+    : normalizedReportLaneAssignments;
+  const workspaceAssignments = normalizedFallbackWorkspaceAssignments.length > 0
+    ? mergeWorkspaceAssignmentEvidence(normalizedReportWorkspaceAssignments, normalizedFallbackWorkspaceAssignments)
+    : normalizedReportWorkspaceAssignments;
+  const staleLaneAssignments = laneAssignments.filter(isStaleOwnerBlockedAssignment);
+  const staleWorkspaceAssignments = workspaceAssignments.filter(isStaleOwnerBlockedAssignment);
+  const blockedLaneAssignments = mergeLaneEvidence(
+    staleLaneAssignments,
+    explicitBlockedLaneAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, "lane_assignment")),
+  );
+  const blockedWorkspaceAssignments = mergeWorkspaceAssignmentEvidence(
+    staleWorkspaceAssignments,
+    explicitBlockedWorkspaceAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, "workspace_assignment")),
+  );
+  const warnings = assignmentResumeDetailWarnings({ report, blockedLaneAssignments: staleLaneAssignments, blockedWorkspaceAssignments: staleWorkspaceAssignments });
+  return {
+    laneAssignments,
+    workspaceAssignments,
+    blockedLaneAssignments,
+    blockedWorkspaceAssignments,
+    warnings,
+  };
+}
+
+function normalizeAssignmentResumeRow(row = {}, report = {}, kind = "assignment", { allowTimestampStale = false } = {}) {
+  const status = sanitizeLedgerField(row.status || "", "", 80);
+  const reasonCode = sanitizeLedgerField(row.reasonCode || row.reason_code || "", "", 80);
+  const stale = isStaleOwnerAssignmentRow(row, report, { allowTimestampStale });
+  const next = {
+    ...row,
+    kind,
+    assignmentId: sanitizeLedgerField(row.assignmentId || row.assignment_id || "", "", 140),
+    taskId: sanitizeLedgerField(row.taskId || row.task_id || "", "", 140),
+    status,
+    owner: sanitizeLedgerField(row.owner || "", "", 160),
+    branch: sanitizeLedgerField(row.branch || "", "", 160),
+    phase: sanitizeLedgerField(row.phase || "", "", 80),
+    heartbeat: sanitizeLedgerField(row.heartbeat || row.lastHeartbeatAt || row.last_heartbeat_at || row.ownerUpdatedAt || row.owner_updated_at || row.updatedAt || row.updated_at || row.createdAt || row.created_at || "", "", 80),
+    reasonCode,
+    reason: sanitizeLedgerField(row.reason || "", "", 180),
+    nextAction: sanitizeLedgerField(row.nextAction || row.next_action || "", "", 220),
+  };
+  if (stale) {
+    next.status = "blocked_stale_owner_needs_takeover";
+    next.reasonCode = next.reasonCode || (kind === "workspace_assignment" ? "owner_heartbeat_stale" : "assignment_heartbeat_stale");
+    next.reason = next.reason || "owner heartbeat is stale";
+    next.nextAction = next.nextAction || "prepare takeover evidence and ask operator before mutation";
+  }
+  return next;
+}
+
+function isStaleOwnerAssignmentRow(row = {}, report = {}, { allowTimestampStale = false } = {}) {
+  const status = String(row.status || "").toLowerCase();
+  const reasonCode = String(row.reasonCode || row.reason_code || "").toLowerCase();
+  if (["closed", "done", "merged"].includes(status)) return false;
+  if (status === "blocked_stale_owner_needs_takeover" || reasonCode === "assignment_heartbeat_stale" || reasonCode === "owner_heartbeat_stale") return true;
+  if (!allowTimestampStale) return false;
+  const heartbeat = Date.parse(String(row.heartbeat || row.lastHeartbeatAt || row.last_heartbeat_at || row.ownerUpdatedAt || row.owner_updated_at || row.updatedAt || row.updated_at || row.createdAt || row.created_at || ""));
+  const generatedAt = Date.parse(String(report.generatedAt || ""));
+  const staleAfterSeconds = nonNegativeInteger(report.staleAfterSeconds) ?? 86_400;
+  if (!Number.isFinite(heartbeat) || !Number.isFinite(generatedAt) || staleAfterSeconds <= 0) return false;
+  return generatedAt - heartbeat > staleAfterSeconds * 1000;
+}
+
+function isStaleOwnerBlockedAssignment(row = {}) {
+  return String(row.status || "").toLowerCase() === "blocked_stale_owner_needs_takeover";
+}
+
+function assignmentResumeDetailWarnings({ report = {}, blockedLaneAssignments = [], blockedWorkspaceAssignments = [] } = {}) {
+  const warnings = [];
+  const expectedLane = nonNegativeInteger(report.laneAssignmentStatusCounts?.blocked_stale_owner_needs_takeover) ?? 0;
+  const expectedWorkspace = nonNegativeInteger(report.workspaceAssignmentStatusCounts?.blocked_stale_owner_needs_takeover) ?? 0;
+  if (expectedLane > blockedLaneAssignments.length) {
+    warnings.push({
+      code: "stale-owner-lane-detail-truncated",
+      message: `Assignment report counted ${expectedLane} stale lane assignment(s), but only ${blockedLaneAssignments.length} exact target row(s) were available for inspection.`,
+      nextAction: "Refresh assignment report detail or inspect the assignment state root before takeover apply.",
+    });
+  }
+  if (expectedWorkspace > blockedWorkspaceAssignments.length) {
+    warnings.push({
+      code: "stale-owner-workspace-detail-truncated",
+      message: `Assignment report counted ${expectedWorkspace} stale workspace assignment(s), but only ${blockedWorkspaceAssignments.length} exact target row(s) were available for inspection.`,
+      nextAction: "Refresh workspace assignment detail or inspect the workspace state root before takeover apply.",
+    });
+  }
+  return warnings;
 }
 
 function buildTakeoverInspectionPlan(assignmentSummary = {}) {
@@ -15391,15 +15613,19 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
   const targets = Array.isArray(resume.summary?.takeoverInspection?.targets) ? resume.summary.takeoverInspection.targets : [];
   const limit = runOptions.limit === null || runOptions.limit === undefined ? targets.length : Math.max(0, Number(runOptions.limit) || 0);
   const inspections = targets.slice(0, limit).map((target) => inspectStaleOwnerTarget(target, context, runOptions));
+  const targetEvidenceBlockers = staleOwnerTargetEvidenceBlockers(resume, targets);
   const failed = inspections.filter((inspection) => !inspection.ok);
   const cleanupCandidates = inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate");
   const dirtyWorkspaces = inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required");
   const approvalCandidates = inspections.filter((inspection) => inspection.classification === "takeover_apply_candidate_with_approval");
-  const blockers = failed.map((inspection) => ({
-    code: "stale-owner-inspection-failed",
-    message: inspection.error || `Failed stale-owner inspection for ${inspection.id || "(missing id)"}.`,
-    nextAction: inspection.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
-  }));
+  const blockers = [
+    ...targetEvidenceBlockers,
+    ...failed.map((inspection) => ({
+      code: "stale-owner-inspection-failed",
+      message: inspection.error || `Failed stale-owner inspection for ${inspection.id || "(missing id)"}.`,
+      nextAction: inspection.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
+    })),
+  ];
   return packet({
     ok: blockers.length === 0,
     status: blockers.length > 0 ? "blocked" : inspections.length > 0 ? "attention" : "ready",
@@ -15419,8 +15645,44 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
       ...(cleanupCandidates.length > 0 ? [{ code: "stale-owner-cleanup-candidates", message: `${cleanupCandidates.length} stale owner target(s) look like abandoned records rather than takeover work.` }] : []),
       ...(dirtyWorkspaces.length > 0 ? [{ code: "dirty-stale-owner-workspaces", message: `${dirtyWorkspaces.length} stale owner workspace(s) have dirty worktree evidence that must be preserved before apply or cleanup.` }] : []),
     ],
-    nextActions: staleOwnerInspectionNextActions({ cleanupCandidates, dirtyWorkspaces, approvalCandidates, inspections }),
+    nextActions: blockers.length > 0
+      ? blockers.map((blocker) => ({
+          code: blocker.code,
+          summary: blocker.message,
+          nextAction: blocker.nextAction,
+        }))
+      : staleOwnerInspectionNextActions({ cleanupCandidates, dirtyWorkspaces, approvalCandidates, inspections }),
   });
+}
+
+function staleOwnerTargetEvidenceBlockers(resume = {}, targets = []) {
+  const blockingWarnings = (Array.isArray(resume.warnings) ? resume.warnings : [])
+    .filter((notice) => ["stale-owner-lane-detail-truncated", "stale-owner-workspace-detail-truncated"].includes(notice.code));
+  const blockingErrors = targets.length === 0
+    ? (Array.isArray(resume.blockers) ? resume.blockers : [])
+      .filter((notice) => ["assignment-report-unavailable", "workspace-state-unsafe"].includes(notice.code))
+    : [];
+  return [...blockingErrors, ...blockingWarnings].map((notice) => ({
+      ...notice,
+      code: "stale-owner-target-evidence-unavailable",
+      sourceCode: notice.code,
+      message: `Stale-owner targets unavailable: ${notice.message || notice.code}.`,
+      nextAction: notice.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
+    }));
+}
+
+function staleOwnerBlockersForCleanup(staleOwner = {}) {
+  const blockers = Array.isArray(staleOwner.blockers) ? staleOwner.blockers : [];
+  if (blockers.length === 0) return [];
+  const summary = staleOwner.summary || {};
+  const hasRelevantStaleOwnerWork = [
+    summary.targetCount,
+    summary.cleanupCandidateCount,
+    summary.dirtyWorkspaceCount,
+    summary.takeoverApprovalCandidateCount,
+  ].some((value) => Number(value || 0) > 0);
+  if (hasRelevantStaleOwnerWork) return blockers;
+  return blockers.filter((blocker) => ["stale-owner-lane-detail-truncated", "stale-owner-workspace-detail-truncated"].includes(blocker.sourceCode || blocker.code));
 }
 
 function inspectStaleOwnerTarget(target = {}, context = {}, options = {}) {
