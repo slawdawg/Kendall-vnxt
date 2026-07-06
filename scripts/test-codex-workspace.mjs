@@ -2166,6 +2166,44 @@ try {
     }
   });
 
+  test("claim-next ingests legacy BMAD stories mapping without source metadata", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const claimStateRoot = mkdtempSync(join(rootDir, ".codex-workspace-bmad-legacy-state-"));
+    try {
+      seedFixtureSafeBacklogSource(fixture.root, [
+        {
+          itemId: "static-ready",
+          status: "ready",
+          priority: "P1",
+          recommendedSliceSize: "small",
+          laneSlug: "static-ready",
+        },
+      ]);
+      seedFixtureLegacyBmadSprintStatus(fixture.root);
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "static-ready", "runner-b");
+
+      const result = runFixtureScript(fixture, [
+        "claim-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.selected?.itemId === "bmad-9-12-legacy-ready-story", result.stdout || result.stderr);
+      assert(packet.selected.sourceType === "bmad_sprint_status", result.stdout || result.stderr);
+      assert(packet.selected.sourceKey === "local-bmad-sprint-status", result.stdout || result.stderr);
+      assert(packet.selected.sourceRef === "_bmad-output/implementation-artifacts/sprint-status.yaml", result.stdout || result.stderr);
+      assert(packet.selected.storyPath === "_bmad-output/implementation-artifacts/9-12-legacy-ready-story.md", result.stdout || result.stderr);
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("claim-next summary-json explains blocked preview when no safe lane is claimable", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-no-safe-preview-"));
     try {
@@ -6048,6 +6086,20 @@ development_status:
 `,
   );
   writeFileSync(join(artifactsDir, "9-9-ready-story.md"), "# Story 9.9: Ready Story\n\nReady story body.\n");
+}
+
+function seedFixtureLegacyBmadSprintStatus(fixtureRoot) {
+  const artifactsDir = join(fixtureRoot, "_bmad-output", "implementation-artifacts");
+  mkdirSync(artifactsDir, { recursive: true });
+  writeFileSync(
+    join(artifactsDir, "sprint-status.yaml"),
+    `
+stories:
+    9-12-legacy-ready-story: ready-for-dev
+    9-13-legacy-backlog-story: backlog
+`,
+  );
+  writeFileSync(join(artifactsDir, "9-12-legacy-ready-story.md"), "# Story 9.12: Legacy Ready Story\n\nReady story body.\n");
 }
 
 function runGit(cwd, args) {

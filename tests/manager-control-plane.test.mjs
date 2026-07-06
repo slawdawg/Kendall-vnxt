@@ -1276,6 +1276,60 @@ test("worker code review gate consumes fresh terminal result without requiring a
   }
 });
 
+test("worker code review gate routes fresh failed result to review feedback", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-failed-result-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-failed-result-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-21-worker-code-review-failed-result.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-21-worker-code-review-failed-result: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-21-worker-code-review-failed-result\n\nStatus: review\n");
+    const resultPath = join(stateRoot, "manager-runs", "manager-test", "review-results", "bmad-8-21-worker-code-review-failed-result.md");
+    mkdirSync(join(resultPath, ".."), { recursive: true });
+    writeFileSync(resultPath, "Status: FAIL\n\n- [High] Fix missing assertion.\n");
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-21-worker-code-review-failed-result" },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "bmad-8-21-worker-code-review-failed-result",
+                taskId: "task-target",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.resultFresh, true);
+    assert.equal(preview.summary.resultFailed, true);
+    assert.equal(preview.nextActions[0].code, "worker-code-review-failed-result-ready");
+    assert.match(preview.nextActions[0].nextAction, /manager-worker-review-feedback\.mjs/);
+    assert.match(preview.nextActions[0].nextAction, /--review-findings-file/);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker code review gate does not select the target lane when assignment ids differ only by bmad prefix", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-self-prefix-"));
   const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-self-prefix-test.yaml";
@@ -13948,6 +14002,75 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, / --apply$/);
   } finally {
     rmSync(freshReviewStateRoot, { recursive: true, force: true });
+  }
+
+  const failedReviewStateRoot = mkdtempSync(join(tmpdir(), "manager-continuous-failed-review-feedback-"));
+  try {
+    const reviewRequestDir = join(failedReviewStateRoot, "manager-runs", "manager-test", "review-requests");
+    const reviewResultDir = join(failedReviewStateRoot, "manager-runs", "manager-test", "review-results");
+    mkdirSync(reviewRequestDir, { recursive: true });
+    mkdirSync(reviewResultDir, { recursive: true });
+    writeFileSync(
+      join(reviewRequestDir, "codex-4-bmad-97-2-manager-continuous-review-gate.md"),
+      "contractVersion: worker_code_review_request.v2\n",
+    );
+    writeFileSync(
+      join(reviewResultDir, "bmad-97-2-manager-continuous-review-gate.md"),
+      "Status: FAIL\n\n- [High] Fix missing assertion at `src/app.js:12`.\n",
+    );
+    const failedReviewFeedbackPlan = buildContinuousRunPlan(
+      {},
+      {
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test", stateRoot: failedReviewStateRoot },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+            runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+            laneAdvance: {
+              readyLaneCount: 1,
+            },
+            workerProgress: {
+              workerProgress: [
+                {
+                  workerId: "codex-3",
+                  sessionName: "codex-3",
+                  assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                  taskId: "task-target",
+                  progressState: "manager_review_ready",
+                  checkpointCount: 1,
+                },
+                {
+                  workerId: "codex-4",
+                  sessionName: "codex-4",
+                  assignmentId: "bmad-1-1-other-ready-lane",
+                  progressState: "manager_review_ready",
+                  checkpointCount: 1,
+                },
+              ],
+            },
+          },
+          warnings: [{ code: "manager-lane-advance-ready", message: "1 active lane appears ready." }],
+          nextActions: [
+            {
+              code: "manager-lane-advance-ready",
+              summary: "Advance review-ready lane.",
+              nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id 'manager-test'",
+            },
+          ],
+        },
+      },
+    );
+
+    assert.equal(failedReviewFeedbackPlan.summary.selectedAction.code, "continuous-worker-review-feedback");
+    assert.match(failedReviewFeedbackPlan.summary.selectedAction.dryRunCommand, /manager-worker-review-feedback\.mjs/);
+    assert.match(failedReviewFeedbackPlan.summary.selectedAction.applyCommand, /manager-worker-review-feedback\.mjs/);
+    assert.match(failedReviewFeedbackPlan.summary.selectedAction.applyCommand, /--review-findings-file/);
+  } finally {
+    rmSync(failedReviewStateRoot, { recursive: true, force: true });
   }
 
   const promptIdleCompletedPlan = buildContinuousRunPlan(

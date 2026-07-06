@@ -3516,6 +3516,7 @@ export function buildWorkerReviewFeedbackPlan(options = {}, context = {}) {
     });
   }
   if (!runOptions.apply) {
+    const scopedStateRoot = runOptions.stateRoot ? ` --state-root ${shellSingleQuote(runOptions.stateRoot)}` : "";
     return packet({
       status: "ready",
       summary: {
@@ -3526,7 +3527,7 @@ export function buildWorkerReviewFeedbackPlan(options = {}, context = {}) {
         requests: selected,
         transport: { primary: "durable_review_feedback_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_review_feedback_file_path_only" },
       },
-      nextActions: [{ code: "worker-review-feedback-apply-ready", summary: `Route review feedback to ${selected.length} manager-owned worker(s).`, nextAction: `node ./scripts/manager-worker-review-feedback.mjs --summary-json --run-id ${shellSingleQuote(runId)} --assignment-id ${shellSingleQuote(selected[0].assignmentId)} --worker-id ${shellSingleQuote(selected[0].workerId)} --limit ${selected.length} --apply --review-findings-file ${shellSingleQuote(findingsPath)}` }],
+      nextActions: [{ code: "worker-review-feedback-apply-ready", summary: `Route review feedback to ${selected.length} manager-owned worker(s).`, nextAction: `node ./scripts/manager-worker-review-feedback.mjs --summary-json --run-id ${shellSingleQuote(runId)}${scopedStateRoot} --assignment-id ${shellSingleQuote(selected[0].assignmentId)} --worker-id ${shellSingleQuote(selected[0].workerId)} --limit ${selected.length} --apply --review-findings-file ${shellSingleQuote(findingsPath)}` }],
     });
   }
   const metadataPreflight = selected
@@ -3629,6 +3630,8 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   const reviewAttemptSummary = buildWorkerCodeReviewAttemptSummary({ paths, targetAssignmentId, invalidatorMs: freshness.latestInvalidatorMs }, runOptions, context);
   if (freshness.resultFresh === true) {
     const resultPath = join(paths.root, "review-results", `${targetAssignmentId}.md`);
+    const resultFailed = reviewResultIsFail(resultPath);
+    const scopedStateRoot = runOptions.stateRoot ? ` --state-root ${shellSingleQuote(runOptions.stateRoot)}` : "";
     return packet({
       status: "ready",
       summary: {
@@ -3642,6 +3645,7 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
         requestContractFresh: freshness.requestFresh,
         resultExists: true,
         resultFresh: true,
+        resultFailed,
         resultComplete: true,
         resultPath,
         reviewFreshness: sanitizeCyclePacketValue(freshness),
@@ -3651,9 +3655,13 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
         retention: "review_result_path_and_summary",
       },
       nextActions: [{
-        code: "worker-code-review-result-ready",
-        summary: "Fresh delegated worker code review result exists; route findings or delivery next.",
-        nextAction: `Review compact findings at ${resultPath}.`,
+        code: resultFailed ? "worker-code-review-failed-result-ready" : "worker-code-review-result-ready",
+        summary: resultFailed
+          ? "Fresh delegated worker code review result failed; route compact findings back to the owning worker."
+          : "Fresh delegated worker code review result exists; route findings or delivery next.",
+        nextAction: resultFailed
+          ? `node ./scripts/manager-worker-review-feedback.mjs --summary-json --run-id ${shellSingleQuote(runId)}${scopedStateRoot} --assignment-id ${shellSingleQuote(targetAssignmentId)} --review-findings-file ${shellSingleQuote(resultPath)}`
+          : `Review compact findings at ${resultPath}.`,
       }],
     });
   }
@@ -5054,7 +5062,7 @@ function renderWorkerCodeReviewFile(request = {}) {
     "",
     `Write the compact findings artifact to this exact path: ${request.resultPath}`,
     "",
-    "Include only finding severity, file/line references, rationale, required fix, verification gaps, and pass/fail summary. Do not store raw prompts, completions, reasoning traces, provider payloads, secrets, or broad source copies.",
+    "Include only finding severity, file/line references, rationale, required fix, verification gaps, and an exact standalone terminal marker line: `Status: PASS` when there are no required fixes, or `Status: FAIL` when required fixes remain. Do not store raw prompts, completions, reasoning traces, provider payloads, secrets, or broad source copies.",
     "",
     "After writing the findings artifact, append a compact manager checkpoint:",
     "",
@@ -16672,6 +16680,8 @@ function continuousActionCapability(action = {}) {
     "continuous-worker-code-review-request",
     "continuous-worker-code-review-request-prepared",
     "continuous-worker-code-review-no-reviewer",
+    "continuous-worker-review-feedback",
+    "continuous-worker-review-feedback-no-target",
   ].includes(code)) {
     return "reviewDelegation";
   }
@@ -16690,6 +16700,7 @@ function continuousActionWorkClass(action = {}) {
     "continuous-worker-answer-question",
     "continuous-refill-apply",
     "continuous-dispatch-apply",
+    "continuous-worker-review-feedback",
   ].includes(code)) {
     return "task_work";
   }
@@ -16703,6 +16714,9 @@ function continuousActionWorkClass(action = {}) {
     return "safety_repair";
   }
   if (code === "continuous-worker-code-review-no-reviewer") {
+    return "manager_improvement";
+  }
+  if (code === "continuous-worker-review-feedback-no-target") {
     return "manager_improvement";
   }
   return "manager_improvement";
@@ -17435,7 +17449,9 @@ function continuousActionPriority(action = {}) {
     ["continuous-worker-submit-pending", 20],
     ["continuous-worker-code-review-request", 27],
     ["continuous-worker-code-review-request-prepared", 27],
+    ["continuous-worker-review-feedback", 27],
     ["continuous-worker-code-review-no-reviewer", 28],
+    ["continuous-worker-review-feedback-no-target", 28],
     ["continuous-lane-advance-apply", 29],
     ["continuous-worker-warm", 30],
     ["continuous-worker-handoff", 31],
@@ -17501,6 +17517,7 @@ function existingGateContinuousMutationAllowed(action = {}) {
     "continuous-worker-handoff",
     "continuous-worker-progress-signal",
     "continuous-worker-prompt-idle-progress-signal",
+    "continuous-worker-review-feedback",
   ].includes(action.code);
 }
 
@@ -18063,6 +18080,44 @@ function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = 
   if (workerReviewPlan.summary?.alreadyPrepared === true) {
     const requestAgeSeconds = Number(workerReviewPlan.summary?.requestAgeSeconds);
     const resultFresh = workerReviewPlan.summary?.resultFresh === true;
+    const resultFailed = workerReviewPlan.summary?.resultFailed === true;
+    if (resultFresh && resultFailed) {
+      const resultPath = sanitizeLedgerField(workerReviewPlan.summary?.resultPath || "", "", 320);
+      const feedbackCommand = [
+        "node ./scripts/manager-worker-review-feedback.mjs --summary-json",
+        scopedRun.trim(),
+        scopedStateRoot.trim(),
+        scopedAssignment.trim(),
+        resultPath ? `--review-findings-file ${shellSingleQuote(resultPath)}` : "",
+      ].filter(Boolean).join(" ");
+      const feedbackPlan = buildWorkerReviewFeedbackPlan(
+        {
+          ...(runId ? { runId } : {}),
+          ...(stateRoot ? { stateRoot } : {}),
+          ...(assignmentId ? { assignmentId } : {}),
+          ...(resultPath ? { reviewFindingsFile: resultPath } : {}),
+        },
+        { cyclePacket: cycle, progressStatus: { summary: cycle.summary?.workerProgress || {} } },
+      );
+      const feedbackAction = feedbackPlan.nextActions?.find((candidate) => candidate.code === "worker-review-feedback-apply-ready");
+      return {
+        code: feedbackAction ? "continuous-worker-review-feedback" : "continuous-worker-review-feedback-no-target",
+        summary: feedbackAction
+          ? `Route failed delegated review findings for ${assignmentId} to the owning manager worker.`
+          : `Failed delegated review findings exist for ${assignmentId}, but no matching manager-owned worker is ready for feedback.`,
+        dryRunCommand: feedbackCommand,
+        applyCommand: feedbackAction?.nextAction || "wait_for_matching_manager_owned_review_feedback_worker",
+        authority: feedbackAction
+          ? "manager-owned-worker-review-feedback-existing-gates"
+          : "manager-owned-worker-review-feedback-target-required",
+        mutationClass: feedbackAction ? "manager_owned_worker_review_feedback" : "none",
+        readOnly: !feedbackAction,
+        reviewResultFresh: true,
+        reviewResultFailed: true,
+        blockerCode: feedbackPlan.warnings?.[0]?.code || feedbackPlan.blockers?.[0]?.code || undefined,
+        nextAction: feedbackPlan.warnings?.[0]?.nextAction || feedbackPlan.blockers?.[0]?.nextAction || feedbackAction?.nextAction,
+      };
+    }
     const resendStaleSeconds = Number.isFinite(Number(cycle.summary?.reviewRequestResendStaleSeconds))
       ? Number(cycle.summary.reviewRequestResendStaleSeconds)
       : WORKER_CODE_REVIEW_RESEND_STALE_SECONDS;
@@ -18213,7 +18268,7 @@ function buildContinuousAction(action = {}, cycle = {}, capabilityPosture = {}) 
       && cycle.summary.workerProgress.workerProgress.length > 0;
     if (!["parked", "blocked"].includes(reviewDelegationState) && reviewPlan.ok !== false && reviewPlan.status === "ready") {
       const reviewAction = continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
-      if (reviewAction?.reviewResultFresh === true) {
+      if (reviewAction?.reviewResultFresh === true && reviewAction?.reviewResultFailed !== true) {
         return null;
       }
       if (reviewAction?.readOnly === true && hasWorkerProgressSignal) {

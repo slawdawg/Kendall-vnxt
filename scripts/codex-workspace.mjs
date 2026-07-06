@@ -6979,7 +6979,8 @@ function readSafeBacklogItems({ stateRootPath = null } = {}) {
 }
 
 function readBmadReadyStoryBacklogItems() {
-  const sprintStatusPath = join(repoRoot, "_bmad-output", "implementation-artifacts", "sprint-status.yaml");
+  const sourcePath = "_bmad-output/implementation-artifacts/sprint-status.yaml";
+  const sprintStatusPath = join(repoRoot, sourcePath);
   if (!existsSync(sprintStatusPath)) {
     return [];
   }
@@ -6989,11 +6990,8 @@ function readBmadReadyStoryBacklogItems() {
   } catch {
     return [];
   }
-  const sourceKey = yamlScalar(content, "source_key");
-  const sourceRef = yamlScalar(content, "source_ref");
-  if (!sourceKey || !sourceRef) {
-    return [];
-  }
+  const sourceKey = yamlScalar(content, "source_key") || "local-bmad-sprint-status";
+  const sourceRef = yamlScalar(content, "source_ref") || sourcePath;
 
   const storyStatuses = parseSprintDevelopmentStatuses(content);
   return Object.entries(storyStatuses)
@@ -7026,7 +7024,7 @@ function readBmadReadyStoryBacklogItems() {
         sourceType: "bmad_sprint_status",
         sourceKey,
         sourceRef,
-        sourcePath: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        sourcePath,
         storyPath,
         title: titleFromBmadStory(storyContent, storyKey),
       };
@@ -7072,22 +7070,31 @@ function normalizeYamlStatus(status) {
 }
 
 function parseSprintDevelopmentStatuses(content) {
+  return {
+    ...parseSprintStatusMapping(content, "stories"),
+    ...parseSprintStatusMapping(content, "development_status"),
+  };
+}
+
+function parseSprintStatusMapping(content, mappingName) {
   const statuses = {};
-  let developmentStatusIndent = null;
+  let mappingIndent = null;
+  const escaped = mappingName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const headerPattern = new RegExp(`^(\\s*)${escaped}\\s*:\\s*$`);
   for (const line of String(content || "").split(/\r?\n/)) {
-    const headerMatch = line.match(/^(\s*)development_status\s*:\s*$/);
+    const headerMatch = line.match(headerPattern);
     if (headerMatch) {
-      developmentStatusIndent = headerMatch[1].length;
+      mappingIndent = headerMatch[1].length;
       continue;
     }
-    if (developmentStatusIndent === null) {
+    if (mappingIndent === null) {
       continue;
     }
     if (!line.trim()) {
       continue;
     }
     const itemMatch = line.match(/^(\s*)([A-Za-z0-9._-]+)\s*:\s*(.*?)\s*$/);
-    if (!itemMatch || itemMatch[1].length <= developmentStatusIndent) {
+    if (!itemMatch || itemMatch[1].length <= mappingIndent) {
       break;
     }
     statuses[itemMatch[2]] = parseYamlScalarValue(itemMatch[3]);
