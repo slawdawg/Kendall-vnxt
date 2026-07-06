@@ -16790,10 +16790,10 @@ export function buildManagerCapabilityPosture(options = {}, context = {}, cycle 
   );
   for (const input of [
     cycle.summary?.managerCapabilityPosture,
-    managerCapabilityPostureFromAdvisorClassification(context.codexAdvisorClassification || options.codexAdvisorClassification),
     context.managerCapabilityPosture,
     options.managerCapabilityPosture,
     context.persistedManagerCapabilityPosture,
+    managerCapabilityPostureFromAdvisorClassification(context.codexAdvisorClassification || options.codexAdvisorClassification),
   ]) {
     mergeManagerCapabilityPosture(merged, input);
   }
