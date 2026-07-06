@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_WORKERS = Object.freeze(["claude", "hermes"]);
 const SUPPORTED_SMOKE_WORKERS = new Set(["claude"]);
@@ -395,6 +395,6 @@ function main() {
   process.exit(errors.length === 0 && results.every((result) => result.validation.ok) ? 0 : 1);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main();
 }

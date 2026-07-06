@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,10 @@ import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-re
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 export const agentUsageRelativePath = ".tmux/plugins/agent-usage-tmux/scripts/agent_usage.sh";
 export const codexUsageFetcherFile = "fetch_codex_usage.py";
+const RETIRE_BLOCKED_QUESTION_BASIS = "retire_blocked_question";
+const WORKER_CODE_REVIEW_REQUEST_VERSION = "worker_code_review_request.v2";
+const PROMPT_IDLE_CHECKPOINT_STALE_SECONDS = 180;
+const WORKER_CODE_REVIEW_RESEND_STALE_SECONDS = 300;
 
 export const MANAGER_WORKER_LIFECYCLE_STATES = Object.freeze([
   "busy",
@@ -113,6 +117,7 @@ export function parseCommonArgs(argv = []) {
     workerCommand: "",
     progressStaleMinutes: null,
     promptIdle: false,
+    retireBlockedQuestion: false,
     answer: "",
     operatorVisiblePrompt: false,
     maxIterations: null,
@@ -120,6 +125,17 @@ export function parseCommonArgs(argv = []) {
     heartbeatEvery: 1,
     sprintStatusPath: "",
     storyKey: "",
+    assignmentId: "",
+    reviewFindingsFile: "",
+    advisorCondition: "",
+    advisorFailureKind: "",
+    advisorActionCode: "",
+    advisorWorkClass: "",
+    advisorRecommendation: "",
+    capabilityName: "",
+    capabilityState: "",
+    capabilityReasonCodes: [],
+    capabilitySafeFallbacks: [],
   };
   const positionals = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -222,6 +238,8 @@ export function parseCommonArgs(argv = []) {
       options.progressStaleMinutes = nonNegativeInteger(arg.slice("--progress-stale-minutes=".length));
     } else if (arg === "--prompt-idle") {
       options.promptIdle = true;
+    } else if (arg === "--retire-blocked-question") {
+      options.retireBlockedQuestion = true;
     } else if (arg === "--answer") {
       options.answer = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--answer=")) {
@@ -250,6 +268,64 @@ export function parseCommonArgs(argv = []) {
       options.storyKey = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--story-key=")) {
       options.storyKey = arg.slice("--story-key=".length);
+    } else if (arg === "--assignment-id") {
+      options.assignmentId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--assignment-id=")) {
+      options.assignmentId = arg.slice("--assignment-id=".length);
+    } else if (arg === "--review-findings-file") {
+      options.reviewFindingsFile = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--review-findings-file=")) {
+      options.reviewFindingsFile = arg.slice("--review-findings-file=".length);
+    } else if (arg === "--condition") {
+      options.advisorCondition = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--condition=")) {
+      options.advisorCondition = arg.slice("--condition=".length);
+    } else if (arg === "--failure-kind") {
+      options.advisorFailureKind = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--failure-kind=")) {
+      options.advisorFailureKind = arg.slice("--failure-kind=".length);
+    } else if (arg === "--action-code") {
+      options.advisorActionCode = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--action-code=")) {
+      options.advisorActionCode = arg.slice("--action-code=".length);
+    } else if (arg === "--work-class") {
+      options.advisorWorkClass = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--work-class=")) {
+      options.advisorWorkClass = arg.slice("--work-class=".length);
+    } else if (arg === "--recommendation" || arg === "--advisor-recommendation") {
+      options.advisorRecommendation = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--recommendation=")) {
+      options.advisorRecommendation = arg.slice("--recommendation=".length);
+    } else if (arg.startsWith("--advisor-recommendation=")) {
+      options.advisorRecommendation = arg.slice("--advisor-recommendation=".length);
+    } else if (arg === "--capability") {
+      options.capabilityName = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--capability=")) {
+      options.capabilityName = arg.slice("--capability=".length);
+    } else if (arg === "--state") {
+      options.capabilityState = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--state=")) {
+      options.capabilityState = arg.slice("--state=".length);
+    } else if (arg === "--reason-code") {
+      options.capabilityReasonCodes.push(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--reason-code=")) {
+      options.capabilityReasonCodes.push(arg.slice("--reason-code=".length));
+    } else if (arg === "--reason-codes") {
+      options.capabilityReasonCodes.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--reason-codes=")) {
+      options.capabilityReasonCodes.push(...arg.slice("--reason-codes=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--safe-fallback" || arg === "--fallback") {
+      options.capabilitySafeFallbacks.push(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--safe-fallback=")) {
+      options.capabilitySafeFallbacks.push(arg.slice("--safe-fallback=".length));
+    } else if (arg.startsWith("--fallback=")) {
+      options.capabilitySafeFallbacks.push(arg.slice("--fallback=".length));
+    } else if (arg === "--safe-fallbacks" || arg === "--fallbacks") {
+      options.capabilitySafeFallbacks.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--safe-fallbacks=")) {
+      options.capabilitySafeFallbacks.push(...arg.slice("--safe-fallbacks=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--fallbacks=")) {
+      options.capabilitySafeFallbacks.push(...arg.slice("--fallbacks=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -430,6 +506,7 @@ export function managerRunPaths(runId = defaultRunId(), options = {}, context = 
     workers: join(root, "workers.json"),
     throughputProof: join(root, "throughput-proof.json"),
     dispatcherSummary: join(root, "dispatcher-summary.json"),
+    capabilityPosture: join(root, "capability-posture.json"),
     events: join(root, "events.ndjson"),
     checkpoints: join(root, "checkpoints.json"),
     questions: join(root, "questions.ndjson"),
@@ -1603,8 +1680,11 @@ function buildWorkerTargetStatus(options = {}, context = {}) {
     startExpansionBlocked = true;
   }
   allowedTarget = Math.max(0, Math.min(maxTarget, allowedTarget));
-  const fakeWorkerHarness = buildWorkerGovernorHarnessSummary(context.fakeWorkerHarness);
-  if (fakeWorkerHarness.liveWorkerGate !== "still_gated_until_live_authority") {
+  const liveManagerWorkerCount = Array.isArray(context.workers)
+    ? context.workers.filter((worker) => isPlainObject(worker) && ["active", "warm"].includes(String(worker.state || ""))).length
+    : 0;
+  const fakeWorkerHarness = buildWorkerGovernorHarnessSummary(context.fakeWorkerHarness, { liveManagerWorkerCount });
+  if (fakeWorkerHarness.liveWorkerGate === "blocked_pending_fake_harness") {
     startExpansionBlocked = true;
     reasons.push({ code: "fake-worker-harness-gate", message: "Fake-worker harness proof is required before worker warm/start planning." });
   }
@@ -1680,7 +1760,7 @@ function workerFailurePressure(failureRate = null, failureLoops = []) {
   return { pressured: repeatedLoop || ratePressured, recentFailures, windowAttempts };
 }
 
-function buildWorkerGovernorHarnessSummary(harness = {}) {
+function buildWorkerGovernorHarnessSummary(harness = {}, context = {}) {
   const twoWorker = classifyFakeWorkerProof(harness.twoWorkerProof || harness.two_worker_proof, 2);
   const sixWorkerInput = harness.sixWorkerProof || harness.six_worker_proof;
   const sixWorker = twoWorker.status === "passed"
@@ -1691,14 +1771,18 @@ function buildWorkerGovernorHarnessSummary(harness = {}) {
         workerCount: nonNegativeInteger(sixWorkerInput?.workerCount ?? sixWorkerInput?.worker_count) ?? null,
         cleanCyclesPerWorker: nonNegativeInteger(sixWorkerInput?.cleanCyclesPerWorker ?? sixWorkerInput?.clean_cycles_per_worker) ?? null,
       };
-  const liveWorkerGate = twoWorker.status === "passed" && sixWorker.status === "passed"
-    ? "still_gated_until_live_authority"
-    : "blocked_pending_fake_harness";
+  const liveManagerWorkerCount = nonNegativeInteger(context.liveManagerWorkerCount) ?? 0;
+  const liveWorkerGate = liveManagerWorkerCount > 0
+    ? "live_manager_pool_observed"
+    : twoWorker.status === "passed" && sixWorker.status === "passed"
+      ? "still_gated_until_live_authority"
+      : "blocked_pending_fake_harness";
   return {
     mode: "fixture_only",
     twoWorker,
     sixWorker,
     liveWorkerGate,
+    liveManagerWorkerCount,
     rawPayloadRetained: false,
   };
 }
@@ -2001,10 +2085,16 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     : reportedLaneAssignments;
   const lanesByAssignment = new Map(laneAssignments.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
   const idleWarmWorkers = workers
-    .filter((worker) => worker.state === "warm" && isManagerOwnedWorker(worker, runId) && worker.sessionName && !worker.assignmentId && !missingLiveWorkerIds.has(worker.workerId));
+    .filter((worker) => {
+      if (worker.state !== "warm" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || missingLiveWorkerIds.has(worker.workerId)) return false;
+      if (!worker.assignmentId) return true;
+      if (String(worker.assignmentState || "").toLowerCase() === "closed") return true;
+      return isDoneSprintStory(worker.assignmentId, storyStatuses);
+    });
   const reusableCompletedWorkers = workers
     .filter((worker) => {
       if (worker.state !== "active" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || !worker.assignmentId || missingLiveWorkerIds.has(worker.workerId)) return false;
+      if (buildOpenStoryReviewFeedbackSummary(worker.assignmentId, context).openCount > 0) return false;
       const lane = lanesByAssignment.get(String(worker.assignmentId)) || {};
       if (isDoneSprintStory(worker.assignmentId, storyStatuses)) return true;
       if (!isNonWorkerLanePhase(lane.phase || lane.status || "")) return false;
@@ -2022,13 +2112,23 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       })
       .map((worker) => String(worker.assignmentId)),
   );
-  const summaryLanes = managerHandoffLaneCandidates(assignmentSummary, { excludeAssignmentIds: activeAssignmentIds, storyStatuses });
+  const parkedPolicyBlockedAssignmentIds = new Set(
+    workers
+      .filter((worker) => worker.state === "retired" && worker.recoveryState === "retired_after_policy_blocked_question" && worker.assignmentId)
+      .map((worker) => String(worker.assignmentId)),
+  );
+  const handoffExcludedAssignmentIds = new Set([...activeAssignmentIds, ...parkedPolicyBlockedAssignmentIds]);
+  const summaryLanes = managerHandoffLaneCandidates(assignmentSummary, { excludeAssignmentIds: handoffExcludedAssignmentIds, storyStatuses });
   const fallbackLanes =
     summaryLanes.length < warmWorkers.length
-      ? readAssignmentFileHandoffCandidates(paths.proof.state.root, { excludeAssignmentIds: activeAssignmentIds, currentOwner: assignmentSummary.currentOwner, now, storyStatuses })
+      ? readAssignmentFileHandoffCandidates(paths.proof.state.root, { excludeAssignmentIds: handoffExcludedAssignmentIds, currentOwner: assignmentSummary.currentOwner, now, storyStatuses })
+      : [];
+  const reviewFeedbackLanes =
+    summaryLanes.length + fallbackLanes.length < warmWorkers.length
+      ? readAssignmentFileReviewFeedbackHandoffCandidates(paths, { excludeAssignmentIds: handoffExcludedAssignmentIds, currentOwner: assignmentSummary.currentOwner, now, storyStatuses }, context)
       : [];
   const seenLaneIds = new Set();
-  const lanes = [...summaryLanes, ...fallbackLanes]
+  const lanes = [...summaryLanes, ...fallbackLanes, ...reviewFeedbackLanes]
     .filter((lane) => {
       if (seenLaneIds.has(lane.assignmentId)) return false;
       seenLaneIds.add(lane.assignmentId);
@@ -2225,7 +2325,7 @@ function managerHandoffLaneCandidates(assignmentSummary = {}, options = {}) {
   const excludeAssignmentIds = options.excludeAssignmentIds instanceof Set ? options.excludeAssignmentIds : new Set();
   const storyStatuses = isPlainObject(options.storyStatuses) ? options.storyStatuses : {};
   return lanes
-    .filter((lane) => lane && lane.status === "claimed" && ["handoff", "claimed", "active"].includes(String(lane.phase || "claimed")))
+    .filter((lane) => lane && ["claimed", "active"].includes(String(lane.status || "").toLowerCase()) && ["handoff", "claimed", "active"].includes(String(lane.phase || "claimed").toLowerCase()))
     .map((lane) => ({
       assignmentId: sanitizeLedgerField(lane.assignmentId || lane.assignment_id || "", "", 140),
       taskId: sanitizeLedgerField(lane.taskId || lane.task_id || "", "", 140),
@@ -2280,6 +2380,57 @@ function readAssignmentFileHandoffCandidates(stateRoot = "", options = {}) {
     .filter((lane) => lane.assignmentId && lane.taskId && lane.branch);
 }
 
+function readAssignmentFileReviewFeedbackHandoffCandidates(paths = {}, options = {}, context = {}) {
+  const stateRoot = paths.proof?.state?.root || "";
+  const assignmentsRoot = resolve(stateRoot || "", "assignments");
+  const excludeAssignmentIds = options.excludeAssignmentIds instanceof Set ? options.excludeAssignmentIds : new Set();
+  const currentOwner = sanitizeLedgerField(options.currentOwner || "", "", 180);
+  const storyStatuses = isPlainObject(options.storyStatuses) ? options.storyStatuses : {};
+  const nowMs = parseTimeMs(options.now) || Date.now();
+  const staleAfterSeconds = Math.max(60, nonNegativeInteger(options.staleAfterSeconds) ?? 86400);
+  if (!stateRoot || !isInsideOrSame(assignmentsRoot, resolve(stateRoot)) || !existsSync(assignmentsRoot)) return [];
+  return readdirSync(assignmentsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .slice(0, 250)
+    .map((entry) => {
+      try {
+        return JSON.parse(readFileSync(join(assignmentsRoot, entry.name), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter(isPlainObject)
+    .filter((record) => {
+      const assignmentId = String(record.assignment_id || record.assignmentId || "");
+      if (!assignmentId || excludeAssignmentIds.has(assignmentId)) return false;
+      if (isDoneSprintStory(assignmentId, storyStatuses)) return false;
+      const owner = String(record.owner || "");
+      if (currentOwner && owner && owner !== currentOwner && !assignmentRecordFreshEnough(record, nowMs, staleAfterSeconds)) return false;
+      if (!["claimed", "active"].includes(String(record.status || "").toLowerCase())) return false;
+      if (String(record.phase || "").toLowerCase() !== "review_ready") return false;
+      const resultPath = join(paths.root || "", "review-results", `${assignmentId}.md`);
+      if (!reviewResultIsFail(resultPath)) return false;
+      const freshness = buildWorkerCodeReviewFreshness({ paths, targetAssignmentId: assignmentId, target: {} }, options, context);
+      return freshness.resultFresh === true;
+    })
+    .sort((left, right) => String(left.updated_at || left.updatedAt || left.assigned_at || "").localeCompare(String(right.updated_at || right.updatedAt || right.assigned_at || "")))
+    .map((record) => {
+      const assignmentId = sanitizeLedgerField(record.assignment_id || record.assignmentId || "", "", 140);
+      return {
+        assignmentId,
+        taskId: sanitizeLedgerField(record.task_id || record.taskId || "", "", 140),
+        branch: sanitizeLedgerField(record.branch || "", "", 160),
+        laneOwner: sanitizeLedgerField(record.owner || "", "", 160),
+        phase: "review_feedback",
+        heartbeat: sanitizeLedgerField(record.last_heartbeat_at || record.lastHeartbeatAt || "", "", 80),
+        nextAction: "Apply compact delegated review findings, verify, and checkpoint for another delegated review.",
+        worktreePath: sanitizeLedgerField(record.worktree_path || record.worktreePath || "", "", 240),
+        reviewFindingsPath: join(paths.root || "", "review-results", `${assignmentId}.md`),
+      };
+    })
+    .filter((lane) => lane.assignmentId && lane.taskId && lane.branch && lane.reviewFindingsPath);
+}
+
 function managerHandoffStoryStatuses(options = {}, context = {}) {
   const explicit = context.storyStatuses || context.sourcePlanning?.sprintStatus?.storyStatuses || context.sourcePlanningState?.sprintStatus?.storyStatuses;
   if (isPlainObject(explicit)) return explicit;
@@ -2297,9 +2448,9 @@ function managerHandoffStoryStatuses(options = {}, context = {}) {
 }
 
 function markManagerHandoffStoryInProgress(pairing = {}, options = {}, context = {}) {
-  const storyKey = sanitizeLedgerField(pairing.assignmentId || "", "", 140);
+  const storyKey = normalizeBmadStoryAssignmentId(pairing.assignmentId || "");
   if (!storyKey || !/^\d+-\d+-[a-z0-9-]+$/i.test(storyKey)) {
-    return { storyKey, skipped: true, reason: "not-a-bmad-story-id" };
+    return { skipped: true, reason: "not-a-bmad-story-id" };
   }
   const sprintPath = sanitizeRelativeBmadOutputPath(
     context.sprintStatusPath ||
@@ -2340,6 +2491,124 @@ function markManagerHandoffStoryInProgress(pairing = {}, options = {}, context =
   return result;
 }
 
+function markManagerLaneStoryReviewReady(lane = {}, options = {}, context = {}) {
+  if (lane.targetPhase !== "review_ready") {
+    return { skipped: true, reason: "target-phase-not-review-ready" };
+  }
+  const storyKey = normalizeBmadStoryAssignmentId(lane.assignmentId || "");
+  if (!storyKey || !/^\d+-\d+-[a-z0-9-]+$/i.test(storyKey)) {
+    return { skipped: true, reason: "not-a-bmad-story-id" };
+  }
+  const sprintPath = sanitizeRelativeBmadOutputPath(
+    context.sprintStatusPath ||
+    options.sprintStatusPath ||
+    context.sourcePlanning?.sprintStatus?.path ||
+    context.sourcePlanningState?.sprintStatus?.path ||
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  if (!sprintPath) {
+    return { storyKey, skipped: true, reason: "sprint-status-path-invalid" };
+  }
+  const absoluteSprintPath = resolve(repoRoot, sprintPath);
+  if (!existsSync(absoluteSprintPath)) {
+    return { storyKey, skipped: true, reason: "sprint-status-missing" };
+  }
+  const now = new Date().toISOString();
+  const result = { storyKey, sprintStatusPath: sprintPath, sprintStatusUpdated: false, storyFileUpdated: false };
+  const sprintSource = readFileSync(absoluteSprintPath, "utf8");
+  const statusPattern = new RegExp(`^(\\s*${escapeRegExp(storyKey)}:\\s*)(ready-for-dev|in-progress)(\\s*)$`, "mi");
+  let updatedSprint = sprintSource.replace(statusPattern, (_match, prefix, _status, suffix) => {
+    result.sprintStatusUpdated = true;
+    return `${prefix}review${suffix}`;
+  });
+  if (result.sprintStatusUpdated) {
+    updatedSprint = updateSprintTimestampLine(updatedSprint, "last_updated", now);
+    updatedSprint = updateSprintTimestampLine(updatedSprint, "# last_updated", now);
+    writeFileSync(absoluteSprintPath, updatedSprint);
+  }
+  const storyPath = resolve(dirname(absoluteSprintPath), `${storyKey}.md`);
+  if (existsSync(storyPath)) {
+    const storySource = readFileSync(storyPath, "utf8");
+    const updatedStory = replaceStoryMarkdownStatus(replaceStoryMarkdownStatus(storySource, "ready-for-dev", "review"), "in-progress", "review");
+    if (updatedStory !== storySource) {
+      writeFileSync(storyPath, updatedStory);
+      result.storyFileUpdated = true;
+    }
+  }
+  return result;
+}
+
+function markManagerReviewFeedbackInProgress(request = {}, options = {}, context = {}) {
+  const storyKey = normalizeBmadStoryAssignmentId(request.assignmentId || "");
+  if (!storyKey || !/^\d+-\d+-[a-z0-9-]+$/i.test(storyKey)) {
+    return { skipped: true, reason: "not-a-bmad-story-id" };
+  }
+  const sprintPath = sanitizeRelativeBmadOutputPath(
+    context.sprintStatusPath ||
+    options.sprintStatusPath ||
+    context.sourcePlanning?.sprintStatus?.path ||
+    context.sourcePlanningState?.sprintStatus?.path ||
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  if (!sprintPath) {
+    return { storyKey, skipped: true, reason: "sprint-status-path-invalid" };
+  }
+  const absoluteSprintPath = resolve(repoRoot, sprintPath);
+  if (!existsSync(absoluteSprintPath)) {
+    return { storyKey, skipped: true, reason: "sprint-status-missing" };
+  }
+  const now = new Date().toISOString();
+  const result = { storyKey, sprintStatusPath: sprintPath, sprintStatusUpdated: false, storyFileUpdated: false };
+  const sprintSource = readFileSync(absoluteSprintPath, "utf8");
+  const statusPattern = new RegExp(`^(\\s*${escapeRegExp(storyKey)}:\\s*)review(\\s*)$`, "mi");
+  let updatedSprint = sprintSource.replace(statusPattern, (_match, prefix, suffix) => {
+    result.sprintStatusUpdated = true;
+    return `${prefix}in-progress${suffix}`;
+  });
+  if (result.sprintStatusUpdated) {
+    updatedSprint = updateSprintTimestampLine(updatedSprint, "last_updated", now);
+    updatedSprint = updateSprintTimestampLine(updatedSprint, "# last_updated", now);
+    writeFileSync(absoluteSprintPath, updatedSprint);
+  }
+  const storyPath = resolve(dirname(absoluteSprintPath), `${storyKey}.md`);
+  if (existsSync(storyPath)) {
+    const storySource = readFileSync(storyPath, "utf8");
+    const updatedStory = replaceStoryMarkdownStatus(storySource, "review", "in-progress");
+    if (updatedStory !== storySource) {
+      writeFileSync(storyPath, updatedStory);
+      result.storyFileUpdated = true;
+    }
+  }
+  return result;
+}
+
+function refreshReviewFeedbackAssignmentHeartbeat(request = {}, options = {}, context = {}) {
+  const owner = request.laneOwner || "";
+  if (!request.assignmentId || !owner) {
+    return { skipped: true, reason: "assignment-or-owner-missing" };
+  }
+  const args = [
+    "./scripts/codex-workspace.mjs",
+    "heartbeat",
+    request.assignmentId,
+    "--owner",
+    owner,
+    "--phase",
+    "in_progress",
+    "--summary",
+    "manager review feedback routed; worker applying patch findings",
+    "--summary-json",
+  ];
+  if (options.stateRoot) {
+    args.push("--state-root", options.stateRoot);
+  }
+  const runner = context.runner || spawnSync;
+  const result = runner("node", args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (result?.error) return { ok: false, error: result.error.message || "heartbeat failed" };
+  if ((result?.status ?? 0) !== 0) return { ok: false, error: String(result?.stderr || result?.stdout || "heartbeat failed").trim(), status: result?.status };
+  return { ok: true, mutation: "assignment heartbeat metadata only", assignmentId: request.assignmentId, phase: "in_progress" };
+}
+
 function updateSprintTimestampLine(source, key, timestamp) {
   return String(source || "").replace(new RegExp(`^(${escapeRegExp(key)}:\\s*).*$`, "m"), `$1${timestamp}`);
 }
@@ -2355,13 +2624,20 @@ function replaceStoryMarkdownStatus(source, fromStatus, toStatus) {
 
 function isDoneSprintStory(assignmentId = "", storyStatuses = {}) {
   const rawId = String(assignmentId || "").trim();
-  const safeId = sanitizeLedgerField(rawId, "", 140);
+  const storyKey = normalizeBmadStoryAssignmentId(rawId);
+  const safeId = sanitizeLedgerField(storyKey || rawId, "", 140);
   if (!rawId || !isPlainObject(storyStatuses)) return false;
-  if (String(storyStatuses[rawId] || storyStatuses[safeId] || "").toLowerCase() === "done") return true;
+  if (String(storyStatuses[rawId] || storyStatuses[storyKey] || storyStatuses[safeId] || "").toLowerCase() === "done") return true;
   return Object.entries(storyStatuses).some(([storyId, status]) =>
     String(status || "").toLowerCase() === "done" &&
     sanitizeLedgerField(storyId, "", 140) === safeId
   );
+}
+
+function normalizeBmadStoryAssignmentId(assignmentId = "") {
+  const rawId = String(assignmentId || "").trim();
+  const withoutPrefix = rawId.startsWith("bmad-") ? rawId.slice("bmad-".length) : rawId;
+  return sanitizeLedgerField(withoutPrefix, "", 140);
 }
 
 function assignmentRecordFreshEnough(record = {}, nowMs = Date.now(), staleAfterSeconds = 86400) {
@@ -2405,6 +2681,7 @@ function buildWorkerHandoffPairing(worker = {}, lane = {}, paths = {}) {
     laneOwner: lane.laneOwner || "",
     phase: lane.phase || "handoff",
     worktreePath: lane.worktreePath || "",
+    reviewFindingsPath: lane.reviewFindingsPath || "",
     handoffPath,
     pastePath,
     pasteText: `Please read and follow this manager handoff file: ${handoffPath}`,
@@ -2415,6 +2692,11 @@ function buildWorkerHandoffPairing(worker = {}, lane = {}, paths = {}) {
 function renderWorkerHandoffFile(pairing = {}) {
   const ownerFlag = pairing.laneOwner ? ` --owner ${shellSingleQuote(pairing.laneOwner)}` : "";
   const sourceContextLines = workerHandoffSourceContextLines(pairing);
+  const reviewFeedbackInstructions = pairing.reviewFindingsPath
+    ? [
+      "9. This is a review-feedback handoff. Read the compact delegated review findings path below, apply only required fixes for this lane, rerun focused verification, and checkpoint the result for another delegated review.",
+    ]
+    : [];
   const checkpointCommand = [
     "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
     `--run-id ${shellSingleQuote(pairing.runId)}`,
@@ -2463,6 +2745,7 @@ function renderWorkerHandoffFile(pairing = {}) {
     "6. Publish compact progress through the manager ledger, not raw pane output.",
     "7. Use the delegated lane owner shown above for workspace commands; do not take over fresh owners.",
     "8. Do not take over stale lanes, kill processes, access secrets, force-push, merge, or clean up without the existing gate and authority evidence.",
+    ...reviewFeedbackInstructions,
     "",
     "## Progress Metadata",
     "",
@@ -2493,6 +2776,9 @@ function workerHandoffSourceContextLines(pairing = {}) {
   }
   if (assignmentId) {
     lines.push(`storyArtifact: ${resolve(repoRoot, "_bmad-output", "implementation-artifacts", `${assignmentId}.md`)}`);
+  }
+  if (pairing.reviewFindingsPath) {
+    lines.push(`reviewFindingsPath: ${pairing.reviewFindingsPath}`);
   }
   lines.push(`sprintStatus: ${resolve(repoRoot, "_bmad-output", "implementation-artifacts", "sprint-status.yaml")}`);
   lines.push(`latestPrd: ${resolve(repoRoot, "_bmad-output", "planning-artifacts", "prds", "prd-Kendall_Nxt-2026-07-01", "prd.md")}`);
@@ -2559,7 +2845,8 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
     promptIdle: promptIdleWorkerIds.has(worker.workerId),
   }));
   const attentionWorkers = workerProgress.filter((worker) => (
-    ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "blocked_question", "checkpoint_blocked", "owner_delegation_stale", "progress_signal_unanswered", "recovery_submit_unanswered", "pointer_receipt_unverified"].includes(worker.progressState)
+    ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "blocked_question", "checkpoint_blocked", "owner_delegation_stale", "progress_signal_unanswered", "recovery_submit_unanswered", "pointer_receipt_unverified"].includes(worker.progressState)
+    || (worker.progressState === "recovery_inspected" && worker.submitPendingAfterRecoveryInspection !== true)
     || needsPendingSubmitRepair(worker)
   ));
   return packet({
@@ -2600,6 +2887,7 @@ export function buildLaneAdvancementPlan(options = {}, context = {}) {
     .map((worker) => buildLaneAdvancementCandidate(worker, {
       lane: lanesByAssignment.get(worker.assignmentId || "") || null,
       checkpoints,
+      managerContext: context,
     }))
     .filter(Boolean)
     .filter((lane) => {
@@ -2717,6 +3005,8 @@ export function buildLaneAdvancementPlan(options = {}, context = {}) {
 function buildLaneAdvancementCandidate(worker = {}, context = {}) {
   const assignmentId = sanitizeIdentifierField(worker.assignmentId || "", "", 140);
   if (!assignmentId) return null;
+  const openStoryReviewFeedback = buildOpenStoryReviewFeedbackSummary(assignmentId, context.managerContext || context);
+  if (openStoryReviewFeedback.openCount > 0) return null;
   const lane = context.lane || {};
   const lanePhase = sanitizeLedgerField(lane.phase || lane.status || "", "", 80);
   if (["waiting_review", "reassignable", "closed"].includes(lanePhase)) return null;
@@ -2726,8 +3016,14 @@ function buildLaneAdvancementCandidate(worker = {}, context = {}) {
     .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0));
   const checkpoint = checkpoints.find((record) => classifyLaneAdvancementSummary(record.summary).state !== "not_ready");
   if (!checkpoint) return null;
+  const laneHeartbeatMs = parseTimeMs(lane.heartbeat || lane.lastHeartbeatAt || lane.last_heartbeat_at);
+  const checkpointMs = parseTimeMs(checkpoint.timestamp);
+  if (lanePhase === "in_progress" && laneHeartbeatMs && checkpointMs && laneHeartbeatMs > checkpointMs) {
+    return null;
+  }
   const readiness = classifyLaneAdvancementSummary(checkpoint.summary);
   const targetPhase = readiness.state === "delivery_gate_ready" ? "delivery_ready" : "review_ready";
+  if (lanePhase === targetPhase) return null;
   return {
     assignmentId,
     taskId: sanitizeIdentifierField(worker.taskId || lane.taskId || lane.task_id || "", "", 140),
@@ -2789,6 +3085,7 @@ function applyLaneAdvancementHeartbeat(lane = {}, context = {}, options = {}) {
       ownerMatches: result.ownerMatches === true,
       lastHeartbeatAt: result.lastHeartbeatAt || null,
     },
+    statusUpdate: markManagerLaneStoryReviewReady(lane, options, context),
   };
 }
 
@@ -2798,7 +3095,7 @@ function classifyLaneAdvancementSummary(summary = "") {
   if (/\b(question|blocked|waiting|needs operator|failed|cannot proceed|error|in progress|still working|ongoing|partial|not complete|not ready)\b/.test(text)) {
     return { state: "not_ready", evidence: "checkpoint reports unresolved blocker" };
   }
-  if (/\b(review[- ]ready|ready for manager review|ready for review|manager review|ready for delivery|verified and idle|verified,? ready|complete,? verified|complete and verified|lane remains complete|remains complete|complete,? verified,? and blocker-free|verified,? and blocker-free|implementation (?:is )?complete|implemented and verified|implemented\b.*\b(?:verification|tests?|checks?)\b.*\bpassed\b|(?:verification|tests?|checks?)\b.*\bpassed\b|staged implementation (?:remains )?unchanged|remains ready|ready for manager)\b/.test(text)) {
+  if (/\b(review[- ]ready|ready for manager review|ready for review|manager review|delegated code review complete|ready for delivery|verified and idle|verified,? ready|complete,? verified|complete and verified|lane remains complete|remains complete|complete,? verified,? and blocker-free|verified,? and blocker-free|implementation (?:is )?complete|implemented and verified|implemented\b.*\b(?:verification|tests?|checks?)\b.*\bpassed\b|(?:verification|tests?|checks?)\b.*\bpassed\b|staged implementation (?:remains )?unchanged|remains ready|ready for manager)\b/.test(text)) {
     const deliveryReady = /\b(ready for delivery|delivery[- ]ready|delivery gate ready)\b/.test(text);
     return { state: deliveryReady ? "delivery_gate_ready" : "manager_review_ready", evidence: "checkpoint indicates work is complete or review-ready" };
   }
@@ -2816,7 +3113,7 @@ function classifyWorkerCheckpointBlockerSummary(summary = "") {
 
 function buildWorkerProgressNextActions(workers = [], options = {}) {
   const attentionWorkers = Array.isArray(workers) ? workers : [];
-  const signalableStates = new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"]);
+  const signalableStates = new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"]);
   const questionWorkers = attentionWorkers.filter((worker) => ["blocked_question", "checkpoint_blocked"].includes(worker.progressState));
   const signalableWorkers = attentionWorkers.filter((worker) => signalableStates.has(worker.progressState));
   const pendingSubmitWorkers = attentionWorkers.filter(needsPendingSubmitRepair);
@@ -2899,12 +3196,13 @@ function buildWorkerProgressSignalNextAction(workers = [], options = {}) {
 function buildWorkerProgressNextAction(worker = {}, context = {}) {
   const code = `worker-progress-${worker.progressState}`;
   const summary = `${worker.workerId} ${String(worker.progressState || "attention").replaceAll("_", " ")} for ${worker.assignmentId || "unassigned"}.`;
-  if (["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"].includes(worker.progressState)) {
+  if (["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"].includes(worker.progressState)) {
     const limit = Math.max(1, Number(context.limit || 0) || Number(context.index || 0) + 1);
+    const workerFlag = worker.workerId ? ` --worker-id ${shellSingleQuote(worker.workerId)}` : "";
     return {
       code,
       summary,
-      nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${limit}${worker.progressState === "prompt_idle_handoff" ? " --prompt-idle" : ""}`, context),
+      nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${limit}${workerFlag}${worker.progressState === "prompt_idle_handoff" ? " --prompt-idle" : ""}`, context),
     };
   }
   if (worker.progressState === "progress_signal_unanswered") {
@@ -2999,10 +3297,12 @@ export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
   const paths = managerRunPaths(runId, runOptions, context);
   const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
   const signalableStates = runOptions.promptIdle
-    ? ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"]
-    : ["needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"];
+    ? ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"]
+    : ["needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"];
   const candidates = Array.isArray(progress.summary?.workerProgress)
-    ? progress.summary.workerProgress.filter((worker) => signalableStates.includes(worker.progressState))
+    ? progress.summary.workerProgress
+      .filter((worker) => signalableStates.includes(worker.progressState))
+      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
     : [];
   const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
   const selected = candidates.slice(0, limit).map((worker) => buildWorkerProgressSignalRequest(worker, paths));
@@ -3025,7 +3325,7 @@ export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
         requests: selected,
         transport: { primary: "durable_progress_request_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_progress_request_file_path_only" },
       },
-      nextActions: [{ code: "worker-progress-signal-apply-ready", summary: `Signal ${selected.length} stale active worker(s) for compact metadata progress.`, nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${runOptions.promptIdle ? " --prompt-idle" : ""} --apply` }],
+      nextActions: [{ code: "worker-progress-signal-apply-ready", summary: `Signal ${selected.length} stale active worker(s) for compact metadata progress.`, nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${selected.length === 1 && selected[0]?.workerId ? ` --worker-id ${shellSingleQuote(selected[0].workerId)}` : ""}${runOptions.promptIdle ? " --prompt-idle" : ""} --apply` }],
     });
   }
   mkdirSync(join(paths.root, "progress-requests"), { recursive: true });
@@ -3065,6 +3365,377 @@ export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
       mutation: "manager-owned-worker-progress-request-file-and-tmux-buffer",
       results,
       retention: "progress_request_path_and_summary",
+    },
+  });
+}
+
+export function buildWorkerReviewFeedbackPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const allowedProgressStates = runOptions.assignmentId || runOptions.workerId
+    ? ["manager_review_ready", "delivery_gate_ready", "checkpoint_seen", "checkpoint_stale", "checkpoint_blocked"]
+    : ["manager_review_ready", "delivery_gate_ready", "checkpoint_seen", "checkpoint_stale"];
+  const rawFindingsFile = runOptions.reviewFindingsFile;
+  const findingsPath = resolveReviewFindingsPath(rawFindingsFile, paths);
+  const findingsAssignmentId = assignmentIdFromReviewFindingsPath(findingsPath, paths);
+  const candidates = Array.isArray(progress.summary?.workerProgress)
+    ? progress.summary.workerProgress
+      .filter((worker) => allowedProgressStates.includes(worker.progressState))
+      .filter((worker) => !workerProgressRowConflictsManagerOwner(worker, runId))
+      .filter((worker) => !runOptions.assignmentId || worker.assignmentId === runOptions.assignmentId)
+      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
+      .filter((worker) => !findingsAssignmentId || worker.assignmentId === findingsAssignmentId)
+    : [];
+  if (!findingsPath) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", requests: [] },
+      blockers: [{ code: "review-feedback-findings-missing", message: "Review feedback requires --review-findings-file pointing to the compact failed review result under this manager run.", nextAction: "Use the matching review-results/<assignment-id>.md file from the current manager run." }],
+    });
+  }
+  if (!findingsAssignmentId || !reviewResultIsFail(findingsPath)) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", findingsPath, requests: [] },
+      blockers: [{ code: "review-feedback-findings-invalid", message: "Review feedback can only route a failed delegated review result for a matching manager-owned assignment.", nextAction: "Use the failed review-results/<assignment-id>.md artifact produced by manager-worker-code-review." }],
+    });
+  }
+  const retentionBlocker = reviewFindingsRetentionBlocker(findingsPath);
+  if (retentionBlocker) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", findingsPath, requests: [], rawPayloadRetained: false },
+      blockers: [retentionBlocker],
+    });
+  }
+  const selected = candidates.slice(0, Math.max(0, runOptions.limit ?? 1)).map((worker) => buildWorkerReviewFeedbackRequest(worker, paths, findingsPath));
+  if (selected.length === 0) {
+    return packet({
+      status: "ready",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", reviewReadyWorkers: candidates.length, requests: [] },
+      warnings: [{ code: "review-feedback-no-target-worker", message: "No matching manager-owned review-ready worker was found for review feedback." }],
+      nextActions: [{ code: "review-feedback-not-needed", summary: "No review feedback target is ready.", nextAction: "Continue metadata-only monitoring or rerun with a matching --assignment-id." }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        planned: selected.length,
+        requests: selected,
+        transport: { primary: "durable_review_feedback_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_review_feedback_file_path_only" },
+      },
+      nextActions: [{ code: "worker-review-feedback-apply-ready", summary: `Route review feedback to ${selected.length} manager-owned worker(s).`, nextAction: `node ./scripts/manager-worker-review-feedback.mjs --summary-json --run-id ${shellSingleQuote(runId)} --assignment-id ${shellSingleQuote(selected[0].assignmentId)} --worker-id ${shellSingleQuote(selected[0].workerId)} --limit ${selected.length} --apply --review-findings-file ${shellSingleQuote(findingsPath)}` }],
+    });
+  }
+  const metadataPreflight = selected
+    .map((request) => ({ request, validation: validateWorkerReviewFeedbackMetadata(request, runOptions, context) }))
+    .find((entry) => entry.validation.ok === false);
+  if (metadataPreflight) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        apply: true,
+        mutation: "none",
+        findingsPath,
+        requests: selected,
+        failedRequest: sanitizeCyclePacketValue(metadataPreflight.request),
+      },
+      blockers: [{
+        code: metadataPreflight.validation.code || "review-feedback-metadata-invalid",
+        message: metadataPreflight.validation.message || "Review feedback metadata could not be validated before worker mutation.",
+        nextAction: metadataPreflight.validation.nextAction || "Refresh manager worker progress, sprint status, and workspace owner metadata before retrying.",
+      }],
+    });
+  }
+  mkdirSync(join(paths.root, "review-feedback"), { recursive: true });
+  const findings = readFileSync(findingsPath, "utf8");
+  const results = [];
+  for (const request of selected) {
+    writeFileSync(request.requestPath, renderWorkerReviewFeedbackFile(request, findings));
+    writeFileSync(request.pastePath, `${request.pasteText}\n`);
+    const statusUpdate = markManagerReviewFeedbackInProgress(request, runOptions, context);
+    const heartbeat = !statusUpdate?.skipped ? refreshReviewFeedbackAssignmentHeartbeat(request, runOptions, context) : null;
+    const metadataOk = !statusUpdate?.skipped && heartbeat?.ok === true;
+    const paste = metadataOk ? pasteWorkerPointer(request, `${request.workerId}-review-feedback`, context) : null;
+    results.push({ ...request, status: metadataOk && paste?.ok === true ? "review_feedback_sent" : "failed", paste, statusUpdate, heartbeat });
+  }
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) {
+    recordPointerReceiptFailure(runOptions, failed, context, "review-feedback");
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "partial", results },
+      blockers: [{ code: "worker-review-feedback-apply-incomplete", message: failed.paste?.error || failed.heartbeat?.error || failed.statusUpdate?.reason || `Failed to route review feedback completely to ${failed.sessionName}.`, nextAction: "Inspect manager review feedback files, tmux paste result, sprint status, and assignment heartbeat before retrying." }],
+    });
+  }
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_review_feedback_apply",
+    authorityBasis: "manager-owned-worker-review-feedback-existing-gates",
+    summary: `Sent ${results.length} manager-owned worker review feedback packet(s).`,
+    sourceRefs: results.flatMap((result) => [`assignment:${result.assignmentId}`, `worker:${result.workerId}`, ...receiptSourceRefs(result)]),
+    evidenceRefs: results.map((result) => `review-feedback:${result.requestPath || result.workerId || result.assignmentId}`),
+    recoveryPath: "rerun manager-worker-progress and inspect review feedback files before retrying",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-review-feedback-file-and-tmux-buffer",
+      results,
+      retention: "review_feedback_path_and_summary",
+    },
+  });
+}
+
+export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const runId = safeRunId(runOptions.runId || defaultRunId());
+  const paths = managerRunPaths(runId, runOptions, context);
+  const requestedStoryKey = normalizeBmadStoryAssignmentId(runOptions.assignmentId || "") || sanitizeLedgerField(runOptions.storyKey || "", "", 140);
+  const reviewOptions = requestedStoryKey ? { ...runOptions, storyKey: requestedStoryKey, allowExplicitReviewReadyAssignment: true } : runOptions;
+  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const reviewPlan = context.reviewRequestPlan || buildBmadCodeReviewRequestPlan(reviewOptions, { ...context, progressStatus: progress });
+  if (reviewPlan.ok === false || reviewPlan.status === "blocked" || !reviewPlan.summary?.selectedStory?.storyKey) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: Boolean(runOptions.apply), mutation: "none", requests: [] },
+      blockers: reviewPlan.blockers?.length
+        ? reviewPlan.blockers
+        : [{ code: "worker-code-review-no-review-story", message: "No BMAD review story is ready to delegate.", nextAction: "Refresh manager-cycle-packet and lane advancement state." }],
+    });
+  }
+
+  const rows = Array.isArray(progress.summary?.workerProgress) ? progress.summary.workerProgress : [];
+  const targetStoryKey = sanitizeLedgerField(reviewPlan.summary.selectedStory.storyKey, "", 140);
+  const targetAssignmentId = assignmentIdForStoryKey(targetStoryKey);
+  const target = rows.find((worker) => normalizeBmadStoryAssignmentId(worker.assignmentId || "") === targetStoryKey) || {
+    assignmentId: targetAssignmentId,
+    taskId: "",
+    workerId: "",
+    sessionName: "",
+    worktreePath: "",
+  };
+  const freshness = buildWorkerCodeReviewFreshness({ paths, targetAssignmentId, target }, runOptions, context);
+  const reviewAttemptSummary = buildWorkerCodeReviewAttemptSummary({ paths, targetAssignmentId, invalidatorMs: freshness.latestInvalidatorMs }, runOptions, context);
+  if (freshness.resultFresh === true) {
+    const resultPath = join(paths.root, "review-results", `${targetAssignmentId}.md`);
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: Boolean(runOptions.apply),
+        mutation: "none; fresh delegated review result exists",
+        planned: 0,
+        alreadyPrepared: true,
+        requestExists: freshness.requestMtimeMs > 0,
+        requestFresh: freshness.requestFresh,
+        requestContractFresh: freshness.requestFresh,
+        resultExists: true,
+        resultFresh: true,
+        resultComplete: true,
+        resultPath,
+        reviewFreshness: sanitizeCyclePacketValue(freshness),
+        reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
+        requests: [],
+        results: runOptions.apply ? [{ status: "fresh_review_result_exists", resultPath }] : undefined,
+        retention: "review_result_path_and_summary",
+      },
+      nextActions: [{
+        code: "worker-code-review-result-ready",
+        summary: "Fresh delegated worker code review result exists; route findings or delivery next.",
+        nextAction: `Review compact findings at ${resultPath}.`,
+      }],
+    });
+  }
+  const reviewer = selectWorkerCodeReviewer(rows, targetAssignmentId, runOptions.workerId, reviewAttemptSummary, runId);
+  if (!reviewer) {
+    return packet({
+      status: "blocked",
+      summary: {
+        runId,
+        apply: Boolean(runOptions.apply),
+        mutation: "none",
+        target: sanitizeCyclePacketValue({ assignmentId: targetAssignmentId, storyKey: targetStoryKey }),
+        reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
+        requests: [],
+      },
+      blockers: [{
+        code: "worker-code-review-no-reviewer",
+        message: "No manager-owned worker is available to run delegated BMAD code review without exceeding retry limits.",
+        nextAction: "Wait for another prompt-idle manager-owned worker, warm a reviewer, or run review manually.",
+      }],
+    });
+  }
+
+  const request = buildWorkerCodeReviewRequest({ reviewer, target, reviewPlan, paths, runOptions });
+  const requestExists = existsSync(request.requestPath);
+  const resultExists = existsSync(request.resultPath);
+  const requestMtimeMs = fileMtimeMs(request.requestPath);
+  const requestContractFresh = requestExists && fileContainsText(request.requestPath, `contractVersion: ${WORKER_CODE_REVIEW_REQUEST_VERSION}`);
+  const requestFresh = requestExists && requestContractFresh && (freshness.latestInvalidatorMs === 0 || requestMtimeMs >= freshness.latestInvalidatorMs);
+  const resultComplete = reviewResultHasTerminalStatus(request.resultPath);
+  const resultFresh = resultExists
+    && resultComplete
+    && (freshness.latestInvalidatorMs === 0 || freshness.resultMtimeMs >= freshness.latestInvalidatorMs)
+    && (!requestExists || (requestContractFresh && freshness.resultMtimeMs >= requestMtimeMs));
+  const requestAgeSeconds = requestExists ? fileAgeSeconds(request.requestPath, runOptions, context) : null;
+  const globalRequestAgeSeconds = freshness.requestMtimeMs > 0
+    ? Math.max(0, Math.floor(((Number.isFinite(Number(runOptions.nowMs ?? context.nowMs)) ? Number(runOptions.nowMs ?? context.nowMs) : parseTimeMs(runOptions.now || context.now) || Date.now()) - freshness.requestMtimeMs) / 1000))
+    : null;
+  const reviewRequestCooldownSeconds = Math.max(0, nonNegativeInteger(runOptions.reviewRequestResendStaleSeconds ?? context.cyclePacket?.summary?.reviewRequestResendStaleSeconds) ?? WORKER_CODE_REVIEW_RESEND_STALE_SECONDS);
+  const freshPeerRequestInFlight = !requestExists
+    && freshness.requestFresh === true
+    && resultFresh !== true
+    && Number.isFinite(globalRequestAgeSeconds)
+    && globalRequestAgeSeconds < reviewRequestCooldownSeconds;
+  if (freshPeerRequestInFlight) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: Boolean(runOptions.apply),
+        mutation: "none; delegated review request already in flight",
+        planned: 0,
+        alreadyPrepared: true,
+        requestExists: false,
+        requestFresh: true,
+        requestContractFresh: false,
+        resultExists,
+        resultFresh,
+        resultComplete,
+        reviewFreshness: sanitizeCyclePacketValue(freshness),
+        requestAgeSeconds: globalRequestAgeSeconds,
+        reviewRequestCooldownSeconds,
+        inFlightReviewRequest: true,
+        reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
+        results: runOptions.apply ? [{ status: "in_flight_review_request_wait" }] : undefined,
+        requests: [],
+        retention: "review_request_path_and_summary",
+      },
+      nextActions: [{
+        code: "worker-code-review-request-prepared",
+        summary: "A fresh delegated worker code review request is already in flight; wait for findings before rotating reviewers.",
+        nextAction: "Monitor worker checkpoints for review result.",
+      }],
+    });
+  }
+  if (!runOptions.apply) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: false,
+        mutation: "none; dry-run summary only",
+        planned: 1,
+        alreadyPrepared: requestFresh,
+        requestExists,
+        requestFresh,
+        requestContractFresh,
+        resultExists,
+        resultFresh,
+        resultComplete,
+        reviewFreshness: sanitizeCyclePacketValue(freshness),
+        requestAgeSeconds,
+        reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
+        requests: [request],
+        transport: { primary: "durable_review_request_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_review_request_file_path_only" },
+      },
+      nextActions: [{
+        code: requestFresh ? "worker-code-review-request-prepared" : "worker-code-review-apply-ready",
+        summary: requestFresh
+          ? resultFresh
+            ? "Fresh delegated worker code review result exists; route findings or delivery next."
+            : "Delegated worker code review request already exists; wait for reviewer checkpoint or findings, or resend if the prompt is visibly idle."
+          : resultExists && !resultFresh
+            ? "Delegated worker code review result is stale after newer review feedback or target checkpoint; delegate a fresh review."
+          : "Delegate BMAD code review to a manager-owned worker.",
+        nextAction: requestFresh
+          ? resultFresh
+            ? `Review compact findings at ${request.resultPath}.`
+            : `node ./scripts/manager-worker-code-review.mjs --summary-json --run-id ${shellSingleQuote(runId)} --assignment-id ${shellSingleQuote(targetAssignmentId)} --worker-id ${shellSingleQuote(request.workerId)} --operator-visible-prompt --apply`
+          : `node ./scripts/manager-worker-code-review.mjs --summary-json --run-id ${shellSingleQuote(runId)} --assignment-id ${shellSingleQuote(targetAssignmentId)} --worker-id ${shellSingleQuote(request.workerId)} --apply`,
+      }],
+    });
+  }
+
+  if (requestFresh && !runOptions.operatorVisiblePrompt) {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        apply: true,
+        mutation: "none; delegated review request already prepared",
+        planned: 1,
+        alreadyPrepared: true,
+        requestExists,
+        requestFresh,
+        requestContractFresh,
+        resultExists,
+        resultFresh,
+        resultComplete,
+        reviewFreshness: sanitizeCyclePacketValue(freshness),
+        requestAgeSeconds,
+        reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
+        results: [{ ...request, status: "already_prepared" }],
+        retention: "review_request_path_and_summary",
+      },
+      nextActions: [{ code: "worker-code-review-request-prepared", summary: "Delegated worker code review request already exists.", nextAction: "Monitor worker checkpoints for review result." }],
+    });
+  }
+
+  mkdirSync(join(paths.root, "review-requests"), { recursive: true });
+  mkdirSync(join(paths.root, "review-results"), { recursive: true });
+  writeFileSync(request.requestPath, renderWorkerCodeReviewFile(request));
+  writeFileSync(request.pastePath, `${request.pasteText}\n`);
+  const paste = pasteWorkerPointer(request, `${request.workerId}-code-review`, context);
+  const result = { ...request, status: paste.ok ? (requestExists ? "code_review_request_resent" : "code_review_request_sent") : "failed", paste };
+  if (!paste.ok) {
+    cleanupReviewRequestArtifacts(request);
+    recordPointerReceiptFailure(runOptions, result, context, "code-review");
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "partial", results: [result] },
+      blockers: [{ code: "worker-code-review-paste-failed", message: paste.error || `Failed to paste code review request to ${request.sessionName}.`, nextAction: "Inspect manager review request files and tmux paste result before retrying." }],
+    });
+  }
+
+  ledgerCommand({
+    command: "append-event",
+    runId,
+    stateRoot: runOptions.stateRoot,
+    eventType: "worker_code_review_request_apply",
+    authorityBasis: "manager-owned-worker-code-review-delegation-existing-gates",
+    summary: `Delegated BMAD code review for ${request.targetAssignmentId} to ${request.workerId}.`,
+    sourceRefs: [`assignment:${request.targetAssignmentId}`, `worker:${request.workerId}`, ...receiptSourceRefs(result)],
+    evidenceRefs: [`review-request:${request.requestPath}`, `review-result:${request.resultPath}`],
+    recoveryPath: "monitor delegated reviewer checkpoint and route review findings through manager-worker-review-feedback if needed",
+  }, context);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      apply: true,
+      mutation: "manager-owned-worker-code-review-request-file-and-tmux-buffer",
+      results: [result],
+      retention: "review_request_path_and_summary",
     },
   });
 }
@@ -3292,21 +3963,29 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
   const workerPacket = context.workerStatus || buildWorkerStatus(runOptions, { ...context, resourceContext });
   const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
   const workersById = new Map(workers.map((worker) => [worker.workerId, worker]));
+  const questionAnswer = resourceState === "critical" || !runOptions.retireBlockedQuestion
+    ? null
+    : context.questionAnswerPlan || buildWorkerQuestionAnswerPlan(runOptions, { ...context, workerStatus: workerPacket, progressStatus: progress });
   const criticalKillOrder = Array.isArray(workerPacket.summary?.lifecyclePlan?.terminationPlan?.killOrder)
     ? workerPacket.summary.lifecyclePlan.terminationPlan.killOrder
+    : [];
+  const progressWorkers = Array.isArray(progress?.summary?.workerProgress) ? progress.summary.workerProgress : [];
+  const recoverySubmitCandidates = progressWorkers
+    .filter((worker) => worker.progressState === "recovery_submit_unanswered")
+    .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
+    .map((worker) => ({ ...worker, retireBasis: "recovery_submit_unanswered", record: workersById.get(worker.workerId) || null }))
+    .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.state === "active" && worker.record.sessionName);
+  const blockedQuestionCandidates = runOptions.retireBlockedQuestion
+    ? buildBlockedQuestionRetireCandidates({ progressWorkers, questionAnswer, workersById, runOptions, runId })
     : [];
   const candidates = resourceState === "critical"
     ? criticalKillOrder
       .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
-      .map((worker) => ({ ...worker, progressState: "critical_resource_pressure", record: workersById.get(worker.workerId) || null }))
+      .map((worker) => ({ ...worker, progressState: "critical_resource_pressure", retireBasis: "critical_resource_pressure", record: workersById.get(worker.workerId) || null }))
       .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.sessionName)
-    : Array.isArray(progress.summary?.workerProgress)
-      ? progress.summary.workerProgress
-      .filter((worker) => worker.progressState === "recovery_submit_unanswered")
-      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
-      .map((worker) => ({ ...worker, record: workersById.get(worker.workerId) || null }))
-      .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.state === "active" && worker.record.sessionName)
-      : [];
+    : runOptions.retireBlockedQuestion
+      ? blockedQuestionCandidates
+      : recoverySubmitCandidates;
   const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
   const selected = candidates.slice(0, Math.max(0, Math.min(6, limit))).map((worker) => ({
     workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
@@ -3317,10 +3996,16 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
     leaseState: sanitizeLedgerField(worker.leaseState?.state || worker.leaseState || worker.record?.leaseState || worker.record?.currentLease?.state || "", "", 80) || null,
     progressState: sanitizeLedgerField(worker.progressState || "unknown", "unknown", 80),
     action: "retire_manager_owned_worker_session",
-    basis: resourceState === "critical" ? "critical_resource_pressure" : "recovery_submit_unanswered",
+    basis: sanitizeLedgerField(resourceState === "critical" ? "critical_resource_pressure" : worker.retireBasis || "recovery_submit_unanswered", "recovery_submit_unanswered", 100),
     resourceSnapshot: resourceState === "critical" ? worker.resourceSnapshot || workerPacket.summary?.lifecyclePlan?.terminationPlan?.resourceSnapshot || null : null,
     affectedLease: resourceState === "critical" ? worker.affectedLease || buildTerminationAffectedLease(worker.record || worker) : null,
-    recoveryAction: resourceState === "critical" ? "mark_lease_recovery_required_before_work_resumes" : "retire_recovery_stuck_worker",
+    recoveryAction: resourceState === "critical"
+      ? "mark_lease_recovery_required_before_work_resumes"
+      : worker.retireBasis === "unsafe_question_policy_blocked"
+        ? "park_policy_blocked_lane_and_free_worker_capacity"
+        : "retire_recovery_stuck_worker",
+    retireMarker: worker.retireBasis === "unsafe_question_policy_blocked" ? RETIRE_BLOCKED_QUESTION_BASIS : null,
+    blockedQuestion: worker.blockedQuestion || null,
   }));
   const blockers = [];
   if (!paths.proof.ok) {
@@ -3329,7 +4014,11 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
   if (selected.length === 0) {
     blockers.push({
       code: resourceState === "critical" ? "worker-retire-no-critical-resource-candidates" : "worker-retire-no-candidates",
-      message: resourceState === "critical" ? "No manager-owned worker is eligible for critical resource termination." : "No manager-owned recovery-submit-unanswered worker is eligible for retire.",
+      message: resourceState === "critical"
+        ? "No manager-owned worker is eligible for critical resource termination."
+        : runOptions.retireBlockedQuestion
+          ? "No manager-owned unsafe-question-blocked worker is eligible for retire."
+          : "No manager-owned recovery-submit-unanswered worker is eligible for retire.",
       nextAction: resourceState === "critical" ? "Refresh manager-resource-status and worker-status before retrying critical resource termination." : "Refresh manager-worker-progress before retrying retire.",
     });
   }
@@ -3354,7 +4043,7 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
         requests: selected,
         stopLines: ["manager-owned-session-only", "no unknown session mutation", "no assignment takeover", "no dispatch apply", "no provider payload retention"],
       },
-      nextActions: [{ code: "worker-retire-apply-ready", summary: resourceState === "critical" ? `Terminate ${selected.length} manager-owned worker(s) for critical resource pressure.` : `Retire ${selected.length} recovery-stuck manager-owned worker(s).`, nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json --limit ${selected.length}${resourceState === "critical" ? " --resource-state critical" : ""} --apply` }],
+      nextActions: [{ code: "worker-retire-apply-ready", summary: workerRetireSummary(resourceState, selected), nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json --limit ${selected.length}${selected.length === 1 && selected[0]?.workerId ? ` --worker-id ${shellSingleQuote(selected[0].workerId)}` : ""}${resourceState === "critical" ? " --resource-state critical" : ""}${selected.some((request) => request.basis === "unsafe_question_policy_blocked") ? " --retire-blocked-question" : ""} --apply` }],
     });
   }
   writeJsonIfMissing(paths.workers, []);
@@ -3389,11 +4078,11 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
           runId,
           stateRoot: runOptions.stateRoot,
           eventType: "worker_retire_apply",
-          authorityBasis: resourceState === "critical" ? "manager-owned-worker-critical-resource-existing-gates" : "manager-owned-worker-retire-after-recovery-existing-gates",
-          summary: resourceState === "critical" ? `Partially terminated ${retiredCount} manager-owned worker(s) for critical resource pressure before a later failure.` : `Partially retired ${retiredCount} recovery-stuck manager-owned worker(s) before a later failure.`,
+          authorityBasis: workerRetireAuthorityBasis(resourceState, results),
+          summary: `Partially ${lowercaseFirst(workerRetirePastTenseSummary(resourceState, results.filter((result) => result.status === "retired")))} before a later failure.`,
           sourceRefs: results.filter((result) => result.status === "retired").map((result) => `assignment:${result.assignmentId}`),
           evidenceRefs: results.filter((result) => result.status === "retired").map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
-          recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the still-active source-owned lane through existing gates",
+          recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the next source-owned lane through existing gates",
           recordPolicy: resourceState === "critical" ? "metadata_only_critical_resource_worker_retire_partial" : "metadata_only_worker_retire_partial",
         }, context);
       }
@@ -3413,7 +4102,11 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       if (record.currentLease) record.currentLease = { ...record.currentLease, state: "recovery_required" };
       record.recoveryAction = "reconcile_dispatcher_lease_before_resuming_work";
     }
-    record.recoveryState = resourceState === "critical" ? "retired_for_critical_resource_pressure" : "retired_after_recovery_submit_unanswered";
+    record.recoveryState = resourceState === "critical"
+      ? "retired_for_critical_resource_pressure"
+      : request.basis === "unsafe_question_policy_blocked"
+        ? "retired_after_policy_blocked_question"
+        : "retired_after_recovery_submit_unanswered";
   }
   writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
   ledgerCommand({
@@ -3421,11 +4114,11 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
     runId,
     stateRoot: runOptions.stateRoot,
     eventType: "worker_retire_apply",
-    authorityBasis: resourceState === "critical" ? "manager-owned-worker-critical-resource-existing-gates" : "manager-owned-worker-retire-after-recovery-existing-gates",
-    summary: resourceState === "critical" ? `Terminated ${results.filter((result) => result.status === "retired").length} manager-owned worker(s) for critical resource pressure.` : `Retired ${results.filter((result) => result.status === "retired").length} recovery-stuck manager-owned worker(s).`,
+    authorityBasis: workerRetireAuthorityBasis(resourceState, results),
+    summary: `${workerRetirePastTenseSummary(resourceState, results.filter((result) => result.status === "retired"))}.`,
     sourceRefs: results.map((result) => `assignment:${result.assignmentId}`),
     evidenceRefs: results.map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
-    recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the still-active source-owned lane through existing gates",
+    recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the next source-owned lane through existing gates",
     recordPolicy: resourceState === "critical" ? "metadata_only_critical_resource_worker_retire" : "metadata_only_worker_retire",
   }, context);
   return packet({
@@ -3439,6 +4132,81 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       retention: "retire_session_and_summary",
     },
   });
+}
+
+function buildBlockedQuestionRetireCandidates({ progressWorkers = [], questionAnswer = null, workersById = new Map(), runOptions = {}, runId = "" } = {}) {
+  const blockedQuestions = Array.isArray(questionAnswer?.summary?.blockedQuestions) ? questionAnswer.summary.blockedQuestions : [];
+  if (blockedQuestions.length === 0) return [];
+  const progressByWorker = new Map((Array.isArray(progressWorkers) ? progressWorkers : [])
+    .filter((worker) => worker?.workerId)
+    .map((worker) => [worker.workerId, worker]));
+  return blockedQuestions
+    .filter((question) =>
+      question.workerId &&
+      question.decision === "block_unsafe_continuation" &&
+      question.operatorInterruption === true &&
+      Array.isArray(question.reasonCodes) &&
+      question.reasonCodes.includes("unsafe_authority_request")
+    )
+    .filter((question) => !runOptions.workerId || question.workerId === runOptions.workerId)
+    .map((question) => {
+      const progressWorker = progressByWorker.get(question.workerId) || {};
+      const record = workersById.get(question.workerId) || null;
+      if (progressWorker.progressState && progressWorker.progressState !== "blocked_question") return null;
+      return {
+        ...progressWorker,
+        workerId: question.workerId,
+        sessionName: progressWorker.sessionName || record?.sessionName || "",
+        assignmentId: progressWorker.assignmentId || record?.assignmentId || "",
+        taskId: progressWorker.taskId || record?.taskId || "",
+        progressState: progressWorker.progressState || "blocked_question",
+        questionCount: progressWorker.questionCount ?? 1,
+        record,
+        blockedQuestion: question,
+      };
+    })
+    .filter(Boolean)
+    .map((worker) => ({
+      ...worker,
+      retireBasis: "unsafe_question_policy_blocked",
+    }))
+    .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.state === "active" && worker.record.sessionName);
+}
+
+function workerRetireAuthorityBasis(resourceState = "unknown", results = []) {
+  if (resourceState === "critical") return "manager-owned-worker-critical-resource-existing-gates";
+  const bases = new Set((Array.isArray(results) ? results : []).map((result) => result.basis).filter(Boolean));
+  if (bases.size === 1 && bases.has("unsafe_question_policy_blocked")) {
+    return "manager-owned-worker-retire-after-policy-blocked-question-existing-gates";
+  }
+  if (bases.has("unsafe_question_policy_blocked")) {
+    return "manager-owned-worker-retire-mixed-existing-gates";
+  }
+  return "manager-owned-worker-retire-after-recovery-existing-gates";
+}
+
+function workerRetireSummary(resourceState = "unknown", selected = []) {
+  if (resourceState === "critical") return `Terminate ${selected.length} manager-owned worker(s) for critical resource pressure.`;
+  const blockedQuestionCount = selected.filter((request) => request.basis === "unsafe_question_policy_blocked").length;
+  const recoveryCount = selected.length - blockedQuestionCount;
+  if (blockedQuestionCount > 0 && recoveryCount > 0) return `Retire ${selected.length} manager-owned worker(s): ${recoveryCount} recovery-stuck and ${blockedQuestionCount} policy-blocked.`;
+  if (blockedQuestionCount > 0) return `Retire ${blockedQuestionCount} policy-blocked manager-owned worker(s) after unsafe question classification.`;
+  return `Retire ${selected.length} recovery-stuck manager-owned worker(s).`;
+}
+
+function workerRetirePastTenseSummary(resourceState = "unknown", results = []) {
+  const count = Array.isArray(results) ? results.length : 0;
+  if (resourceState === "critical") return `Terminated ${count} manager-owned worker(s) for critical resource pressure`;
+  const blockedQuestionCount = results.filter((result) => result.basis === "unsafe_question_policy_blocked").length;
+  const recoveryCount = count - blockedQuestionCount;
+  if (blockedQuestionCount > 0 && recoveryCount > 0) return `Retired ${count} manager-owned worker(s): ${recoveryCount} recovery-stuck and ${blockedQuestionCount} policy-blocked`;
+  if (blockedQuestionCount > 0) return `Retired ${blockedQuestionCount} policy-blocked manager-owned worker(s) after unsafe question classification`;
+  return `Retired ${count} recovery-stuck manager-owned worker(s)`;
+}
+
+function lowercaseFirst(value = "") {
+  const text = String(value || "");
+  return text ? `${text[0].toLowerCase()}${text.slice(1)}` : "";
 }
 
 export function buildWorkerQuestionAnswerPlan(options = {}, context = {}) {
@@ -3851,7 +4619,7 @@ function buildWorkerProgressSignalRequest(worker = {}, paths = {}) {
     progressState: sanitizeLedgerField(worker.progressState || "", "", 80),
     requestPath,
     pastePath,
-    pasteText: `Please read and follow this manager progress request file: ${requestPath}`,
+    pasteText: `Write a compact manager checkpoint now. Read ${requestPath}, report current progress/blockers/verification for ${assignmentId}, then append the checkpoint command from the request file.`,
     retention: "progress_request_path_and_summary",
   };
 }
@@ -3884,6 +4652,427 @@ function renderWorkerProgressSignalFile(request = {}) {
     "```bash",
     checkpointCommand,
     "```",
+    "",
+  ].join("\n");
+}
+
+function resolveReviewFindingsPath(pathValue = "", paths = {}) {
+  const raw = String(pathValue || "").trim();
+  if (!raw) return "";
+  const resolved = resolve(repoRoot, raw);
+  const reviewResultsRoot = paths.root ? resolve(paths.root, "review-results") : "";
+  if (!reviewResultsRoot || !pathInsideRoot(resolved, reviewResultsRoot)) return "";
+  if (!existsSync(resolved)) return "";
+  const stat = statSync(resolved);
+  if (!stat.isFile()) return "";
+  return resolved;
+}
+
+function assignmentIdFromReviewFindingsPath(pathValue = "", paths = {}) {
+  const resolved = resolveReviewFindingsPath(pathValue, paths);
+  if (!resolved) return "";
+  const reviewResultsRoot = resolve(paths.root || "", "review-results");
+  const relativePath = relative(reviewResultsRoot, resolved);
+  if (!relativePath || relativePath.startsWith("..") || relativePath.includes("/")) return "";
+  if (!relativePath.endsWith(".md")) return "";
+  return sanitizeLedgerField(relativePath.slice(0, -3), "", 140);
+}
+
+function assignmentIdForStoryKey(storyKey = "") {
+  const safeStoryKey = sanitizeLedgerField(storyKey || "", "", 140);
+  return safeStoryKey.startsWith("bmad-") ? safeStoryKey : `bmad-${safeStoryKey}`;
+}
+
+function buildWorkerCodeReviewFreshness({ paths = {}, targetAssignmentId = "", target = {} } = {}, options = {}, context = {}) {
+  const targetId = sanitizeLedgerField(targetAssignmentId || "", "", 140);
+  const targetWorkerId = sanitizeLedgerField(target.workerId || "", "", 80);
+  const resultPath = paths.root && targetId ? join(paths.root, "review-results", `${targetId}.md`) : "";
+  const requestDir = paths.root ? join(paths.root, "review-requests") : "";
+  const resultMtimeMs = fileMtimeMs(resultPath);
+  const events = Array.isArray(context.events) ? context.events : readNdjsonStrict(paths.events).value;
+  const checkpoints = Array.isArray(context.checkpoints) ? context.checkpoints : readJson(paths.checkpoints, []);
+  const targetEvents = (Array.isArray(events) ? events : []).filter((event) => recordReferencesAssignment(event, targetId));
+  const latestReviewFeedbackMs = latestRecordTimestampMs(
+    targetEvents.filter((event) => String(event.eventType || "").includes("worker_review_feedback")),
+  );
+  const latestTargetCheckpointMs = latestRecordTimestampMs(
+    (Array.isArray(checkpoints) ? checkpoints : [])
+      .filter((checkpoint) => recordReferencesAssignment(checkpoint, targetId))
+      .filter((checkpoint) => targetCheckpointBelongsToImplementationWorker(checkpoint, targetId, targetWorkerId)),
+  );
+  const latestInvalidatorMs = Math.max(latestReviewFeedbackMs || 0, latestTargetCheckpointMs || 0);
+  const requestMtimes = requestDir && targetId && existsSync(requestDir)
+    ? safeReaddirSync(requestDir)
+      .filter((entry) => entry.endsWith(`-${targetId}.md`))
+      .map((entry) => join(requestDir, entry))
+      .filter((entryPath) => fileContainsText(entryPath, `contractVersion: ${WORKER_CODE_REVIEW_REQUEST_VERSION}`))
+      .map((entryPath) => fileMtimeMs(entryPath))
+      .filter((value) => value > 0)
+    : [];
+  const requestMtimeMs = Math.max(0, ...requestMtimes);
+  const resultComplete = reviewResultHasTerminalStatus(resultPath);
+  return {
+    targetAssignmentId: targetId,
+    resultExists: resultMtimeMs > 0 && resultComplete,
+    resultMtimeMs,
+    requestMtimeMs,
+    latestReviewFeedbackMs,
+    latestTargetCheckpointMs,
+    latestInvalidatorMs,
+    resultComplete,
+    resultFresh: resultComplete && resultMtimeMs > 0 && (latestInvalidatorMs === 0 || resultMtimeMs >= latestInvalidatorMs),
+    resultStale: resultComplete && resultMtimeMs > 0 && latestInvalidatorMs > 0 && resultMtimeMs < latestInvalidatorMs,
+    requestFresh: requestMtimeMs > 0 && (latestInvalidatorMs === 0 || requestMtimeMs >= latestInvalidatorMs),
+    policy: "review_result_must_be_newer_than_latest_review_feedback_or_target_checkpoint",
+  };
+}
+
+function buildWorkerCodeReviewAttemptSummary({ paths = {}, targetAssignmentId = "", invalidatorMs = 0 } = {}, options = {}, context = {}) {
+  const target = sanitizeLedgerField(targetAssignmentId || "", "", 140);
+  const maxAttemptsPerReviewer = Math.max(1, nonNegativeInteger(options.maxReviewRequestsPerReviewer) ?? 2);
+  const resultPath = paths.root && target ? join(paths.root, "review-results", `${target}.md`) : "";
+  const resultExists = resultPath ? reviewResultHasTerminalStatus(resultPath) && (Number(invalidatorMs || 0) === 0 || fileMtimeMs(resultPath) >= Number(invalidatorMs || 0)) : false;
+  const events = Array.isArray(context.events) ? context.events : readNdjsonStrict(paths.events).value;
+  const attemptsByWorker = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!String(event.eventType || "").includes("worker_code_review_request_apply")) continue;
+    const eventMs = parseTimeMs(event.timestamp) || 0;
+    if (Number(invalidatorMs || 0) > 0 && eventMs > 0 && eventMs < Number(invalidatorMs || 0)) continue;
+    const refs = sourceRefList(event.sourceRefs || []);
+    if (!refs.includes(`assignment:${target}`)) continue;
+    const workerRef = refs.find((ref) => ref.startsWith("worker:"));
+    const workerId = sanitizeLedgerField(workerRef ? workerRef.slice("worker:".length) : "", "", 80);
+    if (!workerId) continue;
+    attemptsByWorker.set(workerId, (attemptsByWorker.get(workerId) || 0) + 1);
+  }
+  const attempts = Object.fromEntries([...attemptsByWorker.entries()].sort(([left], [right]) => left.localeCompare(right)));
+  const exhaustedWorkers = resultExists
+    ? []
+    : Object.entries(attempts)
+      .filter(([, count]) => Number(count || 0) >= maxAttemptsPerReviewer)
+      .map(([workerId]) => workerId);
+  return {
+    targetAssignmentId: target,
+    maxAttemptsPerReviewer,
+    resultExists,
+    attempts,
+    exhaustedWorkers,
+    policy: "rotate_reviewer_after_repeated_no_result_requests",
+  };
+}
+
+function recordReferencesAssignment(record = {}, assignmentId = "") {
+  const target = sanitizeLedgerField(assignmentId || "", "", 140);
+  if (!target) return false;
+  if (sanitizeLedgerField(record.assignmentId || "", "", 140) === target) return true;
+  return sourceRefList(record.sourceRefs || []).some((ref) => {
+    const text = String(ref || "");
+    return text === target || text === `assignment:${target}`;
+  });
+}
+
+function targetCheckpointBelongsToImplementationWorker(checkpoint = {}, assignmentId = "", targetWorkerId = "") {
+  const summary = String(checkpoint.summary || "");
+  if (/delegated code review complete/i.test(summary)) return false;
+  if (/code review findings/i.test(summary)) return false;
+  if (targetWorkerId) {
+    const actor = sanitizeLedgerField(checkpoint.actor || checkpoint.actorId || checkpoint.workerId || "", "", 80);
+    if (actor && actor !== "manager" && actor !== targetWorkerId) return false;
+  }
+  return recordReferencesAssignment(checkpoint, assignmentId);
+}
+
+function fileMtimeMs(pathValue = "") {
+  try {
+    if (!pathValue || !existsSync(pathValue)) return 0;
+    return statSync(pathValue).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function safeReaddirSync(pathValue = "") {
+  try {
+    return readdirSync(pathValue);
+  } catch {
+    return [];
+  }
+}
+
+function fileContainsText(pathValue = "", text = "") {
+  try {
+    return Boolean(pathValue && text && readFileSync(pathValue, "utf8").includes(text));
+  } catch {
+    return false;
+  }
+}
+
+function pathInsideRoot(pathValue = "", rootValue = "") {
+  if (!pathValue || !rootValue) return false;
+  const relativePath = relative(resolve(rootValue), resolve(pathValue));
+  return relativePath === "" || (!relativePath.startsWith("..") && !relativePath.startsWith("/") && !relativePath.includes("..\\"));
+}
+
+function reviewResultIsFail(pathValue = "") {
+  try {
+    if (!pathValue || !existsSync(pathValue)) return false;
+    return /^(?:Result|Status):\s*FAIL\s*$/im.test(readFileSync(pathValue, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function reviewResultHasTerminalStatus(pathValue = "") {
+  try {
+    if (!pathValue || !existsSync(pathValue)) return false;
+    return /^(?:Result|Status):\s*(?:PASS|FAIL)\s*$/im.test(readFileSync(pathValue, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function reviewFindingsRetentionBlocker(pathValue = "") {
+  try {
+    const text = readFileSync(pathValue, "utf8");
+    if (!containsForbiddenRetainedText(text)) return null;
+    return {
+      code: "review-feedback-findings-retention-unsafe",
+      message: "Review feedback findings contain raw payload, secret, transcript, or provider-retention markers and cannot be routed to a worker.",
+      nextAction: "Replace the review result with compact severity, file/line, rationale, required fix, and verification-gap metadata only.",
+    };
+  } catch {
+    return {
+      code: "review-feedback-findings-unreadable",
+      message: "Review feedback findings could not be read before routing.",
+      nextAction: "Regenerate the failed compact review result under the current manager run.",
+    };
+  }
+}
+
+function containsForbiddenRetainedText(value = "") {
+  return /\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b|\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/i.test(String(value || ""));
+}
+
+function workerProgressRowConflictsManagerOwner(worker = {}, runId = "") {
+  const rowRunId = sanitizeLedgerField(worker.runId || "", "", 80);
+  if (rowRunId && rowRunId !== runId) return true;
+  const owner = sanitizeLedgerField(worker.owner || "", "", 120);
+  return Boolean(owner && runId && !owner.startsWith(`${runId}/`));
+}
+
+function selectWorkerCodeReviewer(workers = [], targetAssignmentId = "", requestedWorkerId = "", attemptSummary = {}, runId = "") {
+  const allowedStates = new Set(["manager_review_ready", "delivery_gate_ready"]);
+  const requested = sanitizeLedgerField(requestedWorkerId || "", "", 80);
+  const target = normalizeBmadStoryAssignmentId(targetAssignmentId || "") || sanitizeLedgerField(targetAssignmentId || "", "", 140);
+  const exhausted = new Set(sourceRefList(attemptSummary.exhaustedWorkers || []).map((workerId) => sanitizeLedgerField(workerId, "", 80)).filter(Boolean));
+  const candidates = workers
+    .filter((worker) => worker?.workerId && worker?.sessionName)
+    .filter((worker) => allowedStates.has(String(worker.progressState || "")))
+    .filter((worker) => !workerProgressRowConflictsManagerOwner(worker, runId))
+    .filter((worker) => !requested || worker.workerId === requested)
+    .filter((worker) => !exhausted.has(sanitizeLedgerField(worker.workerId || "", "", 80)));
+  return candidates.find((worker) => {
+    const workerAssignment = normalizeBmadStoryAssignmentId(worker.assignmentId || "") || sanitizeLedgerField(worker.assignmentId || "", "", 140);
+    return workerAssignment !== target;
+  }) || null;
+}
+
+function buildWorkerCodeReviewRequest({ reviewer = {}, target = {}, reviewPlan = {}, paths = {}, runOptions = {} } = {}) {
+  const workerId = sanitizeLedgerField(reviewer.workerId || "worker", "worker", 80);
+  const storyKey = sanitizeLedgerField(reviewPlan.summary?.selectedStory?.storyKey || normalizeBmadStoryAssignmentId(target.assignmentId || ""), "", 140);
+  const targetAssignmentId = assignmentIdForStoryKey(storyKey);
+  const requestPath = join(paths.root, "review-requests", `${workerId}-${targetAssignmentId}.md`);
+  const pastePath = join(paths.root, "review-requests", `${workerId}-${targetAssignmentId}.paste.txt`);
+  const resultPath = join(paths.root, "review-results", `${targetAssignmentId}.md`);
+  return {
+    contractVersion: WORKER_CODE_REVIEW_REQUEST_VERSION,
+    workerId,
+    sessionName: sanitizeLedgerField(reviewer.sessionName || workerId, workerId, 80),
+    runId: paths.runId,
+    reviewerAssignmentId: sanitizeLedgerField(reviewer.assignmentId || "", "", 140),
+    reviewerProgressState: sanitizeLedgerField(reviewer.progressState || "", "", 80),
+    targetAssignmentId,
+    targetTaskId: sanitizeLedgerField(target.taskId || "", "", 140),
+    targetWorkerId: sanitizeLedgerField(target.workerId || "", "", 80),
+    targetWorktreePath: sanitizeLedgerField(target.worktreePath || "", "", 260),
+    targetLaneOwner: sanitizeLedgerField(target.laneOwner || "", "", 160),
+    storyKey,
+    storyPath: sanitizeLedgerField(reviewPlan.summary?.selectedStory?.storyPath || `_bmad-output/implementation-artifacts/${storyKey}.md`, "", 260),
+    sprintStatusPath: sanitizeLedgerField(reviewPlan.summary?.selectedStory?.sprintStatusPath || runOptions.sprintStatusPath || "_bmad-output/implementation-artifacts/sprint-status.yaml", "", 260),
+    storySourcePath: sanitizeLedgerField(resolve(repoRoot, reviewPlan.summary?.selectedStory?.storyPath || `_bmad-output/implementation-artifacts/${storyKey}.md`), "", 320),
+    sprintStatusSourcePath: sanitizeLedgerField(resolve(repoRoot, reviewPlan.summary?.selectedStory?.sprintStatusPath || runOptions.sprintStatusPath || "_bmad-output/implementation-artifacts/sprint-status.yaml"), "", 320),
+    requestPath,
+    pastePath,
+    resultPath,
+    pasteText: `Start delegated code review now. Read ${requestPath}, review only the named target lane, write the compact findings artifact to ${resultPath}, then append the checkpoint command from the request file.`,
+    retention: "review_request_path_and_summary",
+  };
+}
+
+function fileAgeSeconds(pathValue = "", options = {}, context = {}) {
+  try {
+    const nowMsCandidate = Number(options.nowMs ?? context.nowMs);
+    const nowMs = Number.isFinite(nowMsCandidate)
+      ? nowMsCandidate
+      : parseTimeMs(options.now || context.now) || Date.now();
+    return Math.max(0, Math.floor((nowMs - statSync(pathValue).mtimeMs) / 1000));
+  } catch {
+    return null;
+  }
+}
+
+function renderWorkerCodeReviewFile(request = {}) {
+  const owner = request.targetLaneOwner || managerDispatcherOwner(request.runId);
+  const ownerFlag = owner ? ` --owner ${shellSingleQuote(owner)}` : "";
+  const resumeCommand = `node ./scripts/codex-workspace.mjs resume ${shellSingleQuote(request.targetAssignmentId)}${ownerFlag}`;
+  const checkpointCommand = [
+    "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
+    `--run-id ${shellSingleQuote(request.runId)}`,
+    `--worker-id ${shellSingleQuote(request.workerId)}`,
+    `--summary ${shellSingleQuote(`delegated code review complete for ${request.targetAssignmentId}; findings at ${request.resultPath}`)}`,
+    `--authority-basis ${shellSingleQuote("manager-owned-worker-code-review-response")}`,
+    `--recovery-path ${shellSingleQuote("manager can read compact findings path and route feedback or delivery")}`,
+    `--source-ref ${shellSingleQuote(`assignment:${request.targetAssignmentId}`)}`,
+    `--source-ref ${shellSingleQuote(`story:${request.storyPath}`)}`,
+  ].join(" ");
+  return [
+    "# Manager Code Review Request",
+    "",
+    `contractVersion: ${request.contractVersion}`,
+    `reviewerWorkerId: ${request.workerId}`,
+    `reviewerCurrentAssignmentId: ${request.reviewerAssignmentId || "(none)"}`,
+    `targetAssignmentId: ${request.targetAssignmentId}`,
+    `targetWorkerId: ${request.targetWorkerId || "(unknown)"}`,
+    `storyPath: ${request.storyPath}`,
+    `storySourcePath: ${request.storySourcePath}`,
+    `sprintStatusPath: ${request.sprintStatusPath}`,
+    `sprintStatusSourcePath: ${request.sprintStatusSourcePath}`,
+    `resultPath: ${request.resultPath}`,
+    "",
+    "Run a BMAD code review for the target lane. You are reviewing only; do not modify target lane files, merge, push, clean up, access secrets, retain raw provider payloads, or inspect unrelated work.",
+    "",
+    "Review target:",
+    "",
+    "```bash",
+    resumeCommand,
+    "```",
+    "",
+    "Use `$bmad-code-review` against the target lane's uncommitted branch/worktree diff with the story file as spec context. If the ignored BMAD story or sprint artifact is absent from the target lane, read the absolute `storySourcePath` and `sprintStatusSourcePath` above from the main repo as source-owned review context; do not copy those artifacts into the target lane. If a reviewer subagent/tool is unavailable, perform the same three lenses locally: Blind Hunter, Edge Case Hunter, and Acceptance Auditor.",
+    "",
+    `Write the compact findings artifact to this exact path: ${request.resultPath}`,
+    "",
+    "Include only finding severity, file/line references, rationale, required fix, verification gaps, and pass/fail summary. Do not store raw prompts, completions, reasoning traces, provider payloads, secrets, or broad source copies.",
+    "",
+    "After writing the findings artifact, append a compact manager checkpoint:",
+    "",
+    "```bash",
+    checkpointCommand,
+    "```",
+    "",
+  ].join("\n");
+}
+
+function cleanupReviewRequestArtifacts(request = {}) {
+  for (const pathValue of [request.requestPath, request.pastePath]) {
+    if (!pathValue) continue;
+    try {
+      rmSync(pathValue, { force: true });
+    } catch {
+      // Best-effort cleanup; the blocked packet still carries the paste failure.
+    }
+  }
+}
+
+function buildWorkerReviewFeedbackRequest(worker = {}, paths = {}, findingsPath = "") {
+  const workerId = sanitizeLedgerField(worker.workerId || "worker", "worker", 80);
+  const assignmentId = sanitizeLedgerField(worker.assignmentId || "unassigned", "unassigned", 140);
+  const requestPath = join(paths.root, "review-feedback", `${workerId}-${assignmentId}.md`);
+  const pastePath = join(paths.root, "review-feedback", `${workerId}-${assignmentId}.paste.txt`);
+  return {
+    workerId,
+    sessionName: sanitizeLedgerField(worker.sessionName || workerId, workerId, 80),
+    runId: paths.runId,
+    assignmentId,
+    taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
+    laneOwner: sanitizeLedgerField(worker.laneOwner || "", "", 160),
+    progressState: sanitizeLedgerField(worker.progressState || "", "", 80),
+    findingsPath,
+    requestPath,
+    pastePath,
+    pasteText: `Start review-feedback fixes now. Read ${requestPath}, apply only the named findings in ${assignmentId}, run focused verification, then append the checkpoint command from the feedback file.`,
+    retention: "review_feedback_path_and_summary",
+  };
+}
+
+function validateWorkerReviewFeedbackMetadata(request = {}, options = {}, context = {}) {
+  const storyKey = normalizeBmadStoryAssignmentId(request.assignmentId || "");
+  if (!storyKey || !/^\d+-\d+-[a-z0-9-]+$/i.test(storyKey)) {
+    return { ok: false, code: "review-feedback-story-id-invalid", message: "Review feedback apply requires a BMAD story assignment id before worker mutation.", nextAction: "Use a BMAD story assignment such as bmad-1-2-example and rerun review feedback." };
+  }
+  if (!request.laneOwner) {
+    return { ok: false, storyKey, code: "review-feedback-lane-owner-missing", message: "Review feedback apply requires lane owner metadata before worker mutation.", nextAction: "Refresh manager worker progress or resume the lane with owner metadata before routing feedback." };
+  }
+  const sprintPath = sanitizeRelativeBmadOutputPath(
+    context.sprintStatusPath ||
+    options.sprintStatusPath ||
+    context.sourcePlanning?.sprintStatus?.path ||
+    context.sourcePlanningState?.sprintStatus?.path ||
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  if (!sprintPath) {
+    return { ok: false, storyKey, code: "review-feedback-sprint-status-path-invalid", message: "Review feedback apply requires a sprint status path under _bmad-output before worker mutation.", nextAction: "Provide the active BMAD sprint status path before routing review feedback." };
+  }
+  const absoluteSprintPath = resolve(repoRoot, sprintPath);
+  if (!existsSync(absoluteSprintPath)) {
+    return { ok: false, storyKey, sprintStatusPath: sprintPath, code: "review-feedback-sprint-status-missing", message: "Review feedback apply requires an existing sprint status tracker before worker mutation.", nextAction: "Refresh BMAD sprint planning or point the manager at the active sprint tracker before routing feedback." };
+  }
+  const sprintSource = readFileSync(absoluteSprintPath, "utf8");
+  const reviewPattern = new RegExp(`^\\s*${escapeRegExp(storyKey)}:\\s*review\\s*$`, "mi");
+  if (!reviewPattern.test(sprintSource)) {
+    return { ok: false, storyKey, sprintStatusPath: sprintPath, code: "review-feedback-sprint-status-not-review", message: "Review feedback apply requires the target BMAD story to still be in review status before worker mutation.", nextAction: "Refresh sprint status and only route review feedback for stories currently in review." };
+  }
+  return { ok: true, storyKey, sprintStatusPath: sprintPath };
+}
+
+function renderWorkerReviewFeedbackFile(request = {}, findings = "") {
+  const ownerFlag = request.laneOwner ? ` --owner ${shellSingleQuote(request.laneOwner)}` : "";
+  const resumeCommand = `node ./scripts/codex-workspace.mjs resume ${shellSingleQuote(request.assignmentId)}${ownerFlag}`;
+  const checkpointCommand = [
+    "node ./scripts/manager-ledger.mjs append-checkpoint --summary-json",
+    `--run-id ${shellSingleQuote(request.runId)}`,
+    `--worker-id ${shellSingleQuote(request.workerId)}`,
+    `--summary ${shellSingleQuote("review feedback addressed; include compact verification result and remaining blockers if any")}`,
+    `--authority-basis ${shellSingleQuote("manager-owned-worker-review-feedback-response")}`,
+    `--recovery-path ${shellSingleQuote("manager can rerun bmad-code-review after review-feedback checkpoint")}`,
+    `--source-ref ${shellSingleQuote(`assignment:${request.assignmentId}`)}`,
+    `--source-ref ${shellSingleQuote(`task:${request.taskId}`)}`,
+  ].join(" ");
+  return [
+    "# Manager Review Feedback",
+    "",
+    `workerId: ${request.workerId}`,
+    `assignmentId: ${request.assignmentId}`,
+    `taskId: ${request.taskId}`,
+    `laneOwner: ${request.laneOwner || "(none)"}`,
+    `progressState: ${request.progressState || "(none)"}`,
+    "",
+    "This lane did not pass BMAD code review. Start the fixes now. Apply the patch findings below in the lane worktree, keep the story scope unchanged, and do not modify unrelated files. Do not merge, push, clean up, access secrets, retain raw provider payloads, or perform provider/account changes.",
+    "",
+    "Resume the lane with delegated owner evidence:",
+    "",
+    "```bash",
+    resumeCommand,
+    "```",
+    "",
+    "After fixes, run the focused verification from the story plus any tests directly covering the changed behavior. Then write a compact manager checkpoint:",
+    "",
+    "```bash",
+    checkpointCommand,
+    "```",
+    "",
+    "## Review Findings To Fix",
+    "",
+    findings.trim(),
     "",
   ].join("\n");
 }
@@ -4051,7 +5240,7 @@ function probeWorkerInputRegion(worker = {}, runner = spawnSync, context = {}) {
 }
 
 function managerPointerPattern() {
-  return /Please read and follow this manager|manager-runs\/.*\.(md|txt)|progress-requests|handoffs|answer-requests|owner-delegations/;
+  return /Please read and follow this manager|manager-runs\/.*\.(md|txt)|progress-requests|handoffs|answer-requests|owner-delegations|review-feedback|review-requests/;
 }
 
 function promptProbeRequestSummary(probe = {}) {
@@ -4115,6 +5304,41 @@ function eventHasUnverifiedPointerReceipt(event = {}) {
     || (refs.includes("receipt:unverified") && !refs.includes("receipt:verified"));
 }
 
+function buildOpenStoryReviewFeedbackSummary(assignmentId = "", context = {}) {
+  const storyKey = normalizeBmadStoryAssignmentId(assignmentId || "");
+  if (!storyKey) return { storyKey: "", storyPath: "", storyMtimeMs: 0, openCount: 0 };
+  const storyPath = context.storyPath || join(repoRoot, "_bmad-output", "implementation-artifacts", `${storyKey}.md`);
+  try {
+    if (!existsSync(storyPath)) return { storyKey, storyPath, storyMtimeMs: 0, openCount: 0 };
+    const content = readFileSync(storyPath, "utf8");
+    let inReviewFindingsSection = false;
+    let openCount = 0;
+    for (const line of content.split(/\r?\n/)) {
+      if (/^\s{0,3}#{1,6}\s+/.test(line)) {
+        inReviewFindingsSection = /\b(BMAD\s+review|code\s+review|review\s+feedback|review\s+findings?)\b/i.test(line);
+        continue;
+      }
+      if (!/^\s*-\s+\[\s\]\s+/.test(line)) continue;
+      const item = line.replace(/^\s*-\s+\[\s\]\s+/, "");
+      if (
+        inReviewFindingsSection ||
+        /\b(BMAD\s+review|code\s+review|review\s+feedback|review\s+finding)\b/i.test(item) ||
+        /^(?:\[[^\]]*\]\s*)?(?:critical|high|medium|low)\s*:/i.test(item)
+      ) {
+        openCount += 1;
+      }
+    }
+    return {
+      storyKey,
+      storyPath,
+      storyMtimeMs: statSync(storyPath).mtimeMs,
+      openCount,
+    };
+  } catch {
+    return { storyKey, storyPath, storyMtimeMs: 0, openCount: 0 };
+  }
+}
+
 function resolveTmuxPaneTarget(sessionName = "", runner = spawnSync, context = {}) {
   const list = runner("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_active}:#{pane_id}"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
   if (list?.error) return { ok: false, error: list.error.message || "tmux list-panes failed" };
@@ -4151,12 +5375,14 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
   const latestCheckpointMs = latestRecordTimestampMs(checkpointMatches);
   const latestOwnerDelegationMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_owner_delegation")));
   const latestProgressSignalMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_progress_signal")));
+  const latestReviewFeedbackMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_review_feedback")));
   const latestSubmitPendingMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_submit_pending")));
   const latestPointerReceiptUnverifiedMs = latestRecordTimestampMs(eventMatches.filter(eventHasUnverifiedPointerReceipt));
   const latestRecoveryInspectionMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_recovery_inspection")));
   const latestQuestionAnswerMs = latestRecordTimestampMs(eventMatches.filter((event) => String(event.eventType || "").includes("worker_question_answer")));
   const latestOwnerDelegationAgeSeconds = latestOwnerDelegationMs ? Math.max(0, Math.floor((context.nowMs - latestOwnerDelegationMs) / 1000)) : null;
   const latestProgressSignalAgeSeconds = latestProgressSignalMs ? Math.max(0, Math.floor((context.nowMs - latestProgressSignalMs) / 1000)) : null;
+  const latestReviewFeedbackAgeSeconds = latestReviewFeedbackMs ? Math.max(0, Math.floor((context.nowMs - latestReviewFeedbackMs) / 1000)) : null;
   const latestSubmitPendingAgeSeconds = latestSubmitPendingMs ? Math.max(0, Math.floor((context.nowMs - latestSubmitPendingMs) / 1000)) : null;
   const latestPointerReceiptUnverifiedAgeSeconds = latestPointerReceiptUnverifiedMs ? Math.max(0, Math.floor((context.nowMs - latestPointerReceiptUnverifiedMs) / 1000)) : null;
   const latestRecoveryInspectionAgeSeconds = latestRecoveryInspectionMs ? Math.max(0, Math.floor((context.nowMs - latestRecoveryInspectionMs) / 1000)) : null;
@@ -4174,6 +5400,10 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
     && latestQuestionAnswerMs >= (latestCheckpointMs || 0);
   const latestReadyCheckpoint = sortedCheckpoints.find((record) => classifyLaneAdvancementSummary(record.summary).state !== "not_ready") || null;
   const readyCheckpointReadiness = classifyLaneAdvancementSummary(latestReadyCheckpoint?.summary || "");
+  const openStoryReviewFeedback = buildOpenStoryReviewFeedbackSummary(assignmentId, context);
+  const openStoryReviewFeedbackMs = openStoryReviewFeedback.openCount > 0 ? openStoryReviewFeedback.storyMtimeMs : 0;
+  const latestEffectiveReviewFeedbackMs = Math.max(latestReviewFeedbackMs || 0, openStoryReviewFeedbackMs || 0);
+  const latestEffectiveReviewFeedbackAgeSeconds = latestEffectiveReviewFeedbackMs ? Math.max(0, Math.floor((context.nowMs - latestEffectiveReviewFeedbackMs) / 1000)) : null;
   const laneStatus = String(context.lane?.status || "").toLowerCase();
   const lanePhase = String(context.lane?.phase || "").toLowerCase();
   const laneReassignable = laneStatus === "reassignable" || lanePhase === "reassignable";
@@ -4205,6 +5435,16 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
   const staleQuestionAnswer = latestCheckpointBlockerAnswered
     && latestQuestionAnswerAgeSeconds !== null
     && latestQuestionAnswerAgeSeconds * 1000 >= context.staleSignalMs;
+  const reviewFeedbackAwaitingCheckpoint = latestEffectiveReviewFeedbackMs > (latestCheckpointMs || 0);
+  const openReviewFeedbackStillUnresolved = openStoryReviewFeedback.openCount > 0;
+  const reviewFeedbackProgressSignalSent = (reviewFeedbackAwaitingCheckpoint || openReviewFeedbackStillUnresolved) && latestProgressSignalMs > latestEffectiveReviewFeedbackMs;
+  const reviewFeedbackProgressSignalStale = reviewFeedbackProgressSignalSent
+    && latestProgressSignalAgeSeconds !== null
+    && latestProgressSignalAgeSeconds * 1000 >= context.staleSignalMs;
+  const staleReviewFeedback = (reviewFeedbackAwaitingCheckpoint || openReviewFeedbackStillUnresolved)
+    && !reviewFeedbackProgressSignalSent
+    && latestEffectiveReviewFeedbackAgeSeconds !== null
+    && latestEffectiveReviewFeedbackAgeSeconds * 1000 >= context.staleSignalMs;
   const staleRecoverySubmit = recoveryInspectionAfterProgressSignal
     && submitPendingAfterRecoveryInspection
     && latestSubmitPendingAgeSeconds !== null
@@ -4229,6 +5469,24 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
   } else if (latestCheckpointBlockerAnswered) {
     progressState = "question_answer_sent";
     nextAction = "Wait for a newer compact checkpoint after the manager source-context answer.";
+  } else if (staleRecoverySubmit) {
+    progressState = "recovery_submit_unanswered";
+    nextAction = "Choose bounded manager-owned restart or retire gate; C-m-only repair has already been submitted without a newer checkpoint.";
+  } else if (recoveryInspectionAfterProgressSignal && (reviewFeedbackProgressSignalStale || progressSignalCount >= 2)) {
+    progressState = "recovery_inspected";
+    nextAction = "Choose a bounded manager-owned repair, retire, restart, or wait for checkpoint; do not send another progress request.";
+  } else if (reviewFeedbackProgressSignalStale) {
+    progressState = "progress_signal_unanswered";
+    nextAction = "Run bounded worker recovery inspection; review feedback still has no newer checkpoint.";
+  } else if (reviewFeedbackProgressSignalSent) {
+    progressState = "progress_signal_sent";
+    nextAction = "Wait for a newer compact checkpoint after the review-feedback progress signal.";
+  } else if (staleReviewFeedback) {
+    progressState = "review_feedback_stale";
+    nextAction = "Ask worker for a compact checkpoint after review feedback; do not run another manager review yet.";
+  } else if (reviewFeedbackAwaitingCheckpoint || openReviewFeedbackStillUnresolved) {
+    progressState = "review_feedback_sent";
+    nextAction = "Wait for open review feedback to be resolved and a newer compact checkpoint before running another manager review.";
   } else if (hasReadyCheckpoint) {
     progressState = readyCheckpointReadiness.state;
     nextAction = "Advance lane through manager review/delivery gates instead of pinging completed worker for more progress.";
@@ -4241,12 +5499,6 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
   } else if (hasCheckpoint) {
     progressState = "checkpoint_seen";
     nextAction = "Surface checkpoint if it is user-facing, safety-relevant, or operator-actionable.";
-  } else if (staleRecoverySubmit) {
-    progressState = "recovery_submit_unanswered";
-    nextAction = "Choose bounded manager-owned restart or retire gate; C-m-only repair has already been submitted without a newer checkpoint.";
-  } else if (recoveryInspectionAfterProgressSignal && progressSignalCount >= 2) {
-    progressState = "recovery_inspected";
-    nextAction = "Choose a bounded manager-owned repair, retire, restart, or wait for checkpoint; do not send another progress request.";
   } else if (promptIdleAfterProgressSignal) {
     progressState = "progress_signal_unanswered";
     nextAction = "Visible Codex prompt after a submitted progress signal means the worker is idle; run bounded recovery inspection now.";
@@ -4287,6 +5539,9 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
     latestCheckpointAgeSeconds,
     latestOwnerDelegationAgeSeconds,
     latestProgressSignalAgeSeconds,
+    latestReviewFeedbackAgeSeconds,
+    latestEffectiveReviewFeedbackAgeSeconds,
+    openStoryReviewFeedbackCount: openStoryReviewFeedback.openCount,
     latestSubmitPendingAgeSeconds,
     latestPointerReceiptUnverifiedAgeSeconds,
     latestRecoveryInspectionAgeSeconds,
@@ -4457,6 +5712,377 @@ export function buildWorkerFrictionPlan(options = {}, context = {}) {
     ],
     nextActions: failureLoops.map((loop) => ({ code: `worker-loop-${loop.action}`, summary: loop.summary, nextAction: loop.nextAction })),
   });
+}
+
+export function buildCodexAdvisorPacketPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const condition = sanitizeLedgerField(options.advisorCondition || options.condition || context.condition || context.advisorCondition || "", "", 140);
+  const summary = sanitizeLedgerField(options.summary || context.summary || condition, "", 240);
+  const failureKind = sanitizeLedgerField(options.advisorFailureKind || options.failureKind || context.failureKind || context.advisorFailureKind || "", "", 100);
+  const actionCode = sanitizeLedgerField(options.advisorActionCode || options.actionCode || context.actionCode || context.advisorActionCode || "", "", 120);
+  const workClass = sanitizeLedgerField(options.advisorWorkClass || options.workClass || context.workClass || context.advisorWorkClass || "", "", 80);
+  const evidenceRefs = advisorPacketRefs(options.evidenceRefs || context.evidenceRefs || context.evidence || []);
+  const sourceRefs = advisorPacketRefs(options.sourceRefs || context.sourceRefs || context.source || []);
+  const usefulWorkPolicy = isPlainObject(context.usefulWorkPolicy || options.usefulWorkPolicy)
+    ? sanitizeCyclePacketValue(context.usefulWorkPolicy || options.usefulWorkPolicy)
+    : null;
+  const safeTaskWorkAvailable = Boolean(
+    context.safeTaskWorkAvailable === true ||
+      options.safeTaskWorkAvailable === true ||
+      Number(usefulWorkPolicy?.usefulWorkActions || 0) > 0 ||
+      Number(context.safeWork?.eligibleCount || context.unblockedWork?.eligibleCount || 0) > 0,
+  );
+  const existingHandler = advisorExistingHandler({ condition, actionCode, workClass, failureKind });
+  const issueClass = advisorIssueClass({ condition, failureKind, actionCode, workClass, existingHandler, usefulWorkPolicy });
+  const recommendedResponse = advisorRecommendedResponse({ issueClass, existingHandler, safeTaskWorkAvailable });
+  const requestPacket = condition ? {
+    packetId: `${runId}-${advisorPacketSlug(condition)}-advisor`,
+    advisor: "codex",
+    inputContract: {
+      question: "Classify this metadata-only manager friction packet and recommend existing handler, continue task work, park/degrade, operator decision, or future manager improvement.",
+      allowedOutputs: ["existing_handler", "continue_task_work", "park_or_degrade_capability", "operator_decision", "future_manager_improvement"],
+      forbiddenOutputs: ["code_patch", "provider_call", "raw_payload_request", "authority_expansion", "self_modification"],
+      outputFormat: "structured_json_summary_only",
+    },
+    condition: {
+      condition,
+      summary,
+      failureKind: failureKind || null,
+      actionCode: actionCode || null,
+      workClass: workClass || null,
+      issueClass,
+      existingHandler,
+    },
+    taskContinuity: {
+      safeTaskWorkAvailable,
+      recommendedResponse,
+      usefulWorkPolicy,
+    },
+    sourceRefs,
+    evidenceRefs,
+    stopLines: [
+      "do_not_edit_manager_code",
+      "do_not_call_provider_from_manager",
+      "do_not_retain_raw_prompt_completion_reasoning_trace_provider_payload",
+      "do_not_expand_authority",
+    ],
+    retentionPolicy: {
+      packet: "metadata_only_codex_advisor_packet",
+      rawProviderPayloads: "do_not_retain",
+      rawPrompts: "do_not_retain",
+      completions: "do_not_retain",
+      reasoningTraces: "do_not_retain",
+      secrets: "do_not_retain",
+    },
+    mutationMode: "none; advisor packet only",
+    rawPayloadRetained: false,
+  } : null;
+  const validation = validateCodexAdvisorPacket(requestPacket, options, context);
+  const blocked = validation.status === "blocked";
+  return packet({
+    ok: !blocked,
+    status: blocked ? "blocked" : "ready",
+    summary: {
+      runId,
+      requestPacket: blocked ? null : requestPacket,
+      validation,
+      mutationMode: "none; read-only Codex advisor packet summary",
+      rawPayloadRetained: false,
+    },
+    blockers: validation.blockers,
+    warnings: validation.warnings,
+    nextActions: blocked
+      ? []
+      : [{
+          code: "codex-advisor-packet-ready",
+          summary: "Codex advisor packet is ready for read-only classification.",
+          nextAction: "Ask Codex to classify the packet only; do not edit manager code, call providers from the manager, or expand authority.",
+        }],
+  });
+}
+
+export function buildCodexAdvisorClassificationPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const command = String(options.command || "classify").trim() || "classify";
+  const condition = sanitizeLedgerField(options.advisorCondition || options.condition || context.condition || context.advisorCondition || "", "", 140);
+  const recommendation = normalizeAdvisorRecommendation(options.advisorRecommendation || options.recommendation || context.recommendation || context.advisorRecommendation || "");
+  const failureKind = sanitizeLedgerField(options.advisorFailureKind || options.failureKind || context.failureKind || context.advisorFailureKind || "", "", 100);
+  const actionCode = sanitizeLedgerField(options.advisorActionCode || options.actionCode || context.actionCode || context.advisorActionCode || "", "", 120);
+  const workClass = sanitizeLedgerField(options.advisorWorkClass || options.workClass || context.workClass || context.advisorWorkClass || "", "", 80);
+  const capability = sanitizeLedgerField(options.capabilityName || context.capabilityName || context.capability || "", "", 80);
+  const requestedState = normalizeManagerCapabilityState(options.capabilityState || context.capabilityState || context.state || "parked").state;
+  const reasonCodes = uniqueManagerCapabilityValues([
+    ...(options.capabilityReasonCodes || []),
+    ...(context.reasonCodes || context.capabilityReasonCodes || []),
+    recommendation ? `codex_advisor_${recommendation}` : "",
+    failureKind,
+    actionCode ? `${actionCode}_classification` : "",
+  ]);
+  const safeFallbacks = uniqueManagerCapabilityValues(options.capabilitySafeFallbacks || context.safeFallbacks || context.capabilitySafeFallbacks || []);
+  const evidenceRefs = sanitizeSourceRefs(options.evidenceRefs || context.evidenceRefs || []);
+  const sourceRefs = sanitizeSourceRefs(options.sourceRefs || context.sourceRefs || []);
+  const rejectedRefs = [...sourceRefList(options.evidenceRefs || context.evidenceRefs || []), ...sourceRefList(options.sourceRefs || context.sourceRefs || [])].filter(capabilityPostureRefRejected);
+  const validRecommendations = ["existing_handler", "continue_task_work", "park_or_degrade_capability", "operator_decision", "future_manager_improvement"];
+  const blockers = [];
+  if (command !== "classify") {
+    blockers.push({ code: "codex-advisor-classification-command-invalid", message: "Advisor classification intake supports only the classify command.", nextAction: "Use classify with --recommendation." });
+  }
+  if (!recommendation || !validRecommendations.includes(recommendation)) {
+    blockers.push({ code: "codex-advisor-classification-recommendation-invalid", message: `Advisor recommendation must be one of: ${validRecommendations.join(", ")}.`, nextAction: "Pass --recommendation with the compact Codex advisor classification." });
+  }
+  if (!condition) {
+    blockers.push({ code: "codex-advisor-classification-condition-missing", message: "Advisor classification requires the original compact condition.", nextAction: "Pass --condition from the advisor packet." });
+  }
+  if (evidenceRefs.length === 0) {
+    blockers.push({ code: "codex-advisor-classification-evidence-missing", message: "Advisor classification requires compact evidence refs.", nextAction: "Pass --evidence-ref values that point to metadata-only advisor evidence." });
+  }
+  if (rejectedRefs.length > 0) {
+    blockers.push({ code: "codex-advisor-classification-raw-ref-rejected", message: "Advisor classification may retain only compact refs, not raw prompts, provider payloads, transcripts, or secrets.", nextAction: "Replace raw refs with metadata refs such as evidence:advisor-classification." });
+  }
+  if (options.apply === true || context.apply === true) {
+    blockers.push({ code: "codex-advisor-classification-forbidden-mutation", message: "Advisor classification intake is plan-only and cannot apply posture changes directly.", nextAction: "Review the classification packet, then use manager-capability-posture with --apply if the posture preview is correct." });
+  }
+  if (recommendation === "park_or_degrade_capability") {
+    if (!capability) {
+      blockers.push({ code: "codex-advisor-classification-capability-missing", message: "Park/degrade recommendations require a manager capability.", nextAction: "Pass --capability with the affected manager capability." });
+    }
+    if (!["parked", "degraded", "blocked"].includes(requestedState)) {
+      blockers.push({ code: "codex-advisor-classification-state-invalid", message: "Park/degrade recommendations require --state parked, degraded, or blocked.", nextAction: "Choose the least restrictive reduced state that keeps safe work moving." });
+    }
+    if (safeFallbacks.length === 0) {
+      blockers.push({ code: "codex-advisor-classification-fallback-missing", message: "Reduced capability recommendations require at least one safe fallback.", nextAction: "Pass --safe-fallback naming useful work that remains allowed." });
+    }
+  }
+  const existingHandler = advisorExistingHandler({ condition, actionCode, workClass, failureKind });
+  const posturePatch = recommendation === "park_or_degrade_capability" && capability && ["parked", "degraded", "blocked"].includes(requestedState)
+    ? {
+        [capability]: {
+          state: requestedState,
+          reasonCodes,
+          safeFallbacks,
+        },
+      }
+    : null;
+  const posturePreview = posturePatch
+    ? buildManagerCapabilityPostureControlPlan({
+        ...options,
+        command: "set",
+        apply: false,
+        runId,
+        capabilityName: capability,
+        capabilityState: requestedState,
+        capabilityReasonCodes: reasonCodes,
+        capabilitySafeFallbacks: safeFallbacks,
+        evidenceRefs,
+        sourceRefs,
+      }, context)
+    : null;
+  const blocked = blockers.length > 0;
+  const postureCommand = posturePatch
+    ? [
+        "node ./scripts/manager-capability-posture.mjs",
+        "--summary-json",
+        "set",
+        "--run-id",
+        shellSingleQuote(runId),
+        "--capability",
+        shellSingleQuote(capability),
+        "--state",
+        shellSingleQuote(requestedState),
+        ...reasonCodes.flatMap((reason) => ["--reason-code", shellSingleQuote(reason)]),
+        ...safeFallbacks.flatMap((fallback) => ["--safe-fallback", shellSingleQuote(fallback)]),
+        ...evidenceRefs.flatMap((ref) => ["--evidence-ref", shellSingleQuote(ref)]),
+        ...sourceRefs.flatMap((ref) => ["--source-ref", shellSingleQuote(ref)]),
+      ].join(" ")
+    : "";
+  const nextActions = blocked ? [] : advisorClassificationNextActions({
+    recommendation,
+    existingHandler,
+    postureCommand,
+    condition,
+  });
+  return packet({
+    ok: !blocked,
+    status: blocked ? "blocked" : recommendation === "operator_decision" ? "attention" : "ready",
+    summary: {
+      runId,
+      command,
+      classification: {
+        condition,
+        recommendation,
+        failureKind: failureKind || null,
+        actionCode: actionCode || null,
+        workClass: workClass || null,
+        capability: capability || null,
+        requestedState: posturePatch ? requestedState : null,
+        existingHandler,
+        evidenceRefs,
+        sourceRefs,
+        rawPayloadRetained: false,
+      },
+      posturePatch,
+      posturePreview: posturePreview ? sanitizeCyclePacketValue(posturePreview.summary) : null,
+      mutationMode: "none; advisor classification intake only",
+      rawPayloadRetained: false,
+    },
+    blockers,
+    warnings: recommendation === "future_manager_improvement"
+      ? [{ code: "codex-advisor-future-work", message: "Advisor classification records future manager improvement without blocking current task work." }]
+      : [],
+    nextActions,
+  });
+}
+
+function normalizeAdvisorRecommendation(value = "") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "park_or_degrade" || normalized === "park_capability" || normalized === "degrade_capability") return "park_or_degrade_capability";
+  if (normalized === "future_work" || normalized === "future_manager_work") return "future_manager_improvement";
+  if (normalized === "operator" || normalized === "ask_operator") return "operator_decision";
+  if (normalized === "existing_handler_candidate" || normalized === "use_existing_handler") return "existing_handler";
+  return normalized;
+}
+
+function advisorClassificationNextActions({ recommendation = "", existingHandler = {}, postureCommand = "", condition = "" } = {}) {
+  if (recommendation === "park_or_degrade_capability" && postureCommand) {
+    return [{
+      code: "codex-advisor-posture-preview-ready",
+      summary: "Advisor classification recommends reducing a manager capability through the posture gate.",
+      nextAction: `${postureCommand} --apply`,
+    }];
+  }
+  if (recommendation === "existing_handler" && existingHandler?.command) {
+    return [{
+      code: "codex-advisor-existing-handler",
+      summary: `Use existing deterministic handler ${existingHandler.handler}.`,
+      nextAction: existingHandler.command,
+    }];
+  }
+  if (recommendation === "continue_task_work") {
+    return [{
+      code: "codex-advisor-continue-task-work",
+      summary: "Advisor classification recommends continuing safe task work without manager self-coding.",
+      nextAction: "Continue the highest-priority allowed continuous action from the current cycle packet.",
+    }];
+  }
+  if (recommendation === "future_manager_improvement") {
+    return [{
+      code: "codex-advisor-record-future-work",
+      summary: "Advisor classification should be recorded as future manager improvement, not handled during the run.",
+      nextAction: `node ./scripts/manager-cycle-packet.mjs --summary-json --feedback ${shellSingleQuote(`future work: ${condition || "manager advisor classification"}`)}`,
+    }];
+  }
+  if (recommendation === "operator_decision") {
+    return [{
+      code: "codex-advisor-operator-decision",
+      summary: "Advisor classification requires an operator decision before changing manager behavior.",
+      nextAction: "Surface the compact advisor classification, evidence refs, and available safe fallbacks to the operator.",
+    }];
+  }
+  return [];
+}
+
+function advisorPacketRefs(value = []) {
+  return compactSanitizedRefs(value)
+    .filter((ref) => !/\[redacted-(retention-term|token)\]/i.test(ref))
+    .slice(0, 8);
+}
+
+function advisorPacketSlug(value = "") {
+  return sanitizeLedgerField(value, "manager-friction", 120)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "manager-friction";
+}
+
+function advisorRefsAreStructured(refs = []) {
+  return refs.length > 0 && refs.every((ref) => {
+    const text = String(ref || "");
+    if (!text || /(^|[\\/])\.\.([\\/]|$)/.test(text) || text.includes("\\")) return false;
+    if (/\b(stdout|stderr|stack|stacktrace|traceback|transcript|scrollback|provider[-_ ]?payload|raw[-_ ]?(prompt|output|log|text|payload)|completion|reasoning[-_ ]?trace|secret|token)\b/i.test(text)) return false;
+    return /^(events|checkpoint|watermark|dispatcher|ledger|workers|worker|assignment|verification|sandbox|recovery|handoff|workspace|manager|cycle|prompt-region|review-feedback|review-requests|self-repair)[\w./:-]*(?:\.json|\.ndjson|\.md|:[\w./-]+)?$/i.test(text);
+  });
+}
+
+function advisorExistingHandler({ condition = "", actionCode = "", workClass = "", failureKind = "" } = {}) {
+  const text = `${condition} ${actionCode} ${workClass} ${failureKind}`.toLowerCase();
+  if (/prompt.*probe|visible.*pointer|input.*manager.*pointer/.test(text)) return { status: "known_handler", handler: "manager-worker-prompt-probe", command: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json" };
+  if (/submit.*pending|unsubmitted|enter-only|c-m/.test(text)) return { status: "known_handler", handler: "manager-worker-submit-pending", command: "node ./scripts/manager-worker-submit-pending.mjs --summary-json" };
+  if (/recovery.*inspection|progress_signal_unanswered|unanswered.*progress/.test(text)) return { status: "known_handler", handler: "manager-worker-recovery-inspection", command: "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json" };
+  if (/retire|recovery_submit_unanswered|blocked.*question/.test(text)) return { status: "known_handler", handler: "manager-worker-retire", command: "node ./scripts/manager-worker-retire.mjs --summary-json" };
+  if (/dispatch/.test(text)) return { status: "known_handler", handler: "codex-workspace-dispatch-next", command: "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json" };
+  if (/refill|starvation|safe-backlog/.test(text)) return { status: "known_handler", handler: "manager-refill-plan", command: "node ./scripts/manager-refill-plan.mjs --summary-json" };
+  if (/lane.*advance|review-ready|delivery.*gate/.test(text)) return { status: "known_handler", handler: "manager-lane-advance", command: "node ./scripts/manager-lane-advance.mjs --summary-json" };
+  return { status: "no_existing_handler", handler: null, command: null };
+}
+
+function advisorIssueClass({ condition = "", failureKind = "", actionCode = "", workClass = "", existingHandler = {}, usefulWorkPolicy = null } = {}) {
+  const text = `${condition} ${failureKind} ${actionCode} ${workClass}`.toLowerCase();
+  if (/self[_-]?fix[_-]?churn|repair.*budget|repeated.*repair/.test(text) || (Array.isArray(usefulWorkPolicy?.parkedSelfRepair) && usefulWorkPolicy.parkedSelfRepair.length > 0)) return "self_fix_churn";
+  if (/novel|unknown|slightly different|unclassified|no_existing_handler/.test(text) || existingHandler.status === "no_existing_handler") return "novel_manager_friction";
+  if (/unsafe|authority|ownership|secret|credential|retention|evidence/.test(text)) return "safety_evidence";
+  if (existingHandler.status === "known_handler") return "existing_handler_candidate";
+  return "manager_friction";
+}
+
+function advisorRecommendedResponse({ issueClass = "", existingHandler = {}, safeTaskWorkAvailable = false } = {}) {
+  if (issueClass === "self_fix_churn") return safeTaskWorkAvailable ? "continue_task_work_and_park_manager_capability" : "park_or_degrade_capability";
+  if (issueClass === "novel_manager_friction") return safeTaskWorkAvailable ? "continue_task_work_and_record_future_manager_improvement" : "operator_decision";
+  if (issueClass === "safety_evidence") return "operator_decision";
+  if (existingHandler.status === "known_handler") return "use_existing_handler_if_it_directly_unblocks_task_work";
+  return safeTaskWorkAvailable ? "continue_task_work" : "operator_decision";
+}
+
+function validateCodexAdvisorPacket(requestPacket, options = {}, context = {}) {
+  const blockers = [];
+  const warnings = [];
+  if (!requestPacket?.condition?.condition) {
+    blockers.push({
+      code: "codex-advisor-condition-missing",
+      message: "Codex advisor packet requires a compact condition.",
+      nextAction: "Pass --condition with the stable manager friction class or symptom.",
+    });
+  }
+  if (!requestPacket?.evidenceRefs?.length) {
+    blockers.push({
+      code: "codex-advisor-evidence-missing",
+      message: "Codex advisor packet requires structured evidence refs.",
+      nextAction: "Pass --evidence-ref values that point to manager metadata, not raw transcripts or provider payloads.",
+    });
+  } else if (!advisorRefsAreStructured(requestPacket.evidenceRefs)) {
+    blockers.push({
+      code: "codex-advisor-evidence-invalid",
+      message: "Codex advisor packet evidence refs must be structured metadata refs.",
+      nextAction: "Replace raw output, transcript, stack, secret, or provider refs with bounded manager metadata refs.",
+    });
+  }
+  if (requestPacket?.sourceRefs?.length && !advisorRefsAreStructured(requestPacket.sourceRefs)) {
+    blockers.push({
+      code: "codex-advisor-source-invalid",
+      message: "Codex advisor packet source refs must be structured metadata refs.",
+      nextAction: "Use assignment, worker, manager, cycle, checkpoint, or event refs only.",
+    });
+  }
+  if (options.apply === true || context.apply === true || options.invokeProvider === true || context.invokeProvider === true || options.editManagerCode === true || context.editManagerCode === true) {
+    blockers.push({
+      code: "codex-advisor-forbidden-mutation",
+      message: "Advisor packet creation cannot call providers, apply changes, or edit manager code.",
+      nextAction: "Create only the read-only packet; use separate explicit operator approval for any code work.",
+    });
+  }
+  if (requestPacket?.condition?.existingHandler?.status === "no_existing_handler") {
+    warnings.push({
+      code: "codex-advisor-no-existing-handler",
+      message: "No deterministic handler matched this manager friction; default to park/degrade or future work rather than code edits.",
+    });
+  }
+  return {
+    status: blockers.length > 0 ? "blocked" : "ready",
+    blockers,
+    warnings,
+    reason: blockers.length > 0 ? "Codex advisor packet validation failed closed." : "Codex advisor packet is bounded and ready for read-only classification.",
+    rawPayloadRetained: false,
+  };
 }
 
 export function buildSteeringPlan(options = {}, context = {}) {
@@ -4722,6 +6348,7 @@ export function buildProgressBeaconPlan(options = {}, context = {}) {
   const operatorActionState = sanitizeLedgerField(context.operatorActionState || context.actionNeeded || "none", "none", 220);
   const runState = sanitizeLedgerField(context.runState || context.status || "ready", "ready", 60);
   const queueLeasePosture = normalizeQueueLeasePosture(context.queueLeaseSummary || context.queueLeasePosture || context.dispatcherSummary || context.dispatchPosture || {});
+  const capabilityPosture = normalizeHeartbeatCapabilityPosture(context.managerCapabilityPosture || context.capabilityPosture || context.capability_posture || null);
   const hasStateOrActionChange = positiveBoolean(context.stateChanged) || operatorActionState !== "none";
   const materialChange = hasStateOrActionChange || (context.materialChange === false ? false : positiveBoolean(context.materialChange));
   const materialChangeSummary = materialChange
@@ -4745,10 +6372,11 @@ export function buildProgressBeaconPlan(options = {}, context = {}) {
     currentSource,
     operatorActionState,
     queueLeasePosture,
+    capabilityPosture,
     materialChange,
     materialChangeSummary,
     cadence,
-    text: compactHeartbeatText({ runState, active, warm, paused, usageState, resourceState, currentSource, operatorActionState, queueLeasePosture, cadence }),
+    text: compactHeartbeatText({ runState, active, warm, paused, usageState, resourceState, currentSource, operatorActionState, queueLeasePosture, capabilityPosture, cadence }),
   };
   return packet({
     status: "ready",
@@ -4812,6 +6440,74 @@ function normalizeQueueLeasePosture(input = {}) {
   };
 }
 
+function normalizeHeartbeatCapabilityPosture(input = null) {
+  const summary = isPlainObject(input?.summary) ? input.summary : input;
+  if (!isPlainObject(summary)) {
+    return {
+      parked: [],
+      degraded: [],
+      blocked: [],
+      heldActions: [],
+      text: "none",
+      rawPayloadRetained: false,
+    };
+  }
+  const postureArrays = heartbeatCapabilityPostureArrays(summary);
+  const parked = postureArrays.parked;
+  const degraded = postureArrays.degraded;
+  const blocked = postureArrays.blocked;
+  const heldActions = (Array.isArray(summary.heldActions) ? summary.heldActions : Array.isArray(summary.capabilityHolds?.heldActions) ? summary.capabilityHolds.heldActions : [])
+    .filter(isPlainObject)
+    .map((action) => ({
+      code: sanitizeLedgerField(action.code || "", "", 120),
+      managerCapability: sanitizeLedgerField(action.managerCapability || action.capability || "", "", 80),
+      state: sanitizeLedgerField(action.state || "", "", 40),
+      safeFallbacks: normalizeManagerCapabilityList(action.safeFallbacks || []),
+    }))
+    .filter((action) => action.managerCapability);
+  const parts = [
+    parked.length > 0 ? `${parked.length} parked (${parked.join(",")})` : "",
+    degraded.length > 0 ? `${degraded.length} degraded (${degraded.join(",")})` : "",
+    blocked.length > 0 ? `${blocked.length} blocked (${blocked.join(",")})` : "",
+  ].filter(Boolean);
+  return {
+    parked,
+    degraded,
+    blocked,
+    heldActions,
+    text: parts.join(" / ") || "none",
+    rawPayloadRetained: false,
+  };
+}
+
+function heartbeatCapabilityPostureArrays(summary = {}) {
+  const parked = normalizeManagerCapabilityList(summary.parkedCapabilities || summary.parked || []);
+  const degraded = normalizeManagerCapabilityList(summary.degradedCapabilities || summary.degraded || []);
+  const blocked = normalizeManagerCapabilityList(summary.blockedCapabilities || summary.blocked || []);
+  if (!isPlainObject(summary.capabilities)) {
+    return { parked, degraded, blocked };
+  }
+  const defaults = buildManagerCapabilityPosture({}, {}, {}).summary.capabilities;
+  const changedReducedCapabilities = (state) => Object.entries(summary.capabilities)
+    .filter(([capability, posture]) => {
+      const normalized = normalizeManagerCapabilityState(posture);
+      if (normalized.state !== state) return false;
+      const baseline = defaults[capability];
+      if (!baseline) return true;
+      if (baseline.state !== normalized.state) return true;
+      const reasons = normalized.reasonCodes.length > 0 ? normalized.reasonCodes : baseline.reasonCodes;
+      const fallbacks = normalized.safeFallbacks.length > 0 ? normalized.safeFallbacks : baseline.safeFallbacks;
+      return JSON.stringify(reasons) !== JSON.stringify(baseline.reasonCodes) ||
+        JSON.stringify(fallbacks) !== JSON.stringify(baseline.safeFallbacks);
+    })
+    .map(([capability]) => capability);
+  return {
+    parked: changedReducedCapabilities("parked"),
+    degraded: changedReducedCapabilities("degraded"),
+    blocked: changedReducedCapabilities("blocked"),
+  };
+}
+
 function normalizeHeartbeatUsageState(value) {
   const normalized = normalizeCleanupText(normalizePosture(value, "unknown"));
   for (const state of ["manager_only", "normal", "conserve", "drain", "waiting"]) {
@@ -4828,12 +6524,15 @@ function normalizeHeartbeatResourceState(value) {
   return "unknown";
 }
 
-function compactHeartbeatText({ runState, active, warm, paused, usageState, resourceState, currentSource, operatorActionState, queueLeasePosture, cadence }) {
+function compactHeartbeatText({ runState, active, warm, paused, usageState, resourceState, currentSource, operatorActionState, queueLeasePosture, capabilityPosture, cadence }) {
   const resume = cadence?.resumeCondition && cadence.resumeCondition !== "continue while usage and resources remain normal"
     ? ` | resume ${cadence.resumeCondition}`
     : "";
   const runningText = queueLeasePosture.runningKnown === false ? "unknown running" : `${queueLeasePosture.running} running`;
-  return `Manager: ${runState} | workers ${active} active / ${warm} warm / ${paused} paused | queue ${queueLeasePosture.queued} queued / ${queueLeasePosture.leased} leased / ${runningText} / ${queueLeasePosture.blocked} blocked | usage ${usageState} | CPU/RAM ${resourceState} | current source ${currentSource} | action needed: ${operatorActionState}${resume}`;
+  const capabilityText = capabilityPosture?.text && capabilityPosture.text !== "none"
+    ? ` | capabilities ${capabilityPosture.text}`
+    : "";
+  return `Manager: ${runState} | workers ${active} active / ${warm} warm / ${paused} paused | queue ${queueLeasePosture.queued} queued / ${queueLeasePosture.leased} leased / ${runningText} / ${queueLeasePosture.blocked} blocked | usage ${usageState} | CPU/RAM ${resourceState} | current source ${currentSource}${capabilityText} | action needed: ${operatorActionState}${resume}`;
 }
 
 export function buildManagerRunStartPlan(options = {}, context = {}) {
@@ -5831,7 +7530,7 @@ function unsafeQuestionStopLines(question = {}) {
   const text = questionSignalText(question);
   const stopLines = [];
   if (/\b(extreme-risk|extreme risk|extreme_risk|critical risk)\b/i.test(text)) stopLines.push("extreme_risk_requires_operator_approval");
-  if (/\b(provider|openai|claude|ollama|model api|api call|live output|provider_call)\b/i.test(text)) stopLines.push("provider_calls_require_operator_approval");
+  if (mentionsProviderCallAuthority(text)) stopLines.push("provider_calls_require_operator_approval");
   if (/\b(model policy|model_policy|model routing|model_routing|model selection|model_selection|reasoning effort|reasoning_effort|downgrade model|quality downgrade|change model|switch model|route model)\b/i.test(text)) stopLines.push("model_policy_requires_operator_approval");
   if (/\b(secret|credential|password|token|api key|sk-[a-z0-9_-]+)\b/i.test(text)) stopLines.push("secrets_require_operator_approval");
   if (/\b(cleanup apply|cleanup_apply|apply cleanup|delete branch|delete-remote|remove worktree|run cleanup|perform cleanup)\b/i.test(text)) stopLines.push("cleanup_requires_cleanup_authority");
@@ -5840,6 +7539,17 @@ function unsafeQuestionStopLines(question = {}) {
   if (/\b(source mutation|canonical write|writeback|write-back)\b/i.test(text)) stopLines.push("source_mutation_requires_operator_approval");
   if (/\b(recovery|takeover|owner|ownership|lease|reassign|reassignment|handoff|arbitration)\b/i.test(text)) stopLines.push("recovery_or_ownership_requires_operator_approval");
   return [...new Set(stopLines)].slice(0, 6);
+}
+
+function mentionsProviderCallAuthority(text = "") {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!/\b(provider|openai|claude|ollama|model api|api call|live output|provider_call)\b/i.test(normalized)) return false;
+  const negatedProviderEvidence = [
+    /\b(no|without|avoids?|avoided|not using|does not use|did not use|never)\s+(?:queueing\s+or\s+)?(?:paid\s+)?(?:live\s+)?(?:provider|openai|claude|ollama|model api|api call|provider_call)s?\b/i,
+    /\b(?:provider|openai|claude|ollama|model api|api call|provider_call)s?\s+(?:were|was|are|is)?\s*(?:not used|avoided|absent|disabled|blocked|prohibited|unavailable)\b/i,
+  ];
+  if (negatedProviderEvidence.some((pattern) => pattern.test(normalized))) return false;
+  return true;
 }
 
 function sourceBackedQuestionRefs(sourceRefs = []) {
@@ -5879,12 +7589,15 @@ function compactQuestionAnswer(input = "implementation") {
   const sourceRefs = isPlainObject(input) ? compactSanitizedRefs(input.sourceRefs || []) : [];
   const assignmentId = assignmentIdFromSourceRefs(sourceRefs);
   if (/missing|no _bmad-output|no .*story|story context|sprint-status|source context/i.test(summary)) {
-    const storyPath = assignmentId ? `_bmad-output/implementation-artifacts/${assignmentId}.md` : "_bmad-output/implementation-artifacts/<assignment-id>.md";
+    const storyKey = normalizeBmadStoryAssignmentId(assignmentId);
+    const storyPath = storyKey ? `_bmad-output/implementation-artifacts/${storyKey}.md` : "_bmad-output/implementation-artifacts/<story-key>.md";
+    const prdRef = sourceRefs.find((ref) => /^prd:/i.test(ref)) || defaultSourceRefs({ discoverDefaultSources: true })[0] || "";
+    const prdPath = prdRef ? prdRef.replace(/^prd:/i, "") : "_bmad-output/planning-artifacts/prds/<active-prd>/prd.md";
     return [
       "Use source context from the main repo root, not only the assigned worktree.",
       `Story: <repo-root>/${storyPath}.`,
       "Sprint tracker: <repo-root>/_bmad-output/implementation-artifacts/sprint-status.yaml.",
-      "PRD: <repo-root>/_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md.",
+      `PRD: <repo-root>/${prdPath}.`,
       "Do not block solely because ignored BMAD artifacts are absent from the worktree; record a compact checkpoint after using these source refs.",
     ].join(" ");
   }
@@ -7202,6 +8915,7 @@ const BMAD_REQUEST_WORKFLOWS = new Set([
   "bmad-ux",
   "bmad-create-architecture",
   "bmad-code-review",
+  "bmad-sprint-planning",
   "bmad-create-epics-and-stories",
   "bmad-correct-course",
 ]);
@@ -7387,6 +9101,12 @@ function bmadRequestWorkflowMetadata(workflow, gapType, sourcePlanning = null) {
       expectedOutput: "Review the ready implementation artifact and record findings before delivery or more work creation.",
       localOutputLocation: `_bmad-output/implementation-artifacts/review-${sourceKey}.md`,
       reason: "Code review is the narrowest missing BMAD workflow.",
+    },
+    "bmad-sprint-planning": {
+      missingArtifact: "sprint_status",
+      expectedOutput: "Generate sprint status tracking from the active epics and stories before story creation or dispatch.",
+      localOutputLocation: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+      reason: "Sprint planning is the narrowest missing BMAD workflow before implementation.",
     },
     "bmad-create-epics-and-stories": {
       missingArtifact: "epics_and_stories",
@@ -9686,7 +11406,11 @@ function defaultSourceRefs(context = {}) {
       };
     })
     .filter((entry) => existsSync(entry.absolutePath))
-    .sort((a, b) => sourceArtifactRank(b.name) - sourceArtifactRank(a.name) || b.name.localeCompare(a.name))
+    .map((entry) => ({
+      ...entry,
+      mtimeMs: sourceArtifactMtimeMs(entry.absolutePath),
+    }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || sourceArtifactRank(b.name) - sourceArtifactRank(a.name) || b.name.localeCompare(a.name))
     .slice(0, 3)
     .map((entry) => `prd:${entry.relativePath}`);
 }
@@ -9728,6 +11452,14 @@ function sourceArtifactRank(name) {
   const match = String(name || "").match(/(\d{4})-(\d{2})-(\d{2})/);
   if (!match) return 0;
   return Number(`${match[1]}${match[2]}${match[3]}`);
+}
+
+function sourceArtifactMtimeMs(path) {
+  try {
+    return statSync(path).mtimeMs || 0;
+  } catch {
+    return 0;
+  }
 }
 
 function normalizeSourceEvidence(refs = []) {
@@ -9828,27 +11560,28 @@ function findMatchingSprintStatus(sourceKey) {
       const relativePath = `_bmad-output/implementation-artifacts/${entry.name}`;
       const lowerName = entry.name.toLowerCase();
       const tokenMatches = sourceTokens.filter((token) => lowerName.includes(token)).length;
-      return { relativePath, absolutePath: join(artifactDir, entry.name), tokenMatches };
+      const absolutePath = join(artifactDir, entry.name);
+      const content = readFileSync(absolutePath, "utf8");
+      const declaredSourceKey = sprintStatusSourceKey(content);
+      const sourceKeyMatches = declaredSourceKey === sourceKey;
+      return { relativePath, absolutePath, content, tokenMatches, sourceKeyMatches };
     })
-    .filter((entry) => entry.tokenMatches > 0)
-    .sort((a, b) => b.tokenMatches - a.tokenMatches || b.relativePath.localeCompare(a.relativePath));
+    .filter((entry) => entry.sourceKeyMatches || entry.tokenMatches > 0)
+    .sort((a, b) => Number(b.sourceKeyMatches) - Number(a.sourceKeyMatches) || b.tokenMatches - a.tokenMatches || b.relativePath.localeCompare(a.relativePath));
   const match = files[0];
   if (!match) {
-    const canonicalPath = join(artifactDir, "sprint-status.yaml");
-    if (existsSync(canonicalPath)) {
-      return {
-        exists: true,
-        path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
-        ...countSprintStories(readFileSync(canonicalPath, "utf8"), { artifactDir }),
-      };
-    }
     return { exists: false, path: null, backlogStories: null, readyStories: null, activeStories: null, doneStories: null };
   }
   return {
     exists: true,
     path: match.relativePath,
-    ...countSprintStories(readFileSync(match.absolutePath, "utf8"), { artifactDir }),
+    ...countSprintStories(match.content, { artifactDir }),
   };
+}
+
+function sprintStatusSourceKey(content) {
+  const match = String(content || "").match(/^\s*source_key\s*:\s*["']?([^"'\n#]+)["']?\s*(?:#.*)?$/im);
+  return match ? match[1].trim().toLowerCase() : "";
 }
 
 const sprintStoryStatusRank = {
@@ -9947,6 +11680,95 @@ function bmadCodeReviewRequestPath(paths, storyKey) {
   return join(paths.root, "bmad-review-requests", `${storyKey}.json`);
 }
 
+function buildExplicitReviewReadyStoryRow({
+  requestedStoryKey = "",
+  sprintStatusPath = "",
+  progressStatus = null,
+  allowExplicitReviewReadyAssignment = false,
+} = {}) {
+  const storyKey = normalizeBmadStoryAssignmentId(requestedStoryKey || "");
+  if (!allowExplicitReviewReadyAssignment || !storyKey) return null;
+  const rows = Array.isArray(progressStatus?.summary?.workerProgress) ? progressStatus.summary.workerProgress : [];
+  const assignmentId = assignmentIdForStoryKey(storyKey);
+  const readyStates = new Set(["manager_review_ready", "delivery_gate_ready"]);
+  const matchingWorker = rows.find((worker) =>
+    normalizeBmadStoryAssignmentId(worker.assignmentId || "") === storyKey
+    && readyStates.has(String(worker.progressState || ""))
+    && !workerHasOpenReviewFeedback(worker)
+  );
+  if (!matchingWorker) return null;
+  const storyPath = `_bmad-output/implementation-artifacts/${storyKey}.md`;
+  const storyAbsolute = resolve(repoRoot, storyPath);
+  if (!existsSync(storyAbsolute)) return null;
+  return {
+    storyKey,
+    status: "manager-review-ready",
+    storyPath,
+    sourceRef: `story:${storyPath}`,
+    storyExists: true,
+    assignmentId,
+    workerId: sanitizeLedgerField(matchingWorker.workerId || "", "", 80),
+    progressState: sanitizeLedgerField(matchingWorker.progressState || "", "", 80),
+    sprintStatusPath,
+    source: "manager_worker_progress",
+  };
+}
+
+function buildProgressReviewReadyStoryRows({
+  requestedStoryKey = "",
+  sprintStatusPath = "",
+  progressStatus = null,
+} = {}) {
+  const requested = normalizeBmadStoryAssignmentId(requestedStoryKey || "");
+  const rows = Array.isArray(progressStatus?.summary?.workerProgress) ? progressStatus.summary.workerProgress : [];
+  const readyStates = new Set(["manager_review_ready", "delivery_gate_ready"]);
+  const seen = new Set();
+  const candidates = [];
+  for (const worker of rows) {
+    const storyKey = normalizeBmadStoryAssignmentId(worker.assignmentId || "");
+    if (!storyKey || seen.has(storyKey)) continue;
+    if (requested && storyKey !== requested) continue;
+    if (!readyStates.has(String(worker.progressState || ""))) continue;
+    if (workerHasOpenReviewFeedback(worker)) continue;
+    const storyPath = `_bmad-output/implementation-artifacts/${storyKey}.md`;
+    const storyAbsolute = resolve(repoRoot, storyPath);
+    if (!existsSync(storyAbsolute)) continue;
+    seen.add(storyKey);
+    candidates.push({
+      storyKey,
+      status: "manager-review-ready",
+      storyPath,
+      sourceRef: `story:${storyPath}`,
+      storyExists: true,
+      assignmentId: assignmentIdForStoryKey(storyKey),
+      workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
+      progressState: sanitizeLedgerField(worker.progressState || "", "", 80),
+      sprintStatusPath,
+      source: "manager_worker_progress",
+    });
+  }
+  return candidates;
+}
+
+function progressRowForStoryKey(progressStatus = null, storyKey = "") {
+  const normalized = normalizeBmadStoryAssignmentId(storyKey || "");
+  if (!normalized) return null;
+  const rows = Array.isArray(progressStatus?.summary?.workerProgress) ? progressStatus.summary.workerProgress : [];
+  return rows.find((worker) => normalizeBmadStoryAssignmentId(worker.assignmentId || "") === normalized) || null;
+}
+
+function workerHasOpenReviewFeedback(worker = {}) {
+  const openCount = Number(worker.openStoryReviewFeedbackCount || 0);
+  if (Number.isFinite(openCount) && openCount > 0) return true;
+  return String(worker.progressState || "") === "review_feedback_stale";
+}
+
+function storyHasOpenReviewFeedback(progressStatus = null, storyKey = "") {
+  const worker = progressRowForStoryKey(progressStatus, storyKey);
+  if (worker && workerHasOpenReviewFeedback(worker)) return true;
+  return buildOpenStoryReviewFeedbackSummary(storyKey).openCount > 0;
+}
+
 export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
   const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
   const paths = managerRunPaths(runId, options, context);
@@ -10008,6 +11830,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
   const reviewRows = rows.filter((row) => row.status === "review");
   const eligibleRows = reviewRows
     .filter((row) => !requestedStoryKey || row.storyKey === requestedStoryKey)
+    .filter((row) => !storyHasOpenReviewFeedback(context.progressStatus, row.storyKey))
     .map((row) => {
       const storyPath = `_bmad-output/implementation-artifacts/${row.storyKey}.md`;
       const storyAbsolute = resolve(repoRoot, storyPath);
@@ -10018,7 +11841,23 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
         storyExists: existsSync(storyAbsolute),
       };
     });
-  const selected = eligibleRows.find((row) => row.storyExists) || null;
+  const explicitReadyRow = buildExplicitReviewReadyStoryRow({
+    requestedStoryKey,
+    sprintStatusPath,
+    progressStatus: context.progressStatus,
+    allowExplicitReviewReadyAssignment: options.allowExplicitReviewReadyAssignment === true,
+  });
+  const progressReadyRows = buildProgressReviewReadyStoryRows({
+    requestedStoryKey,
+    sprintStatusPath,
+    progressStatus: context.progressStatus,
+  });
+  const candidateRows = [...eligibleRows, ...progressReadyRows];
+  const selected = candidateRows.find((row) => row.storyExists) || explicitReadyRow;
+  const requestedStoryHasOpenFeedback = requestedStoryKey
+    ? storyHasOpenReviewFeedback(context.progressStatus, requestedStoryKey)
+    : false;
+  const reviewRowsWithOpenFeedback = reviewRows.filter((row) => storyHasOpenReviewFeedback(context.progressStatus, row.storyKey));
 
   if (!selected) {
     return packet({
@@ -10030,17 +11869,27 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
         sprintStatusPath,
         requestedStoryKey: requestedStoryKey || null,
         reviewStoryCount: reviewRows.length,
-        eligibleStoryCount: eligibleRows.length,
-        candidates: sanitizeCyclePacketValue(eligibleRows.slice(0, 6)),
+        eligibleStoryCount: candidateRows.length,
+        explicitReviewReadyCandidate: sanitizeCyclePacketValue(explicitReadyRow),
+        openReviewFeedbackCount: reviewRowsWithOpenFeedback.length + (requestedStoryHasOpenFeedback && !reviewRowsWithOpenFeedback.some((row) => row.storyKey === requestedStoryKey) ? 1 : 0),
+        candidates: sanitizeCyclePacketValue(candidateRows.slice(0, 6)),
         mutationMode: "none",
         rawPayloadRetained: false,
       },
       blockers: [{
-        code: reviewRows.length > 0 ? "bmad-code-review-story-missing" : "bmad-code-review-no-review-work",
+        code: requestedStoryHasOpenFeedback || reviewRowsWithOpenFeedback.length > 0
+          ? "bmad-code-review-open-review-feedback"
+          : reviewRows.length > 0 ? "bmad-code-review-story-missing" : "bmad-code-review-no-review-work",
         message: reviewRows.length > 0
-          ? "Sprint tracker has review stories, but no selected review story file exists."
-          : "Sprint tracker has no stories in review status.",
-        nextAction: "Run lane advancement, story creation, or sprint planning before preparing a code review request.",
+          ? requestedStoryHasOpenFeedback || reviewRowsWithOpenFeedback.length > 0
+            ? "Sprint tracker has review stories, but selected review work still has unresolved worker review feedback."
+            : "Sprint tracker has review stories, but no selected review story file exists."
+          : requestedStoryHasOpenFeedback
+            ? "Requested review work still has unresolved worker review feedback."
+            : "Sprint tracker has no stories in review status.",
+        nextAction: requestedStoryHasOpenFeedback || reviewRowsWithOpenFeedback.length > 0
+          ? "Signal the target worker to resolve open review feedback before delegating another code review."
+          : "Run lane advancement, story creation, or sprint planning before preparing a code review request.",
       }],
     });
   }
@@ -10124,7 +11973,8 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
       alreadyPrepared,
       applied,
       reviewStoryCount: reviewRows.length,
-      candidates: sanitizeCyclePacketValue(eligibleRows.slice(0, 6)),
+      selectedFromExplicitProgress: selected.source === "manager_worker_progress",
+      candidates: sanitizeCyclePacketValue(candidateRows.slice(0, 6)),
       dryRunCommand,
       applyCommand,
       authority: "existing-bmad-code-review-workflow-request-packet-only",
@@ -10208,6 +12058,15 @@ function selectBmadPlanningGapWorkflow(sourceSlice, sourcePlanning = null, signa
   const sourceMatch = bmadPlanningSignalWorkflow(sourceText);
   if (sourceMatch) return sourceMatch;
   if (sprintStatus && !sprintStatus.exists && sourceSlice?.type === "prd") {
+    const prerequisites = normalizeBmadPlanningPrerequisites(sourcePlanning?.prerequisites || null, { sourceSlice, sourcePlanning });
+    if (prerequisites.epicsAndStories.status === "present" && prerequisites.implementationReadiness.status === "present") {
+      return {
+        narrowestWorkflow: "bmad-sprint-planning",
+        gapType: "sprint_status",
+        reason: "Epics/stories and implementation readiness exist, but no matching sprint tracker was found; sprint planning is the narrowest missing BMAD artifact.",
+        broaderReason: "PRD, architecture, epics, and readiness are already present, so regenerating them would create churn.",
+      };
+    }
     return {
       narrowestWorkflow: "bmad-create-epics-and-stories",
       gapType: "epics_and_stories",
@@ -10311,8 +12170,14 @@ function selectWorkCreationStep(sourceSlice, signals = [], sourcePlanning = null
     workflow = "bmad-correct-course";
     reason = "The matching sprint tracker has no backlog stories left; expand or correct the BMAD backlog before creating another story.";
   } else if (sourcePlanning?.sprintStatus && !sourcePlanning.sprintStatus.exists && sourceSlice.type === "prd") {
-    workflow = "bmad-create-epics-and-stories";
-    reason = "No matching sprint tracker was found for this PRD; create or refresh epics and stories before story creation.";
+    const prerequisites = normalizeBmadPlanningPrerequisites(sourcePlanning?.prerequisites || null, { sourceSlice, sourcePlanning });
+    if (prerequisites.epicsAndStories.status === "present" && prerequisites.implementationReadiness.status === "present") {
+      workflow = "bmad-sprint-planning";
+      reason = "Epics/stories and implementation readiness exist, but no matching sprint tracker was found; run sprint planning before story creation.";
+    } else {
+      workflow = "bmad-create-epics-and-stories";
+      reason = "No matching sprint tracker was found for this PRD; create or refresh epics and stories before story creation.";
+    }
   } else if (/\b(readiness|implementation-readiness|implementation readiness|ready-for-dev)\b/.test(signalText)) {
     workflow = "bmad-check-implementation-readiness";
     reason = "Explicit readiness evidence requires validating implementation inputs before creating or dispatching more work.";
@@ -10563,6 +12428,9 @@ function workCreationTrigger(step) {
   if (step.workflow === "bmad-create-epics-and-stories") {
     return "source PRD has no matching sprint tracker";
   }
+  if (step.workflow === "bmad-sprint-planning") {
+    return "source PRD has epics and readiness but no matching sprint tracker";
+  }
   return "safe backlog below desired manager worker capacity";
 }
 
@@ -10572,6 +12440,9 @@ function workCreationRequestedOutcome(step, backlogTarget) {
   }
   if (step.workflow === "bmad-create-epics-and-stories") {
     return "Create source-owned epics, stories, and sprint tracking before dispatching implementation lanes.";
+  }
+  if (step.workflow === "bmad-sprint-planning") {
+    return "Generate sprint tracking from the active epics and stories before creating implementation lanes.";
   }
   return "Create the narrowest source-owned work item that can be safely verified and dispatched.";
 }
@@ -13760,6 +15631,19 @@ export function buildCyclePacket(options = {}, context = {}) {
       ? buildRecoveryPlan(readOnlyRunOptions, { ...context, stateSignals: context.reconciliationStateSignals || context.stateSignals })
       : buildRecoveryNotRequestedPlan(readOnlyRunOptions, context);
   const workspace = getWorkspaceProof(readOnlyRunOptions, context);
+  const persistedCapabilityPosture = context.persistedManagerCapabilityPosture
+    ? packet({ status: "ready", summary: { managerCapabilityPosture: context.persistedManagerCapabilityPosture } })
+    : readManagerCapabilityPosture(readOnlyRunOptions, context);
+  const managerCapabilityPosture = buildManagerCapabilityPosture(
+    readOnlyRunOptions,
+    {
+      ...context,
+      persistedManagerCapabilityPosture: persistedCapabilityPosture.summary?.managerCapabilityPosture || null,
+    },
+    {},
+  );
+  const managerCapabilityStatus = normalizeHeartbeatCapabilityPosture(managerCapabilityPosture.summary);
+  const selfRepair = buildManagerSelfRepairSummary(readOnlyRunOptions, context);
   const feedback = buildFeedbackPlan(readOnlyRunOptions, context);
   const delivery = context.deliveryPlan ? normalizePacketContext(context.deliveryPlan) : buildDeliveryPlan(readOnlyRunOptions, { ...context, feedbackPlan: feedback });
   const dispatcherState = buildCycleDispatcherState(dispatchPreview);
@@ -13924,6 +15808,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     checkpoints: context.checkpoints || [],
     checkpointCandidates: context.checkpointCandidates || [],
     activeLaneEvidence: context.activeLaneEvidence || context.active_lane_evidence || runway.summary.activeLaneEvidence,
+    managerCapabilityPosture: managerCapabilityPosture.summary,
     workContinues: continuation.canContinue,
     nextSource: currentSource,
   });
@@ -13959,6 +15844,9 @@ export function buildCyclePacket(options = {}, context = {}) {
         rawPayloadRetained: false,
       },
       continuation: sanitizeCyclePacketValue(continuation),
+      managerCapabilityPosture: sanitizeCyclePacketValue(managerCapabilityPosture.summary),
+      managerCapabilityStatus: sanitizeCyclePacketValue(managerCapabilityStatus),
+      selfRepair: sanitizeCyclePacketValue(selfRepair.summary),
       recovery: sanitizeCyclePacketValue(recovery.summary),
       dispatchPreview: sanitizeCyclePacketValue(dispatchPreview.summary),
       delivery: sanitizeCyclePacketValue(delivery.summary || { mutationMode: "existing-gates-required", source: "codex-workspace existing gates" }),
@@ -14007,7 +15895,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       report: sanitizeLedgerField(report, "Manager: status unavailable", 600),
     },
     blockers: sanitizeCyclePacketValue(reportedBlockers),
-    warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
+    warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(persistedCapabilityPosture.warnings || []), ...(selfRepair.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
     nextActions: cycleRecommendedActions,
   });
 }
@@ -14016,24 +15904,40 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
   const cycle = context.cyclePacket || buildCyclePacket(options, context);
   const promptProbe = context.promptProbe || buildWorkerPromptProbePlan({ ...options, limit: 6 }, context);
   const submitPending = context.submitPendingPlan || buildWorkerSubmitPendingPlan({ ...options, limit: 6 }, context);
+  const warmWorkerCount = nonNegativeInteger(cycle.summary?.workers?.workerCounts?.warm ?? cycle.summary?.workerCounts?.warm) ?? 0;
+  const handoffPlan = context.handoffPlan || (warmWorkerCount > 0 ? buildWorkerHandoffPlan({ ...options, limit: 6 }, context) : null);
   const promptProbeActions = promptProbe.status === "attention" && Array.isArray(promptProbe.nextActions) ? promptProbe.nextActions : [];
   const submitPendingActions = submitPending.status === "ready" && Array.isArray(submitPending.nextActions)
     ? submitPending.nextActions.filter((action) => action.code === "worker-submit-pending-apply-ready")
     : [];
   const idleLoadActions = buildPromptIdleLoadActions(cycle, promptProbe);
-  const nextActions = [...promptProbeActions, ...submitPendingActions, ...idleLoadActions, ...(Array.isArray(cycle.nextActions) ? cycle.nextActions : [])];
-  const needsQuestionAnswerGate = nextActions.some((action) => action.code === "worker-progress-blocked_question");
+  const baseNextActions = [...promptProbeActions, ...submitPendingActions, ...idleLoadActions, ...(Array.isArray(cycle.nextActions) ? cycle.nextActions : [])];
+  const needsQuestionAnswerGate = baseNextActions.some((action) => action.code === "worker-progress-blocked_question");
   const questionAnswer = context.questionAnswerPlan || (needsQuestionAnswerGate ? buildWorkerQuestionAnswerPlan({ ...options, limit: 6 }, context) : null);
   const questionAnswerAvailable = !needsQuestionAnswerGate ||
     Number(questionAnswer?.summary?.planned || 0) > 0 ||
     Number(questionAnswer?.summary?.answerableQuestions || 0) > 0;
+  const handoffActions = questionAnswerAvailable && handoffPlan?.status === "ready" && Array.isArray(handoffPlan.nextActions)
+    ? handoffPlan.nextActions.filter((action) => action.code === "worker-handoff-apply-ready")
+    : [];
+  const nextActions = [...promptProbeActions, ...submitPendingActions, ...handoffActions, ...idleLoadActions, ...(Array.isArray(cycle.nextActions) ? cycle.nextActions : [])]
+    .filter((action) => questionAnswerAvailable || action.code !== "worker-handoff-apply-ready");
+  const blockedQuestionRetireActions = buildBlockedQuestionRetireContinuousActions(cycle, questionAnswer, questionAnswerAvailable);
   const dispatchRoutingHold = buildContinuousDispatchRoutingHold(cycle);
-  const actionable = nextActions
+  const capabilityPosture = buildManagerCapabilityPosture(options, context, cycle);
+  const actionableCandidates = [...nextActions, ...blockedQuestionRetireActions]
     .filter((action) => action.code !== "worker-progress-blocked_question" || questionAnswerAvailable)
-    .map((action) => buildContinuousAction(action, cycle))
+    .map((action) => buildContinuousAction(action, cycle, capabilityPosture))
     .filter(Boolean)
     .filter((action) => continuousActionAllowedByContinuation(action, cycle))
-    .sort((left, right) => continuousActionPriority(left) - continuousActionPriority(right));
+    .map((action) => annotateContinuousAction(action));
+  const capabilityFiltered = filterActionsByCapabilityPosture(actionableCandidates, capabilityPosture);
+  const usefulWorkPolicy = buildContinuousUsefulWorkPolicy(capabilityFiltered.actions, { options, context, cycle });
+  const effectiveCapabilityPosture = applyUsefulWorkPolicyCapabilityParks(capabilityPosture, usefulWorkPolicy);
+  const effectiveCapabilityFiltered = filterActionsByCapabilityPosture(usefulWorkPolicy.actions, effectiveCapabilityPosture);
+  const codexAdvisor = buildContinuousCodexAdvisorRecommendations(usefulWorkPolicy, cycle);
+  const actionable = effectiveCapabilityFiltered.actions
+    .sort(continuousActionSort);
   const selected = actionable.find((action) => !action.readOnly) || actionable[0] || null;
   const workers = cycle.summary?.workers?.workerCounts || {};
   const usage = cycle.summary?.usage || {};
@@ -14074,22 +15978,887 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
       resourceState: resources.state || "unknown",
       cycleStatus: cycle.status,
       selectedAction,
+      managerCapabilityPosture: sanitizeCyclePacketValue(effectiveCapabilityPosture.summary),
+      capabilityHolds: sanitizeCyclePacketValue(mergeCapabilityHoldSummaries(capabilityFiltered.summary, effectiveCapabilityFiltered.summary)),
+      codexAdvisor: sanitizeCyclePacketValue(codexAdvisor.summary),
       reviewResourcePolicy: sanitizeCyclePacketValue(cycle.summary?.reviewResourcePolicy || null),
       dispatchRouting: sanitizeCyclePacketValue(dispatchRoutingHold?.decision || null),
       allowedActionCount: stopReasons.length > 0 ? 0 : actionable.length,
+      usefulWorkPolicy: sanitizeCyclePacketValue(usefulWorkPolicy.summary),
       retention: "metadata_only_continuous_loop_summary",
       stopReasons: sanitizeCyclePacketValue(stopReasons),
     },
     blockers: stopReasons.map((reason) => ({ code: reason.code, message: reason.message, nextAction: "Stop continuous mode and inspect the latest manager-cycle-packet." })),
-    warnings: sanitizeCyclePacketValue([...(promptProbe.warnings || []), ...(cycle.warnings || [])]),
+    warnings: sanitizeCyclePacketValue([...(promptProbe.warnings || []), ...(handoffPlan?.warnings || []), ...(cycle.warnings || []), ...capabilityFiltered.warnings, ...effectiveCapabilityFiltered.warnings, ...usefulWorkPolicy.warnings, ...codexAdvisor.warnings]),
     nextActions: stopReasons.length > 0
       ? [{ code: "continuous-blocked", summary: "Continuous mode is blocked by the latest cycle packet.", nextAction: "Stop continuous mode and inspect the latest manager-cycle-packet." }]
       : effectiveSelected
         ? [{ code: "continuous-apply-ready", summary: sanitizeLedgerField(effectiveSelected.summary, "", 180), nextAction: sanitizeLedgerField(effectiveSelected.applyCommand, "", 260) }]
+        : codexAdvisor.nextActions.length > 0
+        ? codexAdvisor.nextActions
         : cycle.status === "attention"
         ? [{ code: "continuous-attention-monitor", summary: "Manager attention remains, but no auto-safe action is currently available.", nextAction: attentionNextAction }]
         : [{ code: "continuous-monitor", summary: "No manager-owned auto action is currently needed.", nextAction: "Sleep until the next continuous manager poll." }],
   });
+}
+
+function buildContinuousCodexAdvisorRecommendations(usefulWorkPolicy = {}, cycle = {}) {
+  const parked = Array.isArray(usefulWorkPolicy.summary?.parkedSelfRepair)
+    ? usefulWorkPolicy.summary.parkedSelfRepair
+    : [];
+  if (parked.length === 0) {
+    return {
+      summary: {
+        status: "not_needed",
+        packetCount: 0,
+        recommendations: [],
+        rawPayloadRetained: false,
+      },
+      warnings: [],
+      nextActions: [],
+    };
+  }
+  const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "manager-run", "manager-run", 120);
+  const safeTaskWorkAvailable = Number(usefulWorkPolicy.summary?.usefulWorkActions || 0) > 0;
+  const recommendations = parked.slice(0, 4).map((repair) => {
+    const actionCode = sanitizeLedgerField(repair.actionCode || "manager-self-repair", "manager-self-repair", 120);
+    const capability = sanitizeLedgerField(repair.managerCapability || "manager", "manager", 80);
+    const workClass = sanitizeLedgerField(repair.workClass || "manager_improvement", "manager_improvement", 80);
+    const condition = `self_fix_churn ${actionCode}`;
+    const evidenceRefs = [`self-repair:${actionCode}`, `cycle:${runId}`];
+    const sourceRefs = ["manager:continuous-run", `manager:capability:${capability}`];
+    const advisor = buildCodexAdvisorPacketPlan(
+      {
+        runId,
+        advisorCondition: condition,
+        advisorFailureKind: "self_fix_churn",
+        advisorActionCode: actionCode,
+        advisorWorkClass: workClass,
+        summary: `Manager self-repair action ${actionCode} exceeded budget; classify before adding another handler.`,
+        evidenceRefs,
+        sourceRefs,
+      },
+      {
+        usefulWorkPolicy: usefulWorkPolicy.summary,
+        safeTaskWorkAvailable,
+      },
+    );
+    const request = advisor.summary?.requestPacket || {};
+    const command = [
+      "node ./scripts/manager-codex-advisor-packet.mjs",
+      "--summary-json",
+      "--run-id",
+      shellSingleQuote(runId),
+      "--condition",
+      shellSingleQuote(condition),
+      "--failure-kind",
+      "self_fix_churn",
+      "--action-code",
+      shellSingleQuote(actionCode),
+      "--work-class",
+      shellSingleQuote(workClass),
+      "--evidence-ref",
+      shellSingleQuote(evidenceRefs[0]),
+      "--evidence-ref",
+      shellSingleQuote(evidenceRefs[1]),
+      "--source-ref",
+      shellSingleQuote(sourceRefs[0]),
+      "--source-ref",
+      shellSingleQuote(sourceRefs[1]),
+    ].join(" ");
+    return {
+      status: advisor.status,
+      packetId: sanitizeLedgerField(request.packetId || "", "", 160),
+      actionCode,
+      managerCapability: capability,
+      workClass,
+      recommendedResponse: sanitizeLedgerField(request.taskContinuity?.recommendedResponse || "", "", 120),
+      existingHandler: sanitizeLedgerField(request.condition?.existingHandler?.handler || "", "", 120),
+      safeTaskWorkAvailable,
+      command,
+      warnings: advisor.warnings || [],
+      blockers: advisor.blockers || [],
+      rawPayloadRetained: false,
+    };
+  });
+  const readyRecommendations = recommendations.filter((recommendation) => recommendation.status === "ready");
+  return {
+    summary: {
+      status: readyRecommendations.length > 0 ? "ready" : "blocked",
+      packetCount: recommendations.length,
+      recommendations,
+      rawPayloadRetained: false,
+    },
+    warnings: [
+      {
+        code: "continuous-codex-advisor-recommended",
+        message: `${recommendations.length} self-repair churn item(s) should be classified through Codex advisor before adding manager handlers.`,
+      },
+      ...recommendations.flatMap((recommendation) => recommendation.warnings || []),
+    ],
+    nextActions: readyRecommendations.length > 0
+      ? [{
+          code: "continuous-codex-advisor-packet-ready",
+          summary: "Self-repair churn is parked; generate a metadata-only Codex advisor packet before adding another manager handler.",
+          nextAction: sanitizeLedgerField(readyRecommendations[0].command, "", 420),
+        }]
+      : [],
+  };
+}
+
+function annotateContinuousAction(action = {}) {
+  const workClass = continuousActionWorkClass(action);
+  const managerCapability = continuousActionCapability(action);
+  return {
+    ...action,
+    workClass,
+    ...(managerCapability ? { managerCapability } : {}),
+    usefulWork: workClass === "task_work",
+    selfRepair: ["direct_unblock_repair", "safety_repair", "manager_improvement"].includes(workClass),
+  };
+}
+
+function continuousActionCapability(action = {}) {
+  const code = String(action.code || "");
+  if ([
+    "continuous-worker-prompt-probe",
+    "continuous-worker-submit-pending",
+    "continuous-worker-warm",
+    "continuous-worker-handoff",
+    "continuous-worker-progress-signal",
+    "continuous-worker-prompt-idle-progress-signal",
+    "continuous-worker-answer-question",
+    "continuous-worker-recovery-inspection",
+    "continuous-worker-retire",
+    "continuous-worker-retire-blocked-question",
+  ].includes(code)) {
+    return "tmuxWorkerMutation";
+  }
+  if (code === "continuous-dispatch-apply") return "dispatchApply";
+  if (code === "continuous-refill-apply") return "refillApply";
+  if ([
+    "continuous-worker-code-review-request",
+    "continuous-worker-code-review-request-prepared",
+    "continuous-worker-code-review-no-reviewer",
+  ].includes(code)) {
+    return "reviewDelegation";
+  }
+  return "";
+}
+
+function continuousActionWorkClass(action = {}) {
+  const code = String(action.code || "");
+  if ([
+    "continuous-worker-code-review-request",
+    "continuous-lane-advance-apply",
+    "continuous-worker-warm",
+    "continuous-worker-handoff",
+    "continuous-worker-progress-signal",
+    "continuous-worker-prompt-idle-progress-signal",
+    "continuous-worker-answer-question",
+    "continuous-refill-apply",
+    "continuous-dispatch-apply",
+  ].includes(code)) {
+    return "task_work";
+  }
+  if (code === "continuous-worker-code-review-request-prepared") {
+    return action.readOnly === true ? "manager_improvement" : "direct_unblock_repair";
+  }
+  if (["continuous-worker-prompt-probe", "continuous-worker-submit-pending"].includes(code)) {
+    return "direct_unblock_repair";
+  }
+  if (["continuous-worker-recovery-inspection", "continuous-worker-retire", "continuous-worker-retire-blocked-question"].includes(code)) {
+    return "safety_repair";
+  }
+  if (code === "continuous-worker-code-review-no-reviewer") {
+    return "manager_improvement";
+  }
+  return "manager_improvement";
+}
+
+function buildContinuousUsefulWorkPolicy(actions = [], { options = {}, context = {}, cycle = {} } = {}) {
+  const selfRepairBudget = Math.max(1, nonNegativeInteger(options.selfRepairBudget ?? context.selfRepairBudget ?? cycle.summary?.selfRepair?.budget ?? cycle.summary?.managerHealth?.selfRepairBudget) ?? 2);
+  const attemptsByAction = isPlainObject(cycle.summary?.selfRepair?.attemptsByAction)
+    ? cycle.summary.selfRepair.attemptsByAction
+    : isPlainObject(cycle.summary?.managerHealth?.selfRepairAttemptsByAction)
+      ? cycle.summary.managerHealth.selfRepairAttemptsByAction
+      : {};
+  const usefulWorkCount = actions.filter((action) => action.workClass === "task_work").length;
+  const repairCount = actions.filter((action) => action.selfRepair).length;
+  const parkedSelfRepair = [];
+  const allowedActions = [];
+  for (const action of actions) {
+    const attemptCount = nonNegativeInteger(
+      action.repairAttemptCount ??
+      attemptsByAction[action.code] ??
+      attemptsByAction[action.mutationClass] ??
+      cycle.summary?.selfRepair?.attemptCount ??
+      cycle.summary?.managerHealth?.selfRepairAttemptCount,
+    ) ?? 0;
+    if (action.selfRepair && attemptCount >= selfRepairBudget) {
+      parkedSelfRepair.push({
+        code: "self_fix_churn",
+        actionCode: action.code,
+        managerCapability: action.managerCapability || continuousActionCapability(action),
+        workClass: action.workClass,
+        attemptCount,
+        budget: selfRepairBudget,
+        nextAction: "Park or degrade this manager capability and continue safe task work through existing gates.",
+      });
+      continue;
+    }
+    allowedActions.push({ ...action, repairAttemptCount: action.selfRepair ? attemptCount : undefined, selfRepairBudget: action.selfRepair ? selfRepairBudget : undefined });
+  }
+  return {
+    actions: allowedActions,
+    warnings: parkedSelfRepair.length > 0
+      ? [{ code: "self_fix_churn", message: `${parkedSelfRepair.length} manager self-repair action(s) exceeded budget and were parked.` }]
+      : [],
+    summary: {
+      usefulWorkActions: usefulWorkCount,
+      managerRepairActions: repairCount,
+      parkedSelfRepair,
+      selfRepairBudget,
+      policy: "task_work_before_manager_self_repair",
+      rawPayloadRetained: false,
+    },
+  };
+}
+
+export function buildManagerCapabilityPosture(options = {}, context = {}, cycle = {}) {
+  const defaults = {
+    tmuxWorkerMutation: {
+      state: "enabled",
+      reasonCodes: [],
+      safeFallbacks: ["dispatch_apply_existing_gates", "source_owned_refill_planning", "lane_advance_metadata", "heartbeat_reporting"],
+    },
+    dispatchApply: {
+      state: "enabled",
+      reasonCodes: [],
+      safeFallbacks: ["active_worker_monitoring", "source_owned_refill_planning", "review_or_lane_advance_gates", "heartbeat_reporting"],
+    },
+    refillApply: {
+      state: "enabled",
+      reasonCodes: [],
+      safeFallbacks: ["dispatch_apply_existing_gates", "active_worker_monitoring", "heartbeat_reporting"],
+    },
+    reviewDelegation: {
+      state: "enabled",
+      reasonCodes: [],
+      safeFallbacks: ["lane_advance_to_review_held", "active_worker_monitoring", "dispatch_or_refill_unrelated_lanes", "heartbeat_reporting"],
+    },
+    cleanupApply: {
+      state: "blocked",
+      reasonCodes: ["cleanup_apply_requires_separate_gate"],
+      safeFallbacks: ["delivery_report", "cleanup_dry_run_only", "heartbeat_reporting"],
+    },
+  };
+  const merged = Object.fromEntries(
+    Object.entries(defaults).map(([capability, value]) => [capability, { ...value, reasonCodes: [...value.reasonCodes], safeFallbacks: [...value.safeFallbacks] }]),
+  );
+  for (const input of [
+    cycle.summary?.managerCapabilityPosture,
+    managerCapabilityPostureFromAdvisorClassification(context.codexAdvisorClassification || options.codexAdvisorClassification),
+    context.managerCapabilityPosture,
+    options.managerCapabilityPosture,
+    context.persistedManagerCapabilityPosture,
+  ]) {
+    mergeManagerCapabilityPosture(merged, input);
+  }
+  return {
+    capabilities: merged,
+    summary: summarizeManagerCapabilityPosture(merged),
+  };
+}
+
+function managerCapabilityPostureFromAdvisorClassification(input = null) {
+  if (!isPlainObject(input)) return null;
+  if (isPlainObject(input.posturePatch)) return input.posturePatch;
+  if (isPlainObject(input.summary?.posturePatch)) return input.summary.posturePatch;
+  const classification = isPlainObject(input.classification) ? input.classification : isPlainObject(input.summary?.classification) ? input.summary.classification : input;
+  const recommendation = normalizeAdvisorRecommendation(classification.recommendation || "");
+  if (recommendation !== "park_or_degrade_capability") return null;
+  const capability = sanitizeLedgerField(classification.capability || classification.capabilityName || "", "", 80);
+  const state = normalizeManagerCapabilityState(classification.requestedState || classification.state || "").state;
+  if (!capability || !["parked", "degraded", "blocked"].includes(state)) return null;
+  return {
+    [capability]: {
+      state,
+      reasonCodes: uniqueManagerCapabilityValues(classification.reasonCodes || [`codex_advisor_${recommendation}`]),
+      safeFallbacks: uniqueManagerCapabilityValues(classification.safeFallbacks || classification.fallbacks || []),
+    },
+  };
+}
+
+function summarizeManagerCapabilityPosture(capabilities = {}) {
+  const parkedCapabilities = [];
+  const degradedCapabilities = [];
+  const blockedCapabilities = [];
+  for (const [capability, posture] of Object.entries(capabilities)) {
+    if (posture.state === "parked") parkedCapabilities.push(capability);
+    if (posture.state === "degraded") degradedCapabilities.push(capability);
+    if (posture.state === "blocked") blockedCapabilities.push(capability);
+  }
+  return {
+    policy: "capability_posture",
+    capabilities,
+    parkedCapabilities,
+    degradedCapabilities,
+    blockedCapabilities,
+    rawPayloadRetained: false,
+  };
+}
+
+function applyUsefulWorkPolicyCapabilityParks(posture = {}, usefulWorkPolicy = {}) {
+  const next = buildManagerCapabilityPosture({}, { managerCapabilityPosture: posture.summary || posture }, {});
+  for (const parked of usefulWorkPolicy.summary?.parkedSelfRepair || []) {
+    const capability = parked.managerCapability || "";
+    if (!capability || !next.capabilities[capability]) continue;
+    next.capabilities[capability] = {
+      ...next.capabilities[capability],
+      state: "parked",
+      reasonCodes: uniqueManagerCapabilityValues([
+        ...(next.capabilities[capability].reasonCodes || []),
+        "self_fix_churn",
+        parked.actionCode ? `${parked.actionCode}_over_budget` : "",
+      ]),
+      safeFallbacks: next.capabilities[capability].safeFallbacks || [],
+    };
+  }
+  return {
+    capabilities: next.capabilities,
+    summary: summarizeManagerCapabilityPosture(next.capabilities),
+  };
+}
+
+function mergeManagerCapabilityPosture(target = {}, input = null) {
+  if (!isPlainObject(input)) return;
+  const source = isPlainObject(input.capabilities) ? input.capabilities : input;
+  for (const capability of Object.keys(target)) {
+    const update = source[capability];
+    if (!update) continue;
+    const normalized = normalizeManagerCapabilityState(update);
+    target[capability] = {
+      state: normalized.state || target[capability].state,
+      reasonCodes: normalized.reasonCodes.length > 0 ? normalized.reasonCodes : target[capability].reasonCodes,
+      safeFallbacks: normalized.safeFallbacks.length > 0 ? normalized.safeFallbacks : target[capability].safeFallbacks,
+    };
+  }
+  for (const capability of ["tmuxWorkerMutation", "dispatchApply", "refillApply", "reviewDelegation", "cleanupApply"]) {
+    const stateFromArray = postureStateFromCapabilityArrays(input, capability);
+    if (stateFromArray) {
+      target[capability] = {
+        ...target[capability],
+        state: stateFromArray,
+        reasonCodes: target[capability].reasonCodes.length > 0 ? target[capability].reasonCodes : [`${capability}_${stateFromArray}`],
+      };
+    }
+  }
+}
+
+function postureStateFromCapabilityArrays(input = {}, capability = "") {
+  const parked = Array.isArray(input.parkedCapabilities) ? input.parkedCapabilities.map(String) : [];
+  const blocked = Array.isArray(input.blockedCapabilities) ? input.blockedCapabilities.map(String) : [];
+  const degraded = Array.isArray(input.degradedCapabilities) ? input.degradedCapabilities.map(String) : [];
+  if (blocked.includes(capability)) return "blocked";
+  if (parked.includes(capability)) return "parked";
+  if (degraded.includes(capability)) return "degraded";
+  return "";
+}
+
+function normalizeManagerCapabilityState(value = {}) {
+  const input = isPlainObject(value) ? value : { state: value };
+  const rawState = String(input.state || input.status || "").trim().toLowerCase().replace(/-/g, "_");
+  const state = ["enabled", "degraded", "parked", "blocked"].includes(rawState) ? rawState : "";
+  return {
+    state,
+    reasonCodes: normalizeManagerCapabilityList(input.reasonCodes || input.reasons || input.reasonCode),
+    safeFallbacks: normalizeManagerCapabilityList(input.safeFallbacks || input.fallbacks || input.safeFallback),
+  };
+}
+
+function normalizeManagerCapabilityList(value = []) {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .map((item) => sanitizeLedgerField(item, "", 120))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function uniqueManagerCapabilityValues(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of normalizeManagerCapabilityList(values)) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function defaultManagerCapabilityPostureRecord(runId = defaultRunId()) {
+  const posture = buildManagerCapabilityPosture({}, {}, {}).summary;
+  return {
+    schemaVersion: "manager_capability_posture.v1",
+    runId: safeRunId(runId),
+    updatedAt: new Date().toISOString(),
+    ...posture,
+  };
+}
+
+export function readManagerCapabilityPosture(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const paths = managerRunPaths(runId, options, context);
+  if (!paths.proof.ok) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, stateRoot: paths.proof.state.root, managerCapabilityPosture: null },
+      blockers: [{ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." }],
+    });
+  }
+  if (!existsSync(paths.capabilityPosture)) {
+    return packet({
+      status: "missing",
+      summary: {
+        runId,
+        path: paths.capabilityPosture,
+        managerCapabilityPosture: null,
+        rawPayloadRetained: false,
+      },
+    });
+  }
+  const read = readJsonStrict(paths.capabilityPosture);
+  if (read.status !== "ready" || !isPlainObject(read.value)) {
+    return packet({
+      ok: true,
+      status: "warning",
+      summary: {
+        runId,
+        path: paths.capabilityPosture,
+        managerCapabilityPosture: null,
+        rawPayloadRetained: false,
+      },
+      warnings: [{
+        code: "capability-posture-unreadable",
+        message: `Persisted manager capability posture is ${read.status}; ignoring it for this cycle.`,
+      }],
+    });
+  }
+  const normalized = buildManagerCapabilityPosture({}, { managerCapabilityPosture: read.value }, {});
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      path: paths.capabilityPosture,
+      managerCapabilityPosture: normalized.summary,
+      rawPayloadRetained: false,
+    },
+  });
+}
+
+export function writeManagerCapabilityPosture(posture = {}, options = {}, context = {}) {
+  const runId = safeRunId(options.runId || defaultRunId());
+  const paths = managerRunPaths(runId, options, context);
+  if (!paths.proof.ok) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, stateRoot: paths.proof.state.root },
+      blockers: [{ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." }],
+    });
+  }
+  const normalized = buildManagerCapabilityPosture({}, { managerCapabilityPosture: posture }, {});
+  const record = {
+    schemaVersion: "manager_capability_posture.v1",
+    runId,
+    updatedAt: new Date().toISOString(),
+    ...normalized.summary,
+    ...(managerCapabilityPostureLastChange(options) || {}),
+  };
+  mkdirSync(paths.root, { recursive: true });
+  const write = writeJsonAtomic(paths.capabilityPosture, record);
+  if (!write.ok) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        path: paths.capabilityPosture,
+        managerCapabilityPosture: null,
+        rawPayloadRetained: false,
+      },
+      blockers: [{
+        code: "capability-posture-atomic-write-failed",
+        message: "Manager capability posture could not be atomically persisted.",
+        nextAction: "Inspect manager runtime state permissions and rerun before applying manager actions.",
+      }],
+      warnings: write.warning ? [write.warning] : [],
+    });
+  }
+  const verify = readJsonStrict(paths.capabilityPosture);
+  if (verify.status !== "ready" || !isPlainObject(verify.value)) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        path: paths.capabilityPosture,
+        managerCapabilityPosture: null,
+        rawPayloadRetained: false,
+      },
+      blockers: [{
+        code: "capability-posture-write-verify-failed",
+        message: "Manager capability posture write completed but the persisted record was not readable.",
+        nextAction: "Inspect manager runtime state storage before applying manager actions.",
+      }],
+    });
+  }
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      path: paths.capabilityPosture,
+      managerCapabilityPosture: normalized.summary,
+      rawPayloadRetained: false,
+    },
+  });
+}
+
+function writeJsonAtomic(path, value) {
+  const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`);
+    renameSync(tmpPath, path);
+    return { ok: true };
+  } catch (error) {
+    try {
+      if (existsSync(tmpPath)) rmSync(tmpPath, { force: true });
+    } catch {
+      // Best-effort cleanup only; the caller receives the write failure.
+    }
+    return {
+      ok: false,
+      warning: {
+        code: "capability-posture-temp-write-cleanup",
+        message: `Capability posture atomic write failed before verification: ${sanitizeLedgerField(error?.code || error?.message || "unknown", "unknown", 120)}.`,
+      },
+    };
+  }
+}
+
+function managerCapabilityPostureLastChange(options = {}) {
+  const command = String(options.command || "").trim();
+  const capability = sanitizeLedgerField(options.capabilityName || "", "", 80);
+  const state = normalizeManagerCapabilityState(options.capabilityState || "").state;
+  const reasonCodes = uniqueManagerCapabilityValues(options.capabilityReasonCodes || []);
+  const sourceRefs = sanitizeSourceRefs(options.sourceRefs || []);
+  const evidenceRefs = sanitizeSourceRefs(options.evidenceRefs || []);
+  if (!command && !capability && !state && reasonCodes.length === 0 && sourceRefs.length === 0 && evidenceRefs.length === 0) return null;
+  return {
+    lastChange: {
+      changedAt: new Date().toISOString(),
+      actor: command ? "operator" : "manager",
+      command: sanitizeLedgerField(command || "write", "write", 40),
+      capability: capability || null,
+      state: state || null,
+      reasonCodes,
+      sourceRefs,
+      evidenceRefs,
+      rawPayloadRetained: false,
+    },
+  };
+}
+
+export function buildManagerCapabilityPostureControlPlan(options = {}, context = {}) {
+  const command = String(options.command || "show").trim() || "show";
+  const runId = safeRunId(options.runId || defaultRunId());
+  const read = readManagerCapabilityPosture({ ...options, runId }, context);
+  if (!["show", "set", "clear"].includes(command)) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, command, mutation: "none" },
+      blockers: [{ code: "capability-posture-command-invalid", message: `Unsupported capability posture command: ${command}.`, nextAction: "Use show, set, or clear." }],
+    });
+  }
+  if (command !== "show" && read.ok === false) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        command,
+        path: read.summary?.path || managerRunPaths(runId, options, context).capabilityPosture,
+        mutation: "none",
+        rawPayloadRetained: false,
+      },
+      blockers: read.blockers?.length
+        ? read.blockers
+        : [{ code: "capability-posture-read-blocked", message: "Capability posture mutation requires a readable safe manager state root.", nextAction: "Fix the state root boundary and rerun the capability posture command." }],
+      warnings: read.warnings || [],
+    });
+  }
+  if (command !== "show" && read.status === "warning") {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        command,
+        path: read.summary?.path || managerRunPaths(runId, options, context).capabilityPosture,
+        mutation: "none",
+        rawPayloadRetained: false,
+      },
+      blockers: [{
+        code: "capability-posture-read-unverified",
+        message: "Capability posture mutation requires the persisted posture file to be readable.",
+        nextAction: "Inspect or replace capability-posture.json before changing manager capability posture.",
+      }],
+      warnings: read.warnings || [],
+    });
+  }
+  const current = read.summary?.managerCapabilityPosture || buildManagerCapabilityPosture({}, {}, {}).summary;
+  if (command === "show") {
+    return packet({
+      status: "ready",
+      summary: {
+        runId,
+        command,
+        postureSource: read.status === "ready" ? "persisted" : "default",
+        path: read.summary?.path || managerRunPaths(runId, options, context).capabilityPosture,
+        managerCapabilityPosture: current,
+        mutation: "none; read-only capability posture summary",
+        rawPayloadRetained: false,
+      },
+      warnings: read.warnings || [],
+    });
+  }
+
+  const validation = validateManagerCapabilityPostureControl(command, options, current);
+  if (validation.blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        command,
+        capability: sanitizeLedgerField(options.capabilityName || "", "", 80),
+        requestedState: command === "clear" ? "enabled" : sanitizeLedgerField(options.capabilityState || "", "", 40),
+        mutation: "none",
+        rawPayloadRetained: false,
+      },
+      blockers: validation.blockers,
+      warnings: [...(read.warnings || []), ...validation.warnings],
+    });
+  }
+
+  const capability = validation.capability;
+  const requestedState = command === "clear" ? "enabled" : validation.state;
+  const nextCapabilities = {
+    ...(current.capabilities || {}),
+    [capability]: {
+      state: requestedState,
+      reasonCodes: validation.reasonCodes,
+      safeFallbacks: validation.safeFallbacks,
+    },
+  };
+  const planned = summarizeManagerCapabilityPosture(nextCapabilities);
+  const resultSummary = {
+    runId,
+    command,
+    capability,
+    requestedState,
+    path: read.summary?.path || managerRunPaths(runId, options, context).capabilityPosture,
+    currentPosture: current,
+    plannedPosture: planned,
+    mutation: options.apply ? "manager_capability_posture_write" : "none; dry-run capability posture preview",
+    applyRequired: !options.apply,
+    rawPayloadRetained: false,
+  };
+  if (!options.apply) {
+    return packet({
+      status: "ready",
+      summary: resultSummary,
+      warnings: [...(read.warnings || []), ...validation.warnings],
+      nextActions: [{
+        code: "capability-posture-apply-ready",
+        summary: `Apply ${capability} -> ${requestedState} capability posture change.`,
+        nextAction: "Rerun node ./scripts/manager-capability-posture.mjs --summary-json with the same arguments plus --apply after reviewing the dry-run packet.",
+      }],
+    });
+  }
+  const write = writeManagerCapabilityPosture(planned, { ...options, runId, capabilityName: capability, capabilityState: requestedState }, context);
+  if (!write.ok) return write;
+  return packet({
+    status: "ready",
+    summary: {
+      ...resultSummary,
+      managerCapabilityPosture: write.summary.managerCapabilityPosture,
+      writeStatus: write.status,
+    },
+    warnings: [...(read.warnings || []), ...validation.warnings, ...(write.warnings || [])],
+    nextActions: [{
+      code: "capability-posture-updated",
+      summary: `${capability} capability posture is now ${requestedState}.`,
+      nextAction: "Rerun node ./scripts/manager-capability-posture.mjs --summary-json show or manager continuous mode to inspect the effective posture.",
+    }],
+  });
+}
+
+function validateManagerCapabilityPostureControl(command = "show", options = {}, current = {}) {
+  const blockers = [];
+  const warnings = [];
+  const validCapabilities = Object.keys(current.capabilities || buildManagerCapabilityPosture({}, {}, {}).summary.capabilities || {});
+  const capability = sanitizeLedgerField(options.capabilityName || "", "", 80);
+  if (!capability || !validCapabilities.includes(capability)) {
+    blockers.push({
+      code: "capability-posture-capability-invalid",
+      message: `Capability must be one of: ${validCapabilities.join(", ")}.`,
+      nextAction: "Provide --capability with a known manager capability.",
+    });
+  }
+  const requested = command === "clear" ? "enabled" : normalizeManagerCapabilityState(options.capabilityState || "").state;
+  if (!requested || !["enabled", "degraded", "parked", "blocked"].includes(requested)) {
+    blockers.push({
+      code: "capability-posture-state-invalid",
+      message: "Capability posture state must be enabled, degraded, parked, or blocked.",
+      nextAction: "Provide --state with a supported state, or use clear to set enabled.",
+    });
+  }
+  const reasonCodes = uniqueManagerCapabilityValues(options.capabilityReasonCodes || []);
+  const safeFallbacks = uniqueManagerCapabilityValues(options.capabilitySafeFallbacks || []);
+  const evidenceRefs = sanitizeSourceRefs(options.evidenceRefs || []);
+  const sourceRefs = sanitizeSourceRefs(options.sourceRefs || []);
+  const rejectedRefs = [...sourceRefList(options.evidenceRefs || []), ...sourceRefList(options.sourceRefs || [])].filter(capabilityPostureRefRejected);
+  if (rejectedRefs.length > 0) {
+    blockers.push({
+      code: "capability-posture-raw-ref-rejected",
+      message: "Capability posture controls may retain only compact source/evidence refs, not raw payload markers or secrets.",
+      nextAction: "Replace raw refs with compact metadata refs such as evidence:manager-observation.",
+    });
+  }
+  if (reasonCodes.length === 0) {
+    blockers.push({
+      code: "capability-posture-reason-missing",
+      message: "Capability posture changes require at least one reason code.",
+      nextAction: "Provide --reason-code with a compact reason.",
+    });
+  }
+  if (evidenceRefs.length === 0) {
+    blockers.push({
+      code: "capability-posture-evidence-missing",
+      message: "Capability posture changes require compact evidence refs.",
+      nextAction: "Provide --evidence-ref with metadata-only evidence.",
+    });
+  }
+  if (["parked", "blocked", "degraded"].includes(requested) && safeFallbacks.length === 0) {
+    blockers.push({
+      code: "capability-posture-fallback-missing",
+      message: "Reduced capability states require at least one safe fallback.",
+      nextAction: "Provide --safe-fallback with the useful work that remains allowed.",
+    });
+  }
+  if (command === "clear" && requested === "enabled" && safeFallbacks.length === 0) {
+    warnings.push({ code: "capability-posture-clear-no-fallback", message: "Clear will preserve the existing safe fallback list when present, otherwise restore the default safe fallback list for this capability." });
+  }
+  const existing = capability ? current.capabilities?.[capability] : null;
+  const defaultCapability = buildManagerCapabilityPosture({}, {}, {}).summary.capabilities?.[capability] || {};
+  return {
+    capability,
+    state: requested,
+    reasonCodes,
+    safeFallbacks: safeFallbacks.length > 0 ? safeFallbacks : existing?.safeFallbacks || defaultCapability.safeFallbacks || [],
+    sourceRefs,
+    evidenceRefs,
+    blockers,
+    warnings,
+  };
+}
+
+function capabilityPostureRefRejected(ref = "") {
+  return /\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/i.test(String(ref || "")) ||
+    /\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/.test(String(ref || ""));
+}
+
+function filterActionsByCapabilityPosture(actions = [], posture = {}) {
+  const capabilities = posture.capabilities || {};
+  const heldActions = [];
+  const allowedActions = [];
+  const degradedActions = [];
+  for (const action of actions) {
+    const capability = action.managerCapability || continuousActionCapability(action);
+    const state = capability ? capabilities[capability]?.state || "enabled" : "enabled";
+    const annotated = capability ? { ...action, managerCapability: capability, capabilityState: state } : action;
+    if (["parked", "blocked"].includes(state)) {
+      heldActions.push({
+        code: action.code,
+        managerCapability: capability,
+        state,
+        reasonCodes: capabilities[capability]?.reasonCodes || [],
+        safeFallbacks: capabilities[capability]?.safeFallbacks || [],
+      });
+      continue;
+    }
+    if (state === "degraded") degradedActions.push({ code: action.code, managerCapability: capability });
+    allowedActions.push(annotated);
+  }
+  return {
+    actions: allowedActions,
+    warnings: heldActions.length > 0
+      ? [{ code: "capability_posture_hold", message: `${heldActions.length} continuous action(s) held by parked or blocked manager capability posture.` }]
+      : [],
+    summary: {
+      policy: "capability_posture",
+      heldActions,
+      degradedActions,
+      rawPayloadRetained: false,
+    },
+  };
+}
+
+function mergeCapabilityHoldSummaries(...summaries) {
+  const heldActions = [];
+  const degradedActions = [];
+  const seenHeld = new Set();
+  const seenDegraded = new Set();
+  for (const summary of summaries) {
+    for (const held of Array.isArray(summary?.heldActions) ? summary.heldActions : []) {
+      const key = `${held.code || ""}:${held.managerCapability || ""}:${held.state || ""}`;
+      if (seenHeld.has(key)) continue;
+      seenHeld.add(key);
+      heldActions.push(held);
+    }
+    for (const degraded of Array.isArray(summary?.degradedActions) ? summary.degradedActions : []) {
+      const key = `${degraded.code || ""}:${degraded.managerCapability || ""}`;
+      if (seenDegraded.has(key)) continue;
+      seenDegraded.add(key);
+      degradedActions.push(degraded);
+    }
+  }
+  return {
+    policy: "capability_posture",
+    heldActions,
+    degradedActions,
+    rawPayloadRetained: false,
+  };
+}
+
+function continuousActionSort(left = {}, right = {}) {
+  const workDelta = continuousWorkClassPriority(left) - continuousWorkClassPriority(right);
+  if (workDelta !== 0) return workDelta;
+  return continuousActionPriority(left) - continuousActionPriority(right);
+}
+
+function continuousWorkClassPriority(action = {}) {
+  const priorities = new Map([
+    ["task_work", 0],
+    ["direct_unblock_repair", 10],
+    ["safety_repair", 20],
+    ["manager_improvement", 40],
+    ["self_fix_churn", 90],
+  ]);
+  return priorities.get(action.workClass) ?? 80;
 }
 
 function continuousActionPriority(action = {}) {
@@ -14097,16 +16866,19 @@ function continuousActionPriority(action = {}) {
     ["continuous-worker-answer-question", 10],
     ["continuous-worker-prompt-probe", 15],
     ["continuous-worker-submit-pending", 20],
+    ["continuous-worker-code-review-request", 27],
+    ["continuous-worker-code-review-request-prepared", 27],
+    ["continuous-worker-code-review-no-reviewer", 28],
     ["continuous-lane-advance-apply", 29],
     ["continuous-worker-warm", 30],
     ["continuous-worker-handoff", 31],
     ["continuous-worker-progress-signal", 32],
     ["continuous-dispatch-apply", 33],
     ["continuous-refill-apply", 34],
-    ["continuous-bmad-code-review-request", 34],
     ["continuous-worker-prompt-idle-progress-signal", 35],
     ["continuous-worker-recovery-inspection", 55],
     ["continuous-worker-retire", 60],
+    ["continuous-worker-retire-blocked-question", 61],
   ]);
   return priorities.get(action.code) ?? 100;
 }
@@ -14117,13 +16889,37 @@ function continuousActionAllowedByContinuation(action = {}, cycle = {}) {
   if (Number(attentionPolicy.operatorInterruptionCount || 0) > 0 && action.code === "continuous-worker-answer-question") {
     return false;
   }
-  if (continuation.workerMutationAllowed === false && String(action.mutationClass || "").startsWith("manager_owned_worker_")) {
+  const mutationClass = String(action.mutationClass || "");
+  if (continuation.workerMutationAllowed === false && mutationClass.startsWith("manager_owned_worker_")) {
     return false;
   }
   if (continuation.dispatchApplyAllowed === false && action.mutationClass === "assignment_workspace_claim_only") {
     return false;
   }
   return true;
+}
+
+function buildBlockedQuestionRetireContinuousActions(cycle = {}, questionAnswer = null, questionAnswerAvailable = true) {
+  if (questionAnswerAvailable) return [];
+  const blockedQuestions = Array.isArray(questionAnswer?.summary?.blockedQuestions) ? questionAnswer.summary.blockedQuestions : [];
+  const unsafeBlocked = blockedQuestions.filter((question) =>
+    question.decision === "block_unsafe_continuation" &&
+    question.operatorInterruption === true &&
+    Array.isArray(question.reasonCodes) &&
+    question.reasonCodes.includes("unsafe_authority_request")
+  );
+  if (unsafeBlocked.length === 0) return [];
+  return unsafeBlocked
+    .slice(0, 6)
+    .filter((question) => sanitizeLedgerField(question.workerId || question.worker_id || "", "", 80))
+    .map((question) => {
+      const workerId = sanitizeLedgerField(question.workerId || question.worker_id || "", "", 80);
+      return {
+        code: "worker-retire-blocked-question",
+        summary: `Retire policy-blocked manager-owned worker ${workerId} after unsafe question classification.`,
+        nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-retire.mjs --summary-json --limit 1 --worker-id ${shellSingleQuote(workerId)} --retire-blocked-question`, cycleRunScope(cycle)),
+      };
+    });
 }
 
 function buildPromptIdleLoadActions(cycle = {}, promptProbe = {}) {
@@ -14150,10 +16946,13 @@ function buildPromptIdleLoadActions(cycle = {}, promptProbe = {}) {
   );
   const checkpointIdleRows = promptIdleRows.filter((worker) =>
     worker.progressState === "checkpoint_seen" &&
-    Number(worker.latestCheckpointAgeSeconds || 0) >= 60,
+    Number(worker.latestCheckpointAgeSeconds || 0) >= PROMPT_IDLE_CHECKPOINT_STALE_SECONDS,
   );
   const answeredQuestionIdleRows = promptIdleRows.filter((worker) =>
     worker.progressState === "question_answer_stale"
+  );
+  const reviewFeedbackIdleRows = promptIdleRows.filter((worker) =>
+    worker.progressState === "review_feedback_stale"
   );
   const actions = [];
   if (completedRows.length > 0 && laneAdvanceReady) {
@@ -14162,8 +16961,14 @@ function buildPromptIdleLoadActions(cycle = {}, promptProbe = {}) {
       summary: `Advance ${completedRows.length} prompt-idle completed worker lane(s) so workers can be reused.`,
       nextAction: appendManagerCommandScope(`node ./scripts/manager-lane-advance.mjs --summary-json --limit ${Math.min(6, completedRows.length)}`, cycleRunScope(cycle)),
     });
+  } else if (completedRows.length > 0) {
+    actions.push({
+      code: "worker-code-review-ready",
+      summary: `Delegate review-ready worker lane(s) to manager-owned worker code review.`,
+      nextAction: appendManagerCommandScope("node ./scripts/manager-worker-code-review.mjs --summary-json", cycleRunScope(cycle)),
+    });
   }
-  const signalRows = [...handoffIdleRows, ...checkpointIdleRows, ...answeredQuestionIdleRows];
+  const signalRows = [...handoffIdleRows, ...checkpointIdleRows, ...answeredQuestionIdleRows, ...reviewFeedbackIdleRows];
   if (signalRows.length > 0) {
     actions.push({
       code: signalRows.length === 1 ? `worker-progress-${signalRows[0].progressState}` : "worker-progress-prompt_idle",
@@ -14190,7 +16995,7 @@ function buildContinuousDispatchRoutingDecision(cycle = {}) {
   const usage = summary.usage || {};
   const resources = summary.resources || {};
   const dispatchPreview = summary.dispatchPreview || {};
-  const owner = summary.run?.runId || "manager-continuous";
+  const owner = managerDispatcherOwner(summary.run?.runId || "manager-continuous");
   const readyQueueCount =
     dispatchPreviewCount({ summary: dispatchPreview }, "dispatchable") ??
     (dispatchPreview.selectedLane ? 1 : 0);
@@ -14212,16 +17017,21 @@ function buildContinuousDispatchRoutingDecision(cycle = {}) {
   });
 }
 
+function managerDispatcherOwner(runId = "") {
+  const owner = sanitizeLedgerField(runId || "manager-continuous", "manager-continuous", 140);
+  return owner.endsWith("/dispatcher") ? owner : `${owner}/dispatcher`;
+}
+
 function mapUsageStateForRouting(state = "unknown") {
   if (state === "normal") return "normal";
-  if (["conserve", "drain", "manager_only"].includes(state)) return "low";
+  if (["low", "conserve", "drain", "manager_only"].includes(state)) return state;
   if (state === "stale") return "stale";
   return "unknown";
 }
 
 function mapResourceStateForRouting(state = "unknown") {
   if (state === "normal") return "normal";
-  if (["warm", "pressured", "critical", "high"].includes(state)) return "high";
+  if (["warm", "pressured", "critical", "high"].includes(state)) return state;
   if (state === "stale") return "stale";
   return "unknown";
 }
@@ -14233,7 +17043,71 @@ function percentMetric(percentValue, ratioValue) {
   return Number.isFinite(ratio) ? Number((ratio * 100).toFixed(2)) : null;
 }
 
-function buildContinuousAction(action = {}, cycle = {}) {
+function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = {}) {
+  const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "", "", 120);
+  const stateRoot = sanitizeLedgerField(cycle.summary?.run?.stateRoot || "", "", 260);
+  const selectedStory = reviewPlan.summary?.selectedStory || {};
+  const assignmentId = assignmentIdForStoryKey(selectedStory.storyKey || "");
+  const reviewSummary = assignmentId
+    ? `Delegate BMAD code review for ${assignmentId} to a manager-owned worker.`
+    : "Delegate BMAD code review to a manager-owned worker.";
+  const scopedRun = runId ? ` --run-id ${shellSingleQuote(runId)}` : "";
+  const scopedStateRoot = stateRoot ? ` --state-root ${shellSingleQuote(stateRoot)}` : "";
+  const scopedAssignment = assignmentId ? ` --assignment-id ${shellSingleQuote(assignmentId)}` : "";
+  const workerReviewPlan = buildWorkerCodeReviewPlan(
+    { ...(runId ? { runId } : {}), ...(stateRoot ? { stateRoot } : {}), ...(assignmentId ? { assignmentId } : {}) },
+    { cyclePacket: cycle, reviewRequestPlan: reviewPlan, progressStatus: { summary: cycle.summary?.workerProgress || {} } },
+  );
+  const dryRunCommand = `node ./scripts/manager-worker-code-review.mjs --summary-json${scopedRun}${scopedStateRoot}${scopedAssignment}`;
+  const request = workerReviewPlan.summary?.requests?.[0] || null;
+  if (workerReviewPlan.status === "blocked") {
+    return {
+      code: "continuous-worker-code-review-no-reviewer",
+      summary: "BMAD code review is ready, but no manager-owned reviewer worker is currently available.",
+      dryRunCommand,
+      applyCommand: "wait_for_or_warm_manager_owned_reviewer",
+      authority: "manager-owned-worker-code-review-delegation-required",
+      mutationClass: "none",
+      readOnly: true,
+      blockerCode: workerReviewPlan.blockers?.[0]?.code || "worker-code-review-no-reviewer",
+      nextAction: workerReviewPlan.blockers?.[0]?.nextAction || "Wait for another prompt-idle manager-owned worker, warm a reviewer, or run review manually only by explicit operator choice.",
+    };
+  }
+  if (workerReviewPlan.summary?.alreadyPrepared === true) {
+    const requestAgeSeconds = Number(workerReviewPlan.summary?.requestAgeSeconds);
+    const resultFresh = workerReviewPlan.summary?.resultFresh === true;
+    const resendStaleSeconds = Number.isFinite(Number(cycle.summary?.reviewRequestResendStaleSeconds))
+      ? Number(cycle.summary.reviewRequestResendStaleSeconds)
+      : WORKER_CODE_REVIEW_RESEND_STALE_SECONDS;
+    const shouldResend = !resultFresh && Number.isFinite(requestAgeSeconds) && requestAgeSeconds >= resendStaleSeconds;
+    const workerFlag = request?.workerId ? ` --worker-id ${shellSingleQuote(request.workerId)}` : "";
+    return {
+      code: "continuous-worker-code-review-request-prepared",
+      summary: shouldResend
+        ? "Delegated worker code review request is stale without findings; resend the durable request pointer."
+        : "Delegated worker code review request is already prepared.",
+      dryRunCommand,
+      applyCommand: shouldResend
+        ? `${dryRunCommand}${workerFlag} --operator-visible-prompt --apply`
+        : "monitor_delegated_worker_code_review",
+      authority: "manager-owned-worker-code-review-delegation-existing-gates",
+      mutationClass: "manager_owned_worker_code_review_delegation",
+      readOnly: !shouldResend,
+      reviewResultFresh: resultFresh,
+    };
+  }
+  const workerFlag = request?.workerId ? ` --worker-id ${shellSingleQuote(request.workerId)}` : "";
+  return {
+    code: "continuous-worker-code-review-request",
+    summary: reviewSummary,
+    dryRunCommand,
+    applyCommand: `${dryRunCommand}${workerFlag} --apply`,
+    authority: "manager-owned-worker-code-review-delegation-existing-gates",
+    mutationClass: "manager_owned_worker_code_review_delegation",
+  };
+}
+
+function buildContinuousAction(action = {}, cycle = {}, capabilityPosture = {}) {
   const nextAction = String(action.nextAction || "").trim();
   if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
     const dryRunCommand = nextAction.replace(/\s+--apply\b/g, "");
@@ -14289,6 +17163,15 @@ function buildContinuousAction(action = {}, cycle = {}) {
       mutationClass: "manager_owned_worker_progress_signal",
     };
   }
+  if (action.code === "worker-code-review-ready" && nextAction.startsWith("node ./scripts/manager-worker-code-review.mjs ")) {
+    const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "", "", 120);
+    const progressStatus = { summary: cycle.summary?.workerProgress || {} };
+    const reviewPlan = buildBmadCodeReviewRequestPlan(runId ? { runId } : {}, { cyclePacket: cycle, progressStatus });
+    if (reviewPlan.ok !== false && reviewPlan.status === "ready") {
+      return continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
+    }
+    return null;
+  }
   if (action.code === "worker-progress-blocked_question" && nextAction.startsWith("node ./scripts/manager-worker-answer-question.mjs ")) {
     return {
       code: "continuous-worker-answer-question",
@@ -14299,12 +17182,12 @@ function buildContinuousAction(action = {}, cycle = {}) {
       mutationClass: "manager_owned_worker_question_answer",
     };
   }
-  if (action.code === "worker-progress-progress_signal_unanswered" && nextAction === "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json") {
+  if (action.code === "worker-progress-progress_signal_unanswered" && nextAction.startsWith("node ./scripts/manager-worker-recovery-inspection.mjs ")) {
     return {
       code: "continuous-worker-recovery-inspection",
       summary: action.summary || "Inspect unanswered manager-owned worker progress signals.",
-      dryRunCommand: nextAction,
-      applyCommand: `${nextAction} --apply`,
+      dryRunCommand: nextAction.replace(/ --apply\b/g, ""),
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
       authority: "metadata-only-worker-recovery-inspection",
       mutationClass: "metadata_only_worker_recovery_inspection",
     };
@@ -14319,7 +17202,27 @@ function buildContinuousAction(action = {}, cycle = {}) {
       mutationClass: "manager_owned_worker_retire",
     };
   }
+  if (action.code === "worker-retire-blocked-question" && nextAction.startsWith("node ./scripts/manager-worker-retire.mjs ")) {
+    return {
+      code: "continuous-worker-retire-blocked-question",
+      summary: action.summary || "Retire policy-blocked manager-owned worker.",
+      dryRunCommand: nextAction,
+      applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      authority: "manager-owned-worker-retire-after-policy-blocked-question-existing-gates",
+      mutationClass: "manager_owned_worker_retire",
+    };
+  }
   if (action.code === "manager-lane-advance-ready" && nextAction.startsWith("node ./scripts/manager-lane-advance.mjs ")) {
+    const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "", "", 120);
+    const progressStatus = { summary: cycle.summary?.workerProgress || {} };
+    const reviewPlan = buildBmadCodeReviewRequestPlan(runId ? { runId } : {}, { cyclePacket: cycle, progressStatus });
+    const reviewDelegationState = capabilityPosture.capabilities?.reviewDelegation?.state || "enabled";
+    if (!["parked", "blocked"].includes(reviewDelegationState) && reviewPlan.ok !== false && reviewPlan.status === "ready") {
+      const reviewAction = continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
+      if (reviewAction && !(reviewAction.readOnly === true && reviewAction.reviewResultFresh === true)) {
+        return reviewAction;
+      }
+    }
     return {
       code: "continuous-lane-advance-apply",
       summary: action.summary || "Advance review-ready lanes into manager review or delivery metadata gates.",
@@ -14332,21 +17235,12 @@ function buildContinuousAction(action = {}, cycle = {}) {
   if (action.code === "safe-backlog-starvation") {
     if (/\bbmad-code-review\b/.test(nextAction)) {
       const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "", "", 120);
-      const reviewPlan = buildBmadCodeReviewRequestPlan(runId ? { runId } : {}, { cyclePacket: cycle });
-      if (reviewPlan.ok === false || reviewPlan.summary?.alreadyPrepared === true) {
+      const progressStatus = { summary: cycle.summary?.workerProgress || {} };
+      const reviewPlan = buildBmadCodeReviewRequestPlan(runId ? { runId } : {}, { cyclePacket: cycle, progressStatus });
+      if (reviewPlan.ok === false) {
         return null;
       }
-      const scopedRun = runId ? ` --run-id ${shellSingleQuote(runId)}` : "";
-      const dryRunCommand = reviewPlan.summary?.dryRunCommand || `node ./scripts/manager-bmad-code-review.mjs --summary-json${scopedRun}`;
-      const applyCommand = reviewPlan.summary?.applyCommand || `${dryRunCommand} --apply`;
-      return {
-        code: "continuous-bmad-code-review-request",
-        summary: action.summary || "Prepare the next source-owned BMAD code review request packet.",
-        dryRunCommand,
-        applyCommand,
-        authority: "existing-bmad-code-review-workflow-request-packet-only",
-        mutationClass: "manager_runtime_review_request_packet",
-      };
+      return continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
     }
     const gate = action.materializationGate || null;
     const gateReady = gate?.state === "ready" || gate?.mutationMode === "dry_run_required";
@@ -14370,10 +17264,12 @@ function buildContinuousAction(action = {}, cycle = {}) {
     if ((dispatcher.allowed === false || dispatchPreview.allowed === false) || !(dispatcher.selectedLane || dispatchPreview.selectedLane)) {
       return null;
     }
+    const capacityDecision = buildContinuousDispatchCapacityDecision(cycle);
+    if (!capacityDecision.allowed) return null;
     const routingDecision = buildContinuousDispatchRoutingDecision(cycle);
     if (!routingDecision.allowed) return null;
     const dryRunCommand = routingDecision.selectedAction.command;
-    const applyCommand = `${dryRunCommand.replace(/\s--dry-run\b/g, "").replace(/\s--summary-json\b/g, "")} --apply`;
+    const applyCommand = `${dryRunCommand.replace(/\s--dry-run\b/g, "")} --apply`;
     return {
       code: "continuous-dispatch-apply",
       summary: action.summary || "Claim the next source-owned safe backlog lane through existing dispatch gates.",
@@ -14381,10 +17277,30 @@ function buildContinuousAction(action = {}, cycle = {}) {
       applyCommand,
       authority: "codex-workspace-dispatch-existing-gates",
       mutationClass: "assignment_workspace_claim_only",
-      routingDecision,
+      routingDecision: { ...routingDecision, capacityDecision },
     };
   }
   return null;
+}
+
+function buildContinuousDispatchCapacityDecision(cycle = {}) {
+  const workers = cycle.summary?.workers?.workerCounts || {};
+  const active = nonNegativeInteger(workers.active) ?? 0;
+  const warm = nonNegativeInteger(workers.warm) ?? 0;
+  const paused = nonNegativeInteger(workers.paused) ?? 0;
+  const maxWorkers = Math.max(1, nonNegativeInteger(cycle.summary?.workers?.targets?.maxTarget) ?? 6);
+  const activeCapacity = Math.max(0, maxWorkers - active - paused);
+  const allowed = warm > 0 || activeCapacity > 0;
+  return {
+    allowed,
+    active,
+    warm,
+    paused,
+    maxWorkers,
+    activeCapacity,
+    policy: "dispatch_requires_warm_worker_or_available_active_worker_capacity",
+    blockedReasons: allowed ? [] : ["worker_capacity_full"],
+  };
 }
 
 function appendContinuousPostureFlags(command = "", cycle = {}) {
@@ -15122,7 +18038,8 @@ function sanitizeCyclePacketValue(value, depth = 0, key = "") {
   if (value === null || value === undefined) return value;
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "string") {
-    return sanitizeLedgerField(shouldRedactCycleKey(key) ? "[redacted-retention-field]" : value, "", 600);
+    const maxLength = ["nextAction", "dryRunCommand", "applyCommand"].includes(key) ? 4000 : 600;
+    return sanitizeLedgerField(shouldRedactCycleKey(key) ? "[redacted-retention-field]" : value, "", maxLength);
   }
   if (Array.isArray(value)) {
     if (depth >= 6) return [];
@@ -15132,6 +18049,10 @@ function sanitizeCyclePacketValue(value, depth = 0, key = "") {
     if (depth >= 6) return {};
     const output = {};
     for (const [entryKey, entryValue] of Object.entries(value).slice(0, 60)) {
+      if (typeof entryValue === "number") {
+        output[entryKey] = entryValue;
+        continue;
+      }
       if (entryKey === "rawPayloadRetained" && entryValue === false) {
         output[entryKey] = false;
         continue;
@@ -15391,6 +18312,7 @@ export function ledgerCommand(options = {}, context = {}) {
       nextAction: "reconstruct from dispatcher summary when available",
       updatedAt: new Date().toISOString(),
     });
+    writeJsonIfMissing(paths.capabilityPosture, defaultManagerCapabilityPostureRecord(runId));
     writeJsonIfMissing(paths.checkpoints, []);
     for (const ndjson of [paths.events, paths.questions, paths.resourceSnapshots, paths.usageSnapshots]) {
       if (!existsSync(ndjson)) writeFileSync(ndjson, "");
@@ -15417,6 +18339,7 @@ export function ledgerCommand(options = {}, context = {}) {
       options,
       fallbackSummary: "manager event",
       eventName: normalizedEventName,
+      extra: ledgerEventExtra(normalizedEventName, options),
     });
     appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
     return packet({ status: "ready", summary: { runId, event } });
@@ -15534,6 +18457,7 @@ export function ledgerCommand(options = {}, context = {}) {
         mission: readJson(paths.mission, null),
         workers: readJson(paths.workers, []),
         checkpoints: readJson(paths.checkpoints, []),
+        capabilityPosture: readJson(paths.capabilityPosture, null),
         events: readNdjsonStrict(paths.events).value.slice(-10),
         questions: readNdjsonStrict(paths.questions).value.slice(-10),
         resourceSnapshots: readNdjsonStrict(paths.resourceSnapshots).value.slice(-10),
@@ -15562,7 +18486,15 @@ function isMaterialQuestionRecord(options = {}) {
 function workspaceJsonArgs(args = [], options = {}) {
   const nextArgs = [...args];
   if (options.stateRoot) nextArgs.push("--state-root", options.stateRoot);
+  if (managerWorkspaceCommandUsesOwner(nextArgs[0]) && !nextArgs.includes("--owner")) {
+    const owner = options.workspaceOwner || options.owner || (options.runId ? `${options.runId}/dispatcher` : "");
+    if (owner) nextArgs.push("--owner", owner);
+  }
   return nextArgs;
+}
+
+function managerWorkspaceCommandUsesOwner(command) {
+  return ["assignment-report", "dispatch-next", "claim-next"].includes(command);
 }
 
 function runWorkspaceJson(args, context = {}) {
@@ -15837,7 +18769,25 @@ function safeLedgerExtra(extra = {}) {
   if (Object.prototype.hasOwnProperty.call(extra, "usageState")) {
     safe.usageState = sanitizeLedgerField(extra.usageState, "unknown", 40);
   }
+  if (Object.prototype.hasOwnProperty.call(extra, "actionCode")) {
+    safe.actionCode = sanitizeLedgerField(extra.actionCode, "manager-self-repair", 120);
+  }
+  if (Object.prototype.hasOwnProperty.call(extra, "workClass")) {
+    safe.workClass = sanitizeLedgerField(extra.workClass, "manager_improvement", 80);
+  }
+  if (Object.prototype.hasOwnProperty.call(extra, "managerCapability")) {
+    safe.managerCapability = sanitizeLedgerField(extra.managerCapability, "manager", 80);
+  }
   return safe;
+}
+
+function ledgerEventExtra(eventName = "", options = {}) {
+  if (eventName !== "manager.self_repair.attempted") return {};
+  return {
+    actionCode: options.advisorActionCode || options.actionCode || "manager-self-repair",
+    workClass: options.advisorWorkClass || options.workClass || "manager_improvement",
+    managerCapability: options.capabilityName || options.managerCapability || "manager",
+  };
 }
 
 function defaultLedgerSourceRefs(eventName) {
@@ -15898,6 +18848,7 @@ const LEDGER_EVENT_NAMES = new Set([
   "manager.checkpoint.recorded",
   "manager.resource.snapshot",
   "manager.usage.snapshot",
+  "manager.self_repair.attempted",
   "manager.blocker.recorded",
   "manager.recovery.blocked",
   "manager.replay.summarized",
@@ -15907,6 +18858,8 @@ const LEDGER_EVENT_ALIASES = new Map([
   ["manager.event", "manager.ledger.appended"],
   ["manager.raw", "manager.ledger.appended"],
   ["manager.steering", "manager.run.steered"],
+  ["manager_self_repair_attempt", "manager.self_repair.attempted"],
+  ["self_repair_attempt", "manager.self_repair.attempted"],
   ["worker_target_changed", "manager.run.steered"],
   ["worker_question", "manager.question.recorded"],
   ["manager_checkpoint", "manager.checkpoint.recorded"],
@@ -15915,6 +18868,8 @@ const LEDGER_EVENT_ALIASES = new Map([
   ["worker_handoff_apply", "manager.ledger.appended"],
   ["worker_recovery_inspection", "manager.recovery.blocked"],
   ["worker_progress_signal_apply", "manager.ledger.appended"],
+  ["worker_code_review_request_apply", "manager.ledger.appended"],
+  ["worker_review_feedback_apply", "manager.ledger.appended"],
   ["worker_submit_pending_apply", "manager.ledger.appended"],
   ["worker_prompt_region_submit_apply", "manager.ledger.appended"],
   ["worker_retire_apply", "manager.recovery.blocked"],
@@ -15993,6 +18948,7 @@ function buildLedgerReplaySummary(paths) {
   const resourceSnapshots = readNdjsonStrict(paths.resourceSnapshots).value;
   const usageSnapshots = readNdjsonStrict(paths.usageSnapshots).value;
   const latestEvent = events.at(-1) || null;
+  const selfRepair = summarizeSelfRepairAttempts(events);
   const outstandingBlockers = events
     .filter((event) => event.eventName === "manager.blocker.recorded" || event.eventName === "manager.recovery.blocked" || event.result === "blocked")
     .slice(-10)
@@ -16017,6 +18973,7 @@ function buildLedgerReplaySummary(paths) {
     latestCheckpoints: Array.isArray(checkpoints) ? checkpoints.slice(-10).map((checkpoint) => sanitizeLedgerField(checkpoint.summary || checkpoint.checkpointType || "checkpoint", "checkpoint", 180)) : [],
     latestResourceState: sanitizeLedgerField(resourceSnapshots.at(-1)?.resourceState || "unknown", "unknown", 60),
     latestUsageState: sanitizeLedgerField(usageSnapshots.at(-1)?.usageState || "unknown", "unknown", 60),
+    selfRepair,
     nextSafeAction: outstandingBlockers.length > 0
       ? "inspect_recovery_blockers"
       : dispatcherUnavailable
@@ -16026,6 +18983,73 @@ function buildLedgerReplaySummary(paths) {
     rawPayloadRetained: false,
     evidenceRefs: latestEvent?.evidenceRefs || [],
   };
+}
+
+function summarizeSelfRepairAttempts(events = [], options = {}) {
+  const budget = Math.max(1, nonNegativeInteger(options.selfRepairBudget) ?? 2);
+  const attemptsByAction = {};
+  const latestAttempts = [];
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.eventName !== "manager.self_repair.attempted") continue;
+    const actionCode = sanitizeLedgerField(event.actionCode || "manager-self-repair", "manager-self-repair", 120);
+    attemptsByAction[actionCode] = (attemptsByAction[actionCode] || 0) + 1;
+    latestAttempts.push({
+      actionCode,
+      workClass: sanitizeLedgerField(event.workClass || "", "", 80),
+      managerCapability: sanitizeLedgerField(event.managerCapability || "", "", 80),
+      eventId: sanitizeLedgerField(event.eventId || "", "", 120),
+      evidenceRefs: Array.isArray(event.evidenceRefs) ? event.evidenceRefs.slice(0, 6) : [],
+    });
+  }
+  return {
+    budget,
+    attemptsByAction,
+    attemptCount: Object.values(attemptsByAction).reduce((total, count) => total + count, 0),
+    latestAttempts: latestAttempts.slice(-8),
+    source: "manager_ledger_events",
+    rawPayloadRetained: false,
+  };
+}
+
+export function buildManagerSelfRepairSummary(options = {}, context = {}) {
+  if (isPlainObject(context.selfRepairSummary || context.selfRepair)) {
+    return packet({
+      status: "ready",
+      summary: {
+        ...sanitizeCyclePacketValue(context.selfRepairSummary || context.selfRepair),
+        source: "context",
+        rawPayloadRetained: false,
+      },
+    });
+  }
+  const runId = safeRunId(options.runId || defaultRunId());
+  const paths = managerRunPaths(runId, options, context);
+  const budget = Math.max(1, nonNegativeInteger(options.selfRepairBudget ?? context.selfRepairBudget) ?? 2);
+  if (!paths.proof.ok) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, budget, attemptsByAction: {}, attemptCount: 0, source: "workspace_state_blocked", rawPayloadRetained: false },
+      blockers: [{ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." }],
+    });
+  }
+  const read = readNdjsonStrict(paths.events);
+  if (read.status !== "ready") {
+    return packet({
+      status: read.status === "missing" ? "missing" : "warning",
+      summary: { runId, budget, attemptsByAction: {}, attemptCount: 0, source: "manager_ledger_events", rawPayloadRetained: false },
+      warnings: read.status === "malformed"
+        ? [{ code: "self-repair-events-unreadable", message: "Manager self-repair attempt summary could not read events.ndjson." }]
+        : [],
+    });
+  }
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      ...summarizeSelfRepairAttempts(read.value, { selfRepairBudget: budget }),
+    },
+  });
 }
 
 function replayControlState(mission = {}, latestEvent = null) {

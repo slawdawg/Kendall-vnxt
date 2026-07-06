@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 
-import { buildContinuousRunPlan, buildPreflight, parseCommonArgs } from "./lib/manager-control-plane/core.mjs";
+import {
+  buildContinuousRunPlan,
+  buildPreflight,
+  ledgerCommand,
+  parseCommonArgs,
+  readManagerCapabilityPosture,
+  writeManagerCapabilityPosture,
+} from "./lib/manager-control-plane/core.mjs";
 
 const options = parseCommonArgs(process.argv.slice(2));
 
@@ -101,6 +108,24 @@ function dryRunStillAllowsApply(selected = {}, packet = {}) {
   return true;
 }
 
+function recordSelfRepairAttempt(selected = {}, iteration = 0) {
+  if (selected.selfRepair !== true) return null;
+  return ledgerCommand({
+    ...options,
+    command: "append-event",
+    eventType: "manager_self_repair_attempt",
+    summary: `Continuous mode selected manager self-repair action ${selected.code || "unknown"}.`,
+    authorityBasis: selected.authority || "manager-self-repair-existing-gates",
+    recoveryPath: "Inspect self-repair budget and park or classify churn before adding handlers.",
+    advisorActionCode: selected.code || "",
+    advisorWorkClass: selected.workClass || "",
+    capabilityName: selected.managerCapability || "",
+    sourceRefs: [`cycle:${options.runId || "manager-run"}`, selected.managerCapability ? `manager:capability:${selected.managerCapability}` : "manager:continuous-run"],
+    evidenceRefs: [`self-repair:${selected.code || "unknown"}`],
+    idempotencyKey: `${options.runId || "manager-run"}:self-repair:${selected.code || "unknown"}:${iteration}`,
+  });
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -126,7 +151,42 @@ if (!preflight.ok) {
   let iteration = 0;
   while (maxIterations === 0 || iteration < maxIterations) {
     iteration += 1;
-    const plan = buildContinuousRunPlan(options);
+    const persistedCapabilityPosture = readManagerCapabilityPosture(options);
+    if (persistedCapabilityPosture.ok === false || persistedCapabilityPosture.status === "warning") {
+      writePacket({
+        ok: false,
+        status: "blocked",
+        timestamp: new Date().toISOString(),
+        summary: {
+          mode: "continuous",
+          iteration,
+          timestamp: new Date().toISOString(),
+          phase: "capability-posture-read",
+          capabilityPosturePersistence: {
+            readStatus: persistedCapabilityPosture.status,
+            writeStatus: "not_written",
+            path: persistedCapabilityPosture.summary?.path || null,
+            rawPayloadRetained: false,
+          },
+          blockers: persistedCapabilityPosture.blockers?.length
+            ? persistedCapabilityPosture.blockers
+            : [{ code: "capability-posture-read-unverified", message: "Continuous mode could not verify persisted capability posture before selecting manager actions.", nextAction: "Inspect or replace capability-posture.json before rerunning continuous mode." }],
+          warnings: persistedCapabilityPosture.warnings || [],
+        },
+        blockers: persistedCapabilityPosture.blockers?.length
+          ? persistedCapabilityPosture.blockers
+          : [{ code: "capability-posture-read-unverified", message: "Continuous mode could not verify persisted capability posture before selecting manager actions.", nextAction: "Inspect or replace capability-posture.json before rerunning continuous mode." }],
+        warnings: persistedCapabilityPosture.warnings || [],
+      });
+      process.exitCode = 1;
+      break;
+    }
+    const plan = buildContinuousRunPlan(options, {
+      persistedManagerCapabilityPosture: persistedCapabilityPosture.summary?.managerCapabilityPosture || null,
+    });
+    const postureWrite = plan.ok !== false && plan.summary?.managerCapabilityPosture
+      ? writeManagerCapabilityPosture(plan.summary.managerCapabilityPosture, options)
+      : null;
     const selected = plan.summary?.selectedAction || null;
     const result = {
       ok: plan.ok,
@@ -139,19 +199,38 @@ if (!preflight.ok) {
         workerCounts: plan.summary?.workerCounts,
         usageState: plan.summary?.usageState,
         resourceState: plan.summary?.resourceState,
+        managerCapabilityPosture: plan.summary?.managerCapabilityPosture || null,
+        capabilityHolds: plan.summary?.capabilityHolds || null,
+        capabilityPosturePersistence: {
+          readStatus: persistedCapabilityPosture.status,
+          writeStatus: postureWrite?.status || "not_written",
+          path: postureWrite?.summary?.path || persistedCapabilityPosture.summary?.path || null,
+          rawPayloadRetained: false,
+        },
         selectedAction: selected ? {
           code: selected.code,
           mutationClass: selected.mutationClass,
           authority: selected.authority,
         } : null,
         blockers: plan.blockers || [],
-        warnings: plan.warnings || [],
+        warnings: [...(persistedCapabilityPosture.warnings || []), ...(postureWrite?.warnings || []), ...(plan.warnings || [])],
       },
       blockers: plan.blockers || [],
-      warnings: plan.warnings || [],
+      warnings: [...(persistedCapabilityPosture.warnings || []), ...(postureWrite?.warnings || []), ...(plan.warnings || [])],
       nextActions: plan.nextActions || [],
     };
     if (!plan.ok) {
+      writePacket(result);
+      process.exitCode = 1;
+      break;
+    }
+    if (postureWrite?.ok === false) {
+      result.ok = false;
+      result.status = "blocked";
+      result.blockers = postureWrite.blockers?.length
+        ? postureWrite.blockers
+        : [{ code: "capability-posture-persistence-failed", message: "Continuous mode could not persist manager capability posture before apply.", nextAction: "Inspect capability posture path and rerun continuous mode after fixing persistence." }];
+      result.summary.blockers = result.blockers;
       writePacket(result);
       process.exitCode = 1;
       break;
@@ -176,6 +255,32 @@ if (!preflight.ok) {
         if (maxIterations !== 0 && iteration >= maxIterations) break;
         await sleep(Math.max(1000, options.intervalMs || 60000));
         continue;
+      }
+      const selfRepairAttempt = recordSelfRepairAttempt(selected, iteration);
+      if (selfRepairAttempt) {
+        result.summary.selfRepairAttempt = {
+          status: selfRepairAttempt.status,
+          eventType: selfRepairAttempt.summary?.event?.eventType || null,
+          eventName: selfRepairAttempt.summary?.event?.eventName || null,
+          duplicateIgnored: selfRepairAttempt.summary?.duplicateIgnored === true,
+          rawPayloadRetained: false,
+        };
+        result.summary.warnings = [
+          ...(result.summary.warnings || []),
+          ...(selfRepairAttempt.warnings || []),
+          ...(!selfRepairAttempt.ok ? (selfRepairAttempt.blockers || []) : []),
+        ];
+      }
+      if (selfRepairAttempt && !selfRepairAttempt.ok) {
+        result.ok = false;
+        result.status = "blocked";
+        result.blockers = selfRepairAttempt.blockers?.length
+          ? selfRepairAttempt.blockers
+          : [{ code: "self-repair-attempt-record-failed", message: "Continuous mode could not record self-repair budget evidence before apply.", nextAction: "Inspect manager ledger state before retrying self-repair." }];
+        result.summary.blockers = result.blockers;
+        writePacket(result);
+        process.exitCode = 1;
+        break;
       }
       if (selected.readOnly) {
         result.summary.apply = { ok: true, status: "not_needed_read_only", blockers: [] };

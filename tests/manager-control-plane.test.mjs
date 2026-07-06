@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { runManagerRefillPlan } from "../scripts/manager-refill-plan.mjs";
 import {
+  buildCodexAdvisorClassificationPlan,
+  buildCodexAdvisorPacketPlan,
   buildCyclePacket,
   buildContinuousRunPlan,
+  buildManagerCapabilityPosture,
+  buildManagerCapabilityPostureControlPlan,
+  buildManagerSelfRepairSummary,
   buildCleanupPlan,
   buildDeliveryPlan,
   buildDirtyWorkspacePreservation,
@@ -40,10 +45,12 @@ import {
   buildWorkerLifecyclePlan,
   buildWorkerOwnerDelegationPlan,
   buildWorkerPromptProbePlan,
+  buildWorkerCodeReviewPlan,
   buildWorkerQuestionAnswerPlan,
   buildWorkerProgressSignalPlan,
   buildWorkerProgressStatus,
   buildWorkerRecoveryInspection,
+  buildWorkerReviewFeedbackPlan,
   buildWorkerRetirePlan,
   buildWorkerSubmitPendingPlan,
   buildWorkerWarmPlan,
@@ -54,6 +61,8 @@ import {
   parseCommonArgs,
   parseCodexFetcherUsage,
   parseCodexUsageOutput,
+  readManagerCapabilityPosture,
+  writeManagerCapabilityPosture,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
 function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
@@ -193,7 +202,7 @@ function readyDispatchPreviewFixture(overrides = {}) {
       claimMutation: "assignment_write",
       workspaceAction: "claim_and_create_workspace",
       nextCommand: "resume prepared workspace for setup-churn-handoff-hardening after doctor readiness",
-      nextActionGuidance: "run dispatch-next --apply after reviewing the dry-run packet",
+      nextActionGuidance: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
       recoveryPath: "remove manager-owned assignment/workspace evidence and rerun dispatch preview",
       blockers: [],
       stopLines: ["no provider/model calls", "no automatic worker or external process launch"],
@@ -968,6 +977,564 @@ test("bmad code review request plan prepares manager runtime packet only", () =>
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate delegates BMAD review to a manager-owned worker", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-8-worker-code-review-target.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-8-worker-code-review-target: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-8-worker-code-review-target\n\nStatus: review\n");
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-1",
+            sessionName: "codex-1",
+            assignmentId: "bmad-8-8-worker-code-review-target",
+            taskId: "task-target",
+            progressState: "manager_review_ready",
+          },
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "bmad-1-1-other-complete-lane",
+            taskId: "task-reviewer",
+            progressState: "manager_review_ready",
+          },
+        ],
+      },
+    };
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-8-worker-code-review-target" },
+      { progressStatus },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.planned, 1);
+    assert.equal(preview.summary.requests[0].workerId, "codex-2");
+    assert.equal(preview.summary.requests[0].targetAssignmentId, "bmad-8-8-worker-code-review-target");
+    assert.match(preview.nextActions[0].nextAction, /manager-worker-code-review\.mjs/);
+
+    const tmuxCalls = [];
+    const applied = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      {
+        progressStatus,
+        tmuxRunner: (cmd, args) => {
+          tmuxCalls.push({ cmd, args });
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%88\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        receiptSettleMs: 0,
+      },
+    );
+
+    assert.equal(applied.status, "ready");
+    assert.equal(applied.summary.results[0].status, "code_review_request_sent");
+    assert.ok(existsSync(applied.summary.results[0].requestPath));
+    assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /\$bmad-code-review/);
+    assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /storySourcePath: .*3-2-minimum-happy-path-operational-loop\.md|storySourcePath: .*8-8-worker-code-review-target\.md/);
+    assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /If the ignored BMAD story or sprint artifact is absent from the target lane/);
+    assert.match(readFileSync(applied.summary.results[0].pastePath, "utf8"), /^Start delegated code review now\./);
+    assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /Write the compact findings artifact to this exact path:/);
+    assert.deepEqual(tmuxCalls.filter((call) => call.args[0] === "send-keys").at(-1).args.slice(-1), ["C-m"]);
+
+    const rotated = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-8-worker-code-review-target", reviewRequestResendStaleSeconds: 0 },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              ...progressStatus.summary.workerProgress,
+              {
+                workerId: "codex-3",
+                sessionName: "codex-3",
+                assignmentId: "bmad-1-2-another-ready-lane",
+                taskId: "task-reviewer-2",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+        events: [
+          {
+            eventType: "worker_code_review_request_apply",
+            sourceRefs: ["assignment:bmad-8-8-worker-code-review-target", "worker:codex-2"],
+            timestamp: "2026-07-05T00:00:00.000Z",
+          },
+          {
+            eventType: "worker_code_review_request_apply",
+            sourceRefs: ["assignment:bmad-8-8-worker-code-review-target", "worker:codex-2"],
+            timestamp: "2026-07-05T00:01:00.000Z",
+          },
+        ],
+      },
+    );
+
+    assert.equal(rotated.status, "ready");
+    assert.equal(rotated.summary.requests[0].workerId, "codex-3");
+    assert.deepEqual(rotated.summary.reviewAttemptSummary.exhaustedWorkers, ["codex-2"]);
+
+    const exhaustedRequested = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", reviewRequestResendStaleSeconds: 0 },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              ...progressStatus.summary.workerProgress,
+              {
+                workerId: "codex-3",
+                sessionName: "codex-3",
+                assignmentId: "bmad-1-2-another-ready-lane",
+                taskId: "task-reviewer-2",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+        events: [
+          {
+            eventType: "worker_code_review_request_apply",
+            sourceRefs: ["assignment:bmad-8-8-worker-code-review-target", "worker:codex-2"],
+            timestamp: "2026-07-05T00:00:00.000Z",
+          },
+          {
+            eventType: "worker_code_review_request_apply",
+            sourceRefs: ["assignment:bmad-8-8-worker-code-review-target", "worker:codex-2"],
+            timestamp: "2026-07-05T00:01:00.000Z",
+          },
+        ],
+      },
+    );
+    assert.equal(exhaustedRequested.status, "blocked");
+    assert.equal(exhaustedRequested.blockers[0].code, "worker-code-review-no-reviewer");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate consumes fresh terminal result without requiring an idle reviewer", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-fresh-result-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-fresh-result-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-15-worker-code-review-fresh-result.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-15-worker-code-review-fresh-result: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-15-worker-code-review-fresh-result\n\nStatus: review\n");
+    const resultPath = join(stateRoot, "manager-runs", "manager-test", "review-results", "bmad-8-15-worker-code-review-fresh-result.md");
+    mkdirSync(join(resultPath, ".."), { recursive: true });
+    writeFileSync(resultPath, "Status: PASS\n\nNo findings.\n");
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-15-worker-code-review-fresh-result" },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "bmad-8-15-worker-code-review-fresh-result",
+                taskId: "task-target",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.planned, 0);
+    assert.equal(preview.summary.resultFresh, true);
+    assert.equal(preview.nextActions[0].code, "worker-code-review-result-ready");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate does not select the target lane when assignment ids differ only by bmad prefix", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-self-prefix-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-self-prefix-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-16-worker-code-review-self-prefix.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-16-worker-code-review-self-prefix: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-16-worker-code-review-self-prefix\n\nStatus: review\n");
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-16-worker-code-review-self-prefix" },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "8-16-worker-code-review-self-prefix",
+                taskId: "task-target",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(preview.status, "blocked");
+    assert.equal(preview.blockers[0].code, "worker-code-review-no-reviewer");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate ignores stale result after review feedback and target checkpoint", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-stale-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-stale-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-9-worker-code-review-stale-target.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-9-worker-code-review-stale-target: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-9-worker-code-review-stale-target\n\nStatus: review\n");
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-1",
+            sessionName: "codex-1",
+            assignmentId: "bmad-8-9-worker-code-review-stale-target",
+            taskId: "task-target",
+            progressState: "manager_review_ready",
+          },
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "bmad-1-1-other-complete-lane",
+            taskId: "task-reviewer",
+            progressState: "manager_review_ready",
+          },
+        ],
+      },
+    };
+    const resultPath = join(stateRoot, "manager-runs", "manager-test", "review-results", "bmad-8-9-worker-code-review-stale-target.md");
+    const requestPath = join(stateRoot, "manager-runs", "manager-test", "review-requests", "codex-2-bmad-8-9-worker-code-review-stale-target.md");
+    mkdirSync(join(resultPath, ".."), { recursive: true });
+    mkdirSync(join(requestPath, ".."), { recursive: true });
+    writeFileSync(resultPath, "Status: FAIL\n\nOld findings before fixes.\n");
+    writeFileSync(requestPath, "old delegated request before fixes\n");
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-9-worker-code-review-stale-target" },
+      {
+        progressStatus,
+        events: [
+          {
+            eventType: "worker_code_review_request_apply",
+            timestamp: "2026-07-05T00:00:00.000Z",
+            sourceRefs: ["assignment:bmad-8-9-worker-code-review-stale-target", "worker:codex-2"],
+          },
+          {
+            eventType: "worker_review_feedback_apply",
+            timestamp: "2030-01-01T00:00:00.000Z",
+            sourceRefs: ["assignment:bmad-8-9-worker-code-review-stale-target", "worker:codex-1"],
+          },
+        ],
+        checkpoints: [
+          {
+            timestamp: "2030-01-01T00:01:00.000Z",
+            summary: "Implemented review feedback; ready for review.",
+            sourceRefs: ["assignment:bmad-8-9-worker-code-review-stale-target"],
+          },
+        ],
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.resultExists, true);
+    assert.equal(preview.summary.resultFresh, false);
+    assert.equal(preview.summary.alreadyPrepared, false);
+    assert.equal(preview.summary.reviewFreshness.resultStale, true);
+    assert.deepEqual(preview.summary.reviewAttemptSummary.attempts, {});
+    assert.match(preview.nextActions[0].summary, /stale/);
+    assert.match(preview.nextActions[0].nextAction, /manager-worker-code-review\.mjs/);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate accepts explicit manager-review-ready assignment when sprint status is stale", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-explicit-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-explicit-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-11-worker-code-review-explicit-target.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-11-worker-code-review-explicit-target: in-progress",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-11-worker-code-review-explicit-target\n\nStatus: in-progress\n");
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-1",
+            sessionName: "codex-1",
+            assignmentId: "bmad-8-11-worker-code-review-explicit-target",
+            taskId: "task-target",
+            progressState: "manager_review_ready",
+          },
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "bmad-1-1-other-complete-lane",
+            taskId: "task-reviewer",
+            progressState: "manager_review_ready",
+          },
+        ],
+      },
+    };
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-11-worker-code-review-explicit-target" },
+      { progressStatus },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.requests[0].targetAssignmentId, "bmad-8-11-worker-code-review-explicit-target");
+    assert.equal(preview.summary.requests[0].workerId, "codex-2");
+    assert.equal(preview.summary.reviewAttemptSummary.targetAssignmentId, "bmad-8-11-worker-code-review-explicit-target");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate blocks lanes with open story review feedback", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-open-feedback-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-open-feedback-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-12-worker-code-review-open-feedback-target.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-12-worker-code-review-open-feedback-target: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-12-worker-code-review-open-feedback-target\n\nStatus: review\n");
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-1",
+            sessionName: "codex-1",
+            assignmentId: "bmad-8-12-worker-code-review-open-feedback-target",
+            taskId: "task-target",
+            progressState: "review_feedback_stale",
+            openStoryReviewFeedbackCount: 7,
+          },
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "bmad-1-1-other-complete-lane",
+            taskId: "task-reviewer",
+            progressState: "manager_review_ready",
+          },
+        ],
+      },
+    };
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-12-worker-code-review-open-feedback-target" },
+      { progressStatus },
+    );
+
+    assert.equal(preview.status, "blocked");
+    assert.equal(preview.summary.requests.length, 0);
+    assert.equal(preview.blockers[0].code, "bmad-code-review-open-review-feedback");
+    assert.match(preview.blockers[0].nextAction, /resolve open review feedback/i);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate blocks explicit ready lane when review checklist remains open", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-explicit-open-feedback-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-explicit-open-feedback-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-13-worker-code-review-explicit-open-feedback-target.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-13-worker-code-review-explicit-open-feedback-target: in-progress",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-13-worker-code-review-explicit-open-feedback-target\n\nStatus: in-progress\n");
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-1",
+            sessionName: "codex-1",
+            assignmentId: "bmad-8-13-worker-code-review-explicit-open-feedback-target",
+            taskId: "task-target",
+            progressState: "manager_review_ready",
+            openStoryReviewFeedbackCount: 2,
+          },
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "bmad-1-1-other-complete-lane",
+            taskId: "task-reviewer",
+            progressState: "manager_review_ready",
+          },
+        ],
+      },
+    };
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-13-worker-code-review-explicit-open-feedback-target" },
+      { progressStatus },
+    );
+
+    assert.equal(preview.status, "blocked");
+    assert.equal(preview.summary.requests.length, 0);
+    assert.equal(preview.blockers[0].code, "bmad-code-review-open-review-feedback");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate reads open review feedback from story when progress row is absent", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-story-feedback-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-story-feedback-test.yaml";
+  const openStoryPath = "_bmad-output/implementation-artifacts/8-17-worker-code-review-story-feedback.md";
+  const ordinaryStoryPath = "_bmad-output/implementation-artifacts/8-18-worker-code-review-ordinary-review-task.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-17-worker-code-review-story-feedback: review",
+        "  8-18-worker-code-review-ordinary-review-task: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(openStoryPath, "# Story 8-17-worker-code-review-story-feedback\n\nStatus: review\n\n## Review Findings\n\n- [ ] HIGH: Fix missing guard\n");
+    writeFileSync(ordinaryStoryPath, "# Story 8-18-worker-code-review-ordinary-review-task\n\nStatus: review\n\n## Tasks\n\n- [ ] Review docs\n");
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "bmad-1-1-reviewer",
+            taskId: "task-reviewer",
+            progressState: "manager_review_ready",
+          },
+        ],
+      },
+    };
+
+    const blocked = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-17-worker-code-review-story-feedback" },
+      { progressStatus },
+    );
+    assert.equal(blocked.status, "blocked");
+    assert.equal(blocked.blockers[0].code, "bmad-code-review-open-review-feedback");
+
+    const ordinary = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-18-worker-code-review-ordinary-review-task" },
+      { progressStatus },
+    );
+    assert.equal(ordinary.status, "ready");
+    assert.equal(ordinary.summary.requests[0].workerId, "codex-2");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(openStoryPath, { force: true });
+    rmSync(ordinaryStoryPath, { force: true });
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
@@ -2488,6 +3055,7 @@ test("BMAD request workflow catalog covers every allowed workflow with bounded m
     "bmad-create-architecture",
     "bmad-create-epics-and-stories",
     "bmad-create-story",
+    "bmad-sprint-planning",
     "bmad-ux",
   ]);
   for (const entry of catalog) {
@@ -3538,7 +4106,7 @@ test("builds dispatch preview from raw snake_case dispatch packet evidence", () 
       claim_mutation: "assignment_write",
       workspace_action: "claim_and_create_workspace",
       next_command: "resume prepared workspace for setup-churn-handoff-hardening after doctor readiness",
-      next_action_guidance: "run dispatch-next --apply after reviewing the dry-run packet",
+      next_action_guidance: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
       recovery_path: "remove manager-owned assignment/workspace evidence and rerun dispatch preview",
       blockers: [],
       stop_lines: ["no provider/model calls", "no automatic worker or external process launch"],
@@ -3632,9 +4200,9 @@ test("manager worker assignment reads forward explicit state root", () => {
     buildLaneAdvancementPlan({ runId: "manager-test", stateRoot, limit: 1 }, context);
 
     assert.deepEqual(calls, [
-      ["assignment-report", "--summary-json", "--state-root", stateRoot],
-      ["assignment-report", "--summary-json", "--state-root", stateRoot],
-      ["assignment-report", "--summary-json", "--state-root", stateRoot],
+      ["assignment-report", "--summary-json", "--state-root", stateRoot, "--owner", "manager-test/dispatcher"],
+      ["assignment-report", "--summary-json", "--state-root", stateRoot, "--owner", "manager-test/dispatcher"],
+      ["assignment-report", "--summary-json", "--state-root", stateRoot, "--owner", "manager-test/dispatcher"],
     ]);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
@@ -4493,6 +5061,47 @@ test("worker governor lowers target for repeated failure pressure and keeps live
     assert.equal(passedHarness.summary.targets.fakeWorkerHarness.sixWorker.status, "passed");
     assert.equal(passedHarness.summary.targets.fakeWorkerHarness.liveWorkerGate, "still_gated_until_live_authority");
     assert.equal(passedHarness.summary.targets.fakeWorkerHarness.rawPayloadRetained, false);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker status allows replacement warm starts when a live manager pool is already observed", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-live-pool-warm-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerStatus = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 2 },
+      {
+        workerRecords: [
+          {
+            workerId: "codex-1",
+            owner: "manager-test/codex-1",
+            runId: "manager-test",
+            sessionName: "codex-1",
+            state: "active",
+            assignmentId: "lane-1",
+            taskId: "task-1",
+            lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+          },
+        ],
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 2 }, laneAssignmentStatusCounts: { active: 1 } } },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        tmuxSummary: {
+          available: true,
+          paneCount: 1,
+          managerOwnedPanes: 1,
+          managerOwnedPaneEvidence: [{ sessionName: "codex-1", classification: "manager-worker-owned" }],
+          unmanagedPanes: 0,
+          takeoverRequiredPanes: 0,
+        },
+      },
+    );
+
+    assert.equal(workerStatus.summary.targets.fakeWorkerHarness.liveWorkerGate, "live_manager_pool_observed");
+    assert.equal(workerStatus.summary.targets.startTarget, 2);
+    assert.equal(workerStatus.summary.lifecyclePlan.startWarmCandidates.length, 1);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -5801,6 +6410,56 @@ test("worker handoff gate previews durable handoff files for warm workers", () =
   }
 });
 
+test("worker handoff excludes policy-blocked retired assignments", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-policy-blocked-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerStatus = {
+      status: "ready",
+      summary: {
+        workers: [
+          {
+            workerId: "codex-6",
+            owner: "manager-test/codex-6",
+            runId: "manager-test",
+            sessionName: "codex-6",
+            state: "retired",
+            assignmentId: "old-policy-blocked",
+            taskId: "old-task",
+            recoveryState: "retired_after_policy_blocked_question",
+            lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+          },
+          {
+            workerId: "codex-7",
+            owner: "manager-test/codex-7",
+            runId: "manager-test",
+            sessionName: "codex-7",
+            state: "warm",
+            lastHeartbeatAt: "2026-06-29T00:01:00.000Z",
+          },
+        ],
+      },
+    };
+    const assignmentSummary = {
+      summary: {
+        laneAssignments: [
+          { assignmentId: "old-policy-blocked", taskId: "old-task", status: "claimed", branch: "codex/old-policy-blocked", owner: "manager-runner", phase: "handoff" },
+          { assignmentId: "next-safe-lane", taskId: "next-task", status: "claimed", branch: "codex/next-safe-lane", owner: "manager-runner", phase: "handoff" },
+        ],
+      },
+    };
+
+    const preview = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 1 }, { workerStatus, assignmentSummary });
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.pairings.length, 1);
+    assert.equal(preview.summary.pairings[0].workerId, "codex-7");
+    assert.equal(preview.summary.pairings[0].assignmentId, "next-safe-lane");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker handoff reuses manager-owned workers from completed lane phases", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-reuse-"));
   try {
@@ -5907,6 +6566,59 @@ test("worker handoff reuses handoff-sent workers after review-ready lane evidenc
     assert.equal(preview.summary.pairings[0].workerId, "codex-1");
     assert.equal(preview.summary.pairings[0].assignmentId, "new-lane");
   } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff does not reuse workers with open story review feedback", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-open-feedback-"));
+  const storyPath = "_bmad-output/implementation-artifacts/8-15-handoff-open-feedback.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      storyPath,
+      [
+        "# Story 8-15-handoff-open-feedback",
+        "",
+        "- [ ] Review finding remains unresolved",
+        "",
+      ].join("\n"),
+    );
+    const workerStatus = {
+      status: "ready",
+      summary: {
+        workers: [
+          { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "active", assignmentId: "bmad-8-15-handoff-open-feedback", taskId: "old-task", recoveryState: "handoff_sent", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+        ],
+      },
+    };
+    const assignmentSummary = {
+      summary: {
+        laneAssignments: [
+          { assignmentId: "bmad-8-15-handoff-open-feedback", taskId: "old-task", status: "claimed", branch: "codex/bmad-8-15-handoff-open-feedback", owner: "manager-runner", phase: "review_ready" },
+          { assignmentId: "new-lane", taskId: "new-task", status: "claimed", branch: "codex/new-lane", owner: "manager-runner", phase: "claimed" },
+        ],
+      },
+    };
+    const checkpoints = [
+      {
+        checkpointId: "checkpoint-open-feedback",
+        timestamp: "2026-06-29T00:05:00.000Z",
+        actor: "codex-1",
+        assignmentId: "bmad-8-15-handoff-open-feedback",
+        summary: "Implemented and verified. Ready for manager review.",
+        sourceRefs: ["assignment:bmad-8-15-handoff-open-feedback"],
+      },
+    ];
+
+    const preview = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 1 }, { workerStatus, assignmentSummary, checkpoints });
+
+    assert.equal(preview.status, "blocked");
+    assert.equal(preview.summary.reusableWorkers, 0);
+    assert.equal(preview.summary.pairings.length, 0);
+    assert.ok(preview.blockers.some((blocker) => blocker.code === "worker-handoff-no-fallback-workers"));
+  } finally {
+    rmSync(storyPath, { force: true });
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
@@ -6050,6 +6762,52 @@ test("worker handoff can assign normal warm workers to claimed lanes", () => {
     assert.equal(preview.summary.pairings[0].workerId, "codex-1");
     assert.equal(preview.summary.pairings[0].assignmentId, "lane-1");
     assert.ok(preview.nextActions?.some((action) => action.code === "worker-handoff-apply-ready"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff reuses warm workers with closed assignment metadata", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-warm-closed-assignment-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const preview = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 1 },
+      {
+        workerStatus: {
+          status: "ready",
+          summary: {
+            targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+            workers: [
+              {
+                workerId: "codex-5",
+                owner: "manager-test/codex-5",
+                runId: "manager-test",
+                sessionName: "codex-5",
+                state: "warm",
+                assignmentState: "closed",
+                assignmentId: "bmad-2-1-runtime-port-interfaces-and-local-proof-adapters",
+                taskId: "20260704-bmad-2-1-runtime-port-interfaces-and-local-proof-adapters",
+                lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [
+              { assignmentId: "bmad-2-3-runtime-readiness-and-operational-modes", taskId: "20260705-bmad-2-3-runtime-readiness-and-operational-modes", status: "active", branch: "codex/bmad-2-3-runtime-readiness-and-operational-modes", owner: "manager-test/dispatcher", phase: "handoff" },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.warmWorkers, 1);
+    assert.equal(preview.summary.pairings.length, 1);
+    assert.equal(preview.summary.pairings[0].workerId, "codex-5");
+    assert.equal(preview.summary.pairings[0].assignmentId, "bmad-2-3-runtime-readiness-and-operational-modes");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -6412,6 +7170,66 @@ test("worker handoff reuses completed delegated workers and delegated assignment
     assert.equal(preview.summary.pairings[0].laneOwner, "delegated-owner");
     assert.equal(preview.summary.pairings[0].workerId, "codex-1");
     assert.doesNotMatch(JSON.stringify(preview.summary.pairings), /stale-file-lane/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff rehydrates workerless review-failed lane from fresh delegated findings", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-review-feedback-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    mkdirSync(join(stateRoot, "assignments"), { recursive: true });
+    const reviewResultsRoot = join(stateRoot, "manager-runs", "manager-test", "review-results");
+    mkdirSync(reviewResultsRoot, { recursive: true });
+    writeFileSync(join(stateRoot, "assignments", "bmad-8-11-review-feedback.json"), `${JSON.stringify({
+      assignment_id: "bmad-8-11-review-feedback",
+      task_id: "20260705-bmad-8-11-review-feedback",
+      branch: "codex/bmad-8-11-review-feedback",
+      status: "active",
+      phase: "review_ready",
+      owner: "manager-test/dispatcher",
+      worktree_path: "/tmp/bmad-8-11-review-feedback",
+      updated_at: "2026-06-29T00:01:00.000Z",
+    })}\n`);
+    writeFileSync(join(reviewResultsRoot, "bmad-8-11-review-feedback.md"), [
+      "# Delegated Code Review: bmad-8-11-review-feedback",
+      "",
+      "Status: FAIL",
+      "",
+      "## Findings",
+      "",
+      "- HIGH - compact finding that requires patch work.",
+      "",
+    ].join("\n"));
+    const preview = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 1 },
+      {
+        workerStatus: {
+          status: "ready",
+          summary: {
+            workers: [
+              { workerId: "codex-4", owner: "manager-test/codex-4", runId: "manager-test", sessionName: "codex-4", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+            ],
+          },
+        },
+        assignmentSummary: {
+          summary: {
+            currentOwner: "manager-test/dispatcher",
+            laneAssignmentsTruncated: true,
+            laneAssignments: [],
+          },
+        },
+        now: "2026-06-29T00:02:00.000Z",
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.pairings.length, 1);
+    assert.equal(preview.summary.pairings[0].assignmentId, "bmad-8-11-review-feedback");
+    assert.equal(preview.summary.pairings[0].phase, "review_feedback");
+    assert.match(preview.summary.pairings[0].reviewFindingsPath, /review-results\/bmad-8-11-review-feedback\.md$/);
+    assert.equal(preview.summary.pairings[0].workerId, "codex-4");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -6865,6 +7683,240 @@ test("worker progress does not ping stale checkpoints that are review-ready", ()
   assert.equal(progress.nextActions.length, 0);
 });
 
+test("worker progress waits for a new checkpoint after review feedback", () => {
+  const progress = buildWorkerProgressStatus(
+    { runId: "manager-test", progressStaleMinutes: 3 },
+    {
+      now: "2026-06-29T00:03:00.000Z",
+      workerStatus: {
+        summary: {
+          workers: [
+            {
+              workerId: "codex-1",
+              owner: "manager-test/codex-1",
+              runId: "manager-test",
+              sessionName: "codex-1",
+              state: "active",
+              assignmentId: "lane-1",
+              taskId: "task-1",
+              recoveryState: "handoff_sent",
+              lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-1", owner: "manager-runner", heartbeat: "2026-06-29T00:00:00.000Z" }] } },
+      checkpoints: [
+        {
+          checkpointId: "old-ready",
+          actor: "codex-1",
+          timestamp: "2026-06-29T00:01:00.000Z",
+          summary: "Implemented and verified. Ready for manager review.",
+          sourceRefs: ["assignment:lane-1"],
+        },
+      ],
+      questions: [],
+      events: [
+        {
+          eventId: "feedback-after-ready",
+          actor: "manager",
+          eventType: "worker_review_feedback_apply",
+          timestamp: "2026-06-29T00:02:00.000Z",
+          sourceRefs: ["assignment:lane-1"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(progress.status, "ready");
+  assert.equal(progress.summary.workerProgress[0].progressState, "review_feedback_sent");
+  assert.equal(progress.summary.workerProgress[0].latestReviewFeedbackAgeSeconds, 60);
+});
+
+test("worker progress blocks stale ready checkpoint when story has open review findings", () => {
+  const storyPath = "_bmad-output/implementation-artifacts/8-10-open-review-feedback.md";
+  try {
+    writeFileSync(
+      storyPath,
+      [
+        "# Story 8-10-open-review-feedback",
+        "",
+        "- [ ] [BMAD Code Review 2026-07-05][High] Fix the unsafe manager gate before review.",
+        "",
+      ].join("\n"),
+    );
+
+    const progress = buildWorkerProgressStatus(
+      { runId: "manager-test", progressStaleMinutes: 3 },
+      {
+        now: "2030-01-01T00:10:00.000Z",
+        workerStatus: {
+          summary: {
+            workers: [
+              {
+                workerId: "codex-1",
+                owner: "manager-test/codex-1",
+                runId: "manager-test",
+                sessionName: "codex-1",
+                state: "active",
+                assignmentId: "bmad-8-10-open-review-feedback",
+                taskId: "task-1",
+                recoveryState: "handoff_sent",
+                lastHeartbeatAt: "2029-12-31T23:59:00.000Z",
+              },
+            ],
+          },
+        },
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [
+              { assignmentId: "bmad-8-10-open-review-feedback", owner: "manager-test/dispatcher", heartbeat: "2029-12-31T23:59:00.000Z" },
+            ],
+          },
+        },
+        checkpoints: [
+          {
+            checkpointId: "ready-but-story-open",
+            actor: "codex-1",
+            timestamp: "2030-01-01T00:05:00.000Z",
+            summary: "Implemented and verified. Ready for manager review.",
+            sourceRefs: ["assignment:bmad-8-10-open-review-feedback"],
+          },
+        ],
+        questions: [],
+        events: [],
+      },
+    );
+
+    assert.equal(progress.status, "attention");
+    assert.equal(progress.summary.workerProgress[0].progressState, "review_feedback_stale");
+    assert.equal(progress.summary.workerProgress[0].openStoryReviewFeedbackCount, 1);
+    assert.notEqual(progress.summary.workerProgress[0].progressState, "manager_review_ready");
+    assert.equal(progress.nextActions[0].code, "worker-progress-review_feedback_stale");
+  } finally {
+    rmSync(storyPath, { force: true });
+  }
+});
+
+test("worker progress signal gate handles stale review feedback", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-feedback-signal-"));
+  try {
+    const progress = buildWorkerProgressStatus(
+      { runId: "manager-test", progressStaleMinutes: 3 },
+      {
+        now: "2026-06-29T00:06:00.000Z",
+        workerStatus: {
+          summary: {
+            workers: [
+              {
+                workerId: "codex-1",
+                owner: "manager-test/codex-1",
+                runId: "manager-test",
+                sessionName: "codex-1",
+                state: "active",
+                assignmentId: "lane-1",
+                taskId: "task-1",
+                recoveryState: "handoff_sent",
+                lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-1", owner: "manager-runner", heartbeat: "2026-06-29T00:00:00.000Z" }] } },
+        checkpoints: [
+          {
+            checkpointId: "old-ready",
+            actor: "codex-1",
+            timestamp: "2026-06-29T00:01:00.000Z",
+            summary: "Implemented and verified. Ready for manager review.",
+            sourceRefs: ["assignment:lane-1"],
+          },
+        ],
+        questions: [],
+        events: [
+          {
+            eventId: "feedback-after-ready",
+            actor: "manager",
+            eventType: "worker_review_feedback_apply",
+            timestamp: "2026-06-29T00:02:00.000Z",
+            sourceRefs: ["assignment:lane-1"],
+          },
+        ],
+      },
+    );
+
+    assert.equal(progress.status, "attention");
+    assert.equal(progress.summary.workerProgress[0].progressState, "review_feedback_stale");
+
+    const signalPlan = buildWorkerProgressSignalPlan(
+      { runId: "manager-test", stateRoot, promptIdle: true },
+      { progressStatus: progress },
+    );
+    assert.equal(signalPlan.status, "ready");
+    assert.equal(signalPlan.summary.planned, 1);
+    assert.equal(signalPlan.summary.requests[0].progressState, "review_feedback_stale");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker progress does not reuse old ready checkpoint after review feedback signal", () => {
+  const progress = buildWorkerProgressStatus(
+    { runId: "manager-test", progressStaleMinutes: 3 },
+    {
+      now: "2026-06-29T00:03:00.000Z",
+      workerStatus: {
+        summary: {
+          workers: [
+            {
+              workerId: "codex-1",
+              owner: "manager-test/codex-1",
+              runId: "manager-test",
+              sessionName: "codex-1",
+              state: "active",
+              assignmentId: "lane-1",
+              taskId: "task-1",
+              recoveryState: "handoff_sent",
+              lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-1", owner: "manager-runner", heartbeat: "2026-06-29T00:00:00.000Z" }] } },
+      checkpoints: [
+        {
+          checkpointId: "old-ready",
+          actor: "codex-1",
+          timestamp: "2026-06-29T00:01:00.000Z",
+          summary: "Implemented and verified. Ready for manager review.",
+          sourceRefs: ["assignment:lane-1"],
+        },
+      ],
+      questions: [],
+      events: [
+        {
+          eventId: "feedback-after-ready",
+          actor: "manager",
+          eventType: "worker_review_feedback_apply",
+          timestamp: "2026-06-29T00:02:00.000Z",
+          sourceRefs: ["assignment:lane-1"],
+        },
+        {
+          eventId: "progress-after-feedback",
+          actor: "manager",
+          eventType: "worker_progress_signal_apply",
+          timestamp: "2026-06-29T00:02:30.000Z",
+          sourceRefs: ["assignment:lane-1", "worker:codex-1"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(progress.status, "ready");
+  assert.equal(progress.summary.workerProgress[0].progressState, "progress_signal_sent");
+  assert.match(progress.summary.workerProgress[0].nextAction, /review-feedback progress signal/);
+});
+
 test("worker progress treats reassignable assignments as completed closeout state", () => {
   const progress = buildWorkerProgressStatus(
     { runId: "manager-test", progressStaleMinutes: 3 },
@@ -7224,7 +8276,7 @@ test("worker progress signal gate writes durable request files and pastes only p
     assert.match(readFileSync(requestPath, "utf8"), /assignment:lane-1/);
     assert.match(readFileSync(requestPath, "utf8"), /--owner 'manager-runner'/);
     assert.match(readFileSync(requestPath, "utf8"), /progressState: owner_delegation_stale/);
-    assert.match(readFileSync(pastePath, "utf8"), /Please read and follow this manager progress request file/);
+    assert.match(readFileSync(pastePath, "utf8"), /^Write a compact manager checkpoint now\./);
     assert.doesNotMatch(readFileSync(pastePath, "utf8"), /# Manager Progress Request/);
     assert.doesNotMatch(JSON.stringify(applied), /raw prompt|provider payload|reasoning trace/i);
 
@@ -7254,6 +8306,46 @@ test("worker progress signal gate writes durable request files and pastes only p
     );
     assert.equal(progressAfterSignal.summary.workerProgress[0].progressState, "progress_signal_sent");
     assert.equal(progressAfterSignal.status, "ready");
+
+    const targetBoundProgressStatus = {
+      status: "attention",
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-9",
+            sessionName: "codex-9",
+            assignmentId: "lane-9",
+            taskId: "task-9",
+            progressState: "checkpoint_stale",
+          },
+          {
+            workerId: "codex-11",
+            sessionName: "codex-11",
+            assignmentId: "lane-11",
+            taskId: "task-11",
+            progressState: "review_feedback_stale",
+          },
+        ],
+      },
+    };
+    const targetBoundPreview = buildWorkerProgressSignalPlan(
+      { runId: "manager-test", stateRoot, workerId: "codex-11", limit: 1 },
+      { progressStatus: targetBoundProgressStatus },
+    );
+    assert.equal(targetBoundPreview.summary.requests[0].workerId, "codex-11");
+    assert.match(targetBoundPreview.nextActions[0].nextAction, /--worker-id 'codex-11'/);
+    const targetBoundApply = buildWorkerProgressSignalPlan(
+      { runId: "manager-test", stateRoot, workerId: "codex-11", limit: 1, apply: true },
+      {
+        progressStatus: targetBoundProgressStatus,
+        tmuxRunner: (cmd, args) => {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%11\n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(targetBoundApply.summary.results[0].workerId, "codex-11");
+    assert.equal(targetBoundApply.summary.results[0].assignmentId, "lane-11");
 
     const progressAfterSingleStaleSignal = buildWorkerProgressStatus(
       { runId: "manager-test", stateRoot, progressStaleMinutes: 1 },
@@ -8031,6 +9123,185 @@ test("worker retire gate retires only recovery-stuck manager-owned active worker
   }
 });
 
+test("worker retire gate can park unsafe-question-blocked manager-owned workers with explicit flag", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-blocked-question-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    const workers = [
+      {
+        workerId: "codex-1",
+        owner: "manager-test/codex-1",
+        runId: "manager-test",
+        sessionName: "codex-1",
+        state: "active",
+        assignmentId: "lane-1",
+        taskId: "task-1",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+      {
+        workerId: "codex-2",
+        owner: "manager-test/codex-2",
+        runId: "manager-test",
+        sessionName: "codex-2",
+        state: "active",
+        assignmentId: "lane-2",
+        taskId: "task-2",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+    ];
+    writeFileSync(workerPath, `${JSON.stringify(workers, null, 2)}\n`);
+    const progressStatus = {
+      status: "attention",
+      summary: {
+        workerProgress: [
+          { workerId: "codex-1", sessionName: "codex-1", assignmentId: "lane-1", taskId: "task-1", progressState: "blocked_question", questionCount: 1 },
+          { workerId: "codex-2", sessionName: "codex-2", assignmentId: "lane-2", taskId: "task-2", progressState: "blocked_question", questionCount: 1 },
+        ],
+      },
+    };
+    const questionAnswerPlan = {
+      summary: {
+        blockedQuestions: [
+          {
+            questionId: "q-unsafe",
+            workerId: "codex-1",
+            decision: "block_unsafe_continuation",
+            operatorInterruption: true,
+            reasonCodes: ["unsafe_authority_request"],
+            stopLines: ["recovery_or_ownership_requires_operator_approval"],
+            sourceRefs: ["assignment:lane-1"],
+          },
+          {
+            questionId: "q-source",
+            workerId: "codex-2",
+            decision: "park_lane",
+            operatorInterruption: false,
+            reasonCodes: ["stale_source_context"],
+            sourceRefs: ["assignment:lane-2"],
+          },
+        ],
+      },
+    };
+    const workerStatus = { summary: { workers } };
+
+    const defaultPreview = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot },
+      { progressStatus, workerStatus, questionAnswerPlan },
+    );
+    assert.equal(defaultPreview.status, "blocked");
+    assert.equal(defaultPreview.summary.planned, 0);
+
+    const preview = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, retireBlockedQuestion: true },
+      { progressStatus, workerStatus, questionAnswerPlan },
+    );
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.planned, 1);
+    assert.equal(preview.summary.requests[0].workerId, "codex-1");
+    assert.equal(preview.summary.requests[0].basis, "unsafe_question_policy_blocked");
+    assert.match(preview.nextActions[0].nextAction, /--retire-blocked-question/);
+
+    const calls = [];
+    const applied = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, retireBlockedQuestion: true, apply: true },
+      {
+        progressStatus,
+        workerStatus,
+        questionAnswerPlan,
+        tmuxRunner: (cmd, args) => {
+          calls.push({ cmd, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(applied.status, "ready");
+    assert.deepEqual(calls[0].args, ["kill-session", "-t", "codex-1"]);
+    assert.doesNotMatch(JSON.stringify(calls), /codex-2/);
+    const records = JSON.parse(readFileSync(workerPath, "utf8"));
+    assert.equal(records.find((worker) => worker.workerId === "codex-1").state, "retired");
+    assert.equal(records.find((worker) => worker.workerId === "codex-1").recoveryState, "retired_after_policy_blocked_question");
+    assert.equal(records.find((worker) => worker.workerId === "codex-2").state, "active");
+    const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
+    assert.equal(ledger.summary.events.at(-1).authorityBasis, "manager-owned-worker-retire-after-policy-blocked-question-existing-gates");
+    assert.doesNotMatch(JSON.stringify(applied), /capture-pane|provider payload|reasoning trace|raw prompt/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire blocked-question mode excludes earlier recovery-stuck candidates", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-blocked-question-priority-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    const workers = [
+      {
+        workerId: "codex-1",
+        owner: "manager-test/codex-1",
+        runId: "manager-test",
+        sessionName: "codex-1",
+        state: "active",
+        assignmentId: "lane-recovery",
+        taskId: "task-recovery",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+      {
+        workerId: "codex-2",
+        owner: "manager-test/codex-2",
+        runId: "manager-test",
+        sessionName: "codex-2",
+        state: "active",
+        assignmentId: "lane-blocked",
+        taskId: "task-blocked",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+    ];
+    writeFileSync(workerPath, `${JSON.stringify(workers, null, 2)}\n`);
+    const progressStatus = {
+      status: "attention",
+      summary: {
+        workerProgress: [
+          { workerId: "codex-1", sessionName: "codex-1", assignmentId: "lane-recovery", taskId: "task-recovery", progressState: "recovery_submit_unanswered", questionCount: 0 },
+          { workerId: "codex-2", sessionName: "codex-2", assignmentId: "lane-blocked", taskId: "task-blocked", progressState: "checkpoint_stale", questionCount: 0 },
+        ],
+      },
+    };
+    const questionAnswerPlan = {
+      summary: {
+        blockedQuestions: [{
+          questionId: "q-unsafe",
+          workerId: "codex-2",
+          decision: "block_unsafe_continuation",
+          operatorInterruption: true,
+          reasonCodes: ["unsafe_authority_request"],
+          stopLines: ["provider_calls_require_operator_approval"],
+          sourceRefs: ["assignment:lane-blocked"],
+        }],
+      },
+    };
+    const workerStatus = { summary: { workers } };
+
+    const recoveryPreview = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, limit: 1 },
+      { progressStatus, workerStatus, questionAnswerPlan },
+    );
+    assert.equal(recoveryPreview.status, "ready");
+    assert.equal(recoveryPreview.summary.requests[0].workerId, "codex-1");
+    assert.equal(recoveryPreview.summary.requests[0].basis, "recovery_submit_unanswered");
+
+    const blockedPreview = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, retireBlockedQuestion: true, limit: 1 },
+      { progressStatus, workerStatus, questionAnswerPlan },
+    );
+    assert.equal(blockedPreview.status, "blocked");
+    assert.equal(blockedPreview.summary.planned, 0);
+    assert.equal(blockedPreview.blockers[0].code, "worker-retire-no-candidates");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker retire apply persists successful records when a later kill fails", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-partial-"));
   try {
@@ -8311,6 +9582,27 @@ test("worker question answer gate writes durable answer files and pastes only pa
     );
     assert.equal(singularSourceRef.summary.planned, 1);
     assert.deepEqual(singularSourceRef.summary.requests[0].sourceRefs, ["assignment:lane-5"]);
+
+    const negatedProviderMention = buildWorkerQuestionAnswerPlan(
+      { runId: "manager-test", stateRoot },
+      {
+        workerStatus,
+        questions: [
+          {
+            questionId: "question-negated-provider",
+            actor: "codex-5",
+            questionType: "source_context",
+            summary: "Implemented the source-backed seed; it remains metadata-only and reports actions without queueing or provider calls.",
+            sourceRefs: ["assignment:lane-5", "task:task-5"],
+            materialDecision: false,
+          },
+        ],
+        events: [],
+      },
+    );
+    assert.equal(negatedProviderMention.status, "ready");
+    assert.equal(negatedProviderMention.summary.planned, 1);
+    assert.equal(negatedProviderMention.summary.blockedQuestions.length, 0);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -8926,6 +10218,42 @@ test("worker owner delegation gate sends delegated owner override without takeov
     assert.equal(progressAfterInspection.summary.workerProgress[0].submitPendingAfterRecoveryInspection, false);
     assert.equal(progressAfterInspection.nextActions[0].code, "worker-submit-pending-progress-signal");
     assert.equal(progressAfterInspection.nextActions[0].nextAction, `node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit 1 --run-id 'manager-test' --state-root '${stateRoot}'`);
+
+    const reviewFeedbackRecovery = buildWorkerProgressStatus(
+      { runId: "manager-test", stateRoot, progressStaleMinutes: 1 },
+      {
+        now: "2026-06-29T00:12:00.000Z",
+        storyPath: "_bmad-output/implementation-artifacts/nonexistent-review-feedback-story.md",
+        workerStatus: {
+          summary: {
+            workers: [
+              {
+                workerId: "codex-2",
+                owner: "manager-test/codex-2",
+                runId: "manager-test",
+                sessionName: "codex-2",
+                state: "active",
+                assignmentId: "review-feedback-lane",
+                taskId: "task-2",
+                recoveryState: "handoff_sent",
+                lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "review-feedback-lane", owner: "manager-runner", heartbeat: "2026-06-29T00:00:00.000Z" }] } },
+        checkpoints: [
+          { checkpointId: "old", actor: "codex-2", timestamp: "2026-06-29T00:01:00.000Z", summary: "old checkpoint", sourceRefs: ["assignment:review-feedback-lane"] },
+        ],
+        events: [
+          { eventId: "review-feedback", actor: "manager", eventType: "worker_review_feedback_apply", timestamp: "2026-06-29T00:02:00.000Z", summary: "review feedback", sourceRefs: ["assignment:review-feedback-lane"] },
+          { eventId: "progress", actor: "manager", eventType: "worker_progress_signal_apply", timestamp: "2026-06-29T00:03:00.000Z", summary: "progress signal", sourceRefs: ["assignment:review-feedback-lane"] },
+          { eventId: "recovery", actor: "manager", eventType: "worker_recovery_inspection", timestamp: "2026-06-29T00:11:00.000Z", summary: "recovery inspection", sourceRefs: ["assignment:review-feedback-lane"] },
+        ],
+      },
+    );
+    assert.equal(reviewFeedbackRecovery.summary.workerProgress[0].progressState, "recovery_inspected");
+    assert.equal(reviewFeedbackRecovery.nextActions[0].code, "worker-submit-pending-progress-signal");
     const progressAfterRecoverySubmit = buildWorkerProgressStatus(
       { runId: "manager-test", stateRoot, progressStaleMinutes: 1 },
       {
@@ -9130,7 +10458,7 @@ test("continuous prompt-idle handoff action uses prompt-idle signal gate", () =>
           run: { runId: "manager-review-request-plan" },
           usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
           resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
-          workers: { workerCounts: { active: 6, warm: 0, paused: 0 } },
+          workers: { workerCounts: { active: 5, warm: 0, paused: 0 } },
           dispatchPreview: {
             allowed: true,
             selectedLane: "lane-ready",
@@ -9177,7 +10505,7 @@ test("continuous dispatcher truth beats prompt-idle handoff repair", () => {
           run: { runId: "manager-test" },
           usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
           resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
-          workers: { workerCounts: { active: 6, warm: 0, paused: 0 } },
+          workers: { workerCounts: { active: 5, warm: 0, paused: 0 } },
           dispatchPreview: {
             allowed: true,
             selectedLane: "lane-ready",
@@ -9206,7 +10534,7 @@ test("continuous dispatcher truth beats prompt-idle handoff repair", () => {
           {
             code: "dispatch-preview-ready",
             summary: "Safe dispatch preview is ready.",
-            nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
           },
         ],
       },
@@ -9721,7 +11049,10 @@ test("cycle discovers default PRD source for autonomous refill planning", () => 
     assert.equal(cycle.summary.runway.dispatchableLanes, 0);
     assert.equal(cycle.summary.runway.refillNeeded, 6);
     assert.equal(cycle.summary.runway.sourceSlice.type, "prd");
-    assert.match(cycle.summary.runway.sourceSlice.label, /^prd:_bmad-output\/planning-artifacts\/prds\/prd-Kendall_Nxt-.+\/prd\.md$/);
+    assert.equal(
+      cycle.summary.runway.sourceSlice.label,
+      "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+    );
     assert.equal(cycle.summary.workers.targets.safeWorkSupply, 0);
     assert.ok(cycle.summary.runway.candidateLanes.length > 0);
     assert.equal(cycle.summary.continuation.state, "planning_only");
@@ -9734,6 +11065,72 @@ test("cycle discovers default PRD source for autonomous refill planning", () => 
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("refill defaults latest PRD and uses source-scoped sprint tracker", () => {
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, runId: "manager-test" },
+    {
+      discoverDefaultSources: true,
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: {
+            assignable: 0,
+            closed: 0,
+          },
+        },
+      },
+      dispatchPreview: {
+        dispatch: {
+          allowed: false,
+          blockers: ["no dispatchable safe backlog lane found"],
+        },
+        counts: {
+          dispatchable: 0,
+          active: 0,
+          blocked: 0,
+        },
+      },
+      sourcePlanningBySourceKey: {
+        "2026-07-04-operational-pipeline-action-loop": {
+          sprintStatus: {
+            exists: true,
+            path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+            backlogStories: 1,
+            readyStories: 0,
+            reviewReadyStories: 0,
+            readyForDevStories: 0,
+            activeStories: 0,
+            doneStories: 0,
+            nextBacklogStoryKey: "9-9-latest-prd-isolated-test-story",
+            storyStatuses: {
+              "9-9-latest-prd-isolated-test-story": "backlog",
+            },
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(
+    plan.summary.source,
+    "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+  );
+  assert.equal(plan.summary.sourcePlanning.sourceKey, "2026-07-04-operational-pipeline-action-loop");
+  assert.equal(plan.summary.sourcePlanning.sprintStatus.exists, true);
+  assert.match(plan.summary.sourcePlanning.sprintStatus.nextBacklogStoryKey, /^\d+-\d+-[a-z0-9-]+$/);
+  assert.equal(plan.summary.workCreationStep.workflow, "bmad-create-story");
+  assert.equal(plan.summary.bmadRequestPacket.workflow, "bmad-create-story");
+  assert.equal(
+    plan.summary.workCreationStep.workCreationPacket.storyCreationInputs.storyKey,
+    plan.summary.sourcePlanning.sprintStatus.nextBacklogStoryKey,
+  );
+  assert.equal(
+    plan.summary.workCreationStep.workCreationPacket.storyCreationInputs.sprintStatusPath,
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+  );
+  assert.equal(plan.summary.workCreationStep.workCreationPacket.storyCreationInputs.statusUpdate.from, "backlog");
+  assert.equal(plan.summary.workCreationStep.workCreationPacket.storyCreationInputs.statusUpdate.to, "ready-for-dev");
 });
 
 test("cycle dispatch posture stops new dispatch before reducing model quality", () => {
@@ -10502,6 +11899,63 @@ test("lane advancement plan detects review-ready worker checkpoints", () => {
   assert.ok(plan.warnings.some((warning) => warning.code === "manager-lane-advance-owner-missing"));
 });
 
+test("lane advancement does not advance lanes with open story review feedback", () => {
+  const storyPath = "_bmad-output/implementation-artifacts/8-14-lane-advance-open-feedback.md";
+  try {
+    writeFileSync(
+      storyPath,
+      [
+        "# Story 8-14-lane-advance-open-feedback",
+        "",
+        "- [ ] Review finding remains unresolved",
+        "",
+      ].join("\n"),
+    );
+    const plan = buildLaneAdvancementPlan(
+      { runId: "manager-test", limit: 1 },
+      {
+        workerStatus: {
+          summary: {
+            workers: [
+              {
+                workerId: "codex-2",
+                owner: "manager-test/codex-2",
+                runId: "manager-test",
+                sessionName: "codex-2",
+                state: "active",
+                assignmentId: "bmad-8-14-lane-advance-open-feedback",
+                taskId: "task-2",
+                lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [{ assignmentId: "bmad-8-14-lane-advance-open-feedback", taskId: "task-2", phase: "handoff" }],
+          },
+        },
+        checkpoints: [
+          {
+            checkpointId: "checkpoint-1",
+            timestamp: "2026-06-29T00:05:00.000Z",
+            actor: "codex-2",
+            assignmentId: "bmad-8-14-lane-advance-open-feedback",
+            summary: "Implemented and verified. Ready for manager review; staged implementation unchanged.",
+            sourceRefs: ["assignment:bmad-8-14-lane-advance-open-feedback"],
+          },
+        ],
+      },
+    );
+
+    assert.equal(plan.status, "ready");
+    assert.equal(plan.summary.readyLaneCount, 0);
+    assert.deepEqual(plan.nextActions, []);
+  } finally {
+    rmSync(storyPath, { force: true });
+  }
+});
+
 test("lane advancement apply no-ops when ready lanes disappeared", () => {
   const plan = buildLaneAdvancementPlan(
     { runId: "manager-test", apply: true, limit: 1 },
@@ -10692,6 +12146,93 @@ test("lane advancement detects completed blocker-free checkpoint refresh phrasin
   assert.equal(plan.summary.readyLanes[0].assignmentId, "lane-7");
   assert.equal(plan.summary.readyLanes[0].readinessState, "manager_review_ready");
   assert.equal(plan.summary.readyLanes[0].targetPhase, "review_ready");
+});
+
+test("lane advancement detects delegated code review complete checkpoint phrasing", () => {
+  const plan = buildLaneAdvancementPlan(
+    { runId: "manager-test", limit: 1 },
+    {
+      workerStatus: {
+        summary: {
+          workers: [
+            {
+              workerId: "codex-3",
+              owner: "manager-test/codex-3",
+              runId: "manager-test",
+              sessionName: "codex-3",
+              state: "active",
+              assignmentId: "lane-review-complete",
+              taskId: "task-review-complete",
+              lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [{ assignmentId: "lane-review-complete", taskId: "task-review-complete", phase: "handoff", owner: "manager-test/dispatcher" }],
+        },
+      },
+      checkpoints: [
+        {
+          checkpointId: "checkpoint-review-complete",
+          timestamp: "2026-06-29T00:05:00.000Z",
+          actor: "codex-3",
+          assignmentId: "lane-review-complete",
+          summary: "Delegated code review complete for lane-review-complete; findings written to compact manager review result artifact.",
+          sourceRefs: ["assignment:lane-review-complete"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(plan.status, "attention");
+  assert.equal(plan.summary.readyLaneCount, 1);
+  assert.equal(plan.summary.readyLanes[0].assignmentId, "lane-review-complete");
+  assert.equal(plan.summary.readyLanes[0].readinessState, "manager_review_ready");
+});
+
+test("lane advancement skips lanes already at the target phase", () => {
+  const plan = buildLaneAdvancementPlan(
+    { runId: "manager-test", limit: 1 },
+    {
+      workerStatus: {
+        summary: {
+          workers: [
+            {
+              workerId: "codex-3",
+              owner: "manager-test/codex-3",
+              runId: "manager-test",
+              sessionName: "codex-3",
+              state: "active",
+              assignmentId: "lane-review-complete",
+              taskId: "task-review-complete",
+              lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [{ assignmentId: "lane-review-complete", taskId: "task-review-complete", phase: "review_ready", owner: "manager-test/dispatcher" }],
+        },
+      },
+      checkpoints: [
+        {
+          checkpointId: "checkpoint-review-complete",
+          timestamp: "2026-06-29T00:05:00.000Z",
+          actor: "codex-3",
+          assignmentId: "lane-review-complete",
+          summary: "Delegated code review complete for lane-review-complete; findings written to compact manager review result artifact.",
+          sourceRefs: ["assignment:lane-review-complete"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(plan.status, "ready");
+  assert.equal(plan.summary.readyLaneCount, 0);
+  assert.deepEqual(plan.nextActions, []);
 });
 
 test("lane advancement does not advance in-progress checkpoint just because a focused test passed", () => {
@@ -11000,7 +12541,7 @@ test("lane advancement apply recovers owner from assignment file fallback", () =
   }
 });
 
-test("lane advancement fallback keeps already review-ready delegated assignment actionable", () => {
+test("lane advancement fallback skips already review-ready delegated assignment", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-lane-advance-delegated-phase-"));
   try {
     mkdirSync(join(stateRoot, "assignments"), { recursive: true });
@@ -11052,12 +12593,10 @@ test("lane advancement fallback keeps already review-ready delegated assignment 
       },
     );
 
-    assert.equal(plan.status, "attention");
-    assert.equal(plan.summary.readyLaneCount, 1);
-    assert.equal(plan.summary.readyLanes[0].assignmentId, "lane-2");
-    assert.equal(plan.summary.readyLanes[0].laneOwner, "delegated-owner");
-    assert.equal(plan.summary.readyLanes[0].targetPhase, "review_ready");
-    assert.equal(plan.nextActions[0].code, "manager-lane-advance-ready");
+    assert.equal(plan.status, "ready");
+    assert.equal(plan.summary.readyLaneCount, 0);
+    assert.deepEqual(plan.summary.readyLanes, []);
+    assert.deepEqual(plan.nextActions, []);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -11292,6 +12831,8 @@ test("cycle reports duplicate subplan warnings once", () => {
 test("continuous run plan selects only manager-owned worker auto actions", () => {
   const reviewSprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-continuous-review-test.yaml";
   const reviewStoryPath = "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md";
+  const noReviewSprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-continuous-no-review-test.yaml";
+  const reviewStateRoot = mkdtempSync(join(tmpdir(), "manager-continuous-review-"));
   try {
     writeFileSync(
       reviewSprintPath,
@@ -11306,6 +12847,17 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       ].join("\n"),
     );
     writeFileSync(reviewStoryPath, "# Story 97-2-manager-continuous-review-gate\n\nImplementation evidence is ready for review.\n", "utf8");
+    writeFileSync(
+      noReviewSprintPath,
+      [
+        "generated: 2026-07-02",
+        "last_updated: 2026-07-02",
+        "development_status:",
+        "  epic-98: in-progress",
+        "  98-1-manager-continuous-no-review-gate: in-progress",
+        "",
+      ].join("\n"),
+    );
 
   const submitPlan = buildContinuousRunPlan(
     { maxIterations: 2, intervalMs: 1000, heartbeatEvery: 3 },
@@ -11366,7 +12918,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           {
             code: "dispatch-preview-ready",
             summary: "Dispatch preview is ready.",
-            nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
           },
         ],
       },
@@ -11383,8 +12935,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(pendingBeforeHandoffPlan.summary.selectedAction.code, "continuous-worker-submit-pending");
-  assert.match(pendingBeforeHandoffPlan.summary.selectedAction.applyCommand, /manager-worker-submit-pending\.mjs --summary-json --limit 1 --apply/);
+  assert.equal(pendingBeforeHandoffPlan.summary.selectedAction.code, "continuous-worker-handoff");
+  assert.equal(pendingBeforeHandoffPlan.summary.selectedAction.workClass, "task_work");
+  assert.match(pendingBeforeHandoffPlan.summary.selectedAction.applyCommand, /manager-worker-handoff\.mjs --summary-json --limit 1 --apply/);
 
   const defaultCadencePlan = buildContinuousRunPlan(
     {},
@@ -11725,6 +13278,11 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
           resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
           workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          continuation: {
+            workerMutationAllowed: false,
+            workerStartAllowed: true,
+            dispatchApplyAllowed: true,
+          },
           dispatchPreview: {
             allowed: true,
             selectedLane: "lane-ready",
@@ -11737,7 +13295,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           {
             code: "worker-progress-progress_signal_unanswered",
             summary: "codex-1 progress signal unanswered.",
-            nextAction: "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json",
+            nextAction: "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test'",
           },
         ],
       },
@@ -11746,7 +13304,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(recoveryPlan.summary.selectedAction.code, "continuous-worker-recovery-inspection");
   assert.equal(recoveryPlan.summary.selectedAction.readOnly, undefined);
-  assert.equal(recoveryPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --apply");
+  assert.equal(recoveryPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test' --apply");
 
   const retirePlan = buildContinuousRunPlan(
     {},
@@ -11793,6 +13351,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           usage: { state: "normal" },
           resources: { state: "normal" },
           workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: noReviewSprintPath } } },
         },
         warnings: [{ code: "manager-lane-advance-ready", message: "1 active lane appears ready." }],
         nextActions: [
@@ -11822,6 +13381,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           usage: { state: "normal" },
           resources: { state: "normal" },
           workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: noReviewSprintPath } } },
         },
         warnings: [{ code: "manager-lane-advance-ready", message: "1 active lane appears ready." }],
         nextActions: [
@@ -11843,6 +13403,89 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(laneAdvanceWithWorkerActionPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
   assert.equal(laneAdvanceWithWorkerActionPlan.summary.selectedAction.readOnly, undefined);
 
+  const freshReviewStateRoot = mkdtempSync(join(tmpdir(), "manager-continuous-fresh-review-lane-advance-"));
+  try {
+    const reviewRequestDir = join(freshReviewStateRoot, "manager-runs", "manager-test", "review-requests");
+    const reviewResultDir = join(freshReviewStateRoot, "manager-runs", "manager-test", "review-results");
+    mkdirSync(reviewRequestDir, { recursive: true });
+    mkdirSync(reviewResultDir, { recursive: true });
+    writeFileSync(
+      join(reviewRequestDir, "codex-4-bmad-97-2-manager-continuous-review-gate.md"),
+      "contractVersion: worker_code_review_request.v2\n",
+    );
+    writeFileSync(
+      join(reviewResultDir, "bmad-97-2-manager-continuous-review-gate.md"),
+      "Status: PASS\n\nNo blocking findings in compact delegated review result.\n",
+    );
+    const freshReviewLaneAdvancePlan = buildContinuousRunPlan(
+      {},
+      {
+        promptProbe: {
+          status: "ready",
+          summary: {
+            probes: [
+              { workerId: "codex-3", promptDetected: true, inputHasManagerPointer: false },
+              { workerId: "codex-4", promptDetected: true, inputHasManagerPointer: false },
+            ],
+          },
+        },
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test", stateRoot: freshReviewStateRoot },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+            runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+            laneAdvance: {
+              readyLaneCount: 1,
+            },
+            workerProgress: {
+              workerProgress: [
+                {
+                  workerId: "codex-3",
+                  sessionName: "codex-3",
+                  assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                  progressState: "manager_review_ready",
+                  checkpointCount: 1,
+                  latestCheckpointAgeSeconds: 240,
+                },
+                {
+                  workerId: "codex-4",
+                  sessionName: "codex-4",
+                  assignmentId: "bmad-1-1-other-ready-lane",
+                  progressState: "manager_review_ready",
+                  checkpointCount: 1,
+                },
+              ],
+            },
+          },
+          warnings: [{ code: "manager-lane-advance-ready", message: "1 active lane appears ready." }],
+          nextActions: [
+            {
+              code: "manager-lane-advance-ready",
+              summary: "Advance review-ready lane.",
+              nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id 'manager-test'",
+            },
+            {
+              code: "worker-progress-checkpoint_stale",
+              summary: "Signal stale worker.",
+              nextAction: "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --run-id 'manager-test'",
+            },
+          ],
+        },
+      },
+    );
+
+    assert.equal(freshReviewLaneAdvancePlan.summary.selectedAction.code, "continuous-lane-advance-apply");
+    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, /manager-lane-advance\.mjs --summary-json --limit \d+ --run-id 'manager-test'/);
+    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, /--state-root '/);
+    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, / --apply$/);
+  } finally {
+    rmSync(freshReviewStateRoot, { recursive: true, force: true });
+  }
+
   const promptIdleCompletedPlan = buildContinuousRunPlan(
     {},
     {
@@ -11862,6 +13505,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           usage: { state: "normal" },
           resources: { state: "normal" },
           workers: { workerCounts: { active: 6, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
           laneAdvance: {
             readyLaneCount: 1,
           },
@@ -11869,10 +13513,25 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
             workerProgress: [
               {
                 workerId: "codex-3",
-                assignmentId: "lane-ready",
+                sessionName: "codex-3",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
                 progressState: "manager_review_ready",
                 checkpointCount: 1,
                 latestCheckpointAgeSeconds: 90,
+              },
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "bmad-1-9-active-fix-lane",
+                progressState: "progress_signal_sent",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-4",
+                sessionName: "codex-4",
+                assignmentId: "bmad-1-1-other-ready-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
               },
             ],
           },
@@ -11882,7 +13541,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           {
             code: "dispatch-preview-ready",
             summary: "Safe dispatch preview is ready.",
-            nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
           },
           {
             code: "worker-progress-checkpoint_stale",
@@ -11894,10 +13553,170 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(promptIdleCompletedPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
-  assert.equal(promptIdleCompletedPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id 'manager-test' --apply");
+  assert.equal(promptIdleCompletedPlan.summary.selectedAction.code, "continuous-worker-code-review-request");
+  assert.equal(promptIdleCompletedPlan.summary.selectedAction.summary, "Delegate BMAD code review for bmad-97-2-manager-continuous-review-gate to a manager-owned worker.");
+  assert.equal(promptIdleCompletedPlan.nextActions[0].summary, "Delegate BMAD code review for bmad-97-2-manager-continuous-review-gate to a manager-owned worker.");
+  assert.equal(promptIdleCompletedPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
+  assert.equal(promptIdleCompletedPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate' --worker-id 'codex-4' --apply");
+
+  const alreadyAdvancedReviewPlan = buildContinuousRunPlan(
+    {},
+    {
+      promptProbe: {
+        status: "ready",
+        summary: {
+          probes: [
+            { workerId: "codex-3", promptDetected: true, inputHasManagerPointer: false },
+            { workerId: "codex-4", promptDetected: true, inputHasManagerPointer: false },
+          ],
+        },
+      },
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 6, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          laneAdvance: {
+            readyLaneCount: 0,
+          },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "bmad-1-9-active-fix-lane",
+                progressState: "progress_signal_sent",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-3",
+                sessionName: "codex-3",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+                latestCheckpointAgeSeconds: 90,
+              },
+              {
+                workerId: "codex-4",
+                sessionName: "codex-4",
+                assignmentId: "bmad-1-1-other-ready-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-progress-progress_signal_sent",
+            summary: "Wait for active fix worker checkpoint.",
+            nextAction: "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test'",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(alreadyAdvancedReviewPlan.summary.selectedAction.code, "continuous-worker-code-review-request");
+  assert.equal(alreadyAdvancedReviewPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate' --worker-id 'codex-4' --apply");
+  assert.doesNotMatch(alreadyAdvancedReviewPlan.summary.selectedAction.applyCommand, /--worker-id 'codex-1'/);
+
+  const openFeedbackReviewPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          laneAdvance: {
+            readyLaneCount: 1,
+          },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-3",
+                sessionName: "codex-3",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "review_feedback_stale",
+                openStoryReviewFeedbackCount: 4,
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-4",
+                sessionName: "codex-4",
+                assignmentId: "bmad-1-1-other-ready-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance review-ready lane.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id 'manager-test'",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(openFeedbackReviewPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
+  assert.doesNotMatch(openFeedbackReviewPlan.summary.selectedAction.applyCommand, /manager-worker-code-review/);
 
   const promptIdleCheckpointPlan = buildContinuousRunPlan(
+    {},
+    {
+      promptProbe: {
+        status: "ready",
+        summary: {
+          probes: [
+            { workerId: "codex-4", promptDetected: true, inputHasManagerPointer: false },
+          ],
+        },
+      },
+      cyclePacket: {
+        ok: true,
+        status: "ready",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 6, warm: 0, paused: 0 } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-4",
+                assignmentId: "lane-checkpointed",
+                progressState: "checkpoint_seen",
+                checkpointCount: 1,
+                latestCheckpointAgeSeconds: 240,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [],
+      },
+    },
+  );
+
+  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
+  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-test' --apply");
+
+  const freshPromptIdleCheckpointPlan = buildContinuousRunPlan(
     {},
     {
       promptProbe: {
@@ -11934,8 +13753,60 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
-  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-test' --apply");
+  assert.equal(freshPromptIdleCheckpointPlan.summary.selectedAction, null);
+  assert.equal(freshPromptIdleCheckpointPlan.nextActions[0].code, "continuous-monitor");
+
+  const handoffBeforeDispatchPlan = buildContinuousRunPlan(
+    {},
+    {
+      handoffPlan: {
+        status: "ready",
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-handoff-apply-ready",
+            summary: "Hand off 1 lane to a warm worker.",
+            nextAction: "node ./scripts/manager-worker-handoff.mjs --summary-json --limit 1 --apply --run-id 'manager-test'",
+          },
+        ],
+      },
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 5, warm: 1, paused: 0 } },
+          continuation: {
+            workerMutationAllowed: false,
+            workerStartAllowed: true,
+            dispatchApplyAllowed: true,
+          },
+          dispatchPreview: {
+            selectedLane: "bmad-4-1-ready-lane",
+            allowed: true,
+            counts: { dispatchable: 2 },
+          },
+          dispatcher: {
+            selectedLane: "bmad-4-1-ready-lane",
+            allowed: true,
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(handoffBeforeDispatchPlan.summary.selectedAction, null);
+  assert.equal(handoffBeforeDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
   const refillPlan = buildContinuousRunPlan(
     {},
@@ -11986,6 +13857,24 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           resources: { state: "normal" },
           workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
           runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-9",
+                sessionName: "codex-9",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-10",
+                sessionName: "codex-10",
+                assignmentId: "bmad-1-1-reviewer-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
         },
         warnings: [],
         nextActions: [
@@ -12000,11 +13889,247 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.code, "continuous-bmad-code-review-request");
-  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.dryRunCommand, `node ./scripts/manager-bmad-code-review.mjs --summary-json --run-id 'manager-review-request-plan' --sprint-status-path '${reviewSprintPath}'`);
-  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.applyCommand, `node ./scripts/manager-bmad-code-review.mjs --summary-json --run-id 'manager-review-request-plan' --sprint-status-path '${reviewSprintPath}' --apply`);
-  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.mutationClass, "manager_runtime_review_request_packet");
-  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.authority, "existing-bmad-code-review-workflow-request-packet-only");
+  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.code, "continuous-worker-code-review-request");
+  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.summary, "Delegate BMAD code review for bmad-97-2-manager-continuous-review-gate to a manager-owned worker.");
+  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-review-request-plan' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
+  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-review-request-plan' --assignment-id 'bmad-97-2-manager-continuous-review-gate' --worker-id 'codex-10' --apply");
+  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.mutationClass, "manager_owned_worker_code_review_delegation");
+  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.authority, "manager-owned-worker-code-review-delegation-existing-gates");
+
+  const reviewWorkflowNoReviewerPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-review-no-reviewer" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-9",
+                sessionName: "codex-9",
+                assignmentId: "bmad-1-9-active-fix-lane",
+                progressState: "checkpoint_seen",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: "Run bmad-code-review to create source-owned safe backlog work.",
+            materializationGate: null,
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.code, "continuous-worker-code-review-no-reviewer");
+  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.readOnly, true);
+  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.applyCommand, "wait_for_or_warm_manager_owned_reviewer");
+  assert.equal(reviewWorkflowNoReviewerPlan.summary.selectedAction.authority, "manager-owned-worker-code-review-delegation-required");
+  assert.doesNotMatch(reviewWorkflowNoReviewerPlan.summary.selectedAction.dryRunCommand, /manager-bmad-code-review/);
+
+  const preparedReviewRequestDir = join(reviewStateRoot, "manager-runs", "manager-stale-review", "review-requests");
+  mkdirSync(preparedReviewRequestDir, { recursive: true });
+  writeFileSync(
+    join(preparedReviewRequestDir, "codex-11-bmad-97-2-manager-continuous-review-gate.md"),
+    "# Prepared delegated review request\n\ncontractVersion: worker_code_review_request.v2\n",
+    "utf8",
+  );
+  const staleReviewResendPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-stale-review", stateRoot: reviewStateRoot },
+          reviewRequestResendStaleSeconds: 0,
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-10",
+                sessionName: "codex-10",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-11",
+                sessionName: "codex-11",
+                assignmentId: "bmad-1-1-reviewer-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: "Run bmad-code-review to create source-owned safe backlog work.",
+            materializationGate: null,
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(staleReviewResendPlan.summary.selectedAction.code, "continuous-worker-code-review-request-prepared");
+  assert.equal(staleReviewResendPlan.summary.selectedAction.readOnly, false);
+  assert.match(staleReviewResendPlan.summary.selectedAction.applyCommand, /manager-worker-code-review\.mjs/);
+  assert.match(staleReviewResendPlan.summary.selectedAction.applyCommand, /--state-root/);
+  assert.match(staleReviewResendPlan.summary.selectedAction.applyCommand, /--operator-visible-prompt --apply/);
+
+  const defaultCooldownRoot = mkdtempSync(join(tmpdir(), "manager-review-default-cooldown-"));
+  const defaultCooldownRunRoot = join(defaultCooldownRoot, "manager-runs", "manager-default-cooldown");
+  const defaultCooldownRequestDir = join(defaultCooldownRunRoot, "review-requests");
+  mkdirSync(defaultCooldownRequestDir, { recursive: true });
+  const defaultCooldownRequestPath = join(defaultCooldownRequestDir, "codex-11-bmad-97-2-manager-continuous-review-gate.md");
+  writeFileSync(
+    defaultCooldownRequestPath,
+    "# Prepared delegated review request\n\ncontractVersion: worker_code_review_request.v2\n",
+    "utf8",
+  );
+  const twoMinutesAgo = new Date(Date.now() - 120_000);
+  utimesSync(defaultCooldownRequestPath, twoMinutesAgo, twoMinutesAgo);
+  const defaultCooldownPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-default-cooldown", stateRoot: defaultCooldownRoot },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-10",
+                sessionName: "codex-10",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-11",
+                sessionName: "codex-11",
+                assignmentId: "bmad-1-1-reviewer-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: "Run bmad-code-review to create source-owned safe backlog work.",
+            materializationGate: null,
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(defaultCooldownPlan.summary.selectedAction.code, "continuous-worker-code-review-request-prepared");
+  assert.equal(defaultCooldownPlan.summary.selectedAction.readOnly, true);
+  assert.equal(defaultCooldownPlan.summary.selectedAction.applyCommand, "monitor_delegated_worker_code_review");
+
+  const freshPeerRequestRoot = mkdtempSync(join(tmpdir(), "manager-fresh-peer-review-"));
+  const freshPeerRequestRunRoot = join(freshPeerRequestRoot, "manager-runs", "manager-fresh-peer-review");
+  const freshPeerRequestDir = join(freshPeerRequestRunRoot, "review-requests");
+  mkdirSync(freshPeerRequestDir, { recursive: true });
+  writeFileSync(
+    join(freshPeerRequestDir, "codex-5-bmad-97-2-manager-continuous-review-gate.md"),
+    "# Fresh delegated review request\n\ncontractVersion: worker_code_review_request.v2\n",
+    "utf8",
+  );
+  writeFileSync(
+    join(freshPeerRequestRunRoot, "events.ndjson"),
+    [
+      JSON.stringify({ eventType: "worker_code_review_request_apply", timestamp: "2026-06-29T00:00:00.000Z", sourceRefs: ["assignment:bmad-97-2-manager-continuous-review-gate", "worker:codex-5"] }),
+      JSON.stringify({ eventType: "worker_code_review_request_apply", timestamp: "2026-06-29T00:00:01.000Z", sourceRefs: ["assignment:bmad-97-2-manager-continuous-review-gate", "worker:codex-5"] }),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const freshPeerRequestPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-fresh-peer-review", stateRoot: freshPeerRequestRoot },
+          reviewRequestResendStaleSeconds: 60,
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 3, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-3",
+                sessionName: "codex-3",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-5",
+                sessionName: "codex-5",
+                assignmentId: "bmad-1-1-reviewer-one",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+              {
+                workerId: "codex-7",
+                sessionName: "codex-7",
+                assignmentId: "bmad-1-2-reviewer-two",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: "Run bmad-code-review to create source-owned safe backlog work.",
+            materializationGate: null,
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(freshPeerRequestPlan.summary.selectedAction.code, "continuous-worker-code-review-request-prepared");
+  assert.equal(freshPeerRequestPlan.summary.selectedAction.readOnly, true);
+  assert.equal(freshPeerRequestPlan.summary.selectedAction.applyCommand, "monitor_delegated_worker_code_review");
 
   const gatedNeedsReviewRefillPlan = buildContinuousRunPlan(
     {},
@@ -12095,7 +14220,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           {
             code: "dispatch-preview-ready",
             summary: "Safe dispatch preview is ready.",
-            nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
           },
         ],
       },
@@ -12103,11 +14228,340 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(dispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
-  assert.equal(dispatchPlan.summary.selectedAction.dryRunCommand, "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner manager-test");
-  assert.equal(dispatchPlan.summary.selectedAction.applyCommand, "node ./scripts/codex-workspace.mjs dispatch-next --owner manager-test --apply");
-  assert.doesNotMatch(dispatchPlan.summary.selectedAction.applyCommand, /--summary-json/);
+  assert.equal(dispatchPlan.summary.selectedAction.dryRunCommand, "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner manager-test/dispatcher");
+  assert.equal(dispatchPlan.summary.selectedAction.applyCommand, "node ./scripts/codex-workspace.mjs dispatch-next --summary-json --owner manager-test/dispatcher --apply");
+  assert.match(dispatchPlan.summary.selectedAction.applyCommand, /--summary-json/);
   assert.equal(dispatchPlan.summary.selectedAction.authority, "codex-workspace-dispatch-existing-gates");
   assert.equal(dispatchPlan.summary.selectedAction.mutationClass, "assignment_workspace_claim_only");
+  assert.equal(dispatchPlan.summary.selectedAction.workClass, "task_work");
+
+  const dispatchBeforePromptRepairPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+      promptProbe: {
+        status: "attention",
+        summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-prompt-probe-submit-ready",
+            summary: "Submit pending manager pointer.",
+            nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(dispatchBeforePromptRepairPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(dispatchBeforePromptRepairPlan.summary.selectedAction.workClass, "task_work");
+  assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.usefulWorkActions, 1);
+  assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.managerRepairActions, 1);
+
+  const dispatchBeforeChurnedPromptRepairPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+          selfRepair: { budget: 2, attemptsByAction: { "continuous-worker-prompt-probe": 2 } },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+      promptProbe: {
+        status: "attention",
+        summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-prompt-probe-submit-ready",
+            summary: "Submit pending manager pointer.",
+            nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.codexAdvisor.recommendations[0].recommendedResponse, "continue_task_work_and_park_manager_capability");
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.nextActions[0].code, "continuous-apply-ready");
+
+  const parkedTmuxStillDispatchesPlan = buildContinuousRunPlan(
+    {},
+    {
+      managerCapabilityPosture: {
+        capabilities: {
+          tmuxWorkerMutation: {
+            state: "parked",
+            reasonCodes: ["prompt_probe_churn"],
+            safeFallbacks: ["dispatch_apply_existing_gates"],
+          },
+        },
+      },
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+      promptProbe: {
+        status: "attention",
+        summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-prompt-probe-submit-ready",
+            summary: "Submit pending manager pointer.",
+            nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(parkedTmuxStillDispatchesPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(parkedTmuxStillDispatchesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+  assert.equal(parkedTmuxStillDispatchesPlan.summary.capabilityHolds.heldActions[0].code, "continuous-worker-prompt-probe");
+  assert.equal(parkedTmuxStillDispatchesPlan.warnings.some((warning) => warning.code === "capability_posture_hold"), true);
+
+  const parkedDispatchStillRefillsPlan = buildContinuousRunPlan(
+    {},
+    {
+      managerCapabilityPosture: {
+        dispatchApply: {
+          state: "parked",
+          reasonCodes: ["dispatch_claim_churn"],
+          safeFallbacks: ["source_owned_refill_planning"],
+        },
+      },
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+          {
+            code: "safe-backlog-starvation",
+            summary: "Source-owned refill materialization is ready.",
+            nextAction: "Run bmad-create-story to create source-owned safe backlog work.",
+            materializationGate: {
+              state: "ready",
+              dryRunCommand: "node ./scripts/manager-refill-plan.mjs --summary-json",
+              applyCommand: "node ./scripts/manager-refill-plan.mjs --summary-json --apply --source-ref 'prd:_bmad-output/planning-artifacts/prds/prd_Kendall_Nxt.md'",
+            },
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(parkedDispatchStillRefillsPlan.summary.selectedAction.code, "continuous-refill-apply");
+  assert.equal(parkedDispatchStillRefillsPlan.summary.capabilityHolds.heldActions[0].managerCapability, "dispatchApply");
+  assert.equal(parkedDispatchStillRefillsPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("dispatchApply"), true);
+
+  const parkedReviewDelegationStillAdvancesPlan = buildContinuousRunPlan(
+    {},
+    {
+      managerCapabilityPosture: {
+        reviewDelegation: {
+          state: "parked",
+          reasonCodes: ["review_worker_unavailable"],
+          safeFallbacks: ["lane_advance_to_review_held"],
+        },
+      },
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          laneAdvance: { readyLaneCount: 1 },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-3",
+                sessionName: "codex-3",
+                assignmentId: "bmad-97-2-manager-continuous-review-gate",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+                latestCheckpointAgeSeconds: 90,
+              },
+              {
+                workerId: "codex-4",
+                sessionName: "codex-4",
+                assignmentId: "bmad-1-1-other-ready-lane",
+                progressState: "manager_review_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-code-review-ready",
+            summary: "Delegate review-ready worker lane(s) to manager-owned worker code review.",
+            nextAction: "node ./scripts/manager-worker-code-review.mjs --summary-json",
+          },
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance review-ready lane metadata.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "reviewDelegation"), true);
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("reviewDelegation"), true);
+
+  const fullCapacityDispatchPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 6, warm: 0, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(fullCapacityDispatchPlan.summary.selectedAction, null);
+  assert.equal(fullCapacityDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+
+  const warmCapacityDispatchPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 6, warm: 1, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(warmCapacityDispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(warmCapacityDispatchPlan.summary.selectedAction.routingDecision.capacityDecision.allowed, true);
 
   const noSelectedDispatchPlan = buildContinuousRunPlan(
     {},
@@ -12131,7 +14585,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
           {
             code: "dispatch-preview-ready",
             summary: "Stale dispatch action should not apply without a selected lane.",
-            nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
           },
         ],
       },
@@ -12173,6 +14627,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   } finally {
     rmSync(reviewSprintPath, { force: true });
     rmSync(reviewStoryPath, { force: true });
+    rmSync(noReviewSprintPath, { force: true });
+    rmSync(reviewStateRoot, { recursive: true, force: true });
   }
 });
 
@@ -12270,13 +14726,383 @@ test("continuous prompt-probe strips apply from dry-run command", () => {
   );
 
   assert.equal(plan.summary.selectedAction.code, "continuous-worker-prompt-probe");
+  assert.equal(plan.summary.selectedAction.workClass, "direct_unblock_repair");
   assert.equal(plan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1");
   assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply");
+
+  const churnPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          selfRepair: { budget: 2, attemptsByAction: { "continuous-worker-prompt-probe": 2 } },
+          continuation: { workerMutationAllowed: true },
+        },
+        warnings: [],
+        nextActions: [],
+      },
+      promptProbe: {
+        status: "attention",
+        summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-prompt-probe-submit-ready",
+            summary: "Submit pending manager pointer.",
+            nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(churnPlan.summary.selectedAction, null);
+  assert.equal(churnPlan.summary.allowedActionCount, 0);
+  assert.equal(churnPlan.summary.usefulWorkPolicy.parkedSelfRepair[0].code, "self_fix_churn");
+  assert.equal(churnPlan.summary.usefulWorkPolicy.parkedSelfRepair[0].managerCapability, "tmuxWorkerMutation");
+  assert.equal(churnPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+  assert.equal(churnPlan.summary.codexAdvisor.status, "ready");
+  assert.equal(churnPlan.summary.codexAdvisor.recommendations[0].actionCode, "continuous-worker-prompt-probe");
+  assert.equal(churnPlan.summary.codexAdvisor.recommendations[0].recommendedResponse, "park_or_degrade_capability");
+  assert.equal(churnPlan.summary.codexAdvisor.recommendations[0].rawPayloadRetained, false);
+  assert.equal(churnPlan.nextActions[0].code, "continuous-codex-advisor-packet-ready");
+  assert.match(churnPlan.nextActions[0].nextAction, /manager-codex-advisor-packet\.mjs/);
+  assert.equal(churnPlan.warnings.some((warning) => warning.code === "self_fix_churn"), true);
+  assert.equal(churnPlan.warnings.some((warning) => warning.code === "continuous-codex-advisor-recommended"), true);
+  assert.doesNotMatch(JSON.stringify(churnPlan.summary.codexAdvisor), /raw prompt|provider payload|sk-testtoken/i);
+});
+
+test("manager capability posture persists and can be cleared by fresh evidence", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-capability-posture-"));
+  try {
+    const initial = buildManagerCapabilityPosture(
+      {},
+      {
+        managerCapabilityPosture: {
+          tmuxWorkerMutation: {
+            state: "parked",
+            reasonCodes: ["self_fix_churn"],
+            safeFallbacks: ["dispatch_apply_existing_gates"],
+          },
+        },
+      },
+      {},
+    );
+    const write = writeManagerCapabilityPosture(initial.summary, { runId: "manager-test", stateRoot });
+    assert.equal(write.status, "ready");
+    assert.match(write.summary.path, /capability-posture\.json$/);
+    const persistedRecord = JSON.parse(readFileSync(write.summary.path, "utf8"));
+    assert.equal(persistedRecord.schemaVersion, "manager_capability_posture.v1");
+    assert.equal(persistedRecord.rawPayloadRetained, false);
+    assert.equal(
+      readdirSync(join(stateRoot, "manager-runs", "manager-test")).filter((name) => name.includes("capability-posture.json.") && name.endsWith(".tmp")).length,
+      0,
+    );
+
+    const read = readManagerCapabilityPosture({ runId: "manager-test", stateRoot });
+    assert.equal(read.status, "ready");
+    assert.equal(read.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+    assert.doesNotMatch(JSON.stringify(read.summary), /raw prompt|provider payload|sk-testtoken/i);
+
+    const persistedHold = buildContinuousRunPlan(
+      { runId: "manager-test", stateRoot },
+      {
+        persistedManagerCapabilityPosture: read.summary.managerCapabilityPosture,
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test", stateRoot },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+            continuation: { workerMutationAllowed: true },
+          },
+          warnings: [],
+          nextActions: [],
+        },
+        promptProbe: {
+          status: "attention",
+          summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+          warnings: [],
+          nextActions: [
+            {
+              code: "worker-prompt-probe-submit-ready",
+              summary: "Submit pending manager pointer.",
+              nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(persistedHold.summary.selectedAction, null);
+    assert.equal(persistedHold.summary.capabilityHolds.heldActions[0].managerCapability, "tmuxWorkerMutation");
+
+    const heldDespiteCycleEvidence = buildContinuousRunPlan(
+      { runId: "manager-test", stateRoot },
+      {
+        persistedManagerCapabilityPosture: read.summary.managerCapabilityPosture,
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test", stateRoot },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+            continuation: { workerMutationAllowed: true },
+            managerCapabilityPosture: {
+              tmuxWorkerMutation: {
+                state: "enabled",
+                reasonCodes: ["prompt_probe_receipt_verified"],
+                safeFallbacks: ["normal_worker_mutation_gates"],
+              },
+            },
+          },
+          warnings: [],
+          nextActions: [],
+        },
+        promptProbe: {
+          status: "attention",
+          summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+          warnings: [],
+          nextActions: [
+            {
+              code: "worker-prompt-probe-submit-ready",
+              summary: "Submit pending manager pointer.",
+              nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(heldDespiteCycleEvidence.summary.selectedAction, null);
+    assert.equal(heldDespiteCycleEvidence.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+    assert.equal(heldDespiteCycleEvidence.summary.capabilityHolds.heldActions[0].managerCapability, "tmuxWorkerMutation");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("cycle self-repair summary replays ledger attempts into continuous churn budget", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-self-repair-cycle-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    for (const key of ["self-repair-cycle-1", "self-repair-cycle-2"]) {
+      const append = ledgerCommand({
+        command: "append-event",
+        runId: "manager-test",
+        stateRoot,
+        eventType: "manager_self_repair_attempt",
+        summary: "Prompt probe repair attempt.",
+        authorityBasis: "manager-owned-worker-enter-only-repair-existing-gates",
+        recoveryPath: "classify self repair churn before adding handlers",
+        advisorActionCode: "continuous-worker-prompt-probe",
+        advisorWorkClass: "direct_unblock_repair",
+        capabilityName: "tmuxWorkerMutation",
+        sourceRefs: ["manager:continuous-run"],
+        evidenceRefs: ["self-repair:continuous-worker-prompt-probe"],
+        idempotencyKey: key,
+      });
+      assert.equal(append.status, "ready");
+    }
+
+    const cycle = buildCyclePacket(
+      { runId: "manager-test", stateRoot },
+      {
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        preflightStatus: {
+          ok: true,
+          status: "ready",
+          summary: {
+            repo: {},
+            branch: {},
+            githubCli: {},
+            workspaceProtocol: {},
+            dispatcher: { status: "ready" },
+            ledger: { status: "ready" },
+          },
+          blockers: [],
+          warnings: [],
+        },
+        workerStatus: { status: "ready", summary: { workerCounts: { active: 1, warm: 0, paused: 0 }, workers: [] }, blockers: [], warnings: [] },
+        workerProgressStatus: { status: "ready", summary: { workerProgress: [] }, blockers: [], warnings: [], nextActions: [] },
+        laneAdvanceStatus: { status: "ready", summary: { readyLaneCount: 0 }, blockers: [], warnings: [], nextActions: [] },
+        dispatchPreview: { status: "ready", counts: { dispatchable: 0, active: 1 }, allowed: false, blockers: [], warnings: [] },
+        cleanupPlan: { status: "ready", summary: { state: "not_requested" }, blockers: [], warnings: [], nextActions: [] },
+      },
+    );
+    assert.equal(cycle.summary.selfRepair.attemptsByAction["continuous-worker-prompt-probe"], 2);
+    assert.equal(cycle.summary.selfRepair.rawPayloadRetained, false);
+
+    const plan = buildContinuousRunPlan(
+      {},
+      {
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test", stateRoot },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+            selfRepair: cycle.summary.selfRepair,
+            continuation: { workerMutationAllowed: true },
+          },
+          warnings: [],
+          nextActions: [],
+        },
+        promptProbe: {
+          status: "attention",
+          summary: { probes: [{ workerId: "codex-1", promptDetected: true, inputHasManagerPointer: true }] },
+          warnings: [],
+          nextActions: [
+            {
+              code: "worker-prompt-probe-submit-ready",
+              summary: "Submit pending manager pointer.",
+              nextAction: "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply",
+            },
+          ],
+        },
+      },
+    );
+
+    assert.equal(plan.summary.selectedAction, null);
+    assert.equal(plan.summary.usefulWorkPolicy.parkedSelfRepair[0].code, "self_fix_churn");
+    assert.equal(plan.summary.codexAdvisor.status, "ready");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager capability posture CLI previews, applies, clears, and rejects raw refs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-capability-cli-"));
+  try {
+    const showDefault = buildManagerCapabilityPostureControlPlan({ runId: "manager-test", stateRoot, command: "show" });
+    assert.equal(showDefault.status, "ready");
+    assert.equal(showDefault.summary.postureSource, "default");
+    assert.equal(showDefault.summary.mutation, "none; read-only capability posture summary");
+
+    const dryRunSet = buildManagerCapabilityPostureControlPlan({
+      runId: "manager-test",
+      stateRoot,
+      command: "set",
+      capabilityName: "dispatchApply",
+      capabilityState: "parked",
+      capabilityReasonCodes: ["dispatch_claim_churn"],
+      capabilitySafeFallbacks: ["source_owned_refill_planning"],
+      sourceRefs: ["operator:capability-posture"],
+      evidenceRefs: ["evidence:dispatch-dry-run-loop"],
+    });
+    assert.equal(dryRunSet.status, "ready");
+    assert.equal(dryRunSet.summary.applyRequired, true);
+    assert.equal(dryRunSet.summary.plannedPosture.parkedCapabilities.includes("dispatchApply"), true);
+    assert.equal(existsSync(join(stateRoot, "manager-runs", "manager-test", "capability-posture.json")), false);
+
+    const appliedSet = buildManagerCapabilityPostureControlPlan({
+      runId: "manager-test",
+      stateRoot,
+      command: "set",
+      apply: true,
+      capabilityName: "dispatchApply",
+      capabilityState: "parked",
+      capabilityReasonCodes: ["dispatch_claim_churn"],
+      capabilitySafeFallbacks: ["source_owned_refill_planning"],
+      sourceRefs: ["operator:capability-posture"],
+      evidenceRefs: ["evidence:dispatch-dry-run-loop"],
+    });
+    assert.equal(appliedSet.status, "ready");
+    assert.equal(appliedSet.summary.managerCapabilityPosture.parkedCapabilities.includes("dispatchApply"), true);
+    const persisted = JSON.parse(readFileSync(join(stateRoot, "manager-runs", "manager-test", "capability-posture.json"), "utf8"));
+    assert.equal(persisted.lastChange.capability, "dispatchApply");
+    assert.deepEqual(persisted.lastChange.evidenceRefs, ["evidence:dispatch-dry-run-loop"]);
+    assert.equal(persisted.lastChange.rawPayloadRetained, false);
+
+    const clear = buildManagerCapabilityPostureControlPlan({
+      runId: "manager-test",
+      stateRoot,
+      command: "clear",
+      apply: true,
+      capabilityName: "dispatchApply",
+      capabilityReasonCodes: ["dispatch_claim_verified"],
+      sourceRefs: ["operator:capability-posture"],
+      evidenceRefs: ["evidence:dispatch-claim-ok"],
+    });
+    assert.equal(clear.status, "ready");
+    assert.equal(clear.summary.managerCapabilityPosture.parkedCapabilities.includes("dispatchApply"), false);
+    assert.equal(clear.summary.managerCapabilityPosture.capabilities.dispatchApply.state, "enabled");
+
+    const rawRef = buildManagerCapabilityPostureControlPlan({
+      runId: "manager-test",
+      stateRoot,
+      command: "set",
+      apply: true,
+      capabilityName: "tmuxWorkerMutation",
+      capabilityState: "blocked",
+      capabilityReasonCodes: ["raw_ref_test"],
+      capabilitySafeFallbacks: ["dispatch_apply_existing_gates"],
+      evidenceRefs: ["raw prompt transcript sk-testtoken"],
+    });
+    assert.equal(rawRef.status, "blocked");
+    assert.equal(rawRef.blockers.some((blocker) => blocker.code === "capability-posture-raw-ref-rejected"), true);
+    assert.doesNotMatch(JSON.stringify(rawRef.summary), /sk-testtoken|raw prompt transcript/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager capability posture mutation blocks when persisted posture is unreadable", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-capability-corrupt-"));
+  try {
+    const posturePath = join(stateRoot, "manager-runs", "manager-test", "capability-posture.json");
+    mkdirSync(join(posturePath, ".."), { recursive: true });
+    writeFileSync(posturePath, "{not-json");
+
+    const read = readManagerCapabilityPosture({ runId: "manager-test", stateRoot });
+    assert.equal(read.status, "warning");
+    assert.equal(read.summary.managerCapabilityPosture, null);
+
+    const show = buildManagerCapabilityPostureControlPlan({ runId: "manager-test", stateRoot, command: "show" });
+    assert.equal(show.status, "ready");
+    assert.equal(show.summary.postureSource, "default");
+
+    const set = buildManagerCapabilityPostureControlPlan({
+      runId: "manager-test",
+      stateRoot,
+      command: "set",
+      apply: true,
+      capabilityName: "tmuxWorkerMutation",
+      capabilityState: "parked",
+      capabilityReasonCodes: ["corrupt_state_guard"],
+      capabilitySafeFallbacks: ["dispatch_apply_existing_gates"],
+      evidenceRefs: ["evidence:capability-posture-corrupt"],
+    });
+    assert.equal(set.status, "blocked");
+    assert.equal(set.summary.mutation, "none");
+    assert.equal(set.blockers[0].code, "capability-posture-read-unverified");
+    assert.equal(readFileSync(posturePath, "utf8"), "{not-json");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("continuous run loop requires machine-readable summary JSON for selected commands", () => {
   const runLoopSource = readFileSync(new URL("../scripts/manager-run-loop.mjs", import.meta.url), "utf8");
   assert.match(runLoopSource, /workspaceDispatchApply/);
+  assert.match(runLoopSource, /readManagerCapabilityPosture/);
+  assert.match(runLoopSource, /writeManagerCapabilityPosture/);
+  assert.match(runLoopSource, /capabilityPosturePersistence/);
+  assert.match(runLoopSource, /capability-posture-read-unverified/);
+  assert.match(runLoopSource, /phase:\s*"capability-posture-read"/);
+  assert.match(runLoopSource, /self-repair-attempt-record-failed/);
+  assert.match(runLoopSource, /!selfRepairAttempt\.ok/);
   assert.match(runLoopSource, /!workspaceDispatchApply && !args\.includes\("--summary-json"\)/);
   assert.match(runLoopSource, /Continuous command must emit --summary-json/);
   assert.match(runLoopSource, /Continuous command did not emit parseable summary JSON/);
@@ -12781,6 +15607,74 @@ test("progress beacon reports queue lease posture and explicit adaptive heartbea
   assert.equal(healthy.summary.heartbeat.cadence.trigger, "routine_liveness");
   assert.equal(healthy.summary.heartbeat.cadence.resumeCondition, "continue while usage and resources remain normal");
   assert.match(healthy.summary.heartbeat.text, /queue 4 queued \/ 2 leased \/ 2 running \/ 0 blocked/);
+
+  const defaultCapabilityPosture = buildProgressBeaconPlan(
+    { runId: "manager-test" },
+    {
+      runState: "active",
+      usageState: "normal",
+      resourceState: "normal",
+      operatorActionState: "none",
+      managerCapabilityPosture: buildManagerCapabilityPosture({}, {}, {}).summary,
+    },
+  );
+  assert.deepEqual(defaultCapabilityPosture.summary.heartbeat.capabilityPosture.blocked, []);
+  assert.doesNotMatch(defaultCapabilityPosture.summary.heartbeat.text, /capabilities/);
+  assert.equal(defaultCapabilityPosture.summary.heartbeat.capabilityPosture.text, "none");
+
+  const changedCleanupPosture = buildProgressBeaconPlan(
+    { runId: "manager-test" },
+    {
+      runState: "active",
+      usageState: "normal",
+      resourceState: "normal",
+      operatorActionState: "none",
+      managerCapabilityPosture: buildManagerCapabilityPosture(
+        {},
+        {
+          managerCapabilityPosture: {
+            cleanupApply: {
+              state: "blocked",
+              reasonCodes: ["operator_reconfirmed_cleanup_gate"],
+              safeFallbacks: ["cleanup_dry_run_only"],
+            },
+          },
+        },
+        {},
+      ).summary,
+    },
+  );
+  assert.deepEqual(changedCleanupPosture.summary.heartbeat.capabilityPosture.blocked, ["cleanupApply"]);
+  assert.match(changedCleanupPosture.summary.heartbeat.text, /capabilities 1 blocked \(cleanupApply\)/);
+
+  const capabilityPosture = buildProgressBeaconPlan(
+    { runId: "manager-test" },
+    {
+      runState: "active",
+      usageState: "normal",
+      resourceState: "normal",
+      operatorActionState: "none",
+      managerCapabilityPosture: {
+        parkedCapabilities: ["tmuxWorkerMutation"],
+        degradedCapabilities: ["reviewDelegation"],
+        blockedCapabilities: ["cleanupApply"],
+        heldActions: [
+          {
+            code: "continuous-worker-prompt-probe",
+            managerCapability: "tmuxWorkerMutation",
+            state: "parked",
+            safeFallbacks: ["dispatch_apply_existing_gates"],
+          },
+        ],
+      },
+    },
+  );
+  assert.deepEqual(capabilityPosture.summary.heartbeat.capabilityPosture.parked, ["tmuxWorkerMutation"]);
+  assert.deepEqual(capabilityPosture.summary.heartbeat.capabilityPosture.degraded, ["reviewDelegation"]);
+  assert.deepEqual(capabilityPosture.summary.heartbeat.capabilityPosture.blocked, ["cleanupApply"]);
+  assert.equal(capabilityPosture.summary.heartbeat.capabilityPosture.heldActions[0].managerCapability, "tmuxWorkerMutation");
+  assert.match(capabilityPosture.summary.heartbeat.text, /capabilities 1 parked \(tmuxWorkerMutation\) \/ 1 degraded \(reviewDelegation\) \/ 1 blocked \(cleanupApply\)/);
+  assert.doesNotMatch(JSON.stringify(capabilityPosture.summary.heartbeat), /raw prompt|provider payload|sk-testtoken/i);
 
   const troubleshooting = buildProgressBeaconPlan(
     { runId: "manager-test" },
@@ -13919,6 +16813,127 @@ test("worker friction model routing is plan-only and does not mutate worker or d
   assert.equal(JSON.stringify(workerRecords), beforeWorkers);
   assert.equal(JSON.stringify(dispatcherState), beforeDispatcher);
   assert.equal(tmuxCalled, false);
+});
+
+test("Codex advisor packet classifies novel manager friction without provider calls or code edits", () => {
+  const known = buildCodexAdvisorPacketPlan(
+    {
+      runId: "manager-test",
+      advisorCondition: "prompt repair variant",
+      advisorActionCode: "continuous-worker-prompt-probe",
+      advisorWorkClass: "direct_unblock_repair",
+      summary: "Prompt repair shape changed but safe dispatch can continue.",
+      sourceRefs: ["assignment:lane-a", "worker:codex-1"],
+      evidenceRefs: ["events.ndjson", "checkpoint:lane-a"],
+    },
+    { safeTaskWorkAvailable: true },
+  );
+
+  assert.equal(known.status, "ready");
+  assert.equal(known.summary.requestPacket.mutationMode, "none; advisor packet only");
+  assert.equal(known.summary.requestPacket.condition.existingHandler.handler, "manager-worker-prompt-probe");
+  assert.equal(known.summary.requestPacket.taskContinuity.recommendedResponse, "use_existing_handler_if_it_directly_unblocks_task_work");
+  assert.ok(known.summary.requestPacket.inputContract.forbiddenOutputs.includes("code_patch"));
+  assert.ok(known.summary.requestPacket.stopLines.includes("do_not_call_provider_from_manager"));
+  assert.doesNotMatch(JSON.stringify(known.summary), /sk-advisor-secret|raw prompt transcript|provider payload body/i);
+
+  const novel = buildCodexAdvisorPacketPlan(
+    {
+      runId: "manager-test",
+      advisorCondition: "slightly different manager issue",
+      advisorFailureKind: "unknown-manager-friction",
+      summary: "No existing handler should be invented during the run.",
+      sourceRefs: ["manager:continuous-run"],
+      evidenceRefs: ["events.ndjson"],
+    },
+    { safeTaskWorkAvailable: true },
+  );
+
+  assert.equal(novel.status, "ready");
+  assert.equal(novel.summary.requestPacket.condition.issueClass, "novel_manager_friction");
+  assert.equal(novel.summary.requestPacket.taskContinuity.recommendedResponse, "continue_task_work_and_record_future_manager_improvement");
+  assert.equal(novel.warnings[0].code, "codex-advisor-no-existing-handler");
+
+  const blocked = buildCodexAdvisorPacketPlan({
+    runId: "manager-test",
+    advisorCondition: "novel manager issue",
+    evidenceRefs: ["raw prompt transcript sk-advisor-secret"],
+    apply: true,
+  });
+
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.summary.requestPacket, null);
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "codex-advisor-evidence-missing"));
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "codex-advisor-forbidden-mutation"));
+});
+
+test("Codex advisor classification intake previews posture changes without self-coding", () => {
+  const classification = buildCodexAdvisorClassificationPlan({
+    runId: "manager-test",
+    command: "classify",
+    advisorCondition: "self_fix_churn continuous-worker-prompt-probe",
+    advisorRecommendation: "park_or_degrade_capability",
+    advisorFailureKind: "self_fix_churn",
+    advisorActionCode: "continuous-worker-prompt-probe",
+    advisorWorkClass: "direct_unblock_repair",
+    capabilityName: "tmuxWorkerMutation",
+    capabilityState: "parked",
+    capabilitySafeFallbacks: ["dispatch_apply_existing_gates"],
+    evidenceRefs: ["self-repair:continuous-worker-prompt-probe", "cycle:manager-test"],
+    sourceRefs: ["manager:continuous-run"],
+  });
+
+  assert.equal(classification.status, "ready");
+  assert.equal(classification.summary.mutationMode, "none; advisor classification intake only");
+  assert.equal(classification.summary.posturePatch.tmuxWorkerMutation.state, "parked");
+  assert.equal(classification.summary.posturePreview.plannedPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+  assert.equal(classification.nextActions[0].code, "codex-advisor-posture-preview-ready");
+  assert.match(classification.nextActions[0].nextAction, /manager-capability-posture\.mjs/);
+  assert.match(classification.nextActions[0].nextAction, /--apply/);
+  assert.doesNotMatch(JSON.stringify(classification.summary), /raw prompt|provider payload|sk-testtoken/i);
+
+  const posture = buildManagerCapabilityPosture(
+    {},
+    {
+      persistedManagerCapabilityPosture: {
+        tmuxWorkerMutation: {
+          state: "enabled",
+          reasonCodes: ["previously_verified"],
+          safeFallbacks: ["normal_worker_mutation_gates"],
+        },
+      },
+      codexAdvisorClassification: classification.summary,
+    },
+    {},
+  );
+  assert.equal(posture.summary.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+  assert.equal(posture.summary.capabilities.tmuxWorkerMutation.reasonCodes.includes("codex_advisor_park_or_degrade_capability"), true);
+
+  const future = buildCodexAdvisorClassificationPlan({
+    runId: "manager-test",
+    command: "classify",
+    advisorCondition: "novel manager issue",
+    advisorRecommendation: "future_manager_improvement",
+    evidenceRefs: ["evidence:advisor-classification"],
+  });
+  assert.equal(future.status, "ready");
+  assert.equal(future.nextActions[0].code, "codex-advisor-record-future-work");
+  assert.equal(future.summary.posturePatch, null);
+
+  const blocked = buildCodexAdvisorClassificationPlan({
+    runId: "manager-test",
+    command: "classify",
+    advisorCondition: "novel manager issue",
+    advisorRecommendation: "park_or_degrade_capability",
+    capabilityName: "tmuxWorkerMutation",
+    capabilityState: "parked",
+    capabilitySafeFallbacks: ["dispatch_apply_existing_gates"],
+    evidenceRefs: ["raw prompt transcript sk-testtoken"],
+    apply: true,
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "codex-advisor-classification-raw-ref-rejected"));
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "codex-advisor-classification-forbidden-mutation"));
 });
 
 function deliveryLaneFixture(overrides = {}) {
@@ -16380,6 +19395,13 @@ test("cycle packet includes bounded preflight readiness without raw logs", () =>
           tmuxResult: { ok: true, panes: [], error: "" },
           workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
         },
+        managerCapabilityPosture: {
+          tmuxWorkerMutation: {
+            state: "parked",
+            reasonCodes: ["operator_parked_for_visibility_test"],
+            safeFallbacks: ["dispatch_apply_existing_gates"],
+          },
+        },
         gitRunner: () => ({ status: 0, stdout: "dev\n", stderr: "" }),
         ghRunner: () => ({ status: 127, stdout: "", stderr: "not installed" }),
       },
@@ -16387,8 +19409,14 @@ test("cycle packet includes bounded preflight readiness without raw logs", () =>
     assert.equal(cycle.summary.preflight.status, "blocked");
     assert.equal(cycle.summary.preflight.mutation, "none; read-only preflight summary");
     assert.equal(cycle.summary.preflight.rawPayloadRetained, false);
+    assert.equal(cycle.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
+    assert.deepEqual(cycle.summary.managerCapabilityStatus.parked, ["tmuxWorkerMutation"]);
+    assert.deepEqual(cycle.summary.progress.heartbeat.capabilityPosture.parked, ["tmuxWorkerMutation"]);
+    assert.match(cycle.summary.progress.heartbeat.text, /capabilities 1 parked \(tmuxWorkerMutation\)/);
+    assert.match(cycle.summary.report, /capabilities 1 parked \(tmuxWorkerMutation\)/);
     assert.ok(cycle.blockers.some((blocker) => blocker.code?.startsWith("preflight-dispatcher-") || blocker.code?.startsWith("ledger-file-")));
     assert.doesNotMatch(JSON.stringify(cycle.summary.preflight), /raw prompt|provider payload|transcript|sk-testtoken/i);
+    assert.doesNotMatch(JSON.stringify(cycle.summary.progress.heartbeat), /raw prompt|provider payload|transcript|sk-testtoken/i);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -16442,6 +19470,74 @@ test("ledger init and append-event write only manager-owned runtime state", () =
     assert.equal(duplicate.status, "ready");
     assert.equal(duplicate.summary.duplicateIgnored, true);
 
+    const delegatedReview = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "worker_code_review_request_apply",
+      summary: "Delegated code review to codex-2.",
+      authorityBasis: "manager-owned-worker-code-review-delegation-existing-gates",
+      recoveryPath: "monitor compact findings",
+      sourceRefs: ["assignment:story-2-3", "worker:codex-2"],
+      evidenceRefs: ["review-request:path", "review-result:path"],
+      idempotencyKey: "code-review-1",
+    });
+    assert.equal(delegatedReview.status, "ready");
+    assert.equal(delegatedReview.summary.event.eventName, "manager.ledger.appended");
+    assert.equal(delegatedReview.summary.event.eventType, "worker_code_review_request_apply");
+
+    const reviewFeedback = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "worker_review_feedback_apply",
+      summary: "Sent review feedback to codex-5.",
+      authorityBasis: "manager-owned-worker-review-feedback-existing-gates",
+      recoveryPath: "wait for newer compact checkpoint",
+      sourceRefs: ["assignment:story-2-3", "worker:codex-5"],
+      evidenceRefs: ["review-feedback:path"],
+      idempotencyKey: "review-feedback-1",
+    });
+    assert.equal(reviewFeedback.status, "ready");
+    assert.equal(reviewFeedback.summary.event.eventName, "manager.ledger.appended");
+    assert.equal(reviewFeedback.summary.event.eventType, "worker_review_feedback_apply");
+
+    for (const key of ["self-repair-1", "self-repair-2"]) {
+      const selfRepair = ledgerCommand({
+        command: "append-event",
+        runId: "manager-test",
+        stateRoot,
+        eventType: "manager_self_repair_attempt",
+        summary: "Selected prompt probe repair.",
+        authorityBasis: "manager-owned-worker-enter-only-repair-existing-gates",
+        recoveryPath: "classify self repair churn before adding handlers",
+        advisorActionCode: "continuous-worker-prompt-probe",
+        advisorWorkClass: "direct_unblock_repair",
+        capabilityName: "tmuxWorkerMutation",
+        sourceRefs: ["manager:continuous-run"],
+        evidenceRefs: ["self-repair:continuous-worker-prompt-probe"],
+        idempotencyKey: key,
+      });
+      assert.equal(selfRepair.status, "ready");
+      assert.equal(selfRepair.summary.event.eventName, "manager.self_repair.attempted");
+      assert.equal(selfRepair.summary.event.actionCode, "continuous-worker-prompt-probe");
+      assert.equal(selfRepair.summary.event.managerCapability, "tmuxWorkerMutation");
+    }
+
+    const finalSteering = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Resume active manager steering after worker review events.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:2.3"],
+      evidenceRefs: ["evidence:steering-final"],
+      idempotencyKey: "steering-2",
+    });
+    assert.equal(finalSteering.status, "ready");
+
     const unknown = ledgerCommand({
       command: "append-event",
       runId: "manager-test",
@@ -16458,15 +19554,24 @@ test("ledger init and append-event write only manager-owned runtime state", () =
 
     const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8");
     assert.match(events, /manager\.run\.steered/);
-    assert.equal(events.trim().split("\n").length, 1);
+    assert.match(events, /worker_code_review_request_apply/);
+    assert.match(events, /worker_review_feedback_apply/);
+    assert.match(events, /manager\.self_repair\.attempted/);
+    assert.equal(events.trim().split("\n").length, 6);
 
     const read = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
     assert.equal(read.status, "ready");
     assert.equal(read.summary.replaySummary.runId, "manager-test");
     assert.equal(read.summary.replaySummary.controlState, "active");
-    assert.equal(read.summary.replaySummary.eventWatermark, append.summary.event.eventId);
+    assert.equal(read.summary.replaySummary.eventWatermark, finalSteering.summary.event.eventId);
+    assert.equal(read.summary.replaySummary.selfRepair.attemptsByAction["continuous-worker-prompt-probe"], 2);
     assert.equal(read.summary.replaySummary.nextSafeAction, "reconcile_dispatcher_summary");
     assert.equal(read.summary.replaySummary.rawPayloadRetained, false);
+
+    const selfRepairSummary = buildManagerSelfRepairSummary({ runId: "manager-test", stateRoot });
+    assert.equal(selfRepairSummary.status, "ready");
+    assert.equal(selfRepairSummary.summary.attemptsByAction["continuous-worker-prompt-probe"], 2);
+    assert.equal(selfRepairSummary.summary.rawPayloadRetained, false);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -16899,6 +20004,192 @@ test("resume treats unmanaged tmux panes as orientation evidence instead of muta
     assert.equal(resume.status, "ready");
     assert.equal(resume.summary.tmux.unmanagedPanes, 1);
     assert.ok(!resume.blockers.some((blocker) => blocker.code === "tmux-unmanaged-panes"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("review feedback can target an explicitly scoped checkpoint-blocked worker", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-feedback-blocked-"));
+  const findingsPath = join(stateRoot, "manager-runs", "manager-test", "review-results", "story-1-2.md");
+  try {
+    mkdirSync(join(stateRoot, "manager-runs", "manager-test", "review-results"), { recursive: true });
+    writeFileSync(findingsPath, "# Review Findings\n\nStatus: FAIL\n\n- [Review][Patch] Fix fabricated gate evidence.\n");
+    const scoped = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        assignmentId: "story-1-2",
+        reviewFindingsFile: findingsPath,
+      },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "story-1-2",
+                taskId: "task-story-1-2",
+                progressState: "checkpoint_blocked",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(scoped.status, "ready");
+    assert.equal(scoped.summary.planned, 1);
+    assert.equal(scoped.summary.requests[0].assignmentId, "story-1-2");
+    assert.match(scoped.summary.requests[0].pasteText, /^Start review-feedback fixes now\./);
+
+    const unscoped = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        reviewFindingsFile: findingsPath,
+      },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "story-1-2",
+                taskId: "task-story-1-2",
+                progressState: "checkpoint_blocked",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(unscoped.status, "ready");
+    assert.equal(unscoped.summary.requests.length, 0);
+    assert.equal(unscoped.warnings[0].code, "review-feedback-no-target-worker");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("review feedback rejects unsafe findings bodies and explicit external worker owners", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-feedback-retention-"));
+  const resultsRoot = join(stateRoot, "manager-runs", "manager-test", "review-results");
+  const safeFindingsPath = join(resultsRoot, "story-1-3.md");
+  const unsafeFindingsPath = join(resultsRoot, "story-1-4.md");
+  try {
+    mkdirSync(resultsRoot, { recursive: true });
+    writeFileSync(safeFindingsPath, "# Review Findings\n\nStatus: FAIL\n\n- [High] Fix missing assertion at `src/app.js:12`.\n");
+    writeFileSync(unsafeFindingsPath, "# Review Findings\n\nStatus: FAIL\n\nraw prompt transcript sk-testtoken provider payload\n");
+
+    const progressStatus = {
+      summary: {
+        workerProgress: [
+          {
+            workerId: "codex-2",
+            sessionName: "codex-2",
+            assignmentId: "story-1-3",
+            taskId: "task-story-1-3",
+            progressState: "checkpoint_blocked",
+            owner: "other-manager/codex-2",
+            runId: "other-manager",
+          },
+        ],
+      },
+    };
+
+    const unsafe = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        assignmentId: "story-1-4",
+        reviewFindingsFile: unsafeFindingsPath,
+      },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-4",
+                sessionName: "codex-4",
+                assignmentId: "story-1-4",
+                taskId: "task-story-1-4",
+                progressState: "checkpoint_blocked",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(unsafe.status, "blocked");
+    assert.equal(unsafe.blockers[0].code, "review-feedback-findings-retention-unsafe");
+    assert.doesNotMatch(JSON.stringify(unsafe), /sk-testtoken|provider payload|raw prompt transcript/i);
+
+    const external = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        assignmentId: "story-1-3",
+        reviewFindingsFile: safeFindingsPath,
+      },
+      { progressStatus },
+    );
+
+    assert.equal(external.status, "ready");
+    assert.equal(external.summary.requests.length, 0);
+    assert.equal(external.warnings[0].code, "review-feedback-no-target-worker");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("review feedback apply validates metadata before tmux mutation", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-feedback-apply-preflight-"));
+  const resultsRoot = join(stateRoot, "manager-runs", "manager-test", "review-results");
+  const findingsPath = join(resultsRoot, "bmad-8-19-review-feedback-preflight.md");
+  try {
+    mkdirSync(resultsRoot, { recursive: true });
+    writeFileSync(findingsPath, "# Review Findings\n\nStatus: FAIL\n\n- [High] Fix missing assertion at `src/app.js:12`.\n");
+    const tmuxCalls = [];
+
+    const applied = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        assignmentId: "bmad-8-19-review-feedback-preflight",
+        reviewFindingsFile: findingsPath,
+        apply: true,
+      },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "bmad-8-19-review-feedback-preflight",
+                taskId: "task-story-8-19",
+                progressState: "checkpoint_blocked",
+              },
+            ],
+          },
+        },
+        tmuxRunner: (cmd, args) => {
+          tmuxCalls.push({ cmd, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.summary.mutation, "none");
+    assert.equal(applied.blockers[0].code, "review-feedback-lane-owner-missing");
+    assert.deepEqual(tmuxCalls, []);
+    assert.equal(existsSync(join(stateRoot, "manager-runs", "manager-test", "review-feedback")), false);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }

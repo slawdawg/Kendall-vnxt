@@ -690,7 +690,7 @@ function buildCoordinationReportPacket(options = {}) {
 
   const manifestBranchStates = workspaceBranchStates(manifests);
   const assignmentBranchStates = assignmentBranchStatesByBranch(assignments);
-  const backlogItems = readSafeBacklogItems();
+  const backlogItems = readSafeBacklogItems({ stateRootPath: state.root });
   const claimEvaluations = backlogItems.map((item) =>
     evaluateClaimCandidate(item, manifests, assignments, {
       currentOwner,
@@ -911,7 +911,7 @@ function assignmentReport(argv) {
   const generatedAt = new Date();
   const manifests = readManifests(state).map(({ manifest }) => manifest);
   const assignments = readAssignments(state).map(({ assignment }) => assignment);
-  const backlogItems = readSafeBacklogItems();
+  const backlogItems = readSafeBacklogItems({ stateRootPath: state.root });
   const manifestBranchStates = workspaceBranchStates(manifests);
   const assignmentBranchStates = assignmentBranchStatesByBranch(assignments);
   const context = {
@@ -1126,7 +1126,7 @@ function claimNext(argv) {
   const generatedAt = new Date();
   const manifests = readManifests(state).map(({ manifest }) => manifest);
   const assignments = readAssignments(state).map(({ assignment }) => assignment);
-  const backlogItems = readSafeBacklogItems();
+  const backlogItems = readSafeBacklogItems({ stateRootPath: state.root });
   const evaluations = backlogItems.map((item) =>
     evaluateClaimCandidate(item, manifests, assignments, {
       currentOwner,
@@ -1141,6 +1141,7 @@ function claimNext(argv) {
     currentOwner,
     generatedAt,
     staleAfterSeconds,
+    mode: "claim-next",
   });
 
   const plan = [
@@ -1257,8 +1258,14 @@ function buildAssignmentPreview({ selected, currentOwner, mode, blockedReasons =
   };
 }
 
-function applyCurrentOwnerSessionBounds({ evaluations, manifests, assignments, currentOwner, generatedAt, staleAfterSeconds }) {
+function applyCurrentOwnerSessionBounds({ evaluations, manifests, assignments, currentOwner, generatedAt, staleAfterSeconds, mode }) {
   const selectedCandidate = selectClaimableEvaluation(evaluations);
+  if (mode === "dispatch-next" && isManagerDispatcherOwner(currentOwner)) {
+    return {
+      selected: selectedCandidate,
+      evaluations,
+    };
+  }
   const boundedSessionBlockers = currentOwnerActiveLaneEvidence({ manifests, assignments, currentOwner, generatedAt, staleAfterSeconds })
     .filter((evidence) => !currentOwnerEvidenceIsClosedSource(evidence, evaluations))
     .filter((evidence) => !selectedMatchesCurrentOwnerEvidence(selectedCandidate, evidence))
@@ -1267,6 +1274,10 @@ function applyCurrentOwnerSessionBounds({ evaluations, manifests, assignments, c
     selected: boundedSessionBlockers.length > 0 ? null : selectedCandidate,
     evaluations: [...boundedSessionBlockers, ...evaluations],
   };
+}
+
+function isManagerDispatcherOwner(owner) {
+  return /^manager-[A-Za-z0-9._-]+\/dispatcher$/.test(String(owner || ""));
 }
 
 function currentOwnerActiveLaneEvidence({ manifests, assignments, currentOwner, generatedAt, staleAfterSeconds }) {
@@ -1407,6 +1418,11 @@ function summarizeClaimEvaluation(evaluation) {
     itemId: evaluation.item.itemId,
     sourceStatus: evaluation.item.status || "unknown",
     priority: evaluation.item.priority || null,
+    sourceType: evaluation.item.sourceType || null,
+    sourceKey: evaluation.item.sourceKey || null,
+    sourceRef: evaluation.item.sourceRef || null,
+    sourcePath: evaluation.item.sourcePath || null,
+    storyPath: evaluation.item.storyPath || null,
     status: evaluation.status,
     claimable: evaluation.claimable,
     branch: evaluation.item.branchName || null,
@@ -1675,10 +1691,6 @@ function dispatchNext(argv) {
   if (!options.apply && !options.dryRun) {
     throw new Error("dispatch-next requires either --dry-run or --apply.");
   }
-  if (options.summaryJson && !options.dryRun) {
-    throw new Error("dispatch-next --summary-json is only supported with --dry-run.");
-  }
-
   const readinessProfile = normalizeDispatchReadinessProfile(options.readiness || "doctor");
   const state = workspaceState(options);
   const currentOwner = currentLaneOwner(options);
@@ -1705,12 +1717,20 @@ function dispatchNext(argv) {
   }
 
   if (!plan.packet.allowed) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildDispatchNextBlockedApplySummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan }), null, 2));
+      return;
+    }
     printDispatchPacket("BLOCKED", plan.packet);
     printClaimBlockers(plan.evaluations, plan.selected);
     throw new Error("No dispatchable safe backlog lane found.");
   }
 
   const applied = applyDispatchNext(plan, context);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildDispatchNextApplySummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan, applied }), null, 2));
+    return;
+  }
   printDispatchPacket("APPLY", applied.packet);
   console.log(`Wrote: ${applied.path}`);
   if (applied.assignmentPath) {
@@ -5387,6 +5407,7 @@ function dispatchPlan(context) {
     currentOwner: context.currentOwner,
     generatedAt: context.generatedAt,
     staleAfterSeconds: context.staleAfterSeconds,
+    mode: "dispatch-next",
   });
   const selected = deliveryWorkspaceCount > 0 ? null : bounded.selected;
   const packet = dispatchPacket(selected, bounded.evaluations, context);
@@ -5400,7 +5421,7 @@ function dispatchPlan(context) {
 function dispatchCandidateEvaluations(context) {
   const manifests = readManifests(context.state).map(({ manifest }) => manifest);
   const assignments = readAssignments(context.state).map(({ assignment }) => assignment);
-  const backlogItems = readSafeBacklogItems();
+  const backlogItems = readSafeBacklogItems({ stateRootPath: context.state.root });
   const evaluations = backlogItems.map((item) =>
     evaluateClaimCandidate(item, manifests, assignments, {
       currentOwner: context.currentOwner,
@@ -5546,6 +5567,47 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
   };
 }
 
+function buildDispatchNextApplySummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan, applied }) {
+  return {
+    ok: true,
+    status: "applied",
+    currentOwner,
+    stateRoot: state.root,
+    staleAfterSeconds,
+    readinessProfile,
+    selected: plan.selected ? summarizeClaimEvaluation(plan.selected) : null,
+    dispatch: {
+      allowed: true,
+      selectedLane: applied.packet.lane,
+      branch: applied.packet.branch,
+      workspaceAction: applied.packet.workspace_action,
+      worktreePath: applied.packet.worktree_path,
+      taskId: applied.packet.task_id,
+      nextCommand: applied.packet.next_command,
+      handoff: applied.packet.handoff,
+      readiness: applied.packet.readiness,
+      stopLines: applied.packet.stop_lines,
+      authorityDecision: applied.packet.authority_decision,
+      generatedAt: applied.packet.generated_at,
+    },
+    assignmentPath: applied.assignmentPath || null,
+    manifestPath: applied.manifestPath || applied.path || null,
+    mutation: "assignment claim and workspace handoff metadata written; no worker/provider process launched",
+    mutationClass: "assignment_workspace_claim_and_handoff_metadata",
+    rawPayloadRetained: false,
+  };
+}
+
+function buildDispatchNextBlockedApplySummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan }) {
+  return {
+    ok: false,
+    status: "blocked",
+    ...buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan }),
+    mutation: "none; blocked apply made no assignment/workspace mutation",
+    rawPayloadRetained: false,
+  };
+}
+
 function dispatchNextBlockedReasons(packet) {
   const blockers = Array.isArray(packet.blockers) ? packet.blockers : [];
   if (packet.selected_lane && blockers.length === 0) {
@@ -5569,7 +5631,7 @@ function dispatchNextBlockedRequiredEvidence() {
 
 function dispatchNextActionGuidance(selected, counts = {}) {
   if (selected) {
-    return "run dispatch-next --apply after reviewing the dry-run packet";
+    return "run dispatch-next --apply with the same --owner after reviewing the dry-run packet";
   }
   if (counts.delivery > 0) {
     return "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup";
@@ -5824,13 +5886,7 @@ function createDispatchWorkspace(item, assignment, context) {
     pr_url: null,
     pr_number: null,
     source_assignment_id: assignment.assignment_id,
-    source_backlog_item: assignment.source_backlog_item || {
-      item_id: item.itemId,
-      status: item.status || null,
-      recommended_slice_size: item.recommendedSliceSize || null,
-      branch_name: item.branchName || null,
-      start_command: item.startCommand || null,
-    },
+    source_backlog_item: assignment.source_backlog_item || sourceBacklogItemRecord(item),
     created_at: now,
     updated_at: now,
     last_verified_at: null,
@@ -5876,8 +5932,11 @@ function shouldUseDetachedTestWorktreeForExistingSafeBacklogBranch(item, branch,
 }
 
 function isTemporaryWorkspaceTestState(stateRootPath) {
+  if (!stateRootPath) {
+    return false;
+  }
   const relativeToTmp = relative(resolve(tmpdir()), resolve(stateRootPath));
-  return relativeToTmp.length > 0 && !relativeToTmp.startsWith("..") && !relativeToTmp.startsWith("/");
+  return relativeToTmp === "" || (relativeToTmp.length > 0 && !relativeToTmp.startsWith("..") && !relativeToTmp.startsWith("/"));
 }
 
 function nextDispatchTaskId(state, laneSlug) {
@@ -6237,13 +6296,7 @@ function buildLaneAssignment(item, existingAssignment, options = {}) {
     current_command: existingAssignment?.current_command || null,
     last_result: existingAssignment?.last_result || null,
     heartbeat_count: Number.isInteger(existingAssignment?.heartbeat_count) ? existingAssignment.heartbeat_count + 1 : 1,
-    source_backlog_item: {
-      item_id: item.itemId,
-      status: item.status || null,
-      recommended_slice_size: item.recommendedSliceSize || null,
-      branch_name: item.branchName || null,
-      start_command: item.startCommand || null,
-    },
+    source_backlog_item: sourceBacklogItemRecord(item),
     authority_profile: existingAssignment?.authority_profile || "standard-delivery",
     stop_lines: existingAssignment?.stop_lines || stopLinesForSafeBacklogItem(item, defaultAssignmentStopLines()),
     events: [
@@ -6254,6 +6307,23 @@ function buildLaneAssignment(item, existingAssignment, options = {}) {
       ),
       taskEvent("heartbeat", `owner ${currentOwner} phase ${existingAssignment?.phase || "claimed"}`),
     ],
+  };
+}
+
+function sourceBacklogItemRecord(item) {
+  return {
+    item_id: item.itemId,
+    title: item.title || null,
+    status: item.status || null,
+    priority: item.priority || null,
+    recommended_slice_size: item.recommendedSliceSize || null,
+    branch_name: item.branchName || null,
+    start_command: item.startCommand || null,
+    source_type: item.sourceType || null,
+    source_key: item.sourceKey || null,
+    source_ref: item.sourceRef || null,
+    source_path: item.sourcePath || null,
+    story_path: item.storyPath || null,
   };
 }
 
@@ -6865,7 +6935,7 @@ function workspaceBranchStates(manifests) {
   return states;
 }
 
-function readSafeBacklogItems() {
+function readSafeBacklogItems({ stateRootPath = null } = {}) {
   const servicePath = join(repoRoot, "services", "supervisor", "src", "supervisor", "application", "service.py");
   if (!existsSync(servicePath)) {
     return [];
@@ -6878,7 +6948,7 @@ function readSafeBacklogItems() {
   }
 
   const nextLanes = readSafeBacklogNextLanes(source);
-  return reportMatch[0]
+  const staticItems = reportMatch[0]
     .split("SafeDevelopmentBacklogItemView(")
     .slice(1)
     .map((block) => {
@@ -6901,6 +6971,133 @@ function readSafeBacklogItems() {
       return item;
     })
     .filter((item) => item.itemId);
+  const itemIds = new Set(staticItems.map((item) => item.itemId));
+  const bmadItems = isTemporaryWorkspaceTestState(stateRootPath)
+    ? []
+    : readBmadReadyStoryBacklogItems().filter((item) => !itemIds.has(item.itemId));
+  return [...staticItems, ...bmadItems];
+}
+
+function readBmadReadyStoryBacklogItems() {
+  const sprintStatusPath = join(repoRoot, "_bmad-output", "implementation-artifacts", "sprint-status.yaml");
+  if (!existsSync(sprintStatusPath)) {
+    return [];
+  }
+  let content = "";
+  try {
+    content = readFileSync(sprintStatusPath, "utf8");
+  } catch {
+    return [];
+  }
+  const sourceKey = yamlScalar(content, "source_key");
+  const sourceRef = yamlScalar(content, "source_ref");
+  if (!sourceKey || !sourceRef) {
+    return [];
+  }
+
+  const storyStatuses = parseSprintDevelopmentStatuses(content);
+  return Object.entries(storyStatuses)
+    .filter(([storyKey, status]) => /^\d+-\d+-[a-z0-9-]+$/.test(storyKey) && normalizeYamlStatus(status) === "ready-for-dev")
+    .map(([storyKey]) => {
+      const storyPath = `_bmad-output/implementation-artifacts/${storyKey}.md`;
+      const absoluteStoryPath = join(repoRoot, storyPath);
+      const itemSlug = `bmad-${storyKey}`;
+      if (!existsSync(absoluteStoryPath)) {
+        return null;
+      }
+      let storyContent = "";
+      try {
+        storyContent = readFileSync(absoluteStoryPath, "utf8");
+      } catch {
+        return null;
+      }
+      return {
+        itemId: itemSlug,
+        status: "ready",
+        priority: "P3",
+        recommendedSliceSize: "story",
+        branchName: `codex/${itemSlug}`,
+        startCommand: `node ./scripts/codex-workspace.mjs start "${storyKey.replace(/-/g, " ")}" --task-id "${itemSlug}" --branch "codex/${itemSlug}"`,
+        stopLines: [
+          "no provider calls outside the active lane authority",
+          "no raw prompts, completions, reasoning traces, provider payloads, secrets, or tmux scrollback retention",
+          "no GitHub delivery mutation without the existing lane delivery gates",
+        ],
+        sourceType: "bmad_sprint_status",
+        sourceKey,
+        sourceRef,
+        sourcePath: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        storyPath,
+        title: titleFromBmadStory(storyContent, storyKey),
+      };
+    })
+    .filter(Boolean);
+}
+
+function yamlScalar(content, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(content || "").match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.*?)\\s*$`, "im"));
+  return match ? parseYamlScalarValue(match[1]) : "";
+}
+
+function parseYamlScalarValue(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return "";
+  }
+  const quote = value[0];
+  if (quote === "'" || quote === '"') {
+    let parsed = "";
+    for (let index = 1; index < value.length; index += 1) {
+      const char = value[index];
+      if (char === quote && value[index - 1] !== "\\") {
+        return parsed.replaceAll(`\\${quote}`, quote).trim();
+      }
+      parsed += char;
+    }
+    return parsed.trim();
+  }
+  let end = value.length;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "#" && (index === 0 || /\s/.test(value[index - 1]))) {
+      end = index;
+      break;
+    }
+  }
+  return value.slice(0, end).trim();
+}
+
+function normalizeYamlStatus(status) {
+  return parseYamlScalarValue(status).toLowerCase();
+}
+
+function parseSprintDevelopmentStatuses(content) {
+  const statuses = {};
+  let developmentStatusIndent = null;
+  for (const line of String(content || "").split(/\r?\n/)) {
+    const headerMatch = line.match(/^(\s*)development_status\s*:\s*$/);
+    if (headerMatch) {
+      developmentStatusIndent = headerMatch[1].length;
+      continue;
+    }
+    if (developmentStatusIndent === null) {
+      continue;
+    }
+    if (!line.trim()) {
+      continue;
+    }
+    const itemMatch = line.match(/^(\s*)([A-Za-z0-9._-]+)\s*:\s*(.*?)\s*$/);
+    if (!itemMatch || itemMatch[1].length <= developmentStatusIndent) {
+      break;
+    }
+    statuses[itemMatch[2]] = parseYamlScalarValue(itemMatch[3]);
+  }
+  return statuses;
+}
+
+function titleFromBmadStory(content, storyKey) {
+  const header = String(content || "").match(/^#\s+Story\s+[^:]+:\s+(.+)$/m);
+  return header ? header[1].trim() : titleFromDescription(storyKey.replace(/-/g, " "));
 }
 
 function readSafeBacklogNextLanes(source) {
