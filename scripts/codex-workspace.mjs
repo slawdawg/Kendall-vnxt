@@ -187,6 +187,8 @@ close-assignments options:
   --ids <a,b>               Comma-separated assignment ids to close.
   --apply                   Apply closeout. Without this, closeout is dry-run.
   --summary-json            Without --apply, print a bounded JSON closeout summary.
+  --allow-stale-record-cleanup Allow explicitly approved closeout of abandoned stale assignment records.
+  --approval <text>         Required with --allow-stale-record-cleanup --apply.
 
 takeover options:
   --dry-run                 Print takeover packet without mutation.
@@ -1562,7 +1564,15 @@ function closeAssignments(argv) {
     return { path, assignment: readAssignment(path) };
   });
   const manifests = readManifests(state);
-  const plans = records.map((record) => assignmentCloseoutPlan(record, manifests, currentOwner));
+  if (options.apply && options.allowStaleRecordCleanup && !validTakeoverReason(options.approval)) {
+    throw new Error("--approval must cite explicit operator approval in at least 10 non-whitespace characters.");
+  }
+
+  const closeoutOptions = {
+    allowStaleRecordCleanup: Boolean(options.allowStaleRecordCleanup),
+    approval: String(options.approval || "").trim(),
+  };
+  const plans = records.map((record) => assignmentCloseoutPlan(record, manifests, currentOwner, closeoutOptions));
   const lines = plans.map(renderAssignmentCloseoutPlan);
   const blocked = plans.filter((plan) => !plan.closeable && !plan.alreadyClosed);
 
@@ -1586,7 +1596,7 @@ function closeAssignments(argv) {
     if (plan.alreadyClosed) {
       continue;
     }
-    applyAssignmentCloseout(state, plan.assignmentId, currentOwner);
+    applyAssignmentCloseout(state, plan.assignmentId, currentOwner, closeoutOptions);
   }
   printApplied("close-assignments", lines);
 }
@@ -1619,6 +1629,9 @@ function shapeAssignmentCloseoutPlan(plan) {
     manifestTaskId: plan.manifest?.task_id || null,
     branch: plan.manifest?.branch || null,
     owner: plan.manifest?.owner || null,
+    closeoutMode: plan.closeoutMode || "blocked",
+    staleRecordCleanupEligible: Boolean(plan.staleRecordCleanupEligible),
+    staleRecordCleanupEvidence: plan.staleRecordCleanupEvidence || null,
     assignmentPath: plan.assignmentPath,
     manifestPath: plan.manifestPath,
   };
@@ -3254,7 +3267,7 @@ function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
   });
 }
 
-function assignmentCloseoutPlan(record, manifests, currentOwner) {
+function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
   const assignment = record.assignment;
   validateAssignment(assignment, record.path);
   const assignmentId = assignment.assignment_id;
@@ -3267,6 +3280,9 @@ function assignmentCloseoutPlan(record, manifests, currentOwner) {
     manifestPath: manifestRecord?.path || null,
     alreadyClosed: assignment.status === "closed",
     closeable: false,
+    closeoutMode: "blocked",
+    staleRecordCleanupEligible: false,
+    staleRecordCleanupEvidence: null,
     reason: "",
   };
 
@@ -3285,14 +3301,133 @@ function assignmentCloseoutPlan(record, manifests, currentOwner) {
     };
   }
   if (assignment.owner && assignment.owner !== currentOwner) {
+    const staleRecordCleanupEvidence = staleRecordCleanupCloseoutEvidence(assignment, manifest);
+    if (staleRecordCleanupEvidence.eligible) {
+      const staleBase = {
+        ...base,
+        closeoutMode: "stale_record_cleanup",
+        staleRecordCleanupEligible: true,
+        staleRecordCleanupEvidence,
+      };
+      if (!options.allowStaleRecordCleanup) {
+        return {
+          ...staleBase,
+          reason: `assignment owner ${assignment.owner} does not match ${currentOwner}; pass --allow-stale-record-cleanup with explicit approval after inspecting abandonment evidence`,
+        };
+      }
+      if (!validTakeoverReason(options.approval)) {
+        return {
+          ...staleBase,
+          reason: "stale record cleanup requires --approval evidence in at least 10 non-whitespace characters",
+        };
+      }
+      return {
+        ...staleBase,
+        closeable: true,
+        reason: `approved stale record cleanup; assignment owner ${assignment.owner} does not match ${currentOwner}; worktree, branch, and PR evidence absent`,
+      };
+    }
     return { ...base, reason: `assignment owner ${assignment.owner} does not match ${currentOwner}` };
   }
 
   return {
     ...base,
     closeable: true,
+    closeoutMode: "closed_workspace",
     reason: `closed workspace evidence ${manifest.task_id}`,
   };
+}
+
+function staleRecordCleanupCloseoutEvidence(assignment, manifest) {
+  const branch = assignment.branch || assignment.source_backlog_item?.branch_name || manifest.branch || "";
+  const worktreePaths = [
+    manifest.worktree_path || "",
+    assignment.worktree_path || "",
+  ].filter(Boolean);
+  const uniqueWorktreePaths = [...new Set(worktreePaths.map((path) => resolve(path)))];
+  const existingWorktreePaths = uniqueWorktreePaths.filter((path) => existsSync(path));
+  const worktreeMissing = uniqueWorktreePaths.length > 0 && existingWorktreePaths.length === 0;
+  const localBranchSha = branch ? branchSha(branch) || null : null;
+  const remoteBranch = branch ? staleRecordRemoteBranchEvidence(branch) : { status: "missing", sha: null };
+  const githubPr = branch ? staleRecordGithubPrEvidence(branch) : { status: "missing", refs: [] };
+  const prEvidence = Boolean(
+    assignment.pr_url ||
+      assignment.pr_number ||
+      manifest.pr_url ||
+      manifest.pr_number ||
+      manifest.pr_state ||
+      manifest.pr_delivery_head_sha ||
+      githubPr.status === "present",
+  );
+  const eligible = Boolean(
+    manifest.status === "closed" &&
+      branch &&
+      worktreeMissing &&
+      !localBranchSha &&
+      remoteBranch.status === "absent" &&
+      !prEvidence &&
+      githubPr.status === "none",
+  );
+  return {
+    eligible,
+    branch: branch || null,
+    worktreePath: uniqueWorktreePaths[0] || null,
+    worktreePaths: uniqueWorktreePaths,
+    existingWorktreePaths,
+    worktreeStatus: worktreeMissing ? "missing" : uniqueWorktreePaths.length > 0 ? "present" : "missing_path",
+    localBranchSha,
+    remoteBranchSha: remoteBranch.sha,
+    remoteBranchStatus: remoteBranch.status,
+    remoteBranchError: remoteBranch.error || null,
+    prStatus: prEvidence ? "present" : githubPr.status,
+    githubPrRefs: githubPr.refs || [],
+    githubPrError: githubPr.error || null,
+  };
+}
+
+function staleRecordRemoteBranchEvidence(branch) {
+  if (
+    process.env.CODEX_WORKSPACE_TEST_MODE === "1" &&
+    process.env.CODEX_WORKSPACE_TEST_STALE_REMOTE_BRANCHES !== undefined
+  ) {
+    const fixtureBranches = String(process.env.CODEX_WORKSPACE_TEST_STALE_REMOTE_BRANCHES || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return fixtureBranches.includes(branch)
+      ? { status: "present", sha: "test-remote-branch-sha" }
+      : { status: "absent", sha: null };
+  }
+
+  try {
+    const sha = originBranchSha(branch) || null;
+    return sha ? { status: "present", sha } : { status: "absent", sha: null };
+  } catch (error) {
+    return { status: "unverified", sha: null, error: error.message };
+  }
+}
+
+function staleRecordGithubPrEvidence(branch) {
+  const result = run("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "number,url,state,headRefName"], {
+    cwd: repoRoot,
+  });
+  if (result.code !== 0) {
+    return { status: "unverified", refs: [], error: result.stderr || result.stdout || "GitHub PR lookup failed" };
+  }
+  const prs = parseGhJson(result.stdout || "[]", `PR list for ${branch}`);
+  if (!Array.isArray(prs)) {
+    return { status: "unverified", refs: [], error: "GitHub PR lookup returned a non-array payload" };
+  }
+  const refs = prs
+    .map((pr) => ({
+      number: pr.number || null,
+      url: pr.url || null,
+      state: pr.state || null,
+      headRefName: pr.headRefName || null,
+    }))
+    .filter((pr) => pr.number || pr.url || pr.state || pr.headRefName)
+    .slice(0, 5);
+  return refs.length > 0 ? { status: "present", refs } : { status: "none", refs: [] };
 }
 
 function closedManifestForAssignment(assignment, manifests) {
@@ -3313,7 +3448,7 @@ function renderAssignmentCloseoutPlan(plan) {
   return `${state} ${plan.assignmentId} | workspace=${target} | reason=${plan.reason}`;
 }
 
-function applyAssignmentCloseout(state, assignmentId, currentOwner) {
+function applyAssignmentCloseout(state, assignmentId, currentOwner, options = {}) {
   assertSafeTaskId(assignmentId);
   const targetAssignmentPath = assignmentPath(state, assignmentId);
 
@@ -3321,7 +3456,7 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner) {
     const assignment = readAssignment(targetAssignmentPath);
     validateAssignment(assignment, targetAssignmentPath);
     const manifests = readManifests(state);
-    const plan = assignmentCloseoutPlan({ path: targetAssignmentPath, assignment }, manifests, currentOwner);
+    const plan = assignmentCloseoutPlan({ path: targetAssignmentPath, assignment }, manifests, currentOwner, options);
     if (plan.alreadyClosed) {
       return { closed: false, assignmentId };
     }
@@ -3335,10 +3470,18 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner) {
     assignment.updated_at = closedAt;
     assignment.closed_at = closedAt;
     assignment.current_command = null;
-    assignment.last_result = `closed from completed workspace ${plan.manifest.task_id}`;
+    assignment.last_result =
+      plan.closeoutMode === "stale_record_cleanup"
+        ? `operator-approved stale record cleanup from closed workspace ${plan.manifest.task_id}`
+        : `closed from completed workspace ${plan.manifest.task_id}`;
+    assignment.closeout_mode = plan.closeoutMode;
+    if (plan.closeoutMode === "stale_record_cleanup") {
+      assignment.closeout_approval_evidence = String(options.approval || "").trim();
+      assignment.closeout_abandonment_evidence = plan.staleRecordCleanupEvidence;
+    }
     assignment.events = [
       ...(Array.isArray(assignment.events) ? assignment.events : []),
-      taskEvent("closed", `closed from completed workspace ${plan.manifest.task_id}`),
+      taskEvent("closed", assignment.last_result),
     ];
     writeAssignment(targetAssignmentPath, assignment);
 
