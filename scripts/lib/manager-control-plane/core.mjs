@@ -11700,7 +11700,7 @@ function defaultSourceRefs(context = {}) {
       ...entry,
       mtimeMs: sourceArtifactMtimeMs(entry.absolutePath),
     }))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs || sourceArtifactRank(b.name) - sourceArtifactRank(a.name) || b.name.localeCompare(a.name))
+    .sort((a, b) => sourceArtifactRank(b.name) - sourceArtifactRank(a.name) || b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name))
     .slice(0, 3)
     .map((entry) => `prd:${entry.relativePath}`);
 }

@@ -84,6 +84,10 @@ for (const [relativePath, content] of [
     "# Kendall Nxt PRD\n\nSource-owned planning fixture for manager control plane tests.\n",
   ],
   [
+    "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+    "# Operational Pipeline Action Loop PRD\n\nSource-owned planning fixture for manager control plane tests.\n",
+  ],
+  [
     "_bmad-output/planning-artifacts/prds/prd_Kendall_Nxt.md",
     "# Kendall Nxt PRD\n\nSource-owned planning fixture for manager control plane tests.\n",
   ],
