@@ -147,7 +147,17 @@ test("backend proof evidence packet names real fake and forbidden capabilities w
   const packet = buildBackendProofEvidencePacket({
     runId: "run-1",
     result: "blocked",
-    evidenceRefs: ["evidence-boundary", { label: "safe-label", rawPrompt: "do not retain" }]
+    evidenceRefs: [
+      "evidence-boundary",
+      "sk-1234567890abcdef",
+      "raw",
+      "provider",
+      "rawPayloadEvidence",
+      "raw_payload_evidence",
+      "providerPayloadEvidence",
+      "provider_payload_evidence",
+      { label: "safe-label", rawPrompt: "do not retain" }
+    ]
   });
 
   assert.equal(packet.authority_stage, "backend_proof");
@@ -163,6 +173,122 @@ test("backend proof evidence packet names real fake and forbidden capabilities w
   assert.deepEqual(BACKEND_PROOF_BOUNDARY.forbiddenCapabilities, packet.forbidden);
   assert.notEqual(packet.forbidden, BACKEND_PROOF_BOUNDARY.forbiddenCapabilities);
   assert.equal(packet.evidence_refs.includes("metadata-only:safe-label"), true);
+  assert.equal(packet.evidence_refs.includes("sk-1234567890abcdef"), false);
+  assert.equal(packet.evidence_refs.includes("raw"), false);
+  assert.equal(packet.evidence_refs.includes("provider"), false);
+  assert.equal(packet.evidence_refs.includes("rawPayloadEvidence"), false);
+  assert.equal(packet.evidence_refs.includes("raw_payload_evidence"), false);
+  assert.equal(packet.evidence_refs.includes("providerPayloadEvidence"), false);
+  assert.equal(packet.evidence_refs.includes("provider_payload_evidence"), false);
+  assert.equal(packet.evidence_refs.includes("metadata-only:redacted"), true);
   assert.equal(Object.isFrozen(BACKEND_PROOF_BOUNDARY), true);
   assert.equal(Object.isFrozen(BACKEND_PROOF_BOUNDARY.forbiddenCapabilities), true);
+});
+
+test("backend proof runtime metadata sanitizer rejects prototype-special keys", () => {
+  const runtimeProof = Object.create(null);
+  runtimeProof.status = "metadata_proof_only";
+  runtimeProof.__proto__ = { polluted: true };
+  runtimeProof.constructor = { misleading: true };
+  runtimeProof.prototype = { misleading: true };
+  runtimeProof.safe = Object.create(null);
+  runtimeProof.safe.status = "ok";
+  runtimeProof.safe.__proto__ = { nestedPolluted: true };
+
+  const packet = buildBackendProofEvidencePacket({
+    runId: "run-1",
+    result: "completed",
+    evidenceRefs: ["runtime-port:verification-metadata-proof"],
+    runtimeProof
+  });
+
+  assert.equal(Object.getPrototypeOf(packet.runtime_ports), null);
+  assert.equal(Object.hasOwn(packet.runtime_ports, "__proto__"), false);
+  assert.equal(Object.hasOwn(packet.runtime_ports, "constructor"), false);
+  assert.equal(Object.hasOwn(packet.runtime_ports, "prototype"), false);
+  assert.equal(Object.getPrototypeOf(packet.runtime_ports.safe), null);
+  assert.equal(Object.hasOwn(packet.runtime_ports.safe, "__proto__"), false);
+  assert.equal({}.polluted, undefined);
+  assert.equal({}.nestedPolluted, undefined);
+});
+
+test("backend proof runtime metadata sanitizer redacts raw-payload string values", () => {
+  const packet = buildBackendProofEvidencePacket({
+    runId: "run-1",
+    result: "blocked",
+    evidenceRefs: ["runtime-port:metadata-proof"],
+    runtimeProof: {
+      status: "metadata_proof_only",
+      completion: "raw completion transcript from provider payload",
+      nested: {
+        safe: "metadata-only status",
+        token: "sk-1234567890abcdef",
+        rawPayload: "rawPayload",
+        providerPayload: "providerPayload",
+        bareRaw: "raw",
+        bareProvider: "provider"
+      }
+    }
+  });
+
+  assert.equal(packet.runtime_ports.status, "metadata_proof_only");
+  assert.equal(packet.runtime_ports.completion, "metadata-only:redacted");
+  assert.match(packet.runtime_ports.nested.safe, /^metadata-only:sha256:[0-9a-f]{32}$/);
+  assert.equal(packet.runtime_ports.nested.token, "metadata-only:redacted");
+  assert.equal(Object.hasOwn(packet.runtime_ports.nested, "rawPayload"), false);
+  assert.equal(Object.hasOwn(packet.runtime_ports.nested, "providerPayload"), false);
+  assert.equal(packet.runtime_ports.nested.bareRaw, "metadata-only:redacted");
+  assert.equal(packet.runtime_ports.nested.bareProvider, "metadata-only:redacted");
+  assert.equal(JSON.stringify(packet).includes("raw completion transcript"), false);
+  assert.equal(JSON.stringify(packet).includes("sk-1234567890abcdef"), false);
+  assert.equal(JSON.stringify(packet).includes("providerPayload"), false);
+  assert.equal(JSON.stringify(packet).includes('"raw"'), false);
+  assert.equal(JSON.stringify(packet).includes('"provider"'), false);
+});
+
+test("backend proof runtime metadata sanitizer redacts raw-payload safe-key values", () => {
+  const packet = buildBackendProofEvidencePacket({
+    runId: "run-1",
+    result: "blocked",
+    evidenceRefs: ["runtime-port:metadata-proof"],
+    runtimeProof: {
+      status: "raw",
+      code: "raw_payload_evidence",
+      blocker: "provider",
+      verification: {
+        command_id: "provider_payload_evidence"
+      }
+    }
+  });
+
+  assert.equal(packet.runtime_ports.status, "metadata-only:redacted");
+  assert.equal(packet.runtime_ports.code, "metadata-only:redacted");
+  assert.equal(packet.runtime_ports.blocker, "metadata-only:redacted");
+  assert.equal(packet.runtime_ports.verification.command_id, "metadata-only:redacted");
+  assert.equal(JSON.stringify(packet).includes('"raw"'), false);
+  assert.equal(JSON.stringify(packet).includes("raw_payload_evidence"), false);
+  assert.equal(JSON.stringify(packet).includes('"provider"'), false);
+  assert.equal(JSON.stringify(packet).includes("provider_payload_evidence"), false);
+});
+
+test("backend proof runtime metadata sanitizer digests arbitrary caller strings", () => {
+  const arbitraryCallerText = "Please summarize this lane exactly as written for the operator";
+  const packet = buildBackendProofEvidencePacket({
+    runId: "run-1",
+    result: "blocked",
+    evidenceRefs: ["runtime-port:metadata-proof"],
+    runtimeProof: {
+      status: "metadata_proof_only",
+      completion: arbitraryCallerText,
+      session: {
+        approved_workspace_root: "/tmp/kendall/manager-control-plane/worktrees/"
+      }
+    }
+  });
+
+  assert.equal(packet.runtime_ports.status, "metadata_proof_only");
+  assert.match(packet.runtime_ports.completion, /^metadata-only:sha256:[0-9a-f]{32}$/);
+  assert.match(packet.runtime_ports.session.approved_workspace_root, /^metadata-only:sha256:[0-9a-f]{32}$/);
+  assert.equal(JSON.stringify(packet).includes(arbitraryCallerText), false);
+  assert.equal(JSON.stringify(packet).includes("/tmp/kendall/manager-control-plane/worktrees/"), false);
 });

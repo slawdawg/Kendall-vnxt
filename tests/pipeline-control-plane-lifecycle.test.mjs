@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import vm from "node:vm";
+
+import { buildCyclePacket } from "../scripts/lib/manager-control-plane/core.mjs";
 
 const contractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 const corePath = new URL("../packages/workflow-core/src/pipeline-control-plane/index.ts", import.meta.url);
@@ -14,6 +16,57 @@ const contractsIndexPath = new URL("../packages/contracts/src/index.ts", import.
 const workflowCoreIndexPath = new URL("../packages/workflow-core/src/index.ts", import.meta.url);
 const dashboardSupervisorPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
+const repoRequire = createRequire(new URL("../package.json", import.meta.url));
+const repoRootPath = process.cwd();
+
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
+function extractConstArray(source, exportName) {
+  const withoutComments = stripComments(source);
+  const match = withoutComments.match(new RegExp(`export const ${exportName} = \\[([\\s\\S]*?)\\] as const;`));
+  assert.ok(match, `missing exported const array ${exportName}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}
+
+function tscPath() {
+  return (
+    resolvePackagePath(dashboardRequire, "typescript/bin/tsc") ||
+    resolvePackagePath(repoRequire, "typescript/bin/tsc") ||
+    resolveViaPnpm("typescript/bin/tsc") ||
+    missingTypescriptDependency()
+  );
+}
+
+function typescriptModule() {
+  const modulePath =
+    resolvePackagePath(dashboardRequire, "typescript") ||
+    resolvePackagePath(repoRequire, "typescript") ||
+    resolveViaPnpm("typescript");
+  if (!modulePath) {
+    missingTypescriptDependency();
+  }
+  return createRequire(modulePath)("typescript");
+}
+
+function resolvePackagePath(requireFn, specifier) {
+  try {
+    return requireFn.resolve(specifier);
+  } catch {
+    return null;
+  }
+}
+
+function resolveViaPnpm(specifier) {
+  const script = `process.stdout.write(require.resolve(${JSON.stringify(specifier)}))`;
+  const result = spawnSync("pnpm", ["exec", "node", "-e", script], { cwd: repoRootPath, encoding: "utf8" });
+  return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+}
+
+function missingTypescriptDependency() {
+  throw new Error("TypeScript dependency is unavailable; run pnpm install before compile-backed lifecycle tests.");
+}
 
 test("authoritative pipeline control plane lifecycle contracts are namespaced and metadata-only", async () => {
   const [contractSource, coreSource, contractsIndex, workflowCoreIndex] = await Promise.all([
@@ -104,9 +157,1483 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(coreSource, /createWorkPacketTransitionEvent/);
   assert.match(coreSource, /raw\[\\s_-\]\*\(\?:prompts\?\|completions\?\|transcripts\?\)/);
   assert.match(coreSource, /\(\?:terminal\|tmux\|pane\)\[\\s_-\]\*\(\?:scrollbacks\?\|texts\?\|outputs\?\|stdouts\?\|stderrs\?\)/);
-  assert.doesNotMatch(contractSource, /\brawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential\b/);
+  assert.doesNotMatch(contractSource.replaceAll("credential_or_provider_change", ""), /\b(?:rawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential)\??:/);
   assert.match(contractsIndex, /export \* from "\.\/pipeline-control-plane";/);
   assert.match(workflowCoreIndex, /export \* from "\.\/pipeline-control-plane";/);
+});
+
+test("operational action contracts define capability-gated metadata-only requests and results", async () => {
+  const contractSource = await readFile(contractPath, "utf8");
+
+  for (const exportedName of [
+    "PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION",
+    "PIPELINE_OPERATIONAL_ACTION_RISK_TIERS",
+    "PIPELINE_OPERATIONAL_ACTION_CAPABILITY_STATES",
+    "PIPELINE_OPERATIONAL_ACTION_AUTHORITY_STATES",
+    "PIPELINE_OPERATIONAL_ACTION_TYPED_REASONS",
+    "PIPELINE_OPERATIONAL_ACTION_IDS",
+    "PipelineOperationalActionRiskTierV0",
+    "PipelineOperationalActionCapabilityStateV0",
+    "PipelineOperationalActionAuthorityStateV0",
+    "PipelineOperationalActionRequestedAuthorityStateV0",
+    "PipelineOperationalActionTypedReasonV0",
+    "PipelineOperationalActionEvidenceRefsV0",
+    "PipelineOperationalActionRequestV0",
+    "PipelineOperationalActionResultV0",
+    "PipelineOperationalActionCapabilityV0",
+    "PipelineOperationalRuntimeReadinessV0",
+    "isPipelineOperationalActionIdV0",
+    "isPipelineOperationalActionEvidenceRefsV0",
+    "validatePipelineOperationalActionRequestV0",
+    "validatePipelineOperationalActionResultV0",
+    "validatePipelineOperationalActionCapabilityV0",
+    "validatePipelineOperationalRuntimeReadinessV0",
+  ]) {
+    assert.match(contractSource, new RegExp(`export (const|type|interface|function) ${exportedName}\\b`), `missing ${exportedName}`);
+  }
+
+  assert.deepEqual(extractConstArray(contractSource, "PIPELINE_OPERATIONAL_ACTION_IDS"), [
+    "inspect",
+    "refresh_projection",
+    "dispatch_apply",
+    "mark_viewed",
+    "retry_verification",
+    "requeue",
+    "mark_tested",
+    "kill_worker",
+    "mutate_source",
+    "push_branch",
+    "open_pr",
+    "merge",
+    "delete_branch",
+    "cleanup",
+    "credential_or_provider_change",
+  ]);
+  assert.doesNotMatch(contractSource, /PipelineOperationalActionIdV0[^\n=]*=[^;]*string\s*&/, "action ids must not have arbitrary string escape hatches");
+  assert.match(contractSource, /isPipelineOperationalActionIdV0[\s\S]*PIPELINE_OPERATIONAL_ACTION_IDS[\s\S]*includes\(value\)/);
+
+  for (const literal of [
+    "pipeline-operational-action/v0",
+    "pipeline-operational-runtime-readiness/v0",
+    "available",
+    "unavailable",
+    "gated",
+    "simulated",
+    "low",
+    "medium",
+    "high",
+    "extreme",
+    "inspect",
+    "refresh_projection",
+    "dispatch_apply",
+    "mark_viewed",
+    "retry_verification",
+    "requeue",
+    "mark_tested",
+    "kill_worker",
+    "mutate_source",
+    "push_branch",
+    "open_pr",
+    "merge",
+    "delete_branch",
+    "cleanup",
+    "credential_or_provider_change",
+    "blocked_by_policy",
+    "blocked_by_approval",
+    "runtime_unavailable",
+    "projection_stale",
+  ]) {
+    assert.match(contractSource, new RegExp(`"${literal}"`), `missing operational action literal ${literal}`);
+  }
+
+  for (const requiredField of [
+    "schemaVersion",
+    "actionId",
+    "targetType",
+    "targetId",
+    "idempotencyKey",
+    "correlationId",
+    "requestedBy",
+    "requestedAuthorityState",
+    "requestedRiskTier",
+    "outcome",
+    "resultingStage",
+    "resultingStatus",
+    "capabilityState",
+    "riskTier",
+    "typedReason",
+    "expectedResultSummary",
+    "freshnessState",
+    "expiresAt",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]) {
+    assert.match(contractSource, new RegExp(`${requiredField}:`), `missing required operational action field ${requiredField}`);
+  }
+
+  assert.doesNotMatch(contractSource, /operatorNote[?]?:/);
+  assert.doesNotMatch(contractSource, /expectedResult:\s*string/);
+  assert.match(contractSource, /PipelineOperationalActionRequestedAuthorityStateV0 = Exclude<PipelineOperationalActionAuthorityStateV0, "allowed">/);
+  assert.match(contractSource, /evidenceRefs:\s*PipelineOperationalActionEvidenceRefsV0;/);
+  assert.match(contractSource, /PipelineOperationalActionEvidenceRefsV0 = \[string, \.\.\.string\[\]\]/);
+  assert.match(contractSource, /metadataOnly:\s*true;/);
+  assert.match(contractSource, /rawPayloadRetained:\s*false;/);
+  assert.doesNotMatch(contractSource.replaceAll("credential_or_provider_change", ""), /\b(?:rawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential)\??:/);
+});
+
+test("operational action contracts validate runtime objects without throwing", async () => {
+  const {
+    validatePipelineOperationalActionRequestV0,
+    validatePipelineOperationalActionResultV0,
+    validatePipelineOperationalActionCapabilityV0,
+    validatePipelineOperationalRuntimeReadinessV0,
+    isPipelineOperationalActionIdV0,
+    isPipelineOperationalActionEvidenceRefsV0,
+  } = await loadCompiledContractModule();
+
+  const validEvidence = ["verification:operational-action-contract"];
+  const validRequest = {
+    schemaVersion: "pipeline-operational-action/v0",
+    actionId: "retry_verification",
+    targetType: "execution_attempt",
+    targetId: "attempt-1",
+    idempotencyKey: "idem-1",
+    correlationId: "corr-1",
+    requestedBy: { actorType: "manager", actorId: "manager-test" },
+    requestedAuthorityState: "needs_authority_approval",
+    requestedRiskTier: "medium",
+    operatorIntentSummary: "Retry focused verification through existing gates.",
+    evidenceRefs: validEvidence,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const approvalEvidenceRef = (
+    authorityState,
+    actionId,
+    targetId = "codex/example",
+    correlationId = "corr-1",
+    idempotencyKey = "idem-1",
+  ) => `evidence:approval-${authorityState}:${actionId}:${evidenceToken(targetId)}:${evidenceToken(correlationId)}:${evidenceToken(idempotencyKey)}`;
+  const contextEvidenceRef = (
+    actionId,
+    targetId = "codex/example",
+    correlationId = "corr-1",
+    idempotencyKey = "idem-1",
+  ) => `evidence:${actionId}-context:${evidenceToken(targetId)}:${evidenceToken(correlationId)}:${evidenceToken(idempotencyKey)}`;
+  const capabilityApprovalEvidenceRef = (
+    authorityState,
+    actionId,
+    targetId = "codex/example",
+  ) => `evidence:capability-approval-${authorityState}:${actionId}:${evidenceToken(targetId)}`;
+  const evidenceToken = (value) => {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    const normalized = value
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24) || "id";
+    return `${normalized}-${(hash >>> 0).toString(36).padStart(7, "0").slice(0, 7)}`;
+  };
+
+  assert.equal(isPipelineOperationalActionIdV0("merge"), true);
+  assert.equal(isPipelineOperationalActionIdV0("custom_merge"), false);
+  assert.equal(isPipelineOperationalActionEvidenceRefsV0(validEvidence), true);
+  assert.equal(isPipelineOperationalActionEvidenceRefsV0(["artifact:0123456789abcdef0123456789abcdef01234567"]), true);
+  assert.equal(isPipelineOperationalActionEvidenceRefsV0(["manager-cycle:manager-20260701-001"]), true);
+  assert.equal(isPipelineOperationalActionEvidenceRefsV0(["raw transcript copied into evidence"]), false);
+  assert.equal(isPipelineOperationalActionEvidenceRefsV0(["evidence:sk-testtoken123456789"]), false);
+  assert.deepEqual(validatePipelineOperationalActionRequestV0(validRequest), []);
+  assert.deepEqual(validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    targetId: "a",
+    correlationId: "1",
+    idempotencyKey: "b",
+    requestedBy: { actorType: "manager", actorId: "m" },
+  }), []);
+  assert.deepEqual(validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    actionId: "inspect",
+    targetType: "manager_run",
+    requestedAuthorityState: "not_required",
+    requestedRiskTier: "low",
+  }), []);
+
+  const readOnlyApprovalRequestIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    actionId: "refresh_projection",
+    targetType: "projection",
+    requestedAuthorityState: "needs_authority_approval",
+    requestedRiskTier: "low",
+  }).map((issue) => issue.code);
+  assert.ok(readOnlyApprovalRequestIssues.includes("policy_violation"));
+
+  const unknownRequestFieldIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    command: "git push",
+  }).map((issue) => issue.code);
+  assert.ok(unknownRequestFieldIssues.includes("forbidden_field"));
+
+  const malformedRequestIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    schemaVersion: "old",
+    actionId: "custom_merge",
+    targetType: "worker",
+    targetId: 12,
+    correlationId: "",
+    idempotencyKey: null,
+    requestedBy: { actorType: "alien" },
+    requestedAuthorityState: "allowed",
+    requestedRiskTier: "low",
+    evidenceRefs: [],
+    metadataOnly: false,
+    rawPayloadRetained: true,
+    operatorIntentSummary: "sk-testtoken123456789",
+    rawPrompt: "do not keep raw prompts",
+  }).map((issue) => issue.code);
+  for (const expectedCode of ["bad_schema_version", "unknown_action_id", "blank_identifier", "request_cannot_self_authorize", "evidence_required", "bad_retention_flag", "unsafe_metadata_retention", "invalid_actor", "forbidden_field"]) {
+    assert.ok(malformedRequestIssues.includes(expectedCode), `missing request issue ${expectedCode}`);
+  }
+
+  const nestedMetadataIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    requestedBy: {
+      actorType: "manager",
+      actorId: "sk-testtoken123456789",
+      actorLabel: "Manager",
+      providerPayload: { copied: "not retained" },
+    },
+    metadata: {
+      note: "sk-nestedtoken123456789",
+      copiedSummary: "raw prompt copied here",
+      sourceNote: "provider payload copied here",
+      terminalNote: "terminal output copied here",
+      sourceCopySummary: "source copy retained here",
+      consoleLogSummary: "console log retained here",
+    },
+  }).map((issue) => issue.code);
+  assert.ok(nestedMetadataIssues.includes("unsafe_metadata_retention"));
+  assert.ok(nestedMetadataIssues.includes("forbidden_field"));
+
+  for (const alias of ["password", "apiKey", "accessToken", "authToken", "privateKey", "passphrase"]) {
+    const credentialAliasIssues = validatePipelineOperationalActionRequestV0({
+      ...validRequest,
+      requestedBy: {
+        actorType: "manager",
+        actorId: "manager-test",
+        [alias]: "retained credential alias",
+      },
+      operatorIntentSummary: `Do not retain ${alias} values.`,
+    }).map((issue) => issue.code);
+    assert.ok(credentialAliasIssues.includes("forbidden_field"), `missing forbidden field issue for ${alias}`);
+    assert.ok(credentialAliasIssues.includes("unsafe_metadata_retention"), `missing metadata issue for ${alias}`);
+  }
+
+  const cyclicMetadata = { note: "metadata summary" };
+  cyclicMetadata.self = cyclicMetadata;
+  const cyclicMetadataIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    requestedBy: { actorType: "manager", actorId: "manager-test", details: cyclicMetadata },
+  }).map((issue) => issue.code);
+  assert.ok(cyclicMetadataIssues.includes("forbidden_field"));
+
+  const sharedMetadata = { note: "metadata summary" };
+  const sharedAcyclicIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    requestedBy: {
+      actorType: "manager",
+      actorId: "manager-test",
+      firstDetails: sharedMetadata,
+      secondDetails: sharedMetadata,
+    },
+  }).map((issue) => issue.code);
+  assert.ok(sharedAcyclicIssues.includes("forbidden_field"));
+
+  const unsafeIdentifierIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    targetId: "sk-targettoken123456789",
+    correlationId: "raw prompt marker",
+    idempotencyKey: "token:key",
+  }).map((issue) => issue.code);
+  assert.ok(unsafeIdentifierIssues.includes("unsafe_metadata_retention"));
+
+  const retainedWhitespaceIdentifierIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    targetId: " attempt-1 ",
+    correlationId: "corr-1\n",
+    idempotencyKey: "\tidem-1",
+    requestedBy: { actorType: "manager", actorId: " manager-test", actorLabel: "Manager\n" },
+  }).map((issue) => issue.code);
+  assert.ok(retainedWhitespaceIdentifierIssues.includes("unsafe_metadata_retention"));
+
+  const actorIdentityIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    requestedBy: { actorType: "manager", actorId: "Manager/../Test", actorLabel: "Manager" },
+  }).map((issue) => issue.code);
+  assert.ok(actorIdentityIssues.includes("unsafe_metadata_retention"));
+
+  const nonCanonicalIdentifierIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    targetId: "Attempt-1",
+    correlationId: "corr 1",
+    idempotencyKey: "idem--1",
+  }).map((issue) => issue.code);
+  assert.ok(nonCanonicalIdentifierIssues.includes("unsafe_metadata_retention"));
+
+  const pathLikeIdentifierIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    targetId: "codex/../main",
+    correlationId: "./corr-1",
+    idempotencyKey: "idem//1",
+  }).map((issue) => issue.code);
+  assert.ok(pathLikeIdentifierIssues.includes("unsafe_metadata_retention"));
+
+  const readOnlyRequestAuthorityIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    actionId: "inspect",
+    targetType: "manager_run",
+    requestedRiskTier: "low",
+    requestedAuthorityState: "needs_safety_approval",
+  }).map((issue) => issue.code);
+  assert.ok(readOnlyRequestAuthorityIssues.includes("policy_violation"));
+
+  const requestPolicyIssues = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    actionId: "merge",
+    targetType: "worker",
+    requestedRiskTier: "low",
+  }).map((issue) => issue.code);
+  assert.ok(requestPolicyIssues.includes("policy_violation"));
+
+  for (const request of [
+    { actionId: "merge", targetType: "branch", requestedRiskTier: "extreme", requestedAuthorityState: "needs_authority_approval" },
+    { actionId: "delete_branch", targetType: "branch", requestedRiskTier: "extreme", requestedAuthorityState: "needs_authority_approval" },
+    { actionId: "cleanup", targetType: "workspace", requestedRiskTier: "extreme", requestedAuthorityState: "needs_authority_approval" },
+    { actionId: "credential_or_provider_change", targetType: "runtime", requestedRiskTier: "extreme", requestedAuthorityState: "needs_safety_approval" },
+    { actionId: "dispatch_apply", targetType: "work_item", requestedRiskTier: "high", requestedAuthorityState: "needs_product_approval" },
+    { actionId: "kill_worker", targetType: "worker", requestedRiskTier: "high", requestedAuthorityState: "needs_safety_approval" },
+  ]) {
+    const authorityIssues = validatePipelineOperationalActionRequestV0({
+      ...validRequest,
+      ...request,
+    }).map((issue) => issue.code);
+    assert.ok(authorityIssues.includes("policy_violation"), `missing request authority policy issue for ${request.actionId}`);
+  }
+
+  let deepMetadata = { note: "metadata summary" };
+  for (let index = 0; index < 64; index += 1) {
+    deepMetadata = { child: deepMetadata };
+  }
+  let deepMetadataIssues = [];
+  assert.doesNotThrow(() => {
+    deepMetadataIssues = validatePipelineOperationalActionRequestV0({
+      ...validRequest,
+      requestedBy: { actorType: "manager", actorId: "manager-test", details: deepMetadata },
+    });
+  });
+  assert.ok(deepMetadataIssues.map((issue) => issue.code).includes("forbidden_field"));
+
+  const wideMetadata = { branches: [] };
+  for (let index = 0; index < 1300; index += 1) {
+    wideMetadata.branches.push({ index, note: "metadata summary" });
+  }
+  let wideMetadataIssues = [];
+  assert.doesNotThrow(() => {
+    wideMetadataIssues = validatePipelineOperationalActionRequestV0({
+      ...validRequest,
+      requestedBy: { actorType: "manager", actorId: "manager-test", details: wideMetadata },
+    });
+  });
+  assert.ok(wideMetadataIssues.map((issue) => issue.code).includes("forbidden_field"));
+  assert.ok(wideMetadataIssues.length < 20);
+
+  const validCapability = {
+    actionId: "inspect",
+    targetType: "manager_run",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "low",
+    typedReason: null,
+    expectedResultSummary: "Inspect compact manager cycle state.",
+    correlationRequired: true,
+    idempotencyRequired: true,
+    evidenceRefs: validEvidence,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.deepEqual(validatePipelineOperationalActionCapabilityV0(validCapability), []);
+
+  const readOnlyApprovalCapabilityIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    actionId: "refresh_projection",
+    targetType: "projection",
+    authorityState: "needs_authority_approval",
+  }).map((issue) => issue.code);
+  assert.ok(readOnlyApprovalCapabilityIssues.includes("policy_violation"));
+
+  const availableCapabilityReasonIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    typedReason: "blocked_by_policy",
+  }).map((issue) => issue.code);
+  assert.ok(availableCapabilityReasonIssues.includes("inconsistent_result"));
+
+  const invalidCapabilityIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    actionId: "merge",
+    targetType: "worker",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "low",
+    typedReason: null,
+    expectedResultSummary: 42,
+    correlationRequired: false,
+    idempotencyRequired: false,
+    evidenceRefs: ["evidence:raw-provider-payload"],
+    metadataOnly: true,
+    rawPayloadRetained: true,
+  }).map((issue) => issue.code);
+  for (const expectedCode of ["policy_violation", "unsafe_metadata_retention", "evidence_required", "bad_retention_flag"]) {
+    assert.ok(invalidCapabilityIssues.includes(expectedCode), `missing capability issue ${expectedCode}`);
+  }
+
+  const unknownCapabilityFieldIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    apply: true,
+  }).map((issue) => issue.code);
+  assert.ok(unknownCapabilityFieldIssues.includes("forbidden_field"));
+
+  const capabilityWhitespaceTargetIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    targetId: " manager-test ",
+  }).map((issue) => issue.code);
+  assert.ok(capabilityWhitespaceTargetIssues.includes("unsafe_metadata_retention"));
+
+  const capabilityIdentityTargetIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    targetId: "Manager/../Test",
+  }).map((issue) => issue.code);
+  assert.ok(capabilityIdentityTargetIssues.includes("unsafe_metadata_retention"));
+
+  const gatedCapabilityIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    capabilityState: "gated",
+    authorityState: "needs_authority_approval",
+    typedReason: null,
+  }).map((issue) => issue.code);
+  assert.ok(gatedCapabilityIssues.includes("inconsistent_result"));
+
+  const nonAllowedAvailableCapabilityIssues = validatePipelineOperationalActionCapabilityV0({
+    ...validCapability,
+    authorityState: "blocked",
+    typedReason: null,
+  }).map((issue) => issue.code);
+  assert.ok(nonAllowedAvailableCapabilityIssues.includes("inconsistent_result"));
+
+  for (const capability of [
+    { actionId: "merge", targetType: "branch", riskTier: "extreme", authorityState: "needs_authority_approval" },
+    { actionId: "delete_branch", targetType: "branch", riskTier: "extreme", authorityState: "needs_authority_approval" },
+    { actionId: "cleanup", targetType: "workspace", riskTier: "extreme", authorityState: "needs_authority_approval" },
+    { actionId: "credential_or_provider_change", targetType: "runtime", riskTier: "extreme", authorityState: "needs_safety_approval" },
+    { actionId: "dispatch_apply", targetType: "work_item", riskTier: "high", authorityState: "needs_product_approval" },
+    { actionId: "kill_worker", targetType: "worker", riskTier: "high", authorityState: "needs_safety_approval" },
+  ]) {
+    const authorityIssues = validatePipelineOperationalActionCapabilityV0({
+      ...validCapability,
+      ...capability,
+      capabilityState: "gated",
+      typedReason: "blocked_by_approval",
+    }).map((issue) => issue.code);
+    assert.ok(authorityIssues.includes("policy_violation"), `missing capability authority policy issue for ${capability.actionId}`);
+  }
+
+  const validResult = {
+    schemaVersion: "pipeline-operational-action/v0",
+    actionId: "inspect",
+    targetType: "manager_run",
+    targetId: "manager-test",
+    outcome: "succeeded",
+    resultingStage: "execute",
+    resultingStatus: "active",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "low",
+    typedReason: null,
+    evidenceRefs: validEvidence,
+    correlationId: "corr-1",
+    idempotencyKey: "idem-1",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.deepEqual(validatePipelineOperationalActionResultV0(validResult), []);
+  const readOnlyApprovalResultIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "refresh_projection",
+    targetType: "projection",
+    authorityState: "needs_authority_approval",
+    outcome: "blocked",
+    capabilityState: "gated",
+    typedReason: "runtime_unavailable",
+    resultingStatus: "blocked",
+  }).map((issue) => issue.code);
+  assert.ok(readOnlyApprovalResultIssues.includes("policy_violation"));
+
+  const unknownResultFieldIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    payload: { action: "merge" },
+  }).map((issue) => issue.code);
+  assert.ok(unknownResultFieldIssues.includes("forbidden_field"));
+
+  const successfulResultReasonIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    typedReason: "blocked_by_policy",
+  }).map((issue) => issue.code);
+  assert.ok(successfulResultReasonIssues.includes("inconsistent_result"));
+
+  const mergeSuccessEvidenceRefs = [
+    ...validEvidence,
+    approvalEvidenceRef("needs_safety_approval", "merge"),
+    contextEvidenceRef("merge"),
+    "evidence:merge-head-sha-0123456789abcdef0123456789abcdef01234567",
+    "evidence:merge-base-dev",
+    "evidence:merge-pr-42",
+    "evidence:merge-checks-passed-head-0123456789abcdef0123456789abcdef01234567:pr-42",
+    "evidence:merge-review-threads-resolved-head-0123456789abcdef0123456789abcdef01234567:pr-42",
+    "evidence:merge-mergeable",
+    "evidence:merge-pr-non-draft",
+    "evidence:merge-requested-changes-cleared",
+    "evidence:merge-expected-base-policy-dev",
+    "evidence:merge-high-risk-diff-excluded",
+    "verification:merge-local-head-0123456789abcdef0123456789abcdef01234567:base-dev:pr-42",
+  ];
+  const deliverySuccessEvidence = {
+    push_branch: [
+      approvalEvidenceRef("needs_authority_approval", "push_branch"),
+      contextEvidenceRef("push_branch"),
+      `evidence:push-branch-ref-${evidenceToken("codex/example")}`,
+      "evidence:push-branch-remote-origin",
+      "evidence:push-branch-head-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:push-branch-result-pushed",
+    ],
+    open_pr: [
+      approvalEvidenceRef("needs_authority_approval", "open_pr"),
+      contextEvidenceRef("open_pr"),
+      `evidence:open-pr-branch-${evidenceToken("codex/example")}`,
+      "evidence:open-pr-base-dev",
+      "evidence:open-pr-pr-42",
+      "evidence:open-pr-result-opened",
+    ],
+    delete_branch: [
+      approvalEvidenceRef("needs_safety_approval", "delete_branch"),
+      contextEvidenceRef("delete_branch"),
+      `evidence:delete-branch-ref-${evidenceToken("codex/example")}`,
+      "evidence:delete-branch-head-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:delete-branch-result-deleted",
+      "evidence:delete-branch-merged-pr-42",
+      "evidence:delete-branch-lane-owner-manager-test",
+      "evidence:delete-branch-local-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:delete-branch-remote-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:delete-branch-delivery-head-match-0123456789abcdef0123456789abcdef01234567",
+    ],
+    cleanup: [
+      approvalEvidenceRef("needs_safety_approval", "cleanup", "workspace-1"),
+      contextEvidenceRef("cleanup", "workspace-1"),
+      `evidence:cleanup-workspace-${evidenceToken("workspace-1")}`,
+      "evidence:cleanup-pr-42",
+      "evidence:cleanup-head-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:cleanup-dry-run",
+      "evidence:cleanup-result-clean",
+      "evidence:cleanup-merged-pr-42",
+      "evidence:cleanup-lane-owner-manager-test",
+      "evidence:cleanup-worktree-identity-workspace-1",
+      "evidence:cleanup-local-branch-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:cleanup-remote-branch-sha-0123456789abcdef0123456789abcdef01234567",
+      "evidence:cleanup-delivery-head-match-0123456789abcdef0123456789abcdef01234567",
+    ],
+  };
+
+  const genericMergeSuccessEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: [...validEvidence, "evidence:approval-needs_safety_approval"],
+  }).map((issue) => issue.code);
+  assert.ok(genericMergeSuccessEvidenceIssues.includes("policy_violation"));
+
+  assert.deepEqual(validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: mergeSuccessEvidenceRefs,
+  }), []);
+
+  const maxIdentifier = "a" + "b".repeat(198) + "c";
+  const maxIdentifierEvidence = approvalEvidenceRef("needs_product_approval", "mark_viewed", maxIdentifier, maxIdentifier, maxIdentifier);
+  assert.equal(maxIdentifierEvidence.length <= 180, true);
+  assert.deepEqual(validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "mark_viewed",
+    targetType: "work_packet",
+    targetId: maxIdentifier,
+    correlationId: maxIdentifier,
+    idempotencyKey: maxIdentifier,
+    riskTier: "low",
+    authorityState: "allowed",
+    evidenceRefs: [...validEvidence, maxIdentifierEvidence],
+  }), []);
+
+  const incompleteMergeSuccessEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: mergeSuccessEvidenceRefs.filter((ref) => !ref.startsWith("evidence:merge-review-threads-")),
+  }).map((issue) => issue.code);
+  assert.ok(incompleteMergeSuccessEvidenceIssues.includes("policy_violation"));
+
+  const missingMergeBaseEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: mergeSuccessEvidenceRefs.filter((ref) => ref !== "evidence:merge-base-dev"),
+  }).map((issue) => issue.code);
+  assert.ok(missingMergeBaseEvidenceIssues.includes("policy_violation"));
+
+  const missingMergePrEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: mergeSuccessEvidenceRefs.filter((ref) => ref !== "evidence:merge-pr-42"),
+  }).map((issue) => issue.code);
+  assert.ok(missingMergePrEvidenceIssues.includes("policy_violation"));
+
+  for (const requiredRef of [
+    "evidence:merge-pr-non-draft",
+    "evidence:merge-requested-changes-cleared",
+    "evidence:merge-expected-base-policy-dev",
+    "evidence:merge-high-risk-diff-excluded",
+  ]) {
+    const missingMergeSafetyEvidenceIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId: "merge",
+      targetType: "branch",
+      targetId: "codex/example",
+      resultingStage: "deliver",
+      authorityState: "allowed",
+      riskTier: "extreme",
+      evidenceRefs: mergeSuccessEvidenceRefs.filter((ref) => ref !== requiredRef),
+    }).map((issue) => issue.code);
+    assert.ok(missingMergeSafetyEvidenceIssues.includes("policy_violation"), `missing merge safety evidence ${requiredRef}`);
+  }
+
+  for (const [label, replacement] of [
+    ["head", "verification:merge-local-head-fedcba9876543210fedcba9876543210fedcba98:base-dev:pr-42"],
+    ["base", "verification:merge-local-head-0123456789abcdef0123456789abcdef01234567:base-main:pr-42"],
+    ["pr", "verification:merge-local-head-0123456789abcdef0123456789abcdef01234567:base-dev:pr-43"],
+  ]) {
+    const mismatchedMergeEvidenceIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId: "merge",
+      targetType: "branch",
+      targetId: "codex/example",
+      resultingStage: "deliver",
+      authorityState: "allowed",
+      riskTier: "extreme",
+      evidenceRefs: mergeSuccessEvidenceRefs.map((ref) => ref.startsWith("verification:merge-local-") ? replacement : ref),
+    }).map((issue) => issue.code);
+    assert.ok(mismatchedMergeEvidenceIssues.includes("policy_violation"), `missing merge ${label} binding issue`);
+  }
+
+  const mismatchedMergeChecksEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: mergeSuccessEvidenceRefs.map((ref) => ref.startsWith("evidence:merge-checks-") ? "evidence:merge-checks-passed-head-fedcba9876543210fedcba9876543210fedcba98:pr-42" : ref),
+  }).map((issue) => issue.code);
+  assert.ok(mismatchedMergeChecksEvidenceIssues.includes("policy_violation"));
+
+  const pathTraversalEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    evidenceRefs: [...validEvidence, "artifact:../escape"],
+  }).map((issue) => issue.code);
+  assert.ok(pathTraversalEvidenceIssues.includes("evidence_required"));
+
+  const genericMergeLocalEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: mergeSuccessEvidenceRefs.map((ref) => ref.startsWith("verification:merge-local-") ? "test:merge-local-focused-check" : ref),
+  }).map((issue) => issue.code);
+  assert.ok(genericMergeLocalEvidenceIssues.includes("policy_violation"));
+
+  for (const [actionId, evidenceRefs] of Object.entries(deliverySuccessEvidence)) {
+    const targetType = actionId === "cleanup" ? "workspace" : "branch";
+    const riskTier = actionId === "push_branch" || actionId === "open_pr" ? "high" : "extreme";
+    const resultingStage = actionId === "cleanup" ? "terminal" : "deliver";
+    const missingSpecificEvidenceIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId,
+      targetType,
+      targetId: actionId === "cleanup" ? "workspace-1" : "codex/example",
+      resultingStage,
+      authorityState: "allowed",
+      riskTier,
+      evidenceRefs: [...validEvidence, evidenceRefs[0]],
+    }).map((issue) => issue.code);
+    assert.ok(missingSpecificEvidenceIssues.includes("policy_violation"), `missing action-specific evidence issue for ${actionId}`);
+
+    assert.deepEqual(validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId,
+      targetType,
+      targetId: actionId === "cleanup" ? "workspace-1" : "codex/example",
+      resultingStage,
+      authorityState: "allowed",
+      riskTier,
+      evidenceRefs: [...validEvidence, ...evidenceRefs],
+    }), [], `expected complete action-specific evidence for ${actionId}`);
+
+    const targetBoundEvidenceIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId,
+      targetType,
+      targetId: actionId === "cleanup" ? "workspace-1" : "codex/example",
+      resultingStage,
+      authorityState: "allowed",
+      riskTier,
+      evidenceRefs: [...validEvidence, ...evidenceRefs.filter((ref) => !ref.includes("-context:")), contextEvidenceRef(actionId, "wrong-target")],
+    }).map((issue) => issue.code);
+    assert.ok(targetBoundEvidenceIssues.includes("policy_violation"), `missing target-bound evidence issue for ${actionId}`);
+
+    if (actionId === "delete_branch" || actionId === "cleanup") {
+      for (const requiredRef of evidenceRefs.filter((ref) =>
+        /(?:merged-pr|lane-owner|worktree-identity|local-(?:branch-)?sha|remote-(?:branch-)?sha|delivery-head-match)/.test(ref)
+      )) {
+        const missingSafetyEvidenceIssues = validatePipelineOperationalActionResultV0({
+          ...validResult,
+          actionId,
+          targetType,
+          targetId: actionId === "cleanup" ? "workspace-1" : "codex/example",
+          resultingStage,
+          authorityState: "allowed",
+          riskTier,
+          evidenceRefs: [...validEvidence, ...evidenceRefs.filter((ref) => ref !== requiredRef)],
+        }).map((issue) => issue.code);
+        assert.ok(missingSafetyEvidenceIssues.includes("policy_violation"), `missing cleanup/delete safety evidence ${requiredRef}`);
+      }
+    }
+  }
+
+  const mutatingSuccessEvidence = {
+    dispatch_apply: {
+      targetType: "work_item",
+      targetId: "lane-ready",
+      riskTier: "high",
+      resultingStage: "execute",
+      resultingStatus: "active",
+      evidenceRefs: [
+        approvalEvidenceRef("needs_authority_approval", "dispatch_apply", "lane-ready"),
+        contextEvidenceRef("dispatch_apply", "lane-ready"),
+        `evidence:dispatch-apply-lane-${evidenceToken("lane-ready")}`,
+        "evidence:dispatch-apply-workspace-20260704-lane-ready",
+        "evidence:dispatch-apply-result-claimed",
+      ],
+    },
+    kill_worker: {
+      targetType: "worker",
+      targetId: "codex-1",
+      riskTier: "high",
+      resultingStage: "terminal",
+      resultingStatus: "complete",
+      evidenceRefs: [
+        approvalEvidenceRef("needs_authority_approval", "kill_worker", "codex-1"),
+        contextEvidenceRef("kill_worker", "codex-1"),
+        `evidence:kill-worker-target-${evidenceToken("codex-1")}`,
+        "evidence:kill-worker-result-terminated",
+      ],
+    },
+    mutate_source: {
+      targetType: "work_packet",
+      targetId: "packet-1",
+      riskTier: "high",
+      resultingStage: "execute",
+      resultingStatus: "active",
+      evidenceRefs: [
+        approvalEvidenceRef("needs_authority_approval", "mutate_source", "packet-1"),
+        contextEvidenceRef("mutate_source", "packet-1"),
+        `evidence:mutate-source-ref-${evidenceToken("packet-1")}`,
+        "evidence:mutate-source-result-updated",
+      ],
+    },
+    retry_verification: {
+      targetType: "execution_attempt",
+      targetId: "attempt-1",
+      riskTier: "medium",
+      resultingStage: "execute",
+      resultingStatus: "active",
+      evidenceRefs: [
+        approvalEvidenceRef("needs_authority_approval", "retry_verification", "attempt-1"),
+        contextEvidenceRef("retry_verification", "attempt-1"),
+        `evidence:retry-verification-ref-${evidenceToken("attempt-1")}`,
+        "evidence:retry-verification-result-queued",
+      ],
+    },
+    requeue: {
+      targetType: "work_item",
+      targetId: "item-1",
+      riskTier: "medium",
+      resultingStage: "execute",
+      resultingStatus: "waiting",
+      evidenceRefs: [
+        approvalEvidenceRef("needs_authority_approval", "requeue", "item-1"),
+        contextEvidenceRef("requeue", "item-1"),
+        `evidence:requeue-item-${evidenceToken("item-1")}`,
+        "evidence:requeue-result-queued",
+      ],
+    },
+    credential_or_provider_change: {
+      targetType: "runtime",
+      targetId: "runtime-1",
+      riskTier: "extreme",
+      resultingStage: "execute",
+      resultingStatus: "active",
+      evidenceRefs: [
+        approvalEvidenceRef("needs_resource_approval", "credential_or_provider_change", "runtime-1"),
+        contextEvidenceRef("credential_or_provider_change", "runtime-1"),
+        `evidence:provider-change-target-${evidenceToken("runtime-1")}`,
+        "evidence:provider-change-result-updated",
+      ],
+    },
+  };
+
+  for (const [actionId, config] of Object.entries(mutatingSuccessEvidence)) {
+    const missingConcreteEvidenceIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId,
+      targetType: config.targetType,
+      targetId: config.targetId,
+      resultingStage: config.resultingStage,
+      resultingStatus: config.resultingStatus,
+      authorityState: "allowed",
+      riskTier: config.riskTier,
+      evidenceRefs: [...validEvidence, config.evidenceRefs[0], config.evidenceRefs[1]],
+    }).map((issue) => issue.code);
+    assert.ok(missingConcreteEvidenceIssues.includes("policy_violation"), `missing concrete success evidence issue for ${actionId}`);
+
+    assert.deepEqual(validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId,
+      targetType: config.targetType,
+      targetId: config.targetId,
+      resultingStage: config.resultingStage,
+      resultingStatus: config.resultingStatus,
+      authorityState: "allowed",
+      riskTier: config.riskTier,
+      evidenceRefs: [...validEvidence, ...config.evidenceRefs],
+    }), [], `expected complete mutating success evidence for ${actionId}`);
+  }
+
+  for (const targetId of ["lane,ready:branch@1", "a" + "b".repeat(198) + "c"]) {
+    assert.deepEqual(validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId: "dispatch_apply",
+      targetType: "work_item",
+      targetId,
+      resultingStage: "execute",
+      resultingStatus: "active",
+      authorityState: "allowed",
+      riskTier: "high",
+      evidenceRefs: [
+        ...validEvidence,
+        approvalEvidenceRef("needs_authority_approval", "dispatch_apply", targetId),
+        contextEvidenceRef("dispatch_apply", targetId),
+        `evidence:dispatch-apply-lane-${evidenceToken(targetId)}`,
+        `evidence:dispatch-apply-workspace-${evidenceToken(`workspace-${targetId}`)}`,
+        "evidence:dispatch-apply-result-claimed",
+      ],
+    }), [], `expected bounded success evidence for target ${targetId}`);
+  }
+
+  const missingApprovalEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+  }).map((issue) => issue.code);
+  assert.ok(missingApprovalEvidenceIssues.includes("policy_violation"));
+
+  const misleadingApprovalEvidenceIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    evidenceRefs: [...validEvidence, "evidence:not-approval-needs_safety_approval-denied"],
+  }).map((issue) => issue.code);
+  assert.ok(misleadingApprovalEvidenceIssues.includes("policy_violation"));
+
+  const allowedBlockedWithoutApprovalIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    outcome: "blocked",
+    resultingStage: "deliver",
+    capabilityState: "gated",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    typedReason: "blocked_by_approval",
+    evidenceRefs: validEvidence,
+  }).map((issue) => issue.code);
+  assert.ok(allowedBlockedWithoutApprovalIssues.includes("policy_violation"));
+
+  const allowedBlockedWithApprovalIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    outcome: "blocked",
+    resultingStage: "deliver",
+    resultingStatus: "blocked",
+    capabilityState: "gated",
+    authorityState: "allowed",
+    riskTier: "extreme",
+    typedReason: "blocked_by_approval",
+    evidenceRefs: [...validEvidence, approvalEvidenceRef("needs_safety_approval", "merge")],
+  }).map((issue) => issue.code);
+  assert.ok(allowedBlockedWithApprovalIssues.includes("inconsistent_result"));
+
+  assert.deepEqual(validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "retry_verification",
+    targetType: "execution_attempt",
+    targetId: "attempt-1",
+    outcome: "failed",
+    resultingStage: "execute",
+    resultingStatus: "failed",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "medium",
+    typedReason: "verification_failed",
+    evidenceRefs: [
+      ...validEvidence,
+      approvalEvidenceRef("needs_authority_approval", "retry_verification", "attempt-1"),
+      contextEvidenceRef("retry_verification", "attempt-1"),
+    ],
+  }), []);
+
+  const allowedFailedWithoutContextIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "retry_verification",
+    targetType: "execution_attempt",
+    targetId: "attempt-1",
+    outcome: "failed",
+    resultingStage: "execute",
+    resultingStatus: "failed",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "medium",
+    typedReason: "verification_failed",
+    evidenceRefs: [...validEvidence, approvalEvidenceRef("needs_authority_approval", "retry_verification", "attempt-1")],
+  }).map((issue) => issue.code);
+  assert.ok(allowedFailedWithoutContextIssues.includes("inconsistent_result"));
+
+  const blockedActiveStatusIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    outcome: "blocked",
+    capabilityState: "gated",
+    authorityState: "blocked",
+    typedReason: "blocked_by_approval",
+  }).map((issue) => issue.code);
+  assert.ok(blockedActiveStatusIssues.includes("inconsistent_result"));
+
+  for (const resultingStage of ["unknown", "deferred"]) {
+    const successfulUnknownStageIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      resultingStage,
+    }).map((issue) => issue.code);
+    assert.ok(successfulUnknownStageIssues.includes("inconsistent_result"), `missing succeeded stage issue for ${resultingStage}`);
+  }
+
+  const failedActiveStatusIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    outcome: "failed",
+    capabilityState: "gated",
+    authorityState: "blocked",
+    typedReason: "verification_failed",
+  }).map((issue) => issue.code);
+  assert.ok(failedActiveStatusIssues.includes("inconsistent_result"));
+
+  const simulatedActiveStatusIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    outcome: "simulated",
+    capabilityState: "simulated",
+    authorityState: "blocked",
+    typedReason: "blocked_by_policy",
+  }).map((issue) => issue.code);
+  assert.ok(simulatedActiveStatusIssues.includes("inconsistent_result"));
+
+  for (const outcome of ["blocked", "failed", "simulated"]) {
+    const wrongAuthorityResultIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      actionId: "merge",
+      targetType: "branch",
+      targetId: "codex/example",
+      outcome,
+      resultingStage: "deliver",
+      capabilityState: outcome === "simulated" ? "simulated" : "gated",
+      authorityState: "needs_authority_approval",
+      riskTier: "extreme",
+      typedReason: "blocked_by_approval",
+    }).map((issue) => issue.code);
+    assert.ok(wrongAuthorityResultIssues.includes("policy_violation"), `missing result authority policy issue for ${outcome}`);
+  }
+
+  const wrongAuthoritySucceededIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "merge",
+    targetType: "branch",
+    targetId: "codex/example",
+    resultingStage: "deliver",
+    capabilityState: "available",
+    authorityState: "needs_authority_approval",
+    riskTier: "extreme",
+    typedReason: null,
+    evidenceRefs: [...validEvidence, approvalEvidenceRef("needs_safety_approval", "merge")],
+  }).map((issue) => issue.code);
+  assert.ok(wrongAuthoritySucceededIssues.includes("policy_violation"));
+
+  for (const result of [
+    { actionId: "mark_viewed", targetType: "work_packet", riskTier: "low" },
+    { actionId: "retry_verification", targetType: "execution_attempt", riskTier: "medium" },
+    { actionId: "requeue", targetType: "work_item", riskTier: "medium" },
+    { actionId: "mark_tested", targetType: "work_packet", riskTier: "medium" },
+  ]) {
+    const missingLowMediumApprovalIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      ...result,
+      targetId: "approval-gated-target",
+      resultingStage: "execute",
+      resultingStatus: "active",
+      authorityState: "allowed",
+      evidenceRefs: validEvidence,
+    }).map((issue) => issue.code);
+    assert.ok(missingLowMediumApprovalIssues.includes("policy_violation"), `missing approval evidence issue for ${result.actionId}`);
+  }
+
+  assert.deepEqual(validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "mark_viewed",
+    targetType: "work_packet",
+    targetId: "packet-1",
+    riskTier: "low",
+    authorityState: "allowed",
+    evidenceRefs: [...validEvidence, approvalEvidenceRef("needs_product_approval", "mark_viewed", "packet-1")],
+  }), []);
+
+  const simulatedResultIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    outcome: "simulated",
+    capabilityState: "simulated",
+    authorityState: "needs_authority_approval",
+    typedReason: null,
+  }).map((issue) => issue.code);
+  assert.ok(simulatedResultIssues.includes("inconsistent_result"));
+
+  const invalidResultIssues = validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "cleanup",
+    targetType: "workspace",
+    outcome: "succeeded",
+    capabilityState: "unavailable",
+    authorityState: "blocked",
+    riskTier: "low",
+    typedReason: null,
+  }).map((issue) => issue.code);
+  assert.ok(invalidResultIssues.includes("policy_violation"));
+  assert.ok(invalidResultIssues.includes("inconsistent_result"));
+
+  const hostileTopLevel = new Proxy({}, {
+    ownKeys() {
+      return ["actionId", "schemaVersion"];
+    },
+    getOwnPropertyDescriptor() {
+      return { enumerable: true, configurable: true };
+    },
+    get() {
+      throw new Error("trap");
+    },
+  });
+  let hostileTopLevelIssues = [];
+  assert.doesNotThrow(() => {
+    hostileTopLevelIssues = validatePipelineOperationalActionRequestV0(hostileTopLevel);
+  });
+  assert.ok(hostileTopLevelIssues.map((issue) => issue.code).includes("forbidden_field"));
+
+  const hostileRequestedBy = new Proxy({}, {
+    ownKeys() {
+      throw new Error("trap");
+    },
+    get() {
+      throw new Error("trap");
+    },
+  });
+  let hostileRequestedByIssues = [];
+  assert.doesNotThrow(() => {
+    hostileRequestedByIssues = validatePipelineOperationalActionRequestV0({
+      ...validRequest,
+      requestedBy: hostileRequestedBy,
+    });
+  });
+  assert.ok(hostileRequestedByIssues.map((issue) => issue.code).includes("forbidden_field"));
+
+  const hostilePrimitive = {
+    toString() {
+      throw new Error("trap");
+    },
+    valueOf() {
+      throw new Error("trap");
+    },
+  };
+  let hostilePrimitiveIssues = [];
+  assert.doesNotThrow(() => {
+    hostilePrimitiveIssues = validatePipelineOperationalActionRequestV0({
+      ...validRequest,
+      requestedBy: { actorType: hostilePrimitive, actorId: hostilePrimitive },
+    });
+  });
+  assert.ok(hostilePrimitiveIssues.map((issue) => issue.code).includes("invalid_actor"));
+
+  const hostileEvidenceRefs = new Proxy([], {
+    get() {
+      throw new Error("trap");
+    },
+  });
+  let hostileEvidenceIssues = [];
+  assert.doesNotThrow(() => {
+    hostileEvidenceIssues = validatePipelineOperationalActionResultV0({
+      ...validResult,
+      evidenceRefs: hostileEvidenceRefs,
+    });
+  });
+  assert.ok(hostileEvidenceIssues.map((issue) => issue.code).includes("evidence_required"));
+
+  const { proxy: revokedTopLevel, revoke: revokeTopLevel } = Proxy.revocable({}, {});
+  revokeTopLevel();
+  let revokedTopLevelIssues = [];
+  assert.doesNotThrow(() => {
+    revokedTopLevelIssues = validatePipelineOperationalActionRequestV0(revokedTopLevel);
+  });
+  assert.ok(revokedTopLevelIssues.map((issue) => issue.code).includes("forbidden_field"));
+
+  const { proxy: revokedNestedArray, revoke: revokeNestedArray } = Proxy.revocable([], {});
+  revokeNestedArray();
+  let revokedNestedArrayIssues = [];
+  assert.doesNotThrow(() => {
+    revokedNestedArrayIssues = validatePipelineOperationalRuntimeReadinessV0({
+      actionCapabilities: revokedNestedArray,
+    });
+  });
+  assert.ok(revokedNestedArrayIssues.map((issue) => issue.code).includes("forbidden_field"));
+  assert.ok(revokedNestedArrayIssues.map((issue) => issue.code).includes("invalid_enum"));
+
+  const stateRoot = await mkdtemp(join(tmpdir(), "operational-action-contract-cycle-"));
+  try {
+  const readyCycle = buildCyclePacket(
+    { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+    {
+      preflightStatus: { status: "ready" },
+      usageContext: { status: "normal" },
+      resourceContext: { status: "normal" },
+      workerStatus: { status: "ready" },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+      dispatchPreview: {
+        counts: { dispatchable: 1, active: 0 },
+        candidateStateCounts: { assignable: 1 },
+        mutation: "none; dry-run summary only",
+      },
+    },
+  );
+  const validReadiness = readyCycle.summary.operationalActions;
+  assert.deepEqual(validatePipelineOperationalRuntimeReadinessV0(validReadiness), []);
+  const readinessCapabilities = new Map(validReadiness.actionCapabilities.map((capability) => [capability.actionId, capability]));
+  assert.equal(readinessCapabilities.get("dispatch_apply").capabilityState, "gated");
+  assert.equal(readinessCapabilities.get("dispatch_apply").authorityState, "needs_authority_approval");
+  assert.equal(readinessCapabilities.get("dispatch_apply").typedReason, "blocked_by_approval");
+  for (const capability of validReadiness.actionCapabilities) {
+    assert.deepEqual(validatePipelineOperationalActionCapabilityV0(capability), []);
+  }
+
+  const unknownReadinessFieldIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    mutation: "none; read-only operational action readiness projection",
+  }).map((issue) => issue.code);
+  assert.ok(unknownReadinessFieldIssues.includes("forbidden_field"));
+
+  const missingCapabilityIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    actionCapabilities: validReadiness.actionCapabilities.slice(1),
+  }).map((issue) => issue.code);
+  assert.ok(missingCapabilityIssues.includes("inconsistent_result"));
+
+  const missingReadOnlyCapabilityIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    actionCapabilities: validReadiness.actionCapabilities.map((capability) =>
+      capability.actionId === "refresh_projection"
+        ? { ...capability, capabilityState: "gated", authorityState: "blocked", typedReason: "runtime_unavailable" }
+        : capability,
+    ),
+  }).map((issue) => issue.code);
+  assert.ok(missingReadOnlyCapabilityIssues.includes("inconsistent_result"));
+
+  const duplicateCapabilityIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    actionCapabilities: [...validReadiness.actionCapabilities, validReadiness.actionCapabilities[0]],
+  }).map((issue) => issue.code);
+  assert.ok(duplicateCapabilityIssues.includes("inconsistent_result"));
+
+  const degradedMissingHighRiskCapabilityIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    readinessState: "degraded",
+    capabilityState: "gated",
+    typedReason: "runtime_unavailable",
+    actionCapabilities: validReadiness.actionCapabilities.filter((capability) => capability.actionId !== "merge"),
+  }).map((issue) => issue.code);
+  assert.ok(degradedMissingHighRiskCapabilityIssues.includes("inconsistent_result"));
+
+  const readyReasonIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    typedReason: "blocked_by_policy",
+  }).map((issue) => issue.code);
+  assert.ok(readyReasonIssues.includes("inconsistent_result"));
+
+  const degradedMissingReasonIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    readinessState: "degraded",
+    capabilityState: "gated",
+    typedReason: null,
+  }).map((issue) => issue.code);
+  assert.ok(degradedMissingReasonIssues.includes("inconsistent_result"));
+
+  const contradictoryReadyIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    readinessState: "ready",
+    capabilityState: "gated",
+    typedReason: "runtime_unavailable",
+  }).map((issue) => issue.code);
+  assert.ok(contradictoryReadyIssues.includes("inconsistent_result"));
+
+  const disabledReadyIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    operationalMode: "disabled",
+  }).map((issue) => issue.code);
+  assert.ok(disabledReadyIssues.includes("inconsistent_result"));
+
+  const unavailableReadyIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    operationalMode: "unavailable",
+  }).map((issue) => issue.code);
+  assert.ok(unavailableReadyIssues.includes("inconsistent_result"));
+
+  const unknownAvailableReadinessIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    readinessState: "unknown",
+    operationalMode: "unknown",
+    freshnessState: "unknown",
+    capabilityState: "available",
+    typedReason: null,
+  }).map((issue) => issue.code);
+  assert.ok(unknownAvailableReadinessIssues.includes("inconsistent_result"));
+
+  const staleDegradedReadiness = buildCyclePacket(
+    { stateRoot, desiredWorkers: 1, runId: "manager-test", now: "not-a-date" },
+    {
+      preflightStatus: { status: "ready" },
+      usageContext: { status: "normal" },
+      resourceContext: { status: "normal" },
+      workerStatus: { status: "ready" },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+      dispatchPreview: {
+        counts: { dispatchable: 1, active: 0 },
+        candidateStateCounts: { assignable: 1 },
+        mutation: "none; dry-run summary only",
+      },
+    },
+  ).summary.operationalActions;
+  assert.equal(staleDegradedReadiness.readinessState, "degraded");
+  assert.equal(staleDegradedReadiness.freshnessState, "stale");
+  assert.equal(staleDegradedReadiness.typedReason, "projection_stale");
+  assert.equal(
+    staleDegradedReadiness.actionCapabilities.find((capability) => capability.actionId === "refresh_projection")?.typedReason,
+    "projection_stale",
+  );
+  const staleDegradedReadinessIssues = validatePipelineOperationalRuntimeReadinessV0(staleDegradedReadiness).map((issue) => issue.code);
+  assert.ok(staleDegradedReadinessIssues.includes("stale_or_unparseable_readiness"));
+
+  const futureReadinessIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    checkedAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+    expiresAt: new Date(Date.now() + 7 * 60 * 1000).toISOString(),
+  }).map((issue) => issue.code);
+  assert.ok(futureReadinessIssues.includes("stale_or_unparseable_readiness"));
+
+  const checkedAfterExpiresIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    checkedAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+    expiresAt: new Date(Date.now() + 60 * 1000).toISOString(),
+  }).map((issue) => issue.code);
+  assert.ok(checkedAfterExpiresIssues.includes("stale_or_unparseable_readiness"));
+
+  const expiredReadinessIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    checkedAt: "2020-01-01T00:00:00.000Z",
+    expiresAt: "2020-01-01T00:05:00.000Z",
+  }).map((issue) => issue.code);
+  assert.ok(expiredReadinessIssues.includes("stale_or_unparseable_readiness"));
+
+  const overlongReadinessIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    checkedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+  }).map((issue) => issue.code);
+  assert.ok(overlongReadinessIssues.includes("stale_or_unparseable_readiness"));
+
+  const unsafeReadinessSummaryIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    summary: "raw prompt provider payload",
+  }).map((issue) => issue.code);
+  assert.ok(unsafeReadinessSummaryIssues.includes("unsafe_metadata_retention"));
+
+  const malformedReadinessEvidenceIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    evidenceRefs: ["bad evidence ref"],
+  }).map((issue) => issue.code);
+  assert.ok(malformedReadinessEvidenceIssues.includes("evidence_required"));
+
+  const excessiveReadinessEvidenceIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    evidenceRefs: Array.from({ length: 25 }, (_, index) => `verification:readiness-${index}`),
+  }).map((issue) => issue.code);
+  assert.ok(excessiveReadinessEvidenceIssues.includes("evidence_required"));
+
+  const targetlessApprovedDispatchCapabilityIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    operationalMode: "bounded_write",
+    actionCapabilities: validReadiness.actionCapabilities.map((capability) =>
+      capability.actionId === "dispatch_apply"
+        ? {
+            ...capability,
+            targetId: null,
+            capabilityState: "available",
+            authorityState: "allowed",
+            typedReason: null,
+            evidenceRefs: [
+              "operational-action:dispatch_apply",
+              "manager-cycle:manager-test",
+              "evidence:capability-approval-needs_authority_approval:dispatch_apply:unknown-0",
+            ],
+          }
+        : capability,
+    ),
+  }).map((issue) => issue.code);
+  assert.ok(targetlessApprovedDispatchCapabilityIssues.includes("blank_identifier"));
+
+  const readOnlyApprovedDispatchReadinessIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    operationalMode: "read_only",
+    actionCapabilities: validReadiness.actionCapabilities.map((capability) =>
+      capability.actionId === "dispatch_apply"
+        ? {
+            ...capability,
+            targetId: "lane-ready",
+            capabilityState: "available",
+            authorityState: "allowed",
+            typedReason: null,
+            evidenceRefs: [
+              "operational-action:dispatch_apply",
+              "manager-cycle:manager-test",
+              capabilityApprovalEvidenceRef("needs_authority_approval", "dispatch_apply", "lane-ready"),
+            ],
+          }
+        : capability,
+    ),
+  }).map((issue) => issue.code);
+  assert.ok(readOnlyApprovedDispatchReadinessIssues.includes("inconsistent_result"));
+
+  const boundedWriteMissingDispatchApprovalIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    operationalMode: "bounded_write",
+    actionCapabilities: validReadiness.actionCapabilities.map((capability) =>
+      capability.actionId === "dispatch_apply"
+        ? {
+            ...capability,
+            targetId: "lane-ready",
+            capabilityState: "available",
+            authorityState: "allowed",
+            typedReason: null,
+            evidenceRefs: [
+              "operational-action:dispatch_apply",
+              "manager-cycle:manager-test",
+            ],
+          }
+        : capability,
+    ),
+  }).map((issue) => issue.code);
+  assert.ok(boundedWriteMissingDispatchApprovalIssues.includes("policy_violation"));
+
+  const invalidReadinessIssues = validatePipelineOperationalRuntimeReadinessV0({
+    ...validReadiness,
+    schemaVersion: "old",
+    actionSchemaVersion: "old-action",
+    freshnessState: "stale",
+    summary: "provider payload sk-testtoken123456789",
+    checkedAt: "not-a-date",
+    expiresAt: "2020-01-01T00:00:00.000Z",
+    actionCapabilities: "not-array",
+    rawPayloadRetained: true,
+    credential: "do not retain credentials",
+  }).map((issue) => issue.code);
+  for (const expectedCode of ["bad_schema_version", "stale_or_unparseable_readiness", "invalid_enum", "bad_retention_flag", "unsafe_metadata_retention", "forbidden_field"]) {
+    assert.ok(invalidReadinessIssues.includes(expectedCode), `missing readiness issue ${expectedCode}`);
+  }
+  } finally {
+    await rm(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("authoritative lifecycle rules create metadata-only creation and transition events", async () => {
@@ -752,7 +2279,7 @@ async function loadCompiledLifecycleModule() {
       2,
     ),
   );
-  const result = spawnSync("node", ["apps/dashboard/node_modules/typescript/bin/tsc", "-p", tsconfigPath], { encoding: "utf8" });
+  const result = spawnSync("node", [tscPath(), "-p", tsconfigPath], { encoding: "utf8" });
   assert.equal(
     result.status,
     0,
@@ -770,6 +2297,40 @@ async function loadCompiledLifecycleModule() {
   await writeFile(join(packageScope, "contracts", "index.js"), "export * from '../../../packages/contracts/src/pipeline-control-plane/index.js';\n");
   const modulePath = join(outDir, "dist/packages/workflow-core/src/pipeline-control-plane/index.js");
   return import(pathToFileURL(modulePath).href);
+}
+
+async function loadCompiledContractModule() {
+  const outDir = await mkdtemp(join(tmpdir(), "pipeline-control-plane-contract-"));
+  const tsconfigPath = join(outDir, "tsconfig.json");
+  await writeFile(
+    tsconfigPath,
+    JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          strict: true,
+          verbatimModuleSyntax: true,
+          baseUrl: repoRootPath,
+          rootDir: repoRootPath,
+          outDir: join(outDir, "dist"),
+        },
+        include: [join(repoRootPath, "packages/contracts/src/pipeline-control-plane/index.ts")],
+      },
+      null,
+      2,
+    ),
+  );
+  const result = spawnSync("node", [tscPath(), "-p", tsconfigPath], { encoding: "utf8" });
+  assert.equal(
+    result.status,
+    0,
+    result.stderr || result.stdout || result.error?.message || `tsc exited with status ${result.status} signal ${result.signal}`,
+  );
+  const distRoot = join(outDir, "dist");
+  await writeFile(join(distRoot, "package.json"), JSON.stringify({ type: "module" }));
+  return import(pathToFileURL(join(distRoot, "packages/contracts/src/pipeline-control-plane/index.js")).href);
 }
 
 function projectionContractFixture(overrides = {}) {
@@ -986,7 +2547,7 @@ function projectionStageSummaryFixtures() {
 }
 
 function loadDashboardSupervisorModule(source) {
-  const ts = dashboardRequire("typescript");
+  const ts = typescriptModule();
   const output = ts.transpileModule(source, {
     compilerOptions: {
       esModuleInterop: true,

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -9,6 +10,7 @@ import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const LEDGER_ACTION_FINGERPRINT_VERSION = "manager-ledger-action-fingerprint.v2";
 export const agentUsageRelativePath = ".tmux/plugins/agent-usage-tmux/scripts/agent_usage.sh";
 export const codexUsageFetcherFile = "fetch_codex_usage.py";
 const RETIRE_BLOCKED_QUESTION_BASIS = "retire_blocked_question";
@@ -105,6 +107,10 @@ export function parseCommonArgs(argv = []) {
     recoveryPath: "",
     sourceRefs: [],
     evidenceRefs: [],
+    correlationId: "",
+    causationId: "",
+    orderingKey: "",
+    idempotencyKey: "",
     materialDecision: false,
     recordPolicy: "",
     assignmentSummaryFile: "",
@@ -190,6 +196,22 @@ export function parseCommonArgs(argv = []) {
       options.evidenceRefs.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
     } else if (arg.startsWith("--evidence-refs=")) {
       options.evidenceRefs.push(...arg.slice("--evidence-refs=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--correlation-id") {
+      options.correlationId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--correlation-id=")) {
+      options.correlationId = arg.slice("--correlation-id=".length);
+    } else if (arg === "--causation-id") {
+      options.causationId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--causation-id=")) {
+      options.causationId = arg.slice("--causation-id=".length);
+    } else if (arg === "--ordering-key") {
+      options.orderingKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--ordering-key=")) {
+      options.orderingKey = arg.slice("--ordering-key=".length);
+    } else if (arg === "--idempotency-key") {
+      options.idempotencyKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--idempotency-key=")) {
+      options.idempotencyKey = arg.slice("--idempotency-key=".length);
     } else if (arg === "--material-decision") {
       options.materialDecision = true;
     } else if (arg === "--record-policy") {
@@ -348,11 +370,19 @@ function boundedDesiredWorkers(value) {
 }
 
 function validRunId(runId) {
-  return /^[a-z0-9][a-z0-9-]{0,80}$/i.test(String(runId || ""));
+  return /^[a-z0-9][a-z0-9-]{0,80}$/i.test(safeString(runId, ""));
 }
 
 function safeRunId(runId) {
-  const value = String(runId || defaultRunId());
+  if (runId === undefined || runId === null || runId === "") {
+    return defaultRunId();
+  }
+  let value = "";
+  try {
+    value = String(runId);
+  } catch {
+    throw new Error("Invalid manager run id: uncoercible value");
+  }
   if (!validRunId(value)) {
     throw new Error(`Invalid manager run id: ${value}`);
   }
@@ -360,8 +390,10 @@ function safeRunId(runId) {
 }
 
 export function resolveManagerRunId(options = {}, context = {}) {
-  if (options.runId || context.runId) {
-    return safeRunId(options.runId || context.runId);
+  const optionRunId = safeReadProperty(options, "runId", "");
+  const contextRunId = safeReadProperty(context, "runId", "");
+  if (optionRunId || contextRunId) {
+    return safeRunId(optionRunId || contextRunId);
   }
   return latestExistingManagerRunId(options, context) || defaultRunId();
 }
@@ -1972,6 +2004,31 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
   const existingWorkers = workerRead.value.filter(isPlainObject).map(projectWorker);
   const existingIds = new Set(existingWorkers.map((worker) => worker.workerId));
   const existingSessions = new Set(existingWorkers.map((worker) => worker.sessionName).filter(Boolean));
+  const warmActionMaterial = warmWorkerActionMaterial(planned);
+  const warmReserveArgs = {
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: "worker_warm_apply",
+    eventName: "worker_warm_apply",
+    fallbackSummary: `Warmed ${planned.length} manager-owned worker(s).`,
+    options: {
+      authorityBasis: "manager-owned-worker-warm-existing-gates",
+      summary: `Warmed ${planned.length} manager-owned worker(s).`,
+      sourceRefs: ["manager-cycle-packet", "kendall-manager-control-plane"],
+      evidenceRefs: [paths.workers],
+      recoveryPath: "inspect tmux sessions and manager workers.json before retrying",
+      result: "ready",
+      idempotencyKey: `worker_warm_apply:${runId}:${planned.map((result) => result.workerId).join(",")}`,
+      actionMaterial: warmActionMaterial,
+    },
+    actionPlan: { kind: "worker_warm_apply", workers: warmActionMaterial },
+  };
+  const warmReservation = reserveLedgerAction(paths, runId, warmReserveArgs, {
+    duplicateReconciler: (record) => reconcileWarmLedgerDuplicate(paths, runId, planned, record, context),
+  });
+  if (warmReservation.packet) return warmReservation.packet;
   const results = [];
   for (const action of planned) {
     const existingIndex = existingWorkers.findIndex((worker) => worker.workerId === action.workerId || worker.sessionName === action.sessionName);
@@ -1991,6 +2048,17 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
     results.push({ ...action, status: launch.ok ? (recoverExisting ? "recovered_started" : "started") : "failed", launch });
     if (!launch.ok) {
       writeFileSync(paths.workers, `${JSON.stringify(existingWorkers, null, 2)}\n`);
+      finalizeLedgerAction(paths, runId, warmReservation.record, {
+        ...warmReserveArgs,
+        fallbackSummary: `Failed warming ${results.length} manager-owned worker(s).`,
+        options: {
+          ...warmReserveArgs.options,
+          summary: `Failed warming ${results.length} manager-owned worker(s).`,
+          result: "blocked_partial",
+          actionMaterial: warmActionMaterial,
+        },
+        actionPlan: { kind: "worker_warm_apply", workers: warmActionMaterial, results: workerResultMaterial(results) },
+      });
       return packet({
         ok: false,
         status: "blocked",
@@ -2032,7 +2100,7 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
   }
   writeFileSync(paths.workers, `${JSON.stringify(existingWorkers, null, 2)}\n`);
   const warmedCount = results.filter((result) => result.status === "started" || result.status === "recovered_started").length;
-  const event = ledgerRecord({
+  const warmEventArgs = {
     idPrefix: "evt",
     idName: "eventId",
     actor: "manager",
@@ -2048,9 +2116,12 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
       recoveryPath: "inspect tmux sessions and manager workers.json before retrying",
       result: "ready",
       idempotencyKey: `worker_warm_apply:${runId}:${results.map((result) => result.workerId).join(",")}`,
+      actionMaterial: warmActionMaterial,
     },
-  });
-  appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+    actionPlan: { kind: "worker_warm_apply", workers: warmActionMaterial, results: workerResultMaterial(results) },
+  };
+  const eventAppend = finalizeLedgerAction(paths, runId, warmReservation.record, warmEventArgs);
+  if (eventAppend.packet?.ok === false) return eventAppend.packet;
   return packet({
     status: "ready",
     summary: {
@@ -2206,6 +2277,31 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     });
   }
   const workerRecords = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const handoffActionMaterial = handoffPairingActionMaterial(pairings);
+  const handoffReserveArgs = {
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: "worker_handoff_apply",
+    eventName: "worker_handoff_apply",
+    fallbackSummary: `Sent ${pairings.length} manager-owned worker handoff(s).`,
+    options: {
+      authorityBasis: "manager-owned-worker-handoff-existing-gates",
+      summary: `Sent ${pairings.length} manager-owned worker handoff(s).`,
+      sourceRefs: ["assignment-report", "manager-workers", ...pairings.flatMap((pairing) => receiptSourceRefs(pairing))],
+      evidenceRefs: [paths.workers, ...pairings.map((pairing) => pairing.handoffPath).filter(Boolean)],
+      recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
+      result: "ready",
+      idempotencyKey: `worker_handoff_apply:${runId}:${pairings.map((pairing) => pairing.workerId).join(",")}:${pairings.map((pairing) => pairing.assignmentId).join(",")}`,
+      actionMaterial: handoffActionMaterial,
+    },
+    actionPlan: { kind: "worker_handoff_apply", handoffs: handoffActionMaterial },
+  };
+  const handoffReservation = reserveLedgerAction(paths, runId, handoffReserveArgs, {
+    duplicateReconciler: (record) => reconcileHandoffLedgerDuplicate(paths, runId, pairings, record, context),
+  });
+  if (handoffReservation.packet) return handoffReservation.packet;
   const results = [];
   for (const pairing of pairings) {
     const handoffBody = renderWorkerHandoffFile(pairing);
@@ -2219,26 +2315,20 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       const sentCount = results.filter((result) => result.status === "handoff_sent").length;
       if (sentCount > 0) {
         writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
-        const event = ledgerRecord({
-          idPrefix: "evt",
-          idName: "eventId",
-          actor: "manager",
-          typeName: "eventType",
-          typeValue: "worker_handoff_apply",
-          eventName: "worker_handoff_apply",
-          fallbackSummary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
-          options: {
-            authorityBasis: "manager-owned-worker-handoff-existing-gates",
-            summary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
-            sourceRefs: ["assignment-report", "manager-workers", ...results.flatMap((result) => receiptSourceRefs(result))],
-            evidenceRefs: [paths.workers, ...results.filter((result) => result.status === "handoff_sent").map((result) => result.handoffPath).filter(Boolean)],
-            recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
-            result: "blocked_partial",
-            idempotencyKey: `worker_handoff_apply_partial:${runId}:${results.map((result) => result.workerId).join(",")}:${results.map((result) => result.assignmentId).join(",")}`,
-          },
-        });
-        appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
       }
+      finalizeLedgerAction(paths, runId, handoffReservation.record, {
+        ...handoffReserveArgs,
+        fallbackSummary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
+        options: {
+          ...handoffReserveArgs.options,
+          summary: `Partially sent ${sentCount} manager-owned worker handoff(s) before a later failure.`,
+          sourceRefs: ["assignment-report", "manager-workers", ...results.flatMap((result) => receiptSourceRefs(result))],
+          evidenceRefs: [paths.workers, ...results.filter((result) => result.status === "handoff_sent").map((result) => result.handoffPath).filter(Boolean)],
+          result: "blocked_partial",
+          actionMaterial: handoffActionMaterial,
+        },
+        actionPlan: { kind: "worker_handoff_apply", handoffs: handoffActionMaterial, results: workerResultMaterial(results) },
+      });
       return packet({
         ok: false,
         status: "blocked",
@@ -2270,7 +2360,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
   }
   writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
   const sentCount = results.filter((result) => result.status === "handoff_sent").length;
-  const event = ledgerRecord({
+  const handoffEventArgs = {
     idPrefix: "evt",
     idName: "eventId",
     actor: "manager",
@@ -2286,9 +2376,12 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       recoveryPath: "inspect manager handoff files, worker records, and tmux sessions before retrying",
       result: "ready",
       idempotencyKey: `worker_handoff_apply:${runId}:${results.map((result) => result.workerId).join(",")}:${results.map((result) => result.assignmentId).join(",")}`,
+      actionMaterial: handoffActionMaterial,
     },
-  });
-  appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
+    actionPlan: { kind: "worker_handoff_apply", handoffs: handoffActionMaterial, results: workerResultMaterial(results) },
+  };
+  const eventAppend = finalizeLedgerAction(paths, runId, handoffReservation.record, handoffEventArgs);
+  if (eventAppend.packet?.ok === false) return eventAppend.packet;
   return packet({
     status: "ready",
     summary: {
@@ -5617,6 +5710,48 @@ function buildWarmWorkerAction(candidate = {}, paths = {}, options = {}) {
   };
   Object.defineProperty(action, "launchCommand", { value: launchCommand, enumerable: false });
   return action;
+}
+
+function warmWorkerActionMaterial(actions = []) {
+  return actions.map((action) => ({
+    workerId: action.workerId,
+    sessionName: action.sessionName,
+    owner: action.owner,
+    runId: action.runId,
+    recoveryMode: action.recoveryMode,
+    previousAssignmentId: action.previousAssignmentId || null,
+    previousTaskId: action.previousTaskId || null,
+    cwd: action.cwd,
+    commandDigest: ledgerValueDigest(action.launchCommand || action.command || ""),
+    envDigest: ledgerValueDigest(action.env || {}),
+  }));
+}
+
+function handoffPairingActionMaterial(pairings = []) {
+  return pairings.map((pairing) => ({
+    workerId: pairing.workerId,
+    sessionName: pairing.sessionName,
+    owner: pairing.owner,
+    assignmentId: pairing.assignmentId,
+    taskId: pairing.taskId,
+    worktreePath: pairing.worktreePath || "",
+    handoffPath: pairing.handoffPath,
+    pastePath: pairing.pastePath,
+    handoffBodyDigest: ledgerValueDigest(renderWorkerHandoffFile(pairing)),
+    pasteTextDigest: ledgerValueDigest(pairing.pasteText || ""),
+  }));
+}
+
+function workerResultMaterial(results = []) {
+  return results.map((result) => ({
+    workerId: result.workerId,
+    sessionName: result.sessionName,
+    assignmentId: result.assignmentId || null,
+    taskId: result.taskId || null,
+    status: result.status,
+    pasteOk: result.paste?.ok ?? null,
+    launchOk: result.launch?.ok ?? null,
+  }));
 }
 
 function defaultWarmWorkerCommand(stateRoot = "") {
@@ -9390,9 +9525,21 @@ export function buildMatureToolEvaluationPlan(options = {}, context = {}) {
       nextAction: "Remove or rename duplicate candidate overrides before selecting an adapter path.",
     });
   }
-  const candidates = candidateDefinitions.map((definition) =>
+  const evaluatedCandidates = candidateDefinitions.map((definition) =>
     evaluateMatureToolCandidate(definition, evidenceByCandidate.get(definition.candidateId), blockers),
   );
+  const duplicateRecordIds = duplicateMatureToolCandidateIds(evaluatedCandidates);
+  const duplicateRecordOrdinal = new Map();
+  const decisionRecords = evaluatedCandidates.map((candidate) => {
+    const duplicateOrdinal = duplicateRecordIds.includes(candidate.candidateId)
+      ? (duplicateRecordOrdinal.set(candidate.candidateId, (duplicateRecordOrdinal.get(candidate.candidateId) || 0) + 1), duplicateRecordOrdinal.get(candidate.candidateId))
+      : 0;
+    return buildMatureToolDecisionRecord(runId, candidate, { duplicateOrdinal });
+  });
+  const candidates = evaluatedCandidates.map((candidate, index) => ({
+    ...candidate,
+    decisionRecord: decisionRecords[index],
+  }));
   const selectedPaths = selectMatureToolPaths(candidates);
   const fallbackSelected = selectedPaths.queueBackend?.candidateId === "sqlite-lease-harness";
   const blocked = blockers.length > 0;
@@ -9410,6 +9557,8 @@ export function buildMatureToolEvaluationPlan(options = {}, context = {}) {
     summary: {
       runId,
       candidates,
+      decisionRecords,
+      decisionRecordsByCategory: groupMatureToolDecisionRecordsByCategory(decisionRecords),
       selectedPaths,
       fallbackSelected,
       noAdditionalPlanningCycleRequired: true,
@@ -9565,13 +9714,14 @@ function evaluateMatureToolCandidate(definition, evidence = {}, blockers = []) {
   )) {
     decision = gateResults.blocked ? "reject" : "defer";
   }
-  if (["defer", "reject"].includes(decision) && !fallback) {
+  if (!fallback) {
     blockers.push({
       code: "mature-tool-fallback-missing",
       candidateId: definition.candidateId,
-      message: "Deferred or rejected mature-tool candidates require an implementation fallback.",
+      message: "Mature-tool candidates require an implementation fallback.",
       nextAction: "Name the fallback path so backend work can continue.",
     });
+    if (decision === "adopt") decision = "defer";
   }
 
   return {
@@ -9591,9 +9741,91 @@ function evaluateMatureToolCandidate(definition, evidence = {}, blockers = []) {
     fallback,
     adapterBoundary: "DispatcherPort",
     stopLines: (definition.stopLines || []).slice(0, 8),
+    fallbackCandidate: definition.fallbackCandidate === true,
     mutationMode: "none; evaluation metadata only",
     rawPayloadRetained: false,
   };
+}
+
+function buildMatureToolDecisionRecord(runId, candidate = {}, options = {}) {
+  const recordDecision = matureToolDecisionRecordState(candidate);
+  const duplicateSuffix = options.duplicateOrdinal > 0 ? `:${options.duplicateOrdinal}` : "";
+  return {
+    schemaVersion: "mature-tool-decision-record/v0",
+    recordId: `mature-tool-decision:${runId}:${candidate.candidateId}${duplicateSuffix}`,
+    runId,
+    candidateId: candidate.candidateId,
+    name: candidate.name,
+    category: candidate.category,
+    decision: recordDecision,
+    evaluationDecision: candidate.decision,
+    directProductTruth: matureToolDirectProductTruthDecision(candidate, recordDecision),
+    localFirstBehavior: candidate.localDependencyPosture,
+    restartRecovery: candidate.recoveryPosture,
+    concurrencySafety: matureToolConcurrencySafety(candidate),
+    installChurn: matureToolInstallChurn(candidate),
+    pipelineNormalization: "kendall_summary_packets",
+    license: candidate.licensePosture,
+    telemetryDataResidency: matureToolTelemetryDataResidency(candidate),
+    adapterBoundary: candidate.adapterBoundary,
+    rollbackPath: candidate.rollbackPath,
+    fallback: candidate.fallback,
+    evidenceRefs: (candidate.runnableEvidenceRefs || []).slice(0, 8),
+    rejectionReasons: (candidate.rejectionReasons || []).slice(0, 12),
+    stopLines: (candidate.stopLines || []).slice(0, 8),
+    contractTestsRequired: candidate.decision === "adopt" && !candidate.fallbackCandidate ? "before_live_adapter" : "not_required_for_current_metadata_only_path",
+    sourceRefs: ["requirement:FR-4", "architecture:mature-tool-decision-pattern"],
+    localProofFallbackValid: Boolean(candidate.fallback),
+    mutationMode: "none; decision record metadata only",
+    rawPayloadRetained: false,
+  };
+}
+
+function matureToolDecisionRecordState(candidate = {}) {
+  if (candidate.decision === "adopt") return candidate.fallbackCandidate ? "adopted" : "adapter_only_reference";
+  if (candidate.decision === "reject") return "rejected";
+  return "deferred";
+}
+
+function matureToolDirectProductTruthDecision(candidate = {}, recordDecision = "") {
+  if (candidate.fallbackCandidate && candidate.decision === "adopt") return "accepted_fallback_product_truth";
+  if (recordDecision === "adapter_only_reference") return "rejected_adapter_only";
+  if (recordDecision === "rejected") return "rejected";
+  return "not_accepted_deferred";
+}
+
+function matureToolConcurrencySafety(candidate = {}) {
+  if (candidate.leaseSemanticsPosture === "passed") return "lease_semantics_passed";
+  if (candidate.leaseSemanticsPosture === "failed") return "lease_semantics_failed";
+  if (candidate.leaseSemanticsPosture === "missing") return "lease_semantics_missing";
+  if (candidate.category !== "queue_backend") return "not_applicable";
+  return sanitizeLedgerField(candidate.leaseSemanticsPosture || "unproven", "unproven", 80);
+}
+
+function matureToolInstallChurn(candidate = {}) {
+  const posture = candidate.localDependencyPosture;
+  if (["built_in", "repo_existing", "existing_repo_scripts"].includes(posture)) return "none_existing_repo_path";
+  if (posture === "local_service_required") return "local_service_required";
+  if (posture === "local_binary_optional") return "optional_local_binary";
+  if (["remote_only", "remote_required"].includes(posture)) return "blocked_remote_dependency";
+  return "unproven";
+}
+
+function matureToolTelemetryDataResidency(candidate = {}) {
+  if (candidate.dataBoundaryPosture === "local_only") return "local_metadata_only";
+  if (candidate.dataBoundaryPosture === "remote_data_required") return "blocked_remote_data";
+  if (candidate.dataBoundaryPosture === "blocked") return "blocked";
+  return "unknown";
+}
+
+function groupMatureToolDecisionRecordsByCategory(records = []) {
+  const grouped = Object.create(null);
+  for (const record of records) {
+    if (!record?.category) continue;
+    if (!grouped[record.category]) grouped[record.category] = [];
+    grouped[record.category].push(record);
+  }
+  return grouped;
 }
 
 function matureToolGateResults(definition, evidence = {}) {
@@ -9634,12 +9866,14 @@ function selectMatureToolPaths(candidates = []) {
     decision: "fallback",
     adapterBoundary: "CandidateWorkPacketPolicy",
     fallback: "deterministic-policy-checks",
+    decisionRecord: buildMatureToolSyntheticFallbackDecisionRecord("policy_engine", "deterministic-policy-checks", "CandidateWorkPacketPolicy"),
   };
   const sessionWorktree = byCategory("session_worktree")[0] || {
     candidateId: "codex-workspace-protocol",
     decision: "fallback",
     adapterBoundary: "WorkspaceSessionAdapter",
     fallback: "codex-workspace-protocol",
+    decisionRecord: buildMatureToolSyntheticFallbackDecisionRecord("session_worktree", "codex-workspace-protocol", "WorkspaceSessionAdapter"),
   };
   const verificationRunner = byCategory("verification_runner").find((candidate) => candidate.candidateId !== "existing-pnpm-scripts") ||
     byCategory("verification_runner").find((candidate) => candidate.candidateId === "existing-pnpm-scripts") ||
@@ -9649,6 +9883,38 @@ function selectMatureToolPaths(candidates = []) {
     policyEngine,
     sessionWorktree,
     verificationRunner,
+  };
+}
+
+function buildMatureToolSyntheticFallbackDecisionRecord(category, candidateId, adapterBoundary) {
+  return {
+    schemaVersion: "mature-tool-decision-record/v0",
+    recordId: `mature-tool-decision:selected-fallback:${category}:${candidateId}`,
+    runId: "selected-fallback",
+    candidateId,
+    name: candidateId,
+    category,
+    decision: "adopted",
+    evaluationDecision: "fallback",
+    directProductTruth: "accepted_fallback_product_truth",
+    localFirstBehavior: "repo_existing",
+    restartRecovery: "passed",
+    concurrencySafety: "not_applicable",
+    installChurn: "none_existing_repo_path",
+    pipelineNormalization: "kendall_summary_packets",
+    license: "acceptable",
+    telemetryDataResidency: "local_metadata_only",
+    adapterBoundary,
+    rollbackPath: `Continue using ${candidateId}.`,
+    fallback: candidateId,
+    evidenceRefs: [],
+    rejectionReasons: [],
+    stopLines: ["do_not_install_dependency", "do_not_bypass_dispatcher_port", "do_not_replace_existing_fallback"],
+    contractTestsRequired: "not_required_for_current_metadata_only_path",
+    sourceRefs: ["requirement:FR-4", "architecture:mature-tool-decision-pattern"],
+    localProofFallbackValid: true,
+    mutationMode: "none; decision record metadata only",
+    rawPayloadRetained: false,
   };
 }
 
@@ -10882,6 +11148,7 @@ function escapeRegExp(value = "") {
 }
 
 export function buildDispatchPreview(options = {}, context = {}) {
+  const callerSuppliedPreview = Boolean(context.dispatchPreview);
   const preview = context.dispatchPreview || runWorkspaceJson(workspaceJsonArgs(["dispatch-next", "--dry-run", "--summary-json"], options), context);
   if (preview?.ok === false) {
     return packet({
@@ -10927,7 +11194,16 @@ export function buildDispatchPreview(options = {}, context = {}) {
     preview?.authorityDecision?.recoveryPath ||
     preview?.authority_decision?.recovery_path ||
     null;
-  const requestedAllowed = Boolean(dispatch.allowed ?? preview?.allowed ?? selected?.claimable);
+  const requestedAllowed = (dispatch.allowed ?? preview?.allowed ?? selected?.claimable) === true;
+  const operationalDispatchAuthority = normalizeOperationalDispatchAuthority(
+    dispatch.operationalDispatchAuthority ||
+      dispatch.operational_dispatch_authority ||
+      preview?.operationalDispatchAuthority ||
+      preview?.operational_dispatch_authority ||
+      selected?.operationalDispatchAuthority ||
+      selected?.operational_dispatch_authority,
+    { allowed: requestedAllowed, selectedLane },
+  );
   const evidenceBlockers = [];
   if (requestedAllowed && !baseBranch) {
     evidenceBlockers.push({ code: "dispatch-preview-base-branch-missing", message: "Allowed dispatch preview is missing base branch evidence." });
@@ -10939,8 +11215,11 @@ export function buildDispatchPreview(options = {}, context = {}) {
     evidenceBlockers.push({ code: "dispatch-preview-selected-lane-conflict", message: "Dispatch and selected lane evidence disagree." });
   }
   const allowed = requestedAllowed && evidenceBlockers.length === 0;
+  const trustedOperationalDispatchAuthority = !callerSuppliedPreview && operationalDispatchAuthority
+    ? { ...operationalDispatchAuthority, producer: "codex-workspace-dispatch-next-dry-run" }
+    : operationalDispatchAuthority;
   const dispatchBlockers = Array.isArray(dispatch.blockers) ? dispatch.blockers : Array.isArray(preview?.blockers) ? preview.blockers : [];
-  return packet({
+  const result = packet({
     status: allowed ? "ready" : "blocked",
     summary: {
       available: true,
@@ -10953,6 +11232,7 @@ export function buildDispatchPreview(options = {}, context = {}) {
       workspaceAction,
       nextCommand,
       nextActionGuidance,
+      operationalDispatchAuthority: trustedOperationalDispatchAuthority,
       recoveryPath,
       blockers: [...evidenceBlockers, ...dispatchBlockers],
       stopLines: Array.isArray(dispatch.stopLines)
@@ -10975,6 +11255,8 @@ export function buildDispatchPreview(options = {}, context = {}) {
       ? [{ code: "dispatch-preview-ready", nextAction: nextActionGuidance || "Review dispatch preview before applying existing gates." }]
       : [],
   });
+  if (!callerSuppliedPreview) markTrustedDispatchPreviewAuthority(result);
+  return result;
 }
 
 function summarizeActiveLaneEvidence(assignment = {}, options = {}) {
@@ -15548,6 +15830,225 @@ function buildRecoveryNotRequestedPlan(options = {}, context = {}) {
   });
 }
 
+const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0";
+const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0";
+const OPERATIONAL_ACTION_READINESS_TTL_MS = 5 * 60 * 1000;
+const OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS = 60 * 1000;
+const PIPELINE_OPERATIONAL_ACTION_IDS = [
+  "inspect",
+  "refresh_projection",
+  "dispatch_apply",
+  "mark_viewed",
+  "retry_verification",
+  "requeue",
+  "mark_tested",
+  "kill_worker",
+  "mutate_source",
+  "push_branch",
+  "open_pr",
+  "merge",
+  "delete_branch",
+  "cleanup",
+  "credential_or_provider_change",
+];
+const FORBIDDEN_OPERATIONAL_ACTION_METADATA =
+  /\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?|logs?|sources?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|source[\s_-]*(?:dumps?|copies?|snapshots?)|stack[\s_-]*dumps?|console[\s_-]*logs?|secrets?(?:[\s_-]*(?:key|token|value|id))?|credentials?(?:[\s_-]*(?:key|token|value|id))?|passwords?|api[\s_-]*keys?|access[\s_-]*tokens?|auth[\s_-]*tokens?|private[\s_-]*keys?|passphrases?|(?:terminal|tmux|pane)[\s_-]*(?:scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const SECRET_LIKE_OPERATIONAL_ACTION_REF =
+  /\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])/i;
+const OPERATIONAL_ACTION_EVIDENCE_REF =
+  /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$/;
+const OPERATIONAL_ACTION_IDENTIFIER =
+  /^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/;
+const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
+const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
+const TRUSTED_OPERATIONAL_READINESS = Symbol("trustedOperationalReadiness");
+const TRUSTED_DISPATCH_PREVIEW_AUTHORITY = Symbol("trustedDispatchPreviewAuthority");
+const TRUSTED_DISPATCH_PREVIEW_AUTHORITY_RECORDS = new WeakSet();
+
+function buildOperationalActionReadinessProjection({ runOptions = {}, usage = {}, resources = {}, preflight = {}, workers = {}, delivery = {}, cleanup = {}, context = {} } = {}) {
+  const safeRunOptions = safePlainObjectSnapshot(runOptions) || {};
+  const safeContext = safePlainObjectSnapshot(context) || {};
+  const safeUsage = safeProjectionPacket(usage);
+  const safeResources = safeProjectionPacket(resources);
+  const safePreflight = safeProjectionPacket(preflight);
+  const safeWorkers = safeProjectionPacket(workers);
+  const safeDelivery = safeProjectionPacket(delivery);
+  const safeCleanup = safeProjectionPacket(cleanup);
+  const contextNow = safeReadProperty(safeContext, "now", undefined);
+  const runOptionsNow = safeReadProperty(safeRunOptions, "now", undefined);
+  const suppliedCheckedAt = contextNow !== undefined || runOptionsNow !== undefined;
+  const requestedCheckedAtInput = operationalTimestampInput(contextNow ?? runOptionsNow ?? new Date().toISOString(), new Date().toISOString());
+  const requestedCheckedAt = requestedCheckedAtInput.value;
+  const requestedCheckedAtMs = Date.parse(requestedCheckedAt);
+  const nowMs = Date.now();
+  const requestedTimestampUnparseable = suppliedCheckedAt && (!requestedCheckedAtInput.readable || !Number.isFinite(requestedCheckedAtMs));
+  const requestedTimestampStale = Number.isFinite(requestedCheckedAtMs) && requestedCheckedAtMs + OPERATIONAL_ACTION_READINESS_TTL_MS <= nowMs;
+  const requestedTimestampFuture = Number.isFinite(requestedCheckedAtMs) && requestedCheckedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS;
+  const requestedTimestampInvalid = requestedTimestampUnparseable || requestedTimestampStale || requestedTimestampFuture;
+  const checkedAtMs = requestedTimestampUnparseable
+    ? nowMs - OPERATIONAL_ACTION_READINESS_TTL_MS - 1
+    : Number.isFinite(requestedCheckedAtMs)
+      ? requestedCheckedAtMs
+      : nowMs;
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const expiresAt = new Date(checkedAtMs + OPERATIONAL_ACTION_READINESS_TTL_MS).toISOString();
+  const evidenceRefs = [
+    `manager-cycle:${operationalActionEvidenceToken(safeReadProperty(safeRunOptions, "runId", "unknown"), "unknown", 100)}`,
+    `preflight:${operationalActionEvidenceToken(safeReadProperty(safePreflight, "status", "unknown"), "unknown", 40)}`,
+    `usage:${operationalActionEvidenceToken(safeReadProperty(safeUsage, "status", "unknown"), "unknown", 40)}`,
+    `resources:${operationalActionEvidenceToken(safeReadProperty(safeResources, "status", "unknown"), "unknown", 40)}`,
+  ];
+  const actionEvidence = (actionId) => [`operational-action:${actionId}`, ...evidenceRefs];
+  const preflightStatus = safeReadProperty(safePreflight, "status", "unknown");
+  const usageStatus = safeString(safeReadProperty(safeUsage, "status", ""), "");
+  const resourceStatus = safeString(safeReadProperty(safeResources, "status", ""), "");
+  const preflightReady = preflightStatus === "ready" && !hasOperationalActionReadinessBlockers(safePreflight);
+  const usageReady = ["normal", "ready"].includes(usageStatus) && !hasOperationalActionReadinessBlockers(safeUsage);
+  const resourceReady = ["normal", "ready"].includes(resourceStatus) && !hasOperationalActionReadinessBlockers(safeResources);
+  const readOnlyReady = preflightReady && usageReady && resourceReady && !requestedTimestampInvalid;
+  const workerReady = safeReadProperty(safeWorkers, "status", "unknown") === "ready" && !hasOperationalActionReadinessBlockers(safeWorkers);
+  const deliveryReady = safeReadProperty(safeDelivery, "status", "unknown") === "ready" && !hasOperationalActionReadinessBlockers(safeDelivery);
+  const cleanupReady = safeReadProperty(safeCleanup, "status", "unknown") === "ready" && !hasOperationalActionReadinessBlockers(safeCleanup);
+  const workerMutationGate = workerReady && readOnlyReady ? "needs_authority_approval" : "blocked";
+  const deliveryGate = deliveryReady && readOnlyReady ? "needs_authority_approval" : "blocked";
+  const cleanupGate = cleanupReady && readOnlyReady ? "needs_safety_approval" : "blocked";
+  const mergeGate = deliveryReady && readOnlyReady ? "needs_safety_approval" : "blocked";
+  const typedReason = readOnlyReady ? null : requestedTimestampInvalid ? "projection_stale" : "runtime_unavailable";
+  const refreshProjectionTypedReason = readOnlyReady ? null : requestedTimestampInvalid ? "projection_stale" : "runtime_unavailable";
+
+  return {
+    schemaVersion: PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION,
+    actionSchemaVersion: PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION,
+    readinessState: readOnlyReady ? "ready" : "degraded",
+    operationalMode: "read_only",
+    freshnessState: requestedTimestampInvalid ? "stale" : "live",
+    capabilityState: readOnlyReady ? "available" : "gated",
+    typedReason,
+    checkedAt,
+    expiresAt,
+    summary: readOnlyReady
+      ? "Read-only operational action capability projection is available for manager-cycle dogfooding."
+      : requestedTimestampInvalid
+        ? "Operational action projection is degraded because supplied cycle time was outside the freshness window; action execution remains gated."
+        : "Operational action projection is degraded; action execution remains gated by existing manager-control-plane blockers.",
+    actionCapabilities: [
+      operationalActionCapability("inspect", "manager_run", "available", "allowed", "low", null, "Inspect compact manager cycle state without mutation.", actionEvidence("inspect")),
+      operationalActionCapability("refresh_projection", "projection", readOnlyReady ? "available" : "gated", readOnlyReady ? "allowed" : "blocked", "low", refreshProjectionTypedReason, "Refresh compact read-only manager projection evidence.", actionEvidence("refresh_projection")),
+      operationalActionCapability("dispatch_apply", "work_item", "gated", "needs_authority_approval", "high", "blocked_by_approval", "Apply dispatch decisions only through explicit manager-control-plane authority gates.", actionEvidence("dispatch_apply")),
+      operationalActionCapability("mark_viewed", "work_packet", "simulated", "needs_product_approval", "low", "blocked_by_approval", "Record viewed state only after backend ownership exists.", actionEvidence("mark_viewed")),
+      operationalActionCapability("retry_verification", "execution_attempt", "gated", "needs_authority_approval", "medium", "blocked_by_approval", "Retry verification only through explicit authority and evidence gates.", actionEvidence("retry_verification")),
+      operationalActionCapability("requeue", "work_item", "gated", "needs_authority_approval", "medium", "blocked_by_approval", "Requeue only through manager-control-plane authority gates.", actionEvidence("requeue")),
+      operationalActionCapability("mark_tested", "work_packet", "gated", "needs_product_approval", "medium", "blocked_by_approval", "Mark tested only through operator test result evidence.", actionEvidence("mark_tested")),
+      operationalActionCapability("kill_worker", "worker", "gated", workerMutationGate, "high", workerMutationGate === "blocked" ? "runtime_unavailable" : "blocked_by_approval", "Worker termination remains blocked without explicit safety evidence.", actionEvidence("kill_worker")),
+      operationalActionCapability("mutate_source", "work_packet", "gated", "needs_authority_approval", "high", "blocked_by_policy", "Source mutation is not available from the continuous cycle projection.", actionEvidence("mutate_source")),
+      operationalActionCapability("push_branch", "branch", "gated", deliveryGate, "high", deliveryGate === "blocked" ? "delivery_blocked" : "blocked_by_approval", "Branch push remains behind delivery gates.", actionEvidence("push_branch")),
+      operationalActionCapability("open_pr", "branch", "gated", deliveryGate, "high", deliveryGate === "blocked" ? "delivery_blocked" : "blocked_by_approval", "PR creation remains behind delivery gates.", actionEvidence("open_pr")),
+      operationalActionCapability("merge", "branch", "gated", mergeGate, "extreme", mergeGate === "blocked" ? "delivery_blocked" : "blocked_by_approval", "Merge requires exact-head delivery evidence and is not continuous-cycle executable.", actionEvidence("merge")),
+      operationalActionCapability("delete_branch", "branch", "gated", cleanupGate, "extreme", cleanupGate === "blocked" ? "blocked_by_policy" : "blocked_by_approval", "Branch deletion remains behind cleanup gates.", actionEvidence("delete_branch")),
+      operationalActionCapability("cleanup", "workspace", "gated", cleanupGate, "extreme", cleanupGate === "blocked" ? "blocked_by_policy" : "blocked_by_approval", "Cleanup remains behind merged-lane cleanup evidence.", actionEvidence("cleanup")),
+      operationalActionCapability("credential_or_provider_change", "runtime", "unavailable", "blocked", "extreme", "blocked_by_policy", "Provider account changes are outside continuous manager authority.", actionEvidence("credential_or_provider_change")),
+    ],
+    evidenceRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function operationalTimestampInput(value, fallback) {
+  try {
+    const text = String(value ?? fallback ?? "");
+    return { readable: true, value: sanitizeLedgerField(text, fallback, 80) };
+  } catch {
+    return { readable: false, value: fallback };
+  }
+}
+
+function hasOperationalActionReadinessBlockers(packet = {}) {
+  const safePacket = safeProjectionPacket(packet);
+  const summary = safePlainObjectSnapshot(safeReadProperty(safePacket, "summary", {})) || {};
+  if (safeReadProperty(safePacket, "ok", true) === false || safeReadProperty(summary, "ok", true) === false) return true;
+  const blockers = operationalArrayEvidence(safePacket, "blockers");
+  const summaryBlockers = operationalArrayEvidence(summary, "blockers");
+  if (!blockers.readable || !summaryBlockers.readable) return true;
+  if (blockers.values.length > 0) return true;
+  if (summaryBlockers.values.length > 0) return true;
+  const packetWarnings = operationalArrayEvidence(safePacket, "warnings");
+  const summaryWarnings = operationalArrayEvidence(summary, "warnings");
+  if (!packetWarnings.readable || !summaryWarnings.readable) return true;
+  const warnings = [...packetWarnings.values, ...summaryWarnings.values];
+  return warnings.some((warning) => {
+    if (typeof warning === "string") {
+      return /^(?:critical|error|fatal)(?::|\b)/i.test(warning.trim());
+    }
+    if (!warning || typeof warning !== "object") return false;
+    const warningRecord = safePlainObjectSnapshot(warning) || {};
+    const severity = safeString(safeReadProperty(warningRecord, "severity", ""), "").toLowerCase();
+    const level = safeString(safeReadProperty(warningRecord, "level", ""), "").toLowerCase();
+    const state = safeString(safeReadProperty(warningRecord, "state", ""), "").toLowerCase();
+    const status = safeString(safeReadProperty(warningRecord, "status", ""), "").toLowerCase();
+    return (
+      ["critical", "error", "fatal"].includes(severity) ||
+      ["critical", "error", "fatal"].includes(level) ||
+      ["blocked", "failed", "unavailable", "critical"].includes(state) ||
+      ["blocked", "failed", "unavailable", "critical"].includes(status)
+    );
+  });
+}
+
+function operationalArrayEvidence(record = {}, key = "") {
+  try {
+    if (!record || typeof record !== "object") return { readable: true, values: [] };
+    if (!Object.prototype.hasOwnProperty.call(record, key)) return { readable: true, values: [] };
+    const value = record[key];
+    if (value === undefined || value === null) return { readable: true, values: [] };
+    if (!Array.isArray(value)) return { readable: false, values: [] };
+    return { readable: true, values: Array.from(value) };
+  } catch {
+    return { readable: false, values: [] };
+  }
+}
+
+function operationalActionCapability(actionId, targetType, capabilityState, authorityState, riskTier, typedReason, expectedResultSummary, evidenceRefs) {
+  return {
+    actionId,
+    targetType,
+    targetId: null,
+    capabilityState,
+    authorityState,
+    riskTier,
+    typedReason,
+    expectedResultSummary,
+    correlationRequired: true,
+    idempotencyRequired: true,
+    evidenceRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function operationalActionEvidenceToken(value, fallback = "unknown", maxLength = 100) {
+  const sanitized = sanitizeLedgerField(value, fallback, maxLength);
+  const rawValue = safeString(value, "");
+  if (
+    FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(rawValue) ||
+    SECRET_LIKE_OPERATIONAL_ACTION_REF.test(rawValue) ||
+    FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(sanitized) ||
+    SECRET_LIKE_OPERATIONAL_ACTION_REF.test(sanitized)
+  ) {
+    return fallback;
+  }
+  const normalized = sanitized
+    .replace(/[^A-Za-z0-9._/@:-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLength);
+  return normalized || fallback;
+}
+
+function safeProjectionPacket(value) {
+  return safePlainObjectSnapshot(value) || {};
+}
+
 function summarizeLedgerDispatcherSummary(summary = null) {
   if (!isPlainObject(summary)) return null;
   return {
@@ -15582,22 +16083,29 @@ function runReadOnlyTool(runner, command, args, context = {}) {
 }
 
 export function buildCyclePacket(options = {}, context = {}) {
+  options = safePlainObjectSnapshot(options) || {};
+  context = safePlainObjectSnapshot(context) || {};
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const readOnlyRunOptions = { ...runOptions, apply: false };
+  const usageContext = safePlainObjectSnapshot(safeReadProperty(context, "usageContext", {})) || {};
+  const resourceContext = safePlainObjectSnapshot(safeReadProperty(context, "resourceContext", {})) || {};
+  const preflightStatus = safeReadProperty(context, "preflightStatus", null);
+  const workerStatus = safeReadProperty(context, "workerStatus", null);
+  const dispatchPreviewContext = safeReadProperty(context, "dispatchPreview", null);
   const usageInput = {
-    ...(isPlainObject(context.usageContext) ? context.usageContext : {}),
-    weeklyUsage: context.usageContext?.weeklyUsage ?? context.weeklyUsage,
-    weeklyUsageContext: context.usageContext?.weeklyUsageContext ?? context.weeklyUsageContext,
-    weeklyUsagePressure: context.usageContext?.weeklyUsagePressure ?? context.weeklyUsagePressure,
+    ...usageContext,
+    weeklyUsage: safeReadProperty(usageContext, "weeklyUsage", undefined) ?? safeReadProperty(context, "weeklyUsage", undefined),
+    weeklyUsageContext: safeReadProperty(usageContext, "weeklyUsageContext", undefined) ?? safeReadProperty(context, "weeklyUsageContext", undefined),
+    weeklyUsagePressure: safeReadProperty(usageContext, "weeklyUsagePressure", undefined) ?? safeReadProperty(context, "weeklyUsagePressure", undefined),
   };
-  const usage = usageInput && (usageInput.status || usageInput.state)
+  const usage = usageInput && (safeReadProperty(usageInput, "status", null) || safeReadProperty(usageInput, "state", null))
     ? normalizeUsagePacketContext(usageInput, context)
     : buildUsageStatus(usageInput);
-  const resources = context.resourceContext && (context.resourceContext.status || context.resourceContext.state) ? normalizePacketContext(context.resourceContext) : buildResourceStatus(context.resourceContext || {});
-  const preflight = context.preflightStatus ? normalizePacketContext(context.preflightStatus) : buildPreflight(readOnlyRunOptions, context);
-  const dispatchPreview = context.dispatchPreview ? normalizeDispatchPreviewContext(context.dispatchPreview) : buildDispatchPreview(readOnlyRunOptions, context);
+  const resources = resourceContext && (safeReadProperty(resourceContext, "status", null) || safeReadProperty(resourceContext, "state", null)) ? normalizePacketContext(resourceContext) : buildResourceStatus(resourceContext || {});
+  const preflight = preflightStatus ? normalizePacketContext(preflightStatus) : buildPreflight(readOnlyRunOptions, context);
+  const dispatchPreview = dispatchPreviewContext ? normalizeDispatchPreviewContext(dispatchPreviewContext) : buildDispatchPreview(readOnlyRunOptions, context);
   const runway = buildRefillPlan(readOnlyRunOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
-  const workers = context.workerStatus ? normalizePacketContext(context.workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
+  const workers = workerStatus ? normalizePacketContext(workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
   const workerHandoff = buildWorkerHandoffPlan(readOnlyRunOptions, {
     ...context,
     workerStatus: workers,
@@ -15623,7 +16131,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   });
   const steering = buildSteeringPlan(readOnlyRunOptions, context);
   const cleanup = context.cleanupPlan || buildCleanupPlan(readOnlyRunOptions, context);
-  const resume = buildResumeState(readOnlyRunOptions, context);
+  const resume = context.resumeState ? normalizePacketContext(context.resumeState) : buildResumeState(readOnlyRunOptions, context);
   const hasRecoverySignals = Boolean(context.stateSignals || context.reconciliationStateSignals);
   const recovery = context.recoveryPlan
     ? normalizePacketContext(context.recoveryPlan)
@@ -15646,7 +16154,21 @@ export function buildCyclePacket(options = {}, context = {}) {
   const selfRepair = buildManagerSelfRepairSummary(readOnlyRunOptions, context);
   const feedback = buildFeedbackPlan(readOnlyRunOptions, context);
   const delivery = context.deliveryPlan ? normalizePacketContext(context.deliveryPlan) : buildDeliveryPlan(readOnlyRunOptions, { ...context, feedbackPlan: feedback });
+  const operationalActions = buildOperationalActionReadinessProjection({
+    runOptions: readOnlyRunOptions,
+    usage,
+    resources,
+    preflight,
+    workers,
+    delivery,
+    cleanup,
+    context,
+  });
   const dispatcherState = buildCycleDispatcherState(dispatchPreview);
+  const dispatchTrustProof = bindTrustedOperationalDispatchAuthority(operationalActions, dispatchPreview);
+  markTrustedOperationalReadiness(operationalActions, { dispatchApply: dispatchTrustProof });
+  const summaryOperationalActions = sanitizeCyclePacketValue(operationalActions);
+  markTrustedOperationalReadiness(summaryOperationalActions, { dispatchApply: dispatchTrustProof });
   const queueLeaseSummary = buildCycleQueueLeaseSummary(dispatcherState);
   const signalGaps = buildCycleSignalGaps({ usage, resources, dispatchPreview, workers, cleanup, preflight, context });
   const observations = buildCycleObservations({ dispatchPreview, workers, context });
@@ -15670,11 +16192,12 @@ export function buildCyclePacket(options = {}, context = {}) {
   if (preflightBlockers.length > 0 && !frictionAttention && !workerProgressAttention && !laneAdvanceAttention && activeWorkerCount === 0) {
     blockers.push(...preflightBlockers);
   }
-  blockers.push(...signalGaps.blockers);
-  blockers.push(...(resume.blockers || []));
-  blockers.push(...(recovery.blockers || []));
-  blockers.push(...(runway.blockers || []));
-  blockers.push(...(workers.blockers || []));
+  blockers.push(...safeBlockerArray(signalGaps.blockers, "signal-gap-blocker-unreadable"));
+  blockers.push(...safeBlockerArray(usage.blockers, "usage-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(resume.blockers, "resume-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(recovery.blockers, "recovery-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(runway.blockers, "runway-blockers-unreadable"));
+  blockers.push(...safeBlockerArray(workers.blockers, "worker-blockers-unreadable"));
   const dispatchPosture = applySteeringToDispatchPosture(buildDispatchPosture(usage.status, resources.status, usage.summary?.weekly), steering.summary);
   const dispatchPostureAllowsNewDispatch = dispatchPosture.summary?.newDispatchAllowed !== false;
   blockers.push(...dispatchPosture.blockers);
@@ -15683,8 +16206,11 @@ export function buildCyclePacket(options = {}, context = {}) {
   blockers.push(...(feedback.blockers || []));
   blockers.push(...(delivery.blockers || []));
   const baseStatus = blockers.length > 0 ? "blocked" : frictionAttention || steeringAttention || feedbackAttention || workerProgressAttention || laneAdvanceAttention ? "attention" : "ready";
-  const continuation = buildContinuationPlan({ status: baseStatus, blockers, runway, usage, resources, workers, resume, dispatchPreview });
-  const status = baseStatus === "blocked" && continuation.canContinue ? "attention" : baseStatus;
+  const continuation = buildContinuationPlan({ status: baseStatus, blockers, runway, usage, resources, workers, resume, dispatchPreview, operationalActions });
+  const deliveryOrPrOperationBlocked = blockers.some((blocker) =>
+    ["delivery-phase-authority-missing", "delivery-phase-authority-invalid", "pr-stewardship-evidence-missing", "pr-stewardship-high-risk"].includes(blocker.code),
+  );
+  const status = baseStatus === "blocked" && continuation.canContinue && !deliveryOrPrOperationBlocked ? "attention" : baseStatus;
   const reportedBlockers = suppressSupersededCycleBlockers({ blockers, cleanup });
   const recoveryMutationBlocked = recoveryBlocksManagerMutation(recovery);
   const autoApply = [
@@ -15746,6 +16272,11 @@ export function buildCyclePacket(options = {}, context = {}) {
     code: action.code || "cleanup-action",
   }));
   const supersededActions = supersededCycleActionCodes({ cleanup });
+  const dispatchApplyOperationallyAllowed = operationalActionCapabilityAllows(
+    { summary: { operationalActions, dispatchPreview: dispatchPreview.summary, dispatcher: dispatcherState.dispatcher } },
+    "dispatch_apply",
+  );
+  const dispatchPreviewActions = continuation.canContinue && dispatchApplyOperationallyAllowed ? (dispatchPreview.nextActions || []) : [];
   const nextActions = uniqueActions([
     ...(recoveryMutationBlocked ? [] : workerQuestionBlockerActions),
     ...(recoveryMutationBlocked ? [] : workerWarmActions),
@@ -15753,7 +16284,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     ...(recoveryMutationBlocked ? [] : laneAdvanceActions),
     ...(recoveryMutationBlocked ? [] : workerProgressActions),
     ...signalGaps.nextActions,
-    ...(recoveryMutationBlocked ? [] : dispatchPostureAllowsNewDispatch ? (dispatchPreview.nextActions || []) : []),
+    ...(recoveryMutationBlocked ? [] : dispatchPostureAllowsNewDispatch ? dispatchPreviewActions : []),
     ...(recoveryMutationBlocked ? [] : runway.nextActions || []),
     ...activeWorkerActions,
     ...(usage.nextActions || []),
@@ -15766,12 +16297,12 @@ export function buildCyclePacket(options = {}, context = {}) {
   ].filter((action) => !supersededActions.has(action.code)));
   const sourceBackedRefillAction =
     !recoveryMutationBlocked && runway.summary.dispatchableLanes === 0 && runway.summary.sourceSlice ? runway.nextActions?.[0]?.nextAction : null;
-  const safeDispatchAction = !recoveryMutationBlocked && dispatchPostureAllowsNewDispatch && dispatchPreview.summary?.allowed ? dispatchPreview.nextActions?.[0]?.nextAction : null;
+  const safeDispatchAction = continuation.canContinue && !recoveryMutationBlocked && dispatchPostureAllowsNewDispatch && dispatchApplyOperationallyAllowed && dispatchPreview.summary?.allowed === true ? dispatchPreview.nextActions?.[0]?.nextAction : null;
   const activeWorkerAction = activeWorkerActions[0]?.nextAction || null;
   const workerWarmAction = recoveryMutationBlocked ? null : workerWarmActions[0]?.nextAction || null;
   const workerHandoffAction = recoveryMutationBlocked ? null : workerHandoffActions[0]?.nextAction || null;
   const laneAdvanceAction = recoveryMutationBlocked ? null : laneAdvanceActions[0]?.nextAction || null;
-  const cleanupAction = recoveryMutationBlocked ? null : cleanupActions[0]?.nextAction || null;
+  const cleanupAction = recoveryMutationBlocked || !continuation.canContinue ? null : cleanupActions[0]?.nextAction || null;
   const actionNeeded =
     (recoveryMutationBlocked ? null : workerQuestionBlockerActions[0]?.nextAction) ||
     (recoveryMutationBlocked ? null : steering.blockers?.[0]?.nextAction) ||
@@ -15790,6 +16321,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     resume.blockers?.[0]?.nextAction ||
     runway.blockers?.[0]?.nextAction ||
     (recoveryMutationBlocked ? null : runway.nextActions?.[0]?.nextAction) ||
+    (status === "blocked" ? "cycle blocked; inspect blockers before manager mutation." : null) ||
     "none";
   const progress = buildProgressBeaconPlan(runOptions, {
     runState: continuation.progressRunState,
@@ -15815,7 +16347,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   const report = progress.summary.heartbeat.text;
   const preflightSummary = preflight.summary || {};
   const cycleRecommendedActions = sanitizeCycleActions(nextActions);
-  return packet({
+  const cyclePacket = packet({
     ok: status !== "blocked",
     status,
     summary: {
@@ -15868,6 +16400,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       },
       progress: sanitizeCyclePacketValue(progress.summary),
       feedback: sanitizeCyclePacketValue(feedback.summary),
+      operationalActions: summaryOperationalActions,
       signalGaps: {
         status: signalGaps.status,
         gapCount: signalGaps.gapCount,
@@ -15898,6 +16431,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(persistedCapabilityPosture.warnings || []), ...(selfRepair.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
     nextActions: cycleRecommendedActions,
   });
+  return cyclePacket;
 }
 
 export function buildContinuousRunPlan(options = {}, context = {}) {
@@ -15930,6 +16464,7 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
     .map((action) => buildContinuousAction(action, cycle, capabilityPosture))
     .filter(Boolean)
     .filter((action) => continuousActionAllowedByContinuation(action, cycle))
+    .filter((action) => continuousActionAllowedByOperationalCapability(action, cycle))
     .map((action) => annotateContinuousAction(action));
   const capabilityFiltered = filterActionsByCapabilityPosture(actionableCandidates, capabilityPosture);
   const usefulWorkPolicy = buildContinuousUsefulWorkPolicy(capabilityFiltered.actions, { options, context, cycle });
@@ -15955,11 +16490,7 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
   const effectiveSelected = stopReasons.length > 0 ? null : selected;
   const status = stopReasons.length > 0 ? "blocked" : effectiveSelected || cycle.status === "attention" ? "attention" : "ready";
   const selectedAction = sanitizeCyclePacketValue(effectiveSelected);
-  const attentionNextAction = sanitizeLedgerField(
-    dispatchRoutingHold?.nextAction || cycle.nextActions?.[0]?.nextAction || "Inspect the latest manager-cycle-packet recommended actions.",
-    "Inspect the latest manager-cycle-packet recommended actions.",
-    260,
-  );
+  const attentionNextAction = continuousAttentionNextAction(cycle, dispatchRoutingHold);
   return packet({
     ok: stopReasons.length === 0,
     status,
@@ -15978,6 +16509,7 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
       resourceState: resources.state || "unknown",
       cycleStatus: cycle.status,
       selectedAction,
+      operationalActions: sanitizeCyclePacketValue(cycle.summary?.operationalActions || null),
       managerCapabilityPosture: sanitizeCyclePacketValue(effectiveCapabilityPosture.summary),
       capabilityHolds: sanitizeCyclePacketValue(mergeCapabilityHoldSummaries(capabilityFiltered.summary, effectiveCapabilityFiltered.summary)),
       codexAdvisor: sanitizeCyclePacketValue(codexAdvisor.summary),
@@ -16861,6 +17393,41 @@ function continuousWorkClassPriority(action = {}) {
   return priorities.get(action.workClass) ?? 80;
 }
 
+function continuousAttentionNextAction(cycle = {}, dispatchRoutingHold = null) {
+  if (dispatchRoutingHold?.nextAction && !isDispatchApplyCommandText(dispatchRoutingHold.nextAction)) {
+    return sanitizeLedgerField(dispatchRoutingHold.nextAction, "Inspect the latest manager-cycle-packet recommended actions.", 260);
+  }
+  const safeAction = (Array.isArray(cycle.nextActions) ? cycle.nextActions : []).find((action) => {
+    if (action?.code === "dispatch-preview-ready") return false;
+    return action?.nextAction && !isDispatchApplyCommandText(action.nextAction);
+  });
+  return sanitizeLedgerField(
+    safeAction?.nextAction || "Inspect the latest manager-cycle-packet recommended actions.",
+    "Inspect the latest manager-cycle-packet recommended actions.",
+    260,
+  );
+}
+
+function isDispatchApplyCommandText(value = "") {
+  const text = safeString(value, "").toLowerCase();
+  return /\bdispatch-next\b/.test(text) && /\b--apply\b/.test(text);
+}
+
+function safeBlockerArray(value = [], fallbackCode = "blocker-unreadable") {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    return [{ code: fallbackCode, message: "Blocker evidence was not a readable array.", nextAction: "Inspect compact manager packet evidence before continuing." }];
+  }
+  return value.map((blocker, index) => {
+    if (blocker && typeof blocker === "object" && !Array.isArray(blocker)) return blocker;
+    return {
+      code: fallbackCode,
+      message: `Blocker evidence entry ${index} was not a readable object.`,
+      nextAction: "Inspect compact manager packet evidence before continuing.",
+    };
+  });
+}
+
 function continuousActionPriority(action = {}) {
   const priorities = new Map([
     ["continuous-worker-answer-question", 10],
@@ -16895,6 +17462,426 @@ function continuousActionAllowedByContinuation(action = {}, cycle = {}) {
   }
   if (continuation.dispatchApplyAllowed === false && action.mutationClass === "assignment_workspace_claim_only") {
     return false;
+  }
+  return true;
+}
+
+function continuousActionAllowedByOperationalCapability(action = {}, cycle = {}) {
+  if (action.readOnly === true || !action.mutationClass) return true;
+  const readiness = cycle.summary?.operationalActions || null;
+  if (!readiness) return true;
+  const actionId = operationalActionIdForContinuousMutation(action);
+  if (!actionId) return operationalReadinessFreshAndComplete(readiness) && existingGateContinuousMutationAllowed(action);
+  return operationalActionCapabilityAllows(cycle, actionId);
+}
+
+function operationalActionIdForContinuousMutation(action = {}) {
+  switch (action.code) {
+    case "continuous-dispatch-apply":
+      return "dispatch_apply";
+    case "continuous-worker-retire":
+      return "kill_worker";
+    case "continuous-refill-apply":
+      return "mutate_source";
+    case "continuous-worker-recovery-inspection":
+    case "continuous-lane-advance-apply":
+    case "continuous-bmad-code-review-request":
+      return "refresh_projection";
+    default:
+      return null;
+  }
+}
+
+function existingGateContinuousMutationAllowed(action = {}) {
+  return [
+    "continuous-worker-answer-question",
+    "continuous-worker-prompt-probe",
+    "continuous-worker-submit-pending",
+    "continuous-worker-warm",
+    "continuous-worker-handoff",
+    "continuous-worker-progress-signal",
+    "continuous-worker-prompt-idle-progress-signal",
+  ].includes(action.code);
+}
+
+function operationalActionCapabilityAllows(cycle = {}, actionId = "") {
+  const readiness = cycle.summary?.operationalActions || null;
+  if (!operationalReadinessFreshAndComplete(readiness)) return false;
+  if (actionId === "dispatch_apply" && (!isTrustedOperationalReadiness(readiness) || readiness.operationalMode !== "bounded_write")) return false;
+  const capabilities = Array.isArray(readiness?.actionCapabilities) ? readiness.actionCapabilities : [];
+  const capability = capabilities.find((candidate) => candidate?.actionId === actionId);
+  if (!capability) return false;
+  if (actionId === "dispatch_apply" && !operationalDispatchCapabilityContractValid(capability)) return false;
+  return (
+    capability.capabilityState === "available" &&
+    capability.authorityState === "allowed" &&
+    capability.typedReason === null &&
+    capability.metadataOnly === true &&
+    capability.rawPayloadRetained === false &&
+    Array.isArray(capability.evidenceRefs) &&
+    capability.evidenceRefs.length > 0 &&
+    operationalCapabilityEvidenceAllows(capability, cycle)
+  );
+}
+
+function markTrustedOperationalReadiness(readiness = null, proof = {}) {
+  if (!readiness || typeof readiness !== "object") return;
+  try {
+    Object.defineProperty(readiness, TRUSTED_OPERATIONAL_READINESS, {
+      value: Object.freeze({ ...(proof || {}) }),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {
+    // Trust marks are best-effort and must never weaken the fail-closed gate.
+  }
+}
+
+function isTrustedOperationalReadiness(readiness = null) {
+  try {
+    return Boolean(readiness && typeof readiness === "object" && readiness[TRUSTED_OPERATIONAL_READINESS]);
+  } catch {
+    return false;
+  }
+}
+
+function trustedOperationalReadinessProof(readiness = null) {
+  try {
+    return readiness && typeof readiness === "object" ? readiness[TRUSTED_OPERATIONAL_READINESS] || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function markTrustedDispatchPreviewAuthority(dispatchPreview = null) {
+  if (!dispatchPreview || typeof dispatchPreview !== "object") return;
+  try {
+    TRUSTED_DISPATCH_PREVIEW_AUTHORITY_RECORDS.add(dispatchPreview);
+  } catch {
+    // WeakSet trust marks are best-effort and must fail closed if unavailable.
+  }
+  try {
+    Object.defineProperty(dispatchPreview, TRUSTED_DISPATCH_PREVIEW_AUTHORITY, {
+      value: true,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {
+    // Symbol trust marks are best-effort; frozen packets still use WeakSet trust.
+  }
+}
+
+function isTrustedDispatchPreviewAuthority(dispatchPreview = null) {
+  try {
+    const producer = safeReadProperty(dispatchPreview?.summary?.operationalDispatchAuthority || {}, "producer", "");
+    return Boolean(
+      dispatchPreview &&
+        typeof dispatchPreview === "object" &&
+        (producer === "codex-workspace-dispatch-next-dry-run" ||
+          dispatchPreview[TRUSTED_DISPATCH_PREVIEW_AUTHORITY] ||
+          TRUSTED_DISPATCH_PREVIEW_AUTHORITY_RECORDS.has(dispatchPreview)),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function bindTrustedOperationalDispatchAuthority(readiness = null, dispatchPreview = {}) {
+  if (!isTrustedDispatchPreviewAuthority(dispatchPreview)) return null;
+  const summary = dispatchPreview.summary || {};
+  const authority = normalizeOperationalDispatchAuthority(summary?.operationalDispatchAuthority, summary);
+  if (!authority || !readiness || typeof readiness !== "object") return null;
+  if (readiness.readinessState !== "ready" || readiness.capabilityState !== "available" || readiness.freshnessState !== "live") return null;
+  if (readiness.typedReason !== null) return null;
+  const capabilities = Array.isArray(readiness.actionCapabilities) ? readiness.actionCapabilities : [];
+  const capability = capabilities.find((candidate) => candidate?.actionId === "dispatch_apply");
+  if (!capability || typeof capability !== "object") return null;
+  capability.targetType = authority.targetType;
+  capability.targetId = authority.targetId;
+  capability.capabilityState = "available";
+  capability.authorityState = "allowed";
+  capability.riskTier = "high";
+  capability.typedReason = null;
+  capability.expectedResultSummary = "Apply dispatch decision for the selected work item through bounded write authority proof.";
+  capability.evidenceRefs = uniqueStrings([...(Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : []), ...authority.evidenceRefs]);
+  readiness.operationalMode = "bounded_write";
+  readiness.summary = "Bounded-write operational action readiness is available for the selected dispatch work item.";
+  return Object.freeze({
+    actionId: "dispatch_apply",
+    targetId: authority.targetId,
+    targetType: authority.targetType,
+    approvalEvidenceRef: authority.approvalEvidenceRef,
+    evidenceRefs: Object.freeze([...authority.evidenceRefs]),
+  });
+}
+
+function normalizeOperationalDispatchAuthority(authority = null, dispatchPreview = {}) {
+  if (!authority || typeof authority !== "object") return null;
+  const record = safePlainObjectSnapshot(authority);
+  if (!record) return null;
+  const selectedLane = safeDispatchWorkTargetString(dispatchPreview.selectedLane);
+  if (dispatchPreview.allowed !== true || !selectedLane) return null;
+  const targetId = safeDispatchWorkTargetString(safeReadProperty(record, "targetId", ""));
+  if (!targetId || targetId !== selectedLane || !operationalIdentifierCanonical(targetId)) return null;
+  const targetType = safeString(safeReadProperty(record, "targetType", "work_item"), "work_item");
+  if (!["work_item", "candidate_work"].includes(targetType)) return null;
+  const actionId = safeReadProperty(record, "actionId", "dispatch_apply");
+  if (actionId && actionId !== "dispatch_apply") return null;
+  if (safeReadProperty(record, "capabilityState", "") !== "available" || safeReadProperty(record, "authorityState", "") !== "allowed") return null;
+  if (safeReadProperty(record, "riskTier", "") !== "high") return null;
+  const approvalEvidenceRef = `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalCapabilityContextToken(targetId)}`;
+  if (safeReadProperty(record, "approvalEvidenceRef", "") !== approvalEvidenceRef) return null;
+  const refs = Array.isArray(record.evidenceRefs) ? record.evidenceRefs : [];
+  if (!refs.includes(approvalEvidenceRef)) return null;
+  const safeRefs = refs.filter((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref));
+  if (safeRefs.length !== refs.length || safeRefs.length === 0 || safeRefs.length > 24) return null;
+  return {
+    actionId: "dispatch_apply",
+    targetId,
+    targetType,
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "high",
+    approvalEvidenceRef,
+    evidenceRefs: safeRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function operationalDispatchCapabilityContractValid(capability = {}) {
+  if (!capability || typeof capability !== "object" || Array.isArray(capability)) return false;
+  const allowedKeys = new Set([
+    "actionId",
+    "targetType",
+    "targetId",
+    "capabilityState",
+    "authorityState",
+    "riskTier",
+    "typedReason",
+    "expectedResultSummary",
+    "correlationRequired",
+    "idempotencyRequired",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]);
+  const entries = safeObjectEntries(capability);
+  if (!entries || entries.some(([key]) => !allowedKeys.has(key))) return false;
+  if (capability.actionId !== "dispatch_apply") return false;
+  if (!["work_item", "candidate_work"].includes(capability.targetType)) return false;
+  if (capability.capabilityState !== "available") return false;
+  if (capability.authorityState !== "allowed") return false;
+  if (capability.riskTier !== "high" && capability.riskTier !== "extreme") return false;
+  if (capability.typedReason !== null) return false;
+  if (capability.correlationRequired !== true || capability.idempotencyRequired !== true) return false;
+  if (capability.metadataOnly !== true || capability.rawPayloadRetained !== false) return false;
+  if (typeof capability.targetId !== "string" || !operationalIdentifierCanonical(capability.targetId)) return false;
+  if (typeof capability.expectedResultSummary !== "string" || !safeOperationalMetadataText(capability.expectedResultSummary)) return false;
+  const refs = Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : null;
+  if (!refs || refs.length === 0 || refs.length > 24) return false;
+  return refs.every((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref));
+}
+
+function safeObjectEntries(value = {}) {
+  try {
+    return Object.entries(value);
+  } catch {
+    return null;
+  }
+}
+
+function operationalIdentifierCanonical(value = "") {
+  if (typeof value !== "string") return false;
+  if (value.trim() !== value) return false;
+  if (value.toLowerCase() !== value) return false;
+  if (!OPERATIONAL_ACTION_IDENTIFIER.test(value)) return false;
+  if (OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR.test(value)) return false;
+  if (OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT.test(value)) return false;
+  return safeOperationalMetadataText(value);
+}
+
+function safeOperationalMetadataText(value = "") {
+  try {
+    const text = String(value);
+    return (
+      text.trim() === text &&
+      text.length > 0 &&
+      text.length <= 500 &&
+      !/[\u0000-\u001f\u007f]/.test(text) &&
+      !FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(text) &&
+      !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(text)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function operationalCapabilityEvidenceAllows(capability = {}, cycle = {}) {
+  if (capability.actionId !== "dispatch_apply") return true;
+  const proof = trustedOperationalReadinessProof(cycle.summary?.operationalActions || null)?.dispatchApply || null;
+  if (!proof || proof.actionId !== "dispatch_apply") return false;
+  const targetId = safeString(safeReadProperty(capability, "targetId", ""), "");
+  if (!targetId || targetId !== proof.targetId || capability.targetType !== proof.targetType) return false;
+  if (!operationalCapabilityMatchesSelectedDispatchTarget(targetId, cycle)) return false;
+  const targetToken = operationalCapabilityContextToken(targetId);
+  if (targetToken === "unknown-0") return false;
+  const refs = Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : [];
+  return refs.includes(proof.approvalEvidenceRef) && refs.includes(`evidence:capability-approval-needs_authority_approval:dispatch_apply:${targetToken}`);
+}
+
+function operationalCapabilityMatchesSelectedDispatchTarget(targetId = "", cycle = {}) {
+  const target = safeDispatchWorkTargetString(targetId);
+  if (!target) return false;
+  const dispatchPreview = cycle.summary?.dispatchPreview || {};
+  const dispatcher = cycle.summary?.dispatcher || {};
+  const previewTargets = [
+    dispatchPreview.selectedLane,
+    dispatchPreview.selectedWorkItem,
+    dispatchPreview.selectedWorkItemId,
+    dispatchPreview.selectedTarget,
+    dispatchPreview.selectedTargetId,
+  ].map((value) => safeDispatchWorkTargetString(value)).filter(Boolean);
+  const dispatcherTargets = [
+    dispatcher.selectedLane,
+    dispatcher.selectedWorkItem,
+    dispatcher.selectedWorkItemId,
+    dispatcher.selectedTarget,
+    dispatcher.selectedTargetId,
+  ].map((value) => safeDispatchWorkTargetString(value)).filter(Boolean);
+  const previewTarget = previewTargets[0] || "";
+  const dispatcherTarget = dispatcherTargets[0] || "";
+  if (!previewTarget) return false;
+  if (dispatcherTarget && dispatcherTarget !== previewTarget) return false;
+  return target === previewTarget;
+}
+
+function safeDispatchWorkTargetString(value = "") {
+  try {
+    const text = String(value || "").trim();
+    return operationalIdentifierCanonical(text) ? text : "";
+  } catch {
+    return "";
+  }
+}
+
+function operationalCapabilityContextToken(value = "") {
+  const text = safeString(value, "");
+  if (!text || !/^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/i.test(text)) return "unknown-0";
+  return boundedOperationalEvidenceToken(text);
+}
+
+function boundedOperationalEvidenceToken(value = "") {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const normalized = value
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24) || "id";
+  return `${normalized}-${(hash >>> 0).toString(36).padStart(7, "0").slice(0, 7)}`;
+}
+
+function operationalReadinessFreshAndComplete(readiness = null) {
+  if (!readiness || typeof readiness !== "object") return false;
+  if (!operationalReadinessShapeValid(readiness)) return false;
+  if (readiness.schemaVersion !== PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION) return false;
+  if (readiness.actionSchemaVersion !== PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION) return false;
+  if (readiness.readinessState !== "ready") return false;
+  if (!["read_only", "bounded_write"].includes(readiness.operationalMode)) return false;
+  if (readiness.freshnessState !== "live") return false;
+  if (readiness.capabilityState !== "available") return false;
+  if (readiness.typedReason !== null) return false;
+  if (readiness.metadataOnly !== true || readiness.rawPayloadRetained !== false) return false;
+  if (!Array.isArray(readiness.evidenceRefs) || readiness.evidenceRefs.length === 0 || readiness.evidenceRefs.length > 24) return false;
+  if (!readiness.evidenceRefs.every((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref))) return false;
+  const checkedAtMs = Date.parse(typeof readiness.checkedAt === "string" ? readiness.checkedAt : "");
+  const expiresAtMs = Date.parse(typeof readiness.expiresAt === "string" ? readiness.expiresAt : "");
+  const nowMs = Date.now();
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs)) return false;
+  if (checkedAtMs > expiresAtMs) return false;
+  if (checkedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS) return false;
+  if (expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_TTL_MS) return false;
+  if (expiresAtMs <= nowMs) return false;
+  if (!Array.isArray(readiness.actionCapabilities)) return false;
+  if (readiness.actionCapabilities.length !== PIPELINE_OPERATIONAL_ACTION_IDS.length) return false;
+  const seen = new Set();
+  for (const capability of readiness.actionCapabilities) {
+    if (!capability || typeof capability !== "object") return false;
+    if (!PIPELINE_OPERATIONAL_ACTION_IDS.includes(capability.actionId)) return false;
+    if (seen.has(capability.actionId)) return false;
+    seen.add(capability.actionId);
+    if (capability.metadataOnly !== true || capability.rawPayloadRetained !== false) return false;
+    if (capability.correlationRequired !== true || capability.idempotencyRequired !== true) return false;
+    if (!operationalCapabilityShapeValid(capability)) return false;
+  }
+  const inspect = readiness.actionCapabilities.find((capability) => capability.actionId === "inspect");
+  const refresh = readiness.actionCapabilities.find((capability) => capability.actionId === "refresh_projection");
+  return (
+    inspect?.capabilityState === "available" &&
+    inspect?.authorityState === "allowed" &&
+    inspect?.typedReason === null &&
+    refresh?.capabilityState === "available" &&
+    refresh?.authorityState === "allowed" &&
+    refresh?.typedReason === null
+  );
+}
+
+function operationalReadinessShapeValid(readiness = {}) {
+  const allowedKeys = new Set([
+    "schemaVersion",
+    "actionSchemaVersion",
+    "readinessState",
+    "operationalMode",
+    "freshnessState",
+    "capabilityState",
+    "typedReason",
+    "checkedAt",
+    "expiresAt",
+    "summary",
+    "actionCapabilities",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]);
+  const entries = safeObjectEntries(readiness);
+  if (!entries || entries.some(([key]) => !allowedKeys.has(key))) return false;
+  return typeof readiness.summary === "string" && safeOperationalMetadataText(readiness.summary);
+}
+
+function operationalCapabilityShapeValid(capability = {}) {
+  if (!capability || typeof capability !== "object" || Array.isArray(capability)) return false;
+  const allowedKeys = new Set([
+    "actionId",
+    "targetType",
+    "targetId",
+    "capabilityState",
+    "authorityState",
+    "riskTier",
+    "typedReason",
+    "expectedResultSummary",
+    "correlationRequired",
+    "idempotencyRequired",
+    "evidenceRefs",
+    "metadataOnly",
+    "rawPayloadRetained",
+  ]);
+  const entries = safeObjectEntries(capability);
+  if (!entries || entries.some(([key]) => !allowedKeys.has(key))) return false;
+  if (typeof capability.expectedResultSummary !== "string" || !safeOperationalMetadataText(capability.expectedResultSummary)) return false;
+  const refs = Array.isArray(capability.evidenceRefs) ? capability.evidenceRefs : null;
+  if (!refs || refs.length === 0 || refs.length > 24) return false;
+  if (!refs.every((ref) => typeof ref === "string" && ref.trim() === ref && OPERATIONAL_ACTION_EVIDENCE_REF.test(ref) && safeOperationalMetadataText(ref))) return false;
+  const availableAllowed = capability.capabilityState === "available" && capability.authorityState === "allowed";
+  if (availableAllowed && capability.typedReason !== null) return false;
+  if (["gated", "unavailable", "simulated"].includes(capability.capabilityState) && !capability.typedReason) return false;
+  if (availableAllowed && ["medium", "high", "extreme"].includes(capability.riskTier)) {
+    if (typeof capability.targetId !== "string" || !operationalIdentifierCanonical(capability.targetId)) return false;
   }
   return true;
 }
@@ -17219,7 +18206,7 @@ function buildContinuousAction(action = {}, cycle = {}, capabilityPosture = {}) 
     const reviewDelegationState = capabilityPosture.capabilities?.reviewDelegation?.state || "enabled";
     if (!["parked", "blocked"].includes(reviewDelegationState) && reviewPlan.ok !== false && reviewPlan.status === "ready") {
       const reviewAction = continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
-      if (reviewAction && !(reviewAction.readOnly === true && reviewAction.reviewResultFresh === true)) {
+      if (reviewAction && (reviewAction.readOnly !== true || reviewAction.reviewResultFresh === true)) {
         return reviewAction;
       }
     }
@@ -17259,9 +18246,12 @@ function buildContinuousAction(action = {}, cycle = {}, capabilityPosture = {}) 
     };
   }
   if (action.code === "dispatch-preview-ready") {
+    if (!operationalActionCapabilityAllows(cycle, "dispatch_apply")) {
+      return null;
+    }
     const dispatcher = cycle.summary?.dispatcher || {};
     const dispatchPreview = cycle.summary?.dispatchPreview || {};
-    if ((dispatcher.allowed === false || dispatchPreview.allowed === false) || !(dispatcher.selectedLane || dispatchPreview.selectedLane)) {
+    if (dispatcher.allowed !== true || dispatchPreview.allowed !== true || !(dispatcher.selectedLane || dispatchPreview.selectedLane)) {
       return null;
     }
     const capacityDecision = buildContinuousDispatchCapacityDecision(cycle);
@@ -17321,7 +18311,7 @@ function sanitizeContinuousFlagValue(value = "") {
   return /^[A-Za-z0-9_-]+$/.test(text) ? text : "";
 }
 
-function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, resume = {}, dispatchPreview = {} } = {}) {
+function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, resume = {}, dispatchPreview = {}, operationalActions = null } = {}) {
   const blockerCodes = blockers.map((blocker) => blocker.code).filter(Boolean);
   const usageState = normalizePosture(usage, "unknown");
   const resourceState = normalizePosture(resources, "unknown");
@@ -17369,13 +18359,13 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   );
   const dispatchSelectedTargets = [
     dispatchPreview.summary?.selectedLane,
-    dispatchPreview.summary?.selectedBranch,
   ].map((value) => String(value || "").trim()).filter(Boolean);
   const dispatchTargetsDeliveryBlocked = dispatchSelectedTargets.some((target) => blockedDeliveryTargets.has(target));
   const safeDispatchApplyAvailable = Boolean(
-    dispatchPreview.summary?.allowed &&
+    dispatchPreview.summary?.allowed === true &&
     dispatchPreview.summary?.selectedLane &&
     dispatchPreview.summary?.claimMutation &&
+    operationalActionCapabilityAllows({ summary: { operationalActions, dispatchPreview: dispatchPreview.summary } }, "dispatch_apply") &&
     !dispatchTargetsDeliveryBlocked &&
     !["manager_only", "drain", "unknown"].includes(usageState) &&
     !["critical", "pressured", "unknown"].includes(resourceState),
@@ -17437,8 +18427,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       reason: safeDispatchApplyAvailable
         ? "Active manager-owned workers can continue, and existing dispatch gates have selected a safe lane for assignment/workspace preparation while takeover and worker kill remain blocked."
         : "Active manager-owned workers can continue while stale ownership inspection remains blocked for takeover, dispatch apply, and worker kill.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       activeWorkers: activeWorkerCount,
       warmWorkers: warmWorkerCount,
       blockerCodes,
@@ -17516,8 +18506,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       reason: safeDispatchApplyAvailable
         ? "Worker mutation is blocked, but existing dispatch gates have selected a safe lane for assignment/workspace preparation."
         : "Worker mutation is blocked, but source-owned backlog creation can continue from the compact BMAD handoff.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17541,8 +18531,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "A worker question requires operator authority, but the blocker is scoped to the affected worker or lane and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17566,8 +18556,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "Blocking feedback pauses affected delivery and PR merge, but unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17575,24 +18565,17 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   }
   if (onlyDeliveryScopedBlocked && !onlyDeliveryAuthorityBlocked && !onlyPrStewardshipBlocked && resourceState !== "critical") {
     const allowedActions = ["delivery_authority_operator_interruption", "pr_stewardship_operator_interruption", "status_reporting", "read_only_inspection"];
-    const blockedActions = ["pr_create", "pr_update", "delivery", "cleanup"];
-    if (safeDispatchApplyAvailable) {
-      allowedActions.push("dispatch_apply_existing_gates");
-    } else {
-      blockedActions.push("dispatch_apply");
-    }
+    const blockedActions = ["pr_create", "pr_update", "delivery", "cleanup", "dispatch_apply"];
     if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
     return {
       state: "delivery_scoped_blocked",
-      canContinue: true,
+      canContinue: false,
       progressRunState: "delivery-scoped-blocked",
       workerMutationAllowed: false,
-      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      dispatchApplyAllowed: false,
       allowedActions,
       blockedActions,
       reason: "Delivery authority or PR stewardship evidence is blocked for the affected lane, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17600,24 +18583,17 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   }
   if (onlyDeliveryAuthorityBlocked && resourceState !== "critical") {
     const allowedActions = ["delivery_authority_operator_interruption", "status_reporting", "read_only_inspection"];
-    const blockedActions = ["delivery", "cleanup"];
-    if (safeDispatchApplyAvailable) {
-      allowedActions.push("dispatch_apply_existing_gates");
-    } else {
-      blockedActions.push("dispatch_apply");
-    }
+    const blockedActions = ["delivery", "cleanup", "dispatch_apply"];
     if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
     return {
       state: "delivery_authority_blocked",
-      canContinue: true,
+      canContinue: false,
       progressRunState: "delivery-authority-blocked",
       workerMutationAllowed: false,
-      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      dispatchApplyAllowed: false,
       allowedActions,
       blockedActions,
       reason: "Delivery requires an active delivery_phase contract, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17625,24 +18601,17 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
   }
   if (onlyPrStewardshipBlocked && resourceState !== "critical") {
     const allowedActions = ["pr_stewardship_operator_interruption", "status_reporting", "read_only_inspection"];
-    const blockedActions = ["pr_create", "pr_update", "delivery"];
-    if (safeDispatchApplyAvailable) {
-      allowedActions.push("dispatch_apply_existing_gates");
-    } else {
-      blockedActions.push("dispatch_apply");
-    }
+    const blockedActions = ["pr_create", "pr_update", "delivery", "dispatch_apply"];
     if (sourceBackedRefillAvailable) allowedActions.push("source_owned_bmad_refill_planning");
     return {
       state: "pr_stewardship_blocked",
-      canContinue: true,
+      canContinue: false,
       progressRunState: "pr-stewardship-blocked",
       workerMutationAllowed: false,
-      dispatchApplyAllowed: safeDispatchApplyAvailable,
+      dispatchApplyAllowed: false,
       allowedActions,
       blockedActions,
       reason: "PR creation or update requires scoped dry-run evidence and delivery authority, but the blocker is scoped to delivery and unrelated safe work can continue through existing gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17670,8 +18639,8 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
       allowedActions,
       blockedActions,
       reason: "A retry lane is parked with visible resume criteria, but unrelated safe work can continue through existing dispatcher/refill gates.",
-      selectedLane: dispatchPreview.summary?.selectedLane || null,
-      selectedBranch: dispatchPreview.summary?.selectedBranch || null,
+      selectedLane: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedLane || null : undefined,
+      selectedBranch: safeDispatchApplyAvailable ? dispatchPreview.summary?.selectedBranch || null : undefined,
       blockerCodes,
       blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
       blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
@@ -17682,9 +18651,13 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
     canContinue: status !== "blocked",
     progressRunState: status,
     workerMutationAllowed: status !== "blocked",
-    dispatchApplyAllowed: status !== "blocked" && Boolean(dispatchPreview.summary?.allowed),
+    dispatchApplyAllowed: status !== "blocked" && safeDispatchApplyAvailable,
     allowedActions: status === "blocked" ? ["status_reporting", "read_only_inspection"] : ["governed_manager_actions"],
-    blockedActions: status === "blocked" ? ["worker_start", "worker_kill", "dispatch_apply", "ownership_takeover"] : [],
+    blockedActions: status === "blocked"
+      ? ["worker_start", "worker_kill", "dispatch_apply", "ownership_takeover"]
+      : safeDispatchApplyAvailable
+        ? []
+        : ["dispatch_apply"],
     reason: status === "blocked" ? "Manager mutation is blocked until blockers are resolved." : "Manager can continue under existing governors.",
     blockerCodes,
     blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
@@ -17789,43 +18762,63 @@ function buildDispatchPosture(usageState = "unknown", resourceState = "unknown",
 }
 
 function normalizePacketContext(context = {}) {
-  const status = context.status || context.state || context.summary?.state || "unknown";
+  const packetContext = safePlainObjectSnapshot(context) || {};
+  const summary = safePlainObjectSnapshot(safeReadProperty(packetContext, "summary", {})) || {};
+  const status = safeReadProperty(packetContext, "status", null) || safeReadProperty(packetContext, "state", null) || safeReadProperty(summary, "state", "unknown");
+  const blockers = safeArrayValuesWithStatus(safeReadProperty(packetContext, "blockers", []), "blockers");
+  const warnings = safeArrayValuesWithStatus(safeReadProperty(packetContext, "warnings", []), "warnings");
+  const nextActions = safeArrayValuesWithStatus(safeReadProperty(packetContext, "nextActions", []), "nextActions");
+  const unreadableBlockers = [blockers, warnings, nextActions]
+    .filter((entry) => !entry.readable)
+    .map((entry) => ({ code: `packet-${entry.field}-unreadable`, message: `Packet ${entry.field} evidence could not be read safely.` }));
   return packet({
-    ok: context.ok ?? true,
+    ok: safeReadProperty(packetContext, "ok", true),
     status,
-    summary: context.summary || { state: status },
-    blockers: context.blockers || [],
-    warnings: context.warnings || [],
-    nextActions: context.nextActions || [],
+    summary: Object.keys(summary).length > 0 ? summary : { state: status },
+    blockers: [...blockers.values, ...unreadableBlockers],
+    warnings: warnings.values,
+    nextActions: nextActions.values,
   });
 }
 
+function safeArrayValuesWithStatus(value, field) {
+  try {
+    if (value === undefined || value === null) return { readable: true, field, values: [] };
+    if (!Array.isArray(value)) return { readable: false, field, values: [] };
+    return { readable: true, field, values: Array.from(value) };
+  } catch {
+    return { readable: false, field, values: [] };
+  }
+}
+
 function normalizeUsagePacketContext(context = {}, outer = {}) {
-  const base = isPlainObject(context.summary) ? context.summary : {};
-  const status = sanitizeLedgerField(context.status || context.state || base.state || "unknown", "unknown", 80);
+  const usageContext = safePlainObjectSnapshot(context) || {};
+  const outerContext = safePlainObjectSnapshot(outer) || {};
+  const base = safePlainObjectSnapshot(safeReadProperty(usageContext, "summary", {})) || {};
+  const status = sanitizeLedgerField(safeReadProperty(usageContext, "status", null) || safeReadProperty(usageContext, "state", null) || safeReadProperty(base, "state", "unknown"), "unknown", 80);
   const weekly = selectWeeklyUsagePressure(
-    base.weekly,
-    context.weekly,
-    context.weeklyUsage,
-    context.weeklyUsageContext,
-    context.weeklyUsagePressure,
-    outer.weeklyUsage,
-    outer.weeklyUsageContext,
-    outer.weeklyUsagePressure,
+    safeReadProperty(base, "weekly", null),
+    safeReadProperty(usageContext, "weekly", null),
+    safeReadProperty(usageContext, "weeklyUsage", null),
+    safeReadProperty(usageContext, "weeklyUsageContext", null),
+    safeReadProperty(usageContext, "weeklyUsagePressure", null),
+    safeReadProperty(outerContext, "weeklyUsage", null),
+    safeReadProperty(outerContext, "weeklyUsageContext", null),
+    safeReadProperty(outerContext, "weeklyUsagePressure", null),
   );
-  const rawRemaining = Number(base.remainingPercent ?? context.remainingPercent);
-  const rawResetSeconds = Number(base.resetInSeconds ?? context.resetInSeconds);
-  const resetTime = sanitizeLedgerField(base.resetTime || context.resetTime || "", "", 40) || null;
+  const rawRemaining = Number(safeReadProperty(base, "remainingPercent", undefined) ?? safeReadProperty(usageContext, "remainingPercent", undefined));
+  const rawResetSeconds = Number(safeReadProperty(base, "resetInSeconds", undefined) ?? safeReadProperty(usageContext, "resetInSeconds", undefined));
+  const resetTime = sanitizeLedgerField(safeReadProperty(base, "resetTime", null) || safeReadProperty(usageContext, "resetTime", null) || "", "", 40) || null;
   const resetInSeconds = Number.isFinite(rawResetSeconds) ? Math.max(0, Math.floor(rawResetSeconds)) : null;
   const parsedForResume = { resetTime, resetInSeconds };
   const managerOnly = status === "manager_only";
   const sampledAt = sanitizeLedgerField(
-    base.sampledAt || context.sampledAt || base.timestamp || context.timestamp || outer.now || new Date().toISOString(),
+    safeReadProperty(base, "sampledAt", null) || safeReadProperty(usageContext, "sampledAt", null) || safeReadProperty(base, "timestamp", null) || safeReadProperty(usageContext, "timestamp", null) || safeReadProperty(outerContext, "now", null) || new Date().toISOString(),
     new Date(0).toISOString(),
     80,
   );
   const summary = {
-    source: sanitizeLedgerField(base.source || context.source || "injected-usage-context", "injected-usage-context", 80),
+    source: sanitizeLedgerField(safeReadProperty(base, "source", null) || safeReadProperty(usageContext, "source", null) || "injected-usage-context", "injected-usage-context", 80),
     state: status,
     remainingPercent: Number.isFinite(rawRemaining) ? boundedPercent(rawRemaining) : null,
     sampledAt,
@@ -17833,22 +18826,28 @@ function normalizeUsagePacketContext(context = {}, outer = {}) {
     resetTime,
     resetInSeconds,
     weekly,
-    leaseIssuancePolicy: base.leaseIssuancePolicy || usageLeaseIssuancePolicy(status, weekly),
-    activeWorkPolicy: base.activeWorkPolicy || usageActiveWorkPolicy(status),
+    leaseIssuancePolicy: safeReadProperty(base, "leaseIssuancePolicy", null) || usageLeaseIssuancePolicy(status, weekly),
+    activeWorkPolicy: safeReadProperty(base, "activeWorkPolicy", null) || usageActiveWorkPolicy(status),
     modelQualityPolicy: "preserve_task_fit_quality",
-    managerOnlyReason: managerOnly ? sanitizeLedgerField(base.managerOnlyReason || "five_hour_usage_at_or_below_2_percent", "five_hour_usage_at_or_below_2_percent", 120) : "",
-    resumeTrigger: managerOnly ? sanitizeLedgerField(base.resumeTrigger || usageResumeTrigger(parsedForResume), usageResumeTrigger(parsedForResume), 120) : "",
-    available: typeof base.available === "boolean" ? base.available : typeof context.available === "boolean" ? context.available : undefined,
-    fetcherPath: base.fetcherPath || context.fetcherPath ? sanitizeLedgerField(base.fetcherPath || context.fetcherPath, "", 240) : undefined,
+    managerOnlyReason: managerOnly ? sanitizeLedgerField(safeReadProperty(base, "managerOnlyReason", null) || "five_hour_usage_at_or_below_2_percent", "five_hour_usage_at_or_below_2_percent", 120) : "",
+    resumeTrigger: managerOnly ? sanitizeLedgerField(safeReadProperty(base, "resumeTrigger", null) || usageResumeTrigger(parsedForResume), usageResumeTrigger(parsedForResume), 120) : "",
+    available: typeof safeReadProperty(base, "available", undefined) === "boolean" ? safeReadProperty(base, "available", undefined) : typeof safeReadProperty(usageContext, "available", undefined) === "boolean" ? safeReadProperty(usageContext, "available", undefined) : undefined,
+    fetcherPath: safeReadProperty(base, "fetcherPath", null) || safeReadProperty(usageContext, "fetcherPath", null) ? sanitizeLedgerField(safeReadProperty(base, "fetcherPath", null) || safeReadProperty(usageContext, "fetcherPath", null), "", 240) : undefined,
     rawPayloadRetained: false,
   };
+  const blockers = safeArrayValuesWithStatus(safeReadProperty(usageContext, "blockers", []), "blockers");
+  const warnings = safeArrayValuesWithStatus(safeReadProperty(usageContext, "warnings", []), "warnings");
+  const nextActions = safeArrayValuesWithStatus(safeReadProperty(usageContext, "nextActions", []), "nextActions");
+  const unreadableEvidence = [blockers, warnings, nextActions]
+    .filter((entry) => !entry.readable)
+    .map((entry) => ({ code: `usage-${entry.field}-unreadable`, message: `Usage ${entry.field} evidence could not be read safely.` }));
   return packet({
-    ok: context.ok ?? true,
+    ok: safeReadProperty(usageContext, "ok", true),
     status,
     summary,
-    blockers: context.blockers || [],
-    warnings: context.warnings || [],
-    nextActions: context.nextActions || [],
+    blockers: [...blockers.values, ...unreadableEvidence],
+    warnings: warnings.readable ? warnings.values : [{ code: "usage-warnings-unreadable", message: "Usage warnings evidence could not be read safely." }],
+    nextActions: nextActions.values,
   });
 }
 
@@ -17863,6 +18862,14 @@ function normalizeDispatchPreviewContext(context = {}) {
       ...(Array.isArray(dispatch.blockers) ? dispatch.blockers : []),
     ];
     const allowed = context.allowed ?? summary.allowed ?? dispatch.allowed ?? null;
+    const selectedLane = summary.selectedLane || dispatch.selectedLane || null;
+    const operationalDispatchAuthority = normalizeOperationalDispatchAuthority(
+      summary.operationalDispatchAuthority ||
+        summary.operational_dispatch_authority ||
+        dispatch.operationalDispatchAuthority ||
+        dispatch.operational_dispatch_authority,
+      { allowed, selectedLane },
+    );
     return packet({
       ...normalized,
       ok: normalized.ok && blockers.length === 0 && allowed !== false && normalized.status !== "blocked",
@@ -17870,10 +18877,12 @@ function normalizeDispatchPreviewContext(context = {}) {
       summary: {
         ...summary,
         allowed,
+        operationalDispatchAuthority,
         blockers,
         dispatch: {
           ...dispatch,
           allowed,
+          operationalDispatchAuthority,
           blockers,
         },
       },
@@ -17882,13 +18891,24 @@ function normalizeDispatchPreviewContext(context = {}) {
   }
   const dispatch = context.dispatch || {};
   const status = context.status || (dispatch.allowed === false ? "blocked" : "ready");
+  const selectedLane = context.selectedLane || dispatch.selectedLane || context.selected?.itemId || null;
+  const allowed = context.allowed ?? dispatch.allowed ?? null;
   const summary = {
     ...context,
-    allowed: context.allowed ?? dispatch.allowed ?? null,
-    selectedLane: context.selectedLane || dispatch.selectedLane || context.selected?.itemId || null,
+    allowed,
+    selectedLane,
     selectedBranch: context.selectedBranch || dispatch.branch || context.selected?.branch || null,
     baseBranch: context.baseBranch || context.base_branch || dispatch.baseBranch || dispatch.base_branch || context.selected?.baseBranch || context.selected?.base_branch || null,
     claimMutation: context.claimMutation || dispatch.claimMutation || context.selected?.mutation || null,
+    operationalDispatchAuthority: normalizeOperationalDispatchAuthority(
+      context.operationalDispatchAuthority ||
+        context.operational_dispatch_authority ||
+        dispatch.operationalDispatchAuthority ||
+        dispatch.operational_dispatch_authority ||
+        context.selected?.operationalDispatchAuthority ||
+        context.selected?.operational_dispatch_authority,
+      { allowed, selectedLane },
+    ),
     recoveryPath: context.recoveryPath || context.recovery_path || dispatch.recoveryPath || dispatch.recovery_path || context.selected?.recoveryPath || context.selected?.recovery_path || null,
   };
   return packet({
@@ -18273,10 +19293,18 @@ function uniqueWarnings(warnings = []) {
   const seen = new Set();
   const result = [];
   for (const warning of warnings) {
-    const key = `${warning.code || ""}:${warning.message || ""}`;
+    if (typeof warning === "string") {
+      const key = `string:${warning}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(warning);
+      continue;
+    }
+    const warningRecord = safePlainObjectSnapshot(warning) || {};
+    const key = `${safeString(safeReadProperty(warningRecord, "code", ""), "")}:${safeString(safeReadProperty(warningRecord, "message", ""), "")}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push(warning);
+    result.push(warningRecord);
   }
   return result;
 }
@@ -18326,11 +19354,7 @@ export function ledgerCommand(options = {}, context = {}) {
     if (blocked) return blocked;
     const normalizedEventName = normalizeLedgerEventName(options.eventType || "manager.ledger.appended");
     if (!normalizedEventName) return unknownLedgerEvent(paths, options.eventType || "");
-    const duplicate = findDuplicateLedgerEvent(paths.events, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, event: duplicate, duplicateIgnored: true } });
-    }
-    const event = ledgerRecord({
+    const appended = appendLedgerEvent(paths, runId, {
       idPrefix: "evt",
       idName: "eventId",
       actor: "manager",
@@ -18341,16 +19365,12 @@ export function ledgerCommand(options = {}, context = {}) {
       eventName: normalizedEventName,
       extra: ledgerEventExtra(normalizedEventName, options),
     });
-    appendFileSync(paths.events, `${JSON.stringify(event)}\n`);
-    return packet({ status: "ready", summary: { runId, event } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, event: appended.record } });
   }
   if (options.command === "append-question") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
     if (blocked) return blocked;
-    const duplicate = findDuplicateLedgerRecord(paths.questions, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, question: duplicate, duplicateIgnored: true } });
-    }
     if (!isMaterialQuestionRecord(options)) {
       return packet({
         ok: false,
@@ -18365,86 +19385,154 @@ export function ledgerCommand(options = {}, context = {}) {
         ],
       });
     }
-    const question = ledgerRecord({
-      idPrefix: "question",
-      idName: "questionId",
-      actor: options.workerId || "worker",
-      typeName: "questionType",
-      typeValue: options.eventType || "worker_question",
-      options,
-      fallbackSummary: "worker question",
-      eventName: "manager.question.recorded",
+    const appended = withLedgerAppendLock(paths, () => {
+      const questionsRead = readNdjsonStrict(paths.questions);
+      if (questionsRead.status !== "ready") {
+        return { packet: malformedLedgerFile(paths, "questions", paths.questions, questionsRead.message) };
+      }
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.question.recorded",
+        typeValue: options.eventType || "worker_question",
+        actor: options.workerId || "worker",
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(questionsRead.value, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "question");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "question", duplicate) };
+      }
+      const question = ledgerRecord({
+        idPrefix: "question",
+        idName: "questionId",
+        actor: options.workerId || "worker",
+        typeName: "questionType",
+        typeValue: options.eventType || "worker_question",
+        options,
+        fallbackSummary: "worker question",
+        eventName: "manager.question.recorded",
+        uniqueAutoIdempotency: !hasExplicitLedgerIdempotencyKey(options),
+      });
+      appendFileSync(paths.questions, `${JSON.stringify(question)}\n`);
+      return { record: question };
     });
-    appendFileSync(paths.questions, `${JSON.stringify(question)}\n`);
-    return packet({ status: "ready", summary: { runId, question } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, question: appended.record } });
   }
   if (options.command === "append-checkpoint") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
     if (blocked) return blocked;
-    const checkpointRead = readJsonStrict(paths.checkpoints);
-    if (checkpointRead.status !== "ready" || !Array.isArray(checkpointRead.value)) {
-      return malformedLedgerFile(paths, "checkpoints", paths.checkpoints, "checkpoints.json must contain an array.");
-    }
-    const checkpoints = checkpointRead.value;
-    const duplicate = findDuplicateLedgerRecordFromArray(checkpoints, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, checkpoint: duplicate, duplicateIgnored: true } });
-    }
-    const checkpoint = ledgerRecord({
-      idPrefix: "checkpoint",
-      idName: "checkpointId",
-      actor: "manager",
-      typeName: "checkpointType",
-      typeValue: options.eventType || "manager_checkpoint",
-      options,
-      fallbackSummary: "manager checkpoint",
-      eventName: "manager.checkpoint.recorded",
+    const appended = withLedgerAppendLock(paths, () => {
+      const checkpointRead = readJsonStrict(paths.checkpoints);
+      if (checkpointRead.status !== "ready" || !Array.isArray(checkpointRead.value)) {
+        return { packet: malformedLedgerFile(paths, "checkpoints", paths.checkpoints, "checkpoints.json must contain an array.") };
+      }
+      const checkpoints = checkpointRead.value;
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.checkpoint.recorded",
+        typeValue: options.eventType || "manager_checkpoint",
+        actor: "manager",
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(checkpoints, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "checkpoint");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "checkpoint", duplicate) };
+      }
+      const checkpoint = ledgerRecord({
+        idPrefix: "checkpoint",
+        idName: "checkpointId",
+        actor: "manager",
+        typeName: "checkpointType",
+        typeValue: options.eventType || "manager_checkpoint",
+        options,
+        fallbackSummary: "manager checkpoint",
+        eventName: "manager.checkpoint.recorded",
+        uniqueAutoIdempotency: !hasExplicitLedgerIdempotencyKey(options),
+      });
+      checkpoints.push(checkpoint);
+      writeFileSync(paths.checkpoints, `${JSON.stringify(checkpoints, null, 2)}\n`);
+      return { record: checkpoint };
     });
-    checkpoints.push(checkpoint);
-    writeFileSync(paths.checkpoints, `${JSON.stringify(checkpoints, null, 2)}\n`);
-    return packet({ status: "ready", summary: { runId, checkpoint } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, checkpoint: appended.record } });
   }
   if (options.command === "append-resource-snapshot") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: false });
     if (blocked) return blocked;
-    const duplicate = findDuplicateLedgerRecord(paths.resourceSnapshots, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, snapshot: duplicate, duplicateIgnored: true } });
-    }
-    const snapshot = ledgerRecord({
-      idPrefix: "resource",
-      idName: "snapshotId",
-      actor: "manager",
-      typeName: "snapshotType",
-      typeValue: "resource",
-      options,
-      fallbackSummary: "resource snapshot",
-      eventName: "manager.resource.snapshot",
-      extra: { resourceState: sanitizeLedgerField(options.resourceState || "unknown", "unknown", 40) },
+    const appended = withLedgerAppendLock(paths, () => {
+      const snapshotsRead = readNdjsonStrict(paths.resourceSnapshots);
+      if (snapshotsRead.status !== "ready") {
+        return { packet: malformedLedgerFile(paths, "resourceSnapshots", paths.resourceSnapshots, snapshotsRead.message) };
+      }
+      const extra = { resourceState: sanitizeLedgerField(options.resourceState || "unknown", "unknown", 40) };
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.resource.snapshot",
+        typeValue: "resource",
+        actor: "manager",
+        extraParts: Object.values(extra),
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(snapshotsRead.value, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "snapshot");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "snapshot", duplicate) };
+      }
+      const snapshot = ledgerRecord({
+        idPrefix: "resource",
+        idName: "snapshotId",
+        actor: "manager",
+        typeName: "snapshotType",
+        typeValue: "resource",
+        options,
+        fallbackSummary: "resource snapshot",
+        eventName: "manager.resource.snapshot",
+        extra,
+        uniqueAutoIdempotency: true,
+      });
+      appendFileSync(paths.resourceSnapshots, `${JSON.stringify(snapshot)}\n`);
+      return { record: snapshot };
     });
-    appendFileSync(paths.resourceSnapshots, `${JSON.stringify(snapshot)}\n`);
-    return packet({ status: "ready", summary: { runId, snapshot } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, snapshot: appended.record } });
   }
   if (options.command === "append-usage-snapshot") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: false });
     if (blocked) return blocked;
-    const duplicate = findDuplicateLedgerRecord(paths.usageSnapshots, options.idempotencyKey);
-    if (duplicate) {
-      return packet({ status: "ready", summary: { runId, snapshot: duplicate, duplicateIgnored: true } });
-    }
-    const snapshot = ledgerRecord({
-      idPrefix: "usage",
-      idName: "snapshotId",
-      actor: "manager",
-      typeName: "snapshotType",
-      typeValue: "usage",
-      options,
-      fallbackSummary: "usage snapshot",
-      eventName: "manager.usage.snapshot",
-      extra: { usageState: sanitizeLedgerField(options.usageState || "unknown", "unknown", 40) },
+    const appended = withLedgerAppendLock(paths, () => {
+      const snapshotsRead = readNdjsonStrict(paths.usageSnapshots);
+      if (snapshotsRead.status !== "ready") {
+        return { packet: malformedLedgerFile(paths, "usageSnapshots", paths.usageSnapshots, snapshotsRead.message) };
+      }
+      const extra = { usageState: sanitizeLedgerField(options.usageState || "unknown", "unknown", 40) };
+      const identity = ledgerRecordIdentity(options, {
+        normalizedEventName: "manager.usage.snapshot",
+        typeValue: "usage",
+        actor: "manager",
+        extraParts: Object.values(extra),
+      });
+      const duplicate = hasExplicitLedgerIdempotencyKey(options) ? findDuplicateLedgerRecordFromArray(snapshotsRead.value, identity.idempotencyKey) : null;
+      if (duplicate) {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "snapshot");
+        if (conflict) return { packet: conflict };
+        return { packet: duplicateLedgerPacket(runId, "snapshot", duplicate) };
+      }
+      const snapshot = ledgerRecord({
+        idPrefix: "usage",
+        idName: "snapshotId",
+        actor: "manager",
+        typeName: "snapshotType",
+        typeValue: "usage",
+        options,
+        fallbackSummary: "usage snapshot",
+        eventName: "manager.usage.snapshot",
+        extra,
+        uniqueAutoIdempotency: true,
+      });
+      appendFileSync(paths.usageSnapshots, `${JSON.stringify(snapshot)}\n`);
+      return { record: snapshot };
     });
-    appendFileSync(paths.usageSnapshots, `${JSON.stringify(snapshot)}\n`);
-    return packet({ status: "ready", summary: { runId, snapshot } });
+    if (appended.packet) return appended.packet;
+    return packet({ status: "ready", summary: { runId, snapshot: appended.record } });
   }
   if (options.command === "read") {
     const readiness = buildLedgerReadiness(options, context);
@@ -18598,7 +19686,51 @@ function writeJsonIfMissing(path, value) {
 }
 
 function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !safeIsArray(value);
+}
+
+function safePlainObjectSnapshot(value) {
+  if (!value || typeof value !== "object" || safeIsArray(value)) return null;
+  try {
+    return Object.fromEntries(Object.entries(value));
+  } catch {
+    return null;
+  }
+}
+
+function safeReadProperty(value, key, fallback = undefined) {
+  try {
+    if (!value || typeof value !== "object") return fallback;
+    const record = value;
+    return record[key] ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeString(value, fallback = "") {
+  try {
+    return String(value || fallback || "");
+  } catch {
+    return String(fallback || "");
+  }
+}
+
+function safeIsArray(value) {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function safeArrayValues(value) {
+  try {
+    if (!Array.isArray(value)) return [];
+    return Array.from(value);
+  } catch {
+    return [];
+  }
 }
 
 function projectWorker(worker) {
@@ -18726,13 +19858,351 @@ function malformedLedgerFile(paths, file, path, message) {
   });
 }
 
-function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = {}, fallbackSummary, eventName = "", extra = {} }) {
+function readLedgerEventsStrict(paths) {
+  const eventsRead = readNdjsonStrict(paths.events);
+  if (eventsRead.status !== "ready") return eventsRead;
+  for (let index = 0; index < eventsRead.value.length; index += 1) {
+    const message = validateRuntimeLedgerEventRecord(eventsRead.value[index]);
+    if (message) {
+      return {
+        status: "malformed",
+        value: [],
+        message: `line ${index + 1}: ${message}`,
+      };
+    }
+  }
+  return eventsRead;
+}
+
+function appendLedgerEvent(paths, runId, recordArgs) {
+  return withLedgerAppendLock(paths, () => {
+    const eventsRead = readLedgerEventsStrict(paths);
+    if (eventsRead.status !== "ready") {
+      return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
+    }
+    const identity = ledgerRecordIdentity(recordArgs.options || {}, {
+      normalizedEventName: normalizeLedgerEventName(recordArgs.eventName || recordArgs.typeValue) || "manager.ledger.appended",
+      typeValue: recordArgs.typeValue,
+      actor: recordArgs.actor,
+      extraParts: Object.values(recordArgs.extra || {}),
+    });
+    const duplicate = hasExplicitLedgerIdempotencyKey(recordArgs.options) ? findDuplicateLedgerRecordFromArray(eventsRead.value, identity.idempotencyKey) : null;
+    if (duplicate) {
+      const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event");
+      if (conflict) return { packet: conflict };
+      return { packet: duplicateLedgerPacket(runId, "event", duplicate) };
+    }
+    const record = ledgerRecord({
+      ...recordArgs,
+      uniqueAutoIdempotency: !hasExplicitLedgerIdempotencyKey(recordArgs.options),
+    });
+    appendFileSync(paths.events, `${JSON.stringify(record)}\n`);
+    return { record };
+  });
+}
+
+function reserveLedgerAction(paths, runId, recordArgs, { duplicateReconciler = null } = {}) {
+  return withLedgerAppendLock(paths, () => {
+    const eventsRead = readLedgerEventsStrict(paths);
+    if (eventsRead.status !== "ready") {
+      return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
+    }
+    const identity = ledgerRecordIdentity(recordArgs.options || {}, {
+      normalizedEventName: normalizeLedgerEventName(recordArgs.eventName || recordArgs.typeValue) || "manager.ledger.appended",
+      typeValue: recordArgs.typeValue,
+      actor: recordArgs.actor,
+      extraParts: Object.values(recordArgs.extra || {}),
+    });
+    const duplicate = hasExplicitLedgerIdempotencyKey(recordArgs.options) ? findDuplicateLedgerRecordFromArray(eventsRead.value, identity.idempotencyKey) : null;
+    if (duplicate) {
+      if (duplicate.actionState === "reserved") {
+        const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event", { skipResult: true });
+        if (conflict) return { packet: conflict };
+        return { packet: blockedLedgerActionState(runId, duplicate, "ledger-action-reserved", "Existing ledger action reservation has not been finalized.") };
+      }
+      if (duplicate.result && duplicate.result !== "ready") {
+        const conflict = partialLedgerActionConflictEvidence(duplicate, identity, recordArgs);
+        return {
+          packet: blockedLedgerActionState(runId, duplicate, "ledger-action-partial-side-effects", "Existing ledger action did not complete cleanly.", {
+            conflictFields: conflict.conflictFields,
+            fingerprintDrift: conflict.fingerprintDrift,
+            idempotencyConflict: conflict.conflictFields.length > 0,
+          }),
+        };
+      }
+      const conflict = duplicateLedgerConflict(runId, duplicate, identity, "event");
+      if (conflict) return { packet: conflict };
+      const reconciled = duplicateReconciler ? duplicateReconciler(duplicate) : null;
+      if (reconciled?.packet) return reconciled;
+      return { packet: duplicateLedgerPacket(runId, "event", duplicate) };
+    }
+    const record = ledgerRecord({
+      ...recordArgs,
+      options: { ...(recordArgs.options || {}), result: "reserved" },
+    });
+    record.result = "reserved";
+    record.actionState = "reserved";
+    record.reservationId = record.eventId;
+    record.reservedAt = record.createdAt;
+    record.actionPlan = safeLedgerStructuredMetadata(recordArgs.actionPlan || {});
+    appendFileSync(paths.events, `${JSON.stringify(record)}\n`);
+    return { record };
+  });
+}
+
+function finalizeLedgerAction(paths, runId, reservation, recordArgs) {
+  return withLedgerAppendLock(paths, () => {
+    const eventsRead = readLedgerEventsStrict(paths);
+    if (eventsRead.status !== "ready") {
+      return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
+    }
+    const index = eventsRead.value.findIndex((event) => event?.eventId === reservation?.eventId && event?.idempotencyKey === reservation?.idempotencyKey);
+    if (index < 0) {
+      return { packet: blockedLedgerActionState(runId, reservation, "ledger-action-reservation-missing", "Ledger action reservation disappeared before finalization.") };
+    }
+    const existing = eventsRead.value[index];
+    const next = ledgerRecord(recordArgs);
+    const finalized = {
+      ...existing,
+      summary: next.summary,
+      sourceRefs: next.sourceRefs,
+      evidenceRefs: next.evidenceRefs,
+      recoveryPath: next.recoveryPath,
+      result: next.result,
+      authorityBasis: next.authorityBasis,
+      correlationId: next.correlationId,
+      causationId: next.causationId,
+      orderingKey: next.orderingKey,
+      actionFingerprint: next.actionFingerprint,
+      actionFingerprintVersion: next.actionFingerprintVersion,
+      projectionBehavior: next.projectionBehavior,
+      actionState: "finalized",
+      finalizedAt: new Date().toISOString(),
+      actionPlan: safeLedgerStructuredMetadata(recordArgs.actionPlan || existing.actionPlan || {}),
+    };
+    eventsRead.value[index] = finalized;
+    writeNdjson(paths.events, eventsRead.value);
+    return { record: finalized };
+  });
+}
+
+function blockedLedgerActionState(runId, record = {}, code, message, actionResultExtras = {}) {
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: { runId, actionResult: { ...ledgerActionResult("blocked", record, "event"), ...actionResultExtras } },
+    blockers: [
+      {
+        code,
+        message,
+        nextAction: "Inspect and reconcile the existing ledger action side effects before retrying.",
+      },
+    ],
+  });
+}
+
+function blockedLedgerReconciliation(runId, record = {}, blockers = []) {
+  return {
+    packet: packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, actionResult: ledgerActionResult("reconciliation_blocked", record, "event") },
+      blockers: blockers.length > 0
+        ? blockers
+        : [{ code: "ledger-action-side-effects-missing", message: "Existing ledger action side effects could not be reconciled.", nextAction: "Inspect worker state and ledger action before retrying." }],
+    }),
+  };
+}
+
+function reconcileWarmLedgerDuplicate(paths, runId, planned = [], record = {}, context = {}) {
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return blockedLedgerReconciliation(runId, record, [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before retrying warm apply." }]);
+  }
+  const workers = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const blockers = [];
+  const runner = context.tmuxRunner || spawnSync;
+  for (const action of planned) {
+    const worker = workers.find((candidate) => candidate.workerId === action.workerId && candidate.owner === action.owner);
+    if (!worker) {
+      blockers.push({ code: "ledger-action-worker-missing", message: `Warm worker record is missing for ${action.workerId}.`, nextAction: "Reconcile workers.json before retrying warm apply." });
+      continue;
+    }
+    if (worker.sessionName !== action.sessionName || worker.runId !== runId || worker.assignmentState !== "warm") {
+      blockers.push({ code: "ledger-action-worker-diverged", message: `Warm worker record diverged for ${action.workerId}.`, nextAction: "Inspect worker record before retrying warm apply." });
+    }
+    const session = runner("tmux", ["has-session", "-t", action.sessionName], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+    if ((session?.status ?? 1) !== 0) {
+      blockers.push({ code: "ledger-action-worker-session-missing", message: `Warm tmux session is missing for ${action.sessionName}.`, nextAction: "Repair or retire the worker before retrying warm apply." });
+    }
+  }
+  return blockers.length > 0 ? blockedLedgerReconciliation(runId, record, blockers) : null;
+}
+
+function reconcileHandoffLedgerDuplicate(paths, runId, pairings = [], record = {}, context = {}) {
+  const workerRead = readJsonArray(paths.workers);
+  if (workerRead.warning) {
+    return blockedLedgerReconciliation(runId, record, [{ code: workerRead.warning.code, message: workerRead.warning.message, nextAction: "Repair manager workers.json before retrying handoff apply." }]);
+  }
+  const workers = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const blockers = [];
+  for (const pairing of pairings) {
+    const worker = workers.find((candidate) => candidate.workerId === pairing.workerId && candidate.owner === pairing.owner);
+    if (!worker) {
+      blockers.push({ code: "ledger-action-handoff-worker-missing", message: `Handoff worker record is missing for ${pairing.workerId}.`, nextAction: "Reconcile workers.json before retrying handoff apply." });
+      continue;
+    }
+    if (worker.assignmentId !== pairing.assignmentId || worker.taskId !== pairing.taskId || worker.assignmentState !== "active") {
+      blockers.push({ code: "ledger-action-handoff-worker-diverged", message: `Handoff worker assignment diverged for ${pairing.workerId}.`, nextAction: "Inspect worker assignment before retrying handoff apply." });
+    }
+    if (!existsSync(pairing.handoffPath)) {
+      blockers.push({ code: "ledger-action-handoff-file-missing", message: `Handoff file is missing for ${pairing.workerId}.`, nextAction: "Regenerate or reconcile handoff evidence before retrying." });
+    } else {
+      const expectedDigest = ledgerValueDigest(renderWorkerHandoffFile(pairing));
+      const actualDigest = ledgerValueDigest(readFileSync(pairing.handoffPath, "utf8"));
+      if (expectedDigest !== actualDigest) {
+        blockers.push({ code: "ledger-action-handoff-file-diverged", message: `Handoff file content diverged for ${pairing.workerId}.`, nextAction: "Inspect handoff file before retrying." });
+      }
+    }
+    if (!existsSync(pairing.pastePath)) {
+      blockers.push({ code: "ledger-action-handoff-pointer-missing", message: `Handoff paste pointer is missing for ${pairing.workerId}.`, nextAction: "Regenerate or reconcile handoff pointer before retrying." });
+    }
+  }
+  return blockers.length > 0 ? blockedLedgerReconciliation(runId, record, blockers) : null;
+}
+
+function writeNdjson(path, records = []) {
+  writeFileSync(path, records.map((record) => JSON.stringify(record)).join("\n") + (records.length > 0 ? "\n" : ""));
+}
+
+function withLedgerAppendLock(paths, fn) {
+  const lockDir = join(paths.root, ".ledger-append.lock");
+  const ownerPath = join(lockDir, "owner.json");
+  const owner = {
+    runId: paths.runId,
+    pid: process.pid,
+    process: currentLedgerLockProcessMetadata(),
+    token: `${paths.runId}:${process.pid}:${Date.now()}:${process.hrtime.bigint().toString(36)}`,
+    createdAt: new Date().toISOString(),
+  };
+  const started = Date.now();
+  while (true) {
+    try {
+      mkdirSync(lockDir);
+      writeFileSync(ownerPath, `${JSON.stringify(owner, null, 2)}\n`);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (recoverStaleLedgerAppendLock(lockDir, ownerPath)) continue;
+      if (Date.now() - started > 5000) {
+        const existingOwner = readJson(ownerPath, null);
+        return {
+          packet: packet({
+            ok: false,
+            status: "blocked",
+            summary: { runId: paths.runId, lock: lockDir, owner: existingOwner },
+            blockers: [
+              {
+                code: "ledger-append-lock-timeout",
+                message: "Timed out waiting for manager runtime ledger append lock.",
+                nextAction: "Inspect the manager ledger lock before retrying append.",
+              },
+            ],
+          }),
+        };
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    const currentOwner = readJson(ownerPath, null);
+    if (currentOwner?.token === owner.token && currentOwner?.pid === owner.pid && currentOwner?.runId === owner.runId) {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  }
+}
+
+function recoverStaleLedgerAppendLock(lockDir, ownerPath) {
+  const owner = readJson(ownerPath, null);
+  const ageMs = Date.now() - (parseTimeMs(owner?.createdAt) || safeMtimeMs(lockDir) || 0);
+  const pid = Number(owner?.pid);
+  const pidAlive = Number.isInteger(pid) && pid > 0 ? processAlive(pid) : false;
+  if (ageMs < 30000) return false;
+  if (pidAlive && !ledgerLockOwnerProcessDiverged(owner)) return false;
+  rmSync(lockDir, { recursive: true, force: true });
+  return true;
+}
+
+function currentLedgerLockProcessMetadata() {
+  const metadata = readProcessMetadata(process.pid) || {};
+  return {
+    execPath: process.execPath,
+    argv0: process.argv[0] || "",
+    cwd: process.cwd(),
+    commandLineDigest: metadata.commandLineDigest || ledgerValueDigest(process.argv.join("\u0000")),
+    startTime: metadata.startTime || "",
+  };
+}
+
+function ledgerLockOwnerProcessDiverged(owner = {}) {
+  const pid = Number(owner?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  const current = readProcessMetadata(pid);
+  if (!current) return false;
+  const recorded = owner.process || {};
+  if (recorded.startTime && current.startTime && recorded.startTime !== current.startTime) return true;
+  if (recorded.commandLineDigest && current.commandLineDigest && recorded.commandLineDigest !== current.commandLineDigest) return true;
+  return false;
+}
+
+function readProcessMetadata(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const afterName = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    const startTime = afterName[19] || "";
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return {
+      startTime,
+      commandLineDigest: ledgerValueDigest(cmdline),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function safeMtimeMs(path) {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = {}, fallbackSummary, eventName = "", extra = {}, uniqueAutoIdempotency = false }) {
   const recordId = `${idPrefix}-${Date.now()}-${process.hrtime.bigint().toString(36)}`;
   const createdAt = new Date().toISOString();
   const normalizedEventName = normalizeLedgerEventName(eventName || typeValue) || "manager.ledger.appended";
   const sanitizedSourceRefs = sanitizeSourceRefs(options.sourceRefs || defaultLedgerSourceRefs(normalizedEventName));
   const sanitizedEvidenceRefs = sanitizeSourceRefs(options.evidenceRefs || options.evidenceRef || defaultLedgerEvidenceRefs(normalizedEventName, recordId));
-  const correlationId = sanitizeLedgerField(options.correlationId || options.correlationID || recordId, recordId, 120);
+  const identity = ledgerRecordIdentity(options, {
+    normalizedEventName,
+    typeValue,
+    actor,
+    extraParts: Object.values(extra || {}),
+    uniqueAutoPart: uniqueAutoIdempotency ? recordId : "",
+  });
+  const correlationId = sanitizeLedgerField(options.correlationId || options.correlationID || identity.idempotencyKey, identity.idempotencyKey, 120);
   return {
     [idName]: recordId,
     ...safeLedgerExtra(extra),
@@ -18753,12 +20223,277 @@ function ledgerRecord({ idPrefix, idName, actor, typeName, typeValue, options = 
     evidenceRefs: sanitizedEvidenceRefs,
     correlationId,
     causationId: sanitizeLedgerField(options.causationId || options.causationID || correlationId, correlationId, 120),
-    orderingKey: sanitizeLedgerField(options.orderingKey || createdAt, createdAt, 120),
-    idempotencyKey: sanitizeLedgerField(options.idempotencyKey || `${normalizedEventName}:${recordId}`, `${normalizedEventName}:${recordId}`, 160),
+    orderingKey: sanitizeLedgerField(options.orderingKey || identity.idempotencyKey, identity.idempotencyKey, 120),
+    idempotencyKey: identity.idempotencyKey,
+    actionFingerprint: identity.actionFingerprint,
+    actionFingerprintVersion: identity.actionFingerprintVersion,
     redactionBoundary: sanitizeLedgerField(options.redactionBoundary || "metadata_only", "metadata_only", 40),
     projectionBehavior: sanitizeLedgerField(options.projectionBehavior || defaultLedgerProjectionBehavior(normalizedEventName), "records_evidence", 80),
     rawPayloadRetained: false,
   };
+}
+
+function ledgerRecordIdentity(options = {}, { normalizedEventName, typeValue, actor, sourceRefs = null, evidenceRefs = null, extraParts = [], uniqueAutoPart = "" } = {}) {
+  const fingerprintSource = ledgerActionFingerprintSource(options, { normalizedEventName, typeValue, actor, sourceRefs, evidenceRefs, extraParts });
+  const actionFingerprint = createHash("sha256").update(JSON.stringify(fingerprintSource)).digest("hex");
+  const idempotencyKey = ledgerIdempotencyKey(options, {
+    normalizedEventName: fingerprintSource.eventName,
+    actionFingerprint,
+    uniqueAutoPart,
+  });
+  return {
+    idempotencyKey,
+    actionFingerprint,
+    actionFingerprintVersion: LEDGER_ACTION_FINGERPRINT_VERSION,
+    eventName: fingerprintSource.eventName,
+    retryMetadata: {
+      authorityBasis: sanitizeLedgerField(options.authorityBasis || "manager-owned-ledger-append", "manager-owned-ledger-append", 120),
+      summary: sanitizeLedgerField(options.summary || "", "", 240),
+      result: sanitizeLedgerField(options.result || "recorded", "recorded", 40),
+      recoveryPath: sanitizeLedgerField(options.recoveryPath || "inspect manager ledger and rerun resume state", "inspect manager ledger and rerun resume state", 240),
+      correlationId: sanitizeLedgerField(options.correlationId || options.correlationID || idempotencyKey, idempotencyKey, 120),
+      causationId: sanitizeLedgerField(options.causationId || options.causationID || options.correlationId || options.correlationID || idempotencyKey, idempotencyKey, 120),
+      orderingKey: sanitizeLedgerField(options.orderingKey || idempotencyKey, idempotencyKey, 120),
+    },
+    canonical: fingerprintSource,
+  };
+}
+
+function ledgerIdempotencyKey(options = {}, { normalizedEventName, actionFingerprint, uniqueAutoPart = "" } = {}) {
+  const explicit = explicitLedgerIdempotencyKey(options);
+  if (explicit) return explicit;
+  const safeEventName = normalizeLedgerEventName(normalizedEventName) || "manager.ledger.appended";
+  const uniquePart = uniqueAutoPart ? `:${hashLedgerValue(uniqueAutoPart).slice(0, 12)}` : "";
+  return `auto:${safeEventName}:${String(actionFingerprint || hashLedgerValue(safeEventName)).slice(0, 24)}${uniquePart}`;
+}
+
+function ledgerActionFingerprintSource(options = {}, { normalizedEventName, typeValue, actor, sourceRefs = null, evidenceRefs = null, extraParts = [] } = {}) {
+  const safeEventName = normalizeLedgerEventName(normalizedEventName || typeValue) || "manager.ledger.appended";
+  return {
+    schemaVersion: LEDGER_ACTION_FINGERPRINT_VERSION,
+    eventName: safeEventName,
+    actorDigest: ledgerValueDigest(actor || "manager"),
+    typeValueDigest: ledgerValueDigest(typeValue || safeEventName),
+    sourceRefDigests: canonicalLedgerDigests(sourceRefs || options.sourceRefs || defaultLedgerSourceRefs(safeEventName)),
+    evidenceRefDigests: canonicalLedgerDigests(evidenceRefs || options.evidenceRefs || options.evidenceRef || defaultLedgerEvidenceRefs(safeEventName, "pending")),
+    actionMaterialDigests: canonicalLedgerDigests(options.actionMaterial || []),
+    extraPartDigests: canonicalLedgerDigests(extraParts),
+  };
+}
+
+function canonicalLedgerRefs(refs = []) {
+  const list = Array.isArray(refs) ? refs : [refs];
+  return [...new Set(list.map((ref) => ledgerFingerprintField(ref)).filter(Boolean))].sort();
+}
+
+function canonicalLedgerDigests(values = []) {
+  const list = Array.isArray(values) ? values : [values];
+  return [...new Set(list.map((value) => ledgerValueDigest(value)).filter(Boolean))].sort();
+}
+
+function ledgerValueDigest(value) {
+  return createHash("sha256").update(stableLedgerValue(value)).digest("hex");
+}
+
+function stableLedgerValue(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return `[${value.map((entry) => stableLedgerValue(entry)).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableLedgerValue(value[key])}`).join(",")}}`;
+  }
+  return String(value)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, (match) => `[protected-token:${hashLedgerValue(match).slice(0, 24)}]`)
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ledgerFingerprintField(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, (match) => `[protected-token:${hashLedgerValue(match).slice(0, 24)}]`)
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hashLedgerValue(value) {
+  return createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function hasExplicitLedgerIdempotencyKey(options = {}) {
+  return Boolean(explicitLedgerIdempotencyKey(options));
+}
+
+function explicitLedgerIdempotencyKey(options = {}) {
+  const raw = String(options.idempotencyKey || options.idempotency_key || "").trim();
+  if (!raw) return "";
+  const normalized = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (normalized.length > 160 || ledgerValueContainsProtectedMaterial(normalized)) return `explicit:${ledgerValueDigest(normalized).slice(0, 48)}`;
+  const sanitized = sanitizeLedgerField(normalized, "", 160);
+  if (sanitized) return sanitized;
+  return `explicit:${ledgerValueDigest(raw).slice(0, 48)}`;
+}
+
+function ledgerValueContainsProtectedMaterial(value = "") {
+  return /\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+|OPENAI_API_KEY|password|secret)\b/i.test(String(value || ""));
+}
+
+function duplicateLedgerPacket(runId, recordName, record) {
+  const existingRecordId = ledgerRecordId(record, recordName);
+  const actionResult = ledgerActionResult("duplicate_ignored", record, recordName);
+  return packet({
+    status: "ready",
+    summary: {
+      runId,
+      [recordName]: record,
+      duplicateIgnored: true,
+      actionResult: { ...actionResult, existingRecordId },
+    },
+  });
+}
+
+function duplicateLedgerConflict(runId, duplicate, identity = {}, recordName = "event", options = {}) {
+  const conflictReasons = [];
+  if (identity.eventName && duplicate.eventName && duplicate.eventName !== identity.eventName) {
+    conflictReasons.push("eventName");
+  }
+  if (!duplicate.actionFingerprint || !duplicate.actionFingerprintVersion) {
+    conflictReasons.push("legacyActionFingerprint");
+  } else if (duplicate.actionFingerprintVersion !== identity.actionFingerprintVersion) {
+    conflictReasons.push("actionFingerprintVersion");
+  } else if (identity.actionFingerprint && duplicate.actionFingerprint !== identity.actionFingerprint) {
+    conflictReasons.push("actionFingerprint");
+  }
+  const retryMetadata = identity.retryMetadata || {};
+  if (retryMetadata.authorityBasis && duplicate.authorityBasis && duplicate.authorityBasis !== retryMetadata.authorityBasis) {
+    conflictReasons.push("authorityBasis");
+  }
+  if (retryMetadata.summary && duplicate.summary && duplicate.summary !== retryMetadata.summary) {
+    conflictReasons.push("summary");
+  }
+  if (!options.skipResult && retryMetadata.result && duplicate.result && duplicate.result !== retryMetadata.result) {
+    conflictReasons.push("result");
+  }
+  if (retryMetadata.recoveryPath && duplicate.recoveryPath && duplicate.recoveryPath !== retryMetadata.recoveryPath) {
+    conflictReasons.push("recoveryPath");
+  }
+  if (retryMetadata.correlationId && duplicate.correlationId && duplicate.correlationId !== retryMetadata.correlationId) {
+    conflictReasons.push("correlationId");
+  }
+  if (retryMetadata.causationId && duplicate.causationId && duplicate.causationId !== retryMetadata.causationId) {
+    conflictReasons.push("causationId");
+  }
+  if (retryMetadata.orderingKey && duplicate.orderingKey && duplicate.orderingKey !== retryMetadata.orderingKey) {
+    conflictReasons.push("orderingKey");
+  }
+  if (conflictReasons.length === 0) return null;
+  const existingRecordId = ledgerRecordId(duplicate, recordName);
+  const actionResult = ledgerActionResult("conflict", duplicate, recordName);
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: {
+      runId,
+      actionResult: {
+        ...actionResult,
+        conflictFields: conflictReasons,
+        existingRecordId,
+        existingEventId: duplicate.eventId || existingRecordId,
+      },
+    },
+    blockers: [
+      {
+        code: "ledger-idempotency-conflict",
+        message: `Ledger idempotency key conflicts with existing record fields: ${conflictReasons.join(", ")}.`,
+        nextAction: `Resolve ${conflictReasons[0]} for the existing ledger record or submit a new idempotency key.`,
+      },
+    ],
+  });
+}
+
+function partialLedgerActionConflictEvidence(duplicate = {}, identity = {}, recordArgs = {}) {
+  const conflictReasons = [];
+  const fingerprintDrift = Boolean(
+    duplicate.actionFingerprint &&
+    identity.actionFingerprint &&
+    duplicate.actionFingerprint !== identity.actionFingerprint,
+  );
+  if (identity.eventName && duplicate.eventName && duplicate.eventName !== identity.eventName) {
+    conflictReasons.push("eventName");
+  }
+  if (!duplicate.actionFingerprint || !duplicate.actionFingerprintVersion) {
+    conflictReasons.push("legacyActionFingerprint");
+  } else if (duplicate.actionFingerprintVersion !== identity.actionFingerprintVersion) {
+    conflictReasons.push("actionFingerprintVersion");
+  } else if (partialLedgerActionMaterialChanged(duplicate.actionPlan, recordArgs.actionPlan)) {
+    conflictReasons.push("actionFingerprint");
+  }
+  const retryMetadata = identity.retryMetadata || {};
+  if (retryMetadata.authorityBasis && duplicate.authorityBasis && duplicate.authorityBasis !== retryMetadata.authorityBasis) {
+    conflictReasons.push("authorityBasis");
+  }
+  if (retryMetadata.recoveryPath && duplicate.recoveryPath && duplicate.recoveryPath !== retryMetadata.recoveryPath) {
+    conflictReasons.push("recoveryPath");
+  }
+  if (retryMetadata.correlationId && duplicate.correlationId && duplicate.correlationId !== retryMetadata.correlationId) {
+    conflictReasons.push("correlationId");
+  }
+  if (retryMetadata.causationId && duplicate.causationId && duplicate.causationId !== retryMetadata.causationId) {
+    conflictReasons.push("causationId");
+  }
+  if (retryMetadata.orderingKey && duplicate.orderingKey && duplicate.orderingKey !== retryMetadata.orderingKey) {
+    conflictReasons.push("orderingKey");
+  }
+  return { conflictFields: conflictReasons, fingerprintDrift };
+}
+
+function partialLedgerActionMaterialChanged(existingActionPlan = {}, retryActionPlan = {}) {
+  const safeRetryActionPlan = safeLedgerStructuredMetadata(retryActionPlan || {});
+  const existingMaterial = isPlainObject(existingActionPlan)
+    ? existingActionPlan.handoffs || existingActionPlan.workers || existingActionPlan.requests || existingActionPlan.answers || existingActionPlan.signals || null
+    : null;
+  const retryMaterial = isPlainObject(safeRetryActionPlan)
+    ? safeRetryActionPlan.handoffs || safeRetryActionPlan.workers || safeRetryActionPlan.requests || safeRetryActionPlan.answers || safeRetryActionPlan.signals || null
+    : null;
+  if (existingMaterial === null || retryMaterial === null) return false;
+  return stableLedgerValue(existingMaterial) !== stableLedgerValue(retryMaterial);
+}
+
+function ledgerActionResult(status, record = {}, recordName = "event") {
+  return {
+    status,
+    existingRecordId: ledgerRecordId(record, recordName),
+    eventId: record.eventId || "",
+    questionId: record.questionId || "",
+    checkpointId: record.checkpointId || "",
+    snapshotId: record.snapshotId || "",
+    eventName: record.eventName || "",
+    authorityBasis: record.authorityBasis || "",
+    result: record.result || "",
+    sourceRefs: Array.isArray(record.sourceRefs) ? record.sourceRefs : [],
+    evidenceRefs: Array.isArray(record.evidenceRefs) ? record.evidenceRefs : [],
+    recoveryPath: record.recoveryPath || "",
+    projectionBehavior: record.projectionBehavior || "",
+    idempotencyKey: record.idempotencyKey || "",
+    correlationId: record.correlationId || "",
+    causationId: record.causationId || "",
+    orderingKey: record.orderingKey || "",
+    actionFingerprintVersion: record.actionFingerprintVersion || "",
+  };
+}
+
+function ledgerRecordId(record = {}, recordName = "event") {
+  const field = {
+    event: "eventId",
+    question: "questionId",
+    checkpoint: "checkpointId",
+    snapshot: "snapshotId",
+  }[recordName] || "eventId";
+  return record[field] || record.eventId || record.questionId || record.checkpointId || record.snapshotId || "";
 }
 
 function safeLedgerExtra(extra = {}) {
@@ -18788,6 +20523,21 @@ function ledgerEventExtra(eventName = "", options = {}) {
     workClass: options.advisorWorkClass || options.workClass || "manager_improvement",
     managerCapability: options.capabilityName || options.managerCapability || "manager",
   };
+}
+
+function safeLedgerStructuredMetadata(value, depth = 0) {
+  if (depth > 4) return "[depth-limit]";
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value.slice(0, 24).map((entry) => safeLedgerStructuredMetadata(entry, depth + 1));
+  if (typeof value === "object") {
+    const safe = {};
+    for (const key of Object.keys(value).sort().slice(0, 32)) {
+      safe[sanitizeLedgerField(key, "field", 80)] = safeLedgerStructuredMetadata(value[key], depth + 1);
+    }
+    return safe;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  return sanitizeLedgerField(stableLedgerValue(value), "", 240);
 }
 
 function defaultLedgerSourceRefs(eventName) {
@@ -18885,7 +20635,9 @@ function findDuplicateLedgerEvent(eventsPath, idempotencyKey) {
 function findDuplicateLedgerRecord(recordsPath, idempotencyKey) {
   const key = sanitizeLedgerField(idempotencyKey || "", "", 160);
   if (!key) return null;
-  return readNdjsonStrict(recordsPath).value.find((event) => event?.idempotencyKey === key) || null;
+  const recordsRead = readNdjsonStrict(recordsPath);
+  if (recordsRead.status !== "ready") return null;
+  return recordsRead.value.find((event) => event?.idempotencyKey === key) || null;
 }
 
 function findDuplicateLedgerRecordFromArray(records = [], idempotencyKey) {
@@ -19067,10 +20819,10 @@ function sanitizeSourceRefs(refs) {
 }
 
 function sanitizeLedgerField(value, fallback, maxLength) {
-  const text = String(value || fallback || "")
+  const text = safeString(value, fallback)
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
-    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|source copy|raw source|console log|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
     .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
     .replace(/\s+/g, " ")
     .trim();
@@ -19078,7 +20830,7 @@ function sanitizeLedgerField(value, fallback, maxLength) {
 }
 
 function sanitizeIdentifierField(value, fallback = "", maxLength = 140) {
-  const text = String(value || fallback || "")
+  const text = safeString(value, fallback)
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
     .replace(/\s+/g, " ")

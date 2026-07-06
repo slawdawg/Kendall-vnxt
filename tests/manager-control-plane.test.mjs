@@ -213,6 +213,98 @@ function readyDispatchPreviewFixture(overrides = {}) {
   };
 }
 
+function operationalActionsFixture(overrides = {}) {
+  const { dispatchCapability: dispatchCapabilityOverride, ...readinessOverrides } = overrides;
+  const checkedAt = readinessOverrides.checkedAt || new Date().toISOString();
+  const expiresAt = readinessOverrides.expiresAt || new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const capability = (actionId, targetType, capabilityState, authorityState, riskTier, typedReason = null) => ({
+    actionId,
+    targetType,
+    targetId: null,
+    capabilityState,
+    authorityState,
+    riskTier,
+    typedReason,
+    expectedResultSummary: `Projected ${actionId} operational action capability.`,
+    correlationRequired: true,
+    idempotencyRequired: true,
+    evidenceRefs: [`operational-action:${actionId}`, "manager-cycle:manager-test"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  });
+  const dispatchCapability = {
+    ...capability("dispatch_apply", "work_item", "gated", "needs_authority_approval", "high", "blocked_by_approval"),
+    ...(dispatchCapabilityOverride || {}),
+  };
+  const actionCapabilities = [
+    capability("inspect", "manager_run", "available", "allowed", "low"),
+    capability("refresh_projection", "projection", "available", "allowed", "low"),
+    dispatchCapability,
+    capability("mark_viewed", "work_packet", "simulated", "needs_product_approval", "low", "blocked_by_approval"),
+    capability("retry_verification", "execution_attempt", "gated", "needs_authority_approval", "medium", "blocked_by_approval"),
+    capability("requeue", "work_item", "gated", "needs_authority_approval", "medium", "blocked_by_approval"),
+    capability("mark_tested", "work_packet", "gated", "needs_product_approval", "medium", "blocked_by_approval"),
+    capability("kill_worker", "worker", "gated", "needs_authority_approval", "high", "blocked_by_approval"),
+    capability("mutate_source", "work_packet", "gated", "needs_authority_approval", "high", "blocked_by_policy"),
+    capability("push_branch", "branch", "gated", "needs_authority_approval", "high", "blocked_by_approval"),
+    capability("open_pr", "branch", "gated", "needs_authority_approval", "high", "blocked_by_approval"),
+    capability("merge", "branch", "gated", "needs_safety_approval", "extreme", "blocked_by_approval"),
+    capability("delete_branch", "branch", "gated", "needs_safety_approval", "extreme", "blocked_by_approval"),
+    capability("cleanup", "workspace", "gated", "needs_safety_approval", "extreme", "blocked_by_approval"),
+    capability("credential_or_provider_change", "runtime", "unavailable", "blocked", "extreme", "blocked_by_policy"),
+  ];
+  return {
+    schemaVersion: "pipeline-operational-runtime-readiness/v0",
+    actionSchemaVersion: "pipeline-operational-action/v0",
+    readinessState: "ready",
+    operationalMode: "read_only",
+    freshnessState: "live",
+    capabilityState: "available",
+    typedReason: null,
+    checkedAt,
+    expiresAt,
+    summary: "Read-only operational action capability projection is available.",
+    actionCapabilities,
+    evidenceRefs: ["manager-cycle:manager-test", "preflight:ready", "usage:normal", "resources:normal"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...readinessOverrides,
+  };
+}
+
+function operationalEvidenceToken(value) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const normalized = value
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24) || "id";
+  return `${normalized}-${(hash >>> 0).toString(36).padStart(7, "0").slice(0, 7)}`;
+}
+
+function dispatchApplyAuthorityFixture(targetId = "lane-ready") {
+  return {
+    actionId: "dispatch_apply",
+    targetType: "work_item",
+    targetId,
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "high",
+    approvalEvidenceRef: `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken(targetId)}`,
+    evidenceRefs: [
+      "operational-action:dispatch_apply",
+      "manager-cycle:manager-test",
+      `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken(targetId)}`,
+    ],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function readyReconciliationSignals({
   runId = "manager-test",
   laneId = "lane-1",
@@ -3322,15 +3414,40 @@ test("mature tool evaluation classifies candidates with bounded decision evidenc
   assert.equal(bullmq.rollbackPath, "Disable the adapter and use the local lease harness.");
   assert.equal(bullmq.fallback, "sqlite-lease-harness");
   assert.equal(bullmq.rawPayloadRetained, false);
+  assert.equal(bullmq.decisionRecord.recordId, "mature-tool-decision:manager-test:bullmq-redis");
+  assert.equal(bullmq.decisionRecord.decision, "adapter_only_reference");
+  assert.equal(bullmq.decisionRecord.directProductTruth, "rejected_adapter_only");
+  assert.equal(bullmq.decisionRecord.localFirstBehavior, "local_service_required");
+  assert.equal(bullmq.decisionRecord.restartRecovery, "passed");
+  assert.equal(bullmq.decisionRecord.concurrencySafety, "lease_semantics_passed");
+  assert.equal(bullmq.decisionRecord.installChurn, "local_service_required");
+  assert.equal(bullmq.decisionRecord.pipelineNormalization, "kendall_summary_packets");
+  assert.equal(bullmq.decisionRecord.license, "acceptable");
+  assert.equal(bullmq.decisionRecord.telemetryDataResidency, "local_metadata_only");
+  assert.equal(bullmq.decisionRecord.adapterBoundary, "DispatcherPort");
+  assert.equal(bullmq.decisionRecord.rollbackPath, bullmq.rollbackPath);
+  assert.equal(bullmq.decisionRecord.fallback, "sqlite-lease-harness");
+  assert.deepEqual(bullmq.decisionRecord.evidenceRefs, ["evidence:bullmq-local-proof"]);
+  assert.equal(bullmq.decisionRecord.rawPayloadRetained, false);
 
   const conftest = plan.summary.candidates.find((candidate) => candidate.candidateId === "opa-conftest");
   assert.equal(conftest.decision, "adopt");
   assert.equal(conftest.category, "policy_engine");
+  assert.equal(conftest.decisionRecord.decision, "adapter_only_reference");
+  assert.equal(conftest.decisionRecord.concurrencySafety, "not_applicable");
+  assert.equal(conftest.decisionRecord.directProductTruth, "rejected_adapter_only");
 
   assert.equal(plan.summary.selectedPaths.queueBackend.candidateId, "bullmq-redis");
   assert.equal(plan.summary.selectedPaths.policyEngine.candidateId, "opa-conftest");
   assert.equal(plan.summary.selectedPaths.queueBackend.adapterBoundary, "DispatcherPort");
   assert.equal(plan.summary.selectedPaths.queueBackend.fallback, "sqlite-lease-harness");
+  assert.equal(plan.summary.decisionRecords.length, plan.summary.candidates.length);
+  assert.ok(plan.summary.decisionRecords.every((record) => record.schemaVersion === "mature-tool-decision-record/v0"));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.rawPayloadRetained === false));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.pipelineNormalization === "kendall_summary_packets"));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.rollbackPath));
+  assert.ok(plan.summary.decisionRecords.every((record) => record.fallback));
+  assert.deepEqual(plan.summary.decisionRecordsByCategory.queue_backend.map((record) => record.candidateId), ["bullmq-redis", "hatchet", "sqlite-lease-harness"]);
   assert.equal(plan.summary.fallbackSelected, false);
   assert.equal(plan.summary.noAdditionalPlanningCycleRequired, true);
   assert.equal(plan.summary.mutationMode, "none; read-only mature-tool evaluation summary");
@@ -3344,6 +3461,12 @@ test("mature tool path falls back to local lease harness without another plannin
   assert.equal(plan.summary.selectedPaths.queueBackend.candidateId, "sqlite-lease-harness");
   assert.equal(plan.summary.selectedPaths.queueBackend.decision, "adopt");
   assert.equal(plan.summary.selectedPaths.queueBackend.adapterBoundary, "DispatcherPort");
+  assert.equal(plan.summary.selectedPaths.queueBackend.decisionRecord.decision, "adopted");
+  assert.equal(plan.summary.selectedPaths.queueBackend.decisionRecord.directProductTruth, "accepted_fallback_product_truth");
+  assert.equal(plan.summary.selectedPaths.policyEngine.decisionRecord.decision, "adopted");
+  assert.equal(plan.summary.selectedPaths.policyEngine.decisionRecord.fallback, "deterministic-policy-checks");
+  assert.equal(plan.summary.selectedPaths.sessionWorktree.decisionRecord.decision, "adopted");
+  assert.equal(plan.summary.selectedPaths.sessionWorktree.decisionRecord.fallback, "codex-workspace-protocol");
   assert.equal(plan.summary.noAdditionalPlanningCycleRequired, true);
   assert.equal(plan.summary.nextAction, "continue_backend_proof_on_selected_fallback");
   assert.ok(plan.summary.candidates.find((candidate) => candidate.candidateId === "bullmq-redis" && candidate.decision === "defer"));
@@ -3351,6 +3474,10 @@ test("mature tool path falls back to local lease harness without another plannin
   for (const candidate of plan.summary.candidates) {
     assert.ok(candidate.fallback, `${candidate.candidateId} must record fallback`);
     assert.ok(candidate.rollbackPath, `${candidate.candidateId} must record rollback path`);
+    assert.ok(candidate.decisionRecord, `${candidate.candidateId} must record decision`);
+    assert.equal(candidate.decisionRecord.rawPayloadRetained, false);
+    assert.equal(candidate.decisionRecord.adapterBoundary, "DispatcherPort");
+    assert.ok(candidate.decisionRecord.stopLines.length > 0, `${candidate.candidateId} must record stop lines`);
   }
   assert.ok(plan.nextActions.some((action) => action.code === "mature-tool-fallback-selected"));
 });
@@ -3418,6 +3545,26 @@ test("mature tool evaluation blocks unsafe adoption claims and invalid gate meta
   const squad = blockedLicense.summary.candidates.find((candidate) => candidate.candidateId === "claude-squad");
   assert.equal(squad.decision, "reject");
   assert.ok(squad.rejectionReasons.includes("license_blocked"));
+
+  const failedLeaseNonQueue = buildMatureToolEvaluationPlan(
+    { runId: "manager-test" },
+    {
+      toolEvidence: {
+        dagger: {
+          runnableEvidenceRefs: ["evidence:dagger-local-verification-proof"],
+          localDependencyPosture: "local_binary_optional",
+          licensePosture: "acceptable",
+          dataBoundaryPosture: "local_only",
+          recoveryPosture: "passed",
+          leaseSemanticsPosture: "failed",
+          rollbackPath: "Use existing pnpm verification commands.",
+        },
+      },
+    },
+  );
+  const failedLeaseDagger = failedLeaseNonQueue.summary.candidates.find((candidate) => candidate.candidateId === "dagger");
+  assert.equal(failedLeaseDagger.decision, "reject");
+  assert.equal(failedLeaseDagger.decisionRecord.concurrencySafety, "lease_semantics_failed");
 
   const rawPayload = buildMatureToolEvaluationPlan(
     { runId: "manager-test" },
@@ -3493,6 +3640,8 @@ test("mature tool evaluation blocks unsafe adoption claims and invalid gate meta
   );
   assert.equal(duplicateCandidate.status, "blocked");
   assert.equal(duplicateCandidate.blockers[0].code, "mature-tool-duplicate-candidate-id");
+  const duplicateRecordIds = duplicateCandidate.summary.decisionRecords.map((record) => record.recordId);
+  assert.equal(new Set(duplicateRecordIds).size, duplicateRecordIds.length);
 
   const unsupportedCategoryAndMissingFallback = buildMatureToolEvaluationPlan(
     { runId: "manager-test" },
@@ -3503,6 +3652,46 @@ test("mature tool evaluation blocks unsafe adoption claims and invalid gate meta
   assert.equal(unsupportedCategoryAndMissingFallback.status, "blocked");
   assert.ok(unsupportedCategoryAndMissingFallback.blockers.some((blocker) => blocker.code === "mature-tool-unsupported-category"));
   assert.ok(unsupportedCategoryAndMissingFallback.blockers.some((blocker) => blocker.code === "mature-tool-fallback-missing"));
+  assert.equal(unsupportedCategoryAndMissingFallback.summary.decisionRecordsByCategory.external_scheduler.length, 1);
+
+  const prototypeCategory = buildMatureToolEvaluationPlan(
+    { runId: "manager-test" },
+    {
+      candidates: [{ candidateId: "prototype-tool", name: "Prototype Tool", category: "__proto__", fallback: "sqlite-lease-harness", defaultDecision: "defer" }],
+    },
+  );
+  assert.equal(prototypeCategory.status, "blocked");
+  assert.ok(prototypeCategory.blockers.some((blocker) => blocker.code === "mature-tool-unsupported-category"));
+  assert.equal(prototypeCategory.summary.decisionRecordsByCategory.__proto__.length, 1);
+
+  const adoptedWithoutFallback = buildMatureToolEvaluationPlan(
+    { runId: "manager-test" },
+    {
+      candidates: [{
+        candidateId: "custom-adopter",
+        name: "Custom Adopter",
+        category: "policy_engine",
+        decision: "adopt",
+        rollbackPath: "Disable custom adapter.",
+        stopLines: ["do_not_install_dependency"],
+      }],
+      toolEvidence: {
+        "custom-adopter": {
+          runnableEvidenceRefs: ["evidence:custom-adopter"],
+          localDependencyPosture: "repo_existing",
+          licensePosture: "acceptable",
+          dataBoundaryPosture: "local_only",
+          recoveryPosture: "passed",
+          leaseSemanticsPosture: "passed",
+        },
+      },
+    },
+  );
+  const customAdopter = adoptedWithoutFallback.summary.candidates.find((candidate) => candidate.candidateId === "custom-adopter");
+  assert.equal(adoptedWithoutFallback.status, "blocked");
+  assert.ok(adoptedWithoutFallback.blockers.some((blocker) => blocker.code === "mature-tool-fallback-missing"));
+  assert.equal(customAdopter.decision, "defer");
+  assert.equal(customAdopter.decisionRecord.localProofFallbackValid, false);
 
   const missingRollback = buildMatureToolEvaluationPlan(
     { runId: "manager-test" },
@@ -5943,6 +6132,160 @@ test("worker warm gate apply starts only manager-owned workers and records heart
   }
 });
 
+test("worker warm apply blocks before tmux mutation when ledger action preflight fails", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-preflight-block-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    writeFileSync(join(runRoot, "events.ndjson"), "{bad json\n");
+    const launches = [];
+    const applied = buildWorkerWarmPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        apply: true,
+        limit: 1,
+        workerCommand: "bash -lc 'echo warm'",
+      },
+      {
+        cyclePacket,
+        tmuxRunner(command, args) {
+          launches.push({ command, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "ledger-file-malformed");
+    assert.equal(launches.length, 0);
+    assert.equal(JSON.parse(readFileSync(join(runRoot, "workers.json"), "utf8")).length, 0);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm duplicate retries reconcile worker records and tmux sessions", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-duplicate-reconcile-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    const liveSessions = new Set();
+    const tmuxRunner = (_command, args) => {
+      if (args[0] === "has-session") return { status: liveSessions.has(args[2]) ? 0 : 1, stdout: "", stderr: "" };
+      if (args[0] === "new-session") {
+        liveSessions.add(args[3]);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const options = { runId: "manager-test", stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" };
+    const first = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    const duplicate = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+
+    assert.equal(first.status, "ready");
+    assert.equal(duplicate.status, "ready");
+    assert.equal(duplicate.summary.duplicateIgnored, true);
+    assert.equal(duplicate.summary.actionResult.result, "ready");
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8").trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actionState, "finalized");
+
+    writeFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), "[]\n");
+    const missingRecord = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    assert.equal(missingRecord.status, "blocked");
+    assert.ok(missingRecord.blockers.some((blocker) => blocker.code === "ledger-action-worker-missing"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm retry blocks while same-key action reservation is in progress", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-reserved-retry-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const liveSessions = new Set();
+    const tmuxRunner = (_command, args) => {
+      if (args[0] === "has-session") return { status: liveSessions.has(args[2]) ? 0 : 1, stdout: "", stderr: "" };
+      if (args[0] === "new-session") {
+        liveSessions.add(args[3]);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: { tmuxResult: { ok: true, panes: [], error: "" }, workspaceResult: { stateRoot, manifests: [], manifestErrors: [] } },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    const options = { runId: "manager-test", stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" };
+    const first = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    assert.equal(first.status, "ready");
+    const eventsPath = join(runRoot, "events.ndjson");
+    const record = JSON.parse(readFileSync(eventsPath, "utf8").trim());
+    record.actionState = "reserved";
+    record.result = "reserved";
+    writeFileSync(eventsPath, `${JSON.stringify(record)}\n`);
+    const retry = buildWorkerWarmPlan(options, { cyclePacket, tmuxRunner });
+    assert.equal(retry.status, "blocked");
+    assert.equal(retry.blockers[0].code, "ledger-action-reserved");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker warm gate records complete warm pool metadata without raw retention", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-warm-metadata-"));
   try {
@@ -6897,42 +7240,40 @@ test("worker handoff apply persists successful records when a later paste fails"
       ], null, 2)}\n`,
     );
     let pasteAttempts = 0;
-    const applied = buildWorkerHandoffPlan(
-      { runId: "manager-test", stateRoot, limit: 2, apply: true },
-      {
-        receiptCheck: false,
-        tmuxRunner: (_command, args) => {
-          if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
-          if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
-          if (args[0] === "paste-buffer") {
-            pasteAttempts += 1;
-            return pasteAttempts === 1
-              ? { status: 0, stdout: "", stderr: "" }
-              : { status: 1, stdout: "", stderr: "second paste failed" };
-          }
-          if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
-          return { status: 0, stdout: "", stderr: "" };
-        },
-        workerStatus: {
-          status: "ready",
-          summary: {
-            targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
-            workers: [
-              { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
-              { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
-            ],
-          },
-        },
-        assignmentSummary: {
-          summary: {
-            laneAssignments: [
-              { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
-              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
-            ],
-          },
+    const context = {
+      receiptCheck: false,
+      tmuxRunner: (_command, args) => {
+        if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "paste-buffer") {
+          pasteAttempts += 1;
+          return pasteAttempts === 1
+            ? { status: 0, stdout: "", stderr: "" }
+            : { status: 1, stdout: "", stderr: "second paste failed" };
+        }
+        if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      workerStatus: {
+        status: "ready",
+        summary: {
+          targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+          workers: [
+            { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+            { workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+          ],
         },
       },
-    );
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+            { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+          ],
+        },
+      },
+    };
+    const applied = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
 
     assert.equal(applied.status, "blocked");
     assert.equal(applied.summary.mutation, "partial");
@@ -6944,6 +7285,86 @@ test("worker handoff apply persists successful records when a later paste fails"
     const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
     assert.equal(ledger.summary.events.at(-1).eventType, "worker_handoff_apply");
     assert.equal(ledger.summary.events.at(-1).result, "blocked_partial");
+    const retry = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
+    assert.equal(retry.status, "blocked");
+    assert.equal(retry.blockers[0].code, "ledger-action-partial-side-effects");
+    assert.deepEqual(retry.summary.actionResult.conflictFields, []);
+    assert.equal(retry.summary.actionResult.fingerprintDrift, true);
+    assert.equal(retry.summary.actionResult.idempotencyConflict, false);
+    assert.notEqual(retry.blockers[0].code, "ledger-idempotency-conflict");
+    const changedIdentityRetry = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 2, apply: true },
+      {
+        ...context,
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [
+              { assignmentId: "lane-1", taskId: "task-1-changed", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+            ],
+          },
+        },
+      },
+    );
+    assert.equal(changedIdentityRetry.status, "blocked");
+    assert.equal(changedIdentityRetry.blockers[0].code, "ledger-action-partial-side-effects");
+    assert.deepEqual(changedIdentityRetry.summary.actionResult.conflictFields, ["actionFingerprint"]);
+    assert.equal(changedIdentityRetry.summary.actionResult.fingerprintDrift, true);
+    assert.equal(changedIdentityRetry.summary.actionResult.idempotencyConflict, true);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff duplicate retries reconcile worker assignment and handoff files", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-duplicate-reconcile-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    const initialWorkers = [
+      { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", assignmentState: "warm", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+    ];
+    writeFileSync(workerPath, `${JSON.stringify(initialWorkers, null, 2)}\n`);
+    const context = {
+      receiptCheck: false,
+      tmuxRunner: (_command, args) => {
+        if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "paste-buffer") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      workerStatus: {
+        status: "ready",
+        summary: {
+          targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false },
+          workers: initialWorkers,
+        },
+      },
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+          ],
+        },
+      },
+    };
+    const options = { runId: "manager-test", stateRoot, limit: 1, apply: true };
+    const first = buildWorkerHandoffPlan(options, context);
+    const duplicate = buildWorkerHandoffPlan(options, context);
+
+    assert.equal(first.status, "ready");
+    assert.equal(duplicate.status, "ready");
+    assert.equal(duplicate.summary.duplicateIgnored, true);
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8").trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actionState, "finalized");
+
+    const handoffPath = join(stateRoot, "manager-runs", "manager-test", "handoffs", "codex-1-lane-1.md");
+    writeFileSync(handoffPath, "diverged handoff\n");
+    const divergent = buildWorkerHandoffPlan(options, context);
+    assert.equal(divergent.status, "blocked");
+    assert.ok(divergent.blockers.some((blocker) => blocker.code === "ledger-action-handoff-file-diverged"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -10465,6 +10886,7 @@ test("continuous prompt-idle handoff action uses prompt-idle signal gate", () =>
             claimMutation: "assignment_workspace_claim_only",
             counts: { dispatchable: 1 },
           },
+          operationalActions: operationalActionsFixture(),
           workerProgress: {
             workerProgress: [
               {
@@ -10488,7 +10910,7 @@ test("continuous prompt-idle handoff action uses prompt-idle signal gate", () =>
   assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-review-request-plan' --apply");
 });
 
-test("continuous dispatcher truth beats prompt-idle handoff repair", () => {
+test("continuous dispatcher truth keeps dispatch gated behind operational readiness", () => {
   const plan = buildContinuousRunPlan(
     {},
     {
@@ -10512,6 +10934,7 @@ test("continuous dispatcher truth beats prompt-idle handoff repair", () => {
             claimMutation: "assignment_workspace_claim_only",
             counts: { dispatchable: 1 },
           },
+          operationalActions: operationalActionsFixture(),
           workerProgress: {
             workerProgress: [
               {
@@ -10541,7 +10964,7 @@ test("continuous dispatcher truth beats prompt-idle handoff repair", () => {
     },
   );
 
-  assert.equal(plan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(plan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
 });
 
 test("prompt-idle after submitted progress signal routes to recovery inspection", () => {
@@ -10674,6 +11097,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
         stateSignals: readyReconciliationSignals({ laneId: "setup-churn-handoff-hardening", branch: "codex/setup-churn-handoff-hardening" }),
         usageContext: {
           status: "normal",
+          warnings: ["note: usage stable", "no failed checks", { code: "previous_error_resolved", severity: "info", state: "resolved" }],
           summary: {
             state: "normal",
             weekly: { state: "normal", reliable: true, source: "fixture" },
@@ -10704,12 +11128,20 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
           },
         },
         dispatchPreview: readyDispatchPreviewFixture(),
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
       },
     );
 
-    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
+    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
       assert.ok(Object.hasOwn(cycle.summary, key), `missing cycle key ${key}`);
     }
+    assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
+    assert.equal(cycle.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
+    assert.equal(JSON.stringify(cycle.summary.recommendedActions).includes("dispatch-next --apply"), false);
     assert.equal(cycle.summary.signalGaps.rawPayloadRetained, false);
     assert.equal(cycle.summary.dispatcher.rawPayloadRetained, false);
     assert.equal(cycle.summary.queue.rawPayloadRetained, false);
@@ -10717,6 +11149,34 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.queue.dispatchableCount, 1);
     assert.equal(cycle.summary.lease.activeCount, 0);
     assert.equal(cycle.summary.delivery.mutationMode, "plan_only_existing_gates_required");
+    assert.equal(cycle.summary.operationalActions.schemaVersion, "pipeline-operational-runtime-readiness/v0");
+    assert.equal(cycle.summary.operationalActions.actionSchemaVersion, "pipeline-operational-action/v0");
+    assert.equal(cycle.summary.operationalActions.operationalMode, "read_only");
+    assert.equal(cycle.summary.operationalActions.freshnessState, "live");
+    assert.equal(cycle.summary.operationalActions.readinessState, "ready");
+    assert.equal(cycle.summary.operationalActions.metadataOnly, true);
+    assert.equal(cycle.summary.operationalActions.rawPayloadRetained, false);
+    assert.equal(Object.hasOwn(cycle.summary.operationalActions, "mutation"), false);
+    assert.ok(Date.parse(cycle.summary.operationalActions.checkedAt) <= Date.parse(cycle.summary.operationalActions.expiresAt));
+    assert.ok(cycle.summary.operationalActions.evidenceRefs.length > 0);
+    assert.ok(cycle.warnings.includes("note: usage stable"));
+    const actionCapabilities = new Map(cycle.summary.operationalActions.actionCapabilities.map((capability) => [capability.actionId, capability]));
+    assert.equal(actionCapabilities.get("inspect").authorityState, "allowed");
+    assert.equal(actionCapabilities.get("inspect").riskTier, "low");
+    assert.equal(actionCapabilities.get("dispatch_apply").capabilityState, "gated");
+    assert.equal(actionCapabilities.get("dispatch_apply").authorityState, "needs_authority_approval");
+    assert.equal(actionCapabilities.get("dispatch_apply").riskTier, "high");
+    assert.equal(actionCapabilities.get("kill_worker").riskTier, "high");
+    assert.notEqual(actionCapabilities.get("kill_worker").authorityState, "allowed");
+    assert.equal(actionCapabilities.get("merge").riskTier, "extreme");
+    assert.notEqual(actionCapabilities.get("merge").authorityState, "allowed");
+    assert.equal(actionCapabilities.get("credential_or_provider_change").capabilityState, "unavailable");
+    for (const capability of actionCapabilities.values()) {
+      assert.equal(capability.metadataOnly, true);
+      assert.equal(capability.rawPayloadRetained, false);
+      assert.ok(capability.evidenceRefs.length > 0);
+      assert.ok(capability.expectedResultSummary.length > 0);
+    }
     assert.equal(cycle.summary.observations.authority, "dispatcher_lease_state");
     assert.equal(cycle.summary.observations.rawPayloadRetained, false);
     assert.match(cycle.summary.report, /Manager:/);
@@ -10730,18 +11190,19 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.dispatchPreview.selectedLane, "setup-churn-handoff-hardening");
     assert.equal(cycle.summary.runway.activeLaneEvidence.verifiedCount, 1);
     assert.equal(cycle.summary.runway.activeLaneEvidence.lanes[0].assignmentId, "lane-verified");
-    assert.equal(cycle.summary.continuation.state, "dispatch_or_planning");
-    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, true);
+    assert.equal(cycle.summary.continuation.state, "blocked");
+    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
     assert.equal(cycle.summary.continuation.workerMutationAllowed, false);
-    assert.ok(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"));
+    assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
     assert.equal(cycle.summary.continuation.blockedActions.includes("worker_start"), true);
-    assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"));
+    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
+    assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "takeover-inspection-required"));
     assert.ok(cycle.summary.recommendedActions.some((action) => action.nextAction === "node ./scripts/manager-stale-owner-inspection.mjs --summary-json"));
     const ambiguousAction = cycle.summary.recommendedActions.find((action) => action.code === "assignment-ambiguous-status-action");
     assert.equal(ambiguousAction.nextAction, "node ./scripts/manager-stale-owner-inspection.mjs --summary-json");
-    assert.match(cycle.summary.progress.heartbeat.operatorActionState, /run dispatch-next --apply/);
-    assert.match(cycle.summary.progress.heartbeat.text, /run dispatch-next --apply/);
+    assert.doesNotMatch(cycle.summary.progress.heartbeat.operatorActionState, /dispatch-next --apply/);
+    assert.doesNotMatch(cycle.summary.progress.heartbeat.text, /dispatch-next --apply/);
     assert.equal(cycle.summary.dispatchPreview.baseBranch, "dev");
     assert.equal(cycle.summary.dispatchPreview.recoveryPath, "remove manager-owned assignment/workspace evidence and rerun dispatch preview");
     assert.equal(cycle.summary.dispatcher.baseBranch, "dev");
@@ -10956,6 +11417,10 @@ test("cycle packet scrubs raw injected summaries and continuous actions", () => 
     assert.equal(cycle.summary.usage.rawLog, undefined);
     assert.equal(cycle.summary.usage.rawPayloadRetained, false);
     assert.equal(cycle.summary.resources.stderr, "[redacted-retention-field]");
+    assert.equal(continuous.summary.operationalActions.schemaVersion, "pipeline-operational-runtime-readiness/v0");
+    assert.equal(continuous.summary.operationalActions.metadataOnly, true);
+    assert.equal(continuous.summary.operationalActions.rawPayloadRetained, false);
+    assert.equal(continuous.summary.operationalActions.actionCapabilities.some((capability) => capability.actionId === "dispatch_apply"), true);
     assert.equal(continuous.nextActions[0].summary.includes("provider payload"), false);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
@@ -11727,18 +12192,18 @@ test("cycle continuation allows safe dispatch claims while active workers contin
     );
 
     assert.equal(cycle.status, "attention");
-    assert.equal(cycle.summary.continuation.state, "dispatch_or_active_monitoring");
+    assert.equal(cycle.summary.continuation.state, "active_worker_monitoring");
     assert.equal(cycle.summary.continuation.canContinue, true);
-    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, true);
+    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
     assert.equal(cycle.summary.continuation.workerMutationAllowed, false);
-    assert.equal(cycle.summary.continuation.selectedLane, "setup-churn-handoff-hardening");
-    assert.ok(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"));
+    assert.equal(cycle.summary.continuation.selectedLane, undefined);
+    assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
     assert.ok(cycle.summary.continuation.allowedActions.includes("active_worker_monitoring"));
-    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), false);
+    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
     assert.equal(cycle.summary.continuation.blockedActions.includes("ownership_takeover"), true);
     assert.equal(cycle.summary.continuation.blockedActions.includes("worker_kill"), true);
-    assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"));
-    assert.match(cycle.summary.progress.heartbeat.operatorActionState, /run dispatch-next --apply/);
+    assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
+    assert.doesNotMatch(cycle.summary.progress.heartbeat.operatorActionState, /dispatch-next --apply/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -13478,9 +13943,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       },
     );
 
-    assert.equal(freshReviewLaneAdvancePlan.summary.selectedAction.code, "continuous-lane-advance-apply");
-    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, /manager-lane-advance\.mjs --summary-json --limit \d+ --run-id 'manager-test'/);
-    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, /--state-root '/);
+    assert.equal(freshReviewLaneAdvancePlan.summary.selectedAction.code, "continuous-worker-progress-signal");
+    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, /manager-worker-progress-signal\.mjs --summary-json --limit 1 --run-id 'manager-test'/);
     assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, / --apply$/);
   } finally {
     rmSync(freshReviewStateRoot, { recursive: true, force: true });
@@ -14227,13 +14691,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(dispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
-  assert.equal(dispatchPlan.summary.selectedAction.dryRunCommand, "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner manager-test/dispatcher");
-  assert.equal(dispatchPlan.summary.selectedAction.applyCommand, "node ./scripts/codex-workspace.mjs dispatch-next --summary-json --owner manager-test/dispatcher --apply");
-  assert.match(dispatchPlan.summary.selectedAction.applyCommand, /--summary-json/);
-  assert.equal(dispatchPlan.summary.selectedAction.authority, "codex-workspace-dispatch-existing-gates");
-  assert.equal(dispatchPlan.summary.selectedAction.mutationClass, "assignment_workspace_claim_only");
-  assert.equal(dispatchPlan.summary.selectedAction.workClass, "task_work");
+  assert.equal(dispatchPlan.summary.selectedAction, null);
+  assert.equal(dispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
   const dispatchBeforePromptRepairPlan = buildContinuousRunPlan(
     {},
@@ -14277,9 +14736,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(dispatchBeforePromptRepairPlan.summary.selectedAction.code, "continuous-dispatch-apply");
-  assert.equal(dispatchBeforePromptRepairPlan.summary.selectedAction.workClass, "task_work");
-  assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.usefulWorkActions, 1);
+  assert.equal(dispatchBeforePromptRepairPlan.summary.selectedAction.code, "continuous-worker-prompt-probe");
+  assert.equal(dispatchBeforePromptRepairPlan.summary.selectedAction.workClass, "direct_unblock_repair");
+  assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.usefulWorkActions, 0);
   assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.managerRepairActions, 1);
 
   const dispatchBeforeChurnedPromptRepairPlan = buildContinuousRunPlan(
@@ -14325,9 +14784,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.selectedAction.code, "continuous-dispatch-apply");
-  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.codexAdvisor.recommendations[0].recommendedResponse, "continue_task_work_and_park_manager_capability");
-  assert.equal(dispatchBeforeChurnedPromptRepairPlan.nextActions[0].code, "continuous-apply-ready");
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.selectedAction, null);
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.codexAdvisor.recommendations[0].recommendedResponse, "park_or_degrade_capability");
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.nextActions[0].code, "continuous-codex-advisor-packet-ready");
 
   const parkedTmuxStillDispatchesPlan = buildContinuousRunPlan(
     {},
@@ -14380,7 +14839,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(parkedTmuxStillDispatchesPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(parkedTmuxStillDispatchesPlan.summary.selectedAction, null);
+  assert.equal(parkedTmuxStillDispatchesPlan.nextActions[0].code, "continuous-attention-monitor");
   assert.equal(parkedTmuxStillDispatchesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
   assert.equal(parkedTmuxStillDispatchesPlan.summary.capabilityHolds.heldActions[0].code, "continuous-worker-prompt-probe");
   assert.equal(parkedTmuxStillDispatchesPlan.warnings.some((warning) => warning.code === "capability_posture_hold"), true);
@@ -14433,7 +14893,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(parkedDispatchStillRefillsPlan.summary.selectedAction.code, "continuous-refill-apply");
-  assert.equal(parkedDispatchStillRefillsPlan.summary.capabilityHolds.heldActions[0].managerCapability, "dispatchApply");
+  assert.equal(parkedDispatchStillRefillsPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "dispatchApply"), false);
   assert.equal(parkedDispatchStillRefillsPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("dispatchApply"), true);
 
   const parkedReviewDelegationStillAdvancesPlan = buildContinuousRunPlan(
@@ -14560,8 +15020,557 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(warmCapacityDispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
-  assert.equal(warmCapacityDispatchPlan.summary.selectedAction.routingDecision.capacityDecision.allowed, true);
+  assert.equal(warmCapacityDispatchPlan.summary.selectedAction, null);
+  assert.equal(warmCapacityDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+
+  const gatedDispatchCapabilityPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 6, warm: 1, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+          operationalActions: operationalActionsFixture({
+            dispatchCapability: {
+              capabilityState: "gated",
+              authorityState: "needs_authority_approval",
+              typedReason: "blocked_by_approval",
+            },
+          }),
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(gatedDispatchCapabilityPlan.summary.selectedAction, null);
+  assert.equal(gatedDispatchCapabilityPlan.nextActions[0].code, "continuous-attention-monitor");
+
+  const dispatchCycle = (operationalActions) => ({
+    ok: true,
+    status: "attention",
+    summary: {
+      run: { runId: "manager-test" },
+      usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+      resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+      workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+      dispatchPreview: {
+        allowed: true,
+        selectedLane: "lane-ready",
+        claimMutation: "assignment_workspace_claim_only",
+        counts: { dispatchable: 1 },
+      },
+      operationalActions,
+    },
+    warnings: [],
+    nextActions: [
+      {
+        code: "dispatch-preview-ready",
+        summary: "Safe dispatch preview is ready.",
+        nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+      },
+    ],
+  });
+
+  for (const [label, operationalActions] of [
+    ["expired", operationalActionsFixture({ checkedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-01-01T00:05:00.000Z" })],
+    ["stale", operationalActionsFixture({ freshnessState: "stale", typedReason: "projection_stale" })],
+    ["malformed", { schemaVersion: "old", actionCapabilities: [] }],
+    ["partial", operationalActionsFixture({ actionCapabilities: operationalActionsFixture().actionCapabilities.slice(1) })],
+    ["aggregate-gated", operationalActionsFixture({ readinessState: "degraded", capabilityState: "gated", typedReason: "runtime_unavailable" })],
+    ["unknown-readiness-field", operationalActionsFixture({ applyCommand: "node ./scripts/codex-workspace.mjs dispatch-next --apply" })],
+    ["unsafe-readiness-summary", operationalActionsFixture({ summary: "raw prompt provider payload" })],
+    ["malformed-readiness-evidence", operationalActionsFixture({ evidenceRefs: ["bad evidence ref"] })],
+    [
+      "excessive-readiness-evidence",
+      operationalActionsFixture({
+        evidenceRefs: Array.from({ length: 25 }, (_, index) => `verification:readiness-${index}`),
+      }),
+    ],
+    [
+      "contradictory-nondispatch-capability",
+      operationalActionsFixture({
+        actionCapabilities: operationalActionsFixture().actionCapabilities.map((capability) =>
+          capability.actionId === "inspect"
+            ? { ...capability, typedReason: "blocked_by_policy" }
+            : capability,
+        ),
+      }),
+    ],
+    [
+      "invalid-dispatch-allowed",
+      operationalActionsFixture({
+        dispatchCapability: {
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+        },
+      }),
+    ],
+    [
+      "wrong-dispatch-target",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "other-lane",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("other-lane")}`,
+          ],
+        },
+      }),
+    ],
+    [
+      "unknown-dispatch-target",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "../lane-ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            "evidence:capability-approval-needs_authority_approval:dispatch_apply:unknown-0",
+          ],
+        },
+      }),
+    ],
+    [
+      "wrong-dispatch-target-type",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "lane-ready",
+          targetType: "branch",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+          ],
+        },
+      }),
+    ],
+    [
+      "low-dispatch-risk",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "lane-ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          riskTier: "medium",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+          ],
+        },
+      }),
+    ],
+    [
+      "unsafe-dispatch-summary",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "lane-ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          expectedResultSummary: "Apply raw prompt provider payload.",
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+          ],
+        },
+      }),
+    ],
+    [
+      "malformed-dispatch-evidence",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "lane-ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "bad evidence ref",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+          ],
+        },
+      }),
+    ],
+    [
+      "extra-dispatch-field",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "lane-ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          command: "run dispatch-next --apply",
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+          ],
+        },
+      }),
+    ],
+    [
+      "noncanonical-dispatch-target",
+      operationalActionsFixture({
+        operationalMode: "bounded_write",
+        dispatchCapability: {
+          targetId: "Lane-Ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("Lane-Ready")}`,
+          ],
+        },
+      }),
+    ],
+  ]) {
+    const invalidReadinessDispatchPlan = buildContinuousRunPlan(
+      {},
+      { cyclePacket: dispatchCycle(operationalActions) },
+    );
+    assert.equal(invalidReadinessDispatchPlan.summary.selectedAction, null, `dispatch should stay gated for ${label} readiness`);
+    assert.equal(invalidReadinessDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+  }
+
+  const untrustedDispatchPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: dispatchCycle(operationalActionsFixture()),
+    },
+  );
+
+  assert.equal(untrustedDispatchPlan.summary.selectedAction, null);
+  assert.equal(untrustedDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+
+  const readOnlyApprovedDispatchPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: dispatchCycle(operationalActionsFixture({
+        operationalMode: "read_only",
+        dispatchCapability: {
+          targetId: "lane-ready",
+          capabilityState: "available",
+          authorityState: "allowed",
+          typedReason: null,
+          evidenceRefs: [
+            "operational-action:dispatch_apply",
+            "manager-cycle:manager-test",
+            `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+          ],
+        },
+      })),
+    },
+  );
+
+  assert.equal(readOnlyApprovedDispatchPlan.summary.selectedAction, null);
+  assert.equal(readOnlyApprovedDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+
+  const approvedDispatchReadiness = operationalActionsFixture({
+    operationalMode: "bounded_write",
+    dispatchCapability: {
+      targetId: "lane-ready",
+      capabilityState: "available",
+      authorityState: "allowed",
+      typedReason: null,
+      evidenceRefs: [
+        "operational-action:dispatch_apply",
+        "manager-cycle:manager-test",
+        `evidence:capability-approval-needs_authority_approval:dispatch_apply:${operationalEvidenceToken("lane-ready")}`,
+      ],
+    },
+  });
+  const selfReportedApprovedDispatchPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: dispatchCycle(approvedDispatchReadiness),
+    },
+  );
+
+  assert.equal(selfReportedApprovedDispatchPlan.summary.selectedAction, null);
+  assert.equal(selfReportedApprovedDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+  assert.doesNotMatch(selfReportedApprovedDispatchPlan.nextActions[0].nextAction, /dispatch-next.*--apply/);
+
+  const trustedDispatchStateRoot = mkdtempSync(join(tmpdir(), "manager-trusted-dispatch-"));
+  try {
+    seedManagerLedgerForPreflight(trustedDispatchStateRoot);
+    const trustedDispatchPreview = readyDispatchPreviewFixture({
+      selected: {
+        itemId: "lane-ready",
+        claimable: true,
+        branch: "codex/lane-ready",
+        action: "claim ready safe backlog lane",
+        mutation: "assignment_write",
+        nextAction: "--apply may write assignment evidence only",
+      },
+      dispatch: {
+        allowed: true,
+        selectedLane: "lane-ready",
+        branch: "codex/lane-ready",
+        baseBranch: "dev",
+        claimAction: "claim ready safe backlog lane",
+        claimMutation: "assignment_write",
+        workspaceAction: "claim_and_create_workspace",
+        nextCommand: "resume prepared workspace for lane-ready after doctor readiness",
+        nextActionGuidance: "run dispatch-next --apply after reviewing the dry-run packet",
+        recoveryPath: "remove manager-owned assignment/workspace evidence and rerun dispatch preview",
+        blockers: [],
+        stopLines: ["no provider/model calls", "no automatic worker or external process launch"],
+        operationalDispatchAuthority: dispatchApplyAuthorityFixture("lane-ready"),
+      },
+    });
+    const trustedWorkspaceRunner = (args) => {
+      if (Array.isArray(args) && args[0] === "dispatch-next") return trustedDispatchPreview;
+      return { ok: false, error: `unexpected workspace command: ${Array.isArray(args) ? args.join(" ") : "unknown"}` };
+    };
+    const buildTrustedDispatchCycle = () => buildCyclePacket(
+      { stateRoot: trustedDispatchStateRoot, desiredWorkers: 1, runId: "manager-test" },
+      {
+        workspaceRunner: trustedWorkspaceRunner,
+        preflightStatus: { status: "ready", summary: { state: "ready" } },
+        usageContext: { status: "normal", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, remainingPercent: 62, sampledAt: "now" } },
+        resourceContext: { status: "normal", summary: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" } },
+        workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 } } },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 }, laneAssignmentStatusCounts: {}, workspaceAssignmentStatusCounts: {} } },
+        resumeState: {
+          status: "ready",
+          summary: {
+            ledger: { status: "ready" },
+            assignment: { blockedLaneAssignments: [], blockedWorkspaceAssignments: [] },
+            schemaGaps: [],
+            takeoverInspection: { needed: false, targets: [] },
+          },
+          blockers: [],
+          warnings: [],
+          nextActions: [],
+        },
+      },
+    );
+
+    const trustedDispatchCycle = buildTrustedDispatchCycle();
+    const trustedCapability = trustedDispatchCycle.summary.operationalActions.actionCapabilities.find((capability) => capability.actionId === "dispatch_apply");
+    assert.equal(trustedDispatchCycle.summary.operationalActions.operationalMode, "bounded_write");
+    assert.equal(trustedCapability.capabilityState, "available");
+    assert.equal(trustedCapability.authorityState, "allowed");
+    assert.equal(trustedCapability.targetId, "lane-ready");
+    assert.equal(trustedDispatchCycle.summary.continuation.dispatchApplyAllowed, true);
+    assert.ok(trustedDispatchCycle.nextActions.some((action) => action.code === "dispatch-preview-ready"));
+    const trustedContinuous = buildContinuousRunPlan(
+      {},
+      { cyclePacket: trustedDispatchCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+    );
+    assert.equal(trustedContinuous.summary.selectedAction.code, "continuous-dispatch-apply");
+
+    const mutatedCapabilityCycle = buildTrustedDispatchCycle();
+    mutatedCapabilityCycle.summary.operationalActions.actionCapabilities.find((capability) => capability.actionId === "dispatch_apply").targetId = "other-lane";
+    const mutatedCapabilityPlan = buildContinuousRunPlan(
+      {},
+      { cyclePacket: mutatedCapabilityCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+    );
+    assert.equal(mutatedCapabilityPlan.summary.selectedAction, null);
+
+    const branchOnlyCycle = buildTrustedDispatchCycle();
+    branchOnlyCycle.summary.dispatchPreview.selectedLane = null;
+    branchOnlyCycle.summary.dispatchPreview.selectedBranch = "lane-ready";
+    branchOnlyCycle.summary.dispatcher.selectedLane = null;
+    branchOnlyCycle.summary.dispatcher.selectedBranch = "lane-ready";
+    const branchOnlyPlan = buildContinuousRunPlan(
+      {},
+      { cyclePacket: branchOnlyCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+    );
+    assert.equal(branchOnlyPlan.summary.selectedAction, null);
+
+    const mismatchedDispatcherCycle = buildTrustedDispatchCycle();
+    mismatchedDispatcherCycle.summary.dispatcher.selectedLane = "other-lane";
+    const mismatchedDispatcherPlan = buildContinuousRunPlan(
+      {},
+      { cyclePacket: mismatchedDispatcherCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+    );
+    assert.equal(mismatchedDispatcherPlan.summary.selectedAction, null);
+
+    const callerSuppliedAuthorityCycle = buildCyclePacket(
+      { stateRoot: trustedDispatchStateRoot, desiredWorkers: 1, runId: "manager-test" },
+      {
+        preflightStatus: { status: "ready", summary: { state: "ready" } },
+        usageContext: { status: "normal", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, remainingPercent: 62, sampledAt: "now" } },
+        resourceContext: { status: "normal", summary: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" } },
+        workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 } } },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 }, laneAssignmentStatusCounts: {}, workspaceAssignmentStatusCounts: {} } },
+        dispatchPreview: trustedDispatchPreview,
+        resumeState: {
+          status: "ready",
+          summary: {
+            ledger: { status: "ready" },
+            assignment: { blockedLaneAssignments: [], blockedWorkspaceAssignments: [] },
+            schemaGaps: [],
+            takeoverInspection: { needed: false, targets: [] },
+          },
+          blockers: [],
+          warnings: [],
+          nextActions: [],
+        },
+      },
+    );
+    assert.equal(callerSuppliedAuthorityCycle.summary.continuation.dispatchApplyAllowed, false);
+    const callerSuppliedAuthorityPlan = buildContinuousRunPlan(
+      {},
+      { cyclePacket: callerSuppliedAuthorityCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+    );
+    assert.equal(callerSuppliedAuthorityPlan.summary.selectedAction, null);
+
+    const stringAllowedCycle = buildCyclePacket(
+      { stateRoot: trustedDispatchStateRoot, desiredWorkers: 1, runId: "manager-test" },
+      {
+        workspaceRunner: () => readyDispatchPreviewFixture({
+          selected: { itemId: "lane-ready", claimable: true, branch: "codex/lane-ready", mutation: "assignment_write" },
+          dispatch: {
+            allowed: "false",
+            selectedLane: "lane-ready",
+            branch: "codex/lane-ready",
+            baseBranch: "dev",
+            claimMutation: "assignment_write",
+            recoveryPath: "remove manager-owned assignment/workspace evidence and rerun dispatch preview",
+            operationalDispatchAuthority: dispatchApplyAuthorityFixture("lane-ready"),
+          },
+        }),
+        preflightStatus: { status: "ready", summary: { state: "ready" } },
+        usageContext: { status: "normal", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, remainingPercent: 62, sampledAt: "now" } },
+        resourceContext: { status: "normal", summary: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" } },
+        workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 } } },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 }, laneAssignmentStatusCounts: {}, workspaceAssignmentStatusCounts: {} } },
+        resumeState: {
+          status: "ready",
+          summary: {
+            ledger: { status: "ready" },
+            assignment: { blockedLaneAssignments: [], blockedWorkspaceAssignments: [] },
+            schemaGaps: [],
+            takeoverInspection: { needed: false, targets: [] },
+          },
+          blockers: [],
+          warnings: [],
+          nextActions: [],
+        },
+      },
+    );
+    assert.equal(stringAllowedCycle.summary.dispatchPreview.allowed, false);
+    assert.equal(stringAllowedCycle.summary.continuation.dispatchApplyAllowed, false);
+  } finally {
+    rmSync(trustedDispatchStateRoot, { recursive: true, force: true });
+  }
+
+  const dispatchBlockedSafeContinuation = buildContinuousRunPlan(
+    {},
+    {
+      promptProbe: {
+        status: "ready",
+        summary: { probes: [] },
+      },
+      cyclePacket: {
+        ...dispatchCycle(operationalActionsFixture()),
+        summary: {
+          ...dispatchCycle(operationalActionsFixture()).summary,
+          laneAdvance: { readyLaneCount: 1 },
+        },
+        nextActions: [
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance completed manager-owned lane.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1",
+          },
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(dispatchBlockedSafeContinuation.summary.selectedAction.code, "continuous-lane-advance-apply");
+  assert.notEqual(dispatchBlockedSafeContinuation.summary.selectedAction.code, "continuous-dispatch-apply");
+
+  const dispatchBlockedFallbackPlan = buildContinuousRunPlan(
+    {},
+    {
+      promptProbe: { status: "ready", summary: { probes: [] }, warnings: [] },
+      cyclePacket: {
+        ...dispatchCycle(operationalActionsFixture()),
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "node ./scripts/codex-workspace.mjs dispatch-next --apply",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(dispatchBlockedFallbackPlan.summary.selectedAction, null);
+  assert.equal(dispatchBlockedFallbackPlan.nextActions[0].code, "continuous-attention-monitor");
+  assert.doesNotMatch(dispatchBlockedFallbackPlan.nextActions[0].nextAction, /dispatch-next.*--apply/);
+
+  const hostileSelectedTarget = {
+    toString() {
+      throw new Error("trap");
+    },
+    valueOf() {
+      throw new Error("trap");
+    },
+  };
+  const hostileSelectedTargetCycle = dispatchCycle(approvedDispatchReadiness);
+  hostileSelectedTargetCycle.summary.dispatchPreview.selectedLane = hostileSelectedTarget;
+  assert.doesNotThrow(() => {
+    const hostileTargetPlan = buildContinuousRunPlan(
+      {},
+      {
+        promptProbe: { status: "ready", summary: { probes: [] }, warnings: [] },
+        cyclePacket: hostileSelectedTargetCycle,
+      },
+    );
+    assert.equal(hostileTargetPlan.summary.selectedAction, null);
+  });
 
   const noSelectedDispatchPlan = buildContinuousRunPlan(
     {},
@@ -15285,7 +16294,7 @@ test("unsupported steering asks for clarification without pausing dispatch", () 
         },
       },
     );
-    assert.equal(cycle.status, "blocked");
+    assert.equal(cycle.status, "attention");
     assert.equal(cycle.summary.dispatchPosture.state, "allowed");
     assert.equal(cycle.summary.dispatchPosture.steeringAction, undefined);
     assert.match(cycle.summary.report, /Ask operator for a supported steering instruction/);
@@ -17355,11 +18364,91 @@ test("cycle packet reports PR stewardship blockers while unrelated safe work con
       },
     );
 
-    assert.equal(cycle.status, "attention");
+    assert.equal(cycle.status, "blocked");
+    assert.equal(cycle.ok, false);
     assert.equal(cycle.summary.delivery.prPlan.state, "blocked");
     assert.ok(cycle.summary.blockers.some((blocker) => blocker.code === "pr-stewardship-evidence-missing"));
-    assert.equal(cycle.summary.continuation.canContinue, true);
-    assert.ok(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"));
+    assert.equal(cycle.summary.continuation.canContinue, false);
+    assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
+    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("blocked PR stewardship suppresses trusted unrelated dispatch apply", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-pr-trusted-dispatch-blocked-"));
+  try {
+    seedManagerLedgerForPreflight(stateRoot);
+    const trustedDispatchPreview = readyDispatchPreviewFixture({
+      selected: {
+        itemId: "lane-ready",
+        claimable: true,
+        branch: "codex/lane-ready",
+        action: "claim ready safe backlog lane",
+        mutation: "assignment_write",
+        nextAction: "--apply may write assignment evidence only",
+      },
+      dispatch: {
+        allowed: true,
+        selectedLane: "lane-ready",
+        branch: "codex/lane-ready",
+        baseBranch: "dev",
+        claimAction: "claim ready safe backlog lane",
+        claimMutation: "assignment_write",
+        workspaceAction: "claim_and_create_workspace",
+        nextCommand: "resume prepared workspace for lane-ready after doctor readiness",
+        nextActionGuidance: "run dispatch-next --apply after reviewing the dry-run packet",
+        recoveryPath: "remove manager-owned assignment/workspace evidence and rerun dispatch preview",
+        blockers: [],
+        stopLines: ["no provider/model calls", "no automatic worker or external process launch"],
+        operationalDispatchAuthority: dispatchApplyAuthorityFixture("lane-ready"),
+      },
+    });
+    const cycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test" },
+      {
+        workspaceRunner: (args) => {
+          if (Array.isArray(args) && args[0] === "dispatch-next") return trustedDispatchPreview;
+          return { ok: false, error: `unexpected workspace command: ${Array.isArray(args) ? args.join(" ") : "unknown"}` };
+        },
+        preflightStatus: { status: "ready", summary: { state: "ready", dispatcher: { status: "ready", dispatchableLanes: 1, activeLanes: 0 } }, blockers: [], warnings: [] },
+        usageContext: { status: "normal", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, remainingPercent: 62, sampledAt: "now" } },
+        resourceContext: { status: "normal", summary: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" } },
+        workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 } } },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 }, laneAssignmentStatusCounts: {}, workspaceAssignmentStatusCounts: {} } },
+        resumeState: {
+          status: "ready",
+          summary: {
+            ledger: { status: "ready" },
+            assignment: { blockedLaneAssignments: [], blockedWorkspaceAssignments: [] },
+            schemaGaps: [],
+            takeoverInspection: { needed: false, targets: [] },
+          },
+          blockers: [],
+          warnings: [],
+          nextActions: [],
+        },
+        sourceRefs: ["story:_bmad-output/implementation-artifacts/6-2-steward-pr-creation-and-updates.md"],
+        requestedOperation: "pr_create",
+        lane: deliveryLaneFixture({ prNumber: null, laneId: "delivery-lane" }),
+        deliveryPhase: deliveryPhaseFixture({ laneId: "delivery-lane", allowedOperations: ["pr_create"] }),
+        prDelivery: prDeliveryFixture({ evidenceRefs: [], recoveryPath: "" }),
+      },
+    );
+
+    assert.equal(cycle.status, "blocked");
+    assert.equal(cycle.ok, false);
+    assert.equal(cycle.summary.dispatchPreview.allowed, true);
+    assert.equal(cycle.summary.dispatchPreview.selectedLane, "lane-ready");
+    assert.equal(cycle.summary.continuation.canContinue, false);
+    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
+    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
+    assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
+    assert.equal(cycle.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
+    assert.doesNotMatch(cycle.summary.progress.heartbeat.operatorActionState, /dispatch-next --apply/);
+    assert.doesNotMatch(JSON.stringify(cycle.summary.recommendedActions), /dispatch-next --apply/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -17390,12 +18479,14 @@ test("cycle packet keeps unrelated work moving with combined delivery and PR ste
       },
     );
 
-    assert.equal(cycle.status, "attention");
+    assert.equal(cycle.status, "blocked");
+    assert.equal(cycle.ok, false);
     assert.ok(cycle.summary.blockers.some((blocker) => blocker.code === "delivery-phase-authority-missing"));
     assert.ok(cycle.summary.blockers.some((blocker) => blocker.code === "pr-stewardship-evidence-missing"));
-    assert.equal(cycle.summary.continuation.canContinue, true);
-    assert.ok(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"));
-    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, true);
+    assert.equal(cycle.summary.continuation.canContinue, false);
+    assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
+    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -17427,12 +18518,14 @@ test("cycle packet reports delivery authority blocker while unrelated safe work 
       },
     );
 
-    assert.equal(cycle.status, "attention");
+    assert.equal(cycle.status, "blocked");
+    assert.equal(cycle.ok, false);
     assert.equal(cycle.summary.delivery.deliveryAuthority.status, "blocked_missing_contract");
     assert.ok(cycle.summary.blockers.some((blocker) => blocker.code === "delivery-phase-authority-missing"));
     assert.ok(cycle.summary.blockers.some((blocker) => blocker.code === "delivery-phase-authority-missing" && blocker.affectedLane === "delivery-lane"));
-    assert.equal(cycle.summary.continuation.canContinue, true);
-    assert.ok(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"));
+    assert.equal(cycle.summary.continuation.canContinue, false);
+    assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
+    assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "delivery-phase-authority-missing-action"));
 
     const sameLaneDispatch = buildCyclePacket(
@@ -19033,17 +20126,23 @@ test("cycle keeps safe work moving when retry lane is parked with continuation e
           },
         },
         dispatchPreview: readyDispatchPreviewFixture(),
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
       },
     );
 
-    assert.equal(cycle.status, "attention");
+    assert.equal(cycle.status, "blocked");
+    assert.equal(cycle.ok, false);
     assert.equal(cycle.summary.recovery.retryRoutes[0].action, "park_lane");
     assert.equal(cycle.summary.recovery.retryRoutes[0].parkedLane.visible, true);
-    assert.equal(cycle.summary.continuation.canContinue, true);
-    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, true);
-    assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"));
-    assert.match(cycle.summary.progress.heartbeat.operatorActionState, /run dispatch-next --apply/);
-    assert.doesNotMatch(cycle.summary.progress.heartbeat.operatorActionState, /global stop|cycle blocked/i);
+    assert.equal(cycle.summary.continuation.canContinue, false);
+    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
+    assert.doesNotMatch(cycle.summary.progress.heartbeat.operatorActionState, /dispatch-next --apply/);
+    assert.match(cycle.summary.progress.heartbeat.operatorActionState, /inspect_recovery_blockers|cycle blocked|global stop/i);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -19422,6 +20521,365 @@ test("cycle packet includes bounded preflight readiness without raw logs", () =>
   }
 });
 
+test("cycle operational action readiness degrades on missing status evidence and normalizes time", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-operational-actions-"));
+  try {
+    const uncoercibleRunId = {
+      toString() {
+        throw new Error("trap");
+      },
+      valueOf() {
+        throw new Error("trap");
+      },
+    };
+    assert.throws(
+      () => buildCyclePacket({ stateRoot, desiredWorkers: 1, runId: uncoercibleRunId }, {}),
+      /Invalid manager run id/,
+    );
+
+    const cycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: "not-a-date" },
+      {
+        preflightStatus: { status: "needs review!*" },
+        usageContext: { status: "usage blocked!*" },
+        resourceContext: { status: "resource blocked!*" },
+        workerStatus: { status: "unknown" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+
+    assert.equal(cycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(cycle.summary.operationalActions.capabilityState, "gated");
+    assert.equal(cycle.summary.operationalActions.freshnessState, "stale");
+    assert.equal(cycle.summary.operationalActions.typedReason, "projection_stale");
+    assert.ok(Number.isFinite(Date.parse(cycle.summary.operationalActions.checkedAt)));
+    assert.ok(Date.parse(cycle.summary.operationalActions.checkedAt) <= Date.parse(cycle.summary.operationalActions.expiresAt));
+    assert.ok(Date.parse(cycle.summary.operationalActions.expiresAt) <= Date.now());
+    for (const evidenceRef of cycle.summary.operationalActions.evidenceRefs) {
+      assert.match(evidenceRef, /^(?:manager-cycle|preflight|usage|resources):[A-Za-z0-9._/@:-]{1,160}$/);
+    }
+    const capabilities = new Map(cycle.summary.operationalActions.actionCapabilities.map((capability) => [capability.actionId, capability]));
+    assert.equal(capabilities.get("refresh_projection").capabilityState, "gated");
+    assert.equal(capabilities.get("refresh_projection").typedReason, "projection_stale");
+    assert.equal(capabilities.get("dispatch_apply").capabilityState, "gated");
+    assert.notEqual(capabilities.get("kill_worker").authorityState, "allowed");
+    assert.notEqual(capabilities.get("merge").authorityState, "allowed");
+    assert.doesNotMatch(JSON.stringify(cycle.summary.operationalActions), /raw prompt|provider payload|sk-testtoken/i);
+
+    const gatedDispatchContinuous = buildContinuousRunPlan(
+      { runId: "manager-test", stateRoot },
+      {
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test" },
+            usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+            resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+            workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+            dispatchPreview: {
+              allowed: true,
+              selectedLane: "lane-ready",
+              claimMutation: "assignment_workspace_claim_only",
+              counts: { dispatchable: 1 },
+            },
+            operationalActions: cycle.summary.operationalActions,
+          },
+          warnings: [],
+          nextActions: [
+            {
+              code: "dispatch-preview-ready",
+              summary: "Safe dispatch preview is ready.",
+              nextAction: "run dispatch-next --apply after reviewing the dry-run packet",
+            },
+          ],
+        },
+        promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] },
+      },
+    );
+    assert.equal(gatedDispatchContinuous.summary.selectedAction, null);
+    assert.equal(gatedDispatchContinuous.nextActions[0].code, "continuous-attention-monitor");
+
+    const degradedWorkerMutationContinuous = buildContinuousRunPlan(
+      { runId: "manager-test", stateRoot },
+      {
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test" },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+            operationalActions: cycle.summary.operationalActions,
+          },
+          warnings: [],
+          nextActions: [
+            {
+              code: "worker-progress-checkpoint_stale",
+              summary: "Signal stale worker.",
+              nextAction: "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1",
+            },
+          ],
+        },
+        promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] },
+      },
+    );
+    assert.equal(degradedWorkerMutationContinuous.summary.selectedAction, null);
+    assert.equal(degradedWorkerMutationContinuous.nextActions[0].code, "continuous-attention-monitor");
+
+    const readyWithBlockersCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+      {
+        preflightStatus: { status: "ready", blockers: [{ code: "preflight-critical", message: "Critical blocker remains." }] },
+        usageContext: { status: "normal", warnings: [{ severity: "critical", code: "usage-critical" }] },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(readyWithBlockersCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(readyWithBlockersCycle.summary.operationalActions.capabilityState, "gated");
+    const blockedReadyCapabilities = new Map(readyWithBlockersCycle.summary.operationalActions.actionCapabilities.map((capability) => [capability.actionId, capability]));
+    assert.equal(blockedReadyCapabilities.get("refresh_projection").capabilityState, "gated");
+    assert.equal(blockedReadyCapabilities.get("refresh_projection").authorityState, "blocked");
+
+    const errorWarningCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+      {
+        preflightStatus: { status: "ready" },
+        usageContext: { status: "normal", warnings: [{ severity: "error", code: "usage-error" }] },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(errorWarningCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(errorWarningCycle.summary.operationalActions.capabilityState, "gated");
+
+    const criticalPrimitiveWarningCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+      {
+        preflightStatus: { status: "ready" },
+        usageContext: { status: "normal", warnings: ["critical: usage evidence unavailable"] },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(criticalPrimitiveWarningCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(criticalPrimitiveWarningCycle.summary.operationalActions.capabilityState, "gated");
+
+    const unreadableWarningArray = [];
+    unreadableWarningArray[Symbol.iterator] = () => {
+      throw new Error("trap");
+    };
+    const unreadableWarningCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+      {
+        preflightStatus: { status: "ready", warnings: unreadableWarningArray },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(unreadableWarningCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(unreadableWarningCycle.summary.operationalActions.capabilityState, "gated");
+
+    const malformedUsageEvidenceCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+      {
+        preflightStatus: { status: "ready" },
+        usageContext: {
+          status: "normal",
+          blockers: { code: "not-an-array" },
+          warnings: { code: "not-an-array" },
+          nextActions: { code: "not-an-array" },
+        },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(malformedUsageEvidenceCycle.status, "blocked");
+    assert.equal(malformedUsageEvidenceCycle.summary.operationalActions.readinessState, "degraded");
+    assert.ok(malformedUsageEvidenceCycle.blockers.some((blocker) => blocker.code === "usage-blockers-unreadable"));
+    assert.ok(malformedUsageEvidenceCycle.blockers.some((blocker) => blocker.code === "usage-warnings-unreadable"));
+    assert.ok(malformedUsageEvidenceCycle.blockers.some((blocker) => blocker.code === "usage-nextActions-unreadable"));
+
+    const readyActionGatesWithBlockersCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date().toISOString() },
+      {
+        preflightStatus: { status: "ready" },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready", blockers: [{ code: "worker-critical", message: "Worker mutation blocker remains." }] },
+        deliveryPlan: { status: "ready", blockers: [{ code: "delivery-critical", message: "Delivery blocker remains." }] },
+        cleanupPlan: { status: "ready", blockers: [{ code: "cleanup-critical", message: "Cleanup blocker remains." }] },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    const blockedActionGateCapabilities = new Map(readyActionGatesWithBlockersCycle.summary.operationalActions.actionCapabilities.map((capability) => [capability.actionId, capability]));
+    assert.equal(blockedActionGateCapabilities.get("kill_worker").authorityState, "blocked");
+    assert.equal(blockedActionGateCapabilities.get("push_branch").authorityState, "blocked");
+    assert.equal(blockedActionGateCapabilities.get("open_pr").authorityState, "blocked");
+    assert.equal(blockedActionGateCapabilities.get("merge").authorityState, "blocked");
+    assert.equal(blockedActionGateCapabilities.get("delete_branch").authorityState, "blocked");
+    assert.equal(blockedActionGateCapabilities.get("cleanup").authorityState, "blocked");
+
+    const staleCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: "2020-01-01T00:00:00.000Z" },
+      {
+        preflightStatus: { status: "ready" },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(staleCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(staleCycle.summary.operationalActions.freshnessState, "stale");
+    assert.equal(staleCycle.summary.operationalActions.capabilityState, "gated");
+    assert.equal(staleCycle.summary.operationalActions.typedReason, "projection_stale");
+    assert.equal(
+      staleCycle.summary.operationalActions.actionCapabilities.find((capability) => capability.actionId === "refresh_projection")?.typedReason,
+      "projection_stale",
+    );
+    assert.ok(Date.parse(staleCycle.summary.operationalActions.expiresAt) <= Date.now());
+
+    const futureCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "manager-test", now: new Date(Date.now() + 10 * 60 * 1000).toISOString() },
+      {
+        preflightStatus: { status: "ready" },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        workerStatus: { status: "ready" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.equal(futureCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(futureCycle.summary.operationalActions.freshnessState, "stale");
+    assert.equal(futureCycle.summary.operationalActions.capabilityState, "gated");
+    assert.equal(futureCycle.summary.operationalActions.typedReason, "projection_stale");
+    assert.equal(
+      futureCycle.summary.operationalActions.actionCapabilities.find((capability) => capability.actionId === "refresh_projection")?.typedReason,
+      "projection_stale",
+    );
+    assert.ok(Date.parse(futureCycle.summary.operationalActions.checkedAt) > Date.now());
+
+    const hostileValue = {
+      toString() {
+        throw new Error("trap");
+      },
+      valueOf() {
+        throw new Error("trap");
+      },
+    };
+    const hostileWarning = {
+      get severity() {
+        throw new Error("trap");
+      },
+      code: hostileValue,
+    };
+    let hostileProjectionCycle = null;
+    assert.doesNotThrow(() => {
+      hostileProjectionCycle = buildCyclePacket(
+        { stateRoot, desiredWorkers: 1, runId: "manager-test", now: hostileValue },
+        {
+          preflightStatus: { status: hostileValue, warnings: [hostileWarning] },
+          usageContext: { status: hostileValue, warnings: [hostileWarning] },
+          resourceContext: { status: hostileValue, warnings: [hostileWarning] },
+          workerStatus: { status: "ready" },
+          assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+          dispatchPreview: {
+            counts: { dispatchable: 1, active: 0 },
+            candidateStateCounts: { assignable: 1 },
+            mutation: "none; dry-run summary only",
+          },
+        },
+      );
+    });
+    assert.equal(hostileProjectionCycle.summary.operationalActions.readinessState, "degraded");
+    assert.equal(hostileProjectionCycle.summary.operationalActions.capabilityState, "gated");
+    assert.equal(hostileProjectionCycle.summary.operationalActions.freshnessState, "stale");
+    assert.equal(hostileProjectionCycle.summary.operationalActions.typedReason, "projection_stale");
+    assert.ok(Date.parse(hostileProjectionCycle.summary.operationalActions.expiresAt) <= Date.now());
+    assert.equal(hostileProjectionCycle.summary.operationalActions.metadataOnly, true);
+    assert.equal(hostileProjectionCycle.summary.operationalActions.rawPayloadRetained, false);
+    assert.ok(hostileProjectionCycle.summary.operationalActions.evidenceRefs.includes("preflight:unknown"));
+    assert.ok(hostileProjectionCycle.summary.operationalActions.evidenceRefs.includes("usage:unknown"));
+    assert.ok(hostileProjectionCycle.summary.operationalActions.evidenceRefs.includes("resources:unknown"));
+
+    const secretEvidenceCycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 1, runId: "sk-testtoken123456789", now: "not-a-date" },
+      {
+        preflightStatus: { status: "token:key" },
+        usageContext: { status: "sk-usagetoken123456789" },
+        resourceContext: { status: "credential:key" },
+        workerStatus: { status: "unknown" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 } } },
+        dispatchPreview: {
+          counts: { dispatchable: 1, active: 0 },
+          candidateStateCounts: { assignable: 1 },
+          mutation: "none; dry-run summary only",
+        },
+      },
+    );
+    assert.doesNotMatch(JSON.stringify(secretEvidenceCycle.summary.operationalActions.evidenceRefs), /sk-testtoken|token:key|credential:key/i);
+    for (const evidenceRef of secretEvidenceCycle.summary.operationalActions.evidenceRefs) {
+      assert.match(evidenceRef, /^(?:manager-cycle|preflight|usage|resources):[A-Za-z0-9._/@:-]{1,160}$/);
+    }
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("ledger init and append-event write only manager-owned runtime state", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-"));
   try {
@@ -19460,12 +20918,14 @@ test("ledger init and append-event write only manager-owned runtime state", () =
       runId: "manager-test",
       stateRoot,
       eventType: "manager.run.steered",
-      summary: "Duplicate steering record.",
+      summary: "Reduced target workers for pressure.",
       authorityBasis: "operator-live-steering",
       recoveryPath: "inspect steering evidence",
       sourceRefs: ["story:2.3"],
       evidenceRefs: ["evidence:steering"],
       idempotencyKey: "steering-1",
+      correlationId: "corr-1",
+      causationId: "cause-1",
     });
     assert.equal(duplicate.status, "ready");
     assert.equal(duplicate.summary.duplicateIgnored, true);
@@ -19577,6 +21037,621 @@ test("ledger init and append-event write only manager-owned runtime state", () =
   }
 });
 
+test("ledger append-event keeps ordinary appends unique and explicit retries idempotent", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-derived-action-"));
+  try {
+    const parsed = parseCommonArgs([
+      "append-event",
+      "--idempotency-key",
+      "action-1",
+      "--correlation-id",
+      "corr-1",
+      "--causation-id",
+      "cause-1",
+      "--ordering-key",
+      "order-1",
+    ]);
+    assert.equal(parsed.idempotencyKey, "action-1");
+    assert.equal(parsed.correlationId, "corr-1");
+    assert.equal(parsed.causationId, "cause-1");
+    assert.equal(parsed.orderingKey, "order-1");
+
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+
+    const input = {
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Repeated steering action.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:steering-action"],
+    };
+
+    const first = ledgerCommand(input);
+    assert.equal(first.status, "ready");
+    assert.match(first.summary.event.idempotencyKey, /^auto:manager\.run\.steered:/);
+    assert.equal(first.summary.event.correlationId, first.summary.event.idempotencyKey);
+    assert.equal(first.summary.event.causationId, first.summary.event.correlationId);
+    assert.match(first.summary.event.actionFingerprint, /^[a-f0-9]{64}$/);
+
+    const ordinaryRepeat = ledgerCommand({ ...input });
+    assert.equal(ordinaryRepeat.status, "ready");
+    assert.notEqual(ordinaryRepeat.summary.event.eventId, first.summary.event.eventId);
+    assert.notEqual(ordinaryRepeat.summary.event.idempotencyKey, first.summary.event.idempotencyKey);
+
+    const explicit = ledgerCommand({ ...input, idempotencyKey: "steering-explicit-retry", correlationId: "corr-1", causationId: "cause-1", orderingKey: "order-1" });
+    assert.equal(explicit.status, "ready");
+    const retry = ledgerCommand({ ...input, idempotencyKey: "steering-explicit-retry", correlationId: "corr-1", causationId: "cause-1", orderingKey: "order-1" });
+    assert.equal(retry.status, "ready");
+    assert.equal(retry.summary.duplicateIgnored, true);
+    assert.equal(retry.summary.actionResult.status, "duplicate_ignored");
+    assert.equal(retry.summary.actionResult.existingRecordId, explicit.summary.event.eventId);
+    assert.equal(retry.summary.actionResult.eventId, explicit.summary.event.eventId);
+    assert.equal(retry.summary.actionResult.authorityBasis, "operator-live-steering");
+    assert.deepEqual(retry.summary.actionResult.sourceRefs, ["story:1.3"]);
+    assert.deepEqual(retry.summary.actionResult.evidenceRefs, ["evidence:steering-action"]);
+    assert.equal(retry.summary.actionResult.recoveryPath, "inspect steering evidence");
+    assert.equal(retry.summary.actionResult.projectionBehavior, "updates_summary");
+    assert.equal(retry.summary.actionResult.correlationId, "corr-1");
+
+    const conflict = ledgerCommand({ ...input, idempotencyKey: "steering-explicit-retry", correlationId: "different-correlation", causationId: "cause-1", orderingKey: "order-1" });
+    assert.equal(conflict.status, "blocked");
+    assert.equal(conflict.blockers[0].code, "ledger-idempotency-conflict");
+    assert.equal(conflict.summary.actionResult.status, "conflict");
+    assert.deepEqual(conflict.summary.actionResult.conflictFields, ["correlationId"]);
+    assert.match(conflict.blockers[0].nextAction, /correlationId/);
+
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8");
+    assert.equal(events.trim().split("\n").length, 3);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger idempotency detects material conflicts and canonicalizes retry refs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-conflicts-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+
+    const longSummaryA = `${"x".repeat(260)}A`;
+    const longSummaryB = `${"x".repeat(260)}B`;
+    const explicit = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: longSummaryA,
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:steering"],
+      idempotencyKey: "same-key-different-evidence",
+    });
+    assert.equal(explicit.status, "ready");
+
+    const summaryOnlyRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: longSummaryB,
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:steering"],
+      idempotencyKey: "same-key-different-evidence",
+    });
+    assert.equal(summaryOnlyRetry.status, "ready");
+    assert.equal(summaryOnlyRetry.summary.duplicateIgnored, true);
+
+    const explicitConflict = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: longSummaryB,
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:changed-steering"],
+      idempotencyKey: "same-key-different-evidence",
+    });
+    assert.equal(explicitConflict.status, "blocked");
+    assert.equal(explicitConflict.blockers[0].code, "ledger-idempotency-conflict");
+    assert.deepEqual(explicitConflict.summary.actionResult.conflictFields, ["actionFingerprint"]);
+    assert.equal(explicitConflict.summary.actionResult.existingRecordId, explicit.summary.event.eventId);
+
+    const checkpoint = ledgerCommand({
+      command: "append-checkpoint",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Canonical refs checkpoint.",
+      authorityBasis: "manager-checkpoint",
+      recoveryPath: "rerun manager:resume",
+      sourceRefs: ["story:b", "story:a", "story:a"],
+      evidenceRefs: ["evidence:2", "evidence:1"],
+      idempotencyKey: "checkpoint-canonical-refs",
+    });
+    assert.equal(checkpoint.status, "ready");
+
+    const checkpointRetry = ledgerCommand({
+      command: "append-checkpoint",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Canonical refs checkpoint.",
+      authorityBasis: "manager-checkpoint",
+      recoveryPath: "rerun manager:resume",
+      sourceRefs: ["story:a", "story:b"],
+      evidenceRefs: ["evidence:1", "evidence:2", "evidence:1"],
+      idempotencyKey: "checkpoint-canonical-refs",
+    });
+    assert.equal(checkpointRetry.status, "ready");
+    assert.equal(checkpointRetry.summary.duplicateIgnored, true);
+    assert.equal(checkpointRetry.summary.actionResult.existingRecordId, checkpoint.summary.checkpoint.checkpointId);
+    assert.equal(checkpointRetry.summary.actionResult.eventId, checkpoint.summary.checkpoint.eventId);
+
+    const question = ledgerCommand({
+      command: "append-question",
+      runId: "manager-test",
+      stateRoot,
+      workerId: "codex-1",
+      summary: "Material decision required.",
+      authorityBasis: "manager-best-judgment",
+      recoveryPath: "inspect parked worker state",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:question"],
+      idempotencyKey: "question-conflict",
+      recordPolicy: "material_decision_only",
+    });
+    assert.equal(question.status, "ready");
+
+    const questionConflict = ledgerCommand({
+      command: "append-question",
+      runId: "manager-test",
+      stateRoot,
+      workerId: "codex-1",
+      summary: "Material decision required.",
+      authorityBasis: "manager-best-judgment",
+      recoveryPath: "inspect parked worker state",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:different-question"],
+      idempotencyKey: "question-conflict",
+      recordPolicy: "material_decision_only",
+    });
+    assert.equal(questionConflict.status, "blocked");
+    assert.equal(questionConflict.summary.actionResult.existingRecordId, question.summary.question.questionId);
+
+    const recoveryOnlyRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovery wording should not change identity.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "first recovery path",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:recovery-stable"],
+      idempotencyKey: "recovery-wording-stable",
+    });
+    assert.equal(recoveryOnlyRetry.status, "ready");
+    const recoveryOnlyDuplicate = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovery wording should not change identity.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "different recovery path",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:recovery-stable"],
+      idempotencyKey: "recovery-wording-stable",
+    });
+    assert.equal(recoveryOnlyDuplicate.status, "blocked");
+    assert.deepEqual(recoveryOnlyDuplicate.summary.actionResult.conflictFields, ["recoveryPath"]);
+
+    const authorityConflict = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovery wording should not change identity.",
+      authorityBasis: "different authority wording",
+      recoveryPath: "first recovery path",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:recovery-stable"],
+      idempotencyKey: "recovery-wording-stable",
+    });
+    assert.equal(authorityConflict.status, "blocked");
+    assert.deepEqual(authorityConflict.summary.actionResult.conflictFields, ["authorityBasis"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger snapshots preserve repeated samples and explicit snapshot conflicts", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-snapshot-idempotency-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+
+    const resourceA = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "CPU/RAM normal",
+      resourceState: "normal",
+    });
+    const resourceB = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "CPU/RAM normal",
+      resourceState: "normal",
+    });
+    assert.equal(resourceA.status, "ready");
+    assert.equal(resourceB.status, "ready");
+    assert.notEqual(resourceA.summary.snapshot.idempotencyKey, resourceB.summary.snapshot.idempotencyKey);
+
+    const usageA = ledgerCommand({
+      command: "append-usage-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Usage normal",
+      usageState: "normal",
+    });
+    const usageB = ledgerCommand({
+      command: "append-usage-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Usage normal",
+      usageState: "normal",
+    });
+    assert.equal(usageA.status, "ready");
+    assert.equal(usageB.status, "ready");
+    assert.notEqual(usageA.summary.snapshot.idempotencyKey, usageB.summary.snapshot.idempotencyKey);
+
+    const explicitResource = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Windowed resource sample",
+      resourceState: "normal",
+      idempotencyKey: "resource-window-1",
+    });
+    assert.equal(explicitResource.status, "ready");
+    const explicitResourceRetry = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Windowed resource sample",
+      resourceState: "normal",
+      idempotencyKey: "resource-window-1",
+    });
+    assert.equal(explicitResourceRetry.status, "ready");
+    assert.equal(explicitResourceRetry.summary.duplicateIgnored, true);
+
+    const explicitResourceConflict = ledgerCommand({
+      command: "append-resource-snapshot",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Windowed resource sample",
+      resourceState: "critical",
+      idempotencyKey: "resource-window-1",
+    });
+    assert.equal(explicitResourceConflict.status, "blocked");
+    assert.equal(explicitResourceConflict.summary.actionResult.existingRecordId, explicitResource.summary.snapshot.snapshotId);
+
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    assert.equal(readFileSync(join(runRoot, "resource-snapshots.ndjson"), "utf8").trim().split("\n").length, 3);
+    assert.equal(readFileSync(join(runRoot, "usage-snapshots.ndjson"), "utf8").trim().split("\n").length, 2);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger explicit keys avoid truncation collisions and malformed event logs fail closed", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-key-and-malformed-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const keyA = `${"k".repeat(180)}A`;
+    const keyB = `${"k".repeat(180)}B`;
+    const first = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Long explicit key A.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:key-a"],
+      idempotencyKey: keyA,
+    });
+    const second = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Long explicit key B.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:key-b"],
+      idempotencyKey: keyB,
+    });
+    assert.equal(first.status, "ready");
+    assert.equal(second.status, "ready");
+    assert.match(first.summary.event.idempotencyKey, /^explicit:/);
+    assert.match(second.summary.event.idempotencyKey, /^explicit:/);
+    assert.notEqual(first.summary.event.idempotencyKey, second.summary.event.idempotencyKey);
+
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    writeFileSync(join(runRoot, "events.ndjson"), "{bad json\n");
+    const malformed = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Malformed event log must block.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:malformed"],
+      idempotencyKey: "malformed-block",
+    });
+    assert.equal(malformed.status, "blocked");
+    assert.equal(malformed.blockers[0].code, "ledger-file-malformed");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger append lock writes owner metadata and recovers stale owners", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-lock-owner-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const lockDir = join(runRoot, ".ledger-append.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify({
+      runId: "manager-test",
+      pid: 999999999,
+      token: "stale-owner",
+      createdAt: "2000-01-01T00:00:00.000Z",
+    })}\n`);
+
+    const append = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Recovered stale lock before append.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:lock"],
+      idempotencyKey: "lock-recovery",
+    });
+    assert.equal(append.status, "ready");
+    assert.equal(existsSync(lockDir), false);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger blocks legacy or mismatched fingerprint duplicates before suppression", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-legacy-fingerprint-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const legacy = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Legacy duplicate fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:legacy"],
+      idempotencyKey: "legacy-key",
+    });
+    assert.equal(legacy.status, "ready");
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const legacyRecord = { ...legacy.summary.event };
+    delete legacyRecord.actionFingerprint;
+    delete legacyRecord.actionFingerprintVersion;
+    writeFileSync(join(runRoot, "events.ndjson"), `${JSON.stringify(legacyRecord)}\n`);
+
+    const legacyRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Legacy duplicate fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:legacy"],
+      idempotencyKey: "legacy-key",
+    });
+    assert.equal(legacyRetry.status, "blocked");
+    assert.deepEqual(legacyRetry.summary.actionResult.conflictFields, ["legacyActionFingerprint"]);
+
+    writeFileSync(join(runRoot, "events.ndjson"), `${JSON.stringify({ ...legacy.summary.event, actionFingerprintVersion: "old-version" })}\n`);
+    const versionRetry = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Legacy duplicate fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:legacy"],
+      idempotencyKey: "legacy-key",
+    });
+    assert.equal(versionRetry.status, "blocked");
+    assert.deepEqual(versionRetry.summary.actionResult.conflictFields, ["actionFingerprintVersion"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger fingerprints distinguish redacted and structured material inputs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-fingerprint-digests-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const redactedA = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Sensitive value sk-alpha should hash distinctly.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:redaction"],
+      idempotencyKey: "redaction-key",
+    });
+    assert.equal(redactedA.status, "ready");
+    const redactedB = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Sensitive value sk-beta should hash distinctly.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:redaction"],
+      idempotencyKey: "redaction-key",
+    });
+    assert.equal(redactedB.status, "ready");
+    assert.equal(redactedB.summary.duplicateIgnored, true);
+
+    const structuredA = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Structured source ref fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: [{ kind: "story", id: "1.3", nested: { a: 1 } }],
+      evidenceRefs: ["evidence:structured"],
+      idempotencyKey: "structured-key",
+    });
+    assert.equal(structuredA.status, "ready");
+    const structuredB = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "manager.run.steered",
+      summary: "Structured source ref fixture.",
+      authorityBasis: "operator-live-steering",
+      recoveryPath: "inspect steering evidence",
+      sourceRefs: [{ kind: "story", id: "1.3", nested: { a: 2 } }],
+      evidenceRefs: ["evidence:structured"],
+      idempotencyKey: "structured-key",
+    });
+    assert.equal(structuredB.status, "blocked");
+    assert.deepEqual(structuredB.summary.actionResult.conflictFields, ["actionFingerprint"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ledger ordinary repeated questions and checkpoints persist separately", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-ordinary-repeats-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const questionInput = {
+      command: "append-question",
+      runId: "manager-test",
+      stateRoot,
+      workerId: "codex-1",
+      summary: "Repeated material question can be separate without an explicit retry key.",
+      authorityBasis: "manager-best-judgment",
+      recoveryPath: "inspect source refs",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:question"],
+      recordPolicy: "material_decision_only",
+    };
+    const questionA = ledgerCommand(questionInput);
+    const questionB = ledgerCommand(questionInput);
+    assert.equal(questionA.status, "ready");
+    assert.equal(questionB.status, "ready");
+    assert.notEqual(questionA.summary.question.questionId, questionB.summary.question.questionId);
+
+    const checkpointInput = {
+      command: "append-checkpoint",
+      runId: "manager-test",
+      stateRoot,
+      summary: "Repeated checkpoint can be separate without an explicit retry key.",
+      authorityBasis: "manager-checkpoint",
+      recoveryPath: "rerun manager-worker-progress",
+      sourceRefs: ["story:1.3"],
+      evidenceRefs: ["evidence:checkpoint"],
+    };
+    const checkpointA = ledgerCommand(checkpointInput);
+    const checkpointB = ledgerCommand(checkpointInput);
+    assert.equal(checkpointA.status, "ready");
+    assert.equal(checkpointB.status, "ready");
+    assert.notEqual(checkpointA.summary.checkpoint.checkpointId, checkpointB.summary.checkpoint.checkpointId);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager mutation blocks schema-invalid event logs before side effects", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-schema-invalid-before-mutation-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", "manager-test");
+    const cyclePacket = buildCyclePacket(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0 }, laneAssignmentStatusCounts: { active: 6 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 6 }, candidateStateCounts: { active: 6 } } },
+        refillPlan: { summary: { safeWorkSupply: 6, candidateLanes: [] } },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    writeFileSync(join(runRoot, "events.ndjson"), `${JSON.stringify({ eventId: "evt-invalid", schemaVersion: "wrong" })}\n`);
+    const launches = [];
+    const applied = buildWorkerWarmPlan(
+      { runId: "manager-test", stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" },
+      {
+        cyclePacket,
+        tmuxRunner(command, args) {
+          launches.push({ command, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "ledger-file-malformed");
+    assert.equal(launches.length, 0);
+    assert.equal(JSON.parse(readFileSync(join(runRoot, "workers.json"), "utf8")).length, 0);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("ledger stores compact questions, checkpoints, and snapshots without raw retention", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-ledger-records-"));
   try {
@@ -19605,7 +21680,7 @@ test("ledger stores compact questions, checkpoints, and snapshots without raw re
       runId: "manager-test",
       stateRoot,
       workerId: "codex-1",
-      summary: "Duplicate material question",
+      summary: "Worker asked about provider payload sk-testtoken",
       authorityBasis: "manager-best-judgment",
       recoveryPath: "inspect source refs and parked worker state",
       sourceRefs: ["story-1.2"],

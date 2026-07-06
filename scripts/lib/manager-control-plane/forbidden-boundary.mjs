@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const backendProofBoundary = {
   authorityStage: "backend_proof",
   allowedOperations: [
@@ -9,6 +11,10 @@ const backendProofBoundary = {
     "memory_dispatcher.complete",
     "memory_dispatcher.fail",
     "memory_dispatcher.recover",
+    "runtime_port.queue.metadata_proof",
+    "runtime_port.verification.metadata_proof",
+    "runtime_port.session.metadata_proof",
+    "runtime_port.policy.metadata_proof",
     "summary_json.emit",
     "pipeline_projection.read"
   ],
@@ -16,6 +22,11 @@ const backendProofBoundary = {
     "contract_objects",
     "workflow_core_lifecycle",
     "in_memory_dispatcher_adapter",
+    "local_proof_runtime_ports",
+    "local_proof_queue_adapter",
+    "local_proof_verification_adapter",
+    "local_proof_session_adapter",
+    "local_proof_policy_adapter",
     "bounded_summary_json",
     "metadata_only_evidence_links",
     "source_boundary_tests"
@@ -24,7 +35,8 @@ const backendProofBoundary = {
     "simulated_worker_execution",
     "fixture_backed_work_supply",
     "in_memory_state",
-    "metadata_only_completion_evidence"
+    "metadata_only_completion_evidence",
+    "metadata_only_runtime_port_evidence"
   ],
   forbiddenCapabilities: [
     "live_tmux_mutation",
@@ -75,6 +87,26 @@ const BASE_FORBIDDEN_PATTERNS = [
   ["child_process.worker_dispatch", /\bfrom\s+["'](?:node:)?child_process["']|\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)/i],
   ["raw_payload_retention", /\b(?:rawPrompt|rawCompletion|providerPayload|rawWorkerTranscript|unboundedLog|secret)\b/]
 ];
+
+const RAW_METADATA_VALUE_PATTERN = /(?:\braw\b|\bprovider\b|raw[-_\s]?payload|raw[-_\s]?prompt|raw[-_\s]?completion|provider[-_\s]?payload|raw[-_\s]?worker(?:[-_\s]?transcript)?|raw[Pp]rompt|raw[Cc]ompletion|provider[Pp]ayload|raw[Ww]orker[Tt]ranscript|\bpayload\b|transcript|s(?:ec)ret|sk-[A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const SAFE_RUNTIME_PROOF_STRING_KEYS = Object.freeze(new Set([
+  "schema_version",
+  "status",
+  "adapter_id",
+  "kind",
+  "mode",
+  "authority_stage",
+  "state_retention",
+  "verification_target_id",
+  "command_id",
+  "session_id",
+  "authority_decision_id",
+  "decision",
+  "code",
+  "blocker"
+]));
+const SAFE_RUNTIME_PROOF_STRING_PATTERN = /^[A-Za-z0-9._:/#-]{1,220}$/;
+const DIGEST_PATTERN = /^sha256:[0-9a-f]{32}$/;
 
 const SURFACE_IMPORT_RULES = {
   contracts: [
@@ -146,16 +178,17 @@ export function classifyBackendProofSourceBoundary({ path, source, surface = "ba
   };
 }
 
-export function buildBackendProofEvidencePacket({ runId, result, evidenceRefs = [] }) {
+export function buildBackendProofEvidencePacket({ runId, result, evidenceRefs = [], runtimeProof = null }) {
   return {
     schema_version: "manager_control_plane.backend_proof_boundary.v1",
-    run_id: runId,
+    run_id: sanitizeMetadataToken(runId, "unknown-run"),
     authority_stage: BACKEND_PROOF_BOUNDARY.authorityStage,
     result,
     real: [...BACKEND_PROOF_BOUNDARY.realCapabilities],
     fake: [...BACKEND_PROOF_BOUNDARY.fakeCapabilities],
     forbidden: [...BACKEND_PROOF_BOUNDARY.forbiddenCapabilities],
     evidence_refs: sanitizeEvidenceRefs(evidenceRefs),
+    runtime_ports: sanitizeRuntimeProof(runtimeProof),
     metadata_only: true,
     raw_payload_retained: false,
     next_actions: result === "blocked"
@@ -164,15 +197,61 @@ export function buildBackendProofEvidencePacket({ runId, result, evidenceRefs = 
   };
 }
 
+function sanitizeRuntimeProof(runtimeProof) {
+  if (!runtimeProof || typeof runtimeProof !== "object") return null;
+  return sanitizeMetadataValue(runtimeProof, 0, "");
+}
+
+function sanitizeMetadataValue(value, depth, key) {
+  if (depth > 6) return "metadata-only:redacted-depth";
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return sanitizeRuntimeProofString(value, key);
+  if (Array.isArray(value)) {
+    if (key === "evidence_refs") return sanitizeEvidenceRefs(value).slice(0, 16);
+    return value.slice(0, 16).map((entry) => sanitizeMetadataValue(entry, depth + 1, key));
+  }
+  if (typeof value === "object") {
+    const output = Object.create(null);
+    for (const [key, entry] of Object.entries(value).slice(0, 48)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+      if (!/^[A-Za-z0-9._:-]{1,80}$/.test(key)) continue;
+      if (key !== "raw_payload_retained" && RAW_METADATA_VALUE_PATTERN.test(key)) continue;
+      output[key] = sanitizeMetadataValue(entry, depth + 1, key);
+    }
+    return output;
+  }
+  return null;
+}
+
+function sanitizeRuntimeProofString(value, key) {
+  if (!/^[\x20-\x7E]{0,260}$/.test(value)) return "metadata-only:redacted";
+  if (RAW_METADATA_VALUE_PATTERN.test(value)) return "metadata-only:redacted";
+  if ((key === "command_digest" || key === "expected_result_digest") && DIGEST_PATTERN.test(value)) return value;
+  if (SAFE_RUNTIME_PROOF_STRING_KEYS.has(key) && SAFE_RUNTIME_PROOF_STRING_PATTERN.test(value)) return value;
+  return `metadata-only:${stableDigest(value)}`;
+}
+
 function sanitizeEvidenceRefs(evidenceRefs) {
   return evidenceRefs.map((ref) => {
-    if (typeof ref === "string" && /^[A-Za-z0-9._:/#-]{1,160}$/.test(ref)) return ref;
+    if (typeof ref === "string") return sanitizeMetadataToken(ref, "metadata-only:redacted");
     if (ref && typeof ref === "object") {
-      const label = typeof ref.label === "string" && /^[A-Za-z0-9._:/#-]{1,80}$/.test(ref.label) ? ref.label : "redacted";
+      const label = sanitizeMetadataToken(ref.label, "redacted", { maxLength: 80 });
       return `metadata-only:${label}`;
     }
     return "metadata-only:redacted";
   });
+}
+
+function sanitizeMetadataToken(value, fallback, { maxLength = 160 } = {}) {
+  if (typeof value !== "string") return fallback;
+  if (!new RegExp(`^[A-Za-z0-9._:/#-]{1,${maxLength}}$`).test(value)) return fallback;
+  if (RAW_METADATA_VALUE_PATTERN.test(value)) return fallback;
+  return value;
+}
+
+function stableDigest(value) {
+  return `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
 }
 
 function lineForIndex(source, index) {

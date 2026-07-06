@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { createLocalProofRuntimeAdapters } from "../scripts/lib/manager-control-plane/adapters/local-proof-runtime-adapters.mjs";
 import { createMemoryDispatcherAdapter } from "../scripts/lib/manager-control-plane/adapters/memory-dispatcher-adapter.mjs";
 import { runBackendProofHarness } from "../scripts/lib/manager-control-plane/backend-proof-harness.mjs";
 import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
@@ -11,10 +14,15 @@ import { assertDispatcherPortConformance } from "./helpers/manager-control-plane
 import { loadWorkflowCoreManagerControlPlane } from "./helpers/manager-control-plane/workflow-core-loader.mjs";
 
 const portPath = new URL("../packages/workflow-core/src/ports/dispatcher-port.ts", import.meta.url);
+const runtimePortsPath = new URL("../packages/workflow-core/src/ports/runtime-ports.ts", import.meta.url);
 const portsIndexPath = new URL("../packages/workflow-core/src/ports/index.ts", import.meta.url);
 const adapterPath = new URL("../scripts/lib/manager-control-plane/adapters/memory-dispatcher-adapter.mjs", import.meta.url);
+const localProofAdaptersPath = new URL("../scripts/lib/manager-control-plane/adapters/local-proof-runtime-adapters.mjs", import.meta.url);
 const harnessPath = new URL("../scripts/lib/manager-control-plane/backend-proof-harness.mjs", import.meta.url);
+const managerRunLoopPath = new URL("../scripts/manager-run-loop.mjs", import.meta.url);
 const summaryJsonPath = new URL("../scripts/lib/manager-control-plane/summary-json.mjs", import.meta.url);
+const managedWorktreeRoot = join(tmpdir(), "kendall", "manager-control-plane", "worktrees");
+const approvedWorkspaceRoots = [managedWorktreeRoot];
 
 test("dispatcher port source boundary exists and is exported from workflow-core", async () => {
   assert.equal(existsSync(portPath), true, "missing lowercase dispatcher-port.ts");
@@ -27,6 +35,645 @@ test("dispatcher port source boundary exists and is exported from workflow-core"
   assert.match(portSource, /interface DispatcherPort/);
   for (const forbidden of ["BullMQ", "Redis", "Hatchet", "SQLite", "tmux", "GitHub", "provider", "child_process"]) {
     assert.doesNotMatch(portSource, new RegExp(forbidden, "i"), `dispatcher port leaks ${forbidden}`);
+  }
+});
+
+test("runtime port interfaces cover queue, verification, session, and policy without tool-native state", async () => {
+  assert.equal(existsSync(runtimePortsPath), true, "missing runtime-ports.ts");
+
+  const portsIndex = await readFile(portsIndexPath, "utf8");
+  assert.match(portsIndex, /export \* from "\.\/runtime-ports";/);
+
+  const workflowIndex = await readFile(new URL("../packages/workflow-core/src/index.ts", import.meta.url), "utf8");
+  assert.match(workflowIndex, /export \* from "\.\/ports";/);
+
+  const source = await readFile(runtimePortsPath, "utf8");
+  for (const interfaceName of ["QueueRuntimePort", "VerificationRuntimePort", "SessionRuntimePort", "PolicyRuntimePort"]) {
+    assert.match(source, new RegExp(`interface ${interfaceName}`));
+  }
+  assert.match(source, /export type RuntimePortMode = "backend_proof" \| "local_proof" \| "live_adapter" \| "simulated_adapter";/);
+  assert.match(source, /export type RuntimeStateRetention = "kendall_manager_metadata_only" \| "tool_native_metadata" \| "external_runtime_state";/);
+  assert.doesNotMatch(source, /interface QueueRuntimePort extends DispatcherPort/);
+  assert.match(source, /authorityStage: ManagerControlPlane\.ManagerAuthorityStage/);
+  assert.match(source, /productTruthBoundary: RuntimeProductTruthBoundary/);
+  assert.match(source, /localProofOnly: boolean/);
+  assert.match(source, /stateRetention: RuntimeStateRetention/);
+  assert.match(source, /toolNativeStateRetained: boolean/);
+  assert.match(source, /nativeQueueStateRetained: boolean/);
+  assert.match(source, /rawPayloadRetained: false/);
+  for (const forbidden of ["BullMQ", "Redis", "Hatchet", "SQLite", "tmux", "GitHub", "child_process"]) {
+    assert.doesNotMatch(source, new RegExp(forbidden, "i"), `runtime port leaks ${forbidden}`);
+  }
+});
+
+test("local proof runtime adapters satisfy all ports without live execution side effects", async () => {
+  assert.equal(existsSync(localProofAdaptersPath), true, "missing local proof runtime adapter");
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const clock = lifecycle.createManualClock("2026-06-30T00:00:00.000Z");
+  const runtimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock,
+    runId: "run-1",
+    approvedWorkspaceRoots
+  });
+
+  assert.deepEqual(Object.keys(runtimePorts).sort(), ["policy", "queue", "session", "verification"]);
+  assert.equal(runtimePorts.queue.descriptor.kind, "queue");
+  assert.equal(runtimePorts.verification.descriptor.kind, "verification");
+  assert.equal(runtimePorts.session.descriptor.kind, "session");
+  assert.equal(runtimePorts.policy.descriptor.kind, "policy");
+  for (const runtime of Object.values(runtimePorts)) {
+    assert.equal(runtime.mode, "backend_proof");
+    assert.equal(runtime.descriptor.authorityStage, "backend_proof");
+    assert.equal(runtime.descriptor.productTruthBoundary, "kendall_product_truth");
+    assert.equal(runtime.descriptor.localProofOnly, true);
+    assert.equal(runtime.descriptor.stateRetention, "kendall_manager_metadata_only");
+    assert.equal(runtime.descriptor.toolNativeStateRetained, false);
+    assert.equal(runtime.descriptor.nativeQueueStateRetained, false);
+    assert.equal(runtime.descriptor.rawPayloadRetained, false);
+  }
+  assert.throws(
+    () => {
+      runtimePorts.queue.mode = "live_worker";
+    },
+    /Cannot assign to read only property|object is not extensible/
+  );
+  assert.throws(
+    () => {
+      runtimePorts.verification.verify = null;
+    },
+    /Cannot assign to read only property|object is not extensible/
+  );
+  assert.throws(
+    () => {
+      runtimePorts.extra = true;
+    },
+    /Cannot add property|object is not extensible/
+  );
+
+  await assertDispatcherPortConformance(
+    () =>
+      createLocalProofRuntimeAdapters({
+        lifecycle,
+        clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+        runId: "run-1",
+        approvedWorkspaceRoots
+      }).queue,
+    { candidate: fixture.candidate }
+  );
+
+  const verification = await runtimePorts.verification.verify({
+    target: fixture.candidate.verificationTargets[0],
+    workItemId: "work-item-001",
+    attemptId: "attempt-001",
+    evidenceRefs: ["evidence-verification", "fixture:expected-result"]
+  });
+  assert.equal(verification.ok, true);
+  assert.equal(verification.value.status, "metadata_proof_only");
+  assert.equal(verification.value.fixtureBackedExpectedEvidencePresent, false);
+  assert.equal(verification.value.target.verificationTargetId, "verify-1");
+  assert.equal(verification.value.target.commandId, "manager-dispatcher-port-test");
+  assert.match(verification.value.target.commandDigest, /^sha256:[0-9a-f]{32}$/);
+  assert.match(verification.value.target.expectedResultDigest, /^sha256:[0-9a-f]{32}$/);
+  assert.equal("command" in verification.value.target, false);
+  assert.equal("expectedResult" in verification.value.target, false);
+  assert.equal(verification.value.commandExecutionAttempted, false);
+  assert.equal(verification.value.rawPayloadRetained, false);
+  assert.equal(verification.value.evidenceRecords.length, 2);
+  assert.equal(verification.value.evidenceRecords[0].retentionClass, "metadata_only");
+
+  const whitespaceSensitiveVerification = await runtimePorts.verification.verify({
+    target: {
+      ...fixture.candidate.verificationTargets[0],
+      command: ` ${fixture.candidate.verificationTargets[0].command}`,
+      expectedResult: `${fixture.candidate.verificationTargets[0].expectedResult}\n`
+    },
+    workItemId: "work-item-001",
+    attemptId: "attempt-001",
+    evidenceRefs: ["evidence-verification-whitespace"]
+  });
+  assert.equal(whitespaceSensitiveVerification.ok, true);
+  assert.notEqual(
+    whitespaceSensitiveVerification.value.target.commandDigest,
+    verification.value.target.commandDigest
+  );
+  assert.notEqual(
+    whitespaceSensitiveVerification.value.target.expectedResultDigest,
+    verification.value.target.expectedResultDigest
+  );
+  assert.equal("command" in whitespaceSensitiveVerification.value.target, false);
+  assert.equal("expectedResult" in whitespaceSensitiveVerification.value.target, false);
+
+  const session = await runtimePorts.session.prepareSession({
+    workItemId: "work-item-001",
+    branchName: "codex/backend-proof",
+    worktreePath: `${managedWorktreeRoot}/local-proof`,
+    evidenceRefs: ["evidence-session"]
+  });
+  assert.equal(session.ok, true);
+  assert.equal(session.value.processLaunchAttempted, false);
+  assert.equal(session.value.filesystemMutationAttempted, false);
+  assert.equal(session.value.credentialAccessAttempted, false);
+  assert.equal(session.value.networkAccessAttempted, false);
+  assert.equal(session.value.branchName, "codex/backend-proof");
+  assert.equal(session.value.worktreePath, `${managedWorktreeRoot}/local-proof`);
+  assert.equal(session.value.approvedWorkspaceRoot, `${managedWorktreeRoot}/`);
+  assert.match(session.value.sessionId, /^local-proof-session:work-item-001:sha256:[0-9a-f]{32}$/);
+  assert.throws(
+    () => {
+      session.value.branchName = "mutated";
+    },
+    /Cannot assign to read only property|object is not extensible/
+  );
+
+  const allowedPolicy = await runtimePorts.policy.evaluate({
+    authorityFamily: "dispatcher_lifecycle",
+    operation: "claim",
+    scope: "backend-proof queue",
+    evidenceRefs: ["z-evidence-policy", "a-evidence-policy", "z-evidence-policy"]
+  });
+  assert.equal(allowedPolicy.ok, true);
+  assert.equal(allowedPolicy.value.allowed, false);
+  assert.equal(allowedPolicy.value.simulatedOnly, true);
+  assert.equal(allowedPolicy.value.wouldAllowIfAuthoritative, true);
+  assert.equal(allowedPolicy.value.decision.decision, "block_and_record");
+  assert.equal(allowedPolicy.value.decision.stopReason, "local_proof_policy_non_authoritative");
+  assert.match(allowedPolicy.value.decision.authorityDecisionId, /^local-proof-policy:sha256:[0-9a-f]{32}$/);
+  assert.throws(
+    () => {
+      allowedPolicy.value.decision.scope = "mutated";
+    },
+    /Cannot assign to read only property|object is not extensible/
+  );
+  const equivalentPolicy = await runtimePorts.policy.evaluate({
+    authorityFamily: "dispatcher_lifecycle",
+    operation: "claim",
+    scope: "backend-proof queue",
+    evidenceRefs: ["a-evidence-policy", "z-evidence-policy"]
+  });
+  assert.equal(equivalentPolicy.ok, true);
+  assert.equal(equivalentPolicy.value.decision.authorityDecisionId, allowedPolicy.value.decision.authorityDecisionId);
+
+  const blockedPolicy = await runtimePorts.policy.evaluate({
+    authorityFamily: "live_worker_execution",
+    operation: "launch",
+    scope: "tmux worker",
+    evidenceRefs: ["evidence-policy-blocked"]
+  });
+  assert.equal(blockedPolicy.ok, true);
+  assert.equal(blockedPolicy.value.allowed, false);
+  assert.equal(blockedPolicy.value.decision.decision, "block_and_record");
+  assert.match(blockedPolicy.value.blockers[0], /backend_proof_denies_live_worker_execution:launch:tmux worker/);
+});
+
+test("local proof queue freezes returned proof copies without freezing caller fixtures", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const sourceRefs = fixture.candidate.sourceRefs.map((source) => ({ ...source }));
+  const verificationTargets = fixture.candidate.verificationTargets.map((target) => ({ ...target }));
+  const candidate = {
+    ...fixture.candidate,
+    sourceRefs,
+    verificationTargets
+  };
+  const runtimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1",
+    approvedWorkspaceRoots
+  });
+
+  const refill = await runtimePorts.queue.refill({
+    candidates: [candidate],
+    evidenceRefs: ["evidence-refill"],
+    policyReason: "fixture-backed backend proof source"
+  });
+
+  assert.equal(refill.ok, true);
+  assert.equal(Object.isFrozen(refill.value), true);
+  assert.equal(Object.isFrozen(refill.value.queuedWorkItems[0].sourceRefs), true);
+  assert.equal(Object.isFrozen(sourceRefs), false);
+  assert.equal(Object.isFrozen(verificationTargets), false);
+  assert.doesNotThrow(() => {
+    sourceRefs.push({
+      sourceRefId: "source-extra",
+      sourceType: "story",
+      sourceSpan: "mutable caller fixture"
+    });
+  });
+});
+
+test("local proof queue delegates sanitized candidate metadata only", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const rawSlice = "Unique candidate text that must not be retained";
+  const rawAcceptance = "Unique acceptance text that must not be retained";
+  const rawCommand = "node --test tests/manager-control-plane.dispatcher-port.test.mjs --unique-command-retention-check";
+  const rawExpected = "Unique expected result that must not be retained";
+  const rawPolicyReason = "Unique policy reason that must not be retained";
+  const rawDependencyHint = "Unique dependency hint that must not be retained";
+  const runtimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1",
+    approvedWorkspaceRoots
+  });
+
+  const refill = await runtimePorts.queue.refill({
+    candidates: [{
+      ...fixture.candidate,
+      proposedSlice: rawSlice,
+      acceptanceCriteria: [rawAcceptance],
+      dependencyHints: [rawDependencyHint],
+      verificationTargets: [{
+        ...fixture.candidate.verificationTargets[0],
+        command: rawCommand,
+        expectedResult: rawExpected
+      }]
+    }],
+    evidenceRefs: ["evidence-refill"],
+    policyReason: rawPolicyReason
+  });
+
+  assert.equal(refill.ok, true);
+  const snapshotText = JSON.stringify(runtimePorts.queue.snapshot());
+  const refillText = JSON.stringify(refill);
+  for (const rawValue of [rawSlice, rawAcceptance, rawCommand, rawExpected, rawPolicyReason, rawDependencyHint]) {
+    assert.equal(snapshotText.includes(rawValue), false, rawValue);
+    assert.equal(refillText.includes(rawValue), false, rawValue);
+  }
+  assert.match(snapshotText, /metadata-only-command:sha256:[0-9a-f]{32}/);
+  assert.match(snapshotText, /candidate-slice:sha256:[0-9a-f]{32}/);
+  assert.match(snapshotText, /acceptance:sha256:[0-9a-f]{32}/);
+  assert.match(snapshotText, /dependency:sha256:[0-9a-f]{32}/);
+});
+
+test("local proof runtime adapters reject unsafe metadata and unsupported operations", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const runtimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1",
+    approvedWorkspaceRoots
+  });
+
+  assert.throws(
+    () => runtimePorts.policy.descriptor.evidenceRefs.push("mutated"),
+    /Cannot add property|object is not extensible|read only/
+  );
+  assert.deepEqual(runtimePorts.policy.descriptor.evidenceRefs, ["runtime-port:local-proof-adapter"]);
+
+  const blankEvidence = await runtimePorts.verification.verify({
+    target: fixture.candidate.verificationTargets[0],
+    evidenceRefs: [" "]
+  });
+  assert.equal(blankEvidence.ok, false);
+  assert.equal(blankEvidence.code, "missing_evidence");
+  assert.deepEqual(blankEvidence.evidenceRefs, []);
+
+  for (const invalidEvidenceRefs of [
+    [{ raw: "payload" }],
+    [["nested"]],
+    ["evidence\ncontrol"],
+    ["sk-1234567890abcdef"],
+    ["raw"],
+    ["provider"],
+    ["raw-payload-evidence"],
+    ["payload-evidence"],
+    ["rawPayloadEvidence"],
+    ["raw_payload_evidence"],
+    ["providerPayloadEvidence"],
+    ["provider_payload_evidence"],
+    [`evidence-${"x".repeat(200)}`]
+  ]) {
+    const invalidEvidence = await runtimePorts.verification.verify({
+      target: fixture.candidate.verificationTargets[0],
+      evidenceRefs: invalidEvidenceRefs
+    });
+    assert.equal(invalidEvidence.ok, false);
+    assert.equal(invalidEvidence.code, "missing_evidence");
+    assert.deepEqual(invalidEvidence.evidenceRefs, []);
+  }
+
+  const incompleteTarget = await runtimePorts.verification.verify({
+    target: {
+      ...fixture.candidate.verificationTargets[0],
+      verificationTargetId: " "
+    },
+    evidenceRefs: ["evidence-verification"]
+  });
+  assert.equal(incompleteTarget.ok, false);
+  assert.equal(incompleteTarget.code, "invalid_input");
+
+  const oversizedTarget = await runtimePorts.verification.verify({
+    target: {
+      ...fixture.candidate.verificationTargets[0],
+      command: "x".repeat(2_001)
+    },
+    evidenceRefs: ["evidence-verification"]
+  });
+  assert.equal(oversizedTarget.ok, false);
+  assert.equal(oversizedTarget.code, "invalid_input");
+
+  for (const optionalIdPayload of [{ raw: "work" }, "work-item\n001", `work-item-${"x".repeat(200)}`]) {
+    const invalidOptionalId = await runtimePorts.verification.verify({
+      target: fixture.candidate.verificationTargets[0],
+      workItemId: optionalIdPayload,
+      evidenceRefs: ["evidence-verification"]
+    });
+    assert.equal(invalidOptionalId.ok, false);
+    assert.equal(invalidOptionalId.code, "invalid_input");
+  }
+
+  const invalidQueueEvidence = await runtimePorts.queue.claim({
+    workerId: "worker-1",
+    evidenceRefs: [{ raw: "queue-evidence" }]
+  });
+  assert.equal(invalidQueueEvidence.ok, false);
+  assert.equal(invalidQueueEvidence.code, "missing_evidence");
+  assert.deepEqual(invalidQueueEvidence.evidenceRefs, []);
+
+  for (const malformedCandidates of [undefined, null, { candidate: fixture.candidate }, "not-an-array"]) {
+    const malformedRefill = await runtimePorts.queue.refill({
+      candidates: malformedCandidates,
+      evidenceRefs: ["evidence-refill"],
+      policyReason: "malformed candidates should fail closed"
+    });
+    assert.equal(malformedRefill.ok, false);
+    assert.equal(malformedRefill.code, "invalid_input");
+    assert.deepEqual(malformedRefill.evidenceRefs, ["evidence-refill"]);
+  }
+
+  for (const malformedCandidate of [
+    {},
+    null,
+    { ...fixture.candidate, candidateWorkPacketId: "" },
+    { ...fixture.candidate, sourceRefs: [] },
+    { ...fixture.candidate, acceptanceCriteria: undefined },
+    { ...fixture.candidate, acceptanceCriteria: [] },
+    { ...fixture.candidate, acceptanceCriteria: [null] },
+    { ...fixture.candidate, dependencyHints: undefined },
+    { ...fixture.candidate, dependencyHints: [null] },
+    { ...fixture.candidate, proposedSlice: "raw prompt provider payload should fail" },
+    { ...fixture.candidate, proposedSlice: "x".repeat(241) },
+    { ...fixture.candidate, authorityStage: "bootstrap_refill" },
+    { ...fixture.candidate, authorityStage: "governor_recovery" },
+    { ...fixture.candidate, authorityStage: "pipeline_adapter" },
+    { ...fixture.candidate, authorityStage: "live_worker" },
+    { ...fixture.candidate, authorityStage: "delivery" },
+    { ...fixture.candidate, authorityStage: "backend_proofish" },
+    { ...fixture.candidate, authorityClass: "allowed_unattendedish" },
+    { ...fixture.candidate, createdAt: "2026-02-31T00:00:00.000Z" },
+    { ...fixture.candidate, updatedAt: "2026-02-31T00:00:00.000Z" },
+    {
+      ...fixture.candidate,
+      sourceRefs: [{ ...fixture.candidate.sourceRefs[0], sourceRefId: "" }]
+    }
+  ]) {
+    const malformedCandidateRefill = await runtimePorts.queue.refill({
+      candidates: [malformedCandidate],
+      evidenceRefs: ["evidence-refill"],
+      policyReason: "malformed candidate packet should fail closed"
+    });
+    assert.equal(malformedCandidateRefill.ok, false);
+    assert.equal(malformedCandidateRefill.code, "invalid_input");
+    assert.deepEqual(malformedCandidateRefill.evidenceRefs, ["evidence-refill"]);
+  }
+
+  const unsafeBranch = await runtimePorts.session.prepareSession({
+    workItemId: "work-item-001",
+    branchName: "../unsafe",
+    worktreePath: `${managedWorktreeRoot}/local-proof`,
+    evidenceRefs: ["evidence-session"]
+  });
+  assert.equal(unsafeBranch.ok, false);
+  assert.equal(unsafeBranch.code, "invalid_input");
+
+  for (const branchName of ["codex/.hidden", "codex/trailing.", "codex/control\nbranch", "codex/segment.lock"]) {
+    const unsafeRef = await runtimePorts.session.prepareSession({
+      workItemId: "work-item-001",
+      branchName,
+      worktreePath: `${managedWorktreeRoot}/local-proof`,
+      evidenceRefs: ["evidence-session"]
+    });
+    assert.equal(unsafeRef.ok, false);
+    assert.equal(unsafeRef.code, "invalid_input");
+  }
+
+  for (const branchName of ["main", "HEAD", "refs/heads/main", "feature/not-managed"]) {
+    const unmanagedRef = await runtimePorts.session.prepareSession({
+      workItemId: "work-item-001",
+      branchName,
+      worktreePath: `${managedWorktreeRoot}/local-proof`,
+      evidenceRefs: ["evidence-session"]
+    });
+    assert.equal(unmanagedRef.ok, false);
+    assert.equal(unmanagedRef.code, "invalid_input");
+  }
+
+  const unsafeWorkItem = await runtimePorts.session.prepareSession({
+    workItemId: "work-item\n001",
+    branchName: "codex/backend-proof",
+    worktreePath: `${managedWorktreeRoot}/local-proof`,
+    evidenceRefs: ["evidence-session"]
+  });
+  assert.equal(unsafeWorkItem.ok, false);
+  assert.equal(unsafeWorkItem.code, "invalid_input");
+
+  for (const worktreePath of ["/", "/tmp/kendall-local-proof", "/etc/kendall-local-proof", `${managedWorktreeRoot}/bad\npath`]) {
+    const unsafePath = await runtimePorts.session.prepareSession({
+      workItemId: "work-item-001",
+      branchName: "codex/backend-proof",
+      worktreePath,
+      evidenceRefs: ["evidence-session"]
+    });
+    assert.equal(unsafePath.ok, false);
+    assert.equal(unsafePath.code, "invalid_input");
+  }
+
+  const invalidRootRuntimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1",
+    approvedWorkspaceRoots: ["/", "/tmp", "relative", `${managedWorktreeRoot}/valid-root`]
+  });
+  const failClosedRoot = await invalidRootRuntimePorts.session.prepareSession({
+    workItemId: "work-item-001",
+    branchName: "codex/backend-proof",
+    worktreePath: `${managedWorktreeRoot}/local-proof`,
+    evidenceRefs: ["evidence-session"]
+  });
+  assert.equal(failClosedRoot.ok, false);
+  assert.equal(failClosedRoot.code, "invalid_input");
+
+  const validCustomRootRuntimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1",
+    approvedWorkspaceRoots: [`${managedWorktreeRoot}/review-root`]
+  });
+  const validCustomRoot = await validCustomRootRuntimePorts.session.prepareSession({
+    workItemId: "work-item-001",
+    branchName: "codex/backend-proof",
+    worktreePath: `${managedWorktreeRoot}/review-root/local-proof`,
+    evidenceRefs: ["evidence-session"]
+  });
+  assert.equal(validCustomRoot.ok, true);
+  assert.equal(validCustomRoot.value.approvedWorkspaceRoot, `${managedWorktreeRoot}/review-root/`);
+
+  const distinctSession = await validCustomRootRuntimePorts.session.prepareSession({
+    workItemId: "work-item-001",
+    branchName: "codex/backend-proof-2",
+    worktreePath: `${managedWorktreeRoot}/review-root/local-proof`,
+    evidenceRefs: ["evidence-session"]
+  });
+  assert.equal(distinctSession.ok, true);
+  assert.notEqual(distinctSession.value.sessionId, validCustomRoot.value.sessionId);
+
+  const unsupportedAllowedFamilyOperation = await runtimePorts.policy.evaluate({
+    authorityFamily: "dispatcher_lifecycle",
+    operation: "launch",
+    scope: "backend-proof queue",
+    evidenceRefs: ["evidence-policy-blocked"]
+  });
+  assert.equal(unsupportedAllowedFamilyOperation.ok, true);
+  assert.equal(unsupportedAllowedFamilyOperation.value.allowed, false);
+  assert.equal(unsupportedAllowedFamilyOperation.value.decision.decision, "block_and_record");
+  assert.match(unsupportedAllowedFamilyOperation.value.blockers[0], /backend_proof_denies_dispatcher_lifecycle:launch:backend-proof queue/);
+
+  const sameOperationDifferentScope = await runtimePorts.policy.evaluate({
+    authorityFamily: "dispatcher_lifecycle",
+    operation: "claim",
+    scope: "different backend-proof queue",
+    evidenceRefs: ["evidence-policy-blocked"]
+  });
+  assert.equal(sameOperationDifferentScope.ok, true);
+  assert.equal(sameOperationDifferentScope.value.allowed, false);
+  assert.notEqual(
+    sameOperationDifferentScope.value.decision.authorityDecisionId,
+    unsupportedAllowedFamilyOperation.value.decision.authorityDecisionId
+  );
+
+  for (const unsafePolicyInput of [
+    { authorityFamily: "dispatcher_lifecycle\nraw", operation: "claim", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "sk-1234567890abcdef", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "raw", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "provider", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "raw-payload", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "rawPayload", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "raw_payload", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "providerPayload", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "provider_payload", scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: `claim-${"x".repeat(100)}`, scope: "backend-proof queue" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "raw completion transcript" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "raw" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "provider" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "payload" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "rawPayload" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "raw_payload_evidence" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "providerPayloadEvidence" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: "provider_payload_evidence" },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim", scope: `backend-proof queue ${"x".repeat(140)}` },
+    { authorityFamily: "dispatcher_lifecycle", operation: "claim\nraw", scope: "backend-proof queue" }
+  ]) {
+    const unsafePolicy = await runtimePorts.policy.evaluate({
+      ...unsafePolicyInput,
+      evidenceRefs: ["evidence-policy"]
+    });
+    assert.equal(unsafePolicy.ok, false);
+    assert.equal(unsafePolicy.code, "invalid_input");
+    assert.deepEqual(unsafePolicy.evidenceRefs, ["evidence-policy"]);
+  }
+
+  const queueSnapshot = runtimePorts.queue.snapshot();
+  assert.deepEqual(Object.keys(queueSnapshot).sort(), [
+    "attempts",
+    "events",
+    "evidenceRecords",
+    "leases",
+    "refillJobs",
+    "workItems"
+  ]);
+  assert.equal("nativeQueue" in queueSnapshot, false);
+  assert.equal("toolNativeState" in queueSnapshot, false);
+
+  const oversizedRefill = await runtimePorts.queue.refill({
+    candidates: Array.from({ length: 33 }, (_, index) => ({
+      ...fixture.candidate,
+      candidateWorkPacketId: `candidate-${index}`,
+      dedupeKey: `candidate-${index}`,
+      sourceRefs: [{ ...fixture.candidate.sourceRefs[0], sourceRefId: `source-${index}` }]
+    })),
+    evidenceRefs: ["evidence-refill"],
+    policyReason: "oversized candidate batch should fail closed"
+  });
+  assert.equal(oversizedRefill.ok, false);
+  assert.equal(oversizedRefill.code, "invalid_input");
+  assert.deepEqual(oversizedRefill.evidenceRefs, ["evidence-refill"]);
+});
+
+test("local proof queue rejects unsafe lifecycle metadata before delegation", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const runtimePorts = createLocalProofRuntimeAdapters({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1",
+    approvedWorkspaceRoots
+  });
+
+  const invalidClaim = await runtimePorts.queue.claim({
+    workerId: { raw: "worker" },
+    evidenceRefs: ["evidence-claim"]
+  });
+  assert.equal(invalidClaim.ok, false);
+  assert.equal(invalidClaim.code, "invalid_input");
+
+  const refill = await runtimePorts.queue.refill({
+    candidates: [fixture.candidate],
+    evidenceRefs: ["evidence-refill"],
+    policyReason: "fixture-backed safe source"
+  });
+  assert.equal(refill.ok, true);
+  const claim = await runtimePorts.queue.claim({ workerId: "worker-1", evidenceRefs: ["evidence-claim"] });
+  assert.equal(claim.ok, true);
+
+  const baseLeaseInput = {
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId
+  };
+  const invalidHeartbeat = await runtimePorts.queue.heartbeat({
+    ...baseLeaseInput,
+    ttlMs: "300000",
+    evidenceRefs: ["evidence-heartbeat"]
+  });
+  assert.equal(invalidHeartbeat.ok, false);
+  assert.equal(invalidHeartbeat.code, "invalid_input");
+
+  const heartbeat = await runtimePorts.queue.heartbeat({
+    ...baseLeaseInput,
+    ttlMs: 300_000,
+    evidenceRefs: ["evidence-heartbeat"]
+  });
+  assert.equal(heartbeat.ok, true);
+
+  for (const closeoutInput of [
+    { ...baseLeaseInput, resultSummary: { raw: "summary" }, evidenceRefs: ["evidence-complete"] },
+    { ...baseLeaseInput, resultSummary: "raw prompt provider payload should fail", evidenceRefs: ["evidence-complete"] },
+    { ...baseLeaseInput, failureReason: { raw: "reason" }, evidenceRefs: ["evidence-fail"] },
+    { ...baseLeaseInput, failureReason: "secret provider payload should fail", evidenceRefs: ["evidence-fail"] },
+    { ...baseLeaseInput, attemptId: "attempt\n001", resultSummary: "done", evidenceRefs: ["evidence-complete"] }
+  ]) {
+    const closeout = "resultSummary" in closeoutInput
+      ? await runtimePorts.queue.complete(closeoutInput)
+      : await runtimePorts.queue.fail(closeoutInput);
+    assert.equal(closeout.ok, false);
+    assert.equal(closeout.code, "invalid_input");
   }
 });
 
@@ -52,7 +699,8 @@ test("backend proof harness runs one honest simulated loop with bounded summary 
     lifecycle,
     clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
     candidates: [fixture.candidate],
-    workerId: "worker-1"
+    workerId: "worker-1",
+    approvedWorkspaceRoots
   });
 
   assert.equal(result.ok, true);
@@ -84,6 +732,199 @@ test("backend proof harness runs one honest simulated loop with bounded summary 
   assert.equal(result.proof.boundary.forbidden.includes("live_tmux_mutation"), true);
   assert.equal(result.proof.boundary.metadata_only, true);
   assert.equal(result.proof.boundary.raw_payload_retained, false);
+  assert.equal(result.proof.boundary.real.includes("local_proof_runtime_ports"), true);
+  assert.equal(result.proof.boundary.fake.includes("metadata_only_runtime_port_evidence"), true);
+  assert.equal(result.proof.boundary.evidence_refs.includes("runtime-port:verification-metadata-proof"), true);
+  assert.equal(result.proof.boundary.evidence_refs.includes("runtime-port:session-metadata-proof"), true);
+  assert.equal(result.proof.boundary.evidence_refs.includes("runtime-port:policy-simulated-proof"), true);
+  assert.equal(result.proof.boundary.runtime_ports.status, "metadata_proof_only");
+  assert.equal(result.proof.boundary.runtime_ports.adapters.queue.adapter_id, "local-proof-queue-runtime");
+  assert.equal(result.proof.boundary.runtime_ports.adapters.verification.adapter_id, "local-proof-verification-runtime");
+  assert.equal(result.proof.boundary.runtime_ports.adapters.session.adapter_id, "local-proof-session-runtime");
+  assert.equal(result.proof.boundary.runtime_ports.adapters.policy.adapter_id, "local-proof-policy-runtime");
+  assert.equal(result.proof.boundary.runtime_ports.verification.command_id, "manager-dispatcher-port-test");
+  assert.match(result.proof.boundary.runtime_ports.verification.command_digest, /^sha256:[0-9a-f]{32}$/);
+  assert.match(result.proof.boundary.runtime_ports.session.session_id, /^local-proof-session:work-item-001:sha256:[0-9a-f]{32}$/);
+  assert.match(result.proof.boundary.runtime_ports.session.approved_workspace_root, /^metadata-only:sha256:[0-9a-f]{32}$/);
+  assert.match(result.proof.boundary.runtime_ports.policy.authority_decision_id, /^local-proof-policy:sha256:[0-9a-f]{32}$/);
+  assert.equal(result.proof.boundary.runtime_ports.raw_payload_retained, false);
+});
+
+test("backend proof harness blocks valid policy denials before queue completion", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const result = await runBackendProofHarness({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    candidates: [fixture.candidate],
+    workerId: "worker-1",
+    approvedWorkspaceRoots,
+    policyProofInput: {
+      authorityFamily: "dispatcher_lifecycle",
+      operation: "launch",
+      scope: "backend-proof queue",
+      evidenceRefs: ["runtime-port:policy-simulated-proof"]
+    }
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.deepEqual(result.blockers, ["runtime_port_metadata_proof_failed"]);
+  assert.equal(result.proof.boundary.result, "blocked");
+  assert.equal(result.proof.boundary.evidence_refs.includes("runtime-port:metadata-proof-failed"), true);
+  assert.equal(result.proof.boundary.evidence_refs.includes("evidence-complete"), false);
+});
+
+test("backend proof harness reports only accepted policy evidence refs", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const customEvidence = await runBackendProofHarness({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    candidates: [fixture.candidate],
+    workerId: "worker-1",
+    approvedWorkspaceRoots,
+    policyProofInput: {
+      authorityFamily: "dispatcher_lifecycle",
+      operation: "claim",
+      scope: "backend-proof queue",
+      evidenceRefs: ["runtime-port:policy-custom-proof"]
+    }
+  });
+  assert.equal(customEvidence.ok, true);
+  assert.equal(customEvidence.proof.boundary.evidence_refs.includes("runtime-port:policy-custom-proof"), true);
+  assert.equal(customEvidence.proof.boundary.evidence_refs.includes("runtime-port:policy-simulated-proof"), false);
+  assert.deepEqual(customEvidence.proof.boundary.runtime_ports.policy.evidence_refs, ["runtime-port:policy-custom-proof"]);
+
+  const rejectedEvidence = await runBackendProofHarness({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    candidates: [fixture.candidate],
+    workerId: "worker-1",
+    approvedWorkspaceRoots,
+    policyProofInput: {
+      authorityFamily: "dispatcher_lifecycle",
+      operation: "claim",
+      scope: "backend-proof queue",
+      evidenceRefs: ["runtime-port:policy\nraw-proof"]
+    }
+  });
+  assert.equal(rejectedEvidence.ok, false);
+  assert.equal(rejectedEvidence.status, "blocked");
+  assert.equal(rejectedEvidence.proof.boundary.evidence_refs.includes("runtime-port:policy-simulated-proof"), false);
+  assert.equal(rejectedEvidence.proof.boundary.evidence_refs.includes("runtime-port:policy\nraw-proof"), false);
+  assert.deepEqual(rejectedEvidence.proof.boundary.runtime_ports.policy.evidence_refs, []);
+});
+
+test("backend proof harness fails fast without approved workspace roots", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  for (const approvedWorkspaceRootsPayload of [undefined, [], ["/tmp"], ["relative/root"]]) {
+    const result = await runBackendProofHarness({
+      lifecycle,
+      clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+      candidates: [fixture.candidate],
+      workerId: "worker-1",
+      approvedWorkspaceRoots: approvedWorkspaceRootsPayload
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "blocked");
+    assert.deepEqual(result.blockers, ["backend_proof_requires_approved_workspace_roots"]);
+    assert.equal(result.proof.boundary.evidence_refs.includes("runtime-port:approved-workspace-roots-invalid"), true);
+    assert.equal(result.proof.boundary.evidence_refs.includes("evidence-refill"), false);
+    assert.equal(result.proof.boundary.runtime_ports.blocker, "approved_workspace_roots_invalid");
+  }
+});
+
+test("backend proof harness fails closed for malformed candidates before queue mutation", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  for (const malformedCandidates of [undefined, null, { candidate: fixture.candidate }, "not-an-array"]) {
+    const result = await runBackendProofHarness({
+      lifecycle,
+      clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+      candidates: malformedCandidates,
+      workerId: "worker-1",
+      approvedWorkspaceRoots
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "blocked");
+    assert.deepEqual(result.blockers, ["backend_proof_requires_candidates_array"]);
+    assert.equal(result.proof.boundary.evidence_refs.includes("backend-proof-invalid-candidates"), true);
+    assert.equal(result.proof.boundary.evidence_refs.includes("evidence-refill"), false);
+  }
+
+  const malformedPacket = await runBackendProofHarness({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    candidates: [{ ...fixture.candidate, sourceRefs: [] }],
+    workerId: "worker-1",
+    approvedWorkspaceRoots
+  });
+  assert.equal(malformedPacket.ok, false);
+  assert.equal(malformedPacket.status, "blocked");
+  assert.equal(malformedPacket.blockers.includes("Queue proof refill requires bounded candidate work packet metadata."), true);
+  assert.equal(malformedPacket.proof.boundary.evidence_refs.includes("evidence-refill"), true);
+  assert.equal(malformedPacket.proof.boundary.evidence_refs.includes("evidence-complete"), false);
+
+  const unsafeRunId = await runBackendProofHarness({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    candidates: [{ ...fixture.candidate, runId: "sk-1234567890abcdef" }],
+    workerId: "worker-1",
+    approvedWorkspaceRoots: ["/tmp"]
+  });
+  assert.equal(unsafeRunId.ok, false);
+  assert.equal(unsafeRunId.status, "blocked");
+  assert.deepEqual(unsafeRunId.blockers, ["backend_proof_requires_explicit_run_id"]);
+  assert.equal(unsafeRunId.proof.boundary.run_id, "unknown-run");
+  assert.equal(JSON.stringify(unsafeRunId).includes("sk-1234567890abcdef"), false);
+  assert.equal(unsafeRunId.proof.boundary.evidence_refs.includes("runtime-port:approved-workspace-roots-invalid"), false);
+});
+
+test("backend proof harness verifies the claimed work item target", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const blockedFirstCandidate = {
+    ...fixture.candidate,
+    candidateWorkPacketId: "candidate-blocked-first",
+    authorityClass: "requires_preauthorization",
+    verificationTargets: [{
+      ...fixture.candidate.verificationTargets[0],
+      verificationTargetId: "verify-blocked-first",
+      commandId: "blocked-first-target"
+    }]
+  };
+  const selectedSecondCandidate = {
+    ...fixture.candidate,
+    candidateWorkPacketId: "candidate-selected-second",
+    sourceRefs: [{
+      ...fixture.candidate.sourceRefs[0],
+      sourceRefId: "source-selected-second",
+      sourceSpan: "Story 2.1 selected second candidate"
+    }],
+    dependencyHints: ["selected-second-dependency"],
+    dedupeKey: "selected-second",
+    verificationTargets: [{
+      ...fixture.candidate.verificationTargets[0],
+      verificationTargetId: "verify-selected-second",
+      commandId: "selected-second-target"
+    }]
+  };
+
+  const result = await runBackendProofHarness({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    candidates: [blockedFirstCandidate, selectedSecondCandidate],
+    workerId: "worker-1",
+    approvedWorkspaceRoots
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "completed");
+  assert.equal(result.proof.boundary.runtime_ports.verification.command_id, "selected-second-target");
+  assert.equal(result.proof.boundary.runtime_ports.verification.verification_target_id, "verify-selected-second");
+  assert.equal(JSON.stringify(result).includes("blocked-first-target"), false);
 });
 
 test("memory dispatcher adapter handles empty refill and missing evidence deterministically", async () => {
@@ -495,7 +1336,8 @@ test("bounded summary JSON filters injected raw fields and preserves proof metad
     lifecycle,
     clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
     candidates: [fixture.candidate],
-    workerId: "worker-1"
+    workerId: "worker-1",
+    approvedWorkspaceRoots
   });
   const bounded = toManagerSummaryJson({
     ok: true,
@@ -537,6 +1379,15 @@ test("pipeline manager execution lane adapter consumes only projected summaries"
   );
   assert.match(adapterSource, /rawStateLabels/);
   assert.match(adapterSource, /operatorAttentionRequired/);
+});
+
+test("runtime port proof slice leaves continuous manager loop source path unchanged", async () => {
+  const runLoopSource = await readFile(managerRunLoopPath, "utf8");
+  const packageJson = await readFile(new URL("../package.json", import.meta.url), "utf8");
+
+  assert.match(packageJson, /"manager:run": "node \.\/scripts\/manager-run-loop\.mjs --summary-json"/);
+  assert.doesNotMatch(runLoopSource, /backend-proof-harness|local-proof-runtime-adapters|runtime-ports/);
+  assert.doesNotMatch(runLoopSource, /runBackendProofHarness|createLocalProofRuntimeAdapters/);
 });
 
 test("backend proof rejects false live worker execution claims before execution", async () => {
