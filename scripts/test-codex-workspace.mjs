@@ -1547,6 +1547,23 @@ try {
           )}\n`,
         );
       }
+      for (let index = 0; index < 7; index += 1) {
+        writeFileSync(
+          join(assignmentsDir, `claimed-extra-${index}.json`),
+          `${JSON.stringify(
+            {
+              assignment_id: `claimed-extra-${index}`,
+              task_id: `claimed-extra-${index}`,
+              branch: `codex/claimed-extra-${index}`,
+              status: "claimed",
+              owner: "runner-a",
+              last_heartbeat_at: now,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
       writeFileSync(
         join(tasksDir, "missing-worktree.json"),
         `${JSON.stringify(
@@ -1582,12 +1599,12 @@ try {
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.staleAfterSeconds === 1, result.stdout || result.stderr);
       assert(packet.counts.backlogCandidates > 0, result.stdout || result.stderr);
-      assert(packet.counts.laneAssignments === 5, result.stdout || result.stderr);
+      assert(packet.counts.laneAssignments === 12, result.stdout || result.stderr);
       assert(packet.counts.workspaceAssignments >= 3, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.ambiguous >= 1, result.stdout || result.stderr);
-      assert(packet.laneAssignmentStatusCounts.claimed === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentStatusCounts.claimed === 8, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.blocked_authority === 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.ambiguous === 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.blocked_owned_active === 2, result.stdout || result.stderr);
@@ -1596,7 +1613,7 @@ try {
       assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
       assert(packet.backlogReasonCodeCounts.safe_backlog_complete >= 1, result.stdout || result.stderr);
       assert(packet.backlogReasonCodeCounts.duplicate_assignment_records === 1, result.stdout || result.stderr);
-      assert(packet.laneAssignmentReasonCodeCounts.assignment_current_owner === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentReasonCodeCounts.assignment_current_owner === 8, result.stdout || result.stderr);
       assert(packet.laneAssignmentReasonCodeCounts.assignment_authority_blocked === 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentReasonCodeCounts.assignment_missing_owner === 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentReasonCodeCounts.assignment_owned_by_other_runner === 2, result.stdout || result.stderr);
@@ -1611,6 +1628,41 @@ try {
       assert(typeof packet.backlogCandidatesTruncated === "boolean", result.stdout || result.stderr);
       assert(typeof packet.laneAssignmentsTruncated === "boolean", result.stdout || result.stderr);
       assert(typeof packet.workspaceAssignmentsTruncated === "boolean", result.stdout || result.stderr);
+      assert(packet.laneAssignmentsTruncated === true, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentsTruncated === true, result.stdout || result.stderr);
+      assert(packet.assignmentInventory, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.schemaVersion === "manager-assignment-inventory/v0", result.stdout || result.stderr);
+      assert(packet.assignmentInventory.generatedAt === packet.generatedAt, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.stateRoot === packet.stateRoot, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.currentOwner === packet.currentOwner, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.staleAfterSeconds === packet.staleAfterSeconds, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.complete === true, result.stdout || result.stderr);
+      assert(Array.isArray(packet.assignmentInventory.blockers), result.stdout || result.stderr);
+      assert(packet.assignmentInventory.blockers.length === 0, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.counts.laneAssignments === packet.counts.laneAssignments, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.counts.workspaceAssignments === packet.counts.workspaceAssignments, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.counts.staleOwnerTargets >= 1, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.counts.ownedActiveTargets >= 8, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.laneAssignments.length === packet.counts.laneAssignments, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.workspaceAssignments.length === packet.counts.workspaceAssignments, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.laneAssignments.length > packet.laneAssignments.length, result.stdout || result.stderr);
+      assert(packet.assignmentInventory.workspaceAssignments.length > packet.workspaceAssignments.length, result.stdout || result.stderr);
+      assert(
+        packet.assignmentInventory.staleOwnerTargets.some((row) => `${row.kind}:${row.id}` === "workspace_assignment:stale-active"),
+        result.stdout || result.stderr,
+      );
+      assert(
+        !packet.assignmentInventory.staleOwnerTargets.some((row) => row.id.startsWith("closed-")),
+        result.stdout || result.stderr,
+      );
+      assert(
+        packet.assignmentInventory.workspaceAssignments.some(
+          (row) => row.id === "closed-assignment-report-queue-proof-refresh" && row.status === "closed",
+        ),
+        result.stdout || result.stderr,
+      );
+      assert(packet.assignmentInventory.activeLaneEvidence["lane_assignment:claimed-assignment"], result.stdout || result.stderr);
+      assert(packet.assignmentInventory.legacyMapping.laneAssignments === "assignmentInventory.laneAssignments", result.stdout || result.stderr);
       assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
       assert(taskSnapshot(tasksDir) === beforeTasks, "assignment-report summary-json mutated workspace manifests");
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "assignment-report summary-json mutated assignments");

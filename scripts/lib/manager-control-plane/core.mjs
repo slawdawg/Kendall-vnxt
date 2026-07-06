@@ -15414,20 +15414,32 @@ export function buildAssignmentResume(options = {}, context = {}) {
   };
   const details = buildAssignmentResumeDetails(report, options);
   const ambiguous = ambiguousAssignmentStatusCounts(statusCounts);
+  const detailBlockers = staleOwnerTargetEvidenceBlockersFromNotices(details.warnings);
+  const blockers = [
+    ...ambiguous.map((item) => ({
+      code: "assignment-ambiguous-status",
+      message: `${item.bucket} has ${item.count} ${item.status} item(s).`,
+      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+    })),
+    ...detailBlockers,
+  ];
   return packet({
-    ok: ambiguous.length === 0,
-    status: ambiguous.length === 0 ? "ready" : "blocked",
+    ok: blockers.length === 0,
+    status: blockers.length === 0 ? "ready" : "blocked",
     summary: {
       available: true,
       source: "assignment-report",
       stateRoot: report.stateRoot || null,
-      counts: report.counts || {},
+      counts: details.counts || report.counts || {},
       statusCounts,
       truncated: {
         backlogCandidates: Boolean(report.backlogCandidatesTruncated),
         laneAssignments: Boolean(report.laneAssignmentsTruncated),
         workspaceAssignments: Boolean(report.workspaceAssignmentsTruncated),
       },
+      detailSource: details.source,
+      legacyFallback: details.legacyFallback,
+      inventorySchemaVersion: details.inventorySchemaVersion,
       laneAssignments: details.laneAssignments.slice(0, 24),
       laneAssignmentsDetailedCount: details.laneAssignments.length,
       workspaceAssignments: details.workspaceAssignments.slice(0, 24),
@@ -15436,16 +15448,38 @@ export function buildAssignmentResume(options = {}, context = {}) {
       blockedWorkspaceAssignments: details.blockedWorkspaceAssignments,
       ambiguousStatusCounts: ambiguous,
     },
-    blockers: ambiguous.map((item) => ({
-      code: "assignment-ambiguous-status",
-      message: `${item.bucket} has ${item.count} ${item.status} item(s).`,
-      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
-    })),
+    blockers,
     warnings: details.warnings,
   });
 }
 
 function buildAssignmentResumeDetails(report = {}, options = {}) {
+  const inventorySelection = selectAssignmentResumeInventory(report);
+  if (inventorySelection.usable) {
+    const inventory = inventorySelection.inventory;
+    const laneAssignments = inventory.laneAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, assignment.kind || "lane_assignment"));
+    const workspaceAssignments = inventory.workspaceAssignments.map((assignment) => normalizeAssignmentResumeRow(assignment, report, assignment.kind || "workspace_assignment"));
+    const blockedLaneAssignments = laneAssignments.filter(isStaleOwnerBlockedAssignment);
+    const blockedWorkspaceAssignments = workspaceAssignments.filter(isStaleOwnerBlockedAssignment);
+    const warnings = assignmentResumeDetailWarnings({ report, blockedLaneAssignments, blockedWorkspaceAssignments });
+    return {
+      source: "inventory",
+      legacyFallback: {
+        used: false,
+        reason: null,
+        laneFileRead: false,
+        workspaceFileRead: false,
+      },
+      inventorySchemaVersion: sanitizeLedgerField(inventory.schemaVersion || "", "", 80) || null,
+      counts: mergeAssignmentResumeCounts(report.counts, inventory.counts),
+      laneAssignments,
+      workspaceAssignments,
+      blockedLaneAssignments,
+      blockedWorkspaceAssignments,
+      warnings,
+    };
+  }
+
   const stateRoot = report.stateRoot || options.stateRoot || workspaceState(options).root;
   const explicitBlockedLaneAssignments = Array.isArray(report.blockedLaneAssignments) ? report.blockedLaneAssignments : [];
   const explicitBlockedWorkspaceAssignments = Array.isArray(report.blockedWorkspaceAssignments) ? report.blockedWorkspaceAssignments : [];
@@ -15485,6 +15519,15 @@ function buildAssignmentResumeDetails(report = {}, options = {}) {
   );
   const warnings = assignmentResumeDetailWarnings({ report, blockedLaneAssignments: staleLaneAssignments, blockedWorkspaceAssignments: staleWorkspaceAssignments });
   return {
+    source: "legacy",
+    legacyFallback: {
+      used: true,
+      reason: inventorySelection.reason,
+      laneFileRead: report.laneAssignmentsTruncated === true,
+      workspaceFileRead: report.workspaceAssignmentsTruncated === true,
+    },
+    inventorySchemaVersion: inventorySelection.inventory ? sanitizeLedgerField(inventorySelection.inventory.schemaVersion || "", "", 80) || null : null,
+    counts: report.counts || {},
     laneAssignments,
     workspaceAssignments,
     blockedLaneAssignments,
@@ -15493,15 +15536,47 @@ function buildAssignmentResumeDetails(report = {}, options = {}) {
   };
 }
 
+function selectAssignmentResumeInventory(report = {}) {
+  if (!Object.hasOwn(report, "assignmentInventory")) {
+    return { usable: false, reason: "inventory_missing", inventory: null };
+  }
+  const inventory = report.assignmentInventory;
+  if (!isPlainObject(inventory)) {
+    return { usable: false, reason: "inventory_unusable", inventory: null };
+  }
+  if (inventory.complete !== true) {
+    return { usable: false, reason: "inventory_incomplete", inventory };
+  }
+  if (!Array.isArray(inventory.laneAssignments) || !Array.isArray(inventory.workspaceAssignments)) {
+    return { usable: false, reason: "inventory_unusable", inventory };
+  }
+  if (!inventory.laneAssignments.every(isPlainObject) || !inventory.workspaceAssignments.every(isPlainObject)) {
+    return { usable: false, reason: "inventory_unusable", inventory };
+  }
+  return { usable: true, reason: null, inventory };
+}
+
+function mergeAssignmentResumeCounts(reportCounts = {}, inventoryCounts = {}) {
+  const merged = isPlainObject(reportCounts) ? { ...reportCounts } : {};
+  if (!isPlainObject(inventoryCounts)) return merged;
+  for (const [key, value] of Object.entries(inventoryCounts)) {
+    if (value !== null && value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
 function normalizeAssignmentResumeRow(row = {}, report = {}, kind = "assignment", { allowTimestampStale = false } = {}) {
   const status = sanitizeLedgerField(row.status || "", "", 80);
   const reasonCode = sanitizeLedgerField(row.reasonCode || row.reason_code || "", "", 80);
   const stale = isStaleOwnerAssignmentRow(row, report, { allowTimestampStale });
+  const fallbackId = row.id || row.assignmentId || row.assignment_id || row.taskId || row.task_id || "";
   const next = {
     ...row,
     kind,
-    assignmentId: sanitizeLedgerField(row.assignmentId || row.assignment_id || "", "", 140),
-    taskId: sanitizeLedgerField(row.taskId || row.task_id || "", "", 140),
+    assignmentId: sanitizeLedgerField(row.assignmentId || row.assignment_id || (kind === "lane_assignment" ? fallbackId : ""), "", 140),
+    taskId: sanitizeLedgerField(row.taskId || row.task_id || (kind === "workspace_assignment" ? fallbackId : ""), "", 140),
     status,
     owner: sanitizeLedgerField(row.owner || "", "", 160),
     branch: sanitizeLedgerField(row.branch || "", "", 160),
@@ -15541,6 +15616,8 @@ function assignmentResumeDetailWarnings({ report = {}, blockedLaneAssignments = 
   const warnings = [];
   const expectedLane = nonNegativeInteger(report.laneAssignmentStatusCounts?.blocked_stale_owner_needs_takeover) ?? 0;
   const expectedWorkspace = nonNegativeInteger(report.workspaceAssignmentStatusCounts?.blocked_stale_owner_needs_takeover) ?? 0;
+  const expectedStaleTargets = nonNegativeInteger(report.assignmentInventory?.counts?.staleOwnerTargets);
+  const exactStaleTargets = blockedLaneAssignments.length + blockedWorkspaceAssignments.length;
   if (expectedLane > blockedLaneAssignments.length) {
     warnings.push({
       code: "stale-owner-lane-detail-truncated",
@@ -15553,6 +15630,13 @@ function assignmentResumeDetailWarnings({ report = {}, blockedLaneAssignments = 
       code: "stale-owner-workspace-detail-truncated",
       message: `Assignment report counted ${expectedWorkspace} stale workspace assignment(s), but only ${blockedWorkspaceAssignments.length} exact target row(s) were available for inspection.`,
       nextAction: "Refresh workspace assignment detail or inspect the workspace state root before takeover apply.",
+    });
+  }
+  if (expectedStaleTargets !== null && expectedLane + expectedWorkspace === 0 && expectedStaleTargets > exactStaleTargets) {
+    warnings.push({
+      code: "stale-owner-detail-truncated",
+      message: `Assignment inventory counted ${expectedStaleTargets} stale-owner target(s), but only ${exactStaleTargets} exact target row(s) were available for inspection.`,
+      nextAction: "Refresh canonical assignment inventory before takeover apply.",
     });
   }
   return warnings;
@@ -15656,19 +15740,45 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
 }
 
 function staleOwnerTargetEvidenceBlockers(resume = {}, targets = []) {
-  const blockingWarnings = (Array.isArray(resume.warnings) ? resume.warnings : [])
-    .filter((notice) => ["stale-owner-lane-detail-truncated", "stale-owner-workspace-detail-truncated"].includes(notice.code));
+  const warningBlockers = staleOwnerTargetEvidenceBlockersFromNotices(resume.warnings);
+  const existingBlockers = staleOwnerTargetEvidenceBlockersFromNotices(resume.blockers);
   const blockingErrors = targets.length === 0
     ? (Array.isArray(resume.blockers) ? resume.blockers : [])
       .filter((notice) => ["assignment-report-unavailable", "workspace-state-unsafe"].includes(notice.code))
     : [];
-  return [...blockingErrors, ...blockingWarnings].map((notice) => ({
-      ...notice,
-      code: "stale-owner-target-evidence-unavailable",
-      sourceCode: notice.code,
-      message: `Stale-owner targets unavailable: ${notice.message || notice.code}.`,
-      nextAction: notice.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
-    }));
+  return dedupeNoticePackets([
+    ...existingBlockers,
+    ...warningBlockers,
+    ...staleOwnerTargetEvidenceBlockersFromNotices(blockingErrors, { includeAvailabilityErrors: true }),
+  ]);
+}
+
+function staleOwnerTargetEvidenceBlockersFromNotices(notices = [], { includeAvailabilityErrors = false } = {}) {
+  const staleOwnerEvidenceCodes = new Set(["stale-owner-target-evidence-unavailable", "stale-owner-detail-truncated", "stale-owner-lane-detail-truncated", "stale-owner-workspace-detail-truncated"]);
+  const availabilityCodes = new Set(["assignment-report-unavailable", "workspace-state-unsafe"]);
+  return (Array.isArray(notices) ? notices : [])
+    .filter((notice) => staleOwnerEvidenceCodes.has(notice?.code) || (includeAvailabilityErrors && availabilityCodes.has(notice?.code)))
+    .map((notice) => {
+      const sourceCode = notice.sourceCode || notice.code;
+      return {
+        ...notice,
+        code: "stale-owner-target-evidence-unavailable",
+        sourceCode,
+        message: String(notice.message || "").startsWith("Stale-owner targets unavailable:")
+          ? notice.message
+          : `Stale-owner targets unavailable: ${notice.message || notice.code}.`,
+        nextAction: notice.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
+      };
+    });
+}
+
+function dedupeNoticePackets(notices = []) {
+  const byKey = new Map();
+  for (const notice of notices) {
+    const key = `${notice.code || ""}\u0000${notice.sourceCode || ""}\u0000${notice.message || ""}`;
+    if (!byKey.has(key)) byKey.set(key, notice);
+  }
+  return [...byKey.values()];
 }
 
 function staleOwnerBlockersForCleanup(staleOwner = {}) {
@@ -15682,7 +15792,7 @@ function staleOwnerBlockersForCleanup(staleOwner = {}) {
     summary.takeoverApprovalCandidateCount,
   ].some((value) => Number(value || 0) > 0);
   if (hasRelevantStaleOwnerWork) return blockers;
-  return blockers.filter((blocker) => ["stale-owner-lane-detail-truncated", "stale-owner-workspace-detail-truncated"].includes(blocker.sourceCode || blocker.code));
+  return blockers.filter((blocker) => ["stale-owner-target-evidence-unavailable", "stale-owner-detail-truncated", "stale-owner-lane-detail-truncated", "stale-owner-workspace-detail-truncated"].includes(blocker.sourceCode || blocker.code));
 }
 
 function inspectStaleOwnerTarget(target = {}, context = {}, options = {}) {

@@ -16,6 +16,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAntiChurnGuidanceHookCli } from "./anti-churn-guidance-hook.mjs";
 import { protectedBranches as branchFoundationProtectedBranches } from "./lib/branch-foundation.mjs";
+import { buildAssignmentInventory } from "./lib/codex-workspace-assignment-inventory.mjs";
 import { currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 
@@ -1080,6 +1081,14 @@ function buildAssignmentReportSummary({
       nextAction: classification.nextAction,
     };
   });
+  const assignmentInventory = buildAssignmentInventory({
+    assignments,
+    manifests,
+    currentOwner,
+    generatedAt,
+    staleAfterSeconds,
+    stateRoot: state.root,
+  });
 
   return {
     generatedAt: generatedAt.toISOString(),
@@ -1104,6 +1113,7 @@ function buildAssignmentReportSummary({
     laneAssignmentsTruncated: laneAssignments.length > 10,
     workspaceAssignments: workspaceAssignments.slice(0, 10),
     workspaceAssignmentsTruncated: workspaceAssignments.length > 10,
+    assignmentInventory,
     mutation: "none; summary only",
   };
 }
