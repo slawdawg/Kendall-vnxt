@@ -8414,6 +8414,15 @@ export function buildTmuxOrientationStatus(options = {}, context = {}) {
     const reconciledPanes = reconcileManagerOwnedTmuxPanes(report.panes || [], options, context);
     const summary = summarizeManagerTmuxPanes(reconciledPanes, report.summary || {});
     const workspaceErrorCount = report.workspaceErrors?.length || 0;
+    const unavailableNotice = report.tmux?.available ? null : toolFailureNotice(
+      { ok: false, error: report.tmux?.error || "tmux unavailable", commandShape: "tmux orientation report" },
+      {
+        code: "tmux-orientation-unavailable",
+        surface: "tmux orientation",
+        fallbackMessage: "tmux unavailable",
+        commandShape: "tmux orientation report",
+      },
+    );
     return packet({
       status: report.tmux?.available ? "ready" : "unavailable",
       summary: {
@@ -8433,14 +8442,23 @@ export function buildTmuxOrientationStatus(options = {}, context = {}) {
         managerOwnedPaneEvidence: summarizeTmuxPaneEvidence(reconciledPanes, "manager-owned"),
         unmanagedPaneEvidence: summarizeTmuxPaneEvidence(reconciledPanes, "unmanaged"),
         takeoverRequiredPaneEvidence: summarizeTmuxPaneEvidence(reconciledPanes, "takeover"),
-        error: report.tmux?.error || "",
+        error: unavailableNotice?.sandboxBoundary ? unavailableNotice.message : report.tmux?.error || "",
+        sandboxBoundary: unavailableNotice?.sandboxBoundary === true,
+        sandboxSignatureClass: unavailableNotice?.sandboxSignatureClass || null,
       },
       warnings: [
-        ...(report.tmux?.available ? [] : [{ code: "tmux-orientation-unavailable", message: report.tmux?.error || "tmux unavailable" }]),
+        ...(unavailableNotice ? [unavailableNotice] : []),
         ...(workspaceErrorCount > 0 ? [{ code: "tmux-workspace-errors", message: `${workspaceErrorCount} workspace orientation errors.` }] : []),
       ],
     });
   } catch (error) {
+    const failure = { ok: false, error: error instanceof Error ? error.message : String(error), errorCode: error?.code || "", commandShape: "tmux orientation report" };
+    const warning = toolFailureNotice(failure, {
+      code: "tmux-orientation-failed",
+      surface: "tmux orientation",
+      fallbackMessage: "tmux orientation failed",
+      commandShape: "tmux orientation report",
+    });
     return packet({
       ok: false,
       status: "unavailable",
@@ -8457,9 +8475,11 @@ export function buildTmuxOrientationStatus(options = {}, context = {}) {
         unknownDirtyPanes: 0,
         malformedPaneMetadata: 0,
         workspaceErrorCount: 0,
-        error: error instanceof Error ? error.message : String(error),
+        error: warning.sandboxBoundary ? warning.message : error instanceof Error ? error.message : String(error),
+        sandboxBoundary: warning.sandboxBoundary === true,
+        sandboxSignatureClass: warning.sandboxSignatureClass || null,
       },
-      warnings: [{ code: "tmux-orientation-failed", message: error instanceof Error ? error.message : String(error) }],
+      warnings: [warning],
     });
   }
 }
@@ -10258,6 +10278,13 @@ export function buildRefillPlan(options = {}, context = {}) {
   if (options.stateRoot) assignmentArgs.push("--state-root", options.stateRoot);
   const assignment = context.assignmentSummary || readAssignmentSummaryFile(options.assignmentSummaryFile) || runWorkspaceJson(assignmentArgs, context);
   if (assignment?.ok === false) {
+    const blocker = toolFailureNotice(assignment, {
+      code: "assignment-report-unavailable",
+      surface: "assignment report",
+      fallbackMessage: "assignment report unavailable",
+      commandShape: assignment.commandShape || "node ./scripts/codex-workspace.mjs assignment-report --summary-json",
+      nextAction: "Restore assignment inventory before creating or refreshing safe backlog work.",
+    });
     return packet({
       ok: false,
       status: "unknown",
@@ -10275,12 +10302,14 @@ export function buildRefillPlan(options = {}, context = {}) {
         workCreationStep: null,
         splitPlan: null,
         mutationMode: "blocked_until_inventory_available",
+        sandboxBoundary: blocker.sandboxBoundary === true,
+        sandboxSignatureClass: blocker.sandboxSignatureClass || null,
       },
       blockers: [
         {
+          ...blocker,
           code: "assignment-report-unavailable",
-          message: assignment.error || "assignment report unavailable",
-          nextAction: "Restore assignment inventory before creating or refreshing safe backlog work.",
+          nextAction: blocker.sandboxBoundary ? blocker.nextAction : "Restore assignment inventory before creating or refreshing safe backlog work.",
         },
       ],
     });
@@ -11159,6 +11188,12 @@ export function buildDispatchPreview(options = {}, context = {}) {
   const callerSuppliedPreview = Boolean(context.dispatchPreview);
   const preview = context.dispatchPreview || runWorkspaceJson(workspaceJsonArgs(["dispatch-next", "--dry-run", "--summary-json"], options), context);
   if (preview?.ok === false) {
+    const warning = toolFailureNotice(preview, {
+      code: "dispatch-preview-unavailable",
+      surface: "dispatch preview",
+      fallbackMessage: "dispatch preview unavailable",
+      commandShape: preview.commandShape || "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json",
+    });
     return packet({
       ok: false,
       status: "unknown",
@@ -11170,8 +11205,10 @@ export function buildDispatchPreview(options = {}, context = {}) {
         nextCommand: null,
         nextActionGuidance: null,
         mutation: "none; preview unavailable",
+        sandboxBoundary: warning.sandboxBoundary === true,
+        sandboxSignatureClass: warning.sandboxSignatureClass || null,
       },
-      warnings: [{ code: "dispatch-preview-unavailable", message: preview.error || "dispatch preview unavailable" }],
+      warnings: [warning],
     });
   }
   const dispatch = preview?.dispatch || {};
@@ -14084,13 +14121,75 @@ function retryRefsAreStructured(refs = []) {
 
 function classifySandboxSignature(signature = "") {
   const text = String(signature || "").toLowerCase();
-  if (/spawnsync\s+\/usr\/bin\/node\s+eperm/.test(text)) return "node-spawnsync-eperm";
+  if (/spawnsync\s+(?:\/usr\/bin\/)?node\s+eperm/.test(text)) return "node-spawnsync-eperm";
+  if (/\bspawnsync\b.*\beperm\b|\beperm\b.*\bspawnsync\b/.test(text)) return "process-spawn-eperm";
+  if (/tmux.*operation not permitted|operation not permitted.*tmux/.test(text)) return "tmux-operation-not-permitted";
   if (/\.git\/worktrees|git worktree.*read-only|read-only file system.*worktrees/.test(text)) return "git-worktree-erofs";
   if (/pnpm.*erofs|erofs.*pnpm|read-only file system.*pnpm/.test(text)) return "managed-worktree-pnpm-erofs";
   if (/uv.*cache|cache\/uv|could not acquire lock|read-only file system.*uv/.test(text)) return "uv-cache-erofs";
   if (/network.*denied|network.*blocked|dns|connection.*denied/.test(text)) return "network-denied";
   if (/timeout before output|timed out before.*output|runner timeout/.test(text)) return "runner-timeout-before-output";
   return "";
+}
+
+function toolFailureText(result = {}) {
+  return [
+    result.errorCode || result.code || "",
+    result.error || "",
+    result.message || "",
+    result.stderr || "",
+    result.stdout || "",
+    result.failureSignature || "",
+    result.commandShape || "",
+  ].filter(Boolean).join(" ");
+}
+
+function toolFailureSandboxSignature(result = {}) {
+  return result.sandboxSignatureClass || classifySandboxSignature(toolFailureText(result));
+}
+
+function withToolFailureMetadata(result = {}, options = {}) {
+  const commandShape = options.commandShape || result.commandShape || "";
+  const sandboxSignatureClass = toolFailureSandboxSignature({ ...result, commandShape });
+  if (!sandboxSignatureClass) return commandShape ? { ...result, commandShape } : result;
+  const surface = sanitizeLedgerField(commandShape || "tool command", "tool command", 160);
+  return {
+    ok: false,
+    commandShape,
+    error: `${surface} hit a sandbox permission boundary (${sandboxSignatureClass}).`,
+    stdout: "",
+    stderr: "",
+    failureClass: "sandbox",
+    sandboxBoundary: true,
+    sandboxSignatureClass,
+    rerunRequirement: "Rerun the exact same read-only command outside the sandbox once.",
+    retryStopLine: "Do not change wrapper, scope, command shape, or target; record the outside-sandbox result.",
+  };
+}
+
+function toolFailureNotice(result = {}, options = {}) {
+  const enriched = withToolFailureMetadata(result, { commandShape: options.commandShape || result.commandShape || "" });
+  const code = options.code || "tool-unavailable";
+  const fallbackMessage = options.fallbackMessage || "Tool unavailable.";
+  if (!enriched.sandboxBoundary) {
+    return {
+      code,
+      message: sanitizeLedgerField(enriched.error || fallbackMessage, fallbackMessage, 220),
+      ...(options.nextAction ? { nextAction: options.nextAction } : {}),
+    };
+  }
+  const surface = sanitizeLedgerField(options.surface || "read-only manager tool", "read-only manager tool", 120);
+  return {
+    code,
+    message: `${surface} hit a sandbox permission boundary (${enriched.sandboxSignatureClass}).`,
+    nextAction: options.sandboxNextAction || "Request approval to rerun the exact same read-only manager command outside the sandbox once; record the result before changing scope or repairing code.",
+    failureClass: "sandbox",
+    sandboxBoundary: true,
+    sandboxSignatureClass: enriched.sandboxSignatureClass,
+    rerunRequirement: "Rerun the exact same read-only command outside the sandbox once.",
+    retryStopLine: "Do not change wrapper, scope, command shape, or target; record the outside-sandbox result.",
+    rawPayloadRetained: false,
+  };
 }
 
 function normalizeRetryFailureClass(failureKind = "", signature = "") {
@@ -15129,10 +15228,20 @@ export function buildResumeState(options = {}, context = {}) {
   blockers.push(...(ledger.blockers || []));
   blockers.push(...(assignment.blockers || []));
   if (!tmux.summary.available) {
+    const tmuxBlocker = toolFailureNotice(
+      { ok: false, error: tmux.summary.error || "tmux orientation unavailable", sandboxBoundary: tmux.summary.sandboxBoundary, sandboxSignatureClass: tmux.summary.sandboxSignatureClass, commandShape: "tmux orientation report" },
+      {
+        code: "tmux-orientation-unavailable",
+        surface: "tmux orientation",
+        fallbackMessage: "tmux orientation unavailable",
+        commandShape: "tmux orientation report",
+        nextAction: "Restore tmux orientation or keep worker mutation disabled.",
+      },
+    );
     blockers.push({
+      ...tmuxBlocker,
       code: "tmux-orientation-unavailable",
-      message: tmux.summary.error || "tmux orientation unavailable",
-      nextAction: "Restore tmux orientation or keep worker mutation disabled.",
+      nextAction: tmuxBlocker.sandboxBoundary ? tmuxBlocker.nextAction : "Restore tmux orientation or keep worker mutation disabled.",
     });
   }
   for (const blocker of tmuxOrientationBlockers(tmux.summary)) {
@@ -15167,15 +15276,29 @@ export function buildAssignmentResume(options = {}, context = {}) {
   if (options.stateRoot) assignmentArgs.push("--state-root", options.stateRoot);
   const assignment = context.assignmentSummary || runWorkspaceJson(assignmentArgs, context);
   if (assignment?.ok === false) {
+    const blocker = toolFailureNotice(assignment, {
+      code: "assignment-report-unavailable",
+      surface: "assignment report",
+      fallbackMessage: "assignment report unavailable",
+      commandShape: assignment.commandShape || "node ./scripts/codex-workspace.mjs assignment-report --summary-json",
+      nextAction: "Restore assignment inventory before resuming manager mutation.",
+    });
     return packet({
       ok: false,
       status: "blocked",
-      summary: { available: false, source: "assignment-report", statusCounts: {}, counts: {} },
+      summary: {
+        available: false,
+        source: "assignment-report",
+        statusCounts: {},
+        counts: {},
+        sandboxBoundary: blocker.sandboxBoundary === true,
+        sandboxSignatureClass: blocker.sandboxSignatureClass || null,
+      },
       blockers: [
         {
+          ...blocker,
           code: "assignment-report-unavailable",
-          message: assignment.error || "assignment report unavailable",
-          nextAction: "Restore assignment inventory before resuming manager mutation.",
+          nextAction: blocker.sandboxBoundary ? blocker.nextAction : "Restore assignment inventory before resuming manager mutation.",
         },
       ],
     });
@@ -15663,7 +15786,12 @@ function buildRepoPreflightStatus(context = {}) {
       status: "warning",
       root: repoRoot,
       mutation: "none; git metadata only",
-      warnings: [{ code: "preflight-repo-root-unavailable", message: result.error || "Unable to read git repository root." }],
+      warnings: [toolFailureNotice(result, {
+        code: "preflight-repo-root-unavailable",
+        surface: "git repository root",
+        fallbackMessage: "Unable to read git repository root.",
+        commandShape: "git rev-parse --show-toplevel",
+      })],
     };
   }
   return {
@@ -15688,7 +15816,12 @@ function buildBranchPreflightStatus(context = {}) {
     ["preflight-head-sha-unavailable", head],
     ["preflight-git-status-unavailable", status],
   ]) {
-    if (!result.ok) warnings.push({ code, message: result.error || "Unable to read git branch metadata." });
+    if (!result.ok) warnings.push(toolFailureNotice(result, {
+      code,
+      surface: "git branch metadata",
+      fallbackMessage: "Unable to read git branch metadata.",
+      commandShape: `git ${code === "preflight-git-status-unavailable" ? "status --short --branch" : code === "preflight-head-sha-unavailable" ? "rev-parse HEAD" : "rev-parse --abbrev-ref HEAD"}`,
+    }));
   }
   return {
     status: warnings.length > 0 ? "warning" : "ready",
@@ -15710,7 +15843,12 @@ function buildGithubCliPreflightStatus(context = {}) {
       available: false,
       version: "",
       mutation: "none; gh availability check only",
-      warnings: [{ code: "preflight-github-cli-unavailable", message: result.error || "GitHub CLI is unavailable." }],
+      warnings: [toolFailureNotice(result, {
+        code: "preflight-github-cli-unavailable",
+        surface: "GitHub CLI availability",
+        fallbackMessage: "GitHub CLI is unavailable.",
+        commandShape: "gh --version",
+      })],
     };
   }
   return {
@@ -16074,19 +16212,23 @@ function summarizeLedgerDispatcherSummary(summary = null) {
 }
 
 function runReadOnlyTool(runner, command, args, context = {}) {
+  const commandShape = [command, ...args].join(" ");
   try {
     const result = runner(command, args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 5000 });
-    if (!result || typeof result !== "object" || typeof result.status !== "number") {
+    if (!result || typeof result !== "object") {
       return { ok: false, stdout: "", stderr: "", error: `${command} returned malformed result` };
     }
-    const status = Number(result.status);
     const stdout = String(result?.stdout || "").trim();
     const stderr = String(result?.stderr || "").trim();
-    if (result?.error) return { ok: false, stdout, stderr, error: result.error.message || `${command} unavailable` };
-    if (status !== 0) return { ok: false, stdout, stderr, error: stderr || stdout || `${command} exited ${status}` };
+    if (result?.error) return withToolFailureMetadata({ ok: false, stdout, stderr, error: result.error.message || `${command} unavailable`, errorCode: result.error.code || "" }, { commandShape });
+    if (typeof result.status !== "number") {
+      return withToolFailureMetadata({ ok: false, stdout, stderr, error: `${command} returned malformed result` }, { commandShape });
+    }
+    const status = Number(result.status);
+    if (status !== 0) return withToolFailureMetadata({ ok: false, stdout, stderr, error: stderr || stdout || `${command} exited ${status}` }, { commandShape });
     return { ok: true, stdout, stderr };
   } catch (error) {
-    return { ok: false, stdout: "", stderr: "", error: error instanceof Error ? error.message : String(error) };
+    return withToolFailureMetadata({ ok: false, stdout: "", stderr: "", error: error instanceof Error ? error.message : String(error), errorCode: error?.code || "" }, { commandShape });
   }
 }
 
@@ -19650,7 +19792,11 @@ function managerWorkspaceCommandUsesOwner(command) {
 }
 
 function runWorkspaceJson(args, context = {}) {
-  if (context.workspaceRunner) return context.workspaceRunner(args);
+  const commandShape = `node ./scripts/codex-workspace.mjs ${args.join(" ")}`;
+  if (context.workspaceRunner) {
+    const result = context.workspaceRunner(args);
+    return result?.ok === false ? withToolFailureMetadata(result, { commandShape: result.commandShape || commandShape }) : result;
+  }
   const result = spawnSync(process.execPath, [join(repoRoot, "scripts/codex-workspace.mjs"), ...args], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -19658,18 +19804,18 @@ function runWorkspaceJson(args, context = {}) {
     timeout: context.timeoutMs || 5000,
   });
   if (result.error) {
-    return { ok: false, error: result.error.message || "workspace command failed" };
+    return withToolFailureMetadata({ ok: false, error: result.error.message || "workspace command failed", errorCode: result.error.code || "", commandShape }, { commandShape });
   }
   if ((result.status ?? 1) !== 0) {
-    return { ok: false, error: (result.stderr || result.stdout || result.error?.message || "workspace command failed").trim() };
+    return withToolFailureMetadata({ ok: false, error: (result.stderr || result.stdout || result.error?.message || "workspace command failed").trim(), stderr: result.stderr || "", stdout: result.stdout || "", commandShape }, { commandShape });
   }
   if (!String(result.stdout || "").trim()) {
-    return { ok: false, error: "workspace command produced no JSON output" };
+    return { ok: false, error: "workspace command produced no JSON output", commandShape };
   }
   try {
     return JSON.parse(result.stdout);
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: error instanceof Error ? error.message : String(error), commandShape };
   }
 }
 

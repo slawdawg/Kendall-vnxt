@@ -4375,6 +4375,24 @@ test("builds dispatch preview from dry-run evidence without mutation", () => {
   const unavailable = buildDispatchPreview({}, { dispatchPreview: { ok: false, error: "spawnSync node EPERM" } });
   assert.equal(unavailable.status, "unknown");
   assert.equal(unavailable.warnings[0].code, "dispatch-preview-unavailable");
+  assert.equal(unavailable.summary.sandboxBoundary, true);
+  assert.equal(unavailable.warnings[0].failureClass, "sandbox");
+  assert.equal(unavailable.warnings[0].sandboxSignatureClass, "node-spawnsync-eperm");
+  assert.match(unavailable.warnings[0].rerunRequirement, /exact same read-only command outside the sandbox once/i);
+  assert.doesNotMatch(unavailable.warnings[0].message, /spawnSync|EPERM/);
+
+  const runnerUnavailable = buildDispatchPreview({}, {
+    workspaceRunner: () => ({
+      ok: false,
+      error: "spawnSync /usr/bin/node EPERM",
+      stdout: "raw stdout should not survive",
+      stderr: "raw stderr should not survive",
+    }),
+  });
+  assert.equal(runnerUnavailable.status, "unknown");
+  assert.equal(runnerUnavailable.summary.sandboxBoundary, true);
+  assert.equal(runnerUnavailable.warnings[0].sandboxSignatureClass, "node-spawnsync-eperm");
+  assert.doesNotMatch(runnerUnavailable.warnings[0].message, /spawnSync|EPERM|raw stderr|raw stdout/);
 });
 
 test("builds dispatch preview from raw snake_case dispatch packet evidence", () => {
@@ -4717,6 +4735,11 @@ test("blocks refill decisions when assignment inventory is unavailable or malfor
   assert.equal(unavailable.summary.desiredWorkers, 6);
   assert.equal(unavailable.summary.dispatchableLanes, null);
   assert.equal(unavailable.blockers[0].code, "assignment-report-unavailable");
+  assert.equal(unavailable.summary.sandboxBoundary, true);
+  assert.equal(unavailable.blockers[0].failureClass, "sandbox");
+  assert.equal(unavailable.blockers[0].sandboxSignatureClass, "node-spawnsync-eperm");
+  assert.match(unavailable.blockers[0].nextAction, /rerun the exact same read-only manager command outside the sandbox once/i);
+  assert.doesNotMatch(unavailable.blockers[0].message, /spawnSync|EPERM/);
   assert.equal(unavailable.nextActions.length, 0);
   assert.equal(unavailable.summary.workCreationStep, null);
 
@@ -5774,6 +5797,70 @@ test("tmux orientation status includes bounded unmanaged pane evidence", () => {
   assert.equal(status.summary.unmanagedPaneEvidence[0].sessionName, "utility");
   assert.equal(status.summary.unmanagedPaneEvidence[0].paneId, "%22");
   assert.equal(status.summary.unmanagedPaneEvidence[0].classification, "unmanaged-path");
+});
+
+test("tmux orientation permission errors are routed as sandbox boundaries", () => {
+  const status = buildTmuxOrientationStatus(
+    { runId: "manager-test" },
+    {
+      tmuxResult: {
+        ok: false,
+        panes: [],
+        error: "error connecting to /tmp/tmux-1000/default (Operation not permitted)",
+      },
+      workspaceResult: { stateRoot: "/tmp/manager-test", manifests: [], manifestErrors: [] },
+      env: { USER: "tester" },
+    },
+  );
+
+  assert.equal(status.status, "unavailable");
+  assert.equal(status.summary.sandboxBoundary, true);
+  assert.equal(status.summary.sandboxSignatureClass, "tmux-operation-not-permitted");
+  assert.doesNotMatch(status.summary.error, /Operation not permitted|\/tmp\/tmux/);
+  assert.equal(status.warnings[0].failureClass, "sandbox");
+  assert.match(status.warnings[0].nextAction, /rerun the exact same read-only manager command outside the sandbox once/i);
+  assert.doesNotMatch(status.warnings[0].message, /Operation not permitted/);
+});
+
+test("tmux orientation thrown sandbox errors are sanitized in summaries", () => {
+  const status = buildTmuxOrientationStatus(
+    { runId: "manager-test" },
+    {
+      tmuxResult: {
+        ok: true,
+        panes: [
+          {
+            sessionName: "manager",
+            windowIndex: "1",
+            windowName: "node",
+            paneIndex: "1",
+            paneId: "%23",
+            paneActive: true,
+            panePid: "1001",
+            currentPath: "/tmp/manager-test/worktree/src",
+            paneTitle: "Kendall_Nxt",
+            currentCommand: "node",
+          },
+        ],
+        error: "",
+      },
+      workspaceResult: {
+        stateRoot: "/tmp/manager-test",
+        manifests: [{ manifest: { task_id: "task-1", worktree_path: "/tmp/manager-test/worktree" } }],
+        manifestErrors: [],
+      },
+      dirtyStateReader: () => {
+        throw new Error("spawnSync tmux EPERM");
+      },
+      env: { USER: "tester" },
+    },
+  );
+
+  assert.equal(status.status, "unavailable");
+  assert.equal(status.summary.sandboxBoundary, true);
+  assert.equal(status.summary.sandboxSignatureClass, "process-spawn-eperm");
+  assert.doesNotMatch(status.summary.error, /spawnSync|EPERM/);
+  assert.doesNotMatch(status.warnings[0].message, /spawnSync|EPERM/);
 });
 
 test("tmux orientation reconciles manager worker panes from worker records", () => {
@@ -20624,6 +20711,46 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     assert.equal(malformedGitRunner.summary.repo.status, "warning");
     assert.ok(malformedGitRunner.warnings.some((warning) => warning.code === "preflight-repo-root-unavailable"));
 
+    const sandboxGitRunner = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 6, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 6, active: 0 }, candidateStateCounts: { assignable: 6 } },
+        gitRunner: () => ({ status: 1, stdout: "", stderr: "spawnSync git EPERM" }),
+        ghRunner: () => ({ status: 1, stdout: "", stderr: "spawnSync gh EPERM" }),
+      },
+    );
+    const sandboxWarnings = sandboxGitRunner.warnings.filter((warning) => warning.sandboxBoundary);
+    const repoRootWarning = sandboxWarnings.find((warning) => warning.code === "preflight-repo-root-unavailable");
+    const githubCliWarning = sandboxWarnings.find((warning) => warning.code === "preflight-github-cli-unavailable");
+    assert.ok(repoRootWarning);
+    assert.ok(githubCliWarning);
+    assert.equal(repoRootWarning.sandboxSignatureClass, "process-spawn-eperm");
+    assert.equal(githubCliWarning.sandboxSignatureClass, "process-spawn-eperm");
+    assert.ok(sandboxWarnings.every((warning) => warning.failureClass === "sandbox"));
+    assert.ok(sandboxWarnings.every((warning) => /exact same read-only command outside the sandbox once/i.test(warning.rerunRequirement)));
+    assert.ok(sandboxWarnings.every((warning) => !/spawnSync|EPERM/.test(warning.message)));
+
+    const spawnError = Object.assign(new Error("spawnSync git EPERM"), { code: "EPERM" });
+    const nullStatusSpawnRunner = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 6, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 6, active: 0 }, candidateStateCounts: { assignable: 6 } },
+        gitRunner: () => ({ status: null, stdout: "", stderr: "", error: spawnError }),
+        ghRunner: () => ({ status: 0, stdout: "gh version 2.0.0\n", stderr: "" }),
+      },
+    );
+    const nullStatusWarning = nullStatusSpawnRunner.warnings.find((warning) => warning.code === "preflight-repo-root-unavailable");
+    assert.equal(nullStatusWarning.sandboxBoundary, true);
+    assert.equal(nullStatusWarning.sandboxSignatureClass, "process-spawn-eperm");
+    assert.match(nullStatusWarning.rerunRequirement, /exact same read-only command outside the sandbox once/i);
+    assert.doesNotMatch(nullStatusWarning.message, /spawnSync|EPERM/);
+
     const forcedReadOnly = buildPreflight(
       { stateRoot, desiredWorkers: 6, runId: "manager-test", apply: true },
       {
@@ -22016,6 +22143,36 @@ test("resume state reports missing or malformed ledger evidence as schema gaps",
     assert.ok(resume.summary.schemaGaps.some((gap) => gap.code === "ledger-file-missing"));
     assert.ok(resume.blockers.some((blocker) => blocker.code === "assignment-report-unavailable"));
     assert.ok(resume.blockers.some((blocker) => blocker.code === "tmux-orientation-unavailable"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("resume state routes sandbox EPERM as a boundary instead of inventory repair", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-resume-sandbox-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const resume = buildResumeState(
+      { runId: "manager-test", stateRoot },
+      {
+        assignmentSummary: { ok: false, error: "spawnSync /usr/bin/node EPERM" },
+        tmuxContext: {
+          tmuxResult: { ok: false, panes: [], error: "spawnSync tmux EPERM" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+      },
+    );
+
+    const assignmentBlocker = resume.blockers.find((blocker) => blocker.code === "assignment-report-unavailable");
+    const tmuxBlocker = resume.blockers.find((blocker) => blocker.code === "tmux-orientation-unavailable");
+    assert.equal(assignmentBlocker.sandboxBoundary, true);
+    assert.equal(assignmentBlocker.sandboxSignatureClass, "node-spawnsync-eperm");
+    assert.match(assignmentBlocker.nextAction, /rerun the exact same read-only manager command outside the sandbox once/i);
+    assert.doesNotMatch(assignmentBlocker.message, /spawnSync|EPERM/);
+    assert.equal(tmuxBlocker.sandboxBoundary, true);
+    assert.equal(tmuxBlocker.sandboxSignatureClass, "process-spawn-eperm");
+    assert.match(tmuxBlocker.nextAction, /rerun the exact same read-only manager command outside the sandbox once/i);
+    assert.doesNotMatch(tmuxBlocker.message, /spawnSync|EPERM/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
