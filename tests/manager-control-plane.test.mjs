@@ -187,6 +187,41 @@ for (const [relativePath, content] of [
   ensureIgnoredBmadFixture(relativePath, content);
 }
 
+function sprintStatusFixture(overrides = {}) {
+  return {
+    exists: true,
+    path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+    backlogStories: 1,
+    readyStories: 5,
+    reviewReadyStories: 0,
+    readyForDevStories: 5,
+    activeStories: 0,
+    doneStories: 78,
+    nextBacklogStoryKey: "6-6-overnight-run-recovery-and-housekeeping",
+    storyStatuses: {
+      "6-6-overnight-run-recovery-and-housekeeping": "backlog",
+    },
+    ...overrides,
+  };
+}
+
+function latestPrdSourcePlanningBySourceKey(overrides = {}) {
+  return {
+    "2026-07-04-operational-pipeline-action-loop": {
+      sprintStatus: sprintStatusFixture(overrides.sprintStatus),
+    },
+  };
+}
+
+function managerControlPlaneSourcePlanningState(overrides = {}) {
+  return {
+    sprintStatus: sprintStatusFixture({
+      path: "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml",
+      ...overrides.sprintStatus,
+    }),
+  };
+}
+
 function readyDispatchPreviewFixture(overrides = {}) {
   return {
     selected: {
@@ -4756,6 +4791,7 @@ test("manager refill CLI args emit source slice and candidate lanes from fixture
       "--source-ref",
       "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md",
     ], {
+      sourcePlanningState: managerControlPlaneSourcePlanningState(),
       dispatchPreview: {
         counts: {
           dispatchable: 1,
@@ -4784,6 +4820,7 @@ test("manager refill CLI args emit source slice and candidate lanes from fixture
     const { result: defaultSourcePacket } = runManagerRefillPlan(
       ["--summary-json"],
       {
+        sourcePlanningBySourceKey: latestPrdSourcePlanningBySourceKey(),
         assignmentSummary: {
           summary: {
             backlogStatusCounts: {
@@ -12219,6 +12256,7 @@ test("cycle continuation allows safe dispatch claims while active workers contin
         stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
         usageContext: { status: "normal", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" } } },
         resourceContext: { status: "normal", summary: { state: "normal" } },
+        sourcePlanningBySourceKey: latestPrdSourcePlanningBySourceKey(),
         assignmentSummary: {
           summary: {
             backlogStatusCounts: { assignable: 1, closed: 0 },
@@ -12297,6 +12335,7 @@ test("cycle surfaces worker progress attention before generic active monitoring"
         stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
         usageContext: { status: "normal" },
         resourceContext: { status: "normal" },
+        sourcePlanningBySourceKey: latestPrdSourcePlanningBySourceKey(),
         dispatchPreview: {
           summary: {
             available: true,
@@ -13240,6 +13279,7 @@ test("cycle prioritizes review-ready lane advancement before active monitoring",
         stateSignals: readyReconciliationSignals({ laneId: "lane-2", branch: "codex/lane-2", workerId: "codex-2" }),
         usageContext: { status: "normal" },
         resourceContext: { status: "normal" },
+        sourcePlanningBySourceKey: latestPrdSourcePlanningBySourceKey(),
         dispatchPreview: {
           summary: {
             available: true,
@@ -16398,6 +16438,7 @@ test("ledger CLI parser accepts material question policy flags", () => {
 test("unsupported steering asks for clarification without pausing dispatch", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-unsupported-steering-"));
   try {
+    seedManagerLedgerForPreflight(stateRoot);
     const bareFocus = buildSteeringPlan({ runId: "manager-test", steeringInstruction: "focus" });
     assert.equal(bareFocus.status, "attention");
     assert.equal(bareFocus.summary.instruction.supported, false);
@@ -16411,7 +16452,7 @@ test("unsupported steering asks for clarification without pausing dispatch", () 
         usageContext: { status: "normal" },
         resourceContext: { status: "normal" },
         assignmentSummary: { summary: { backlogStatusCounts: { assignable: 6, closed: 78 } } },
-        dispatchPreview: readyDispatchPreviewFixture(),
+        dispatchPreview: readyDispatchPreviewFixture({ counts: { total: 6, dispatchable: 6, active: 0, blocked: 0 } }),
         tmuxContext: {
           tmuxResult: { ok: true, panes: [], error: "" },
           workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
@@ -17158,7 +17199,7 @@ test("cycle packet exposes feedback gates and keeps unrelated safe lanes moving"
         usageContext: { status: "normal" },
         resourceContext: { status: "normal" },
         assignmentSummary: { summary: { backlogStatusCounts: { assignable: 6, closed: 78 } } },
-        dispatchPreview: readyDispatchPreviewFixture(),
+        dispatchPreview: readyDispatchPreviewFixture({ counts: { total: 6, dispatchable: 6, active: 0, blocked: 0 } }),
         feedback: { classification: "blocking", text: "Blocking issue found on /pipeline, prevent merge", affectedLane: "lane-pipeline", whereToTest: "/pipeline" },
         tmuxContext: {
           tmuxResult: { ok: true, panes: [], error: "" },

@@ -16187,6 +16187,9 @@ export function buildCyclePacket(options = {}, context = {}) {
     summary: blocker.message,
     nextAction: blocker.nextAction,
   }));
+  const steeringBlockers = (steering.blockers || []).filter((blocker) =>
+    !(blocker.code === "steering-instruction-unsupported" && steering.summary?.futureDispatch?.newDispatchAllowed !== false),
+  );
   const steeringAttention = steering.status === "attention";
   const feedbackAttention = feedback.status === "attention";
   const workerProgressAttention = workerProgress.status === "attention";
@@ -16210,7 +16213,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   const dispatchPostureAllowsNewDispatch = dispatchPosture.summary?.newDispatchAllowed !== false;
   blockers.push(...dispatchPosture.blockers);
   blockers.push(...workerQuestionBlockers);
-  blockers.push(...(steering.blockers || []));
+  blockers.push(...steeringBlockers);
   blockers.push(...(feedback.blockers || []));
   blockers.push(...(delivery.blockers || []));
   const baseStatus = blockers.length > 0 ? "blocked" : frictionAttention || steeringAttention || feedbackAttention || workerProgressAttention || laneAdvanceAttention ? "attention" : "ready";
