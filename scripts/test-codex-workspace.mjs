@@ -2076,6 +2076,411 @@ try {
     }
   });
 
+  test("close-assignments apply closes explicitly approved abandoned stale assignment record", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-approved-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      const missingWorktree = join(closeoutStateRoot, "worktrees", "stale-record-cleanup-fixture");
+      writeFileSync(
+        join(tasksDir, "closed-stale-record-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-stale-record-lane",
+            branch: "codex/stale-record-cleanup-fixture",
+            worktree_path: missingWorktree,
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-record-cleanup-fixture",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-record-cleanup-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-record-cleanup-fixture",
+            task_id: "closed-stale-record-lane",
+            branch: "codex/stale-record-cleanup-fixture",
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-record-cleanup-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("approved stale record cleanup"), result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "stale-record-cleanup-fixture.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync(join(tasksDir, "closed-stale-record-lane.json"), "utf8"));
+      assert(assignment.status === "closed", JSON.stringify(assignment));
+      assert(assignment.phase === "closed", JSON.stringify(assignment));
+      assert(assignment.closeout_mode === "stale_record_cleanup", JSON.stringify(assignment));
+      assert(assignment.closeout_approval_evidence === "operator approved stale cleanup", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.worktreeStatus === "missing", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.localBranchSha === null, JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.remoteBranchSha === null, JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.remoteBranchStatus === "absent", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.prStatus === "none", JSON.stringify(assignment));
+      assert(assignment.last_result === "operator-approved stale record cleanup from closed workspace closed-stale-record-lane", JSON.stringify(assignment));
+      assert(manifest.source_assignment_closed_at === assignment.closed_at, JSON.stringify(manifest));
+      assert(manifest.events.some((event) => event.type === "assignment_closed"), JSON.stringify(manifest));
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments stale cleanup fails closed when worktree still exists", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-live-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-live-worktree-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-live-worktree-lane",
+            branch: "codex/stale-record-live-worktree-fixture",
+            worktree_path: rootDir,
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-record-live-worktree-fixture",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-record-live-worktree-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-record-live-worktree-fixture",
+            task_id: "closed-live-worktree-lane",
+            branch: "codex/stale-record-live-worktree-fixture",
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-record-live-worktree-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("Refusing to close blocked assignments"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "live worktree stale cleanup mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments stale cleanup fails closed when assignment worktree still exists", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-assignment-live-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      const liveAssignmentWorktree = join(closeoutStateRoot, "worktrees", "live-assignment-worktree");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      mkdirSync(liveAssignmentWorktree, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-missing-manifest-worktree-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-missing-manifest-worktree-lane",
+            branch: "codex/stale-record-assignment-live-fixture",
+            worktree_path: join(closeoutStateRoot, "worktrees", "missing-manifest-worktree"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-record-assignment-live-fixture",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-record-assignment-live-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-record-assignment-live-fixture",
+            task_id: "closed-missing-manifest-worktree-lane",
+            branch: "codex/stale-record-assignment-live-fixture",
+            worktree_path: liveAssignmentWorktree,
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-record-assignment-live-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("Refusing to close blocked assignments"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "live assignment worktree stale cleanup mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments stale cleanup fails closed when remote branch exists", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-remote-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-remote-branch-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-remote-branch-lane",
+            branch: "codex/stale-record-remote-branch-fixture",
+            worktree_path: join(closeoutStateRoot, "worktrees", "missing-remote-branch-worktree"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-record-remote-branch-fixture",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-record-remote-branch-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-record-remote-branch-fixture",
+            task_id: "closed-remote-branch-lane",
+            branch: "codex/stale-record-remote-branch-fixture",
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const env = staleCleanupFixtureEnv(closeoutStateRoot, {
+        remoteBranches: ["codex/stale-record-remote-branch-fixture"],
+      });
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-record-remote-branch-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("Refusing to close blocked assignments"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "remote branch stale cleanup mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments stale cleanup fails closed when GitHub PR exists", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-pr-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-github-pr-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-github-pr-lane",
+            branch: "codex/stale-record-github-pr-fixture",
+            worktree_path: join(closeoutStateRoot, "worktrees", "missing-github-pr-worktree"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-record-github-pr-fixture",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-record-github-pr-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-record-github-pr-fixture",
+            task_id: "closed-github-pr-lane",
+            branch: "codex/stale-record-github-pr-fixture",
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const env = staleCleanupFixtureEnv(closeoutStateRoot, {
+        prListJson: JSON.stringify([
+          {
+            number: 123,
+            url: "https://example.test/pull/123",
+            state: "OPEN",
+            headRefName: "codex/stale-record-github-pr-fixture",
+          },
+        ]),
+      });
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-record-github-pr-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("Refusing to close blocked assignments"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "GitHub PR stale cleanup mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments stale cleanup apply requires explicit approval", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-no-approval-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-no-approval-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-no-approval-lane",
+            branch: "codex/stale-record-no-approval-fixture",
+            worktree_path: join(closeoutStateRoot, "worktrees", "missing-no-approval-worktree"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-record-no-approval-fixture",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-record-no-approval-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-record-no-approval-fixture",
+            task_id: "closed-no-approval-lane",
+            branch: "codex/stale-record-no-approval-fixture",
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-record-no-approval-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("--approval must cite explicit operator approval"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "no-approval stale cleanup mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-dry-run-"));
     try {
@@ -5566,7 +5971,7 @@ try {
   rmSync(stateRoot, { recursive: true, force: true });
 }
 
-function run(args) {
+function run(args, options = {}) {
   const result = spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: rootDir,
     encoding: "utf8",
@@ -5574,6 +5979,7 @@ function run(args) {
       ...process.env,
       CODEX_WORKSPACE_TEST_MODE: "1",
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
+      ...(options.env || {}),
     },
     stdio: "pipe",
   });
@@ -5581,6 +5987,30 @@ function run(args) {
     code: result.status ?? 1,
     stdout: result.stdout || "",
     stderr: result.stderr || "",
+  };
+}
+
+function staleCleanupFixtureEnv(root, options = {}) {
+  const binDir = join(root, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const ghPath = join(binDir, "gh");
+  writeFileSync(
+    ghPath,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'list') { console.log(process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON || '[]'); process.exit(0); }",
+      "console.error(`unexpected gh command: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(ghPath, 0o755);
+  return {
+    PATH: `${binDir}:${process.env.PATH || ""}`,
+    CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON: options.prListJson || "[]",
+    CODEX_WORKSPACE_TEST_STALE_REMOTE_BRANCHES: (options.remoteBranches || []).join(","),
   };
 }
 
