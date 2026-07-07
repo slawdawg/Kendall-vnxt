@@ -103,6 +103,23 @@ Future PR gate evidence should record:
 - exact PR head SHA
 - unresolved review-thread count
 
+## Measurement Slices
+
+After planner-driven PR routing is merged, the first proof slice should be a
+docs-only PR that changes this plan. Expected PR checks:
+
+- `changes`: pass
+- `fast`: pass
+- `check`: pass
+- `static`: skipped
+- `javascript`: skipped
+- `supervisor`: skipped
+
+If those skips occur, the planner has removed the static and supervisor wait
+from focused documentation and planner-policy PRs. If any broad job runs, treat
+the check output as routing evidence and fix the planner before starting the
+static-bundle split.
+
 ## Stop Lines
 
 Do not remove existing static coverage just to reduce time. First introduce the
