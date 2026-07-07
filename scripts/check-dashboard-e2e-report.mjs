@@ -20,10 +20,12 @@ const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const dashboardE2ERunner = readWorkspaceFile("scripts/dashboard-e2e-runner.mjs");
 const dashboardE2ERunnerTest = readWorkspaceFile("tests/dashboard-e2e-runner.test.mjs");
+const fastWorkflowRunner = readWorkspaceFile("scripts/run-fast-workflow-checks.mjs");
 
 const expectedPackageScripts = [
   ["setup:e2e", "node ./scripts/setup-e2e.mjs"],
   ["check:e2e-report", "node ./scripts/check-dashboard-e2e-report.mjs"],
+  ["check:dashboard-fast", "node ./scripts/run-fast-workflow-checks.mjs dashboard"],
   ["test:e2e:dashboard", "playwright test"],
   ["test:e2e:dashboard:controls", "node ./scripts/run-controls-e2e.mjs"],
   ["test:e2e:dashboard:detail", "node ./scripts/run-detail-e2e.mjs"],
@@ -138,6 +140,24 @@ assertCondition(
   "Aggregate check scripts must run pnpm run test:dashboard-e2e-runner",
   failures,
 );
+assertCondition(
+  packageJson.scripts?.["check:static"]?.startsWith("pnpm run check:fast") &&
+    packageJson.scripts?.check?.includes("pnpm run check:fast"),
+  "Aggregate check scripts must run pnpm run check:fast before broad dashboard checks",
+  failures,
+);
+for (const dashboardFastCommand of [
+  '"check:e2e-report"',
+  '"test:dashboard-e2e-runner"',
+  '"check:dashboard-pipeline-boundary"',
+  '"test:dashboard-pipeline-fixtures"',
+]) {
+  assertCondition(
+    fastWorkflowRunner.includes(dashboardFastCommand),
+    `Fast workflow runner must include dashboard command ${dashboardFastCommand}`,
+    failures,
+  );
+}
 assertCondition(
   dashboardE2ERunner.includes("playwrightBrowserPreflight") &&
     dashboardE2ERunner.includes("PLAYWRIGHT_BROWSERS_PATH") &&

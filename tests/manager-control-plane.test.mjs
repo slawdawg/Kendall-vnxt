@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
+import { executeContinuousSelectedAction, runManagerRunLoop } from "../scripts/manager-run-loop.mjs";
 import { runManagerRefillPlan } from "../scripts/manager-refill-plan.mjs";
 import { runManagerSourcePacketSeed } from "../scripts/manager-source-packet-seed.mjs";
 import {
@@ -34,6 +35,7 @@ import {
   buildRefillPlan,
   buildResourceStatus,
   buildRecoveryPlan,
+  buildRuntimeReadinessPlan,
   buildSourceArtifactDiscoveryPlan,
   buildSourceBackedPacketSeedPlan,
   buildSourceWorkEligibilityPlan,
@@ -67,6 +69,7 @@ import {
   readManagerCapabilityPosture,
   workspaceJsonCommandIsReadOnly,
   writeManagerCapabilityPosture,
+  MANAGER_RUNTIME_OPERATIONAL_MODES,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
 function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
@@ -2914,7 +2917,8 @@ test("explicit eligible source-backed packet seed feeds refill and continuous re
 
   assert.equal(continuous.summary.selectedAction.code, "continuous-dispatcher-refill-refresh");
   assert.equal(continuous.summary.selectedAction.readOnly, true);
-  assert.match(continuous.summary.selectedAction.applyCommand, /manager-refill-plan\.mjs --summary-json/);
+  assert.match(continuous.summary.selectedAction.dryRunCommand, /manager-refill-plan\.mjs --summary-json/);
+  assert.equal(continuous.summary.applySelectedAction, null);
 });
 
 test("source-backed packet seed keeps blocked packets visible with typed reason", () => {
@@ -8661,7 +8665,7 @@ test("worker progress status classifies active workers from metadata only", () =
     assert.equal(progress.nextActions[0].code, "worker-progress-blocked_question");
     assert.match(progress.nextActions[0].nextAction, /manager-worker-answer-question\.mjs --summary-json --limit 2/);
     assert.ok(progress.nextActions.some((action) => action.code === "worker-progress-needs_progress_signal"));
-    assert.ok(progress.nextActions.some((action) => /manager-worker-progress-signal\.mjs --summary-json --limit 1/.test(action.nextAction)));
+    assert.ok(progress.nextActions.some((action) => /manager-worker-progress-signal\.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'/.test(action.nextAction)));
     assert.doesNotMatch(JSON.stringify(progress), /capture-pane|provider payload|reasoning trace|raw prompt/i);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
@@ -8833,7 +8837,7 @@ test("worker progress treats timestamped old checkpoints as stale signal candida
   assert.equal(progress.status, "attention");
   assert.equal(progress.summary.workerProgress[0].progressState, "checkpoint_stale");
   assert.equal(progress.summary.workerProgress[0].latestCheckpointAgeSeconds, 720);
-  assert.match(progress.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --limit 1/);
+  assert.match(progress.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'/);
 
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-checkpoint-stale-signal-"));
   try {
@@ -9266,7 +9270,7 @@ test("worker progress routes blocked checkpoints through source-context answer h
   assert.equal(progress.status, "attention");
   assert.equal(progress.summary.workerProgress[0].progressState, "checkpoint_blocked");
   assert.equal(progress.nextActions[0].code, "worker-progress-blocked_question");
-  assert.match(progress.nextActions[0].nextAction, /manager-worker-answer-question\.mjs --summary-json --limit 1/);
+  assert.match(progress.nextActions[0].nextAction, /manager-worker-answer-question\.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'/);
 });
 
 test("worker progress does not repeat source-context answer after blocked checkpoint is answered", () => {
@@ -9367,7 +9371,7 @@ test("worker progress signals stale source-context answers instead of waiting fo
   assert.equal(progress.status, "attention");
   assert.equal(progress.summary.workerProgress[0].progressState, "question_answer_stale");
   assert.equal(progress.nextActions[0].code, "worker-progress-question_answer_stale");
-  assert.match(progress.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --limit 1/);
+  assert.match(progress.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'/);
 
   const signalPlan = buildWorkerProgressSignalPlan(
     { runId: "manager-test", limit: 1 },
@@ -9625,7 +9629,7 @@ test("worker progress signal gate writes durable request files and pastes only p
     assert.equal(progressAfterAgedPendingSignal.summary.workerProgress[0].progressState, "progress_signal_sent");
     assert.equal(progressAfterAgedPendingSignal.status, "attention");
     assert.equal(progressAfterAgedPendingSignal.nextActions[0].code, "worker-submit-pending-progress-signal");
-    assert.match(progressAfterAgedPendingSignal.nextActions[0].nextAction, /manager-worker-submit-pending\.mjs --summary-json --limit 1/);
+    assert.match(progressAfterAgedPendingSignal.nextActions[0].nextAction, /manager-worker-submit-pending\.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'/);
 
     const progressAfterSubmitRepair = buildWorkerProgressStatus(
       { runId: "manager-test", stateRoot, progressStaleMinutes: 1 },
@@ -10009,7 +10013,7 @@ test("unverified pointer receipt metadata routes to C-m-only submit repair", () 
     assert.equal(progressStatus.status, "attention");
     assert.equal(progressStatus.summary.workerProgress[0].progressState, "pointer_receipt_unverified");
     assert.equal(progressStatus.nextActions[0].code, "worker-submit-pending-progress-signal");
-    assert.match(progressStatus.nextActions[0].nextAction, /manager-worker-submit-pending\.mjs --summary-json --limit 1/);
+    assert.match(progressStatus.nextActions[0].nextAction, /manager-worker-submit-pending\.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'/);
 
     const submitPreview = buildWorkerSubmitPendingPlan(
       { runId: "manager-test", stateRoot },
@@ -10225,7 +10229,7 @@ test("worker prompt probe submits only manager pointers visible in Codex input r
   assert.equal(preview.status, "attention");
   assert.equal(preview.summary.promptPointerWorkers, 1);
   assert.equal(preview.summary.requests[0].workerId, "codex-2");
-  assert.match(preview.nextActions[0].nextAction, /manager-worker-prompt-probe\.mjs --summary-json --limit 1 --apply/);
+  assert.match(preview.nextActions[0].nextAction, /manager-worker-prompt-probe\.mjs --summary-json --worker-id 'codex-2' --session-name 'codex-2' --assignment-id 'lane-2' --task-id 'task-2' --apply/);
 
   let codex2CaptureCount = 0;
   const applied = buildWorkerPromptProbePlan(
@@ -11160,7 +11164,7 @@ test("worker question answer gate synthesizes source-context answers from blocke
     assert.match(preview.summary.requests[0].questionId, /^checkpoint-blocker-checkpoint-blocked/);
     assert.match(preview.summary.requests[0].compactAnswer, /Use source context from the main repo root/);
     assert.match(preview.summary.requests[0].compactAnswer, /8-6-cleanup-and-handoff-closeout\.md/);
-    assert.match(preview.nextActions[0].nextAction, /manager-worker-answer-question\.mjs --summary-json --limit 1 --apply/);
+    assert.match(preview.nextActions[0].nextAction, /manager-worker-answer-question\.mjs --summary-json --worker-id 'codex-6' --session-name 'codex-6' --assignment-id '8-6-cleanup-and-handoff-closeout' --task-id '20260629-8-6-cleanup-and-handoff-closeout' --apply/);
 
     const answered = buildWorkerQuestionAnswerPlan(
       { runId: "manager-test", stateRoot },
@@ -11434,7 +11438,7 @@ test("worker owner delegation gate sends delegated owner override without takeov
     assert.equal(progressAfterInspection.summary.workerProgress[0].recoveryInspectionAfterProgressSignal, true);
     assert.equal(progressAfterInspection.summary.workerProgress[0].submitPendingAfterRecoveryInspection, false);
     assert.equal(progressAfterInspection.nextActions[0].code, "worker-submit-pending-progress-signal");
-    assert.equal(progressAfterInspection.nextActions[0].nextAction, `node ./scripts/manager-worker-submit-pending.mjs --summary-json --limit 1 --run-id 'manager-test' --state-root '${stateRoot}'`);
+    assert.equal(progressAfterInspection.nextActions[0].nextAction, `node ./scripts/manager-worker-submit-pending.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1' --run-id 'manager-test' --state-root '${stateRoot}'`);
 
     const reviewFeedbackRecovery = buildWorkerProgressStatus(
       { runId: "manager-test", stateRoot, progressStaleMinutes: 1 },
@@ -11541,7 +11545,7 @@ test("worker owner delegation gate sends delegated owner override without takeov
     );
     assert.equal(progressAfterStaleRecoverySubmit.status, "attention");
     assert.equal(progressAfterStaleRecoverySubmit.summary.workerProgress[0].progressState, "recovery_submit_unanswered");
-    assert.equal(progressAfterStaleRecoverySubmit.nextActions[0].nextAction, `node ./scripts/manager-worker-retire.mjs --summary-json --limit 1 --run-id 'manager-test' --state-root '${stateRoot}'`);
+    assert.equal(progressAfterStaleRecoverySubmit.nextActions[0].nextAction, `node ./scripts/manager-worker-retire.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1' --run-id 'manager-test' --state-root '${stateRoot}'`);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -11703,7 +11707,7 @@ test("continuous prompt-idle handoff action uses prompt-idle signal gate", () =>
 
   assert.equal(plan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
   assert.equal(plan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-review-request-plan'");
-  assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-review-request-plan' --apply");
+  assert.equal(plan.summary.applySelectedAction, null);
 });
 
 test("continuous dispatcher truth keeps dispatch gated behind operational readiness", () => {
@@ -15170,6 +15174,119 @@ test("cycle reports duplicate subplan warnings once", () => {
   }
 });
 
+test("runtime readiness gates continuous apply to explicit existing manager gates", () => {
+  assert.ok(MANAGER_RUNTIME_OPERATIONAL_MODES.includes("continuous_apply"));
+  assert.ok(MANAGER_RUNTIME_OPERATIONAL_MODES.includes("continuous_dry_run"));
+
+  const selectedAction = {
+    code: "continuous-worker-progress-signal",
+    mutationClass: "manager_owned_worker_progress_signal",
+    targetComponents: ["run:manager-test", "worker:codex-1", "assignment:lane-1"],
+  };
+  const ready = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "normal" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: { workerMutationAllowed: true },
+      selectedAction,
+    },
+  );
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.summary.allowedExecutionMode, "continuous_apply_existing_gates");
+  assert.equal(ready.summary.gates.workerMutation, "existing_gate_only");
+  assert.equal(ready.summary.gates.delivery, "blocked_or_not_requested");
+  assert.equal(ready.summary.rawPayloadRetained, false);
+
+  const blocked = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "unknown" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: { workerMutationAllowed: false },
+      selectedAction,
+    },
+  );
+  assert.equal(blocked.status, "blocked");
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "usage-not-ready"));
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "worker-mutation-gate-not-proven"));
+});
+
+test("runtime parser rejects empty modes and duplicate exact target flags", () => {
+  assert.throws(
+    () => parseCommonArgs(["--runtime-mode", ""]),
+    /--runtime-mode requires a value/,
+  );
+  assert.throws(
+    () => parseCommonArgs(["--runtime-mode="]),
+    /--runtime-mode requires a non-empty value/,
+  );
+  for (const flag of ["--worker-id", "--session-name", "--assignment-id", "--task-id"]) {
+    assert.throws(
+      () => parseCommonArgs([flag, "A", flag, "B"]),
+      new RegExp(`${flag} may only be provided once`),
+    );
+  }
+});
+
+test("continuous execution separates dry-run proof from apply mutation", () => {
+  const selected = {
+    code: "continuous-worker-progress-signal",
+    dryRunCommand: "node ./scripts/manager-worker-progress-signal.mjs --summary-json --worker-id codex-1",
+    mutationClass: "manager_owned_worker_progress_signal",
+    targetComponents: ["assignment:lane-1", "worker:codex-1"],
+    targetKey: "assignment:lane-1|worker:codex-1",
+  };
+  const applySelected = {
+    ...selected,
+    applyCommand: "node ./scripts/manager-worker-progress-signal.mjs --summary-json --worker-id codex-1 --apply",
+  };
+  const calls = [];
+  const proofPacket = (action) => ({
+    ok: true,
+    status: "ready",
+    continuousSelection: {
+      code: action.code,
+      mutationClass: action.mutationClass,
+      targetComponents: action.targetComponents,
+      targetKey: action.targetKey,
+      allowed: true,
+      status: "ready",
+    },
+  });
+
+  const dryRunOnly = executeContinuousSelectedAction({
+    selected,
+    applySelected: null,
+    runCommand(command) {
+      calls.push(command);
+      return { ok: true, packet: proofPacket(selected) };
+    },
+  });
+  assert.equal(dryRunOnly.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(dryRunOnly.summary.apply.status, "skipped_runtime_mode_not_apply_ready");
+
+  calls.length = 0;
+  const applied = executeContinuousSelectedAction({
+    selected,
+    applySelected,
+    runCommand(command) {
+      calls.push(command);
+      return { ok: true, packet: proofPacket(applySelected) };
+    },
+  });
+  assert.equal(applied.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /--apply/);
+});
+
 test("continuous run plan selects only manager-owned worker auto actions", () => {
   const reviewSprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-continuous-review-test.yaml";
   const reviewStoryPath = "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md";
@@ -15236,7 +15353,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(submitPlan.summary.intervalMs, 1000);
   assert.equal(submitPlan.summary.heartbeatEvery, 3);
   assert.equal(submitPlan.summary.selectedAction.code, "continuous-worker-submit-pending");
-  assert.match(submitPlan.summary.selectedAction.applyCommand, /manager-worker-submit-pending\.mjs --summary-json --limit 6 --apply/);
+  assert.match(submitPlan.summary.selectedAction.dryRunCommand, /manager-worker-submit-pending\.mjs --summary-json --limit 6/);
+  assert.equal(submitPlan.summary.applySelectedAction, null);
 
   const pendingBeforeHandoffPlan = buildContinuousRunPlan(
     {},
@@ -15277,9 +15395,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(pendingBeforeHandoffPlan.summary.selectedAction.code, "continuous-worker-handoff");
-  assert.equal(pendingBeforeHandoffPlan.summary.selectedAction.workClass, "task_work");
-  assert.match(pendingBeforeHandoffPlan.summary.selectedAction.applyCommand, /manager-worker-handoff\.mjs --summary-json --limit 1 --apply/);
+  assert.equal(pendingBeforeHandoffPlan.summary.selectedAction.code, "continuous-worker-submit-pending");
+  assert.match(pendingBeforeHandoffPlan.summary.selectedAction.dryRunCommand, /manager-worker-submit-pending\.mjs --summary-json --limit 1/);
+  assert.equal(pendingBeforeHandoffPlan.summary.applySelectedAction, null);
 
   const defaultCadencePlan = buildContinuousRunPlan(
     {},
@@ -15359,7 +15477,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(signalPlan.summary.selectedAction.code, "continuous-worker-progress-signal");
-  assert.match(signalPlan.summary.selectedAction.applyCommand, /manager-worker-progress-signal\.mjs --summary-json --limit 2 --apply/);
+  assert.match(signalPlan.summary.selectedAction.dryRunCommand, /manager-worker-progress-signal\.mjs --summary-json --limit 2/);
+  assert.equal(signalPlan.summary.applySelectedAction, null);
 
   const questionPlan = buildContinuousRunPlan(
     {},
@@ -15401,7 +15520,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(questionPlan.summary.selectedAction.code, "continuous-worker-answer-question");
   assert.equal(questionPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-answer-question.mjs --summary-json --limit 1");
-  assert.equal(questionPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-answer-question.mjs --summary-json --limit 1 --apply");
+  assert.equal(questionPlan.summary.applySelectedAction, null);
   assert.equal(questionPlan.summary.selectedAction.authority, "manager-owned-worker-question-answer-existing-gates");
   assert.equal(questionPlan.summary.selectedAction.mutationClass, "manager_owned_worker_question_answer");
   assert.equal(questionPlan.summary.reviewResourcePolicy.attentionId, "human_attention_review_routing_policy");
@@ -15542,7 +15661,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
   assert.equal(questionBeatsRecoveryAndRefillPlan.summary.selectedAction.code, "continuous-worker-answer-question");
-  assert.equal(questionBeatsRecoveryAndRefillPlan.summary.allowedActionCount, 4);
+  assert.equal(questionBeatsRecoveryAndRefillPlan.summary.allowedActionCount, 0);
+  assert.equal(questionBeatsRecoveryAndRefillPlan.summary.eligibleActionCount, 4);
 
   const warmPlan = buildContinuousRunPlan(
     {},
@@ -15574,7 +15694,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(warmPlan.summary.selectedAction.code, "continuous-worker-warm");
-  assert.equal(warmPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-warm.mjs --summary-json --run-id 'manager-test' --limit 1 --state-root '/tmp/manager-state' --apply");
+  assert.equal(warmPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-warm.mjs --summary-json --run-id 'manager-test' --limit 1 --state-root '/tmp/manager-state'");
+  assert.equal(warmPlan.summary.applySelectedAction, null);
 
   const handoffPlan = buildContinuousRunPlan(
     {},
@@ -15607,7 +15728,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(handoffPlan.summary.selectedAction.code, "continuous-worker-handoff");
   assert.equal(handoffPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-handoff.mjs --summary-json --limit 1 --usage-state normal --resource-state normal");
-  assert.equal(handoffPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-handoff.mjs --summary-json --limit 1 --apply --usage-state normal --resource-state normal");
+  assert.equal(handoffPlan.summary.applySelectedAction, null);
 
   const recoveryPlan = buildContinuousRunPlan(
     {},
@@ -15646,7 +15767,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(recoveryPlan.summary.selectedAction.code, "continuous-worker-recovery-inspection");
   assert.equal(recoveryPlan.summary.selectedAction.readOnly, undefined);
-  assert.equal(recoveryPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test' --apply");
+  assert.equal(recoveryPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test'");
+  assert.equal(recoveryPlan.summary.applySelectedAction, null);
 
   const retirePlan = buildContinuousRunPlan(
     {},
@@ -15680,7 +15802,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(retirePlan.status, "attention");
   assert.equal(retirePlan.summary.selectedAction.code, "continuous-worker-retire");
-  assert.equal(retirePlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1 --apply");
+  assert.equal(retirePlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1");
+  assert.equal(retirePlan.summary.applySelectedAction, null);
 
   const laneAdvancePlan = buildContinuousRunPlan(
     {},
@@ -15710,7 +15833,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(laneAdvancePlan.status, "attention");
   assert.equal(laneAdvancePlan.summary.selectedAction.code, "continuous-lane-advance-apply");
   assert.equal(laneAdvancePlan.summary.selectedAction.readOnly, undefined);
-  assert.equal(laneAdvancePlan.summary.selectedAction.applyCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --apply");
+  assert.equal(laneAdvancePlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1");
+  assert.equal(laneAdvancePlan.summary.applySelectedAction, null);
 
   const laneAdvanceWithWorkerActionPlan = buildContinuousRunPlan(
     {},
@@ -15820,9 +15944,10 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       },
     );
 
-    assert.equal(freshReviewLaneAdvancePlan.summary.selectedAction.code, "continuous-worker-progress-signal");
-    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, /manager-worker-progress-signal\.mjs --summary-json --limit 1 --run-id 'manager-test'/);
-    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.applyCommand, / --apply$/);
+    assert.equal(freshReviewLaneAdvancePlan.summary.selectedAction.code, "continuous-lane-advance-apply");
+    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.dryRunCommand, /manager-lane-advance\.mjs --summary-json --limit \d+ --run-id 'manager-test'/);
+    assert.match(freshReviewLaneAdvancePlan.summary.selectedAction.dryRunCommand, /--state-root/);
+    assert.equal(freshReviewLaneAdvancePlan.summary.applySelectedAction, null);
   } finally {
     rmSync(freshReviewStateRoot, { recursive: true, force: true });
   }
@@ -15890,8 +16015,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
     assert.equal(failedReviewFeedbackPlan.summary.selectedAction.code, "continuous-worker-review-feedback");
     assert.match(failedReviewFeedbackPlan.summary.selectedAction.dryRunCommand, /manager-worker-review-feedback\.mjs/);
-    assert.match(failedReviewFeedbackPlan.summary.selectedAction.applyCommand, /manager-worker-review-feedback\.mjs/);
-    assert.match(failedReviewFeedbackPlan.summary.selectedAction.applyCommand, /--review-findings-file/);
+    assert.match(failedReviewFeedbackPlan.summary.selectedAction.dryRunCommand, /--review-findings-file/);
+    assert.equal(failedReviewFeedbackPlan.summary.applySelectedAction, null);
   } finally {
     rmSync(failedReviewStateRoot, { recursive: true, force: true });
   }
@@ -15967,7 +16092,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(promptIdleCompletedPlan.summary.selectedAction.summary, "Delegate BMAD code review for bmad-97-2-manager-continuous-review-gate to a manager-owned worker.");
   assert.equal(promptIdleCompletedPlan.nextActions[0].summary, "Delegate BMAD code review for bmad-97-2-manager-continuous-review-gate to a manager-owned worker.");
   assert.equal(promptIdleCompletedPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
-  assert.equal(promptIdleCompletedPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate' --worker-id 'codex-4' --apply");
+  assert.equal(promptIdleCompletedPlan.summary.applySelectedAction, null);
 
   const alreadyAdvancedReviewPlan = buildContinuousRunPlan(
     {},
@@ -16033,8 +16158,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(alreadyAdvancedReviewPlan.summary.selectedAction.code, "continuous-worker-code-review-request");
-  assert.equal(alreadyAdvancedReviewPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate' --worker-id 'codex-4' --apply");
-  assert.doesNotMatch(alreadyAdvancedReviewPlan.summary.selectedAction.applyCommand, /--worker-id 'codex-1'/);
+  assert.equal(alreadyAdvancedReviewPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
+  assert.equal(alreadyAdvancedReviewPlan.summary.applySelectedAction, null);
 
   const openFeedbackReviewPlan = buildContinuousRunPlan(
     {},
@@ -16084,7 +16209,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(openFeedbackReviewPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
-  assert.doesNotMatch(openFeedbackReviewPlan.summary.selectedAction.applyCommand, /manager-worker-code-review/);
+  assert.equal(openFeedbackReviewPlan.summary.applySelectedAction, null);
 
   const promptIdleCheckpointPlan = buildContinuousRunPlan(
     {},
@@ -16124,7 +16249,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(promptIdleCheckpointPlan.summary.selectedAction.code, "continuous-worker-prompt-idle-progress-signal");
-  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-test' --apply");
+  assert.equal(promptIdleCheckpointPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-test'");
+  assert.equal(promptIdleCheckpointPlan.summary.applySelectedAction, null);
 
   const freshPromptIdleCheckpointPlan = buildContinuousRunPlan(
     {},
@@ -16251,7 +16377,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(refillPlan.summary.selectedAction.code, "continuous-refill-apply");
   assert.equal(refillPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-refill-plan.mjs --summary-json");
-  assert.equal(refillPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-refill-plan.mjs --summary-json --apply --source-ref 'prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md'");
+  assert.equal(refillPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-refill-plan.mjs --summary-json");
+  assert.equal(refillPlan.summary.applySelectedAction, null);
   assert.equal(refillPlan.summary.selectedAction.authority, "source-owned-refill-planning-existing-gates");
   assert.equal(refillPlan.summary.selectedAction.mutationClass, "local_bmad_refill_artifacts");
 
@@ -16302,7 +16429,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.code, "continuous-worker-code-review-request");
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.summary, "Delegate BMAD code review for bmad-97-2-manager-continuous-review-gate to a manager-owned worker.");
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-review-request-plan' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
-  assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-review-request-plan' --assignment-id 'bmad-97-2-manager-continuous-review-gate' --worker-id 'codex-10' --apply");
+  assert.equal(reviewWorkflowRefillPlan.summary.applySelectedAction, null);
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.mutationClass, "manager_owned_worker_code_review_delegation");
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.authority, "manager-owned-worker-code-review-delegation-existing-gates");
 
@@ -16401,9 +16528,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(staleReviewResendPlan.summary.selectedAction.code, "continuous-worker-code-review-request-prepared");
   assert.equal(staleReviewResendPlan.summary.selectedAction.readOnly, false);
-  assert.match(staleReviewResendPlan.summary.selectedAction.applyCommand, /manager-worker-code-review\.mjs/);
-  assert.match(staleReviewResendPlan.summary.selectedAction.applyCommand, /--state-root/);
-  assert.match(staleReviewResendPlan.summary.selectedAction.applyCommand, /--operator-visible-prompt --apply/);
+  assert.match(staleReviewResendPlan.summary.selectedAction.dryRunCommand, /manager-worker-code-review\.mjs/);
+  assert.match(staleReviewResendPlan.summary.selectedAction.dryRunCommand, /--state-root/);
+  assert.equal(staleReviewResendPlan.summary.applySelectedAction, null);
 
   const defaultCooldownRoot = mkdtempSync(join(tmpdir(), "manager-review-default-cooldown-"));
   const defaultCooldownRunRoot = join(defaultCooldownRoot, "manager-runs", "manager-default-cooldown");
@@ -16463,7 +16590,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(defaultCooldownPlan.summary.selectedAction.code, "continuous-worker-code-review-request-prepared");
   assert.equal(defaultCooldownPlan.summary.selectedAction.readOnly, true);
-  assert.equal(defaultCooldownPlan.summary.selectedAction.applyCommand, "monitor_delegated_worker_code_review");
+  assert.match(defaultCooldownPlan.summary.selectedAction.dryRunCommand, /manager-worker-code-review\.mjs/);
+  assert.equal(defaultCooldownPlan.summary.applySelectedAction, null);
 
   const freshPeerRequestRoot = mkdtempSync(join(tmpdir(), "manager-fresh-peer-review-"));
   const freshPeerRequestRunRoot = join(freshPeerRequestRoot, "manager-runs", "manager-fresh-peer-review");
@@ -16537,7 +16665,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(freshPeerRequestPlan.summary.selectedAction.code, "continuous-worker-code-review-request-prepared");
   assert.equal(freshPeerRequestPlan.summary.selectedAction.readOnly, true);
-  assert.equal(freshPeerRequestPlan.summary.selectedAction.applyCommand, "monitor_delegated_worker_code_review");
+  assert.match(freshPeerRequestPlan.summary.selectedAction.dryRunCommand, /manager-worker-code-review\.mjs/);
+  assert.equal(freshPeerRequestPlan.summary.applySelectedAction, null);
 
   const gatedNeedsReviewRefillPlan = buildContinuousRunPlan(
     {},
@@ -16635,8 +16764,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(dispatchPlan.summary.selectedAction, null);
-  assert.equal(dispatchPlan.nextActions[0].code, "continuous-attention-monitor");
+  assert.equal(dispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.match(dispatchPlan.summary.selectedAction.dryRunCommand, /codex-workspace\.mjs dispatch-next --dry-run --summary-json/);
+  assert.equal(dispatchPlan.summary.applySelectedAction, null);
 
   const dispatchBeforePromptRepairPlan = buildContinuousRunPlan(
     {},
@@ -16728,9 +16858,10 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.selectedAction, null);
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.applySelectedAction, null);
   assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.codexAdvisor.recommendations[0].recommendedResponse, "park_or_degrade_capability");
-  assert.equal(dispatchBeforeChurnedPromptRepairPlan.nextActions[0].code, "continuous-codex-advisor-packet-ready");
+  assert.equal(dispatchBeforeChurnedPromptRepairPlan.nextActions[0].code, "continuous-dry-run-ready");
 
   const parkedTmuxStillDispatchesPlan = buildContinuousRunPlan(
     {},
@@ -16783,8 +16914,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     },
   );
 
-  assert.equal(parkedTmuxStillDispatchesPlan.summary.selectedAction, null);
-  assert.equal(parkedTmuxStillDispatchesPlan.nextActions[0].code, "continuous-attention-monitor");
+  assert.equal(parkedTmuxStillDispatchesPlan.summary.selectedAction.code, "continuous-dispatch-apply");
+  assert.equal(parkedTmuxStillDispatchesPlan.summary.applySelectedAction, null);
+  assert.equal(parkedTmuxStillDispatchesPlan.nextActions[0].code, "continuous-dry-run-ready");
   assert.equal(parkedTmuxStillDispatchesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("tmuxWorkerMutation"), true);
   assert.equal(parkedTmuxStillDispatchesPlan.summary.capabilityHolds.heldActions[0].code, "continuous-worker-prompt-probe");
   assert.equal(parkedTmuxStillDispatchesPlan.warnings.some((warning) => warning.code === "capability_posture_hold"), true);
@@ -16837,7 +16969,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(parkedDispatchStillRefillsPlan.summary.selectedAction.code, "continuous-refill-apply");
-  assert.equal(parkedDispatchStillRefillsPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "dispatchApply"), false);
+  assert.equal(parkedDispatchStillRefillsPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "dispatchApply"), true);
   assert.equal(parkedDispatchStillRefillsPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("dispatchApply"), true);
 
   const parkedReviewDelegationStillAdvancesPlan = buildContinuousRunPlan(
@@ -17681,7 +17813,7 @@ test("continuous prompt-probe strips apply from dry-run command", () => {
   assert.equal(plan.summary.selectedAction.code, "continuous-worker-prompt-probe");
   assert.equal(plan.summary.selectedAction.workClass, "direct_unblock_repair");
   assert.equal(plan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1");
-  assert.equal(plan.summary.selectedAction.applyCommand, "node ./scripts/manager-worker-prompt-probe.mjs --summary-json --limit 1 --apply");
+  assert.equal(plan.summary.applySelectedAction, null);
 
   const churnPlan = buildContinuousRunPlan(
     {},

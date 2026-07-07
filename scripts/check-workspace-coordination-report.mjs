@@ -22,6 +22,12 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function packageCommands(scriptName) {
+  return packageJson.scripts?.[scriptName]
+    ?.split("&&")
+    .map((script) => script.trim()) ?? [];
+}
+
 function ciJobBlock(jobName) {
   const jobStart = ciWorkflow.indexOf(`\n  ${jobName}:`);
   if (jobStart === -1) {
@@ -80,6 +86,28 @@ function assertCiBaseRefBeforeCheck({ packageScriptName, ciJobName, ciCheckComma
   );
 }
 
+function assertCiTextOrder({ ciJobName, beforeText, afterText, message }, failures) {
+  const job = ciJobBlock(ciJobName);
+  const beforeIndex = job.indexOf(beforeText);
+  const afterIndex = job.indexOf(afterText);
+  assertCondition(job, `${ciWorkflowPath} must define the ${ciJobName} job`, failures);
+  assertCondition(
+    job && beforeIndex !== -1,
+    `${ciWorkflowPath} ${ciJobName} job must include ${beforeText}`,
+    failures,
+  );
+  assertCondition(
+    job && afterIndex !== -1,
+    `${ciWorkflowPath} ${ciJobName} job must include ${afterText}`,
+    failures,
+  );
+  assertCondition(
+    job && beforeIndex !== -1 && afterIndex !== -1 && beforeIndex < afterIndex,
+    message,
+    failures,
+  );
+}
+
 const failures = [];
 const workflowPath = "docs/workflows/workspace-coordination-report.md";
 const storyPath = "docs/workflows/implementation-evidence-boundary.md";
@@ -90,6 +118,7 @@ const workflow = readRequiredWorkspaceFile(workflowPath, failures);
 const story = readRequiredWorkspaceFile(storyPath, failures);
 const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 const ciWorkflow = readRequiredWorkspaceFile(ciWorkflowPath, failures);
+const fastWorkflowRunner = readRequiredWorkspaceFile("scripts/run-fast-workflow-checks.mjs", failures);
 
 assertCondition(
   packageJson.scripts?.["check:workspace-coordination"] === "node ./scripts/check-workspace-coordination-report.mjs",
@@ -97,13 +126,45 @@ assertCondition(
   failures,
 );
 assertCondition(
+  packageJson.scripts?.["check:fast"] === "node ./scripts/run-fast-workflow-checks.mjs all",
+  "package.json must define check:fast as node ./scripts/run-fast-workflow-checks.mjs all",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.["check:workspace-fast"] === "node ./scripts/run-fast-workflow-checks.mjs workspace",
+  "package.json must define check:workspace-fast as node ./scripts/run-fast-workflow-checks.mjs workspace",
+  failures,
+);
+assertCondition(
+  packageCommands("check:static")[0] === "pnpm run check:fast",
+  "pnpm run check:static must run pnpm run check:fast before the long static chain",
+  failures,
+);
+assertCondition(
+  packageCommands("check")[0] === "pnpm run preflight" &&
+    packageCommands("check")[1] === "pnpm run check:fast",
+  "pnpm run check must run preflight and then pnpm run check:fast before the long full chain",
+  failures,
+);
+assertCondition(
   packageJson.scripts?.check
     ?.split("&&")
     .map((script) => script.trim())
     .includes("pnpm run check:workspace-coordination"),
-  "pnpm run check must include pnpm run check:workspace-coordination",
+    "pnpm run check must include pnpm run check:workspace-coordination",
   failures,
 );
+for (const workspaceFastCommand of [
+  '"test:codex-workspace-state"',
+  '"test:workspace-command-resolution"',
+  '"test:codex-workspace"',
+]) {
+  assertCondition(
+    fastWorkflowRunner.includes(workspaceFastCommand),
+    `Fast workflow runner must include workspace command ${workspaceFastCommand}`,
+    failures,
+  );
+}
 
 assertCiHookBeforeCheck(
   { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
@@ -114,6 +175,50 @@ assertCiBaseRefBeforeCheck(
   failures,
 );
 assertCiHookBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
+assertCiBaseRefBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
+for (const ciJobName of ["fast", "full"]) {
+  assertCiTextOrder(
+    {
+      ciJobName,
+      beforeText: "git config core.hooksPath .githooks",
+      afterText: "pnpm run check:fast",
+      message: `${ciWorkflowPath} must configure core.hooksPath before pnpm run check:fast in the ${ciJobName} job`,
+    },
+    failures,
+  );
+  assertCiTextOrder(
+    {
+      ciJobName,
+      beforeText: "git fetch origin main:refs/remotes/origin/main",
+      afterText: "pnpm run check:fast",
+      message: `${ciWorkflowPath} must fetch origin/main before pnpm run check:fast in the ${ciJobName} job`,
+    },
+    failures,
+  );
+}
+for (const ciJobName of ["fast", "static"]) {
+  assertCiTextOrder(
+    {
+      ciJobName,
+      beforeText: "pnpm install --frozen-lockfile",
+      afterText: ciJobName === "fast" ? "pnpm run check:fast" : "pnpm run check:static",
+      message: `${ciWorkflowPath} must install JavaScript dependencies before running dependency-backed ${ciJobName} checks`,
+    },
+    failures,
+  );
+}
+assertCondition(
+  ciJobBlock("static").includes("- fast"),
+  `${ciWorkflowPath} static job must depend on the fast job`,
+  failures,
+);
+assertCondition(
+  ciJobBlock("check").includes("- fast") &&
+    ciJobBlock("check").includes('needs.fast.result') &&
+    ciJobBlock("check").includes("Fast workflow checks failed or did not complete"),
+  `${ciWorkflowPath} final check job must require the fast job result`,
+  failures,
+);
 
 for (const path of [workflowPath, storyPath]) {
   assertCondition(existsSync(join(rootDir, path)), `Missing workspace coordination artifact ${path}`, failures);

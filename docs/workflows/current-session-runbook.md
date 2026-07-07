@@ -43,7 +43,15 @@ asks for takeover.
 Autonomous best-judgment choices must be recorded through metadata-only heartbeat decision evidence.
 Include the decision, rationale, and next safe action before the runner continues.
 
+Run `pnpm run check:fast` before long local or CI-style gates when changes touch
+workflow policy, workspace delivery, sandbox-boundary handling, anti-churn
+routing, dashboard E2E runners, or manager-control-plane verification. Use
+`pnpm run check:ci-fast`, `pnpm run check:workspace-fast`,
+`pnpm run check:sandbox-fast`, or `pnpm run check:dashboard-fast` for a narrower
+first pass when only one surface changed.
+
 `pnpm run check` includes `pnpm run check:docs`,
+`pnpm run check:fast`,
 `pnpm run check:governed-worker-execution-dry-run`,
 `pnpm run check:documentation-authority`,
 `pnpm run check:legacy-planning-inventory`,
@@ -67,6 +75,8 @@ verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run check:maintenance-action-plan`, `pnpm run check:development-runway`,
 `pnpm run check:runner-assignment-status`,
 `pnpm run test:manager-quality-gate`,
+`pnpm run test:manager-control-plane:contracts`,
+`pnpm run test:manager-control-plane:focused`,
 `pnpm run test:manager-control-plane`,
 `pnpm run test:manager-control-plane-contract`,
 `pnpm run test:manager-control-plane-dispatcher-port`,

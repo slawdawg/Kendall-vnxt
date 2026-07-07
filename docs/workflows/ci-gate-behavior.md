@@ -7,6 +7,9 @@ This repository uses tiered CI so pull requests get fast, relevant feedback whil
 
 Pull requests run a final `check` job backed by component jobs:
 
+- `fast` always runs `pnpm run check:fast` before the broader static gate. It
+  covers CI policy wiring, workspace delivery command readiness,
+  sandbox-boundary and anti-churn routing, and dashboard E2E runner contracts.
 - `static` always runs the deterministic repository drift checks through
   `pnpm run check:static`.
 - `javascript` runs only when dashboard, shared package, JavaScript lockfile, or
@@ -21,17 +24,32 @@ path filters do not match. Failed or cancelled component jobs fail `check`.
 
 Pushes to `main` run the full serial gate through `pnpm run check`. This keeps
 the merged baseline covered by preflight, static drift checks, dashboard build,
-and the complete supervisor test suite.
+and the complete supervisor test suite. The push job runs `pnpm run check:fast`
+first so workflow, workspace, sandbox-boundary, and dashboard E2E contract
+regressions fail before the long serial gate.
 
 ## Local Behavior
 
 Use focused checks during development:
 
 ```bash
+pnpm run check:fast
+pnpm run check:ci-fast
+pnpm run check:workspace-fast
+pnpm run check:sandbox-fast
+pnpm run check:dashboard-fast
 pnpm run check:static
 pnpm run build:dashboard
 pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k routing
 ```
+
+Use the narrower fast suites when the change touches only one friction surface:
+
+- `check:ci-fast` for GitHub workflow and workspace coordination policy.
+- `check:workspace-fast` for Codex workspace delivery command readiness.
+- `check:sandbox-fast` for sandbox-boundary and anti-churn routing.
+- `check:dashboard-fast` for dashboard E2E runner contracts and pipeline
+  fixture smoke coverage.
 
 Use the profiled supervisor suite when test runtime is the question:
 

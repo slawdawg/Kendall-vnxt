@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+
+import { spawnSync } from "node:child_process";
+
+const suites = {
+  ci: [
+    "check:github-workflow-policy",
+    "check:workspace-coordination",
+  ],
+  workspace: [
+    "test:codex-workspace-state",
+    "test:workspace-command-resolution",
+    "test:codex-workspace",
+  ],
+  sandbox: [
+    "test:sandbox-boundary-classifier",
+    "test:anti-churn-signature-classifier",
+    "test:anti-churn-verification-routing",
+    "test:anti-churn-apply-safe-gate",
+  ],
+  dashboard: [
+    "check:e2e-report",
+    "test:dashboard-e2e-runner",
+    "check:dashboard-pipeline-boundary",
+    "test:dashboard-pipeline-fixtures",
+  ],
+};
+
+const requested = process.argv[2] || "all";
+const commands = requested === "all"
+  ? [...suites.ci, ...suites.workspace, ...suites.sandbox, ...suites.dashboard]
+  : suites[requested];
+
+if (!commands) {
+  console.error(`Unknown fast workflow check suite: ${requested}`);
+  console.error(`Expected one of: ${["all", ...Object.keys(suites)].join(", ")}`);
+  process.exit(64);
+}
+
+for (const command of commands) {
+  console.log(`\n> pnpm run ${command}`);
+  const result = spawnSync("pnpm", ["run", command], { stdio: "inherit" });
+  if (result.error) {
+    console.error(result.error.message);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    process.exit(typeof result.status === "number" ? result.status : 1);
+  }
+}
