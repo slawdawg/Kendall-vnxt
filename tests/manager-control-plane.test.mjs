@@ -3149,6 +3149,186 @@ test("refill plan surfaces eligible source work candidates into dispatcher refil
   assert.equal(plan.summary.refillWatermark.eligibleCandidates[0].rawPayloadRetained, false);
 });
 
+test("cycle packet exposes minimum happy path operational loop evidence", () => {
+  const freshNow = new Date(Date.now() - 1000).toISOString();
+  const cycle = buildCyclePacket(
+    { desiredWorkers: 1, runId: "manager-test", now: freshNow },
+    {
+      preflightStatus: { status: "ready", summary: { ok: true }, blockers: [], warnings: [] },
+      usageContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 }, rawPayloadRetained: false }, blockers: [], warnings: [] },
+      deliveryPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      cleanupPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceWorkCandidates: [
+        {
+          candidateId: "minimum-happy-path-source-work",
+          title: "Minimum happy path operational loop",
+          sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+          acceptanceCriteria: ["AC source work reaches dispatcher refill through existing gates"],
+          verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+          riskClass: "low",
+          touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+          authorityClass: "allowed_unattended",
+          evidenceRefs: ["evidence:minimum-happy-path-loop"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(cycle.summary.operationalLoop.schemaVersion, "manager-operational-loop/v0");
+  assert.equal(cycle.summary.operationalLoop.status, "ready");
+  assert.equal(cycle.summary.operationalLoop.mode, "read_only_projection");
+  assert.equal(cycle.summary.operationalLoop.sourceWork.candidateWorkPacketIds[0], "minimum-happy-path-source-work");
+  assert.equal(cycle.summary.operationalLoop.sourceWork.eligibleCount, 1);
+  assert.equal(cycle.summary.operationalLoop.dispatcherRefill.result, "queued_work");
+  assert.equal(cycle.summary.operationalLoop.dispatcherRefill.queuedCount, 1);
+  assert.deepEqual(cycle.summary.operationalLoop.gates.preserved, [
+    "worker_mutation",
+    "dispatch_apply",
+    "delivery",
+    "cleanup",
+    "provider_usage",
+  ]);
+  assert.equal(cycle.summary.operationalLoop.gates.dispatchApplyAuthority, "needs_authority_approval");
+  assert.equal(cycle.summary.operationalLoop.gates.workerMutationAuthority, "needs_authority_approval");
+  assert.equal(cycle.summary.operationalLoop.gates.deliveryAuthority, "blocked");
+  assert.equal(cycle.summary.operationalLoop.gates.cleanupAuthority, "blocked");
+  assert.equal(cycle.summary.operationalLoop.gates.modelCallAuthority, "blocked");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.readinessState, "ready");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.freshnessState, "live");
+  assert.match(cycle.summary.operationalLoop.nextManagerAction, /Pass eligible CandidateWorkPacket summaries/);
+  assert.equal(cycle.summary.operationalLoop.rawPayloadRetained, false);
+  assert.doesNotMatch(JSON.stringify(cycle.summary.operationalLoop), /raw prompt|provider payload|sk-testtoken|capture-pane/i);
+});
+
+test("cycle operational loop degrades stale operational readiness before happy path", () => {
+  const cycle = buildCyclePacket(
+    { desiredWorkers: 1, runId: "manager-test", now: "2026-07-05T00:00:00.000Z" },
+    {
+      preflightStatus: { status: "ready", summary: { ok: true }, blockers: [], warnings: [] },
+      usageContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 }, rawPayloadRetained: false }, blockers: [], warnings: [] },
+      deliveryPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      cleanupPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceWorkCandidates: [
+        {
+          candidateId: "minimum-happy-path-source-work",
+          sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+          acceptanceCriteria: ["AC source work reaches dispatcher refill through existing gates"],
+          verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+          riskClass: "low",
+          touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+          authorityClass: "allowed_unattended",
+          evidenceRefs: ["evidence:minimum-happy-path-loop"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(cycle.summary.operationalActions.freshnessState, "stale");
+  assert.equal(cycle.summary.operationalLoop.status, "attention");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.freshnessState, "stale");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.typedReason, "projection_stale");
+  assert.match(cycle.summary.operationalLoop.nextManagerAction, /Refresh or repair the operational readiness projection/i);
+  assert.doesNotMatch(cycle.summary.operationalLoop.nextManagerAction, /Pass eligible CandidateWorkPacket summaries/i);
+});
+
+test("cycle operational loop degrades blocked operational readiness before happy path", () => {
+  const freshNow = new Date(Date.now() - 1000).toISOString();
+  const cycle = buildCyclePacket(
+    { desiredWorkers: 1, runId: "manager-test", now: freshNow },
+    {
+      preflightStatus: {
+        status: "blocked",
+        summary: { ok: false },
+        blockers: [{ code: "preflight-blocked", message: "Preflight is blocked.", nextAction: "Repair preflight." }],
+        warnings: [],
+      },
+      usageContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 }, rawPayloadRetained: false }, blockers: [], warnings: [] },
+      deliveryPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      cleanupPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceWorkCandidates: [
+        {
+          candidateId: "minimum-happy-path-source-work",
+          sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+          acceptanceCriteria: ["AC source work reaches dispatcher refill through existing gates"],
+          verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+          riskClass: "low",
+          touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+          authorityClass: "allowed_unattended",
+          evidenceRefs: ["evidence:minimum-happy-path-loop"],
+        },
+      ],
+    },
+  );
+
+  assert.equal(cycle.summary.operationalActions.readinessState, "degraded");
+  assert.equal(cycle.summary.operationalLoop.status, "attention");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.readinessState, "degraded");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.typedReason, "runtime_unavailable");
+  assert.equal(cycle.summary.operationalLoop.gates.operationalReadiness.blockerCount > 0, true);
+  assert.match(cycle.summary.operationalLoop.nextManagerAction, /Refresh or repair the operational readiness projection/i);
+  assert.doesNotMatch(cycle.summary.operationalLoop.nextManagerAction, /Pass eligible CandidateWorkPacket summaries/i);
+});
+
+test("cycle operational loop preserves duplicate refill suppression", () => {
+  const freshNow = new Date(Date.now() - 1000).toISOString();
+  const sourceRefs = ["doc:docs/workflows/current-session-runbook.md"];
+  const refillCandidates = [
+    {
+      candidateId: "minimum-happy-path-source-work",
+      sourceRefs,
+      acceptanceCriteria: ["AC source work reaches dispatcher refill through existing gates"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      riskClass: "low",
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      authorityClass: "allowed_unattended",
+      evidenceRefs: ["evidence:minimum-happy-path-loop"],
+    },
+  ];
+  const activeRefill = buildDispatcherRefillWatermarkPlan(
+    { runId: "manager-test" },
+    {
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceRefs,
+      refillCandidates,
+    },
+  );
+  const cycle = buildCyclePacket(
+    { desiredWorkers: 1, runId: "manager-test", now: freshNow, sourceRefs },
+    {
+      preflightStatus: { status: "ready", summary: { ok: true }, blockers: [], warnings: [] },
+      usageContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      workerStatus: { status: "ready", summary: { workerCounts: { active: 0, warm: 0, paused: 0 }, rawPayloadRetained: false }, blockers: [], warnings: [] },
+      deliveryPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      cleanupPlan: { status: "blocked", summary: { mutationMode: "existing-gates-required", rawPayloadRetained: false }, blockers: [], warnings: [] },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceWorkCandidates: refillCandidates,
+      activeRefillJobs: [activeRefill.summary.refillJob],
+    },
+  );
+
+  assert.equal(activeRefill.status, "refilling");
+  assert.equal(cycle.summary.operationalLoop.status, "refilling");
+  assert.equal(cycle.summary.operationalLoop.dispatcherRefill.duplicateRefillSuppressed, true);
+  assert.equal(cycle.summary.operationalLoop.dispatcherRefill.queuedCount, 1);
+  assert.match(cycle.summary.operationalLoop.nextManagerAction, /Wait for the active refill job/i);
+  assert.doesNotMatch(cycle.summary.operationalLoop.nextManagerAction, /Pass eligible CandidateWorkPacket summaries/i);
+  assert.equal(cycle.summary.operationalLoop.rawPayloadRetained, false);
+});
+
 test("refill plan uses source-work refs directly and does not bypass blocked eligibility", () => {
   const sourceWorkOnly = buildRefillPlan(
     { desiredWorkers: 1 },
