@@ -20,6 +20,7 @@ export type PipelinePacketActionability =
 export type PipelineActiveBoardSummary = {
   projectionTruth: PipelineProjectionSourceLabelV0;
   executionLoopHealth: PipelineExecutionLoopHealthSummary;
+  backpressure: PipelineBackpressureState | null;
   activePacketCount: number;
   attentionCount: number;
   readyToTestCount: number;
@@ -142,6 +143,7 @@ export type PipelinePacketDetailWhyDiagnostics = {
   packetId: string;
   placement: PipelinePacketBoardPlacement;
   actionability: PipelinePacketActionability;
+  backpressure: PipelineBackpressureState | null;
   detailSource: "PipelineDashboardProjectionV0.selectedPacketDetails" | "PipelineDashboardProjectionV0.workPackets";
   selectedDetailAvailable: boolean;
   why: {
@@ -175,6 +177,33 @@ export type PipelineDispatchAffectingManagerState = {
     | "backend_unavailable"
     | "source_exhausted";
   summary: string;
+};
+
+export type PipelineBackpressureReason =
+  | "review_overloaded"
+  | "delivery_overloaded"
+  | "verification_overloaded"
+  | "operator_testing_overloaded"
+  | "usage_limited"
+  | "resource_limited"
+  | "readiness_blocked"
+  | "queue_blocked"
+  | "queue_gated"
+  | "cleanup_gated"
+  | "source_exhausted"
+  | "projection_stale"
+  | "unknown";
+
+export type PipelineBackpressureState = {
+  visible: true;
+  reason: PipelineBackpressureReason;
+  severity: "low" | "medium" | "high";
+  source: "queueSummary" | "managerSummary" | "backendReachability" | "truthSummary" | "stageSummaries";
+  summary: string;
+  nextSafeAction: string;
+  affectedStages: AuthoritativePacketStage[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
 };
 
 export type PipelineActiveBoardViewModel = {
@@ -226,6 +255,7 @@ const dispatchAffectingEmptyReasons = new Set([
 
 export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardProjectionV0): PipelineActiveBoardViewModel {
   const dispatchState = isDispatchAffectingManagerState(projection.managerSummary, projection.queueSummary, projection);
+  const backpressure = deriveBackpressureState(projection);
   const cardsByStage = new Map<AuthoritativePacketStage, PipelineCompactPacketCard[]>();
   const staleHistoryItems: PipelineStaleHistoryItem[] = [];
   const attentionItems: PipelineCompactPacketCard[] = [];
@@ -295,6 +325,7 @@ export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardP
     summary: {
       projectionTruth: projection.sourceLabel,
       executionLoopHealth,
+      backpressure,
       activePacketCount,
       staleHistoryCount: staleHistoryItems.length,
       attentionCount,
@@ -385,6 +416,7 @@ export function buildPacketDetailWhyDiagnosticsForPacket(
     packetId: packet.packetId,
     placement,
     actionability,
+    backpressure: derivePacketBackpressureState(packet, projection),
     detailSource: selectedDetailAvailable
       ? "PipelineDashboardProjectionV0.selectedPacketDetails"
       : "PipelineDashboardProjectionV0.workPackets",
@@ -1045,6 +1077,196 @@ export function isDispatchAffectingManagerState(
     return { visible: true, reason: "idle_with_ready_work", summary: "Ready work exists but workers are idle." };
   }
   return { visible: false };
+}
+
+export function deriveBackpressureState(projection: PipelineDashboardProjectionV0): PipelineBackpressureState | null {
+  if (projection.backendReachability.state === "unavailable" || projection.truthSummary.backendUnavailable) {
+    return backpressureState(
+      "readiness_blocked",
+      "high",
+      "backendReachability",
+      "Backend readiness is unavailable.",
+      "Restore backend reachability before starting new Execute work.",
+      []
+    );
+  }
+  if (projection.freshnessState === "stale" || projection.truthSummary.stale || projection.queueSummary.emptyReason === "projection_stale") {
+    return backpressureState(
+      "projection_stale",
+      "medium",
+      "truthSummary",
+      "Projection is stale.",
+      "Refresh or inspect backend freshness before dispatching more work.",
+      []
+    );
+  }
+  if (!projectionCanShowLiveActiveWork(projection)) {
+    return null;
+  }
+  if (projection.managerSummary.inactivityReason === "usage_limited" || projection.queueSummary.emptyReason === "usage_limited") {
+    return backpressureState(
+      "usage_limited",
+      "medium",
+      "managerSummary",
+      "Usage limits are applying dispatch backpressure.",
+      "Wait for usage recovery or reduce active work before starting new Execute work.",
+      []
+    );
+  }
+  if (projection.managerSummary.inactivityReason === "resource_limited" || projection.queueSummary.emptyReason === "resource_limited") {
+    return backpressureState(
+      "resource_limited",
+      "high",
+      "managerSummary",
+      "Host resource limits are applying dispatch backpressure.",
+      "Let CPU/RAM recover or drain active work before starting new Execute work.",
+      []
+    );
+  }
+  if (projection.queueSummary.emptyReason === "cleanup_gated" || projection.managerSummary.inactivityReason === "cleanup_gated") {
+    return backpressureState(
+      "cleanup_gated",
+      "medium",
+      "queueSummary",
+      "Cleanup or drain state is applying backpressure.",
+      "Finish or inspect cleanup gates before starting more Execute work.",
+      affectedStagesFromProjection(projection, ["deliver", "learn"])
+    );
+  }
+  if ((projection.queueSummary.gatedCount ?? 0) > 0 || projection.queueSummary.emptyReason === "approval_required") {
+    return backpressureState(
+      "queue_gated",
+      "medium",
+      "queueSummary",
+      "Queue has gated work waiting on approval.",
+      "Resolve the smallest approval or inspect packet detail before dispatching more work.",
+      affectedStagesFromProjection(projection, ["needs_approval"])
+    );
+  }
+  if ((projection.queueSummary.blockedCount ?? 0) > 0 || projection.queueSummary.emptyReason === "blocked") {
+    return backpressureState(
+      "queue_blocked",
+      "medium",
+      "queueSummary",
+      "Queue has blocked work applying backpressure.",
+      "Inspect blockers and clear Review, Deliver, verification, or operator-testing pressure before starting more Execute work.",
+      affectedStagesFromProjection(projection, ["review", "deliver", "promote"])
+    );
+  }
+  if (projection.queueSummary.sourceExhausted || projection.managerSummary.sourceExhausted || projection.queueSummary.emptyReason === "source_exhausted") {
+    return backpressureState(
+      "source_exhausted",
+      "low",
+      "queueSummary",
+      "Source work is exhausted.",
+      "Refill safe source-backed work before starting more Execute work.",
+      []
+    );
+  }
+  if (projection.queueSummary.emptyReason === "failure_budget_hit" || projection.managerSummary.inactivityReason === "failure_budget_hit") {
+    return backpressureState(
+      "verification_overloaded",
+      "high",
+      "queueSummary",
+      "Failure budget is applying verification backpressure.",
+      "Inspect failed verification evidence and recover or defer failing work before dispatching more.",
+      affectedStagesFromProjection(projection, ["execute", "review"])
+    );
+  }
+  const stagePressure = deriveStageBackpressure(projection);
+  if (stagePressure) {
+    return stagePressure;
+  }
+  return null;
+}
+
+export function derivePacketBackpressureState(
+  packet: PipelineDashboardWorkPacketV0,
+  projection: PipelineDashboardProjectionV0
+): PipelineBackpressureState | null {
+  const backpressure = deriveBackpressureState(projection);
+  if (!backpressure) {
+    return null;
+  }
+  if (backpressure.affectedStages.length === 0 || backpressure.affectedStages.includes(packet.currentStage)) {
+    return backpressure;
+  }
+  return null;
+}
+
+function deriveStageBackpressure(projection: PipelineDashboardProjectionV0): PipelineBackpressureState | null {
+  const activeStages = new Set(projection.workPackets.map((packet) => packet.currentStage));
+  if (activeStages.has("review") && projection.workPackets.some((packet) => packet.currentStage === "review" && (packet.status === "blocked" || packet.status === "failed"))) {
+    return backpressureState(
+      "review_overloaded",
+      "medium",
+      "stageSummaries",
+      "Review has blocked or failed packets.",
+      "Clear Review blockers before routing more Execute work.",
+      ["review"]
+    );
+  }
+  if (activeStages.has("deliver") && projection.workPackets.some((packet) => packet.currentStage === "deliver" && (packet.status === "blocked" || packet.status === "failed"))) {
+    return backpressureState(
+      "delivery_overloaded",
+      "medium",
+      "stageSummaries",
+      "Deliver has blocked or failed packets.",
+      "Clear delivery blockers before routing more Execute work.",
+      ["deliver"]
+    );
+  }
+  if (projection.workPackets.some((packet) => (packet.currentStage === "promote" || packet.currentStage === "review") && packet.status === "failed")) {
+    return backpressureState(
+      "verification_overloaded",
+      "medium",
+      "stageSummaries",
+      "Verification or quality review has failed packets.",
+      "Inspect failed checks and recover or defer before starting more Execute work.",
+      affectedStagesFromProjection(projection, ["promote", "review"])
+    );
+  }
+  if (projection.workPackets.some((packet) => isReadyToTestPacket(packet, projection))) {
+    return backpressureState(
+      "operator_testing_overloaded",
+      "medium",
+      "stageSummaries",
+      "Ready To Test packets are waiting for operator testing.",
+      "Record pass, fail, note, or rework decision before starting more Execute work.",
+      affectedStagesFromProjection(projection, ["review", "promote"])
+    );
+  }
+  return null;
+}
+
+function backpressureState(
+  reason: PipelineBackpressureReason,
+  severity: PipelineBackpressureState["severity"],
+  source: PipelineBackpressureState["source"],
+  summary: string,
+  nextSafeAction: string,
+  affectedStages: AuthoritativePacketStage[]
+): PipelineBackpressureState {
+  return {
+    visible: true,
+    reason,
+    severity,
+    source,
+    summary,
+    nextSafeAction,
+    affectedStages,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function affectedStagesFromProjection(
+  projection: PipelineDashboardProjectionV0,
+  preferredStages: AuthoritativePacketStage[]
+): AuthoritativePacketStage[] {
+  const liveStages = new Set(projection.workPackets.map((packet) => packet.currentStage));
+  const affected = preferredStages.filter((stage) => liveStages.has(stage));
+  return affected.length > 0 ? affected : preferredStages;
 }
 
 function addStageCard(cardsByStage: Map<AuthoritativePacketStage, PipelineCompactPacketCard[]>, card: PipelineCompactPacketCard) {

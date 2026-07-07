@@ -668,6 +668,186 @@ test("packet detail why diagnostics contract explains placement without retainin
   }
 });
 
+test("backpressure summary is metadata-only and separate from dispatch-affecting state", async () => {
+  const {
+    buildPipelineActiveBoardViewModel,
+    deriveBackpressureState,
+    isDispatchAffectingManagerState,
+  } = await loadActiveBoardViewModelModule();
+
+  const blockedQueueProjection = projectionFixture({
+    queueSummary: {
+      ...queueSummaryFixture(),
+      blockedCount: 3,
+      dispatchableCount: 0,
+      emptyReason: "blocked",
+      summary: "Review queue is blocked.",
+    },
+  });
+  const blockedBackpressure = deriveBackpressureState(blockedQueueProjection);
+  assert.equal(blockedBackpressure.reason, "queue_blocked");
+  assert.equal(blockedBackpressure.source, "queueSummary");
+  assert.equal(blockedBackpressure.metadataOnly, true);
+  assert.equal(blockedBackpressure.rawPayloadRetained, false);
+  assert.match(blockedBackpressure.nextSafeAction, /Inspect blockers/);
+
+  const blockedDispatchState = isDispatchAffectingManagerState(
+    blockedQueueProjection.managerSummary,
+    blockedQueueProjection.queueSummary,
+    blockedQueueProjection
+  );
+  assert.equal(blockedDispatchState.visible, false);
+
+  const usageProjection = projectionFixture({
+    managerSummary: {
+      ...managerSummaryFixture(),
+      inactivityReason: "usage_limited",
+      summary: "Usage is constrained.",
+    },
+  });
+  assert.equal(deriveBackpressureState(usageProjection).reason, "usage_limited");
+
+  const readyToTestProjection = projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-ready-pressure",
+        currentStage: "review",
+        status: "complete",
+        readyToTest: readyToTestFixture({ readyId: "ready:pressure", evidenceRefs: ["ready:pressure:evidence"] }),
+      }),
+    ],
+  });
+  const readyToTestModel = buildPipelineActiveBoardViewModel(readyToTestProjection);
+  assert.equal(readyToTestModel.summary.backpressure.reason, "operator_testing_overloaded");
+  assert.equal(JSON.stringify(readyToTestModel.summary.backpressure.affectedStages), "[\"review\"]");
+  assert.equal(readyToTestModel.packetDetails.byPacketId["packet-ready-pressure"].backpressure.reason, "operator_testing_overloaded");
+
+  const unrelatedPacketPressureModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-ready-pressure",
+        currentStage: "review",
+        status: "complete",
+        readyToTest: readyToTestFixture({ readyId: "ready:pressure", evidenceRefs: ["ready:pressure:evidence"] }),
+      }),
+      packetFixture({
+        packetId: "packet-execute-unrelated",
+        currentStage: "execute",
+        status: "active",
+      }),
+    ],
+  }));
+  assert.equal(unrelatedPacketPressureModel.packetDetails.byPacketId["packet-execute-unrelated"].backpressure, null);
+
+  const unprovenReadyToTestModel = buildPipelineActiveBoardViewModel(projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-unproven-ready-pressure",
+        currentStage: "review",
+        status: "waiting",
+        readyToTest: readyToTestFixture({ readyId: "ready:pressure", evidenceRefs: [] }),
+      }),
+    ],
+  }));
+  assert.equal(unprovenReadyToTestModel.summary.backpressure, null);
+
+  const reviewBlockedProjection = projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-review-blocked",
+        currentStage: "review",
+        status: "blocked",
+        blocker: "Review queue is overloaded.",
+      }),
+    ],
+  });
+  assert.equal(deriveBackpressureState(reviewBlockedProjection).reason, "review_overloaded");
+
+  const deliveryBlockedProjection = projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-delivery-blocked",
+        currentStage: "deliver",
+        status: "blocked",
+      }),
+    ],
+  });
+  assert.equal(deriveBackpressureState(deliveryBlockedProjection).reason, "delivery_overloaded");
+
+  const resourceLimitedProjection = projectionFixture({
+    managerSummary: {
+      ...managerSummaryFixture(),
+      inactivityReason: "resource_limited",
+      summary: "CPU pressure is high.",
+    },
+    workPackets: [
+      packetFixture({
+        packetId: "packet-review-blocked",
+        currentStage: "review",
+        status: "blocked",
+      }),
+    ],
+  });
+  assert.equal(deriveBackpressureState(resourceLimitedProjection).reason, "resource_limited");
+
+  const readinessBlockedProjection = projectionFixture({
+    backendReachability: {
+      state: "unavailable",
+      checkedAt: "2026-07-02T20:00:00.000Z",
+      reason: "backend_unavailable",
+      summary: "Backend unavailable.",
+    },
+    workPackets: [
+      packetFixture({
+        packetId: "packet-review-blocked",
+        currentStage: "review",
+        status: "blocked",
+      }),
+    ],
+  });
+  assert.equal(deriveBackpressureState(readinessBlockedProjection).reason, "readiness_blocked");
+
+  const verificationBlockedProjection = projectionFixture({
+    queueSummary: {
+      ...queueSummaryFixture(),
+      emptyReason: "failure_budget_hit",
+    },
+  });
+  assert.equal(deriveBackpressureState(verificationBlockedProjection).reason, "verification_overloaded");
+
+  const fixtureBlockedProjection = projectionFixture({
+    sourceLabel: "fixture",
+    fixtureMode: {
+      enabled: true,
+      reason: "fixture fallback",
+      allowedForEnvironment: true,
+      visibleLabelRequired: true,
+      canSatisfyLiveProof: false,
+    },
+    truthSummary: {
+      ...truthSummaryFixture(),
+      label: "fixture",
+      fixtureBacked: true,
+    },
+    workPackets: [
+      packetFixture({
+        packetId: "packet-fixture-review-blocked",
+        currentStage: "review",
+        status: "blocked",
+      }),
+    ],
+  });
+  assert.equal(deriveBackpressureState(fixtureBlockedProjection), null);
+
+  const healthyModel = buildPipelineActiveBoardViewModel(projectionFixture());
+  assert.equal(healthyModel.summary.backpressure, null);
+
+  const backpressureJson = JSON.stringify(readyToTestModel.summary.backpressure);
+  assert.equal(backpressureJson.includes("raw prompt"), false);
+  assert.equal(backpressureJson.includes("provider payload"), false);
+  assert.equal(backpressureJson.includes("tmux scrollback"), false);
+});
+
 test("fixture, unavailable, and stale-only projections cannot satisfy live or ready-to-test counts", async () => {
   const { buildPipelineActiveBoardViewModel, derivePacketActionability, derivePacketPlacement } = await loadActiveBoardViewModelModule();
 

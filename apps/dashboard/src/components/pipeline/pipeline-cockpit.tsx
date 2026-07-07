@@ -14,6 +14,7 @@ import {
 import {
   buildPipelineActiveBoardViewModel,
   type PipelineActiveBoardViewModel,
+  type PipelineBackpressureState,
   type PipelineCompactPacketCard,
   type PipelineContextualActionStrip,
   type PipelineDiagnosticsItem,
@@ -688,6 +689,7 @@ function ProjectionTruthSummary({
   const staleHistoryCount = activeBoardViewModel ? String(activeBoardViewModel.summary.staleHistoryCount) : "unknown";
   const readyToTestCount = activeBoardViewModel ? String(activeBoardViewModel.summary.readyToTestCount) : "unknown";
   const dispatchState = activeBoardViewModel?.summary.dispatchAffectingManagerState;
+  const backpressure = activeBoardViewModel?.summary.backpressure ?? null;
   const recoveryText = projectionError
     ? `Projection fetch failed: ${projectionError}. Fixture packets remain visible only as labeled fallback and cannot prove live work.`
     : projection?.truthSummary.summary ?? "Backend projection unavailable. Fixture packets remain visible only as labeled fallback and cannot prove live work.";
@@ -713,9 +715,32 @@ function ProjectionTruthSummary({
           Dispatch attention: {dispatchState.summary}
         </p>
       ) : null}
+      <BackpressureSummaryBanner backpressure={backpressure} />
       <p className="text-sm leading-5 text-[var(--muted)]">
         {recoveryText} Open Diagnostics only when you need debug details.
       </p>
+    </section>
+  );
+}
+
+function BackpressureSummaryBanner({ backpressure }: { backpressure: PipelineBackpressureState | null }) {
+  if (!backpressure) {
+    return null;
+  }
+  const affectedStages = backpressure.affectedStages.length > 0
+    ? backpressure.affectedStages.map((stage) => stage.replace(/_/g, " ")).join(", ")
+    : "queue";
+  return (
+    <section
+      aria-label="Backpressure state"
+      aria-live="polite"
+      className="grid gap-1 rounded-[0.375rem] border border-[color-mix(in_srgb,var(--review)_38%,var(--line))] bg-[color-mix(in_srgb,var(--review)_10%,transparent)] px-2 py-1 text-sm leading-5 text-[var(--foreground)]"
+      role="status"
+    >
+      <p>
+        Backpressure: {backpressure.summary} Severity {backpressure.severity}; source {backpressure.source}; affected {affectedStages}.
+      </p>
+      <p className="text-[var(--muted)]">Next safe action: {backpressure.nextSafeAction}</p>
     </section>
   );
 }
@@ -2495,6 +2520,13 @@ function PacketWhyDiagnosticsPanel({ detail }: { detail: PipelinePacketDetailWhy
       <dl className="grid gap-2 text-sm">
         <InspectionRow label="Why here" value={detail.why.placementReason} />
         <InspectionRow label="Placement" value={detail.why.label} />
+        {detail.backpressure ? (
+          <>
+            <InspectionRow label="Backpressure" value={detail.backpressure.summary} />
+            <InspectionRow label="Backpressure next" value={detail.backpressure.nextSafeAction} />
+            <InspectionRow label="Backpressure state" value={`${detail.backpressure.reason}; severity ${detail.backpressure.severity}; source ${detail.backpressure.source}; rawPayloadRetained ${String(detail.backpressure.rawPayloadRetained)}`} />
+          </>
+        ) : null}
         <InspectionRow label="Detail source" value={detail.detailSource} />
         <InspectionRow label="Selected detail" value={detail.selectedDetailAvailable ? "available" : "not present"} />
         <InspectionRow label="Next diagnostic action" value={detail.why.nextDiagnosticAction} />
@@ -2537,8 +2569,9 @@ function ContextualActionStripPanel({ strip }: { strip: PipelineContextualAction
               </a>
             ) : (
               <button
-                className="h-8 rounded-[0.375rem] border border-[var(--line)] px-3 text-sm font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-70"
-                disabled
+                aria-disabled="true"
+                className="h-8 rounded-[0.375rem] border border-[var(--line)] px-3 text-sm font-semibold text-[var(--foreground)] opacity-70"
+                onClick={(event) => event.preventDefault()}
                 title={`${action.reason} ${action.expectedResult}`}
                 type="button"
               >
