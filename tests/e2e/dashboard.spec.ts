@@ -1542,6 +1542,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:dashboard-memory-proposals", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:sandbox-boundary-classifier", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace-state", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:anti-churn-event-writer", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:anti-churn-signature-classifier", { exact: true })).toBeVisible();

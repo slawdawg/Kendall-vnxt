@@ -2068,6 +2068,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-knx-obsidian-memory",
         "check-clean-install-boundary",
         "test-codex-workspace",
+        "test-sandbox-boundary-classifier",
         "test-codex-workspace-state",
         "test-work-packet-contracts",
         "test-work-packet-stage-map",
@@ -2149,6 +2150,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-dashboard-memory-proposals" in static_group["commandIds"]
     assert "check-clean-install-boundary" in static_group["commandIds"]
     assert "test-codex-workspace" in static_group["commandIds"]
+    assert "test-sandbox-boundary-classifier" in static_group["commandIds"]
     assert "test-codex-workspace-state" in static_group["commandIds"]
     assert "test-anti-churn-event-writer" in static_group["commandIds"]
     assert "test-anti-churn-signature-classifier" in static_group["commandIds"]

@@ -4669,6 +4669,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-sandbox-boundary-classifier",
+                label="Sandbox boundary classifier tests",
+                command="pnpm run test:sandbox-boundary-classifier",
+                status="required",
+                requiredFor=["sandbox boundary routing changes", "workspace command rerun policy changes", "manager tool failure classification changes"],
+                evidence=[
+                    "Validates sandbox boundary packets, read-only rerun authorization, and normal product-error exclusions.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-codex-workspace-state",
                 label="Codex workspace state tests",
                 command="pnpm run test:codex-workspace-state",
@@ -5038,6 +5049,7 @@ class SupervisorService:
                     "test-dashboard-memory-proposals",
                     "check-clean-install-boundary",
                     "test-codex-workspace",
+                    "test-sandbox-boundary-classifier",
                     "test-codex-workspace-state",
                     "test-anti-churn-event-writer",
                     "test-anti-churn-signature-classifier",

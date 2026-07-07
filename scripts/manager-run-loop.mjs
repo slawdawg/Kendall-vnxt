@@ -132,13 +132,16 @@ function sleep(ms) {
 
 const preflight = buildPreflight(options);
 if (!preflight.ok) {
+  const sandboxBoundary = firstSandboxBoundary(preflight);
   writePacket({
     ok: false,
-    status: "blocked",
+    status: sandboxBoundary ? "known_sandbox_boundary" : "blocked",
     summary: {
       mode: "continuous",
       phase: "preflight",
       timestamp: new Date().toISOString(),
+      stopReason: sandboxBoundary ? "known_sandbox_boundary" : "preflight_blocked",
+      ...(sandboxBoundary ? { sandboxBoundaryPacket: sandboxBoundary } : {}),
       blockers: preflight.blockers,
       warnings: preflight.warnings,
     },
@@ -304,4 +307,28 @@ if (!preflight.ok) {
     if (maxIterations !== 0 && iteration >= maxIterations) break;
     await sleep(Math.max(1000, options.intervalMs || 60000));
   }
+}
+
+function firstSandboxBoundary(packet = {}) {
+  const notices = [
+    ...(Array.isArray(packet.blockers) ? packet.blockers : []),
+    ...(Array.isArray(packet.warnings) ? packet.warnings : []),
+  ];
+  const notice = notices.find((item) => item?.sandboxBoundary === true || item?.sandboxBoundaryPacket?.boundary === true);
+  if (!notice) return null;
+  return notice.sandboxBoundaryPacket || {
+    boundary: true,
+    class: "sandbox",
+    signature: notice.sandboxSignatureClass || "known_sandbox_boundary",
+    command: notice.commandShape || currentInvocationCommand(),
+    safe_rerun: notice.safe_rerun || "exact_command_outside_sandbox_when_read_only",
+    mutation: notice.mutation || "none",
+    next_action: notice.nextAction || "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+  };
+}
+
+function currentInvocationCommand() {
+  return ["node", "./scripts/manager-run-loop.mjs", ...process.argv.slice(2)]
+    .map((part) => (/^[A-Za-z0-9_./:=@+-]+$/.test(String(part)) ? String(part) : `'${String(part).replaceAll("'", "'\"'\"'")}'`))
+    .join(" ");
 }

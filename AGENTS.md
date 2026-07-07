@@ -18,6 +18,24 @@
   files, do not change test scope or command shape. Record the sandbox boundary
   and request approval to rerun the exact same read-only verification command
   outside the sandbox.
+- Known Kendall_Nxt sandbox-boundary commands:
+  - `node ./scripts/manager-preflight.mjs --summary-json`: if Git, tmux,
+    assignment, or local workspace probes hit EPERM/EACCES, stop sandbox retries
+    and request the exact same read-only outside-sandbox rerun.
+  - `node ./scripts/manager-cycle-packet.mjs --summary-json`: treat embedded
+    manager probe EPERM/EACCES as a known sandbox boundary, not self-repair.
+  - `node ./scripts/manager-run-loop.mjs --summary-json --once`: when
+    preflight stops at `known_sandbox_boundary`, do not change scope or launch
+    workers; collect the same read-only evidence through `manager-preflight` or
+    `manager-cycle-packet` outside the sandbox before rerunning the loop.
+  - `node ./scripts/manager-stale-owner-inspection.mjs --summary-json`: local
+    workspace metadata inspection may need outside-sandbox read approval.
+  - `node ./scripts/manager-cleanup-plan.mjs --summary-json`: fail closed on
+    `sandbox_incomplete`; do not treat hidden workspace state as zero cleanup
+    targets.
+  - `node ./scripts/test-codex-workspace.mjs`: empty child stdout where JSON is
+    expected is a sandbox/process boundary; report command metadata before the
+    exact same outside-sandbox rerun.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying
