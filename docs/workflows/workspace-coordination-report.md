@@ -53,6 +53,7 @@ Workspace Coordination Report
 - Current checkout:
 - Root status:
 - Active managed worktrees:
+- Workspace stale-lane closeout readiness:
 - PRs waiting at merge gate:
 - Clean active lanes:
 - Dirty active lanes:
@@ -68,6 +69,22 @@ Workspace Coordination Report
 
 - `clean active lane`: no uncommitted files, still useful or awaiting PR work.
 - `dirty active lane`: uncommitted files exist; do not start overlapping work.
+- `workspaceCloseoutReadiness`: metadata-only coordination-report section that
+  classifies active managed lanes into exclusive buckets without retaining
+  diffs, source content, raw prompts, provider payloads, secrets, or tmux
+  scrollback.
+- `currently owned active work`: clean active work owned by the current runner.
+  Continue or refresh heartbeat evidence; do not close it out as stale.
+- `stale manager-owned lane`: clean active work owned by a `manager-*` owner
+  whose heartbeat is older than the stale threshold. Prepare takeover or
+  closeout evidence, but do not mutate the lane from the report.
+- `dirty preserve-first lane`: active work with uncommitted paths. Preserve or
+  inspect before any closeout decision, even when the owner appears stale.
+- `clean closeout candidate`: clean active lane with merged PR evidence or
+  cleanup status. Run the matching cleanup dry-run and prove exact branch and
+  worktree evidence before any mutation.
+- `needs operator decision`: active lane that does not meet the current-owner,
+  stale-manager, dirty-preserve, or clean-closeout criteria.
 - `merge-gated lane`: PR is open, CI is green, conversations are resolved, but
   explicit merge approval is missing.
 - `local-only commit`: branch is ahead of its upstream or base and must be
