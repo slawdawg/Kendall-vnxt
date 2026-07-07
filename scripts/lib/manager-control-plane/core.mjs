@@ -20261,6 +20261,7 @@ function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = 
           ? "manager-owned-worker-review-feedback-existing-gates"
           : "manager-owned-worker-review-feedback-target-required",
         mutationClass: feedbackAction ? "manager_owned_worker_review_feedback" : "none",
+        targetComponents: continuousTargetComponentsFromRows(feedbackPlan.summary?.requests || [], runId ? [`run:${runId}`] : []),
         readOnly: !feedbackAction,
         reviewResultFresh: true,
         reviewResultFailed: true,
@@ -20496,8 +20497,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
     }
     const workerCounts = cycle.summary?.workers?.workerCounts || {};
     const activeWorkers = Math.max(0, Number(workerCounts.active || 0));
-    const warmWorkers = Math.max(0, Number(workerCounts.warm || 0));
-    if (Number.isFinite(activeWorkers) && Number.isFinite(warmWorkers) && activeWorkers + warmWorkers >= 6) {
+    if (Number.isFinite(activeWorkers) && activeWorkers >= 6) {
       return null;
     }
     if (

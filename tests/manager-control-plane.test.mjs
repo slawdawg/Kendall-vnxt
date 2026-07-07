@@ -15421,6 +15421,20 @@ test("continuous execution separates dry-run proof from apply mutation", () => {
   assert.match(calls[1], /--apply/);
 
   calls.length = 0;
+  const appliedWithoutEchoedApplyProof = executeContinuousSelectedAction({
+    selected,
+    applySelected,
+    runCommand(command) {
+      calls.push(command);
+      if (!command.includes(" --apply")) return { ok: true, packet: proofPacket(selected) };
+      return { ok: true, packet: { ok: true, status: "ready", summary: { results: [{ status: "submitted" }] } } };
+    },
+  });
+  assert.equal(appliedWithoutEchoedApplyProof.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(appliedWithoutEchoedApplyProof.summary.apply.status, "ready");
+
+  calls.length = 0;
   const appliedWithUnrelatedDryRunBlockers = executeContinuousSelectedAction({
     selected,
     applySelected,
@@ -16172,6 +16186,9 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     assert.equal(failedReviewFeedbackPlan.summary.selectedAction.code, "continuous-worker-review-feedback");
     assert.match(failedReviewFeedbackPlan.summary.selectedAction.dryRunCommand, /manager-worker-review-feedback\.mjs/);
     assert.match(failedReviewFeedbackPlan.summary.selectedAction.dryRunCommand, /--review-findings-file/);
+    assert.ok(failedReviewFeedbackPlan.summary.selectedAction.targetComponents.includes("worker:codex-3"));
+    assert.ok(failedReviewFeedbackPlan.summary.selectedAction.targetComponents.includes("assignment:bmad-97-2-manager-continuous-review-gate"));
+    assert.ok(failedReviewFeedbackPlan.summary.selectedAction.targetComponents.includes("task:task-target"));
     assert.equal(failedReviewFeedbackPlan.summary.applySelectedAction, null);
   } finally {
     rmSync(failedReviewStateRoot, { recursive: true, force: true });
@@ -16923,6 +16940,38 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(dispatchPlan.summary.selectedAction.code, "continuous-dispatch-apply");
   assert.match(dispatchPlan.summary.selectedAction.dryRunCommand, /codex-workspace\.mjs dispatch-next --dry-run --summary-json/);
   assert.equal(dispatchPlan.summary.applySelectedAction, null);
+
+  const dispatchWithWarmCapacityPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 5, warm: 1, paused: 0 } },
+          dispatchPreview: {
+            allowed: true,
+            selectedLane: "lane-ready",
+            claimMutation: "assignment_workspace_claim_only",
+            counts: { dispatchable: 1 },
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "dispatch-preview-ready",
+            summary: "Safe dispatch preview is ready.",
+            nextAction: "run dispatch-next --apply with the same --owner after reviewing the dry-run packet",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(dispatchWithWarmCapacityPlan.summary.selectedAction.code, "continuous-dispatch-apply");
 
   const dispatchBeforePromptRepairPlan = buildContinuousRunPlan(
     {},

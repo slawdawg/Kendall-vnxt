@@ -594,7 +594,8 @@ export function executeContinuousSelectedAction({ selected = null, applySelected
     result.summary.blockers = result.blockers;
     return result;
   }
-  if (!dryRunStillAllowsApply(applySelected, apply.packet)) {
+  const applyPacketHasSelectionProof = dryRunSelectionProof(apply.packet) !== null;
+  if (applyPacketHasSelectionProof && !dryRunStillAllowsApply(applySelected, apply.packet)) {
     result.ok = false;
     result.status = "blocked";
     result.summary.apply = { ...result.summary.apply, status: "blocked_apply_selection_mismatch" };
