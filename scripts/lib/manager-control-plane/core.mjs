@@ -17420,6 +17420,122 @@ function safeProjectionPacket(value) {
   return safePlainObjectSnapshot(value) || {};
 }
 
+const OPERATIONAL_LOOP_AUTHORITY_STATES = new Set([
+  "allowed",
+  "blocked",
+  "needs_authority_approval",
+  "needs_product_approval",
+  "needs_safety_approval",
+]);
+
+function operationalLoopAuthorityState(actionCapabilities, actionId, fallback = "blocked") {
+  const capability = actionCapabilities.get(actionId);
+  const authorityState = sanitizeLedgerField(capability?.authorityState || fallback, fallback, 80);
+  return OPERATIONAL_LOOP_AUTHORITY_STATES.has(authorityState) ? authorityState : fallback;
+}
+
+function buildMinimumHappyPathOperationalLoop({ runway = {}, operationalActions = {}, recommendedActions = [], blockers = [] } = {}) {
+  const runwaySummary = safePlainObjectSnapshot(runway.summary || runway) || {};
+  const eligibility = safePlainObjectSnapshot(runwaySummary.sourceWorkEligibility || {}) || {};
+  const refillJob = safePlainObjectSnapshot(runwaySummary.refillJob || {}) || {};
+  const refillWatermark = safePlainObjectSnapshot(runwaySummary.refillWatermark || {}) || {};
+  const cycleBlockers = Array.isArray(blockers) ? blockers.filter(Boolean) : [];
+  const candidates = Array.isArray(eligibility.candidateWorkPackets) ? eligibility.candidateWorkPackets : [];
+  const actionCapabilities = new Map(
+    (Array.isArray(operationalActions.actionCapabilities) ? operationalActions.actionCapabilities : [])
+      .map((capability) => [capability.actionId, capability]),
+  );
+  const eligibleCount = nonNegativeInteger(eligibility.eligibleCount) ?? candidates.length;
+  const queuedCount = nonNegativeInteger(refillJob.queuedCount ?? refillWatermark.queuedCount) ?? 0;
+  const blockedCount = nonNegativeInteger(eligibility.blockedCount) ?? 0;
+  const needsReviewCount = nonNegativeInteger(eligibility.needsReviewCount) ?? 0;
+  const duplicateRefillSuppressed = refillWatermark.duplicateRefillSuppressed === true;
+  const operationalReadiness = {
+    readinessState: sanitizeLedgerField(operationalActions.readinessState || "unknown", "unknown", 80),
+    freshnessState: sanitizeLedgerField(operationalActions.freshnessState || "unknown", "unknown", 80),
+    capabilityState: sanitizeLedgerField(operationalActions.capabilityState || "unknown", "unknown", 80),
+    typedReason: operationalActions.typedReason ? sanitizeLedgerField(operationalActions.typedReason, "", 120) : null,
+    checkedAt: sanitizeLedgerField(operationalActions.checkedAt || "", "", 80),
+    expiresAt: sanitizeLedgerField(operationalActions.expiresAt || "", "", 80),
+    blockerCount: cycleBlockers.length,
+    rawPayloadRetained: false,
+  };
+  const operationalProjectionReady =
+    operationalReadiness.readinessState === "ready" &&
+    operationalReadiness.freshnessState === "live" &&
+    !["blocked", "unavailable"].includes(operationalReadiness.capabilityState);
+  const status = !operationalProjectionReady
+    ? "attention"
+    : duplicateRefillSuppressed
+      ? "refilling"
+      : eligibleCount > 0 && queuedCount > 0
+        ? "ready"
+        : blockedCount > 0 || needsReviewCount > 0
+          ? "attention"
+          : "waiting";
+  const candidateWorkPacketIds = candidates
+    .map((candidate) => sanitizeLedgerField(candidate?.candidateWorkPacketId || candidate?.candidateId || "", "", 120))
+    .filter(Boolean)
+    .slice(0, 8);
+  const sourceRefs = [
+    ...sourceRefList(runwaySummary.sourceSlice?.ref),
+    ...candidates.flatMap((candidate) => sourceRefList(candidate?.sourceRefs)),
+  ].map((ref) => sanitizeLedgerField(ref, "", 180)).filter(Boolean);
+  const evidenceRefs = [
+    ...sourceRefs.map((ref) => `source:${ref}`),
+    ...candidates.flatMap((candidate) => sourceRefList(candidate?.evidenceRefs)),
+    ...(Array.isArray(refillJob.evidenceRefs) ? refillJob.evidenceRefs : []),
+    ...(Array.isArray(operationalActions.evidenceRefs) ? operationalActions.evidenceRefs : []),
+  ]
+    .map((ref) => sanitizeLedgerField(ref, "", 180))
+    .filter(Boolean);
+  const nextManagerAction = !operationalProjectionReady
+    ? "Refresh or repair the operational readiness projection before continuing the happy-path refill loop."
+    : duplicateRefillSuppressed
+      ? "Wait for the active refill job to complete or refresh dispatcher refill state."
+      : queuedCount > 0
+        ? "Pass eligible CandidateWorkPacket summaries to dispatcher refill watermarks."
+        : recommendedActions.find((action) =>
+          action?.code === "source-work-eligible" || /CandidateWorkPacket|dispatcher refill/i.test(String(action?.nextAction || action?.summary || "")),
+        )?.nextAction || recommendedActions[0]?.nextAction || "Continue manager cycle monitoring until source-backed work is eligible.";
+
+  return {
+    schemaVersion: "manager-operational-loop/v0",
+    status,
+    mode: "read_only_projection",
+    sourceWork: {
+      eligibleCount,
+      needsReviewCount,
+      blockedCount,
+      candidateWorkPacketIds,
+      sourceRefs: [...new Set(sourceRefs)].slice(0, 8),
+      rawPayloadRetained: false,
+    },
+    dispatcherRefill: {
+      result: sanitizeLedgerField(refillJob.result || "unknown", "unknown", 80),
+      state: sanitizeLedgerField(refillJob.state || "unknown", "unknown", 80),
+      queuedCount,
+      candidateCount: nonNegativeInteger(refillJob.candidateCount ?? refillWatermark.candidateCount) ?? 0,
+      duplicateRefillSuppressed,
+      rawPayloadRetained: false,
+    },
+    gates: {
+      preserved: ["worker_mutation", "dispatch_apply", "delivery", "cleanup", "provider_usage"],
+      workerMutationAuthority: operationalLoopAuthorityState(actionCapabilities, "kill_worker"),
+      dispatchApplyAuthority: operationalLoopAuthorityState(actionCapabilities, "dispatch_apply"),
+      deliveryAuthority: operationalLoopAuthorityState(actionCapabilities, "open_pr"),
+      cleanupAuthority: operationalLoopAuthorityState(actionCapabilities, "cleanup"),
+      modelCallAuthority: operationalLoopAuthorityState(actionCapabilities, "credential_or_provider_change"),
+      operationalReadiness,
+      rawPayloadRetained: false,
+    },
+    evidenceRefs: [...new Set(evidenceRefs)].slice(0, 12),
+    nextManagerAction: sanitizeLedgerField(nextManagerAction, "Continue manager cycle monitoring until source-backed work is eligible.", 260),
+    retention: "metadata_only_operational_loop_summary",
+    rawPayloadRetained: false,
+  };
+}
+
 function summarizeLedgerDispatcherSummary(summary = null) {
   if (!isPlainObject(summary)) return null;
   return {
@@ -17734,6 +17850,12 @@ export function buildCyclePacket(options = {}, context = {}) {
     actionNeeded,
     recommendedActions: cycleRecommendedActions,
   });
+  const operationalLoop = buildMinimumHappyPathOperationalLoop({
+    runway,
+    operationalActions: summaryOperationalActions,
+    recommendedActions: cycleRecommendedActions,
+    blockers: reportedBlockers,
+  });
   const cyclePacket = packet({
     ok: status !== "blocked",
     status,
@@ -17791,6 +17913,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       feedback: sanitizeCyclePacketValue(feedback.summary),
       operationalActions: summaryOperationalActions,
       operationalSummary: sanitizeCyclePacketValue(operationalSummary),
+      operationalLoop: sanitizeCyclePacketValue(operationalLoop),
       signalGaps: {
         status: signalGaps.status,
         gapCount: signalGaps.gapCount,
