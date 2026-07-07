@@ -3107,7 +3107,7 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
     promptIdle: promptIdleWorkerIds.has(worker.workerId),
   }));
   const attentionWorkers = workerProgress.filter((worker) => (
-    ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "blocked_question", "checkpoint_blocked", "owner_delegation_stale", "progress_signal_unanswered", "recovery_submit_unanswered", "pointer_receipt_unverified"].includes(worker.progressState)
+    ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "blocked_question", "checkpoint_blocked", "final_checkpoint_blocked", "owner_delegation_stale", "progress_signal_unanswered", "recovery_submit_unanswered", "pointer_receipt_unverified"].includes(worker.progressState)
     || (worker.progressState === "recovery_inspected" && worker.submitPendingAfterRecoveryInspection !== true)
     || needsPendingSubmitRepair(worker)
   ));
@@ -3118,6 +3118,7 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
       activeWorkers: activeWorkers.length,
       warmWorkers: workers.filter((worker) => worker.state === "warm" && isManagerOwnedWorker(worker, runId)).length,
       workerProgress,
+      finalCheckpointCounts: countWorkerFinalCheckpointStatuses(workerProgress),
       retention: "metadata_only_worker_progress",
       source: "manager-workers-checkpoints-questions-assignment-heartbeats",
     },
@@ -3278,6 +3279,9 @@ function buildLaneAdvancementCandidate(worker = {}, context = {}) {
     .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0));
   const checkpoint = checkpoints.find((record) => classifyLaneAdvancementSummary(record.summary).state !== "not_ready");
   if (!checkpoint) return null;
+  const rawFinalCheckpoint = latestFinalWorkerCheckpoint(checkpoints);
+  const finalCheckpoint = validateWorkerFinalCheckpoint(rawFinalCheckpoint, worker, assignmentId);
+  if (rawFinalCheckpoint && finalCheckpoint.status !== "ready") return null;
   const laneHeartbeatMs = parseTimeMs(lane.heartbeat || lane.lastHeartbeatAt || lane.last_heartbeat_at);
   const checkpointMs = parseTimeMs(checkpoint.timestamp);
   if (lanePhase === "in_progress" && laneHeartbeatMs && checkpointMs && laneHeartbeatMs > checkpointMs) {
@@ -3297,6 +3301,7 @@ function buildLaneAdvancementCandidate(worker = {}, context = {}) {
     checkpointId: sanitizeLedgerField(checkpoint.checkpointId || checkpoint.id || "", "", 120),
     checkpointAt: sanitizeLedgerField(checkpoint.timestamp || "", "", 80),
     evidenceSummary: sanitizeLedgerField(checkpoint.summary || readiness.evidence, readiness.evidence, 220),
+    finalCheckpoint,
     nextAction: "Run manager review, verification, delivery, finish-pr, merge, or cleanup only through existing codex-workspace and review gates.",
   };
 }
@@ -3383,15 +3388,279 @@ function classifyWorkerCheckpointBlockerSummary(summary = "") {
   return { blocked: false, reason: "" };
 }
 
+const WORKER_FINAL_CHECKPOINT_REQUEST_STATES = new Set([
+  "retired_clean_requested",
+  "warm_available",
+  "retirement_blocked",
+]);
+
+const WORKER_FINAL_CHECKPOINT_READY_DELIVERY_STATES = new Set([
+  "delivered",
+  "complete",
+  "completed",
+  "done",
+  "closed",
+  "parked",
+]);
+
+const WORKER_FINAL_CHECKPOINT_READY_PR_STATES = new Set([
+  "merged",
+  "closed",
+  "not_applicable",
+  "none",
+  "parked",
+]);
+
+const WORKER_FINAL_CHECKPOINT_READY_MERGE_STATES = new Set([
+  "merged",
+  "closed",
+  "not_applicable",
+  "none",
+  "parked",
+]);
+
+const WORKER_FINAL_CHECKPOINT_READY_CLEANUP_STATES = new Set([
+  "complete",
+  "cleanup_complete",
+  "clean",
+  "not_applicable",
+  "none",
+]);
+
+const WORKER_FINAL_CHECKPOINT_REQUIRED_FIELDS = [
+  "workerId",
+  "assignmentId",
+  "taskId",
+  "branch",
+  "diffSummary",
+  "deliveryState",
+  "prState",
+  "mergeState",
+  "cleanupState",
+  "verificationSummary",
+  "reviewSummary",
+  "openQuestions",
+  "unresolvedReviewThreads",
+  "dirtyWorktree",
+  "nextAssignmentReserved",
+  "requestedFinalState",
+  "recoveryPath",
+  "openBlockers",
+];
+
+function countWorkerFinalCheckpointStatuses(workerProgress = []) {
+  const counts = {
+    missing: 0,
+    incomplete: 0,
+    blocked: 0,
+    ready: 0,
+    total: 0,
+  };
+  for (const worker of Array.isArray(workerProgress) ? workerProgress : []) {
+    const status = String(worker?.finalCheckpoint?.status || "missing");
+    if (Object.hasOwn(counts, status)) counts[status] += 1;
+    counts.total += 1;
+  }
+  return counts;
+}
+
+function latestFinalWorkerCheckpoint(checkpoints = []) {
+  return (Array.isArray(checkpoints) ? checkpoints : [])
+    .filter(isPlainObject)
+    .filter(isFinalWorkerCheckpoint)
+    .sort((left, right) => (parseTimeMs(right.timestamp || right.finalCheckpoint?.timestamp || right.final_checkpoint?.timestamp) || 0) - (parseTimeMs(left.timestamp || left.finalCheckpoint?.timestamp || left.final_checkpoint?.timestamp) || 0))[0] || null;
+}
+
+function isFinalWorkerCheckpoint(checkpoint = {}) {
+  if (!isPlainObject(checkpoint)) return false;
+  if (isPlainObject(checkpoint.finalCheckpoint || checkpoint.final_checkpoint)) return true;
+  const kind = normalizeWorkerLifecycleToken(checkpoint.kind || checkpoint.category || checkpoint.checkpointType || checkpoint.checkpoint_type || checkpoint.type || "");
+  if (["worker_final_checkpoint", "final_worker_checkpoint", "final_checkpoint"].includes(kind)) return true;
+  return Boolean(checkpoint.requestedFinalState || checkpoint.requested_final_state || checkpoint.finalState || checkpoint.final_state);
+}
+
+function workerFinalCheckpointValue(source = {}, ...keys) {
+  for (const key of keys) {
+    if (Object.hasOwn(source, key)) return source[key];
+  }
+  return undefined;
+}
+
+function finalCheckpointText(value, fallback = "", maxLength = 180) {
+  return sanitizeLedgerField(value, fallback, maxLength) || fallback;
+}
+
+function finalCheckpointNumber(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
+}
+
+function finalCheckpointBoolean(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "boolean") return value;
+  const text = String(value || "").trim().toLowerCase();
+  if (["true", "yes", "1"].includes(text)) return true;
+  if (["false", "no", "0"].includes(text)) return false;
+  return null;
+}
+
+function finalCheckpointRefs(value) {
+  const refs = Array.isArray(value) ? value : value === undefined || value === null || value === "" ? [] : [value];
+  return refs.map((ref) => sanitizeLedgerField(ref, "", 160)).filter(Boolean).slice(0, 12);
+}
+
+function finalCheckpointOpenBlockers(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((blocker) => {
+    if (isPlainObject(blocker)) {
+      const code = sanitizeLedgerField(blocker.code || blocker.reason || blocker.id || "open_blocker", "open_blocker", 120);
+      const message = sanitizeLedgerField(blocker.message || blocker.summary || blocker.nextAction || code, code, 240);
+      return `${code}:${message}`;
+    }
+    return sanitizeLedgerField(blocker, "", 240);
+  }).filter(Boolean).slice(0, 12);
+}
+
+function canonicalWorkerFinalCheckpoint(checkpoint = {}, worker = {}, assignmentId = "") {
+  const source = isPlainObject(checkpoint?.finalCheckpoint)
+    ? checkpoint.finalCheckpoint
+    : isPlainObject(checkpoint?.final_checkpoint)
+      ? checkpoint.final_checkpoint
+      : checkpoint;
+  const openBlockersInput = workerFinalCheckpointValue(source, "openBlockers", "open_blockers", "blockers");
+  return {
+    checkpointId: finalCheckpointText(workerFinalCheckpointValue(source, "checkpointId", "checkpoint_id") || checkpoint.checkpointId || checkpoint.id || "", "", 120) || null,
+    checkpointAt: finalCheckpointText(workerFinalCheckpointValue(source, "timestamp", "createdAt", "created_at") || checkpoint.timestamp || "", "", 80) || null,
+    workerId: finalCheckpointText(workerFinalCheckpointValue(source, "workerId", "worker_id") || worker.workerId || "", "", 80) || null,
+    assignmentId: finalCheckpointText(workerFinalCheckpointValue(source, "assignmentId", "assignment_id") || assignmentId || worker.assignmentId || "", "", 140) || null,
+    taskId: finalCheckpointText(workerFinalCheckpointValue(source, "taskId", "task_id") || worker.taskId || "", "", 140) || null,
+    branch: finalCheckpointText(workerFinalCheckpointValue(source, "branch", "branchName", "branch_name"), "", 160) || null,
+    diffSummary: finalCheckpointText(workerFinalCheckpointValue(source, "diffSummary", "diff_summary", "changeSummary", "change_summary"), "", 240) || null,
+    deliveryState: normalizeWorkerLifecycleToken(workerFinalCheckpointValue(source, "deliveryState", "delivery_state")),
+    prState: normalizeWorkerLifecycleToken(workerFinalCheckpointValue(source, "prState", "pr_state", "pullRequestState", "pull_request_state")),
+    prUrl: finalCheckpointText(workerFinalCheckpointValue(source, "prUrl", "pr_url", "pullRequestUrl", "pull_request_url"), "", 240) || null,
+    parkedReason: finalCheckpointText(workerFinalCheckpointValue(source, "parkedReason", "parked_reason"), "", 180) || null,
+    mergeState: normalizeWorkerLifecycleToken(workerFinalCheckpointValue(source, "mergeState", "merge_state")),
+    cleanupState: normalizeWorkerLifecycleToken(workerFinalCheckpointValue(source, "cleanupState", "cleanup_state")),
+    verificationSummary: finalCheckpointText(workerFinalCheckpointValue(source, "verificationSummary", "verification_summary", "verification"), "", 240) || null,
+    reviewSummary: finalCheckpointText(workerFinalCheckpointValue(source, "reviewSummary", "review_summary", "review"), "", 240) || null,
+    openQuestions: finalCheckpointNumber(workerFinalCheckpointValue(source, "openQuestions", "open_questions")),
+    unresolvedReviewThreads: finalCheckpointNumber(workerFinalCheckpointValue(source, "unresolvedReviewThreads", "unresolved_review_threads")),
+    dirtyWorktree: finalCheckpointBoolean(workerFinalCheckpointValue(source, "dirtyWorktree", "dirty_worktree")),
+    nextAssignmentReserved: finalCheckpointBoolean(workerFinalCheckpointValue(source, "nextAssignmentReserved", "next_assignment_reserved")),
+    requestedFinalState: normalizeWorkerLifecycleToken(workerFinalCheckpointValue(source, "requestedFinalState", "requested_final_state", "finalState", "final_state")),
+    recoveryPath: finalCheckpointText(workerFinalCheckpointValue(source, "recoveryPath", "recovery_path", "nextSafeAction", "next_safe_action"), "", 240) || null,
+    openBlockersPresent: openBlockersInput !== undefined,
+    openBlockersWellFormed: openBlockersInput === undefined || Array.isArray(openBlockersInput),
+    openBlockers: finalCheckpointOpenBlockers(openBlockersInput),
+    sourceRefs: finalCheckpointRefs(workerFinalCheckpointValue(source, "sourceRefs", "source_refs") || checkpoint.sourceRefs || checkpoint.source_refs),
+    rawPayloadRetained: false,
+  };
+}
+
+function validateWorkerFinalCheckpoint(checkpoint = null, worker = {}, assignmentId = "") {
+  if (!isPlainObject(checkpoint)) {
+    return {
+      status: "missing",
+      requestedFinalState: null,
+      handoffQuality: "poor",
+      missingFields: WORKER_FINAL_CHECKPOINT_REQUIRED_FIELDS,
+      blockers: [{ code: "no_final_checkpoint", message: "No compact final worker checkpoint is present." }],
+      mutation: "none",
+      rawPayloadRetained: false,
+    };
+  }
+  const canonical = canonicalWorkerFinalCheckpoint(checkpoint, worker, assignmentId);
+  const missingFields = WORKER_FINAL_CHECKPOINT_REQUIRED_FIELDS.filter((field) => {
+    if (field === "openBlockers") return canonical.openBlockersPresent !== true || canonical.openBlockersWellFormed !== true;
+    return canonical[field] === null || canonical[field] === undefined || canonical[field] === "";
+  });
+  if (!canonical.prUrl && !canonical.parkedReason) missingFields.push("prUrlOrParkedReason");
+  if (!WORKER_FINAL_CHECKPOINT_REQUEST_STATES.has(canonical.requestedFinalState)) missingFields.push("requestedFinalState");
+  const blockers = [];
+  if (missingFields.length > 0) {
+    blockers.push({
+      code: "no_final_checkpoint",
+      message: `Final checkpoint is missing required field(s): ${[...new Set(missingFields)].join(", ")}.`,
+      missingFields: [...new Set(missingFields)],
+    });
+  }
+  if (canonical.openQuestions > 0) {
+    blockers.push({ code: "material_question_open", message: `${canonical.openQuestions} material question(s) remain open.` });
+  }
+  if (canonical.unresolvedReviewThreads > 0) {
+    blockers.push({ code: "review_threads_unresolved", message: `${canonical.unresolvedReviewThreads} review thread(s) remain unresolved.` });
+  }
+  if (canonical.dirtyWorktree === true) {
+    blockers.push({ code: "dirty_worktree", message: "Final checkpoint reports a dirty worktree." });
+  }
+  if (canonical.nextAssignmentReserved === true) {
+    blockers.push({ code: "handoff_pending", message: "Final checkpoint reports a reserved next assignment." });
+  }
+  if (canonical.workerId && worker.workerId && canonical.workerId !== worker.workerId) {
+    blockers.push({ code: "identity_ambiguous", message: "Final checkpoint worker id does not match the active worker." });
+  }
+  if (canonical.assignmentId && assignmentId && canonical.assignmentId !== assignmentId) {
+    blockers.push({ code: "identity_ambiguous", message: "Final checkpoint assignment id does not match the active assignment." });
+  }
+  if (canonical.taskId && worker.taskId && canonical.taskId !== worker.taskId) {
+    blockers.push({ code: "identity_ambiguous", message: "Final checkpoint task id does not match the active task." });
+  }
+  if (canonical.deliveryState && !WORKER_FINAL_CHECKPOINT_READY_DELIVERY_STATES.has(canonical.deliveryState)) {
+    blockers.push({ code: "blocked_state_mismatch", message: `Delivery state ${canonical.deliveryState} is not final.` });
+  }
+  if (canonical.cleanupState && !WORKER_FINAL_CHECKPOINT_READY_CLEANUP_STATES.has(canonical.cleanupState)) {
+    blockers.push({ code: "cleanup_not_done", message: `Cleanup state is ${canonical.cleanupState}.` });
+  }
+  if (canonical.prState && !WORKER_FINAL_CHECKPOINT_READY_PR_STATES.has(canonical.prState)) {
+    blockers.push({ code: "pr_checks_pending", message: `PR state ${canonical.prState} is not final.` });
+  }
+  if (canonical.mergeState && !WORKER_FINAL_CHECKPOINT_READY_MERGE_STATES.has(canonical.mergeState)) {
+    blockers.push({ code: "pr_checks_pending", message: `Merge state ${canonical.mergeState} is not final.` });
+  }
+  if (["pending", "queued", "running", "in_progress", "waiting"].includes(canonical.prState) || ["pending", "queued", "running", "in_progress", "waiting"].includes(canonical.mergeState)) {
+    blockers.push({ code: "pr_checks_pending", message: "PR or merge state is still pending." });
+  }
+  if (["failed", "failure", "error", "blocked"].includes(canonical.prState) || ["failed", "failure", "error", "blocked"].includes(canonical.mergeState)) {
+    blockers.push({ code: "pr_checks_failing", message: "PR or merge state reports failure." });
+  }
+  if (/\b(inconclusive|timeout|timed out|sandbox|failed|failure|error)\b/i.test(canonical.verificationSummary || "")) {
+    blockers.push({ code: "verification_inconclusive", message: "Verification summary is inconclusive or failed." });
+  }
+  if (canonical.openBlockers.length > 0) {
+    blockers.push({ code: "reachable_root_present", message: "Final checkpoint reports open blocker/root evidence.", blockers: canonical.openBlockers });
+  }
+  const evidenceBlockers = blockers.filter((blocker) => blocker.code !== "no_final_checkpoint");
+  if (evidenceBlockers.length > 0 && canonical.requestedFinalState !== "retirement_blocked") {
+    blockers.push({ code: "blocked_state_mismatch", message: "Blocked evidence requires requestedFinalState retirement_blocked." });
+  } else if (missingFields.length === 0 && evidenceBlockers.length === 0 && canonical.requestedFinalState === "retirement_blocked") {
+    blockers.push({ code: "blocked_state_mismatch", message: "requestedFinalState retirement_blocked has no blocker evidence." });
+  }
+  const status = missingFields.length > 0 ? "incomplete" : blockers.length > 0 ? "blocked" : "ready";
+  return {
+    status,
+    requestedFinalState: canonical.requestedFinalState || null,
+    handoffQuality: status === "ready" ? "complete" : canonical.recoveryPath ? "partial" : "poor",
+    checkpoint: canonical,
+    missingFields: [...new Set(missingFields)],
+    blockers,
+    mutation: "none",
+    rawPayloadRetained: false,
+  };
+}
+
 function buildWorkerProgressNextActions(workers = [], options = {}) {
   const attentionWorkers = Array.isArray(workers) ? workers : [];
   const signalableStates = new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"]);
   const questionWorkers = attentionWorkers.filter((worker) => ["blocked_question", "checkpoint_blocked"].includes(worker.progressState));
+  const finalCheckpointWorkers = attentionWorkers.filter((worker) => worker.progressState === "final_checkpoint_blocked");
   const signalableWorkers = attentionWorkers.filter((worker) => signalableStates.has(worker.progressState));
   const pendingSubmitWorkers = attentionWorkers.filter(needsPendingSubmitRepair);
   let signalActionAdded = false;
   let pendingSubmitActionAdded = false;
   let questionActionAdded = false;
+  let finalCheckpointActionAdded = false;
   const actions = [];
   if (questionWorkers.length > 0) {
     actions.push(buildWorkerQuestionAnswerNextAction(questionWorkers, options));
@@ -3399,6 +3668,13 @@ function buildWorkerProgressNextActions(workers = [], options = {}) {
   }
   for (const worker of attentionWorkers) {
     if (["blocked_question", "checkpoint_blocked"].includes(worker.progressState) && questionActionAdded) {
+      continue;
+    }
+    if (worker.progressState === "final_checkpoint_blocked") {
+      if (!finalCheckpointActionAdded) {
+        actions.push(buildWorkerFinalCheckpointNextAction(finalCheckpointWorkers, options));
+        finalCheckpointActionAdded = true;
+      }
       continue;
     }
     if (needsPendingSubmitRepair(worker)) {
@@ -3447,6 +3723,15 @@ function buildWorkerQuestionAnswerNextAction(workers = [], options = {}) {
     code: "worker-progress-blocked_question",
     summary: `Answer ${selected.length || 1} compact worker question(s).`,
     nextAction: appendManagerCommandScope(`node ./scripts/manager-worker-answer-question.mjs --summary-json --limit ${selected.length || 1}`, options),
+  };
+}
+
+function buildWorkerFinalCheckpointNextAction(workers = [], options = {}) {
+  const selected = Array.isArray(workers) ? workers.filter(isPlainObject) : [];
+  return {
+    code: "worker-progress-final_checkpoint_blocked",
+    summary: `Resolve ${selected.length || 1} final checkpoint contract blocker(s).`,
+    nextAction: appendManagerCommandScope("route final checkpoint blockers through manager review, cleanup, worker feedback, or recovery before retirement/reuse", options),
   };
 }
 
@@ -5672,6 +5957,7 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
     .slice()
     .sort((left, right) => (parseTimeMs(right.timestamp) || 0) - (parseTimeMs(left.timestamp) || 0));
   const latestCheckpoint = sortedCheckpoints[0] || null;
+  const finalCheckpoint = validateWorkerFinalCheckpoint(latestFinalWorkerCheckpoint(sortedCheckpoints), worker, assignmentId);
   const latestCheckpointBlocker = classifyWorkerCheckpointBlockerSummary(latestCheckpoint?.summary || "");
   const latestCheckpointBlockerQuestionId = latestCheckpoint ? blockedCheckpointQuestionId(latestCheckpoint) : "";
   const latestCheckpointBlockerAnswered = latestCheckpointBlocker.blocked
@@ -5767,6 +6053,12 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
   } else if (reviewFeedbackAwaitingCheckpoint || openReviewFeedbackStillUnresolved) {
     progressState = "review_feedback_sent";
     nextAction = "Wait for open review feedback to be resolved and a newer compact checkpoint before running another manager review.";
+  } else if (["incomplete", "blocked"].includes(finalCheckpoint.status)) {
+    progressState = "final_checkpoint_blocked";
+    nextAction = "Route final checkpoint blockers through manager review, cleanup, or worker feedback; do not retire or reuse the worker yet.";
+  } else if (finalCheckpoint.status === "ready") {
+    progressState = "final_checkpoint_ready";
+    nextAction = "Final checkpoint is complete; future retirement or warm reuse must still use manager-owned dry-run gates.";
   } else if (hasReadyCheckpoint) {
     progressState = readyCheckpointReadiness.state;
     nextAction = "Advance lane through manager review/delivery gates instead of pinging completed worker for more progress.";
@@ -5835,6 +6127,7 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
     questionCount: questionMatches.length,
     eventCount: eventMatches.length,
     progressSignalCount,
+    finalCheckpoint,
     nextAction,
   };
 }
