@@ -102,22 +102,13 @@ share one boundary classifier.
   EPERM or incomplete-child-output signature appears.
 - Do not change test scope to hide a sandbox boundary.
 - Do not treat known sandbox boundaries as manager self-repair work.
+- Do not label a command safe for outside-sandbox rerun until the command shape
+  is classified as read-only and the exact command is recorded.
 - Do not apply cleanup, takeover, worker launch, branch deletion, GitHub
   mutation, provider calls, or credential access as part of this remediation.
+- Do not write tool state into repo-owned paths merely to avoid EPERM.
 - Do not broaden standing authority. The durable fix should improve detection,
   evidence, and routing only.
-
-## Fast Verification Path
-
-Run `pnpm run check:sandbox-fast` before any long static, workspace, manager, or
-full-repo verification gate when a change touches sandbox-boundary
-classification, anti-churn signature detection, verification routing, or
-apply-safe gating. This command is a normal workflow check, not a substitute for
-broader delivery verification.
-
-`pnpm run check:fast` includes the sandbox fast suite plus the related CI,
-workspace, and dashboard contract checks so boundary-routing regressions fail
-before long serial gates.
 
 ## Proposed Fix Slices
 
@@ -132,18 +123,77 @@ Candidate signatures:
 - `EACCES` or `EPERM` from Git, tmux, workspace metadata, or child process
   probes.
 - empty stdout when a child command is required to emit JSON and exits or is
-  interrupted before parseable output.
+  interrupted before parseable output, only when paired with a known sandbox
+  signal, runner interruption, or sandbox-visible permission error.
 - read-only filesystem errors for `.git/worktrees`, `$HOME/.cache/uv`, managed
   worktree pnpm temp files, or local Codex workspace state.
 
-Expected output contract:
+Do not collapse every incomplete child result into `sandbox`. The classifier
+must distinguish:
+
+- `sandbox_eperm`: EPERM/EACCES or known managed-sandbox permission denial.
+- `runner_timeout`: command runner timed out before process output.
+- `process_timeout`: child process exceeded its own timeout.
+- `process_killed`: child was terminated by signal or parent.
+- `partial_stdout`: stdout was incomplete or non-JSON, with captured stderr.
+- `empty_stdout_unknown`: no JSON output and no known sandbox signal.
+- `product_or_process_failure`: command exited/crashed in a way that should be
+  debugged as product/test behavior, not rerun outside the sandbox by default.
+
+Mixed-signal precedence:
+
+1. If a command produced a valid product result before a later wrapper warning,
+   preserve the product result and attach a non-blocking diagnostic.
+2. If EPERM/EACCES or a known managed-sandbox permission denial appears before a
+   complete product result, classify as `sandbox_eperm`.
+3. If the runner times out before process output, classify as `runner_timeout`.
+4. If the child process times out after partial output, classify as
+   `process_timeout` and retain stdout/stderr excerpts.
+5. If stdout is non-empty but invalid JSON, classify as `partial_stdout` unless
+   stderr/exit metadata proves `process_killed`, `process_timeout`, or
+   `sandbox_eperm`.
+6. If stdout is empty with no known sandbox signal, classify as
+   `empty_stdout_unknown` or `product_or_process_failure`; do not recommend an
+   outside-sandbox rerun by default.
+
+Expected sandbox-boundary output contract:
 - `boundary: true`
 - `class: sandbox`
+- `schema_version: 1`
 - `signature`
 - `command`
-- `safe_rerun: exact_command_outside_sandbox_when_read_only`
+- `command_read_only: true|false|unknown`
+- `safe_rerun`: `exact_command_outside_sandbox_when_read_only` only when
+  `command_read_only: true`; otherwise `operator_review_required`
 - `mutation: none`
 - `next_action`
+- `evidence`: stdout length, stderr excerpt, exit code, signal, runner timeout
+  flag, and sandbox signature when available
+
+Expected non-boundary child failure output contract:
+- `boundary: false`
+- `class`: `product_or_process_failure`, `process_timeout`, `process_killed`,
+  `partial_stdout`, or `empty_stdout_unknown`
+- `schema_version: 1`
+- `command`
+- `command_read_only: true|false|unknown`
+- `safe_rerun: operator_review_required`
+- `mutation: none`
+- `next_action`
+- `evidence`: stdout length, stderr excerpt, exit code, signal, and timeout
+  metadata when available
+
+Read-only proof:
+
+- `command_read_only: true` may come only from a static exact-command registry or
+  a narrow parser that recognizes a command as read-only without shell
+  expansion, redirection, write flags, cleanup flags, provider calls, GitHub
+  mutation, secrets, or credential access.
+- If command mutability cannot be proven, set `command_read_only: unknown` and
+  `safe_rerun: operator_review_required`.
+- Outside-sandbox success proves only that the command worked in a different
+  execution boundary; it does not prove the sandboxed command was healthy or
+  that product behavior is correct in the sandbox.
 
 Verification:
 - Unit tests for each signature.
@@ -162,6 +212,11 @@ Acceptance checks:
   sandbox hid local workspace state.
 - `manager-run-loop --once` must stop at `known_sandbox_boundary` and recommend
   exact outside-sandbox rerun, not self-repair.
+- Any outside-sandbox rerun recommendation must include read-only proof, exact
+  command, unchanged command shape, failure signature, and approval reason.
+- Boundary packets from preflight, cycle packet, run loop, stale-owner
+  inspection, cleanup plan, and workspace harness must use the same
+  `schema_version: 1` field set.
 - Summary JSON remains bounded and metadata-only.
 
 Verification:
@@ -177,6 +232,12 @@ Smallest useful outcome:
 Acceptance checks:
 - The harness reports the command, expected JSON, stdout length, stderr excerpt,
   exit code, and next action.
+- Empty stdout without a known sandbox signature is classified as
+  `product_or_process_failure` or `empty_stdout_unknown`, not automatically as
+  `sandbox`.
+- Malformed JSON, trailing logs mixed into stdout, mixed stdout/stderr, and child
+  crashes must report the exact parser/failure class and must not silently strip
+  output until a valid object appears.
 - The harness does not silently pass or skip tests.
 
 Verification:
@@ -188,6 +249,9 @@ Verification:
 Smallest useful outcome:
 - Add a concise table or bullet list to `AGENTS.md` naming the Kendall_Nxt
   commands that are known to cross sandbox boundaries and their exact stop line.
+- Treat this as a durable agent-behavior change. It requires review after slices
+  1-3 prove the classifier and packet behavior, and should not be used to encode
+  temporary workaround text as permanent policy.
 
 Candidate entries:
 - `node ./scripts/manager-preflight.mjs --summary-json`
@@ -225,7 +289,11 @@ For every implementation slice, preserve:
 - command run
 - sandbox result
 - outside-sandbox exact rerun result when applicable
+- outside-sandbox rerun state: `not_needed`, `not_run`, `approved_and_run`, or
+  `approval_denied`
+- reason when outside-sandbox rerun is `not_run` or `approval_denied`
 - classification
+- command read-only proof
 - mutation scope
 - verification command
 - residual risk
@@ -240,5 +308,9 @@ large copied source output.
 - Cleanup plans do not return misleading empty state when sandbox visibility is
   incomplete.
 - Test harness failures for empty child JSON output are actionable.
+- Mutating, unknown, or unclassified commands never receive automatic
+  outside-sandbox rerun guidance.
+- Runner timeout, process timeout, killed process, EPERM, partial stdout, empty
+  stdout, and product/process failure produce distinguishable diagnostics.
 - The next session can run one documented command path and know whether it is a
   product failure, sandbox boundary, or approval-gated outside-sandbox rerun.
