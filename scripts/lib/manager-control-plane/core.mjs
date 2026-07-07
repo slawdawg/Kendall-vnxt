@@ -17202,6 +17202,7 @@ function buildRecoveryNotRequestedPlan(options = {}, context = {}) {
 
 const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0";
 const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0";
+const PIPELINE_OPERATIONAL_SUMMARY_SCHEMA_VERSION = "pipeline-operational-summary/v0";
 const OPERATIONAL_ACTION_READINESS_TTL_MS = 5 * 60 * 1000;
 const OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS = 60 * 1000;
 const PIPELINE_OPERATIONAL_ACTION_IDS = [
@@ -17725,6 +17726,14 @@ export function buildCyclePacket(options = {}, context = {}) {
   const report = progress.summary.heartbeat.text;
   const preflightSummary = preflight.summary || {};
   const cycleRecommendedActions = sanitizeCycleActions(nextActions);
+  const operationalSummary = buildCycleOperationalSummary({
+    status,
+    dispatcherState,
+    queueLeaseSummary,
+    operationalActions: summaryOperationalActions,
+    actionNeeded,
+    recommendedActions: cycleRecommendedActions,
+  });
   const cyclePacket = packet({
     ok: status !== "blocked",
     status,
@@ -17781,6 +17790,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       progress: sanitizeCyclePacketValue(progress.summary),
       feedback: sanitizeCyclePacketValue(feedback.summary),
       operationalActions: summaryOperationalActions,
+      operationalSummary: sanitizeCyclePacketValue(operationalSummary),
       signalGaps: {
         status: signalGaps.status,
         gapCount: signalGaps.gapCount,
@@ -20486,6 +20496,45 @@ function buildCycleQueueLeaseSummary(dispatcherState = {}) {
     refilling: dispatcherStatus === "refilling",
     nextAction: dispatcher.allowed === true ? "dispatch preview ready" : dispatcherStatus,
     freshness: dispatcherStatus === "unknown" ? "unknown" : "dispatcher_preview",
+  };
+}
+
+function buildCycleOperationalSummary({ status = "unknown", dispatcherState = {}, queueLeaseSummary = {}, operationalActions = {}, actionNeeded = "none", recommendedActions = [] } = {}) {
+  const dispatcher = isPlainObject(dispatcherState.dispatcher) ? dispatcherState.dispatcher : {};
+  const queue = isPlainObject(dispatcherState.queue) ? dispatcherState.queue : {};
+  const lease = isPlainObject(dispatcherState.lease) ? dispatcherState.lease : {};
+  const capabilities = Array.isArray(operationalActions.actionCapabilities) ? operationalActions.actionCapabilities : [];
+  const countByCapabilityState = (state) => capabilities.filter((capability) => capability?.capabilityState === state).length;
+  const blockedHighRiskCount = capabilities.filter((capability) =>
+    ["high", "extreme"].includes(capability?.riskTier) && capability?.authorityState !== "allowed"
+  ).length;
+  const firstAction = (Array.isArray(recommendedActions) ? recommendedActions : []).find((action) => action?.nextAction);
+  const nextAction = actionNeeded && actionNeeded !== "none" ? actionNeeded : firstAction?.nextAction || "none";
+  return {
+    schemaVersion: PIPELINE_OPERATIONAL_SUMMARY_SCHEMA_VERSION,
+    sourceLabel: sanitizeLedgerField(queue.source || lease.source || "unknown", "unknown", 80),
+    freshnessLabel: sanitizeLedgerField(operationalActions.freshnessState || queueLeaseSummary.freshness || "unknown", "unknown", 40),
+    currentMode: sanitizeLedgerField(operationalActions.operationalMode || status || "unknown", "unknown", 40),
+    runtimeReadiness: sanitizeLedgerField(operationalActions.readinessState || "unknown", "unknown", 40),
+    capabilityState: sanitizeLedgerField(operationalActions.capabilityState || "unknown", "unknown", 40),
+    lastSuccessfulTransition: null,
+    lastTypedError: operationalActions.typedReason ? sanitizeLedgerField(operationalActions.typedReason, "unknown", 80) : null,
+    counts: {
+      active: cycleCount(lease.activeCount ?? queueLeaseSummary.leased) ?? 0,
+      blocked: cycleCount(queue.blockedCount ?? queueLeaseSummary.blocked) ?? 0,
+      ready: cycleCount(queue.dispatchableCount ?? queue.availableCount ?? queueLeaseSummary.queued) ?? 0,
+    },
+    actionGateSummary: {
+      available: countByCapabilityState("available"),
+      gated: countByCapabilityState("gated"),
+      simulated: countByCapabilityState("simulated"),
+      unavailable: countByCapabilityState("unavailable"),
+      blockedHighRisk: blockedHighRiskCount,
+    },
+    selectedTarget: dispatcher.selectedLane || null,
+    nextAction: sanitizeLedgerField(nextAction, "none", 500),
+    metadataOnly: true,
+    rawPayloadRetained: false,
   };
 }
 
