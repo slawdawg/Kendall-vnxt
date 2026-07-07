@@ -484,6 +484,7 @@ function contextualActionsFromPacketState(
       result: null,
       metadataOnly: true,
     });
+    actions.push(...readyToTestResultControls(packet, projection));
   }
   if (actionability === "operator_attention") {
     const metadata = buildActionNeededMetadata(packet, projection);
@@ -500,6 +501,47 @@ function contextualActionsFromPacketState(
     });
   }
   return actions;
+}
+
+function readyToTestResultControls(
+  packet: PipelineDashboardWorkPacketV0,
+  projection: PipelineDashboardProjectionV0
+): PipelineContextualActionStripItem[] {
+  const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId) ?? null;
+  const readyToTest = detail?.readyToTest ?? packet.readyToTest ?? null;
+  const correlationLabel = safeCompactActionLabel(readyToTest?.readyId ?? null) ?? packet.packetId;
+  return [
+    readyToTestResultControl(packet.packetId, "record_test_pass", "Pass", "Record pass result", correlationLabel),
+    readyToTestResultControl(packet.packetId, "record_test_fail", "Fail", "Record fail result", correlationLabel),
+    readyToTestResultControl(packet.packetId, "request_rework", "Rework", "Send packet back for rework", correlationLabel),
+  ];
+}
+
+function readyToTestResultControl(
+  packetId: string,
+  actionId: string,
+  label: string,
+  expectedResult: string,
+  correlationLabel: string
+): PipelineContextualActionStripItem {
+  return {
+    actionInstanceId: `${packetId}:${actionId}`,
+    actionId,
+    label,
+    state: "gated",
+    riskTier: "medium",
+    reason: "Ready-to-test result recording needs backend action ownership.",
+    expectedResult,
+    result: {
+      status: "blocked",
+      label: "Gated",
+      detail: "Result recording is visible for operator workflow but blocked until backend action ownership exists.",
+      correlationLabel,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    metadataOnly: true,
+  };
 }
 
 function gatedControlActionLabel(operation: PipelineGatedControlV0["operation"]) {

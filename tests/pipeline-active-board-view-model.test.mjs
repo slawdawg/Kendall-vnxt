@@ -494,7 +494,7 @@ test("contextual action strips are selection scoped and return metadata-only act
         currentStage: "execute",
         status: "complete",
         nextAction: "Ready to test in /pipeline.",
-        evidenceRefs: ["packet:ready-evidence"],
+        evidenceRefs: ["detail:ready-internal-path"],
       }),
     ],
   });
@@ -524,11 +524,26 @@ test("contextual action strips are selection scoped and return metadata-only act
   assert.equal(model.contextualActions.byPacketId["packet-global-control-only"], undefined);
 
   assert.equal(readyStrip.visible, true);
-  assert.equal(readyStrip.actions.length, 1);
+  assert.equal(readyStrip.actions.length, 4);
   assert.equal(readyStrip.actions[0].actionId, "inspect_ready_to_test");
   assert.equal(readyStrip.actions[0].actionInstanceId, "packet-ready-result:inspect-ready-to-test");
   assert.equal(readyStrip.actions[0].state, "available");
   assert.equal(readyStrip.actions[0].result, null);
+  assert.equal(JSON.stringify(readyStrip.actions.slice(1).map((action) => action.actionId)), JSON.stringify([
+    "record_test_pass",
+    "record_test_fail",
+    "request_rework",
+  ]));
+  assert.equal(readyStrip.actions.slice(1).every((action) => action.state === "gated"), true);
+  assert.equal(readyStrip.actions.slice(1).every((action) => action.riskTier === "medium"), true);
+  assert.equal(readyStrip.actions.slice(1).every((action) => action.result?.status === "blocked"), true);
+  assert.equal(readyStrip.actions.slice(1).every((action) => action.result?.rawPayloadRetained === false), true);
+  assert.equal(readyStrip.actions.slice(1).every((action) => action.result?.correlationLabel === "packet-ready-result"), true);
+  assert.equal(new Set(readyStrip.actions.map((action) => action.actionInstanceId)).size, readyStrip.actions.length);
+  assert.equal(JSON.stringify(readyStrip).includes("packet:ready-evidence"), false);
+  assert.equal(JSON.stringify(readyStrip).includes("detail:ready-internal-path"), false);
+  assert.equal(JSON.stringify(readyStrip).includes("provider payload"), false);
+  assert.equal(JSON.stringify(readyStrip).includes("raw prompt"), false);
 
   assert.equal(buildContextualActionStripForPacket(
     packetFixture({ packetId: "fixture-packet", truthLabel: "fixture" }),
