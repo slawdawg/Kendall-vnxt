@@ -98,6 +98,7 @@
     "manager:codex-advisor": "node ./scripts/manager-codex-advisor-packet.mjs --summary-json",
     "manager:cycle": "node ./scripts/manager-cycle-packet.mjs --summary-json",
     "manager:refill": "node ./scripts/manager-refill-plan.mjs --summary-json",
+    "manager:source-packet-seed": "node ./scripts/manager-source-packet-seed.mjs --summary-json",
     "manager:cleanup": "node ./scripts/manager-cleanup-plan.mjs --summary-json",
     "manager:dirty-workspace-preservation": "node ./scripts/manager-dirty-workspace-preservation.mjs --summary-json",
     "manager:stale-owner": "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
