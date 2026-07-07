@@ -44,6 +44,20 @@ test("check plan maps CI acceleration planner files to focused planner tests", (
   assert.ok(plan.surfaces.includes("ciAcceleration"));
   assert.ok(plan.surfaces.includes("docs"));
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:check-plan"));
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:static-bundles"));
+});
+
+test("check plan maps static bundle files to focused bundle tests", () => {
+  const plan = buildCheckPlan([
+    "scripts/run-static-bundle.mjs",
+    "tests/static-bundles.test.mjs",
+  ]);
+
+  assert.equal(plan.requiresFullStatic, true);
+  assert.deepEqual(plan.surfaces, ["ciAcceleration"]);
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:check-plan"));
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:static-bundles"));
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:static"));
 });
 
 test("check plan maps CI policy drift scripts without full static escalation", () => {

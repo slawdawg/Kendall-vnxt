@@ -3972,6 +3972,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-static-bundles",
+                label="Static bundle topology tests",
+                command="pnpm run test:static-bundles",
+                status="required",
+                requiredFor=["static bundle script changes", "CI static bundle matrix changes", "aggregate static coverage routing"],
+                evidence=[
+                    "Confirms every monolithic static command belongs to exactly one static bundle.",
+                    "Confirms package script entry points, bundle expansion order, and CLI guard behavior stay aligned.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-docs",
                 label="Documentation authority drift",
                 command="pnpm run check:docs",
@@ -5008,6 +5019,7 @@ class SupervisorService:
                 commandIds=[
                     "check-fast",
                     "test-check-plan",
+                    "test-static-bundles",
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",

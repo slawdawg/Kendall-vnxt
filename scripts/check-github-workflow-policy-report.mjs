@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { staticBundleNames } from "./run-static-bundle.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -29,6 +30,10 @@ function ciJobBlock(jobName) {
   jobKeyPattern.lastIndex = jobStart + `\n  ${jobName}:`.length;
   const nextJob = jobKeyPattern.exec(ciWorkflow);
   return nextJob ? ciWorkflow.slice(jobStart, nextJob.index) : ciWorkflow.slice(jobStart);
+}
+
+function ciMatrixBundleNames(jobName) {
+  return [...ciJobBlock(jobName).matchAll(/^\s+- ([a-z][a-z-]*)$/gm)].map((match) => match[1]);
 }
 
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
@@ -83,6 +88,28 @@ assertCondition(
   failures,
 );
 assertCondition(
+  packageJson.scripts?.["check:static"]?.includes("pnpm run test:static-bundles"),
+  "pnpm run check:static must include pnpm run test:static-bundles",
+  failures,
+);
+for (const bundleName of ["core", "manager", "workspace", "policy", "pipeline-dashboard", "anti-churn"]) {
+  assertCondition(
+    packageJson.scripts?.[`check:static-${bundleName}`] === `node ./scripts/run-static-bundle.mjs ${bundleName}`,
+    `package.json must define check:static-${bundleName} as node ./scripts/run-static-bundle.mjs ${bundleName}`,
+    failures,
+  );
+}
+assertCondition(
+  packageJson.scripts?.["check:static-bundles"] === "node ./scripts/run-static-bundle.mjs all",
+  "package.json must define check:static-bundles as node ./scripts/run-static-bundle.mjs all",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.["test:static-bundles"] === "node --test tests/static-bundles.test.mjs",
+  "package.json must define test:static-bundles as node --test tests/static-bundles.test.mjs",
+  failures,
+);
+assertCondition(
   packageJson.scripts?.check?.startsWith("pnpm run preflight && pnpm run check:fast"),
   "pnpm run check must run pnpm run check:fast immediately after preflight",
   failures,
@@ -104,7 +131,10 @@ for (const ciFastCommand of [
 }
 for (const ciText of [
   "fast:",
+  "static_bundle:",
   "needs: changes",
+  "fail-fast: false",
+  "pnpm run \"check:static-${{ matrix.bundle }}\"",
   "node ./scripts/check-plan.mjs",
   "--ci-outputs",
   "RUNNER_TEMP",
@@ -121,9 +151,26 @@ assertCondition(
   failures,
 );
 assertCondition(
+  ciJobBlock("static_bundle").includes("needs.changes.outputs.static == 'true'") &&
+    ciJobBlock("static_bundle").includes("matrix:") &&
+    ciJobBlock("static_bundle").includes("continue-on-error: true"),
+  ".github/workflows/ci.yml static_bundle job must be a static-gated matrix over all reporting bundles",
+  failures,
+);
+assertCondition(
+  JSON.stringify(ciMatrixBundleNames("static_bundle")) === JSON.stringify(staticBundleNames()),
+  ".github/workflows/ci.yml static_bundle matrix entries must match scripts/run-static-bundle.mjs STATIC_BUNDLES",
+  failures,
+);
+assertCondition(
   ciJobBlock("check").includes('needs.changes.outputs.static') &&
     ciJobBlock("check").includes("Static checks were required but did not pass"),
   ".github/workflows/ci.yml final check job must require static only when the planner selects it",
+  failures,
+);
+assertCondition(
+  !ciJobBlock("check").includes("static_bundle"),
+  ".github/workflows/ci.yml final check job must not require static_bundle while it is reporting-only",
   failures,
 );
 assertNotIncludes(
