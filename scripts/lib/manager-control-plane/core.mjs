@@ -17662,6 +17662,93 @@ function buildRecoveryDrillReplayProof({ runId = "", recovery = {}, nextManagerA
   };
 }
 
+function buildQualityDeliveryEvidenceBoundaryProof({ runId = "", delivery = {}, nextManagerAction = "" } = {}) {
+  const summary = delivery.summary || {};
+  const authority = summary.deliveryAuthority || {};
+  const mergePlan = summary.mergePlan || {};
+  const prPlan = summary.prPlan || {};
+  const cleanupPlan = summary.cleanupPlan || {};
+  const deliveryBlockers = Array.isArray(delivery.blockers) ? delivery.blockers : [];
+  const mergeCriteria = Array.isArray(mergePlan.criteria) ? mergePlan.criteria : [];
+  const cleanupCriteria = Array.isArray(cleanupPlan.criteria) ? cleanupPlan.criteria : [];
+  const mergeMissing = Array.isArray(mergePlan.missingEvidence) ? mergePlan.missingEvidence : [];
+  const prMissing = Array.isArray(prPlan.missingEvidence) ? prPlan.missingEvidence : [];
+  const cleanupMissing = Array.isArray(cleanupPlan.missingEvidence) ? cleanupPlan.missingEvidence : [];
+  const authorityMissing = [
+    ...(Array.isArray(authority.missingFields) ? authority.missingFields : []),
+    ...(Array.isArray(authority.mismatchReasons) ? authority.mismatchReasons : []),
+  ];
+  const noDeliveryRequested =
+    authority.status === "not_requested" &&
+    (!prPlan.state || prPlan.state === "not_requested") &&
+    (!mergePlan.mutationMode || mergePlan.mutationMode === "blocked_until_merge_criteria_proven" || mergePlan.mutationMode === "plan_only_no_merge_requested");
+  const status = noDeliveryRequested ? "not_requested" : delivery.status === "ready" ? "ready" : "blocked";
+  const provenMergeCriteria = noDeliveryRequested ? 0 : mergeCriteria.filter((criterion) => criterion?.status === "proven").length;
+  const provenCleanupCriteria = noDeliveryRequested ? 0 : cleanupCriteria.filter((criterion) => criterion?.status === "proven").length;
+  const criterionStatus = (key) => noDeliveryRequested ? "not_evaluated" : sanitizeLedgerField(mergeCriteria.find((criterion) => criterion?.key === key)?.status || "not_evaluated", "not_evaluated", 80);
+  const cleanupCriterionStatus = (key) => noDeliveryRequested ? "not_evaluated" : sanitizeLedgerField(cleanupCriteria.find((criterion) => criterion?.key === key)?.status || "not_evaluated", "not_evaluated", 80);
+  const nextAction = sanitizeLedgerField(
+    deliveryBlockers[0]?.nextAction ||
+      (mergePlan.threadAwareReviewInspectionRequired ? "Inspect thread-aware review state for the exact head before merge or cleanup." : "") ||
+      (cleanupMissing.length > 0 ? "Collect cleanup dry-run, exact-head, ownership, and raw-retention evidence before cleanup." : "") ||
+      nextManagerAction ||
+      "continue_current_cycle",
+    "continue_current_cycle",
+    260,
+  );
+
+  return {
+    schemaVersion: "manager-control-plane.quality-delivery-evidence-boundary-proof/v0",
+    status,
+    dogfoodable: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    deliveryBoundary: {
+      deliveryAuthorityStatus: sanitizeLedgerField(authority.status || "unknown", "unknown", 100),
+      mutationMode: sanitizeLedgerField(summary.mutationMode || "unknown", "unknown", 120),
+      prState: sanitizeLedgerField(prPlan.state || "not_requested", "not_requested", 100),
+      mergeState: sanitizeLedgerField(mergePlan.state || "not_requested", "not_requested", 100),
+      cleanupState: sanitizeLedgerField(cleanupPlan.state || "not_requested", "not_requested", 120),
+      deliveryMutationAllowed: false,
+      cleanupMutationAllowed: false,
+      providerUsageAllowed: false,
+      dispatchApplyAuthorityExpanded: false,
+    },
+    qualityGates: {
+      localVerification: criterionStatus("localVerificationPassed"),
+      exactHead: criterionStatus("exactReviewedHeadSha"),
+      exactHeadChecks: criterionStatus("checkRunExactHead"),
+      threadAwareReview: criterionStatus("threadAwareReviewState"),
+      changedFilesBoundToHead: criterionStatus("changedFilesEvidence"),
+      highRiskSurfacesCovered: criterionStatus("highRiskSurfacesCovered"),
+      cleanupDryRunEvidence: cleanupCriterionStatus("dryRunEvidence"),
+      cleanupRawPayloadRetained: cleanupCriterionStatus("rawPayloadRetained"),
+      mergeCriteria: { proven: provenMergeCriteria, total: noDeliveryRequested ? 0 : mergeCriteria.length },
+      cleanupCriteria: { proven: provenCleanupCriteria, total: noDeliveryRequested ? 0 : cleanupCriteria.length },
+    },
+    missingEvidence: {
+      authority: authorityMissing.map((item) => sanitizeLedgerField(item, "", 120)).filter(Boolean).slice(0, 12),
+      pr: prMissing.map((item) => sanitizeLedgerField(item, "", 120)).filter(Boolean).slice(0, 12),
+      merge: mergeMissing.map((item) => sanitizeLedgerField(item, "", 120)).filter(Boolean).slice(0, 12),
+      cleanup: cleanupMissing.map((item) => sanitizeLedgerField(item, "", 120)).filter(Boolean).slice(0, 12),
+    },
+    evidenceRefs: [
+      runId ? `manager-cycle:${sanitizeLedgerField(runId, "", 100)}` : "",
+      `delivery:${status}`,
+      authority.status ? `delivery-authority:${sanitizeLedgerField(authority.status, "", 100)}` : "",
+      ...mergeMissing.slice(0, 4).map((item) => `merge-missing:${sanitizeLedgerField(item, "", 100)}`),
+      ...prMissing.slice(0, 4).map((item) => `pr-missing:${sanitizeLedgerField(item, "", 100)}`),
+      ...cleanupMissing.slice(0, 4).map((item) => `cleanup-missing:${sanitizeLedgerField(item, "", 100)}`),
+    ].filter(Boolean),
+    nextManagerAction: nextAction,
+    compactSummary: sanitizeLedgerField(
+      `${status}: ${nextAction}`,
+      "Quality delivery evidence boundary proof available.",
+      320,
+    ),
+  };
+}
+
 function summarizeLedgerDispatcherSummary(summary = null) {
   if (!isPlainObject(summary)) return null;
   return {
@@ -17961,6 +18048,11 @@ export function buildCyclePacket(options = {}, context = {}) {
     recovery,
     nextManagerAction: actionNeeded,
   });
+  const qualityDeliveryEvidenceBoundaryProof = buildQualityDeliveryEvidenceBoundaryProof({
+    runId: runOptions.runId,
+    delivery,
+    nextManagerAction: actionNeeded,
+  });
   const progress = buildProgressBeaconPlan(runOptions, {
     runState: continuation.progressRunState,
     workerCounts: workers.summary?.workerCounts || {},
@@ -18038,6 +18130,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       recoveryDrillReplayProof: sanitizeCyclePacketValue(recoveryDrillReplayProof),
       dispatchPreview: sanitizeCyclePacketValue(dispatchPreview.summary),
       delivery: sanitizeCyclePacketValue(delivery.summary || { mutationMode: "existing-gates-required", source: "codex-workspace existing gates" }),
+      qualityDeliveryEvidenceBoundaryProof: sanitizeCyclePacketValue(qualityDeliveryEvidenceBoundaryProof),
       dispatchPosture: sanitizeCyclePacketValue(dispatchPosture.summary),
       steering: sanitizeCyclePacketValue(steering.summary),
       modelRouting: sanitizeCyclePacketValue(friction.summary.modelRouting),

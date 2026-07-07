@@ -11898,7 +11898,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
       },
     );
 
-    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "recoveryDrillReplayProof", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
+    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "recoveryDrillReplayProof", "qualityDeliveryEvidenceBoundaryProof", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
       assert.ok(Object.hasOwn(cycle.summary, key), `missing cycle key ${key}`);
     }
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
@@ -12002,6 +12002,17 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.cleanupAllowed, false);
     assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.providerUsageAllowed, false);
     assert.ok(cycle.summary.recoveryDrillReplayProof.evidenceRefs.includes("checkpoint:checkpoint-10"));
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.schemaVersion, "manager-control-plane.quality-delivery-evidence-boundary-proof/v0");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.status, "not_requested");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.dogfoodable, true);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.metadataOnly, true);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.rawPayloadRetained, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.deliveryMutationAllowed, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.cleanupMutationAllowed, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.providerUsageAllowed, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.dispatchApplyAuthorityExpanded, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.qualityGates.localVerification, "not_evaluated");
+    assert.ok(cycle.summary.qualityDeliveryEvidenceBoundaryProof.evidenceRefs.includes("delivery:not_requested"));
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "takeover-inspection-required"));
     assert.ok(cycle.summary.recommendedActions.some((action) => action.nextAction === "node ./scripts/manager-stale-owner-inspection.mjs --summary-json"));
@@ -20269,6 +20280,14 @@ test("cycle packet reports PR stewardship blockers while unrelated safe work con
     assert.equal(cycle.status, "blocked");
     assert.equal(cycle.ok, false);
     assert.equal(cycle.summary.delivery.prPlan.state, "blocked");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.status, "blocked");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.deliveryAuthorityStatus, "active");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.prState, "blocked");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.deliveryMutationAllowed, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.cleanupMutationAllowed, false);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.missingEvidence.pr.includes("evidence_ref"), true);
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.missingEvidence.pr.includes("recovery_path"), true);
+    assert.ok(cycle.summary.qualityDeliveryEvidenceBoundaryProof.evidenceRefs.some((ref) => ref === "pr-missing:evidence_ref"));
     assert.ok(cycle.summary.blockers.some((blocker) => blocker.code === "pr-stewardship-evidence-missing"));
     assert.equal(cycle.summary.continuation.canContinue, false);
     assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
