@@ -17594,6 +17594,74 @@ function buildBlockedPathOperationalProof({ runId = "", status = "unknown", cont
   };
 }
 
+function buildRecoveryDrillReplayProof({ runId = "", recovery = {}, nextManagerAction = "" } = {}) {
+  const reconciliation = recovery.summary?.reconciliation || {};
+  const retryRoutes = Array.isArray(recovery.summary?.retryRoutes) ? recovery.summary.retryRoutes : [];
+  const recoveryBlockers = Array.isArray(recovery.blockers) ? recovery.blockers : [];
+  const status = sanitizeLedgerField(recovery.status || reconciliation.status || "unknown", "unknown", 80);
+  const recoveryStatus = sanitizeLedgerField(reconciliation.recoveryStatus || status, status, 100);
+  const action = sanitizeLedgerField(reconciliation.action || "not_requested", "not_requested", 100);
+  const missingEvidence = Array.isArray(reconciliation.missingEvidence) ? reconciliation.missingEvidence : [];
+  const disagreements = Array.isArray(reconciliation.disagreements) ? reconciliation.disagreements : [];
+  const latestSafeCheckpoint = sanitizeLedgerField(reconciliation.latestSafeCheckpoint || "", "", 160);
+  const mutationBlocked = recoveryBlocksManagerMutation(recovery);
+  const nextSafeAction = sanitizeLedgerField(
+    mutationBlocked
+      ? reconciliation.nextAction || recoveryBlockers[0]?.nextAction || "inspect_recovery_blockers"
+      : retryRoutes[0]?.nextAction || reconciliation.nextAction || nextManagerAction || "continue_current_cycle",
+    "continue_current_cycle",
+    240,
+  );
+
+  return {
+    schemaVersion: "manager-control-plane.recovery-drill-replay-proof/v0",
+    status: recoveryStatus === "not_requested" ? "not_requested" : mutationBlocked ? "blocked" : status,
+    dogfoodable: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    drill: {
+      requested: action !== "not_requested",
+      action,
+      recoveryStatus,
+      latestSafeCheckpoint: latestSafeCheckpoint || null,
+      evidenceFreshness: sanitizeCyclePacketValue(reconciliation.evidenceFreshness || {}),
+      surfaceCount: isPlainObject(reconciliation.surfaces) ? Object.keys(reconciliation.surfaces).length : 0,
+      missingEvidenceCount: missingEvidence.length,
+      disagreementCount: disagreements.length,
+      recoveryAttemptCount: nonNegativeInteger(reconciliation.recoveryAttemptCount) ?? 0,
+      operatorAttentionRequired: reconciliation.operatorAttentionRequired === true || mutationBlocked,
+    },
+    replay: {
+      source: "cycle_recovery_projection",
+      controlState: mutationBlocked ? "blocked" : "active",
+      eventWatermark: latestSafeCheckpoint || sanitizeLedgerField(reconciliation.eventWatermark || "", "", 160),
+      nextSafeAction,
+      retryRouteCount: retryRoutes.length,
+      recoveryBlockerCount: recoveryBlockers.length,
+    },
+    preservedSafetyGates: {
+      workerMutationAuthorityExpanded: false,
+      dispatchApplyAuthorityExpanded: false,
+      deliveryAllowed: false,
+      cleanupAllowed: false,
+      providerUsageAllowed: false,
+    },
+    evidenceRefs: [
+      runId ? `manager-cycle:${sanitizeLedgerField(runId, "", 100)}` : "",
+      `recovery:${recoveryStatus}`,
+      action ? `recovery-action:${action}` : "",
+      latestSafeCheckpoint ? `checkpoint:${latestSafeCheckpoint}` : "",
+      ...missingEvidence.slice(0, 6).map((surface) => `missing-evidence:${sanitizeLedgerField(surface, "", 80)}`),
+      ...disagreements.slice(0, 6).map((disagreement) => `disagreement:${sanitizeLedgerField(disagreement, "", 100)}`),
+    ].filter(Boolean),
+    compactSummary: sanitizeLedgerField(
+      `${recoveryStatus}: ${nextSafeAction}`,
+      "Recovery drill replay proof available.",
+      320,
+    ),
+  };
+}
+
 function summarizeLedgerDispatcherSummary(summary = null) {
   if (!isPlainObject(summary)) return null;
   return {
@@ -17888,6 +17956,11 @@ export function buildCyclePacket(options = {}, context = {}) {
     operationalActions,
     nextManagerAction: actionNeeded,
   });
+  const recoveryDrillReplayProof = buildRecoveryDrillReplayProof({
+    runId: runOptions.runId,
+    recovery,
+    nextManagerAction: actionNeeded,
+  });
   const progress = buildProgressBeaconPlan(runOptions, {
     runState: continuation.progressRunState,
     workerCounts: workers.summary?.workerCounts || {},
@@ -17962,6 +18035,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       managerCapabilityStatus: sanitizeCyclePacketValue(managerCapabilityStatus),
       selfRepair: sanitizeCyclePacketValue(selfRepair.summary),
       recovery: sanitizeCyclePacketValue(recovery.summary),
+      recoveryDrillReplayProof: sanitizeCyclePacketValue(recoveryDrillReplayProof),
       dispatchPreview: sanitizeCyclePacketValue(dispatchPreview.summary),
       delivery: sanitizeCyclePacketValue(delivery.summary || { mutationMode: "existing-gates-required", source: "codex-workspace existing gates" }),
       dispatchPosture: sanitizeCyclePacketValue(dispatchPosture.summary),

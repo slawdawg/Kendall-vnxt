@@ -11898,7 +11898,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
       },
     );
 
-    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
+    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "recoveryDrillReplayProof", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
       assert.ok(Object.hasOwn(cycle.summary, key), `missing cycle key ${key}`);
     }
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
@@ -11991,6 +11991,17 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.ok(cycle.summary.blockedPathOperationalProof.evidenceRefs.includes("usage:normal"));
     assert.ok(cycle.summary.blockedPathOperationalProof.evidenceRefs.includes("resources:normal"));
     assert.match(cycle.summary.blockedPathOperationalProof.nextManagerAction, /manager-stale-owner-inspection/);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.schemaVersion, "manager-control-plane.recovery-drill-replay-proof/v0");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.dogfoodable, true);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.metadataOnly, true);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.rawPayloadRetained, false);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.drill.requested, true);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.drill.latestSafeCheckpoint, "checkpoint-10");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.replay.controlState, "active");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.deliveryAllowed, false);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.cleanupAllowed, false);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.providerUsageAllowed, false);
+    assert.ok(cycle.summary.recoveryDrillReplayProof.evidenceRefs.includes("checkpoint:checkpoint-10"));
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "takeover-inspection-required"));
     assert.ok(cycle.summary.recommendedActions.some((action) => action.nextAction === "node ./scripts/manager-stale-owner-inspection.mjs --summary-json"));
@@ -22097,6 +22108,14 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
 
     assert.equal(missingEvidenceCycle.status, "blocked");
     assert.equal(missingEvidenceCycle.summary.recovery.reconciliation.recoveryStatus, "blocked_missing_evidence");
+    assert.equal(missingEvidenceCycle.summary.recoveryDrillReplayProof.status, "blocked");
+    assert.equal(missingEvidenceCycle.summary.recoveryDrillReplayProof.drill.recoveryStatus, "blocked_missing_evidence");
+    assert.equal(missingEvidenceCycle.summary.recoveryDrillReplayProof.drill.operatorAttentionRequired, true);
+    assert.equal(missingEvidenceCycle.summary.recoveryDrillReplayProof.replay.controlState, "blocked");
+    assert.equal(missingEvidenceCycle.summary.recoveryDrillReplayProof.preservedSafetyGates.dispatchApplyAuthorityExpanded, false);
+    assert.equal(missingEvidenceCycle.summary.recoveryDrillReplayProof.preservedSafetyGates.deliveryAllowed, false);
+    assert.ok(missingEvidenceCycle.summary.recoveryDrillReplayProof.drill.missingEvidenceCount > 0);
+    assert.ok(missingEvidenceCycle.summary.recoveryDrillReplayProof.evidenceRefs.some((ref) => ref.startsWith("missing-evidence:")));
     assert.ok(missingEvidenceCycle.blockers.some((blocker) => blocker.code === "split-brain-state"));
     assert.equal(missingEvidenceCycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.equal(missingEvidenceCycle.summary.recommendedActions.some((action) => action.nextAction?.includes("--apply")), false);
@@ -22162,6 +22181,12 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
 
     assert.equal(cycle.status, "blocked");
     assert.equal(cycle.summary.recovery.reconciliation.action, "park_ambiguous_lane");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.status, "blocked");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.drill.action, "park_ambiguous_lane");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.drill.disagreementCount > 0, true);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.replay.nextSafeAction, "park_or_route_recovery_before_mutation");
+    assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.workerMutationAuthorityExpanded, false);
+    assert.equal(cycle.summary.recoveryDrillReplayProof.preservedSafetyGates.providerUsageAllowed, false);
     assert.ok(cycle.blockers.some((blocker) => blocker.code === "split-brain-state"));
     assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
     assert.equal(cycle.summary.continuation.workerMutationAllowed, false);
