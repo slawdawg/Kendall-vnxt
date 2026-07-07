@@ -54,6 +54,8 @@ const CONTINUOUS_APPLY_MUTATION_GATES = Object.freeze({
   manager_owned_worker_progress_signal: "workerMutation",
   manager_owned_worker_question_answer: "workerMutation",
   manager_owned_worker_retire: "workerMutation",
+  manager_owned_worker_code_review_delegation: "workerMutation",
+  manager_owned_worker_review_feedback: "workerMutation",
   assignment_workspace_claim_only: "dispatchApply",
   assignment_heartbeat_metadata_only: "laneAdvance",
   manager_runtime_review_request_packet: "reviewRequest",
@@ -2832,8 +2834,8 @@ function continuousWorkerProgressActionTargets(action = {}, summary = {}, option
   } else {
     const promptIdle = /\s--prompt-idle\b/.test(String(action.nextAction || "")) || code.includes("prompt_idle");
     const signalable = promptIdle
-      ? new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"])
-      : new Set(["needs_progress_signal", "checkpoint_stale", "question_answer_stale", "owner_delegation_stale"]);
+      ? new Set(["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"])
+      : new Set(["needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "owner_delegation_stale"]);
     selected = workers.filter((worker) => signalable.has(worker.progressState));
   }
   const exactTarget = continuousCommandExactWorkerTarget(action.nextAction || "");
@@ -4658,12 +4660,11 @@ export function buildWorkerSubmitPendingPlan(options = {}, context = {}) {
   const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
   const pendingStates = new Set(["handoff_sent", "progress_signal_sent", "recovery_inspected", "owner_delegation_sent", "owner_delegation_stale", "pointer_receipt_unverified"]);
   const candidates = Array.isArray(progress.summary?.workerProgress)
-    ? progress.summary.workerProgress
+    ? filterWorkersByExactTarget(progress.summary.workerProgress, runOptions)
       .filter((worker) => runOptions.operatorVisiblePrompt || pendingStates.has(worker.progressState))
       .filter((worker) => runOptions.operatorVisiblePrompt || worker.progressState !== "handoff_sent" || worker.submitPendingAfterHandoff !== true)
       .filter((worker) => runOptions.operatorVisiblePrompt || Number(worker.checkpointCount || 0) === 0 || needsPendingSubmitRepair(worker))
       .filter((worker) => Number(worker.questionCount || 0) === 0)
-      .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId)
     : [];
   const limit = runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0);
   const selected = candidates.slice(0, limit).map((worker) => ({

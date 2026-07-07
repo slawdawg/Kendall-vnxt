@@ -497,7 +497,8 @@ export function executeContinuousSelectedAction({ selected = null, applySelected
   const dryRun = runCommand(selected.dryRunCommand);
   const dryRunBlockers = packetBlockers(dryRun.packet);
   result.summary.dryRun = { ok: dryRun.ok, status: dryRun.packet?.status || null, blockers: dryRunBlockers.length > 0 ? sanitizeExecutionBlockers(dryRunBlockers, { code: "continuous-dry-run-blocked", message: "Continuous dry-run is blocked." }) : [] };
-  if (!dryRun.ok || dryRun.packet?.ok === false || normalizePacketStatus(dryRun.packet?.status) === "blocked" || packetHasBlockers(dryRun.packet)) {
+  const dryRunSelectedProofStillReady = applySelected ? dryRunStillAllowsApply(applySelected, dryRun.packet) : false;
+  if (!dryRun.ok || dryRun.packet?.ok === false || normalizePacketStatus(dryRun.packet?.status) === "blocked" || (packetHasBlockers(dryRun.packet) && !dryRunSelectedProofStillReady)) {
     result.ok = false;
     result.status = "blocked";
     result.blockers = sanitizeExecutionBlockers(dryRunBlockers, commandFailureBlocker(

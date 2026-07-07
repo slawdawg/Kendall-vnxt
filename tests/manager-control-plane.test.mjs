@@ -9508,6 +9508,44 @@ test("worker progress signal gate writes durable request files and pastes only p
     assert.match(batchPreview.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --limit 2 --apply/);
     assert.doesNotMatch(batchPreview.nextActions[0].nextAction, /--worker-id/);
 
+    const reviewFeedbackTargetPlan = buildContinuousRunPlan(
+      {},
+      {
+        cyclePacket: {
+          ok: true,
+          status: "attention",
+          summary: {
+            run: { runId: "manager-test" },
+            usage: { state: "normal" },
+            resources: { state: "normal" },
+            workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+            workerProgress: {
+              workerProgress: [
+                {
+                  workerId: "codex-1",
+                  sessionName: "codex-1",
+                  assignmentId: "lane-1",
+                  taskId: "task-1",
+                  progressState: "review_feedback_stale",
+                },
+              ],
+            },
+          },
+          warnings: [],
+          nextActions: [
+            {
+              code: "worker-progress-review_feedback_stale",
+              summary: "Signal stale review-feedback worker.",
+              nextAction: "node ./scripts/manager-worker-progress-signal.mjs --summary-json --worker-id 'codex-1' --session-name 'codex-1' --assignment-id 'lane-1' --task-id 'task-1'",
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(reviewFeedbackTargetPlan.summary.selectedAction.code, "continuous-worker-progress-signal");
+    assert.ok(reviewFeedbackTargetPlan.summary.selectedAction.targetComponents.includes("worker:codex-1"));
+    assert.ok(reviewFeedbackTargetPlan.summary.selectedAction.targetComponents.includes("assignment:lane-1"));
+
     const calls = [];
     const applied = buildWorkerProgressSignalPlan(
       { runId: "manager-test", stateRoot, apply: true },
@@ -10068,6 +10106,37 @@ test("unverified pointer receipt metadata routes to C-m-only submit repair", () 
     assert.ok(submitPreview.summary.continuousSelection.targetComponents.includes("worker:codex-1"));
     assert.ok(submitPreview.summary.continuousSelection.targetComponents.includes("assignment:lane-1"));
     assert.equal(submitPreview.summary.transport.submitKey, "C-m");
+
+    const reassignedSubmitPreview = buildWorkerSubmitPendingPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        workerId: "codex-1",
+        sessionName: "codex-1",
+        assignmentId: "lane-1",
+        taskId: "task-1",
+      },
+      {
+        progressStatus: {
+          status: "attention",
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "lane-2",
+                taskId: "task-2",
+                progressState: "pointer_receipt_unverified",
+                checkpointCount: 0,
+                questionCount: 0,
+              },
+            ],
+          },
+        },
+      },
+    );
+    assert.equal(reassignedSubmitPreview.status, "ready");
+    assert.equal(reassignedSubmitPreview.summary.requests.length, 0);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -15245,6 +15314,27 @@ test("runtime readiness gates continuous apply to explicit existing manager gate
   assert.equal(ready.summary.gates.delivery, "blocked_or_not_requested");
   assert.equal(ready.summary.rawPayloadRetained, false);
 
+  for (const mutationClass of ["manager_owned_worker_code_review_delegation", "manager_owned_worker_review_feedback"]) {
+    const reviewMutationReady = buildRuntimeReadinessPlan(
+      { runtimeMode: "continuous_apply" },
+      {
+        cycleStatus: "attention",
+        cycleOk: true,
+        usage: { state: "normal" },
+        resources: { state: "normal" },
+        preflight: { status: "ready", blockerCount: 0, blockers: [] },
+        continuation: { workerMutationAllowed: true },
+        selectedAction: {
+          code: `continuous-${mutationClass}`,
+          mutationClass,
+          targetComponents: ["run:manager-test", "worker:codex-reviewer", "assignment:lane-review"],
+        },
+      },
+    );
+    assert.equal(reviewMutationReady.status, "ready");
+    assert.equal(reviewMutationReady.summary.gates.workerMutation, "existing_gate_only");
+  }
+
   const blocked = buildRuntimeReadinessPlan(
     { runtimeMode: "continuous_apply" },
     {
@@ -15329,6 +15419,28 @@ test("continuous execution separates dry-run proof from apply mutation", () => {
   assert.equal(applied.ok, true);
   assert.equal(calls.length, 2);
   assert.match(calls[1], /--apply/);
+
+  calls.length = 0;
+  const appliedWithUnrelatedDryRunBlockers = executeContinuousSelectedAction({
+    selected,
+    applySelected,
+    runCommand(command) {
+      calls.push(command);
+      if (!command.includes(" --apply")) {
+        return {
+          ok: true,
+          packet: {
+            ...proofPacket(applySelected),
+            blockers: [{ code: "unrelated-question-blocked", message: "A different target is blocked." }],
+          },
+        };
+      }
+      return { ok: true, packet: proofPacket(applySelected) };
+    },
+  });
+  assert.equal(appliedWithUnrelatedDryRunBlockers.ok, true);
+  assert.equal(calls.length, 2);
+  assert.ok(appliedWithUnrelatedDryRunBlockers.summary.dryRun.blockers.some((blocker) => blocker.code === "unrelated-question-blocked"));
 });
 
 test("continuous run plan selects only manager-owned worker auto actions", () => {
