@@ -17,6 +17,8 @@ export const MANAGER_CONTROL_PLANE_EVENT_NAMES = [
   "dispatcher.refill.started",
   "dispatcher.refill.completed",
   "dispatcher.authority.blocked",
+  "dispatcher.candidate.blocked",
+  "dispatcher.review.required",
   "dispatcher.summary.updated",
   "dispatcher.summary.stale",
   "dispatcher.progress.observed",

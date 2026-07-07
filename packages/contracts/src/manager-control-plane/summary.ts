@@ -20,7 +20,9 @@ export interface ManagerExecutionLaneStateCounts {
   quarantined: number;
   blocked: number;
   closed: number;
+  metadataOnlyQueuedCandidates: number;
   blockedCandidates: number;
+  needsReviewCandidates: number;
   duplicateCandidates: number;
   noSafeWork: number;
 }
@@ -87,6 +89,7 @@ export interface ManagerExecutionLaneSummary {
   recoveryAttemptCount: number;
   lastRecoveryAt?: string | null;
   safeWorkAvailableCount: number;
+  metadataOnlyQueuedCount: number;
   unsafeOrGatedWorkCount: number;
   evidenceFreshness: EvidenceFreshnessState;
   eventWatermark: ManagerEventId;

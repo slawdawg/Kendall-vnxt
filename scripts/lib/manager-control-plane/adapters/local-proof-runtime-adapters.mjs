@@ -17,7 +17,29 @@ const SAFE_CANDIDATE_STATUSES = Object.freeze(["eligible", "needs_review", "bloc
 const SAFE_SOURCE_TYPES = Object.freeze(["prd", "bmad_artifact", "research", "repo_source", "runtime_state", "manual"]);
 const SAFE_AUTHORITY_STAGES = Object.freeze(["backend_proof"]);
 const SAFE_AUTHORITY_CLASSES = Object.freeze(["allowed_unattended", "requires_preauthorization", "block_and_record", "forbidden"]);
-const RAW_PAYLOAD_PATTERN = /(?:\braw\b|\bprovider\b|raw[-_\s]?payload|raw[-_\s]?prompt|raw[-_\s]?completion|provider[-_\s]?payload|raw[-_\s]?worker(?:[-_\s]?transcript)?|raw[Pp]rompt|raw[Cc]ompletion|provider[Pp]ayload|raw[Ww]orker[Tt]ranscript|\bpayload\b|transcript|s(?:ec)ret|sk-[A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const CANDIDATE_INPUT_KEYS = new Set([
+  "candidateWorkPacketId",
+  "runId",
+  "sourceRefs",
+  "proposedSlice",
+  "acceptanceCriteria",
+  "verificationTargets",
+  "riskClass",
+  "dependencyHints",
+  "dedupeKey",
+  "authorityClass",
+  "authorityStage",
+  "status",
+  "policyId",
+  "evidenceRefs",
+  "createdAt",
+  "updatedAt"
+]);
+const SOURCE_REF_INPUT_KEYS = new Set(["sourceRefId", "sourceType", "label", "pathOrUrl", "sourceSpan", "summaryOnly"]);
+const VERIFICATION_TARGET_INPUT_KEYS = new Set(["verificationTargetId", "commandId", "command", "expectedResult"]);
+const RAW_PAYLOAD_PATTERN = /\b(rawProviderPayload|providerPayload|providerMetadata|providerResponse|provider_response|rawPayload|raw_payload|raw[-_\s]?payload|raw[-_\s]?prompt|raw[-_\s]?completion|provider_payload|provider_metadata|provider[-_\s]?payload|retainedPayload|retained_payload|raw payload|provider payload|provider response|payload|transcript|secret|token|credential|scrollback|api_key|api-key|apikey|client_secret|clientSecret|private_key|privateKey|sshPrivateKey|access_key|accessKey|secret_key|secretKey|secretAccessKey|awsSecretAccessKey|password)\b|\b[A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|ID_TOKEN|TOKEN|SECRET)\b\s*=?|\bprovider\s*[:=]|\bresponse_id\s*[:=]|"provider"\s*:|"response_id"\s*:|\bauthorization\s*:\s*bearer\b|\bbearer\s+[A-Za-z0-9._~+/-]+=*\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|\bsk-[A-Za-z0-9_-]{8,}|\b(?:git(?:hub)_pat|gh[opusr])_[A-Za-z0-9_]{8,}|\bAKIA[0-9A-Z]{12,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
+const UNSAFE_EVIDENCE_REF_PATTERN = /(payload|secret|token|credential|transcript|api[_-]?key|access[_-]?key|private[_-]?key|bearer|password|rawpayload|raw_payload|raw-payload|providerpayload|provider_payload|provider-payload)/i;
+const UNSAFE_METADATA_TEXT_PATTERN = /raw|provider|payload|secret|token|credential|transcript|api[_-]?key|access[_-]?key|private[_-]?key|bearer|password/i;
 const KNOWN_AUTHORITY_FAMILIES = Object.freeze([
   "contract_definition",
   "safe_work_eligibility",
@@ -73,10 +95,14 @@ export function createLocalProofQueueRuntime({
   maxAttempts,
   summaryStaleAfterMs
 }) {
+  const normalizedRunId = normalizeWorkItemId(runId);
+  if (!normalizedRunId) {
+    throw new Error("local proof queue runtime requires a metadata-safe runId");
+  }
   const adapter = createMemoryDispatcherAdapter({
     lifecycle,
     clock,
-    runId,
+    runId: normalizedRunId,
     leaseTtlMs,
     maxAttempts,
     summaryStaleAfterMs
@@ -86,6 +112,7 @@ export function createLocalProofQueueRuntime({
     clock,
     descriptor: descriptor("queue", "local-proof-queue-runtime"),
     refill(input) {
+      if (!isRecord(input)) return Promise.resolve(failResult("invalid_input", "Queue proof refill requires an input object.", []));
       const normalized = normalizeQueueEvidenceInput(input);
       if (!normalized.ok) return Promise.resolve(failResult("missing_evidence", "Queue proof requires valid bounded evidence refs.", []));
       if (!Array.isArray(input?.candidates)) {
@@ -109,6 +136,7 @@ export function createLocalProofQueueRuntime({
       }).then(freezeLifecycleResult);
     },
     claim(input) {
+      if (!isRecord(input)) return Promise.resolve(failResult("invalid_input", "Queue proof claim requires an input object.", []));
       const normalized = normalizeQueueEvidenceInput(input);
       if (!normalized.ok) return Promise.resolve(failResult("missing_evidence", "Queue proof requires valid bounded evidence refs.", []));
       const workerId = normalizeWorkItemId(input?.workerId);
@@ -116,6 +144,7 @@ export function createLocalProofQueueRuntime({
       return adapter.claim({ workerId, evidenceRefs: normalized.evidenceRefs }).then(freezeLifecycleResult);
     },
     heartbeat(input) {
+      if (!isRecord(input)) return Promise.resolve(failResult("invalid_input", "Queue proof heartbeat requires an input object.", []));
       const normalized = normalizeQueueEvidenceInput(input);
       if (!normalized.ok) return Promise.resolve(failResult("missing_evidence", "Queue proof requires valid bounded evidence refs.", []));
       const leaseInput = normalizeLeaseLifecycleInput(input, normalized.evidenceRefs, { requireTtl: true });
@@ -123,6 +152,7 @@ export function createLocalProofQueueRuntime({
       return adapter.heartbeat(leaseInput).then(freezeLifecycleResult);
     },
     complete(input) {
+      if (!isRecord(input)) return Promise.resolve(failResult("invalid_input", "Queue proof complete requires an input object.", []));
       const normalized = normalizeQueueEvidenceInput(input);
       if (!normalized.ok) return Promise.resolve(failResult("missing_evidence", "Queue proof requires valid bounded evidence refs.", []));
       const leaseInput = normalizeLeaseLifecycleInput(input, normalized.evidenceRefs);
@@ -134,6 +164,7 @@ export function createLocalProofQueueRuntime({
       }).then(freezeLifecycleResult);
     },
     fail(input) {
+      if (!isRecord(input)) return Promise.resolve(failResult("invalid_input", "Queue proof fail requires an input object.", []));
       const normalized = normalizeQueueEvidenceInput(input);
       if (!normalized.ok) return Promise.resolve(failResult("missing_evidence", "Queue proof requires valid bounded evidence refs.", []));
       const leaseInput = normalizeLeaseLifecycleInput(input, normalized.evidenceRefs);
@@ -145,6 +176,7 @@ export function createLocalProofQueueRuntime({
       }).then(freezeLifecycleResult);
     },
     recoverExpiredLeases(input) {
+      if (!isRecord(input)) return Promise.resolve(failResult("invalid_input", "Queue proof recoverExpiredLeases requires an input object.", []));
       const normalized = normalizeQueueEvidenceInput(input);
       if (!normalized.ok) return Promise.resolve(failResult("missing_evidence", "Queue proof requires valid bounded evidence refs.", []));
       return adapter.recoverExpiredLeases({ evidenceRefs: normalized.evidenceRefs }).then(freezeLifecycleResult);
@@ -325,17 +357,19 @@ function requireClock(clock, adapterName) {
 function normalizeEvidenceRefs(evidenceRefs) {
   if (!Array.isArray(evidenceRefs) || evidenceRefs.length === 0 || evidenceRefs.length > 8) return null;
   const normalized = evidenceRefs.map((ref) => normalizeRequiredString(ref));
-  if (normalized.some((ref) => !isSafeMetadataToken(ref, SAFE_TOKEN_PATTERN))) return null;
+  if (normalized.some((ref) => !isSafeEvidenceRef(ref))) return null;
   return Object.freeze([...normalized]);
 }
 
 function normalizeVerificationTarget(target) {
+  if (!isRecord(target) || !hasOnlyKeys(target, VERIFICATION_TARGET_INPUT_KEYS)) return null;
   const verificationTargetId = normalizeRequiredString(target?.verificationTargetId);
   const commandId = normalizeRequiredString(target?.commandId);
   const command = typeof target?.command === "string" ? target.command : "";
   const expectedResult = typeof target?.expectedResult === "string" ? target.expectedResult : "";
   if (!verificationTargetId || !commandId || !command.trim() || !expectedResult.trim()) return null;
   if (!isSafeMetadataToken(verificationTargetId, SAFE_TOKEN_PATTERN) || !isSafeMetadataToken(commandId, SAFE_POLICY_TOKEN_PATTERN)) return null;
+  if (hasUnsafeVerificationText(command) || hasUnsafeVerificationText(expectedResult)) return null;
   if (command.length > MAX_VERIFICATION_FIELD_LENGTH || expectedResult.length > MAX_VERIFICATION_FIELD_LENGTH) return null;
   return {
     proof: Object.freeze({
@@ -448,6 +482,14 @@ function stableDigest(value) {
   return `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
 }
 
+function isRecord(input) {
+  return input !== null && typeof input === "object" && !Array.isArray(input);
+}
+
+function hasOnlyKeys(input, allowedKeys) {
+  return Object.keys(input).every((key) => allowedKeys.has(key));
+}
+
 function normalizeQueueEvidenceInput(input) {
   const evidenceRefs = normalizeEvidenceRefs(input?.evidenceRefs);
   return evidenceRefs ? { ok: true, evidenceRefs } : { ok: false };
@@ -465,19 +507,19 @@ function normalizeQueueCandidates(candidates) {
 }
 
 function normalizeQueueCandidate(candidate) {
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  if (!isRecord(candidate) || !hasOnlyKeys(candidate, CANDIDATE_INPUT_KEYS)) return null;
   const candidateWorkPacketId = normalizeWorkItemId(candidate.candidateWorkPacketId);
   const runId = normalizeWorkItemId(candidate.runId);
   const sourceRefs = normalizeSourceRefs(candidate.sourceRefs);
   const proposedSlice = normalizeMetadataText(candidate.proposedSlice);
   const acceptanceCriteria = normalizeMetadataArray(candidate.acceptanceCriteria, { requireNonEmpty: true });
-  const verificationTargets = normalizeVerificationTargets(candidate.verificationTargets);
   const riskClass = normalizeSetMember(candidate.riskClass, SAFE_RISK_CLASSES);
   const dependencyHints = normalizeMetadataArray(candidate.dependencyHints);
   const dedupeKey = normalizeWorkItemId(candidate.dedupeKey);
   const authorityClass = normalizeSetMember(candidate.authorityClass, SAFE_AUTHORITY_CLASSES);
   const authorityStage = normalizeSetMember(candidate.authorityStage, SAFE_AUTHORITY_STAGES);
   const status = normalizeSetMember(candidate.status, SAFE_CANDIDATE_STATUSES);
+  const verificationTargets = normalizeVerificationTargets(candidate.verificationTargets, { allowEmpty: status === "needs_review" });
   const policyId = normalizeWorkItemId(candidate.policyId);
   const evidenceRefs = normalizeEvidenceRefs(candidate.evidenceRefs);
   const createdAt = normalizeIsoString(candidate.createdAt);
@@ -525,12 +567,13 @@ function normalizeQueueCandidate(candidate) {
 function normalizeSourceRefs(sourceRefs) {
   if (!Array.isArray(sourceRefs) || sourceRefs.length === 0 || sourceRefs.length > 8) return null;
   const normalized = sourceRefs.map((sourceRef) => {
-    if (!sourceRef || typeof sourceRef !== "object" || Array.isArray(sourceRef)) return null;
+    if (!isRecord(sourceRef) || !hasOnlyKeys(sourceRef, SOURCE_REF_INPUT_KEYS)) return null;
     const sourceRefId = normalizeWorkItemId(sourceRef.sourceRefId);
     const sourceType = normalizeSetMember(sourceRef.sourceType, SAFE_SOURCE_TYPES);
     const label = normalizeMetadataText(sourceRef.label);
     const pathOrUrl = sourceRef.pathOrUrl === undefined || sourceRef.pathOrUrl === null ? null : normalizeMetadataText(sourceRef.pathOrUrl);
     const sourceSpan = sourceRef.sourceSpan === undefined || sourceRef.sourceSpan === null ? null : normalizeMetadataText(sourceRef.sourceSpan);
+    if (sourceRef.summaryOnly !== undefined && typeof sourceRef.summaryOnly !== "boolean") return null;
     if (!sourceRefId || !sourceType || !label || pathOrUrl === "" || sourceSpan === "") return null;
     return {
       sourceRefId,
@@ -545,8 +588,8 @@ function normalizeSourceRefs(sourceRefs) {
   return normalized;
 }
 
-function normalizeVerificationTargets(targets) {
-  if (!Array.isArray(targets) || targets.length === 0 || targets.length > 8) return null;
+function normalizeVerificationTargets(targets, { allowEmpty = false } = {}) {
+  if (!Array.isArray(targets) || (!allowEmpty && targets.length === 0) || targets.length > 8) return null;
   const normalized = targets.map((target) => {
     const proof = normalizeVerificationTarget(target)?.proof;
     if (!proof) return null;
@@ -580,7 +623,19 @@ function isSafeMetadataToken(value, pattern) {
   return Boolean(value) && pattern.test(value) && !hasUnsafeMetadataText(value);
 }
 
+function isSafeEvidenceRef(value) {
+  if (!value || !SAFE_TOKEN_PATTERN.test(value)) return false;
+  if (/^(raw|provider)$/i.test(value)) return false;
+  if (/^(sk-[A-Za-z0-9_-]{8,}|github_pat_|gh[opusr]_|AKIA[0-9A-Z]{12,})/i.test(value)) return false;
+  return !UNSAFE_EVIDENCE_REF_PATTERN.test(value);
+}
+
 function hasUnsafeMetadataText(value) {
+  if (RAW_PAYLOAD_PATTERN.test(value)) return true;
+  return UNSAFE_METADATA_TEXT_PATTERN.test(value);
+}
+
+function hasUnsafeVerificationText(value) {
   return RAW_PAYLOAD_PATTERN.test(value);
 }
 

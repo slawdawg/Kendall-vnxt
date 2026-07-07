@@ -9227,14 +9227,17 @@ export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
   const dedupeKeys = existingDedupeKeys(context);
   const classified = classifyRefillCandidates(normalizedCandidates, dedupeKeys, targetCandidateCount);
   const sourceExhausted = normalizedCandidates.length === 0;
+  const hasGatedCandidates = classified.needsReviewCandidates.length > 0 || classified.blockedCandidates.length > 0;
   const result = classified.eligibleCandidates.length > 0
-    ? "queued_work"
+    ? hasGatedCandidates
+      ? "queued_with_gated_candidates"
+      : "queued_work"
     : classified.needsReviewCandidates.length > 0
       ? "needs_review"
       : classified.blockedCandidates.length > 0
         ? "blocked"
         : "no_safe_work";
-  const state = sourceExhausted || result === "needs_review" || result === "blocked" ? "completed" : "running";
+  const state = sourceExhausted || result === "needs_review" || result === "blocked" || result === "queued_with_gated_candidates" ? "completed" : "running";
   const status = result === "queued_work" ? "refilling" : sourceExhausted ? "attention" : result === "blocked" ? "blocked" : "attention";
   const nextActions = refillWatermarkNextActions(result, sourceExhausted);
   const blockers = result === "blocked"
@@ -11372,9 +11375,9 @@ function refillJobSummary({
   dedupe = null,
 } = {}) {
   const normalizedState = ["planned", "running", "completed", "blocked", "failed"].includes(String(state)) ? String(state) : "running";
-  const normalizedResult = ["queued_work", "no_safe_work", "needs_review", "blocked", "failed"].includes(String(result)) ? String(result) : "queued_work";
+  const normalizedResult = ["queued_work", "queued_with_gated_candidates", "no_safe_work", "needs_review", "blocked", "failed"].includes(String(result)) ? String(result) : "queued_work";
   const id = sanitizeLedgerField(refillJobId || `refill-${refillSourceKey(sourceRefs)}-${triggerReason}-${lowWatermark}-${highWatermark}`, "refill-job", 180);
-  const authorityClass = normalizedResult === "blocked"
+  const authorityClass = normalizedResult === "blocked" || normalizedResult === "queued_with_gated_candidates"
     ? "block_and_record"
     : normalizedResult === "needs_review"
       ? "requires_preauthorization"
@@ -11560,6 +11563,9 @@ function compactRefillNextActions(nextActions = []) {
 function refillWatermarkNextActions(result, sourceExhausted) {
   if (result === "queued_work") {
     return [{ code: "dispatcher-refill-started", summary: "Refill job can queue eligible source-owned work up to the high watermark.", nextAction: "Record refill evidence and refresh dispatcher queue summary." }];
+  }
+  if (result === "queued_with_gated_candidates") {
+    return [{ code: "dispatcher-refill-mixed-gated", summary: "Refill queued eligible work and retained gated candidates for attention.", nextAction: "Record queued work and surface review-needed or blocked refill candidates." }];
   }
   if (sourceExhausted || result === "no_safe_work") {
     return [{ code: "dispatcher-refill-source-exhausted", summary: "No eligible source-owned refill candidates are available.", nextAction: "Run housekeeping and stop, or request the narrowest BMAD planning step." }];
@@ -22473,6 +22479,8 @@ const LEDGER_EVENT_NAMES = new Set([
   "dispatcher.refill.started",
   "dispatcher.refill.completed",
   "dispatcher.authority.blocked",
+  "dispatcher.candidate.blocked",
+  "dispatcher.review.required",
   "dispatcher.summary.updated",
   "dispatcher.summary.stale",
   "dispatcher.progress.observed",

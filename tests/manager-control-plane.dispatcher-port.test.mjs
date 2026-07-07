@@ -1,21 +1,28 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createLocalProofRuntimeAdapters } from "../scripts/lib/manager-control-plane/adapters/local-proof-runtime-adapters.mjs";
 import { createMemoryDispatcherAdapter } from "../scripts/lib/manager-control-plane/adapters/memory-dispatcher-adapter.mjs";
 import { runBackendProofHarness } from "../scripts/lib/manager-control-plane/backend-proof-harness.mjs";
 import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
 import { toManagerSummaryJson } from "../scripts/lib/manager-control-plane/summary-json.mjs";
 import { loadManagerFixture } from "./helpers/manager-control-plane/fixture-loader.mjs";
-import { assertDispatcherPortConformance } from "./helpers/manager-control-plane/dispatcher-port-conformance.mjs";
+import {
+  assertDispatcherPortConformance,
+  assertDispatcherPortContractSuite
+} from "./helpers/manager-control-plane/dispatcher-port-conformance.mjs";
 import { loadWorkflowCoreManagerControlPlane } from "./helpers/manager-control-plane/workflow-core-loader.mjs";
 
 const portPath = new URL("../packages/workflow-core/src/ports/dispatcher-port.ts", import.meta.url);
 const runtimePortsPath = new URL("../packages/workflow-core/src/ports/runtime-ports.ts", import.meta.url);
 const portsIndexPath = new URL("../packages/workflow-core/src/ports/index.ts", import.meta.url);
+const lifecycleContractPath = new URL("../packages/contracts/src/manager-control-plane/lifecycle.ts", import.meta.url);
+const summaryContractPath = new URL("../packages/contracts/src/manager-control-plane/summary.ts", import.meta.url);
 const adapterPath = new URL("../scripts/lib/manager-control-plane/adapters/memory-dispatcher-adapter.mjs", import.meta.url);
 const localProofAdaptersPath = new URL("../scripts/lib/manager-control-plane/adapters/local-proof-runtime-adapters.mjs", import.meta.url);
 const harnessPath = new URL("../scripts/lib/manager-control-plane/backend-proof-harness.mjs", import.meta.url);
@@ -23,6 +30,7 @@ const managerRunLoopPath = new URL("../scripts/manager-run-loop.mjs", import.met
 const summaryJsonPath = new URL("../scripts/lib/manager-control-plane/summary-json.mjs", import.meta.url);
 const managedWorktreeRoot = join(tmpdir(), "kendall", "manager-control-plane", "worktrees");
 const approvedWorkspaceRoots = [managedWorktreeRoot];
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
 test("dispatcher port source boundary exists and is exported from workflow-core", async () => {
   assert.equal(existsSync(portPath), true, "missing lowercase dispatcher-port.ts");
@@ -33,6 +41,11 @@ test("dispatcher port source boundary exists and is exported from workflow-core"
 
   const portSource = await readFile(portPath, "utf8");
   assert.match(portSource, /interface DispatcherPort/);
+  assert.match(portSource, /needsReviewCandidates/);
+  const lifecycleContractSource = await readFile(lifecycleContractPath, "utf8");
+  assert.match(lifecycleContractSource, /"needs_review"/);
+  const summaryContractSource = await readFile(summaryContractPath, "utf8");
+  assert.match(summaryContractSource, /needsReviewCandidates/);
   for (const forbidden of ["BullMQ", "Redis", "Hatchet", "SQLite", "tmux", "GitHub", "provider", "child_process"]) {
     assert.doesNotMatch(portSource, new RegExp(forbidden, "i"), `dispatcher port leaks ${forbidden}`);
   }
@@ -110,17 +123,6 @@ test("local proof runtime adapters satisfy all ports without live execution side
       runtimePorts.extra = true;
     },
     /Cannot add property|object is not extensible/
-  );
-
-  await assertDispatcherPortConformance(
-    () =>
-      createLocalProofRuntimeAdapters({
-        lifecycle,
-        clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
-        runId: "run-1",
-        approvedWorkspaceRoots
-      }).queue,
-    { candidate: fixture.candidate }
   );
 
   const verification = await runtimePorts.verification.verify({
@@ -377,6 +379,19 @@ test("local proof runtime adapters reject unsafe metadata and unsupported operat
   assert.equal(oversizedTarget.ok, false);
   assert.equal(oversizedTarget.code, "invalid_input");
 
+  const providerNamedRepoCheck = await runtimePorts.verification.verify({
+    target: {
+      ...fixture.candidate.verificationTargets[0],
+      command: "pnpm run check:provider-fixtures",
+      expectedResult: "provider fixture check passes"
+    },
+    evidenceRefs: ["evidence-provider-fixtures-check"]
+  });
+  assert.equal(providerNamedRepoCheck.ok, true);
+  assert.equal(providerNamedRepoCheck.value.commandExecutionAttempted, false);
+  assert.equal("command" in providerNamedRepoCheck.value.target, false);
+  assert.match(providerNamedRepoCheck.value.target.commandDigest, /^sha256:[0-9a-f]{32}$/);
+
   for (const optionalIdPayload of [{ raw: "work" }, "work-item\n001", `work-item-${"x".repeat(200)}`]) {
     const invalidOptionalId = await runtimePorts.verification.verify({
       target: fixture.candidate.verificationTargets[0],
@@ -590,9 +605,12 @@ test("local proof runtime adapters reject unsafe metadata and unsupported operat
   const queueSnapshot = runtimePorts.queue.snapshot();
   assert.deepEqual(Object.keys(queueSnapshot).sort(), [
     "attempts",
+    "blockedCandidates",
+    "duplicateCandidates",
     "events",
     "evidenceRecords",
     "leases",
+    "needsReviewCandidates",
     "refillJobs",
     "workItems"
   ]);
@@ -677,18 +695,643 @@ test("local proof queue rejects unsafe lifecycle metadata before delegation", as
   }
 });
 
-test("memory dispatcher adapter passes refill, lease, heartbeat, complete, and summary conformance", async () => {
+test("workflow-core loader honors explicit repo root from a non-repo cwd", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "manager-loader-cwd-"));
+  try {
+    const script = [
+      `import { loadWorkflowCoreManagerControlPlane } from ${JSON.stringify(new URL("./helpers/manager-control-plane/workflow-core-loader.mjs", import.meta.url).href)};`,
+      `const lifecycle = await loadWorkflowCoreManagerControlPlane({ repoRoot: ${JSON.stringify(repoRoot)} });`,
+      `if (typeof lifecycle.createManualClock !== "function") throw new Error("missing lifecycle export");`,
+      ""
+    ].join("\n");
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+      cwd,
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: 30_000
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("memory dispatcher adapter passes the shared adapter contract suite", async () => {
   const lifecycle = await loadWorkflowCoreManagerControlPlane();
   const fixture = await loadManagerFixture("happy-path.json");
 
-  await assertDispatcherPortConformance(
-    () =>
+  await assertDispatcherPortContractSuite(
+    ({ clock, runId, leaseTtlMs, maxAttempts, summaryStaleAfterMs } = {}) =>
       createMemoryDispatcherAdapter({
         lifecycle,
-        clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
-        runId: "run-1"
+        clock: clock ?? lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+        runId: runId ?? "run-1",
+        ...(leaseTtlMs === undefined ? {} : { leaseTtlMs }),
+        ...(maxAttempts === undefined ? {} : { maxAttempts }),
+        ...(summaryStaleAfterMs === undefined ? {} : { summaryStaleAfterMs })
       }),
-    { candidate: fixture.candidate }
+    {
+      candidate: fixture.candidate,
+      createClock: () => lifecycle.createManualClock("2026-06-30T00:00:00.000Z")
+    }
+  );
+});
+
+test("memory dispatcher adapter revalidates lifecycle-normalized candidates before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      evaluateCandidateEligibility(candidate, input) {
+        const result = lifecycle.evaluateCandidateEligibility(candidate, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            candidate: {
+              ...result.value.candidate,
+              proposedSlice: "Bearer abcdef1234567890"
+            }
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const refill = await adapter.refill({
+    candidates: [fixture.candidate],
+    evidenceRefs: ["evidence-lifecycle-candidate-revalidation"],
+    policyReason: "unsafe lifecycle candidate normalization must not retain"
+  });
+  assert.equal(refill.ok, true);
+  assert.equal(refill.value.queuedWorkItems.length, 0);
+  assert.equal(refill.value.blockedCandidates.length, 1);
+  assert.equal(refill.value.refillJob.result, "blocked");
+  const snapshot = adapter.snapshot();
+  assert.equal(snapshot.workItems.length, 0);
+  assert.equal(JSON.stringify(snapshot).includes("Bearer abcdef1234567890"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-queued work before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      transitionWorkItem(workItem, input) {
+        const result = lifecycle.transitionWorkItem(workItem, input);
+        if (!result.ok || input.toStatus !== "queued") return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            title: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature"
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const refill = await adapter.refill({
+    candidates: [fixture.candidate],
+    evidenceRefs: ["evidence-lifecycle-workitem-revalidation"],
+    policyReason: "unsafe lifecycle queued work must not retain"
+  });
+  assert.equal(refill.ok, true);
+  assert.equal(refill.value.queuedWorkItems.length, 0);
+  assert.equal(refill.value.blockedCandidates.length, 1);
+  assert.equal(refill.value.refillJob.result, "blocked");
+  const snapshot = adapter.snapshot();
+  assert.equal(snapshot.workItems.length, 0);
+  assert.equal(JSON.stringify(snapshot).includes("eyJhbGciOiJIUzI1NiJ9"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-claimed work before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      transitionWorkItem(workItem, input) {
+        const result = lifecycle.transitionWorkItem(workItem, input);
+        if (!result.ok || input.toStatus !== "leased") return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            raw_payload: "must-not-retain"
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const refill = await adapter.refill({
+    candidates: [fixture.candidate],
+    evidenceRefs: ["evidence-lifecycle-claim-refill"],
+    policyReason: "fixture-backed safe source"
+  });
+  assert.equal(refill.ok, true);
+  const claim = await adapter.claim({ workerId: "worker-1", evidenceRefs: ["evidence-lifecycle-claim"] });
+  assert.equal(claim.ok, false);
+  assert.equal(claim.code, "invalid_lifecycle_result");
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("raw_payload"), false);
+});
+
+test("memory dispatcher adapter rejects lifecycle-claimed work identity drift", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      transitionWorkItem(workItem, input) {
+        const result = lifecycle.transitionWorkItem(workItem, input);
+        if (!result.ok || input.toStatus !== "leased") return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItemId: "work-item-drift"
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const refill = await adapter.refill({
+    candidates: [fixture.candidate],
+    evidenceRefs: ["evidence-lifecycle-claim-drift-refill"],
+    policyReason: "fixture-backed safe source"
+  });
+  assert.equal(refill.ok, true);
+  const claim = await adapter.claim({ workerId: "worker-1", evidenceRefs: ["evidence-lifecycle-claim-drift"] });
+  assert.equal(claim.ok, false);
+  assert.equal(claim.code, "invalid_lifecycle_result");
+  assert.equal(adapter.snapshot().workItems.some((item) => item.workItemId === "work-item-drift"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-running work before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      transitionWorkItem(workItem, input) {
+        const result = lifecycle.transitionWorkItem(workItem, input);
+        if (!result.ok || input.toStatus !== "running") return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            title: "secretKey must-not-retain"
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillAndClaim(adapter, fixture.candidate, "running-revalidation");
+  const heartbeat = await adapter.heartbeat({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-running-heartbeat"],
+    ttlMs: 300_000
+  });
+  assert.equal(heartbeat.ok, false);
+  assert.equal(heartbeat.code, "invalid_lifecycle_result");
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("secretKey"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-closeout work before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      completeLease(workItem, lease, input) {
+        const result = lifecycle.completeLease(workItem, lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItem: {
+              ...result.value.workItem,
+              provider_payload: "must-not-retain"
+            }
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillClaimAndHeartbeat(adapter, fixture.candidate, "closeout-revalidation");
+  const complete = await adapter.complete({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-closeout-complete"],
+    resultSummary: "metadata complete"
+  });
+  assert.equal(complete.ok, false);
+  assert.equal(complete.code, "invalid_lifecycle_result");
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("provider_payload"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-heartbeat lease before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      heartbeatLease(lease, input) {
+        const result = lifecycle.heartbeatLease(lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            raw_payload: "must-not-retain"
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillAndClaim(adapter, fixture.candidate, "heartbeat-lease-revalidation");
+  const heartbeat = await adapter.heartbeat({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-heartbeat-lease"],
+    ttlMs: 300_000
+  });
+  assert.equal(heartbeat.ok, false);
+  assert.equal(heartbeat.code, "invalid_lifecycle_result");
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("raw_payload"), false);
+});
+
+test("memory dispatcher adapter rejects lifecycle-heartbeat lease identity drift", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      heartbeatLease(lease, input) {
+        const result = lifecycle.heartbeatLease(lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            attemptId: "attempt-drift"
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillAndClaim(adapter, fixture.candidate, "heartbeat-lease-identity-drift");
+  const heartbeat = await adapter.heartbeat({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-heartbeat-lease-drift"],
+    ttlMs: 300_000
+  });
+  assert.equal(heartbeat.ok, false);
+  assert.equal(heartbeat.code, "invalid_lifecycle_result");
+  assert.equal(adapter.snapshot().leases.some((lease) => lease.attemptId === "attempt-drift"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-closeout lease before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      completeLease(workItem, lease, input) {
+        const result = lifecycle.completeLease(workItem, lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            lease: {
+              ...result.value.lease,
+              provider_payload: "must-not-retain"
+            }
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillClaimAndHeartbeat(adapter, fixture.candidate, "closeout-lease-revalidation");
+  const complete = await adapter.complete({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-closeout-lease"],
+    resultSummary: "metadata complete"
+  });
+  assert.equal(complete.ok, false);
+  assert.equal(complete.code, "invalid_lifecycle_result");
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("provider_payload"), false);
+});
+
+test("memory dispatcher adapter rejects lifecycle-closeout work and lease identity drift", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      completeLease(workItem, lease, input) {
+        const result = lifecycle.completeLease(workItem, lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItem: {
+              ...result.value.workItem,
+              authorityDecisionId: "authority-drift"
+            },
+            lease: {
+              ...result.value.lease,
+              workerId: "worker-drift"
+            }
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillClaimAndHeartbeat(adapter, fixture.candidate, "closeout-identity-drift");
+  const complete = await adapter.complete({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-closeout-drift"],
+    resultSummary: "metadata complete"
+  });
+  assert.equal(complete.ok, false);
+  assert.equal(complete.code, "invalid_lifecycle_result");
+  const snapshot = adapter.snapshot();
+  assert.equal(snapshot.workItems.some((item) => item.authorityDecisionId === "authority-drift"), false);
+  assert.equal(snapshot.leases.some((lease) => lease.workerId === "worker-drift"), false);
+});
+
+test("memory dispatcher adapter revalidates lifecycle-recovered work before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      recoverWorkItem(workItem, input) {
+        const result = lifecycle.recoverWorkItem(workItem, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItem: {
+              ...result.value.workItem,
+              retained_payload: "must-not-retain"
+            }
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillClaimAndHeartbeat(adapter, fixture.candidate, "recovery-revalidation");
+  const fail = await adapter.fail({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-recovery-fail"],
+    failureReason: "metadata failure"
+  });
+  assert.equal(fail.ok, true);
+  const recovery = await adapter.recoverExpiredLeases({ evidenceRefs: ["evidence-lifecycle-recovery"] });
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.value.recoveredWorkItems.length, 0);
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("retained_payload"), false);
+});
+
+test("memory dispatcher adapter rejects lifecycle recovery identity drift before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      recoverWorkItem(workItem, input) {
+        const result = lifecycle.recoverWorkItem(workItem, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItem: {
+              ...result.value.workItem,
+              workItemId: "work-item-recovery-drift"
+            }
+          }
+        };
+      }
+    },
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    runId: "run-1"
+  });
+
+  const claim = await refillClaimAndHeartbeat(adapter, fixture.candidate, "recovery-identity-drift");
+  const fail = await adapter.fail({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: ["evidence-lifecycle-recovery-drift-fail"],
+    failureReason: "metadata failure"
+  });
+  assert.equal(fail.ok, true);
+  const recovery = await adapter.recoverExpiredLeases({ evidenceRefs: ["evidence-lifecycle-recovery-drift"] });
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.value.recoveredWorkItems.length, 0);
+  assert.equal(adapter.snapshot().workItems.some((item) => item.workItemId === "work-item-recovery-drift"), false);
+});
+
+test("memory dispatcher adapter leaves expired leases recoverable after invalid recovery output", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("expired-lease.json");
+  const clock = lifecycle.createManualClock("2026-06-30T00:00:00.000Z");
+  let driftRecovery = true;
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      recoverWorkItem(workItem, input) {
+        const result = lifecycle.recoverWorkItem(workItem, input);
+        if (!result.ok || !driftRecovery) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItem: {
+              ...result.value.workItem,
+              workItemId: "work-item-invalid-recovery"
+            }
+          }
+        };
+      }
+    },
+    clock,
+    runId: "run-1",
+    leaseTtlMs: 1
+  });
+
+  const claim = await refillAndClaim(adapter, fixture.candidate, "expired-invalid-recovery");
+  clock.advanceMs(2);
+  const firstRecovery = await adapter.recoverExpiredLeases({ evidenceRefs: ["evidence-expired-invalid-recovery"] });
+  assert.equal(firstRecovery.ok, true);
+  assert.equal(firstRecovery.value.expiredLeases.length, 0);
+  assert.equal(firstRecovery.value.recoveredWorkItems.length, 0);
+  const firstSnapshot = adapter.snapshot();
+  assert.equal(firstSnapshot.workItems.some((item) => item.workItemId === "work-item-invalid-recovery"), false);
+  assert.equal(firstSnapshot.leases.find((lease) => lease.leaseId === claim.value.lease.leaseId)?.state, "leased");
+
+  driftRecovery = false;
+  const secondRecovery = await adapter.recoverExpiredLeases({ evidenceRefs: ["evidence-expired-valid-recovery"] });
+  assert.equal(secondRecovery.ok, true);
+  assert.equal(secondRecovery.value.expiredLeases.length, 1);
+  assert.equal(secondRecovery.value.recoveredWorkItems.length, 1);
+  assert.equal(secondRecovery.value.recoveredWorkItems[0].status, "queued");
+});
+
+test("memory dispatcher adapter revalidates expired lease lifecycle output before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("expired-lease.json");
+  const clock = lifecycle.createManualClock("2026-06-30T00:00:00.000Z");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      expireLeaseIfStale(workItem, lease, input) {
+        const result = lifecycle.expireLeaseIfStale(workItem, lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            lease: {
+              ...result.value.lease,
+              provider_payload: "must-not-retain"
+            }
+          }
+        };
+      }
+    },
+    clock,
+    runId: "run-1",
+    leaseTtlMs: 1
+  });
+
+  const claim = await refillAndClaim(adapter, fixture.candidate, "expired-lease-revalidation");
+  assert.equal(claim.ok, true);
+  clock.advanceMs(2);
+  const recovery = await adapter.recoverExpiredLeases({ evidenceRefs: ["evidence-expired-lease-revalidation"] });
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.value.expiredLeases.length, 0);
+  assert.equal(recovery.value.recoveredWorkItems.length, 0);
+  assert.equal(JSON.stringify(adapter.snapshot()).includes("provider_payload"), false);
+});
+
+test("memory dispatcher adapter rejects expired lease identity drift before retention", async () => {
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("expired-lease.json");
+  const clock = lifecycle.createManualClock("2026-06-30T00:00:00.000Z");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle: {
+      ...lifecycle,
+      expireLeaseIfStale(workItem, lease, input) {
+        const result = lifecycle.expireLeaseIfStale(workItem, lease, input);
+        if (!result.ok) return result;
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            workItem: {
+              ...result.value.workItem,
+              workItemId: "work-item-expiry-drift"
+            },
+            lease: {
+              ...result.value.lease,
+              leaseId: "lease-expiry-drift"
+            }
+          }
+        };
+      }
+    },
+    clock,
+    runId: "run-1",
+    leaseTtlMs: 1
+  });
+
+  const claim = await refillAndClaim(adapter, fixture.candidate, "expired-lease-identity-drift");
+  assert.equal(claim.ok, true);
+  clock.advanceMs(2);
+  const recovery = await adapter.recoverExpiredLeases({ evidenceRefs: ["evidence-expired-lease-identity-drift"] });
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.value.expiredLeases.length, 0);
+  assert.equal(recovery.value.recoveredWorkItems.length, 0);
+  const snapshot = adapter.snapshot();
+  assert.equal(snapshot.workItems.some((item) => item.workItemId === "work-item-expiry-drift"), false);
+  assert.equal(snapshot.leases.some((lease) => lease.leaseId === "lease-expiry-drift"), false);
+});
+
+test("legacy dispatcher conformance helper fails loudly without createClock", async () => {
+  const fixture = await loadManagerFixture("happy-path.json");
+  await assert.rejects(
+    () => assertDispatcherPortConformance(() => ({}), { candidate: fixture.candidate }),
+    /requires createClock/
   );
 });
 
@@ -1024,23 +1667,26 @@ test("memory dispatcher adapter blocks gated authority candidates and proves dup
   });
   assert.equal(gated.ok, true);
   assert.equal(gated.value.queuedWorkItems.length, 0);
-  assert.equal(gated.value.blockedCandidates.length, 1);
-  assert.equal(gated.value.events.some((event) => event.eventName === "dispatcher.authority.blocked"), true);
+  assert.equal(gated.value.needsReviewCandidates.length, 1);
+  assert.equal(gated.value.blockedCandidates.length, 0);
+  assert.equal(gated.value.events.some((event) => event.eventName === "dispatcher.review.required"), true);
+  assert.equal(gated.value.events.some((event) => event.eventName === "dispatcher.authority.blocked"), false);
 
   const summary = await adapter.summarize();
   assert.equal(summary.currentPhase, "queued");
   assert.equal(summary.stateCounts.queued, 1);
-  assert.equal(summary.stateCounts.blockedCandidates, 1);
+  assert.equal(summary.stateCounts.needsReviewCandidates, 1);
+  assert.equal(summary.stateCounts.blockedCandidates, 0);
   assert.equal(summary.stateCounts.duplicateCandidates, 1);
   assert.equal(summary.unsafeOrGatedWorkCount, 1);
-  assert.equal(summary.authorityBlockedReason, "requires_preauthorization");
-  assert.equal(summary.authorityClass, "block_and_record");
+  assert.equal(summary.authorityBlockedReason, null);
+  assert.equal(summary.authorityClass, "requires_preauthorization");
   assert.equal(summary.operatorAttentionRequired, true);
-  assert.equal(summary.blockers.includes("dispatcher_has_blocked_candidates"), true);
-  assert.equal(summary.rawStateLabels.includes("candidate:blocked"), true);
+  assert.equal(summary.blockers.includes("dispatcher_has_needs_review_candidates"), true);
+  assert.equal(summary.rawStateLabels.includes("candidate:needs_review"), true);
   assert.equal(summary.rawStateLabels.includes("candidate:duplicate"), true);
   assert.equal(summary.warnings.includes("duplicate_candidates_ignored"), true);
-  assert.equal(summary.warnings.includes("authority_blocked_candidates_recorded"), true);
+  assert.equal(summary.warnings.includes("needs_review_candidates_recorded"), true);
 });
 
 test("memory dispatcher adapter permits only one same-tick claim and recovers failed work", async () => {
@@ -1108,6 +1754,12 @@ test("memory dispatcher adapter permits only one same-tick claim and recovers fa
   assert.equal(recovery.ok, true);
   assert.equal(recovery.value.recoveredWorkItems.length, 1);
   assert.equal(recovery.value.recoveredWorkItems[0].status, "queued");
+  const summaryAfterRecovery = await adapter.summarize();
+  assert.equal(summaryAfterRecovery.currentPhase, "queued");
+  assert.equal(summaryAfterRecovery.recoveryStatus, "complete");
+  assert.equal(summaryAfterRecovery.nextAction, "continue_monitoring");
+  assert.equal(summaryAfterRecovery.blockers.includes("dispatcher_has_failed_attempt"), false);
+  assert.equal(summaryAfterRecovery.blockers.includes("dispatcher_phase_failed"), false);
 });
 
 test("memory dispatcher summary keeps mixed queued and failed work operator-visible", async () => {
@@ -1167,6 +1819,7 @@ test("memory dispatcher summary keeps mixed queued and failed work operator-visi
   assert.equal(summary.operatorAttentionRequired, true);
   assert.equal(summary.blockers.includes("dispatcher_has_failed_work"), true);
   assert.equal(summary.recoveryStatus, "needed");
+  assert.equal(summary.nextAction, "run_recovery");
 });
 
 test("memory dispatcher closeout rejects mismatched existing attempt identity", async () => {
@@ -1280,6 +1933,363 @@ test("memory dispatcher summary distinguishes empty, authority-blocked, and stal
   assert.equal(blockedSummary.operatorAttentionRequired, true);
   assert.equal(blockedSummary.stateCounts.blockedCandidates, 1);
   assert.equal(blockedSummary.rawStateLabels.includes("candidate:blocked"), true);
+
+  const mixedMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    workItems: [{
+      workItemId: "work-item-mixed",
+      status: "queued",
+      evidenceRefs: ["evidence-mixed-metadata"],
+      sourceRefs: [{ sourceRefId: "source-mixed-metadata" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }]
+    }],
+    refillJobs: [{
+      refillJobId: "refill-mixed-metadata",
+      state: "completed",
+      result: "queued_with_gated_candidates",
+      queuedCount: 1,
+      blockedCount: 0,
+      needsReviewCount: 2,
+      authorityClass: "block_and_record",
+      evidenceRefs: ["evidence-mixed-metadata"]
+    }],
+    blockedCandidates: [],
+    needsReviewCandidates: [],
+    events: [{
+      eventId: "event-mixed-metadata",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-mixed-metadata"]
+    }]
+  });
+  assert.equal(mixedMetadataOnlySummary.currentPhase, "queued");
+  assert.equal(mixedMetadataOnlySummary.stateCounts.needsReviewCandidates, 2);
+  assert.equal(mixedMetadataOnlySummary.nextAction, "review_refill_candidates");
+  assert.equal(mixedMetadataOnlySummary.operatorAttentionRequired, true);
+  assert.equal(mixedMetadataOnlySummary.authorityClass, "block_and_record");
+  assert.equal(mixedMetadataOnlySummary.authorityStopReason, "needs_review");
+  assert.equal(mixedMetadataOnlySummary.blockers.includes("dispatcher_has_needs_review_candidates"), true);
+
+  const queuedNeedsReviewMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    refillJobs: [{
+      refillJobId: "refill-queued-needs-review-metadata",
+      state: "completed",
+      result: "queued_with_gated_candidates",
+      queuedCount: 2,
+      blockedCount: 0,
+      needsReviewCount: 1,
+      authorityClass: "block_and_record",
+      evidenceRefs: ["evidence-queued-needs-review-metadata"]
+    }],
+    blockedCandidates: [],
+    needsReviewCandidates: [],
+    events: [{
+      eventId: "event-queued-needs-review-metadata",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-queued-needs-review-metadata"]
+    }]
+  });
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.currentPhase, "needs_review");
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.stateCounts.queued, 0);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.safeWorkAvailableCount, 0);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.metadataOnlyQueuedCount, 2);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.stateCounts.metadataOnlyQueuedCandidates, 2);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.stateCounts.needsReviewCandidates, 1);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.stateCounts.noSafeWork, 0);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.nextAction, "review_refill_candidates");
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.operatorAttentionRequired, true);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.authorityClass, "block_and_record");
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.authorityStopReason, "needs_review");
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.rawStateLabels.includes("work:queued"), false);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.rawStateLabels.includes("refill:queued_metadata"), true);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.rawStateLabels.includes("candidate:needs_review"), true);
+  assert.equal(queuedNeedsReviewMetadataOnlySummary.blockers.includes("dispatcher_has_needs_review_candidates"), true);
+
+  const queuedMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    refillJobs: [{
+      refillJobId: "refill-queued-metadata-only",
+      state: "completed",
+      result: "queued_work",
+      queuedCount: 2,
+      blockedCount: 0,
+      needsReviewCount: 0,
+      authorityClass: "allowed_unattended",
+      startedAt: "2026-06-30T00:00:00.000Z",
+      finishedAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-queued-metadata-only"]
+    }],
+    events: [{
+      eventId: "event-queued-metadata-only",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-queued-metadata-only"]
+    }]
+  });
+  assert.equal(queuedMetadataOnlySummary.currentPhase, "queued");
+  assert.equal(queuedMetadataOnlySummary.stateCounts.queued, 0);
+  assert.equal(queuedMetadataOnlySummary.safeWorkAvailableCount, 0);
+  assert.equal(queuedMetadataOnlySummary.metadataOnlyQueuedCount, 2);
+  assert.equal(queuedMetadataOnlySummary.stateCounts.noSafeWork, 0);
+  assert.equal(queuedMetadataOnlySummary.rawStateLabels.includes("work:queued"), false);
+  assert.equal(queuedMetadataOnlySummary.rawStateLabels.includes("refill:queued_metadata"), true);
+  assert.equal(queuedMetadataOnlySummary.rawStateLabels.includes("supply:no_safe_work"), false);
+
+  const completedHistoryWithQueuedMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    workItems: [{
+      workItemId: "work-item-completed-history",
+      status: "completed",
+      evidenceRefs: ["evidence-completed-history"],
+      sourceRefs: [{ sourceRefId: "source-completed-history" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }],
+      createdAt: "2026-06-29T23:00:00.000Z"
+    }, {
+      workItemId: "work-item-closed-history",
+      status: "closed",
+      evidenceRefs: ["evidence-closed-history"],
+      sourceRefs: [{ sourceRefId: "source-closed-history" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }],
+      createdAt: "2026-06-29T23:30:00.000Z"
+    }],
+    refillJobs: [{
+      refillJobId: "refill-completed-history-queued-metadata",
+      state: "completed",
+      result: "queued_work",
+      queuedCount: 2,
+      blockedCount: 0,
+      needsReviewCount: 0,
+      authorityClass: "allowed_unattended",
+      startedAt: "2026-06-30T00:00:00.000Z",
+      finishedAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-completed-history-queued-metadata"]
+    }],
+    events: [{
+      eventId: "event-completed-history-queued-metadata",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-completed-history-queued-metadata"]
+    }]
+  });
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.currentPhase, "queued");
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.stateCounts.completed, 1);
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.stateCounts.closed, 1);
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.stateCounts.queued, 0);
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.metadataOnlyQueuedCount, 2);
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.safeWorkAvailableCount, 0);
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.nextAction, "continue_monitoring");
+  assert.equal(completedHistoryWithQueuedMetadataOnlySummary.rawStateLabels.includes("refill:queued_metadata"), true);
+
+  const failedWithQueuedMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    workItems: [{
+      workItemId: "work-item-failed-with-queued-metadata",
+      status: "failed",
+      evidenceRefs: ["evidence-failed-with-queued-metadata"],
+      sourceRefs: [{ sourceRefId: "source-failed-with-queued-metadata" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }],
+      createdAt: "2026-06-30T00:00:00.000Z"
+    }],
+    refillJobs: [{
+      refillJobId: "refill-failed-with-queued-metadata",
+      state: "completed",
+      result: "queued_work",
+      queuedCount: 2,
+      blockedCount: 0,
+      needsReviewCount: 0,
+      authorityClass: "allowed_unattended",
+      startedAt: "2026-06-30T00:00:00.000Z",
+      finishedAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-failed-with-queued-metadata"]
+    }],
+    events: [{
+      eventId: "event-failed-with-queued-metadata",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-failed-with-queued-metadata"]
+    }]
+  });
+  assert.equal(failedWithQueuedMetadataOnlySummary.currentPhase, "failed");
+  assert.equal(failedWithQueuedMetadataOnlySummary.stateCounts.failed, 1);
+  assert.equal(failedWithQueuedMetadataOnlySummary.stateCounts.queued, 0);
+  assert.equal(failedWithQueuedMetadataOnlySummary.safeWorkAvailableCount, 0);
+  assert.equal(failedWithQueuedMetadataOnlySummary.metadataOnlyQueuedCount, 1);
+  assert.equal(failedWithQueuedMetadataOnlySummary.stateCounts.metadataOnlyQueuedCandidates, 1);
+  assert.equal(failedWithQueuedMetadataOnlySummary.rawStateLabels.includes("work:queued"), false);
+  assert.equal(failedWithQueuedMetadataOnlySummary.rawStateLabels.includes("refill:queued_metadata"), true);
+  assert.equal(failedWithQueuedMetadataOnlySummary.nextAction, "run_recovery");
+
+  const oldFailedWithReusedEvidenceSummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:10:00.000Z"),
+    workItems: [{
+      workItemId: "work-item-old-failed-reused-evidence",
+      status: "failed",
+      evidenceRefs: ["evidence-reused-refill"],
+      sourceRefs: [{ sourceRefId: "source-old-failed-reused-evidence" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }],
+      createdAt: "2026-06-30T00:00:00.000Z"
+    }],
+    refillJobs: [{
+      refillJobId: "refill-reused-evidence-latest",
+      state: "completed",
+      result: "queued_work",
+      queuedCount: 2,
+      blockedCount: 0,
+      needsReviewCount: 0,
+      authorityClass: "allowed_unattended",
+      startedAt: "2026-06-30T00:05:00.000Z",
+      finishedAt: "2026-06-30T00:05:00.000Z",
+      evidenceRefs: ["evidence-reused-refill"]
+    }],
+    events: [{
+      eventId: "event-reused-evidence-latest",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:05:00.000Z",
+      evidenceRefs: ["evidence-reused-refill"]
+    }]
+  });
+  assert.equal(oldFailedWithReusedEvidenceSummary.currentPhase, "failed");
+  assert.equal(oldFailedWithReusedEvidenceSummary.metadataOnlyQueuedCount, 2);
+  assert.equal(oldFailedWithReusedEvidenceSummary.stateCounts.metadataOnlyQueuedCandidates, 2);
+  assert.equal(oldFailedWithReusedEvidenceSummary.rawStateLabels.includes("refill:queued_metadata"), true);
+
+  const noTimestampRefillSummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:10:00.000Z"),
+    workItems: [{
+      workItemId: "work-item-no-timestamp-retained",
+      status: "queued",
+      evidenceRefs: ["evidence-no-timestamp-refill"],
+      sourceRefs: [{ sourceRefId: "source-no-timestamp-retained" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }]
+    }, {
+      workItemId: "work-item-no-timestamp-completed-history",
+      status: "completed",
+      evidenceRefs: ["evidence-no-timestamp-refill"],
+      sourceRefs: [{ sourceRefId: "source-no-timestamp-completed-history" }],
+      verificationTargets: [{ commandId: "manager-dispatcher-port-test" }]
+    }],
+    refillJobs: [{
+      refillJobId: "refill-no-timestamp",
+      state: "completed",
+      result: "queued_work",
+      queuedCount: 2,
+      blockedCount: 0,
+      needsReviewCount: 0,
+      authorityClass: "allowed_unattended",
+      evidenceRefs: ["evidence-no-timestamp-refill"]
+    }],
+    events: [{
+      eventId: "event-no-timestamp-refill",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:05:00.000Z",
+      evidenceRefs: ["evidence-no-timestamp-refill"]
+    }]
+  });
+  assert.equal(noTimestampRefillSummary.currentPhase, "queued");
+  assert.equal(noTimestampRefillSummary.stateCounts.queued, 1);
+  assert.equal(noTimestampRefillSummary.safeWorkAvailableCount, 1);
+  assert.equal(noTimestampRefillSummary.metadataOnlyQueuedCount, 1);
+  assert.equal(noTimestampRefillSummary.stateCounts.metadataOnlyQueuedCandidates, 1);
+
+  const malformedPersistedCandidateSummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    blockedCandidates: [{
+      candidateWorkPacketId: "candidate-malformed-persisted",
+      sourceRefs: [{ sourceRefId: 42, sourceSpan: null }],
+      acceptanceCriteria: [null, "bounded persisted metadata"],
+      dependencyHints: [false, "scripts/lib/manager-control-plane/summary-projection.mjs"],
+      dedupeKey: 123,
+      status: "blocked",
+      evidenceRefs: ["evidence-malformed-persisted"]
+    }],
+    needsReviewCandidates: [{
+      candidateWorkPacketId: "candidate-malformed-persisted-review",
+      sourceRefs: "not-an-array",
+      acceptanceCriteria: [{ raw: "not retained" }],
+      dependencyHints: null,
+      dedupeKey: null,
+      status: "needs_review",
+      evidenceRefs: ["evidence-malformed-persisted"]
+    }],
+    events: [{
+      eventId: "event-malformed-persisted",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-malformed-persisted"]
+    }]
+  });
+  assert.equal(malformedPersistedCandidateSummary.stateCounts.blockedCandidates, 1);
+  assert.equal(malformedPersistedCandidateSummary.stateCounts.needsReviewCandidates, 1);
+  assert.equal(malformedPersistedCandidateSummary.rawStateLabels.includes("candidate:blocked"), true);
+  assert.equal(malformedPersistedCandidateSummary.rawStateLabels.includes("candidate:needs_review"), true);
+
+  const blockedMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    refillJobs: [{
+      refillJobId: "refill-blocked-metadata",
+      state: "completed",
+      result: "blocked",
+      queuedCount: 0,
+      blockedCount: 3,
+      needsReviewCount: 0,
+      authorityClass: "block_and_record",
+      evidenceRefs: ["evidence-blocked-metadata"]
+    }],
+    blockedCandidates: [],
+    needsReviewCandidates: [],
+    events: [{
+      eventId: "event-blocked-metadata",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-blocked-metadata"]
+    }]
+  });
+  assert.equal(blockedMetadataOnlySummary.currentPhase, "blocked");
+  assert.equal(blockedMetadataOnlySummary.stateCounts.blockedCandidates, 3);
+  assert.equal(blockedMetadataOnlySummary.stateCounts.noSafeWork, 0);
+  assert.equal(blockedMetadataOnlySummary.nextAction, "resolve_authority_or_source_blocker");
+  assert.equal(blockedMetadataOnlySummary.operatorAttentionRequired, true);
+  assert.equal(blockedMetadataOnlySummary.authorityClass, "block_and_record");
+  assert.equal(blockedMetadataOnlySummary.blockers.includes("dispatcher_has_blocked_candidates"), true);
+  assert.equal(blockedMetadataOnlySummary.rawStateLabels.includes("candidate:blocked"), true);
+
+  const blockedNeedsReviewMetadataOnlySummary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock: lifecycle.createManualClock("2026-06-30T00:00:00.000Z"),
+    refillJobs: [{
+      refillJobId: "refill-blocked-needs-review-metadata",
+      state: "completed",
+      result: "blocked",
+      queuedCount: 0,
+      blockedCount: 2,
+      needsReviewCount: 3,
+      authorityClass: "block_and_record",
+      evidenceRefs: ["evidence-blocked-needs-review-metadata"]
+    }],
+    blockedCandidates: [],
+    needsReviewCandidates: [],
+    events: [{
+      eventId: "event-blocked-needs-review-metadata",
+      eventName: "dispatcher.refill.completed",
+      occurredAt: "2026-06-30T00:00:00.000Z",
+      evidenceRefs: ["evidence-blocked-needs-review-metadata"]
+    }]
+  });
+  assert.equal(blockedNeedsReviewMetadataOnlySummary.stateCounts.blockedCandidates, 2);
+  assert.equal(blockedNeedsReviewMetadataOnlySummary.stateCounts.needsReviewCandidates, 3);
+  assert.equal(blockedNeedsReviewMetadataOnlySummary.unsafeOrGatedWorkCount, 5);
+  assert.equal(blockedNeedsReviewMetadataOnlySummary.operatorAttentionRequired, true);
 
   clock.advanceMs(60_001);
   const staleSummary = await adapter.summarize();
@@ -1416,3 +2426,30 @@ test("backend proof code does not use live side-effect transports or direct syst
     assert.doesNotMatch(source, /node:child_process|spawnSync|execSync|tmux|gh\s|GITHUB_|OPENAI_API_KEY|BullMQ|Redis|Hatchet|SQLite|sqlite/i);
   }
 });
+
+async function refillAndClaim(adapter, candidate, label) {
+  const refill = await adapter.refill({
+    candidates: [candidate],
+    evidenceRefs: [`evidence-${label}-refill`],
+    policyReason: "fixture-backed safe source"
+  });
+  assert.equal(refill.ok, true);
+  const claim = await adapter.claim({ workerId: "worker-1", evidenceRefs: [`evidence-${label}-claim`] });
+  assert.equal(claim.ok, true);
+  return claim;
+}
+
+async function refillClaimAndHeartbeat(adapter, candidate, label) {
+  const claim = await refillAndClaim(adapter, candidate, label);
+  const heartbeat = await adapter.heartbeat({
+    leaseId: claim.value.lease.leaseId,
+    workerId: claim.value.lease.workerId,
+    attemptId: claim.value.lease.attemptId,
+    idempotencyKey: claim.value.lease.idempotencyKey,
+    authorityDecisionId: claim.value.lease.authorityDecisionId,
+    evidenceRefs: [`evidence-${label}-heartbeat`],
+    ttlMs: 300_000
+  });
+  assert.equal(heartbeat.ok, true);
+  return claim;
+}

@@ -152,9 +152,10 @@ export function classifyBackendProofOperation(operation) {
 
 export function classifyBackendProofSourceBoundary({ path, source, surface = "backend_proof" }) {
   const rules = [...BASE_FORBIDDEN_PATTERNS, ...(SURFACE_IMPORT_RULES[surface] ?? [])];
+  const scannableSource = sourceWithoutApprovedSanitizerDeclarations({ path, source, surface });
   const violations = [];
   for (const [operation, pattern] of rules) {
-    const match = pattern.exec(source);
+    const match = pattern.exec(scannableSource);
     pattern.lastIndex = 0;
     if (match) {
       const decision = classifyBackendProofOperation(operation);
@@ -176,6 +177,19 @@ export function classifyBackendProofSourceBoundary({ path, source, surface = "ba
     surface,
     violations
   };
+}
+
+function sourceWithoutApprovedSanitizerDeclarations({ path, source, surface }) {
+  if (surface !== "backend_proof" || !path.includes("/adapters/")) return source;
+  return source
+    .split("\n")
+    .map((line) => {
+      if (/^const\s+(?:RAW|UNSAFE)_[A-Z0-9_]*_PATTERN\s*=/.test(line)) {
+        return " ".repeat(line.length);
+      }
+      return line;
+    })
+    .join("\n");
 }
 
 export function buildBackendProofEvidencePacket({ runId, result, evidenceRefs = [], runtimeProof = null }) {

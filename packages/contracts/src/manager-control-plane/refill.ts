@@ -3,7 +3,7 @@ import type { EvidenceRefId, ManagerSourceRefId, RefillJobId } from "./ids";
 import type { ManagerRefillJobStatus } from "./lifecycle";
 
 export type RefillTriggerReason = "low_watermark" | "manual_bootstrap" | "source_exhaustion_check" | "recovery";
-export type RefillResult = "queued_work" | "no_safe_work" | "needs_review" | "blocked" | "failed";
+export type RefillResult = "queued_work" | "queued_with_gated_candidates" | "no_safe_work" | "needs_review" | "blocked" | "failed";
 
 export interface RefillJob {
   refillJobId: RefillJobId;
