@@ -17,6 +17,7 @@ jobs:
     outputs:
       javascript: ${{ steps.filter.outputs.javascript }}
       supervisor: ${{ steps.filter.outputs.supervisor }}
+      static: ${{ steps.filter.outputs.static }}
 
     steps:
       - name: Check out repository
@@ -30,23 +31,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          git diff --name-only \
-            "${{ github.event.pull_request.base.sha }}" \
-            "${{ github.event.pull_request.head.sha }}" > changed-files.txt
+          node ./scripts/check-plan.mjs \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --ci-outputs > ci-outputs.json
 
-          if grep -Eq '^(apps/dashboard/|packages/|scripts/.*e2e|package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)' changed-files.txt; then
-            echo "javascript=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "javascript=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if grep -Eq '^(services/supervisor/|scripts/run-supervisor-tests\.mjs|scripts/preflight\.mjs|package\.json|\.github/workflows/ci\.yml)' changed-files.txt; then
-            echo "supervisor=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "supervisor=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          cat changed-files.txt
+          node -e 'const fs = require("node:fs"); const outputs = JSON.parse(fs.readFileSync("ci-outputs.json", "utf8")); for (const key of ["javascript", "supervisor", "static"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${outputs[key] ? "true" : "false"}\n`); console.log(JSON.stringify(outputs, null, 2));'
 
   fast:
     if: github.event_name == 'pull_request'
@@ -79,7 +69,7 @@ jobs:
         run: pnpm run check:fast
 
   static:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
     needs:
       - changes
       - fast
@@ -240,8 +230,8 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ needs.static.result }}" != "success" ]; then
-            echo "Static checks failed or did not complete: ${{ needs.static.result }}"
+          if [ "${{ needs.changes.outputs.static }}" = "true" ] && [ "${{ needs.static.result }}" != "success" ]; then
+            echo "Static checks were required but did not pass: ${{ needs.static.result }}"
             exit 1
           fi
 

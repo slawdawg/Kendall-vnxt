@@ -10,15 +10,17 @@ Pull requests run a final `check` job backed by component jobs:
 - `fast` always runs `pnpm run check:fast` before the broader static gate. It
   covers CI policy wiring, workspace delivery command readiness,
   sandbox-boundary and anti-churn routing, and dashboard E2E runner contracts.
-- `static` always runs the deterministic repository drift checks through
-  `pnpm run check:static`.
+- `static` runs the deterministic repository drift checks through
+  `pnpm run check:static` only when `scripts/check-plan.mjs --ci-outputs`
+  marks full static confidence as required.
 - `javascript` runs only when dashboard, shared package, JavaScript lockfile, or
   JavaScript workflow inputs changed.
 - `supervisor` runs only when supervisor service files, supervisor test runner
   inputs, Python preflight inputs, or workflow inputs changed.
 
-The final `check` job accepts skipped component jobs as intentional when their
-path filters do not match. Failed or cancelled component jobs fail `check`.
+The final `check` job accepts skipped component jobs as intentional when the
+planner does not require that component. Failed or cancelled required component
+jobs fail `check`.
 
 ## Main
 

@@ -83,10 +83,12 @@ Keep full verification for:
 4. Teach `finish-pr` to run `check:changed` before pushing.
 5. Split package scripts into static bundles while keeping `check:static` as an
    aggregate.
-6. Add CI jobs for bundles as non-required reporting checks.
-7. Compare bundle results against monolithic static.
-8. Promote bundles to required checks and retire the monolithic PR static job.
-9. Add duration artifacts and optimize bundle balance from evidence.
+6. Route pull request CI component jobs from `check-plan --ci-outputs` so
+   `static` runs only when the planner marks full static confidence required.
+7. Add CI jobs for bundles as non-required reporting checks.
+8. Compare bundle results against monolithic static.
+9. Promote bundles to required checks and retire the monolithic PR static job.
+10. Add duration artifacts and optimize bundle balance from evidence.
 
 ## Gate Evidence
 

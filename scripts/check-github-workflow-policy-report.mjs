@@ -18,6 +18,15 @@ function assertIncludes(source, text, label, failures) {
   assertCondition(source.includes(text), `${label} must include ${text}`, failures);
 }
 
+function ciJobBlock(jobName) {
+  const jobStart = ciWorkflow.indexOf(`\n  ${jobName}:`);
+  if (jobStart === -1) return "";
+  const jobKeyPattern = /\n  [A-Za-z0-9_-]+:\n/g;
+  jobKeyPattern.lastIndex = jobStart + `\n  ${jobName}:`.length;
+  const nextJob = jobKeyPattern.exec(ciWorkflow);
+  return nextJob ? ciWorkflow.slice(jobStart, nextJob.index) : ciWorkflow.slice(jobStart);
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const readme = readWorkspaceFile("README.md");
 const connectorWorkflow = readWorkspaceFile("docs/github-connector-workflow.md");
@@ -92,11 +101,26 @@ for (const ciFastCommand of [
 for (const ciText of [
   "fast:",
   "needs: changes",
+  "node ./scripts/check-plan.mjs",
+  "--ci-outputs",
+  "static: ${{ steps.filter.outputs.static }}",
   "pnpm run check:fast",
   "Fast workflow checks failed or did not complete",
+  "Static checks were required but did not pass",
 ]) {
   assertIncludes(ciWorkflow, ciText, ".github/workflows/ci.yml", failures);
 }
+assertCondition(
+  ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
+  ".github/workflows/ci.yml static job must be gated by needs.changes.outputs.static == 'true'",
+  failures,
+);
+assertCondition(
+  ciJobBlock("check").includes('needs.changes.outputs.static') &&
+    ciJobBlock("check").includes("Static checks were required but did not pass"),
+  ".github/workflows/ci.yml final check job must require static only when the planner selects it",
+  failures,
+);
 
 for (const text of [
   "pnpm run check:github-workflow-policy",
