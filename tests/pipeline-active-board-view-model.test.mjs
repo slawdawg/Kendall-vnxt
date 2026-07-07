@@ -538,6 +538,121 @@ test("contextual action strips are selection scoped and return metadata-only act
   assert.equal(JSON.stringify(model.contextualActions).includes("provider payload"), false);
 });
 
+test("packet detail why diagnostics contract explains placement without retaining raw payloads", async () => {
+  const {
+    buildPacketDetailWhyDiagnosticsForPacket,
+    buildPipelineActiveBoardViewModel,
+  } = await loadActiveBoardViewModelModule();
+
+  const projection = projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-why-detail",
+        title: "Why detail packet",
+        currentStage: "execute",
+        status: "active",
+        nextAction: "Continue after five-whys evidenceRef sourceRef managerRun raw provider payload review.",
+        evidenceRefs: ["packet:evidence-one"],
+      }),
+      packetFixture({
+        packetId: "packet-empty-detail-fallback",
+        title: "Empty detail fallback packet",
+        currentStage: "execute",
+        status: "active",
+        sourceRef: {
+          refId: "source:packet-fallback",
+          sourceType: "prd",
+          title: "Fallback source",
+          pathOrUrl: "docs/fallback.md",
+        },
+        nextAction: "Continue packet-level work.",
+        evidenceRefs: ["packet:fallback-evidence"],
+      }),
+      packetFixture({
+        packetId: "packet-why-stale",
+        title: "Why stale packet",
+        currentStage: "execute",
+        status: "blocked",
+        truthLabel: "stale",
+        blocker: "Stale five-whys sourceRef evidenceRef detail.",
+      }),
+    ],
+    selectedPacketDetails: [
+      detailFixture({
+        packetId: "packet-why-detail",
+        sourceRefs: [
+          {
+            refId: "source:packet-why-detail",
+            sourceType: "prd",
+            title: "Packet why detail source",
+            pathOrUrl: "_bmad-output/planning-artifacts/prds/example.md",
+          },
+        ],
+        evidenceRefs: ["detail:evidence-one", "detail:evidence-two"],
+        recentTransitionEventRefs: ["transition:one", "transition:two"],
+        latestTransitionEventRef: "transition:two",
+        latestMovementSummary: "moved from review to execute with metadata-only proof",
+        nextAction: "Continue after five-whys evidenceRef sourceRef managerRun raw provider payload review.",
+      }),
+      detailFixture({
+        packetId: "packet-empty-detail-fallback",
+        sourceRefs: [],
+        evidenceRefs: [],
+        recentTransitionEventRefs: [],
+        latestMovementSummary: null,
+        nextAction: "   ",
+      }),
+    ],
+  });
+
+  const model = buildPipelineActiveBoardViewModel(projection);
+  const detail = model.packetDetails.byPacketId["packet-why-detail"];
+
+  assert.equal(detail.packetId, "packet-why-detail");
+  assert.equal(detail.detailSource, "PipelineDashboardProjectionV0.selectedPacketDetails");
+  assert.equal(detail.selectedDetailAvailable, true);
+  assert.equal(detail.placement, "active_board");
+  assert.equal(detail.actionability, "actionable");
+  assert.equal(detail.why.label, "active_board / actionable");
+  assert.equal(detail.why.placementReason, "Packet is live active work.");
+  assert.equal(detail.why.nextDiagnosticAction, "Inspect packet detail.");
+  assert.equal(detail.diagnostics.sourceRefCount, 1);
+  assert.equal(detail.diagnostics.evidenceRefCount, 2);
+  assert.equal(detail.diagnostics.movementRefCount, 2);
+  assert.equal(detail.diagnostics.latestMovementLabel, "moved from review to execute with metadata-only proof");
+  assert.equal(detail.diagnostics.retentionClass, "metadata_only");
+  assert.equal(detail.diagnostics.rawPayloadRetained, false);
+  assert.equal(detail.metadataOnly, true);
+
+  const fallbackDetail = model.packetDetails.byPacketId["packet-empty-detail-fallback"];
+  assert.equal(fallbackDetail.selectedDetailAvailable, true);
+  assert.equal(fallbackDetail.diagnostics.sourceRefCount, 1);
+  assert.equal(fallbackDetail.diagnostics.evidenceRefCount, 1);
+  assert.equal(fallbackDetail.diagnostics.movementRefCount, 1);
+  assert.equal(fallbackDetail.diagnostics.latestMovementLabel, "latest movement summary not present in projection detail");
+  assert.equal(fallbackDetail.why.nextDiagnosticAction, "Continue packet-level work.");
+
+  const staleDetail = model.packetDetails.byPacketId["packet-why-stale"];
+  assert.equal(staleDetail.detailSource, "PipelineDashboardProjectionV0.workPackets");
+  assert.equal(staleDetail.selectedDetailAvailable, false);
+  assert.equal(staleDetail.placement, "stale_history");
+  assert.equal(staleDetail.actionability, "history");
+  assert.equal(staleDetail.why.placementReason, "Packet is stale history.");
+
+  assert.deepEqual(buildPacketDetailWhyDiagnosticsForPacket(projection.workPackets[0], projection), detail);
+  const detailJson = JSON.stringify(model.packetDetails);
+  for (const bannedDetailText of [
+    "five-whys",
+    "sourceRef managerRun",
+    "raw provider payload",
+    "transition:one",
+    "detail:evidence-one",
+    "_bmad-output/planning-artifacts",
+  ]) {
+    assert.equal(detailJson.includes(bannedDetailText), false, `${bannedDetailText} must stay out of packet detail why diagnostics`);
+  }
+});
+
 test("fixture, unavailable, and stale-only projections cannot satisfy live or ready-to-test counts", async () => {
   const { buildPipelineActiveBoardViewModel, derivePacketActionability, derivePacketPlacement } = await loadActiveBoardViewModelModule();
 
