@@ -4205,6 +4205,7 @@ export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
     });
   }
   if (!runOptions.apply) {
+    const targetFlags = selected.length === 1 ? workerExactTargetFlags(selected[0]) : "";
     return packet({
       status: "ready",
       summary: {
@@ -4222,8 +4223,7 @@ export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
         }),
         transport: { primary: "durable_progress_request_file", secondary: "literal_safe_tmux_buffer", pastedText: "read_progress_request_file_path_only" },
       },
-      nextActions: [{ code: "worker-progress-signal-apply-ready", summary: `Signal ${selected.length} stale active worker(s) for compact metadata progress.`, nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit ${selected.length}${selected.length === 1 && selected[0]?.workerId ? ` --worker-id ${shellSingleQuote(selected[0].workerId)}` : ""}${runOptions.promptIdle ? " --prompt-idle" : ""} --apply` }],
-      nextActions: [{ code: "worker-progress-signal-apply-ready", summary: `Signal ${selected.length} stale active worker(s) for compact metadata progress.`, nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json${workerExactTargetFlags(selected[0]) || ` --limit ${selected.length}`}${runOptions.promptIdle ? " --prompt-idle" : ""} --apply` }],
+      nextActions: [{ code: "worker-progress-signal-apply-ready", summary: `Signal ${selected.length} stale active worker(s) for compact metadata progress.`, nextAction: `node ./scripts/manager-worker-progress-signal.mjs --summary-json${targetFlags || ` --limit ${selected.length}`}${runOptions.promptIdle ? " --prompt-idle" : ""} --apply` }],
     });
   }
   mkdirSync(join(paths.root, "progress-requests"), { recursive: true });
@@ -4692,6 +4692,12 @@ export function buildWorkerSubmitPendingPlan(options = {}, context = {}) {
         pendingWorkers: candidates.length,
         planned: selected.length,
         requests: selected,
+        continuousSelection: buildContinuousSelectionProof({
+          code: "continuous-worker-submit-pending",
+          mutationClass: "manager_owned_worker_enter_only",
+          runId,
+          targets: selected,
+        }),
         transport: {
           primary: "tmux_send_c_m_only",
           pastedText: "none",
@@ -18835,8 +18841,8 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
     stopReasons.push({ code: "resource-critical", message: "Resources are critical; continuous mode must avoid additional worker mutation." });
   }
   const cycleBlockers = dedupeRuntimeBlockers(Array.isArray(cycle.blockers) ? cycle.blockers : []);
-  if (cycleBlockers.length > 0) {
-    stopReasons.push({ code: "cycle-blockers-present", message: "Cycle packet has blockers; continuous mode must stop for operator or repair." });
+  if (cycleBlockers.length > 0 && cycle.summary?.continuation?.canContinue !== true) {
+    stopReasons.push({ code: "cycle-blockers-present", message: "Cycle packet has terminal blockers; continuous mode must stop for operator or repair." });
   }
   const selectedCandidate = stopReasons.length > 0 || !dryRunExecutionAllowed ? null : selected;
   const runtimeReadiness = buildRuntimeReadinessPlan(

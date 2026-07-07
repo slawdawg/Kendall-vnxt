@@ -9436,6 +9436,14 @@ test("worker progress batches same-signal stale workers into one next action", (
   assert.equal(progress.nextActions[0].code, "worker-progress-checkpoint_stale");
   assert.match(progress.nextActions[0].summary, /Signal 2 active worker/);
   assert.match(progress.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --limit 2/);
+
+  const signalPreview = buildWorkerProgressSignalPlan(
+    { runId: "manager-test" },
+    { progressStatus: progress },
+  );
+  assert.equal(signalPreview.summary.planned, 2);
+  assert.match(signalPreview.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --limit 2 --apply/);
+  assert.doesNotMatch(signalPreview.nextActions[0].nextAction, /--worker-id/);
 });
 
 test("worker progress signal gate writes durable request files and pastes only path pointers", () => {
@@ -9469,6 +9477,36 @@ test("worker progress signal gate writes durable request files and pastes only p
     assert.equal(preview.summary.planned, 1);
     assert.match(preview.summary.requests[0].requestPath, /progress-requests\/codex-1-lane-1\.md$/);
     assert.match(preview.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs/);
+
+    const batchPreview = buildWorkerProgressSignalPlan(
+      { runId: "manager-test", stateRoot },
+      {
+        progressStatus: {
+          status: "attention",
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "lane-1",
+                taskId: "task-1",
+                progressState: "checkpoint_stale",
+              },
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "lane-2",
+                taskId: "task-2",
+                progressState: "checkpoint_stale",
+              },
+            ],
+          },
+        },
+      },
+    );
+    assert.equal(batchPreview.summary.planned, 2);
+    assert.match(batchPreview.nextActions[0].nextAction, /manager-worker-progress-signal\.mjs --summary-json --limit 2 --apply/);
+    assert.doesNotMatch(batchPreview.nextActions[0].nextAction, /--worker-id/);
 
     const calls = [];
     const applied = buildWorkerProgressSignalPlan(
@@ -10023,6 +10061,12 @@ test("unverified pointer receipt metadata routes to C-m-only submit repair", () 
     assert.equal(submitPreview.summary.planned, 1);
     assert.equal(submitPreview.summary.requests[0].workerId, "codex-1");
     assert.equal(submitPreview.summary.requests[0].progressState, "pointer_receipt_unverified");
+    assert.equal(submitPreview.summary.continuousSelection.code, "continuous-worker-submit-pending");
+    assert.equal(submitPreview.summary.continuousSelection.mutationClass, "manager_owned_worker_enter_only");
+    assert.equal(submitPreview.summary.continuousSelection.allowed, true);
+    assert.equal(submitPreview.summary.continuousSelection.status, "ready");
+    assert.ok(submitPreview.summary.continuousSelection.targetComponents.includes("worker:codex-1"));
+    assert.ok(submitPreview.summary.continuousSelection.targetComponents.includes("assignment:lane-1"));
     assert.equal(submitPreview.summary.transport.submitKey, "C-m");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
@@ -17776,6 +17820,37 @@ test("continuous run plan blocks manager-only usage before worker mutation", () 
   assert.equal(criticalResource.summary.allowedActionCount, 0);
   assert.ok(criticalResource.blockers.some((blocker) => blocker.code === "resource-critical"));
   assert.equal(criticalResource.nextActions.some((action) => /--apply/.test(action.nextAction || "")), false);
+
+  const continuableBlockerPlan = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+          continuation: { canContinue: true },
+        },
+        blockers: [{ code: "review-stewardship-blocked", message: "Review stewardship is blocked, but unrelated worker progress can continue." }],
+        warnings: [],
+        nextActions: [
+          {
+            code: "worker-progress-checkpoint_stale",
+            summary: "Signal 2 active worker(s).",
+            nextAction: "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 2",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(continuableBlockerPlan.status, "attention");
+  assert.equal(continuableBlockerPlan.summary.selectedAction.code, "continuous-worker-progress-signal");
+  assert.ok(continuableBlockerPlan.blockers.some((blocker) => blocker.code === "review-stewardship-blocked"));
+  assert.equal(continuableBlockerPlan.summary.stopReasons.some((reason) => reason.code === "cycle-blockers-present"), false);
 });
 
 test("continuous prompt-probe strips apply from dry-run command", () => {
