@@ -1026,7 +1026,20 @@ export function buildWorkerStatus(options = {}, context = {}) {
     resourceSummary: resourcePacket.summary || {},
     tmuxSummary,
   });
+  const lifecycleProjection = buildWorkerLifecycleProjection(workers, { runId, tmuxSummary });
   const counts = lifecycle.summary?.liveWorkerCounts || countWorkerStates(workers);
+  const workerCounts = {
+    ...counts,
+    delivered: lifecycleProjection.counts.delivered,
+    cleanup_complete: lifecycleProjection.counts.cleanup_complete,
+    warm_available: lifecycleProjection.counts.warm_available,
+    retirable: lifecycleProjection.counts.retirable,
+    retirement_blocked: lifecycleProjection.counts.retirement_blocked,
+    retired_logical: lifecycleProjection.counts.retired_logical,
+    retiring_physical: lifecycleProjection.counts.retiring_physical,
+    retired: lifecycleProjection.counts.retired,
+    abandoned: lifecycleProjection.counts.abandoned,
+  };
   const warmPool = buildWarmWorkerPoolSummary({
     runId,
     workers,
@@ -1042,7 +1055,9 @@ export function buildWorkerStatus(options = {}, context = {}) {
     summary: {
       runId,
       stateRoot: paths.proof.state.root,
-      workerCounts: counts,
+      workerCounts,
+      workerLifecycleCounts: lifecycleProjection.counts,
+      workerLifecycleProjection: lifecycleProjection,
       workers,
       unknownSessions: Number.isInteger(tmuxSummary.unmanagedPanes) ? tmuxSummary.unmanagedPanes : null,
       unknownSessionStatus: Number.isInteger(tmuxSummary.unmanagedPanes) ? "metadata-only" : tmux.status === "unavailable" ? "unavailable" : "not-inspected",
@@ -1441,6 +1456,159 @@ function countWorkerStates(workers = [], total = workers.length) {
     warm: projected.filter((worker) => worker.state === "warm").length,
     paused: projected.filter((worker) => String(worker.state || "").startsWith("paused")).length,
     total,
+  };
+}
+
+const WORKER_LIFECYCLE_PROJECTION_STATES = [
+  "active",
+  "delivered",
+  "cleanup_complete",
+  "warm_available",
+  "retirable",
+  "retirement_blocked",
+  "retired_logical",
+  "retiring_physical",
+  "retired",
+  "abandoned",
+];
+
+function emptyWorkerLifecycleCounts(total = 0) {
+  return {
+    active: 0,
+    delivered: 0,
+    cleanup_complete: 0,
+    warm_available: 0,
+    retirable: 0,
+    retirement_blocked: 0,
+    retired_logical: 0,
+    retiring_physical: 0,
+    retired: 0,
+    abandoned: 0,
+    total,
+  };
+}
+
+function normalizeWorkerLifecycleToken(value = "") {
+  return sanitizeLedgerField(String(value || "").trim().toLowerCase().replaceAll("-", "_"), "", 80);
+}
+
+function workerLifecycleBlockedToken(value = "") {
+  return [
+    "blocked",
+    "retirement_blocked",
+    "blocked_question",
+    "blocked_review",
+    "blocked_delivery",
+    "blocked_cleanup",
+    "policy_blocked_question",
+    "recovery_blocked",
+    "delivery_blocked",
+    "cleanup_blocked",
+  ].includes(value);
+}
+
+function workerLifecycleProjectionKey(worker = {}) {
+  return [
+    worker.workerId || "",
+    worker.sessionName || "",
+    worker.owner || "",
+    worker.assignmentId || "",
+    worker.taskId || "",
+  ].join("\u001f");
+}
+
+function workerLifecycleStateFromEvidence(worker = {}, excludedReason = "") {
+  const state = normalizeWorkerLifecycleToken(worker.state);
+  const assignmentState = normalizeWorkerLifecycleToken(worker.assignmentState);
+  const deliveryState = normalizeWorkerLifecycleToken(worker.deliveryState);
+  const cleanupState = normalizeWorkerLifecycleToken(worker.cleanupState);
+  const recoveryState = normalizeWorkerLifecycleToken(worker.recoveryState);
+  const retirementRequest = normalizeWorkerLifecycleToken(worker.retirementRequest);
+  const explicit = normalizeWorkerLifecycleToken(worker.lifecycleState || worker.lifecycle_state);
+
+  if (state === "abandoned" || recoveryState.startsWith("safe_abandonment")) {
+    return { state: "abandoned", reason: recoveryState || state };
+  }
+  if (state === "retiring_physical") {
+    return { state: "retiring_physical", reason: state };
+  }
+  if (state === "retired_logical") {
+    return { state: "retired_logical", reason: state };
+  }
+  if (["retired", "terminated"].includes(state)) {
+    return { state: "retired", reason: state };
+  }
+  if (state === "failed") {
+    return { state: "retirement_blocked", reason: "failed_worker_record" };
+  }
+  if (excludedReason && excludedReason !== "not-live-manager-owned") {
+    return { state: "retirement_blocked", reason: excludedReason };
+  }
+  if (
+    workerLifecycleBlockedToken(state) ||
+    workerLifecycleBlockedToken(assignmentState) ||
+    workerLifecycleBlockedToken(deliveryState) ||
+    workerLifecycleBlockedToken(cleanupState) ||
+    workerLifecycleBlockedToken(retirementRequest)
+  ) {
+    return { state: "retirement_blocked", reason: "blocked_evidence" };
+  }
+  if (state === "active" || hasActiveWorkerLease(worker)) {
+    return { state: "active", reason: "active_worker_record" };
+  }
+  if (WORKER_LIFECYCLE_PROJECTION_STATES.includes(explicit)) {
+    return { state: explicit, reason: "explicit_lifecycle_state" };
+  }
+  if (cleanupState === "complete" || cleanupState === "cleanup_complete" || assignmentState === "cleanup_complete") {
+    return { state: "cleanup_complete", reason: "cleanup_complete" };
+  }
+  if (["delivered", "merged", "closed", "done"].includes(deliveryState) || ["closed", "done", "merged"].includes(assignmentState)) {
+    return { state: "delivered", reason: "delivery_or_assignment_complete" };
+  }
+  if (assignmentState === "reassignable") {
+    return { state: "retirable", reason: "assignment_reassignable" };
+  }
+  if (state === "warm" || retirementRequest === "warm_available") {
+    return { state: "warm_available", reason: state === "warm" ? "warm_worker_record" : "warm_requested" };
+  }
+  if (excludedReason) {
+    return { state: "retirement_blocked", reason: excludedReason };
+  }
+  return { state: "retirement_blocked", reason: "unknown_lifecycle_evidence" };
+}
+
+function buildWorkerLifecycleProjection(workers = [], { runId = "", tmuxSummary = {} } = {}) {
+  const projected = Array.isArray(workers) ? workers.filter(isPlainObject).map(projectWorker) : [];
+  const eligibility = classifyLifecycleWorkers(projected, runId, tmuxSummary);
+  const excludedByWorkerKey = new Map(
+    eligibility.excluded.map((worker) => [workerLifecycleProjectionKey(worker), worker.reason]),
+  );
+  const counts = emptyWorkerLifecycleCounts(projected.length);
+  const rows = projected.map((worker) => {
+    const excludedReason = excludedByWorkerKey.get(workerLifecycleProjectionKey(worker)) || "";
+    const classification = workerLifecycleStateFromEvidence(worker, excludedReason);
+    counts[classification.state] += 1;
+    return {
+      workerId: worker.workerId,
+      sessionName: worker.sessionName || null,
+      owner: worker.owner,
+      assignmentId: worker.assignmentId || null,
+      taskId: worker.taskId || null,
+      state: classification.state,
+      reason: classification.reason,
+      sourceState: worker.state || "unknown",
+      assignmentState: worker.assignmentState || "unknown",
+      managerOwned: isManagerOwnedWorker(worker, runId),
+      mutation: "none",
+      rawPayloadRetained: false,
+    };
+  });
+  return {
+    states: [...WORKER_LIFECYCLE_PROJECTION_STATES],
+    counts,
+    workers: rows,
+    mutation: "none; read-only worker lifecycle projection",
+    rawPayloadRetained: false,
   };
 }
 
@@ -20328,7 +20496,12 @@ function projectWorker(worker) {
       source: sanitizeLedgerField(worker.modelRoute.source || "worker_record", "worker_record", 80),
     } : null,
     state: sanitizeLedgerField(worker.state || "unknown", "unknown", 40),
+    lifecycleState: sanitizeLedgerField(worker.lifecycleState || worker.lifecycle_state || "", "", 80) || null,
     assignmentState: sanitizeLedgerField(worker.assignmentState || worker.assignment_state || worker.state || "unknown", "unknown", 40),
+    deliveryState: sanitizeLedgerField(worker.deliveryState || worker.delivery_state || "", "", 80) || null,
+    reviewState: sanitizeLedgerField(worker.reviewState || worker.review_state || "", "", 80) || null,
+    cleanupState: sanitizeLedgerField(worker.cleanupState || worker.cleanup_state || "", "", 80) || null,
+    retirementRequest: sanitizeLedgerField(worker.retirementRequest || worker.retirement_request || "", "", 80) || null,
     assignmentId: worker.assignmentId || worker.assignment_id || null,
     taskId: worker.taskId || worker.task_id || null,
     leaseId: sanitizeLedgerField(worker.leaseId || worker.lease_id || "", "", 140) || null,
