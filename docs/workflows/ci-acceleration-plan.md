@@ -126,6 +126,9 @@ redirecting planner JSON to `ci-outputs.json` inside the checkout made
 artifacts must be written under `$RUNNER_TEMP` or another path outside the Git
 worktree before collecting changed files.
 
+Record the second measurement PR after the `$RUNNER_TEMP` fix with the observed
+check durations and skipped jobs before starting the static-bundle split.
+
 ## Stop Lines
 
 Do not remove existing static coverage just to reduce time. First introduce the
