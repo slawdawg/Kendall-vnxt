@@ -31,12 +31,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          ci_outputs="${RUNNER_TEMP}/ci-outputs.json"
           node ./scripts/check-plan.mjs \
             --base "${{ github.event.pull_request.base.sha }}" \
             --head "${{ github.event.pull_request.head.sha }}" \
-            --ci-outputs > ci-outputs.json
+            --ci-outputs > "$ci_outputs"
 
-          node -e 'const fs = require("node:fs"); const outputs = JSON.parse(fs.readFileSync("ci-outputs.json", "utf8")); for (const key of ["javascript", "supervisor", "static"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${outputs[key] ? "true" : "false"}\n`); console.log(JSON.stringify(outputs, null, 2));'
+          node -e 'const fs = require("node:fs"); const outputs = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const key of ["javascript", "supervisor", "static"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${outputs[key] ? "true" : "false"}\n`); console.log(JSON.stringify(outputs, null, 2));' "$ci_outputs"
 
   fast:
     if: github.event_name == 'pull_request'

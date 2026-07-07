@@ -120,6 +120,12 @@ from focused documentation and planner-policy PRs. If any broad job runs, treat
 the check output as routing evidence and fix the planner before starting the
 static-bundle split.
 
+The first measurement attempt exposed a workflow-local artifact hazard:
+redirecting planner JSON to `ci-outputs.json` inside the checkout made
+`check-plan` see that untracked file and escalate to full static. CI planner
+artifacts must be written under `$RUNNER_TEMP` or another path outside the Git
+worktree before collecting changed files.
+
 ## Stop Lines
 
 Do not remove existing static coverage just to reduce time. First introduce the
