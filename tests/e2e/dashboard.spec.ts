@@ -1481,6 +1481,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("Delivery checks do not bypass failing checks, unresolved review threads, or exact-head mismatch.")).toBeVisible();
     await expect(verificationPanel.getByText("docs/workflows/linux-primary-development-runbook.md", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:fast", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:governed-worker-execution-dry-run", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();

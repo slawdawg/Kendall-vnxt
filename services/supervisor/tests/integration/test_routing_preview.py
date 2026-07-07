@@ -2020,6 +2020,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-pipeline-implementation-readiness",
         "test-live-memory-source-enforcement",
         "test-bounded-live-memory-source",
+        "check-fast",
         "check-authority-readiness",
         "check-branch-protection-readiness",
         "check-adaptive-scoring",
@@ -2113,6 +2114,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "optional-remote-bootstrap",
     }
     static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
+    assert "check-fast" in static_group["commandIds"]
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-review-resource-policy" in static_group["commandIds"]
     assert "check-runtime-review" in static_group["commandIds"]
@@ -2175,6 +2177,8 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         command for command in report["requiredCommands"] if command["commandId"] == "check-adaptive-scoring"
     )
     assert adaptive_scoring_command["command"] == "pnpm run check:adaptive-scoring"
+    fast_command = next(command for command in report["requiredCommands"] if command["commandId"] == "check-fast")
+    assert fast_command["command"] == "pnpm run check:fast"
     dashboard_group = next(group for group in report["commandGroups"] if group["groupId"] == "dashboard-browser-build")
     assert "dashboard-controls-e2e" in dashboard_group["commandIds"]
     assert "dashboard-provider-raw-output-e2e" in dashboard_group["commandIds"]
