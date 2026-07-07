@@ -1004,6 +1004,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(activeBoardViewModelSource, /PipelinePacketDetailWhyDiagnostics/);
   assert.match(activeBoardViewModelSource, /buildPacketDetailWhyDiagnosticsForPacket/);
   assert.match(activeBoardViewModelSource, /packetPlacementReason/);
+  assert.match(activeBoardViewModelSource, /readyToTestResultControls/);
+  assert.match(activeBoardViewModelSource, /record_test_pass/);
+  assert.match(activeBoardViewModelSource, /record_test_fail/);
+  assert.match(activeBoardViewModelSource, /request_rework/);
+  assert.match(activeBoardViewModelSource, /Ready-to-test result recording needs backend action ownership/);
   assert.match(cockpitSource, /activeBoardViewModel\?\.packetDetails\?\.byPacketId\?\./);
   assert.match(cockpitSource, /aria-label="Packet why diagnostics"/);
   assert.match(cockpitSource, /refreshUnavailable = Boolean\(projectionError\)/);
