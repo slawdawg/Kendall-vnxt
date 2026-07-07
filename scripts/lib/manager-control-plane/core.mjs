@@ -17536,6 +17536,64 @@ function buildMinimumHappyPathOperationalLoop({ runway = {}, operationalActions 
   };
 }
 
+function buildBlockedPathOperationalProof({ runId = "", status = "unknown", continuation = {}, blockers = [], usage = {}, resources = {}, dispatchPosture = {}, dispatchPreview = {}, operationalActions = null, nextManagerAction = "" } = {}) {
+  const blockerCodes = (Array.isArray(blockers) ? blockers : [])
+    .map((blocker) => sanitizeLedgerField(blocker?.code || "", "", 100))
+    .filter(Boolean)
+    .slice(0, 12);
+  const allowedActions = Array.isArray(continuation.allowedActions) ? continuation.allowedActions : [];
+  const blockedActions = Array.isArray(continuation.blockedActions) ? continuation.blockedActions : [];
+  const usageState = sanitizeLedgerField(usage.status || usage.summary?.state || "unknown", "unknown", 60);
+  const resourceState = sanitizeLedgerField(resources.status || resources.summary?.state || "unknown", "unknown", 60);
+  const dispatchApplyAllowed =
+    continuation.dispatchApplyAllowed === true &&
+    operationalActionCapabilityAllows({ summary: { operationalActions, dispatchPreview: dispatchPreview.summary } }, "dispatch_apply");
+  const proofStatus = status === "blocked" && continuation.canContinue === false ? "blocked" : continuation.canContinue ? "can_continue" : status;
+  const continuationNextAction =
+    continuation.state === "active_worker_monitoring"
+      ? "Poll manager-worker-progress and route only blockers, questions, checkpoints, stale progress signals, and risky decisions."
+      : continuation.state === "planning_only"
+        ? "Use source-owned BMAD refill planning through existing gates."
+        : "";
+  const nextAction = sanitizeLedgerField(continuationNextAction || nextManagerAction || "inspect blockers before manager mutation", "inspect blockers before manager mutation", 220);
+
+  return {
+    schemaVersion: "manager-control-plane.blocked-path-operational-proof/v0",
+    status: proofStatus,
+    state: sanitizeLedgerField(continuation.state || status, "unknown", 80),
+    dogfoodable: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    blockedPath: status === "blocked" || blockedActions.length > 0 || blockerCodes.length > 0,
+    safeToContinueWithoutWorkerIntervention: continuation.canContinue === true,
+    reason: sanitizeLedgerField(continuation.reason || "Manager continuation posture was projected from existing gates.", "Manager continuation posture was projected from existing gates.", 240),
+    preservedSafetyGates: {
+      workerMutationAllowed: continuation.workerMutationAllowed === true,
+      workerStartAllowed: continuation.workerStartAllowed === true,
+      dispatchApplyAllowed,
+      deliveryAllowed: false,
+      cleanupAllowed: false,
+      providerUsageAllowed: false,
+    },
+    allowedActions: allowedActions.map((action) => sanitizeLedgerField(action, "", 100)).filter(Boolean).slice(0, 12),
+    blockedActions: blockedActions.map((action) => sanitizeLedgerField(action, "", 100)).filter(Boolean).slice(0, 12),
+    blockerCodes,
+    nextManagerAction: nextAction,
+    evidenceRefs: [
+      runId ? `manager-cycle:${sanitizeLedgerField(runId, "", 100)}` : "",
+      `usage:${usageState}`,
+      `resources:${resourceState}`,
+      `dispatch-posture:${sanitizeLedgerField(dispatchPosture.summary?.state || dispatchPosture.state || "unknown", "unknown", 80)}`,
+      ...blockerCodes.slice(0, 6).map((code) => `blocker:${code}`),
+    ].filter(Boolean),
+    compactSummary: sanitizeLedgerField(
+      `${proofStatus}: ${continuation.reason || "manager continuation posture projected"} Next: ${nextAction}`,
+      "Blocked path proof available.",
+      320,
+    ),
+  };
+}
+
 function summarizeLedgerDispatcherSummary(summary = null) {
   if (!isPlainObject(summary)) return null;
   return {
@@ -17818,6 +17876,18 @@ export function buildCyclePacket(options = {}, context = {}) {
     (recoveryMutationBlocked ? null : runway.nextActions?.[0]?.nextAction) ||
     (status === "blocked" ? "cycle blocked; inspect blockers before manager mutation." : null) ||
     "none";
+  const blockedPathOperationalProof = buildBlockedPathOperationalProof({
+    runId: runOptions.runId,
+    status,
+    continuation,
+    blockers: reportedBlockers,
+    usage,
+    resources,
+    dispatchPosture,
+    dispatchPreview,
+    operationalActions,
+    nextManagerAction: actionNeeded,
+  });
   const progress = buildProgressBeaconPlan(runOptions, {
     runState: continuation.progressRunState,
     workerCounts: workers.summary?.workerCounts || {},
@@ -17887,6 +17957,7 @@ export function buildCyclePacket(options = {}, context = {}) {
         rawPayloadRetained: false,
       },
       continuation: sanitizeCyclePacketValue(continuation),
+      blockedPathOperationalProof: sanitizeCyclePacketValue(blockedPathOperationalProof),
       managerCapabilityPosture: sanitizeCyclePacketValue(managerCapabilityPosture.summary),
       managerCapabilityStatus: sanitizeCyclePacketValue(managerCapabilityStatus),
       selfRepair: sanitizeCyclePacketValue(selfRepair.summary),

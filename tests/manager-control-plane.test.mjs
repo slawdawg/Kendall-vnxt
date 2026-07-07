@@ -11898,7 +11898,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
       },
     );
 
-    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
+    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
       assert.ok(Object.hasOwn(cycle.summary, key), `missing cycle key ${key}`);
     }
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
@@ -11974,6 +11974,23 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.continuation.allowedActions.includes("dispatch_apply_existing_gates"), false);
     assert.equal(cycle.summary.continuation.blockedActions.includes("worker_start"), true);
     assert.equal(cycle.summary.continuation.blockedActions.includes("dispatch_apply"), true);
+    assert.equal(cycle.summary.blockedPathOperationalProof.schemaVersion, "manager-control-plane.blocked-path-operational-proof/v0");
+    assert.equal(cycle.summary.blockedPathOperationalProof.status, "blocked");
+    assert.equal(cycle.summary.blockedPathOperationalProof.dogfoodable, true);
+    assert.equal(cycle.summary.blockedPathOperationalProof.metadataOnly, true);
+    assert.equal(cycle.summary.blockedPathOperationalProof.rawPayloadRetained, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.workerMutationAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.deliveryAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.cleanupAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.providerUsageAllowed, false);
+    assert.ok(cycle.summary.blockedPathOperationalProof.blockedActions.includes("worker_start"));
+    assert.ok(cycle.summary.blockedPathOperationalProof.blockedActions.includes("dispatch_apply"));
+    assert.ok(cycle.summary.blockedPathOperationalProof.blockerCodes.includes("assignment-ambiguous-status"));
+    assert.ok(cycle.summary.blockedPathOperationalProof.evidenceRefs.includes("manager-cycle:manager-test"));
+    assert.ok(cycle.summary.blockedPathOperationalProof.evidenceRefs.includes("usage:normal"));
+    assert.ok(cycle.summary.blockedPathOperationalProof.evidenceRefs.includes("resources:normal"));
+    assert.match(cycle.summary.blockedPathOperationalProof.nextManagerAction, /manager-stale-owner-inspection/);
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "takeover-inspection-required"));
     assert.ok(cycle.summary.recommendedActions.some((action) => action.nextAction === "node ./scripts/manager-stale-owner-inspection.mjs --summary-json"));
@@ -13842,6 +13859,15 @@ test("cycle continuation monitors active workers despite stale assignment inspec
     assert.equal(cycle.summary.continuation.activeWorkers, 1);
     assert.ok(cycle.summary.continuation.allowedActions.includes("active_worker_monitoring"));
     assert.equal(cycle.summary.continuation.blockedActions.includes("ownership_takeover"), true);
+    assert.equal(cycle.summary.blockedPathOperationalProof.status, "can_continue");
+    assert.equal(cycle.summary.blockedPathOperationalProof.state, "active_worker_monitoring");
+    assert.equal(cycle.summary.blockedPathOperationalProof.safeToContinueWithoutWorkerIntervention, true);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.workerMutationAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.deliveryAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.cleanupAllowed, false);
+    assert.equal(cycle.summary.blockedPathOperationalProof.preservedSafetyGates.providerUsageAllowed, false);
+    assert.match(cycle.summary.blockedPathOperationalProof.nextManagerAction, /manager-worker-progress/);
     assert.equal(cycle.summary.recommendedActions[0].code, "safe-backlog-starvation");
     const monitoringIndex = cycle.summary.recommendedActions.findIndex((action) => action.code === "active-worker-monitoring");
     assert.ok(monitoringIndex > 0, "active monitoring should remain after refill when healthy workers are already visible");
