@@ -34,6 +34,28 @@ test("known sandbox and read-only filesystem signatures become churn event input
       evidenceSummary: /\.git\/worktrees/,
     },
     {
+      name: ".git/ORIG_HEAD.lock EROFS",
+      observation: baseObservation({
+        command: "node ./scripts/manager-preflight.mjs --summary-json",
+        error: "error: Unable to create '.git/ORIG_HEAD.lock': Read-only file system",
+        readOnlyVerification: true,
+      }),
+      signature: ".git metadata read-only filesystem boundary",
+      nextSafeAction: /rerun the exact same read-only command outside the sandbox/,
+      evidenceSummary: /Git metadata state/,
+    },
+    {
+      name: ".git/index.lock split-line EROFS",
+      observation: baseObservation({
+        command: "node ./scripts/manager-preflight.mjs --summary-json",
+        error: "error: Unable to create '.git/index.lock'\nEROFS",
+        readOnlyVerification: true,
+      }),
+      signature: ".git metadata read-only filesystem boundary",
+      nextSafeAction: /rerun the exact same read-only command outside the sandbox/,
+      evidenceSummary: /Git metadata state/,
+    },
+    {
       name: "uv cache EROFS",
       observation: baseObservation({
         command: "uv run --directory services/supervisor python --version",
@@ -54,6 +76,17 @@ test("known sandbox and read-only filesystem signatures become churn event input
       signature: "managed-worktree pnpm temp read-only filesystem boundary",
       nextSafeAction: /rerun the exact same read-only command outside the sandbox/,
       evidenceSummary: /pnpm temp/,
+    },
+    {
+      name: "local workspace state EROFS",
+      observation: baseObservation({
+        command: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
+        error: "/home/operator/.codex-workspaces/slawdawg-kendall-vnxt/tasks/lane.json: EROFS",
+        readOnlyVerification: true,
+      }),
+      signature: "local Codex workspace state read-only filesystem boundary",
+      nextSafeAction: /rerun the exact same read-only command outside the sandbox/,
+      evidenceSummary: /local Codex workspace state/,
     },
   ];
 
@@ -181,6 +214,31 @@ test("product assertion failures and one-off failures do not become churn events
   }));
   assert.equal(oneOff.status, "no-event");
   assert.equal(oneOff.reason, "insufficient-repeated-evidence");
+
+  const unrelatedGitLockCommand = classifyChurnFailure(baseObservation({
+    command: "git show .git/ORIG_HEAD.lock",
+    error: "/tmp/unrelated-state: EROFS",
+    readOnlyVerification: true,
+  }));
+  assert.equal(unrelatedGitLockCommand.status, "no-event");
+  assert.equal(unrelatedGitLockCommand.reason, "insufficient-repeated-evidence");
+
+  const genericWorkspaceMetadata = classifyChurnFailure(baseObservation({
+    command: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
+    error: "workspace metadata probe failed: EROFS",
+    readOnlyVerification: true,
+  }));
+  assert.equal(genericWorkspaceMetadata.status, "no-event");
+  assert.equal(genericWorkspaceMetadata.reason, "insufficient-repeated-evidence");
+
+  const unrelatedWorkspaceState = classifyChurnFailure(baseObservation({
+    command: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
+    output: "inspecting /tmp/.codex-workspaces/slawdawg-kendall-vnxt/tasks",
+    error: "/tmp/unrelated-state: EROFS",
+    readOnlyVerification: true,
+  }));
+  assert.equal(unrelatedWorkspaceState.status, "no-event");
+  assert.equal(unrelatedWorkspaceState.reason, "insufficient-repeated-evidence");
 });
 
 test("classified churn events can be recorded through the local event writer", () => {

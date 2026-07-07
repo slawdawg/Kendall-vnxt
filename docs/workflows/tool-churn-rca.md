@@ -90,6 +90,17 @@ Choose one narrow action that can actually reduce uncertainty:
   project imports, package manifests, and supported scripts before changing
   command wrappers again.
 - Request approval for the exact read-only verification command when sandbox behavior is the blocker.
+- For `spawnSync EPERM` from Git, gh, tmux, Node, or manager probe commands,
+  treat the child-process launch as a sandbox boundary. Do not chase PATH,
+  package-manager, or script-wrapper explanations unless a direct tool
+  availability check failed first.
+- For Git metadata lock failures such as `.git/ORIG_HEAD.lock` or
+  `.git/index.lock` with `EROFS` or `Read-only file system`, request approval
+  for the exact same read-only verification command outside the sandbox instead
+  of changing Git recovery commands, deleting lock files, or rewriting history.
+- For tmux socket errors that report `Operation not permitted`, classify the
+  failure as a tmux sandbox boundary. Do not mutate tmux sessions, restart
+  panes, or switch to pane-content capture as a workaround.
 - For Node workspace tests that fail with a read-only `.git/worktrees` write
   while creating temporary worktree metadata, request approval for the exact
   same read-only verification command outside the sandbox instead of changing
@@ -99,6 +110,10 @@ Choose one narrow action that can actually reduce uncertainty:
   read-only user cache path, request approval for the same read-only command
   outside the sandbox instead of changing package-manager or Python command
   shapes.
+- For local Codex workspace state writes under `.codex-workspaces`, including
+  task manifests, assignment metadata, cleanup plans, or managed-worktree state,
+  fail closed and request the exact same read-only command outside the sandbox.
+  Do not treat hidden or unreadable workspace state as empty state.
 - For merge blockers with green checks, run the thread-aware GitHub review
   comment workflow from the PR branch worktree before retrying merge commands
   or speculating about branch policy.

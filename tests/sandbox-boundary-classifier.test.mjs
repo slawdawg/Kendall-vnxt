@@ -41,6 +41,12 @@ test("classifies EPERM and EACCES probes for known manager dependencies", () => 
       evidence: /tmux probe/,
     },
     {
+      command: "tmux list-panes -a",
+      stderr: "error connecting to /tmp/tmux-1000/default (Operation not permitted)",
+      signature: "tmux sandbox permission boundary",
+      evidence: /tmux probe/,
+    },
+    {
       command: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
       stderr: "assignment workspace metadata probe failed with EPERM",
       signature: "workspace metadata sandbox permission boundary",
@@ -76,6 +82,18 @@ test("classifies read-only filesystem boundaries for known local state targets",
       stderr: "fatal: could not create leading directories of '.git/worktrees/codex-example': Read-only file system",
       signature: ".git/worktrees read-only filesystem boundary",
       evidence: /\.git\/worktrees/,
+    },
+    {
+      command: "node ./scripts/manager-preflight.mjs --summary-json",
+      stderr: "error: Unable to create '.git/ORIG_HEAD.lock': Read-only file system",
+      signature: ".git metadata read-only filesystem boundary",
+      evidence: /Git metadata state/,
+    },
+    {
+      command: "node ./scripts/manager-preflight.mjs --summary-json",
+      stderr: "error: Unable to create '.git/index.lock'\nEROFS",
+      signature: ".git metadata read-only filesystem boundary",
+      evidence: /Git metadata state/,
     },
     {
       command: "uv run --directory services/supervisor python --version",
@@ -138,6 +156,16 @@ test("does not authorize exact outside-sandbox rerun without read-only proof", (
   assert.equal(packet.boundary, true);
   assert.equal(packet.safe_rerun, "none");
   assert.equal(packet.mutation, "none");
+
+  const gitMetadataPacket = classifySandboxBoundaryResult({
+    command: "node ./scripts/manager-preflight.mjs --summary-json",
+    stderr: "error: Unable to create '.git/ORIG_HEAD.lock': Read-only file system",
+  });
+
+  assert.equal(gitMetadataPacket.boundary, true);
+  assert.equal(gitMetadataPacket.signature, ".git metadata read-only filesystem boundary");
+  assert.equal(gitMetadataPacket.safe_rerun, "none");
+  assert.equal(gitMetadataPacket.mutation, "none");
 });
 
 test("preserves command argument boundaries for array input", () => {
@@ -177,6 +205,36 @@ test("does not classify normal product or successful JSON output as a sandbox bo
       readOnly: true,
       stdout: "",
       stderr: "ERROR: malformed emergency-stop state",
+      status: 1,
+    }),
+    null,
+  );
+
+  assert.equal(
+    classifySandboxBoundaryResult({
+      command: "git show .git/ORIG_HEAD.lock",
+      readOnly: true,
+      stderr: "/tmp/unrelated-state: EROFS",
+      status: 1,
+    }),
+    null,
+  );
+
+  assert.equal(
+    classifySandboxBoundaryResult({
+      command: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
+      readOnly: true,
+      stderr: "workspace metadata probe failed: EROFS",
+      status: 1,
+    }),
+    null,
+  );
+
+  assert.equal(
+    classifySandboxBoundaryResult({
+      command: "node ./scripts/manager-cleanup-plan.mjs --state /tmp/.codex-workspaces/demo --summary-json",
+      readOnly: true,
+      stderr: "/tmp/unrelated-state: EROFS",
       status: 1,
     }),
     null,

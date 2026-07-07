@@ -51,12 +51,20 @@ function classifySandboxBoundary(observation) {
     return buildReadOnlyEvent(observation, ".git/worktrees read-only filesystem boundary", ".git/worktrees");
   }
 
+  if (isGitMetadataLockReadOnlyBoundary(text)) {
+    return buildReadOnlyEvent(observation, ".git metadata read-only filesystem boundary", "Git metadata state");
+  }
+
   if ((text.includes("$home/.cache/uv") || text.includes(".cache/uv")) && isReadOnlyBoundary(text)) {
     return buildReadOnlyEvent(observation, "$HOME/.cache/uv read-only filesystem boundary", "$HOME/.cache/uv");
   }
 
   if ((text.includes("pnpm temp") || text.includes("managed-worktree pnpm") || text.includes("pnpm")) && isReadOnlyBoundary(text)) {
     return buildReadOnlyEvent(observation, "managed-worktree pnpm temp read-only filesystem boundary", "managed-worktree pnpm temp");
+  }
+
+  if (isLocalWorkspaceStateReadOnlyBoundary(text)) {
+    return buildReadOnlyEvent(observation, "local Codex workspace state read-only filesystem boundary", "local Codex workspace state");
   }
 
   return null;
@@ -219,6 +227,32 @@ function observationText(observation) {
 
 function isReadOnlyBoundary(text) {
   return /read-only file system|erofs/.test(text);
+}
+
+function isGitMetadataLockReadOnlyBoundary(text) {
+  const lines = text.split(/\r?\n/);
+  return lines.some((line, index) => {
+    if (!hasGitMetadataLockPath(line)) {
+      return false;
+    }
+    return (
+      isReadOnlyBoundary(line) ||
+      isReadOnlyBoundary(lines[index - 1] || "") ||
+      isReadOnlyBoundary(lines[index + 1] || "")
+    );
+  });
+}
+
+function hasGitMetadataLockPath(text) {
+  return text.includes(".git/orig_head.lock") || /\.git\/[^\s'"]+\.lock\b/.test(text);
+}
+
+function isLocalWorkspaceStateReadOnlyBoundary(text) {
+  return text.split(/\r?\n/).some((line) => isReadOnlyBoundary(line) && isLocalWorkspaceStateLine(line));
+}
+
+function isLocalWorkspaceStateLine(text) {
+  return text.includes(".codex-workspaces") || text.includes("codex workspace state");
 }
 
 function isModuleResolutionFailure(text) {
