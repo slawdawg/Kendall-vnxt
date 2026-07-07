@@ -11718,7 +11718,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
       },
     );
 
-    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
+    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
       assert.ok(Object.hasOwn(cycle.summary, key), `missing cycle key ${key}`);
     }
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
@@ -11739,6 +11739,22 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.operationalActions.metadataOnly, true);
     assert.equal(cycle.summary.operationalActions.rawPayloadRetained, false);
     assert.equal(Object.hasOwn(cycle.summary.operationalActions, "mutation"), false);
+    assert.equal(cycle.summary.operationalSummary.schemaVersion, "pipeline-operational-summary/v0");
+    assert.equal(cycle.summary.operationalSummary.sourceLabel, "dispatcher_preview");
+    assert.equal(cycle.summary.operationalSummary.freshnessLabel, "live");
+    assert.equal(cycle.summary.operationalSummary.currentMode, "read_only");
+    assert.equal(cycle.summary.operationalSummary.runtimeReadiness, "degraded");
+    assert.equal(cycle.summary.operationalSummary.capabilityState, "gated");
+    assert.equal(cycle.summary.operationalSummary.counts.active, 0);
+    assert.equal(cycle.summary.operationalSummary.counts.blocked, 0);
+    assert.equal(cycle.summary.operationalSummary.counts.ready, 1);
+    assert.equal(cycle.summary.operationalSummary.actionGateSummary.available > 0, true);
+    assert.equal(cycle.summary.operationalSummary.actionGateSummary.gated > 0, true);
+    assert.equal(cycle.summary.operationalSummary.actionGateSummary.blockedHighRisk > 0, true);
+    assert.notEqual(cycle.summary.operationalSummary.nextAction, "none");
+    assert.doesNotMatch(cycle.summary.operationalSummary.nextAction, /raw prompt|provider payload|sk-testtoken|dispatch-next --apply/i);
+    assert.equal(cycle.summary.operationalSummary.metadataOnly, true);
+    assert.equal(cycle.summary.operationalSummary.rawPayloadRetained, false);
     assert.ok(Date.parse(cycle.summary.operationalActions.checkedAt) <= Date.parse(cycle.summary.operationalActions.expiresAt));
     assert.ok(cycle.summary.operationalActions.evidenceRefs.length > 0);
     assert.ok(cycle.warnings.includes("note: usage stable"));
