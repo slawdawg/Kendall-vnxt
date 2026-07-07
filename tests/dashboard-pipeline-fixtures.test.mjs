@@ -973,6 +973,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(packetInspectionSource, /RefList title="Evidence refs"/);
   assert.match(packetInspectionSource, /Latest movement/);
   assert.match(packetInspectionSource, /Five whys/);
+  assert.match(packetInspectionSource, /PacketWhyDiagnosticsPanel/);
+  assert.match(packetInspectionSource, /packetDetailWhyDiagnostics/);
   assert.match(packetInspectionSource, /Execution attempts/);
   assert.match(packetInspectionSource, /Manager lane details/);
   assert.match(cockpitSource, /buildPipelineActiveBoardViewModel/);
@@ -999,6 +1001,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.doesNotMatch(cockpitSource, /latestTransitionEventRef: lifecycleEvidenceRefs\.at\(-1\) \?\? null/);
   assert.match(activeBoardViewModelSource, /derivePacketPlacement/);
   assert.match(activeBoardViewModelSource, /derivePacketActionability/);
+  assert.match(activeBoardViewModelSource, /PipelinePacketDetailWhyDiagnostics/);
+  assert.match(activeBoardViewModelSource, /buildPacketDetailWhyDiagnosticsForPacket/);
+  assert.match(activeBoardViewModelSource, /packetPlacementReason/);
+  assert.match(cockpitSource, /activeBoardViewModel\?\.packetDetails\?\.byPacketId\?\./);
+  assert.match(cockpitSource, /aria-label="Packet why diagnostics"/);
   assert.match(cockpitSource, /refreshUnavailable = Boolean\(projectionError\)/);
   assert.match(cockpitSource, /refreshUnavailable \? "unavailable" : proofSource/);
   assert.match(cockpitSource, /refreshUnavailable \? "unavailable" : proofFreshness/);

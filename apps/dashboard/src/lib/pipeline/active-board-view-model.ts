@@ -138,6 +138,29 @@ export type PipelineContextualActionStrip = {
   metadataOnly: true;
 };
 
+export type PipelinePacketDetailWhyDiagnostics = {
+  packetId: string;
+  placement: PipelinePacketBoardPlacement;
+  actionability: PipelinePacketActionability;
+  detailSource: "PipelineDashboardProjectionV0.selectedPacketDetails" | "PipelineDashboardProjectionV0.workPackets";
+  selectedDetailAvailable: boolean;
+  why: {
+    label: string;
+    placementReason: string;
+    nextDiagnosticAction: string;
+    metadataOnly: true;
+  };
+  diagnostics: {
+    sourceRefCount: number;
+    evidenceRefCount: number;
+    movementRefCount: number;
+    latestMovementLabel: string;
+    retentionClass: "metadata_only";
+    rawPayloadRetained: false;
+  };
+  metadataOnly: true;
+};
+
 export type PipelineDispatchAffectingManagerState = {
   visible: true;
   reason:
@@ -168,6 +191,9 @@ export type PipelineActiveBoardViewModel = {
   readyToTestItems: PipelineCompactPacketCard[];
   contextualActions: {
     byPacketId: Record<string, PipelineContextualActionStrip>;
+  };
+  packetDetails: {
+    byPacketId: Record<string, PipelinePacketDetailWhyDiagnostics>;
   };
   diagnostics: {
     enabled: false;
@@ -290,6 +316,9 @@ export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardP
     contextualActions: {
       byPacketId: buildContextualActionStrips(projection),
     },
+    packetDetails: {
+      byPacketId: buildPacketDetailWhyDiagnostics(projection),
+    },
     diagnostics: {
       enabled: false,
       items: diagnosticsItems,
@@ -331,6 +360,88 @@ function buildContextualActionStrips(projection: PipelineDashboardProjectionV0) 
     }
   }
   return strips;
+}
+
+function buildPacketDetailWhyDiagnostics(projection: PipelineDashboardProjectionV0) {
+  const details: Record<string, PipelinePacketDetailWhyDiagnostics> = {};
+  for (const packet of projection.workPackets) {
+    details[packet.packetId] = buildPacketDetailWhyDiagnosticsForPacket(packet, projection);
+  }
+  return details;
+}
+
+export function buildPacketDetailWhyDiagnosticsForPacket(
+  packet: PipelineDashboardWorkPacketV0,
+  projection: PipelineDashboardProjectionV0
+): PipelinePacketDetailWhyDiagnostics {
+  const placement = derivePacketPlacement(packet, projection);
+  const actionability = derivePacketActionability(packet, projection);
+  const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId) ?? null;
+  const selectedDetailAvailable = Boolean(detail);
+  const sourceRefCount = detail?.sourceRefs.length ? detail.sourceRefs.length : (packet.sourceRef ? 1 : 0);
+  const evidenceRefs = detail?.evidenceRefs.length ? detail.evidenceRefs : packet.evidenceRefs;
+  const movementRefs = detail?.recentTransitionEventRefs?.length ? detail.recentTransitionEventRefs : packet.evidenceRefs;
+  return {
+    packetId: packet.packetId,
+    placement,
+    actionability,
+    detailSource: selectedDetailAvailable
+      ? "PipelineDashboardProjectionV0.selectedPacketDetails"
+      : "PipelineDashboardProjectionV0.workPackets",
+    selectedDetailAvailable,
+    why: {
+      label: `${placement} / ${actionability}`,
+      placementReason: packetPlacementReason(placement, actionability),
+      nextDiagnosticAction: firstSafeCompactActionLabel(
+        detail?.nextAction,
+        packet.nextAction,
+        detail?.blocker,
+        packet.blocker
+      ) ?? "Inspect packet detail.",
+      metadataOnly: true,
+    },
+    diagnostics: {
+      sourceRefCount,
+      evidenceRefCount: evidenceRefs.length,
+      movementRefCount: movementRefs.length,
+      latestMovementLabel: safeCompactActionLabel(detail?.latestMovementSummary ?? null) ?? "latest movement summary not present in projection detail",
+      retentionClass: "metadata_only",
+      rawPayloadRetained: false,
+    },
+    metadataOnly: true,
+  };
+}
+
+function packetPlacementReason(
+  placement: PipelinePacketBoardPlacement,
+  actionability: PipelinePacketActionability
+) {
+  if (actionability === "operator_attention" || placement === "attention") {
+    return "Packet needs operator attention.";
+  }
+  if (actionability === "ready_to_test") {
+    return "Packet has live ready-to-test evidence.";
+  }
+  if (actionability === "actionable") {
+    return "Packet is live active work.";
+  }
+  if (actionability === "history" || placement === "stale_history") {
+    return "Packet is stale history.";
+  }
+  if (actionability === "closed" || placement === "hidden") {
+    return "Packet is closed.";
+  }
+  return "Packet is diagnostics-only because live proof or truth state is insufficient.";
+}
+
+function firstSafeCompactActionLabel(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const label = safeCompactActionLabel(value ?? null);
+    if (label) {
+      return label;
+    }
+  }
+  return null;
 }
 
 function contextualActionFromGatedControl(control: PipelineGatedControlV0): PipelineContextualActionStripItem {

@@ -17,6 +17,7 @@ import {
   type PipelineCompactPacketCard,
   type PipelineContextualActionStrip,
   type PipelineDiagnosticsItem,
+  type PipelinePacketDetailWhyDiagnostics,
   type PipelineStaleHistoryItem,
 } from "../../lib/pipeline/active-board-view-model";
 import type {
@@ -156,6 +157,9 @@ export function PipelineCockpit({
     && !currentProjection?.selectedPacketDetails.some((detail) => detail.packetId === selectedItem.id);
   const selectedContextualActionStrip = selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
+    : null;
+  const selectedPacketDetailWhyDiagnostics = selectedItem?.type === "packet"
+    ? activeBoardViewModel?.packetDetails?.byPacketId?.[selectedItem.id] ?? null
     : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(dashboardPackets);
@@ -629,6 +633,7 @@ export function PipelineCockpit({
                   onClose={closeSelectedItem}
                   contextualActionStrip={selectedContextualActionStrip}
                   packet={selectedMapPacket}
+                  packetDetailWhyDiagnostics={selectedPacketDetailWhyDiagnostics}
                   projectionDetail={selectedProjectionDetail}
                   projectionError={currentProjectionError}
                 />
@@ -637,6 +642,7 @@ export function PipelineCockpit({
                   onClose={closeSelectedItem}
                   contextualActionStrip={selectedContextualActionStrip}
                   packet={selectedDetailOnlyPacket}
+                  packetDetailWhyDiagnostics={selectedPacketDetailWhyDiagnostics}
                   projectionDetail={selectedProjectionDetail}
                   projectionError={currentProjectionError}
                 />
@@ -2304,12 +2310,14 @@ function PacketInspection({
   contextualActionStrip,
   onClose,
   packet,
+  packetDetailWhyDiagnostics,
   projectionDetail,
   projectionError,
 }: {
   contextualActionStrip: PipelineContextualActionStrip | null;
   onClose: () => void;
   packet: ActiveBoardCockpitPacket;
+  packetDetailWhyDiagnostics: PipelinePacketDetailWhyDiagnostics | null;
   projectionDetail: ProjectionSelectedPacketDetail | null;
   projectionError: string | null;
 }) {
@@ -2380,6 +2388,7 @@ function PacketInspection({
         <span>{packet.summary}</span>
       </div>
       <ContextualActionStripPanel strip={contextualActionStrip} />
+      <PacketWhyDiagnosticsPanel detail={packetDetailWhyDiagnostics} />
       <dl className="mt-3 grid gap-2 text-sm">
         <InspectionRow label="Where" value={detailStage} />
         <InspectionRow label="Status" value={detailState} />
@@ -2473,6 +2482,29 @@ function PacketInspection({
         </Link>
       ) : null}
     </aside>
+  );
+}
+
+function PacketWhyDiagnosticsPanel({ detail }: { detail: PipelinePacketDetailWhyDiagnostics | null }) {
+  if (!detail) {
+    return null;
+  }
+  return (
+    <section aria-label="Packet why diagnostics" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+      <h3 className="text-sm font-semibold">Why and diagnostics</h3>
+      <dl className="grid gap-2 text-sm">
+        <InspectionRow label="Why here" value={detail.why.placementReason} />
+        <InspectionRow label="Placement" value={detail.why.label} />
+        <InspectionRow label="Detail source" value={detail.detailSource} />
+        <InspectionRow label="Selected detail" value={detail.selectedDetailAvailable ? "available" : "not present"} />
+        <InspectionRow label="Next diagnostic action" value={detail.why.nextDiagnosticAction} />
+        <InspectionRow label="Source ref count" value={String(detail.diagnostics.sourceRefCount)} />
+        <InspectionRow label="Evidence ref count" value={String(detail.diagnostics.evidenceRefCount)} />
+        <InspectionRow label="Movement ref count" value={String(detail.diagnostics.movementRefCount)} />
+        <InspectionRow label="Latest movement" value={detail.diagnostics.latestMovementLabel} />
+        <InspectionRow label="Retention" value={`${detail.diagnostics.retentionClass}; rawPayloadRetained ${String(detail.diagnostics.rawPayloadRetained)}`} />
+      </dl>
+    </section>
   );
 }
 
