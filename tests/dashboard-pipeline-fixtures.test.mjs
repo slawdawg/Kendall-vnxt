@@ -1002,6 +1002,10 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(activeBoardViewModelSource, /derivePacketPlacement/);
   assert.match(activeBoardViewModelSource, /derivePacketActionability/);
   assert.match(activeBoardViewModelSource, /PipelinePacketDetailWhyDiagnostics/);
+  assert.match(activeBoardViewModelSource, /PipelineBackpressureState/);
+  assert.match(activeBoardViewModelSource, /deriveBackpressureState/);
+  assert.match(activeBoardViewModelSource, /operator_testing_overloaded/);
+  assert.match(activeBoardViewModelSource, /rawPayloadRetained: false/);
   assert.match(activeBoardViewModelSource, /buildPacketDetailWhyDiagnosticsForPacket/);
   assert.match(activeBoardViewModelSource, /packetPlacementReason/);
   assert.match(activeBoardViewModelSource, /readyToTestResultControls/);
@@ -1010,6 +1014,15 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(activeBoardViewModelSource, /request_rework/);
   assert.match(activeBoardViewModelSource, /Ready-to-test result recording needs backend action ownership/);
   assert.match(cockpitSource, /activeBoardViewModel\?\.packetDetails\?\.byPacketId\?\./);
+  assert.match(cockpitSource, /activeBoardViewModel\?\.summary\.backpressure/);
+  assert.match(cockpitSource, /aria-label="Backpressure state"/);
+  assert.match(cockpitSource, /aria-live="polite"/);
+  assert.match(cockpitSource, /role="status"/);
+  assert.match(cockpitSource, /Backpressure: \{backpressure\.summary\}/);
+  assert.match(cockpitSource, /Next safe action: \{backpressure\.nextSafeAction\}/);
+  assert.match(cockpitSource, /Backpressure next/);
+  assert.match(cockpitSource, /aria-disabled="true"/);
+  assert.doesNotMatch(cockpitSource, /disabled\s*\n\s*title=\{`\$\{action\.reason/);
   assert.match(cockpitSource, /aria-label="Packet why diagnostics"/);
   assert.match(cockpitSource, /refreshUnavailable = Boolean\(projectionError\)/);
   assert.match(cockpitSource, /refreshUnavailable \? "unavailable" : proofSource/);
@@ -1776,6 +1789,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     ".pipeline-mini-packet",
     ".pipeline-mini-packet-label",
     ".pipeline-inspection-panel",
+    ".pipeline-route-connector-line",
     ".pipeline-usage-meter",
     ".pipeline-usage-meter-fill",
     ".pipeline-status-key",
@@ -1783,6 +1797,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   ]) {
     assert.match(globalsSource, new RegExp(cssContract.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.match(globalsSource, /prefers-reduced-motion: reduce[\s\S]*\.pipeline-route-connector-line[\s\S]*animation: none/);
+  assert.match(globalsSource, /prefers-reduced-motion: reduce[\s\S]*\.pipeline-inspection-panel[\s\S]*transition: none/);
 
   for (const { label, state, packetId } of [
     { label: "Candidate Work", state: "included", packetId: "fixture:happy-path" },

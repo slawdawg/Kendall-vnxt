@@ -1190,6 +1190,7 @@ textarea::placeholder {
   .kendall-graph-background__nodes circle,
   .pipeline-board-flow,
   .pipeline-stage-module:not(:first-child)::before,
+  .pipeline-route-connector-line,
   .pipeline-route-station::after,
   .pipeline-flow-line::after,
   .pipeline-review-stack {
@@ -1203,6 +1204,7 @@ textarea::placeholder {
   .manager-lane-row,
   .manager-lane-block,
   .pipeline-stage-packet-row,
+  .pipeline-inspection-panel,
   .kendall-info-tip-bubble,
   .pipeline-usage-warning-bubble,
   .pipeline-stage-info-icon,
