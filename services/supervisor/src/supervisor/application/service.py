@@ -3961,6 +3961,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-check-plan",
+                label="Changed-file check planner tests",
+                command="pnpm run test:check-plan",
+                status="required",
+                requiredFor=["CI acceleration planner changes", "aggregate check routing", "quick-fail command coverage"],
+                evidence=[
+                    "Validates focused check-plan routing and conservative full-static escalation.",
+                    "Confirms the planner regression suite remains wired into aggregate static checks.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-docs",
                 label="Documentation authority drift",
                 command="pnpm run check:docs",
@@ -4996,6 +5007,7 @@ class SupervisorService:
                 summary="Run documentation, report, runtime evidence, safe backlog, runbook, and policy drift checks before browser or full test work.",
                 commandIds=[
                     "check-fast",
+                    "test-check-plan",
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",

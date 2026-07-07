@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const helperDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = dirname(dirname(dirname(helperDir)));
+const workflowCoreModuleCache = new Map();
 
 function resolveTscCommand(repoRoot) {
   for (const candidate of [
@@ -23,6 +24,14 @@ function resolveTscCommand(repoRoot) {
 }
 
 export async function loadWorkflowCoreManagerControlPlane({ repoRoot = defaultRepoRoot } = {}) {
+  const cacheKey = repoRoot;
+  if (!workflowCoreModuleCache.has(cacheKey)) {
+    workflowCoreModuleCache.set(cacheKey, compileAndLoadWorkflowCoreManagerControlPlane(repoRoot));
+  }
+  return workflowCoreModuleCache.get(cacheKey);
+}
+
+async function compileAndLoadWorkflowCoreManagerControlPlane(repoRoot) {
   const outDir = await mkdtemp(join(tmpdir(), "manager-dispatcher-"));
   await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
 

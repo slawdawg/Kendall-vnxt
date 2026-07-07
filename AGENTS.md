@@ -36,6 +36,12 @@
   - `node ./scripts/test-codex-workspace.mjs`: empty child stdout where JSON is
     expected is a sandbox/process boundary; report command metadata before the
     exact same outside-sandbox rerun.
+  - `pnpm run build:dashboard` and any broader verification command that routes
+    to it, including `pnpm run check:changed` when dashboard files or full
+    static checks are selected: Turbopack process/socket setup is a known EPERM
+    sandbox boundary. Do not preflight this path inside the sandbox after the
+    route is known; request the outside-sandbox verification run directly and
+    record that the escalation is for the known Turbopack EPERM boundary.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying
