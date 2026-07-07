@@ -124,6 +124,8 @@ const story = readRequiredWorkspaceFile(storyPath, failures);
 const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 const ciWorkflow = readRequiredWorkspaceFile(ciWorkflowPath, failures);
 const fastWorkflowRunner = readRequiredWorkspaceFile("scripts/run-fast-workflow-checks.mjs", failures);
+const workspaceScript = readRequiredWorkspaceFile("scripts/codex-workspace.mjs", failures);
+const workspaceTest = readRequiredWorkspaceFile("scripts/test-codex-workspace.mjs", failures);
 
 assertCondition(
   packageJson.scripts?.["check:workspace-coordination"] === "node ./scripts/check-workspace-coordination-report.mjs",
@@ -281,6 +283,7 @@ for (const packetField of [
   "- Current checkout:",
   "- Root status:",
   "- Active managed worktrees:",
+  "- Workspace stale-lane closeout readiness:",
   "- PRs waiting at merge gate:",
   "- Clean active lanes:",
   "- Dirty active lanes:",
@@ -297,6 +300,12 @@ for (const packetField of [
 for (const classification of [
   "clean active lane",
   "dirty active lane",
+  "workspaceCloseoutReadiness",
+  "currently owned active work",
+  "stale manager-owned lane",
+  "dirty preserve-first lane",
+  "clean closeout candidate",
+  "needs operator decision",
   "merge-gated lane",
   "local-only commit",
   "no-source refresh lane",
@@ -350,6 +359,7 @@ for (const requiredText of [
   "node ./scripts/codex-workspace.mjs coordination-report --json",
   "node ./scripts/codex-workspace.mjs coordination-report --summary-json",
   "bounded automation form",
+  "metadata-only coordination-report section",
   "full retained lane payload",
   "groups blocked packet and backlog statuses by count",
   "It must not create branches, worktrees, commits, PRs, merges, cleanup actions",
@@ -363,6 +373,34 @@ for (const requiredText of [
   "This workflow does not merge PRs, clean worktrees, delete branches",
 ]) {
   assertCondition(workflow.includes(requiredText), `Workspace coordination workflow must include ${requiredText}`, failures);
+}
+
+for (const scriptText of [
+  "workspaceCloseoutReadiness",
+  "buildWorkspaceCloseoutReadiness",
+  "workspace-closeout-readiness/v0",
+  "dirtyPreserveFirstLanes",
+  "dirty_preserve_first",
+  "stale_manager_owner",
+  "cleanCloseoutCandidates",
+  "clean_cleanup_status",
+  "metadataOnly",
+]) {
+  assertCondition(workspaceScript.includes(scriptText), `codex-workspace coordination report must preserve ${scriptText}`, failures);
+}
+
+for (const testText of [
+  "coordination-report classifies workspace stale-lane closeout readiness metadata only",
+  "readiness.counts.currentlyOwnedActiveWork === 1",
+  "readiness.counts.staleManagerOwnedLanes === 1",
+  "readiness.counts.dirtyPreserveFirstLanes === 1",
+  "readiness.counts.cleanCloseoutCandidates === 1",
+  "readiness.counts.needsOperatorDecision === 1",
+  "coordination-report closeout readiness fails closed for unsafe edge cases",
+  "coordination-report closeout readiness summary truncates bucket rows but keeps full counts",
+  "coordination closeout readiness report mutated manifests",
+]) {
+  assertCondition(workspaceTest.includes(testText), `codex-workspace tests must preserve ${testText}`, failures);
 }
 
 for (const storyText of [

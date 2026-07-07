@@ -296,6 +296,272 @@ try {
     }
   });
 
+  test("coordination-report classifies workspace stale-lane closeout readiness metadata only", () => {
+    const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-closeout-readiness-"));
+    const worktrees = [];
+    try {
+      const tasksDir = join(reportStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const cleanCurrent = createCoordinationReportGitWorktree("codex-closeout-current-");
+      const staleManager = createCoordinationReportGitWorktree("codex-closeout-manager-");
+      const dirtyPreserve = createCoordinationReportGitWorktree("codex-closeout-dirty-", { dirty: true });
+      const cleanupReady = createCoordinationReportGitWorktree("codex-closeout-cleanup-");
+      const operatorDecision = createCoordinationReportGitWorktree("codex-closeout-decision-");
+      worktrees.push(cleanCurrent, staleManager, dirtyPreserve, cleanupReady, operatorDecision);
+      const freshHeartbeat = new Date().toISOString();
+      const staleHeartbeat = "2026-07-01T18:00:00.000Z";
+
+      const manifests = [
+        {
+          task_id: "current-owned-clean",
+          title: "Current owned clean",
+          branch: "codex/current-owned-clean",
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-a",
+          worktree_path: cleanCurrent,
+          owner_updated_at: freshHeartbeat,
+        },
+        {
+          task_id: "stale-manager-clean",
+          title: "Stale manager clean",
+          branch: "codex/stale-manager-clean",
+          base_branch: "dev",
+          status: "active",
+          owner: "manager-control-plane",
+          worktree_path: staleManager,
+          owner_updated_at: staleHeartbeat,
+        },
+        {
+          task_id: "dirty-preserve-first",
+          title: "Dirty preserve first",
+          branch: "codex/dirty-preserve-first",
+          base_branch: "dev",
+          status: "active",
+          owner: "manager-control-plane",
+          worktree_path: dirtyPreserve,
+          owner_updated_at: staleHeartbeat,
+        },
+        {
+          task_id: "clean-cleanup-candidate",
+          title: "Clean cleanup candidate",
+          branch: "codex/clean-cleanup-candidate",
+          base_branch: "dev",
+          status: "merged",
+          owner: "runner-a",
+          worktree_path: cleanupReady,
+          owner_updated_at: freshHeartbeat,
+          pr_number: 321,
+          merged_at: freshHeartbeat,
+        },
+        {
+          task_id: "operator-decision-clean",
+          title: "Operator decision clean",
+          branch: "codex/operator-decision-clean",
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-b",
+          worktree_path: operatorDecision,
+          owner_updated_at: freshHeartbeat,
+        },
+      ];
+      for (const manifest of manifests) {
+        writeFileSync(join(tasksDir, `${manifest.task_id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      const before = taskSnapshot(tasksDir);
+
+      const result = run([
+        "coordination-report",
+        "--summary-json",
+        "--state-root",
+        reportStateRoot,
+        "--owner",
+        "runner-a",
+        "--stale-after-seconds",
+        "86400",
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      const readiness = packet.workspaceCloseoutReadiness;
+      const activeCurrentLane = packet.activeManagedWorktrees.find((lane) => lane.taskId === "current-owned-clean");
+      assert(activeCurrentLane.reasonCode === "active_current_owner", result.stdout || result.stderr);
+      assert(readiness.schemaVersion === "workspace-closeout-readiness/v0", result.stdout || result.stderr);
+      assert(readiness.metadataOnly === true, result.stdout || result.stderr);
+      assert(readiness.bucketPriority[0] === "dirtyPreserveFirstLanes", result.stdout || result.stderr);
+      assert(Array.isArray(readiness[readiness.bucketPriority[0]]), result.stdout || result.stderr);
+      assert(readiness.counts.currentlyOwnedActiveWork === 1, result.stdout || result.stderr);
+      assert(readiness.counts.staleManagerOwnedLanes === 1, result.stdout || result.stderr);
+      assert(readiness.counts.dirtyPreserveFirstLanes === 1, result.stdout || result.stderr);
+      assert(readiness.counts.cleanCloseoutCandidates === 1, result.stdout || result.stderr);
+      assert(readiness.counts.needsOperatorDecision === 1, result.stdout || result.stderr);
+      assert(readiness.currentlyOwnedActiveWork[0].taskId === "current-owned-clean", result.stdout || result.stderr);
+      assert(readiness.currentlyOwnedActiveWork[0].reasonCode === "current_owner_active_work", result.stdout || result.stderr);
+      assert(readiness.staleManagerOwnedLanes[0].taskId === "stale-manager-clean", result.stdout || result.stderr);
+      assert(readiness.staleManagerOwnedLanes[0].reasonCode === "stale_manager_owner", result.stdout || result.stderr);
+      assert(readiness.dirtyPreserveFirstLanes[0].taskId === "dirty-preserve-first", result.stdout || result.stderr);
+      assert(readiness.dirtyPreserveFirstLanes[0].dirtyPathCount === 1, result.stdout || result.stderr);
+      assert(readiness.cleanCloseoutCandidates[0].taskId === "clean-cleanup-candidate", result.stdout || result.stderr);
+      assert(readiness.cleanCloseoutCandidates[0].prNumber === 321, result.stdout || result.stderr);
+      assert(readiness.needsOperatorDecision[0].taskId === "operator-decision-clean", result.stdout || result.stderr);
+      assert(readiness.needsOperatorDecision[0].reasonCode === "owned_by_other_runner", result.stdout || result.stderr);
+      assert(!JSON.stringify(readiness).includes("uncommitted workspace content"), "readiness report retained dirty source content");
+      const textResult = run(["coordination-report", "--state-root", reportStateRoot, "--owner", "runner-a"]);
+      assert(textResult.code === 0, textResult.stderr || textResult.stdout);
+      assert(textResult.stdout.includes("- Workspace stale-lane closeout readiness:"), textResult.stdout || textResult.stderr);
+      assert(textResult.stdout.includes("stale manager-owned lanes"), textResult.stdout || textResult.stderr);
+      assert(textResult.stdout.includes("reason_code=stale_manager_owner"), textResult.stdout || textResult.stderr);
+      assert(taskSnapshot(tasksDir) === before, "coordination closeout readiness report mutated manifests");
+    } finally {
+      rmSync(reportStateRoot, { recursive: true, force: true });
+      for (const worktree of worktrees) {
+        rmSync(worktree, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("coordination-report closeout readiness fails closed for unsafe edge cases", () => {
+    const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-closeout-readiness-edge-"));
+    const worktrees = [];
+    try {
+      const tasksDir = join(reportStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const authorityBlocked = createCoordinationReportGitWorktree("codex-closeout-authority-");
+      const freshManager = createCoordinationReportGitWorktree("codex-closeout-fresh-manager-");
+      worktrees.push(authorityBlocked, freshManager);
+      const freshHeartbeat = new Date().toISOString();
+      const staleHeartbeat = "2026-07-01T18:00:00.000Z";
+      const missingWorktree = join(reportStateRoot, "missing-worktree");
+      const manifests = [
+        {
+          task_id: "missing-merged-evidence",
+          title: "Missing merged evidence",
+          branch: "codex/missing-merged-evidence",
+          base_branch: "dev",
+          status: "pr_open",
+          owner: "runner-a",
+          worktree_path: missingWorktree,
+          owner_updated_at: freshHeartbeat,
+          pr_number: 654,
+          merged_at: freshHeartbeat,
+        },
+        {
+          task_id: "authority-blocked-current",
+          title: "Authority blocked current",
+          branch: "codex/authority-blocked-current",
+          base_branch: "dev",
+          status: "blocked_authority",
+          owner: "runner-a",
+          worktree_path: authorityBlocked,
+          owner_updated_at: freshHeartbeat,
+        },
+        {
+          task_id: "fresh-manager-heartbeat",
+          title: "Fresh manager heartbeat",
+          branch: "codex/fresh-manager-heartbeat",
+          base_branch: "dev",
+          status: "active",
+          owner: "manager-control-plane",
+          worktree_path: freshManager,
+          owner_updated_at: staleHeartbeat,
+          last_heartbeat_at: freshHeartbeat,
+        },
+      ];
+      for (const manifest of manifests) {
+        writeFileSync(join(tasksDir, `${manifest.task_id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      const before = taskSnapshot(tasksDir);
+
+      const result = run([
+        "coordination-report",
+        "--summary-json",
+        "--state-root",
+        reportStateRoot,
+        "--owner",
+        "runner-a",
+        "--stale-after-seconds",
+        "86400",
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const readiness = JSON.parse(result.stdout).workspaceCloseoutReadiness;
+      assert(readiness.counts.currentlyOwnedActiveWork === 0, result.stdout || result.stderr);
+      assert(readiness.counts.staleManagerOwnedLanes === 0, result.stdout || result.stderr);
+      assert(readiness.counts.cleanCloseoutCandidates === 0, result.stdout || result.stderr);
+      assert(readiness.counts.needsOperatorDecision === 3, result.stdout || result.stderr);
+      assert(
+        readiness.needsOperatorDecision.some((lane) => lane.taskId === "missing-merged-evidence" && lane.reasonCode === "worktree_path_missing"),
+        result.stdout || result.stderr,
+      );
+      assert(
+        readiness.needsOperatorDecision.some((lane) => lane.taskId === "authority-blocked-current" && lane.reasonCode === "manifest_authority_blocked"),
+        result.stdout || result.stderr,
+      );
+      assert(
+        readiness.needsOperatorDecision.some((lane) => lane.taskId === "fresh-manager-heartbeat" && lane.reasonCode === "owned_by_other_runner"),
+        result.stdout || result.stderr,
+      );
+      assert(taskSnapshot(tasksDir) === before, "coordination edge readiness report mutated manifests");
+    } finally {
+      rmSync(reportStateRoot, { recursive: true, force: true });
+      for (const worktree of worktrees) {
+        rmSync(worktree, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("coordination-report closeout readiness summary truncates bucket rows but keeps full counts", () => {
+    const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-closeout-readiness-truncate-"));
+    const worktrees = [];
+    try {
+      const tasksDir = join(reportStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const freshHeartbeat = new Date().toISOString();
+      for (let index = 0; index < 11; index += 1) {
+        const taskId = `current-owned-clean-${index}`;
+        const worktree = createCoordinationReportGitWorktree(`codex-closeout-current-${index}-`);
+        worktrees.push(worktree);
+        writeFileSync(
+          join(tasksDir, `${taskId}.json`),
+          `${JSON.stringify(
+            {
+              task_id: taskId,
+              title: `Current owned clean ${index}`,
+              branch: `codex/current-owned-clean-${index}`,
+              base_branch: "dev",
+              status: "active",
+              owner: "runner-a",
+              worktree_path: worktree,
+              owner_updated_at: freshHeartbeat,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+
+      const result = run([
+        "coordination-report",
+        "--summary-json",
+        "--state-root",
+        reportStateRoot,
+        "--owner",
+        "runner-a",
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const readiness = JSON.parse(result.stdout).workspaceCloseoutReadiness;
+      assert(readiness.counts.currentlyOwnedActiveWork === 11, result.stdout || result.stderr);
+      assert(readiness.currentlyOwnedActiveWork.length === 10, result.stdout || result.stderr);
+      assert(readiness.currentlyOwnedActiveWorkTruncated === true, result.stdout || result.stderr);
+    } finally {
+      rmSync(reportStateRoot, { recursive: true, force: true });
+      for (const worktree of worktrees) {
+        rmSync(worktree, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("start dry-run defaults new work to dev when branch foundation exists", () => {
     const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
     try {
@@ -6518,6 +6784,18 @@ function cleanupWorkspaceDefaultBaseFixture(fixture) {
     return;
   }
   rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function createCoordinationReportGitWorktree(prefix, options = {}) {
+  const worktree = mkdtempSync(join(tmpdir(), prefix));
+  runGit(worktree, ["init", "-q"]);
+  runGit(worktree, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(worktree, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(worktree, "base.txt", "base\n", "base");
+  if (options.dirty) {
+    writeFileSync(join(worktree, "dirty.txt"), "uncommitted workspace content\n");
+  }
+  return worktree;
 }
 
 function createBranchCleanupFixture() {

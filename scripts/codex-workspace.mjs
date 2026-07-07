@@ -564,6 +564,7 @@ function buildCoordinationReportSummary(packet) {
     backlogStatusCounts: countByField(packet.backlogSummary, "status"),
     backlogClassificationStatusCounts: countByField(packet.backlogClassificationSummary, "status"),
     activeManagedWorktrees: packet.activeManagedWorktrees.map(summaryLane),
+    workspaceCloseoutReadiness: summarizeWorkspaceCloseoutReadiness(packet.workspaceCloseoutReadiness),
     prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.map(summaryLane),
     prStateReconciliation: packet.prStateReconciliation.slice(0, 10).map(summaryLane),
     prStateReconciliationTruncated: packet.prStateReconciliation.length > 10,
@@ -601,12 +602,12 @@ function reasonCodeForClassification(classification = {}) {
   if (reason === "manifest is authority-blocked") return "manifest_authority_blocked";
   if (reason === "worktree path is missing") return "worktree_path_missing";
   if (reason.startsWith("owner heartbeat older than ")) return "owner_heartbeat_stale";
+  if (reason === "owned by current runner") return "active_current_owner";
   if (reason.startsWith("owned by ")) return "owned_by_other_runner";
   if (reason === "PR is merged but cleanup is not closed") return "pr_merged_cleanup_pending";
   if (reason === "cleanup is partial" || status === "cleanup") return "cleanup_partial";
   if (reason === "PR is open") return "pr_open_delivery";
   if (reason === "active workspace has no owner") return "active_workspace_unowned";
-  if (reason === "owned by current runner") return "active_current_owner";
   if (reason === "safe backlog item is already complete and must not be requeued") return "safe_backlog_complete";
   if (reason === "safe backlog item is not dispatchable from generic continuation") return "safe_backlog_not_dispatchable";
   if (reason === "ready item has no source-owned lane start command") return "safe_backlog_missing_start_command";
@@ -644,10 +645,15 @@ function summaryLane(lane) {
     taskId: lane.taskId,
     status: lane.status,
     assignmentStatus: lane.assignmentStatus,
+    recommendation: lane.recommendation || null,
+    reasonCode: lane.reasonCode || null,
     branch: lane.branch,
     owner: lane.owner,
+    ownerUpdatedAt: lane.ownerUpdatedAt || null,
+    lastHeartbeatAt: lane.lastHeartbeatAt || null,
     worktreeExists: lane.worktreeExists,
     dirty: lane.dirty,
+    dirtyPathCount: lane.dirtyPathCount || 0,
     localOnlyCommits: lane.localOnlyCommits,
     prNumber: lane.prNumber,
     prState: lane.prState,
@@ -675,6 +681,7 @@ function buildCoordinationReportPacket(options = {}) {
   const prWaitingAtMergeGate = activeLanes.filter((lane) => lane.status === "pr_open");
   const prStateReconciliation = prWaitingAtMergeGate.filter((lane) => lane.prState === "merged_evidence_present");
   const cleanupCandidates = activeLanes.filter((lane) => lane.assignmentStatus === "cleanup" && !lane.dirty);
+  const workspaceCloseoutReadiness = buildWorkspaceCloseoutReadiness(activeLanes, context);
   const blockedApprovalPackets = [
     ...activeLanes.filter((lane) => String(lane.assignmentStatus).startsWith("blocked")),
     ...assignments
@@ -725,6 +732,7 @@ function buildCoordinationReportPacket(options = {}) {
       pathCount: rootStatus.lines.length,
     },
     activeManagedWorktrees: activeLanes,
+    workspaceCloseoutReadiness,
     prsWaitingAtMergeGate: prWaitingAtMergeGate,
     prStateReconciliation,
     cleanActiveLanes,
@@ -775,6 +783,7 @@ function printCoordinationReport(packet) {
   console.log(`- Current checkout: ${packet.currentCheckout.branch || "unknown"} at ${packet.currentCheckout.shortHead || "unknown"} (${packet.currentCheckout.path})`);
   console.log(`- Root status: ${packet.rootStatus.dirty ? `dirty (${packet.rootStatus.pathCount} path(s))` : "clean"}`);
   printCoordinationRows("- Active managed worktrees:", packet.activeManagedWorktrees, formatCoordinationLane);
+  printWorkspaceCloseoutReadiness(packet.workspaceCloseoutReadiness);
   printCoordinationRows("- PRs waiting at merge gate:", packet.prsWaitingAtMergeGate, formatCoordinationLane);
   printCoordinationRows(
     "- PR state reconciliation:",
@@ -806,6 +815,23 @@ function formatCoordinationLane(lane) {
   return `${lane.taskId} | ${lane.status} | ${lane.branch} | ${lane.cleanState} | assignment=${lane.assignmentStatus} | next=${lane.nextAction}`;
 }
 
+function printWorkspaceCloseoutReadiness(readiness) {
+  console.log("- Workspace stale-lane closeout readiness:");
+  for (const [label, rows] of [
+    ["currently owned active work", readiness.currentlyOwnedActiveWork],
+    ["stale manager-owned lanes", readiness.staleManagerOwnedLanes],
+    ["dirty preserve-first lanes", readiness.dirtyPreserveFirstLanes],
+    ["clean closeout candidates", readiness.cleanCloseoutCandidates],
+    ["needs operator decision", readiness.needsOperatorDecision],
+  ]) {
+    printCoordinationRows(`  - ${label}:`, rows, formatWorkspaceCloseoutReadinessLane);
+  }
+}
+
+function formatWorkspaceCloseoutReadinessLane(lane) {
+  return `${lane.taskId} | ${lane.branch} | owner=${lane.owner || "unowned"} | status=${lane.manifestStatus} | clean=${lane.cleanState} | pr=${lane.prState} | reason_code=${lane.reasonCode} | next=${lane.nextAction}`;
+}
+
 function coordinationLanePacket(manifest, context) {
   const classification = classifyWorkspaceAssignment(manifest, context);
   const worktreeExists = Boolean(manifest.worktree_path && existsSync(manifest.worktree_path));
@@ -818,11 +844,15 @@ function coordinationLanePacket(manifest, context) {
     assignmentStatus: classification.status,
     reason: classification.reason,
     nextAction: classification.nextAction,
+    reasonCode: reasonCodeForClassification(classification),
     branch: manifest.branch,
     owner: manifest.owner || null,
+    ownerUpdatedAt: manifest.owner_updated_at || manifest.updated_at || manifest.created_at || null,
+    lastHeartbeatAt: manifest.last_heartbeat_at || manifest.owner_updated_at || manifest.updated_at || null,
     worktreePath: manifest.worktree_path,
     worktreeExists,
     dirty: status.any,
+    dirtyPathCount: status.lines.length,
     cleanState: status.any ? `dirty:${status.lines.length}` : "clean",
     staged: status.staged,
     unstaged: status.unstaged,
@@ -832,6 +862,151 @@ function coordinationLanePacket(manifest, context) {
     prState: coordinationPrState(manifest),
     prStateReason: coordinationPrStateReason(manifest),
     prStateNextAction: coordinationPrStateNextAction(manifest),
+  };
+}
+
+function buildWorkspaceCloseoutReadiness(activeLanes, context) {
+  const buckets = {
+    schemaVersion: "workspace-closeout-readiness/v0",
+    metadataOnly: true,
+    bucketPriority: [
+      "dirtyPreserveFirstLanes",
+      "cleanCloseoutCandidates",
+      "currentlyOwnedActiveWork",
+      "staleManagerOwnedLanes",
+      "needsOperatorDecision",
+    ],
+    generatedAt: context.generatedAt.toISOString(),
+    staleAfterSeconds: context.staleAfterSeconds,
+    counts: {
+      currentlyOwnedActiveWork: 0,
+      staleManagerOwnedLanes: 0,
+      dirtyPreserveFirstLanes: 0,
+      cleanCloseoutCandidates: 0,
+      needsOperatorDecision: 0,
+    },
+    reasonCodeCounts: {},
+    currentlyOwnedActiveWork: [],
+    staleManagerOwnedLanes: [],
+    dirtyPreserveFirstLanes: [],
+    cleanCloseoutCandidates: [],
+    needsOperatorDecision: [],
+  };
+
+  for (const lane of activeLanes) {
+    const classification = classifyWorkspaceCloseoutReadinessLane(lane, context);
+    const row = {
+      taskId: lane.taskId,
+      branch: lane.branch || null,
+      owner: lane.owner || null,
+      manifestStatus: lane.status || "unknown",
+      assignmentStatus: lane.assignmentStatus || "unknown",
+      ownerUpdatedAt: lane.ownerUpdatedAt || null,
+      lastHeartbeatAt: lane.lastHeartbeatAt || null,
+      worktreeExists: lane.worktreeExists,
+      dirty: lane.dirty,
+      dirtyPathCount: lane.dirtyPathCount || 0,
+      cleanState: lane.cleanState,
+      localOnlyCommits: lane.localOnlyCommits || 0,
+      prNumber: lane.prNumber || null,
+      prState: lane.prState || "not_applicable",
+      prStateReason: lane.prStateReason || null,
+      recommendation: classification.recommendation,
+      reasonCode: classification.reasonCode,
+      reason: classification.reason,
+      nextAction: classification.nextAction,
+    };
+    buckets[classification.bucket].push(row);
+    buckets.counts[classification.bucket] += 1;
+    buckets.reasonCodeCounts[row.reasonCode] = (buckets.reasonCodeCounts[row.reasonCode] || 0) + 1;
+  }
+
+  return buckets;
+}
+
+function classifyWorkspaceCloseoutReadinessLane(lane, context) {
+  if (lane.dirty) {
+    return {
+      bucket: "dirtyPreserveFirstLanes",
+      recommendation: "preserve_first",
+      reasonCode: "dirty_preserve_first",
+      reason: "worktree has uncommitted paths; preserve or inspect before any closeout decision",
+      nextAction: "preserve dirty work and ask the owner or operator before closeout",
+    };
+  }
+
+  if (!lane.worktreeExists) {
+    return {
+      bucket: "needsOperatorDecision",
+      recommendation: "operator_decision_required",
+      reasonCode: lane.reasonCode || "worktree_path_missing",
+      reason: lane.reason || "worktree path is missing",
+      nextAction: lane.nextAction || "run workspace doctor or rebuild-index before closeout decisions",
+    };
+  }
+
+  if (lane.assignmentStatus === "cleanup" || lane.prState === "merged_evidence_present") {
+    return {
+      bucket: "cleanCloseoutCandidates",
+      recommendation: "closeout_readiness_check",
+      reasonCode: lane.prState === "merged_evidence_present" ? "clean_pr_merged_evidence_present" : "clean_cleanup_status",
+      reason: "lane is clean and has merged or cleanup evidence",
+      nextAction: "run the matching cleanup dry-run and prove branch/worktree evidence before mutation",
+    };
+  }
+
+  if (lane.owner === context.currentOwner && ["active", "delivery"].includes(lane.assignmentStatus)) {
+    return {
+      bucket: "currentlyOwnedActiveWork",
+      recommendation: "continue_current_owner_work",
+      reasonCode: "current_owner_active_work",
+      reason: "lane is owned by the current runner and is clean",
+      nextAction: "continue the lane or refresh heartbeat evidence",
+    };
+  }
+
+  if (isManagerOwner(lane.owner) && lane.assignmentStatus === "blocked_stale_owner_needs_takeover") {
+    return {
+      bucket: "staleManagerOwnedLanes",
+      recommendation: "operator_stale_manager_review",
+      reasonCode: "stale_manager_owner",
+      reason: `manager-owned lane heartbeat is older than ${context.staleAfterSeconds} seconds`,
+      nextAction: "prepare takeover or closeout evidence; do not mutate without operator approval",
+    };
+  }
+
+  return {
+    bucket: "needsOperatorDecision",
+    recommendation: "operator_decision_required",
+    reasonCode: lane.reasonCode || "operator_decision_required",
+    reason: lane.reason || "lane does not meet automatic closeout-readiness criteria",
+    nextAction: lane.nextAction || "inspect lane metadata before action",
+  };
+}
+
+function isManagerOwner(owner) {
+  return /^manager(?:-|\/|$)/.test(String(owner || ""));
+}
+
+function summarizeWorkspaceCloseoutReadiness(readiness) {
+  return {
+    schemaVersion: readiness.schemaVersion,
+    metadataOnly: readiness.metadataOnly,
+    bucketPriority: readiness.bucketPriority,
+    generatedAt: readiness.generatedAt,
+    staleAfterSeconds: readiness.staleAfterSeconds,
+    counts: readiness.counts,
+    reasonCodeCounts: readiness.reasonCodeCounts,
+    currentlyOwnedActiveWork: readiness.currentlyOwnedActiveWork.slice(0, 10),
+    currentlyOwnedActiveWorkTruncated: readiness.currentlyOwnedActiveWork.length > 10,
+    staleManagerOwnedLanes: readiness.staleManagerOwnedLanes.slice(0, 10),
+    staleManagerOwnedLanesTruncated: readiness.staleManagerOwnedLanes.length > 10,
+    dirtyPreserveFirstLanes: readiness.dirtyPreserveFirstLanes.slice(0, 10),
+    dirtyPreserveFirstLanesTruncated: readiness.dirtyPreserveFirstLanes.length > 10,
+    cleanCloseoutCandidates: readiness.cleanCloseoutCandidates.slice(0, 10),
+    cleanCloseoutCandidatesTruncated: readiness.cleanCloseoutCandidates.length > 10,
+    needsOperatorDecision: readiness.needsOperatorDecision.slice(0, 10),
+    needsOperatorDecisionTruncated: readiness.needsOperatorDecision.length > 10,
   };
 }
 
@@ -4883,7 +5058,7 @@ function classifyWorkspaceAssignment(manifest, context) {
 }
 
 function laneOwnerIsStale(manifest, context) {
-  const timestamp = Date.parse(manifest.owner_updated_at || manifest.updated_at || manifest.created_at || "");
+  const timestamp = Date.parse(manifest.last_heartbeat_at || manifest.owner_updated_at || manifest.updated_at || manifest.created_at || "");
   if (!Number.isFinite(timestamp)) {
     return true;
   }
