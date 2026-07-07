@@ -129,6 +129,19 @@ worktree before collecting changed files.
 Record the second measurement PR after the `$RUNNER_TEMP` fix with the observed
 check durations and skipped jobs before starting the static-bundle split.
 
+Observed second measurement result, PR #403:
+
+- `changes`: pass, 6s
+- `fast`: pass, 1m17s
+- `check`: pass, 3s
+- `static`: skipped
+- `javascript`: skipped
+- `supervisor`: skipped
+- `full`: skipped
+
+This proves focused docs/planner-policy PRs no longer pay the static,
+JavaScript build, or supervisor-profile wait.
+
 ## Stop Lines
 
 Do not remove existing static coverage just to reduce time. First introduce the
