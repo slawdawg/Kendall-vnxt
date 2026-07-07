@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -76,7 +76,15 @@ function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
   const path = join(process.cwd(), relativePath);
   mkdirSync(dirname(path), { recursive: true });
   if (!existsSync(path)) {
-    writeFileSync(path, content);
+    const tmpPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+    writeFileSync(tmpPath, content);
+    try {
+      linkSync(tmpPath, path);
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    } finally {
+      rmSync(tmpPath, { force: true });
+    }
   }
   return relativePath;
 }
@@ -255,6 +263,60 @@ function readyDispatchPreviewFixture(overrides = {}) {
     },
     counts: { total: 1, dispatchable: 1, active: 0, blocked: 0 },
     mutation: "none; dry-run summary only",
+    ...overrides,
+  };
+}
+
+function fastCycleContext(overrides = {}) {
+  const defaultAssignmentSummary = {
+    summary: {
+      backlogStatusCounts: { assignable: 0, closed: 0 },
+      laneAssignmentStatusCounts: { active: 0 },
+      workspaceAssignmentStatusCounts: { active: 0 },
+    },
+  };
+  return {
+    preflightStatus: { status: "ready", summary: { ok: true }, blockers: [], warnings: [] },
+    assignmentSummary: defaultAssignmentSummary,
+    sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+    sourcePlanningState: { sprintStatus: sprintStatusFixture() },
+    tmuxSummary: { available: true, paneCount: 0, managerOwnedPanes: 0, unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+    cleanupPlan: { status: "ready", summary: { mutationMode: "none", rawPayloadRetained: false }, blockers: [], warnings: [], nextActions: [] },
+    deliveryPlan: { status: "ready", summary: { mutationMode: "none", rawPayloadRetained: false }, blockers: [], warnings: [], nextActions: [] },
+    recoveryPlan: { status: "ready", summary: { state: "not_requested" }, blockers: [], warnings: [], nextActions: [] },
+    workerProgressStatus: { status: "ready", summary: { workerProgress: [] }, blockers: [], warnings: [], nextActions: [] },
+    laneAdvanceStatus: { status: "ready", summary: { readyLaneCount: 0, readyLanes: [] }, blockers: [], warnings: [], nextActions: [] },
+    ...overrides,
+  };
+}
+
+function buildFastCyclePacket(options = {}, context = {}) {
+  return buildCyclePacket(options, fastCycleContext(context));
+}
+
+function readyContinuousSubplans(overrides = {}) {
+  return {
+    promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] },
+    submitPendingPlan: { status: "ready", summary: { planned: 0 }, warnings: [], nextActions: [] },
+    ...overrides,
+  };
+}
+
+function readyStaleOwnerInspectionFixture(overrides = {}) {
+  return {
+    ok: true,
+    status: "ready",
+    summary: {
+      runId: "manager-test",
+      targetCount: 0,
+      cleanupCandidateCount: 0,
+      dirtyWorkspaceCount: 0,
+      takeoverApprovalCandidateCount: 0,
+      inspections: [],
+      ...overrides.summary,
+    },
+    blockers: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -4814,7 +4876,7 @@ test("cycle packet exposes bounded dispatcher refill watermark state", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-refill-watermark-"));
   try {
     seedManagerLedgerForPreflight(stateRoot);
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { runId: "manager-test", stateRoot },
       {
         dispatchPreview: {
@@ -4860,7 +4922,7 @@ test("cycle refill watermark trusts dispatcher queue truth over assignment inven
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-refill-authority-"));
   try {
     seedManagerLedgerForPreflight(stateRoot);
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { runId: "manager-test", stateRoot },
       {
         dispatchPreview: {
@@ -11779,6 +11841,7 @@ test("continuous prompt-idle handoff action uses prompt-idle signal gate", () =>
   const plan = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       promptProbe: {
         status: "ready",
         summary: {
@@ -11827,6 +11890,7 @@ test("continuous dispatcher truth keeps dispatch gated behind operational readin
   const plan = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       promptProbe: {
         status: "ready",
         summary: {
@@ -13141,7 +13205,7 @@ test("cycle packet records schema gaps instead of inferring hidden progress", ()
       currentPhase: "unknown",
       nextAction: "refresh dispatcher summary",
     });
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test", apply: true },
       {
         usageContext: { status: "unknown", summary: { state: "unknown" } },
@@ -13292,7 +13356,7 @@ test("cycle packet scrubs raw injected summaries and continuous actions", () => 
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-scrub-"));
   try {
     seedManagerLedgerForPreflight(stateRoot);
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 1, runId: "manager-test" },
       {
         usageContext: { status: "normal", summary: { state: "normal", rawLog: "raw prompt provider payload sk-cycle" } },
@@ -13317,6 +13381,7 @@ test("cycle packet scrubs raw injected summaries and continuous actions", () => 
     const continuous = buildContinuousRunPlan(
       { stateRoot, desiredWorkers: 1, runId: "manager-test" },
       {
+        ...readyContinuousSubplans(),
         cyclePacket: {
           ...cycle,
           nextActions: [
@@ -13327,7 +13392,6 @@ test("cycle packet scrubs raw injected summaries and continuous actions", () => 
             },
           ],
         },
-        promptProbe: { status: "ready", summary: { probes: [] }, warnings: [] },
       },
     );
 
@@ -13545,7 +13609,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
       fakeWorkerHarness: passedFakeWorkerHarness,
     };
 
-    const conserve = buildCyclePacket(
+    const conserve = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13557,7 +13621,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(conserve.summary.dispatchPosture.modelQualityPolicy, "preserve_task_fit_quality");
     assert.equal(conserve.summary.dispatchPosture.newDispatchAllowed, true);
 
-    const drain = buildCyclePacket(
+    const drain = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13572,11 +13636,11 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(drain.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
     const drainContinuous = buildContinuousRunPlan(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
-      { cyclePacket: drain, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+      { cyclePacket: drain, ...readyContinuousSubplans() },
     );
     assert.notEqual(drainContinuous.summary.selectedAction?.code, "continuous-dispatch-apply");
 
-    const resourceOnly = buildCyclePacket(
+    const resourceOnly = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13591,11 +13655,11 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(resourceOnly.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
     const resourceOnlyContinuous = buildContinuousRunPlan(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
-      { cyclePacket: resourceOnly, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+      { cyclePacket: resourceOnly, ...readyContinuousSubplans() },
     );
     assert.notEqual(resourceOnlyContinuous.summary.selectedAction?.code, "continuous-dispatch-apply");
 
-    const weeklyPressure = buildCyclePacket(
+    const weeklyPressure = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13616,7 +13680,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.ok(weeklyPressure.summary.dispatchPosture.reasons.some((reason) => reason.code === "weekly-usage-pressure"));
     assert.equal(weeklyPressure.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
 
-    const topLevelWeeklyPressure = buildCyclePacket(
+    const topLevelWeeklyPressure = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13629,7 +13693,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(topLevelWeeklyPressure.summary.dispatchPosture.newDispatchAllowed, false);
     assert.equal(topLevelWeeklyPressure.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
 
-    const injectedManagerOnly = buildCyclePacket(
+    const injectedManagerOnly = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13647,7 +13711,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(injectedManagerOnly.summary.usage.weekly.state, "normal");
     assert.equal(injectedManagerOnly.summary.dispatchPosture.newDispatchAllowed, false);
 
-    const blocked = buildCyclePacket(
+    const blocked = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13659,7 +13723,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(blocked.summary.dispatchPosture.newDispatchAllowed, false);
     assert.ok(blocked.blockers.some((blocker) => blocker.code === "dispatch-posture-blocked"));
 
-    const workerReady = buildCyclePacket(
+    const workerReady = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13671,7 +13735,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.ok(workerReady.warnings.some((warning) => warning.code === "tmux-unmanaged-orientation-evidence"));
     assert.equal(workerReady.summary.workers.lifecyclePlan.startWarmCandidates.length, 1);
 
-    const refillAware = buildCyclePacket(
+    const refillAware = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
         ...baseContext,
@@ -13702,7 +13766,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.equal(refillAware.summary.runway.refillNeeded, 5);
     assert.equal(refillAware.summary.workers.targets.safeWorkSupply, 1);
 
-    const frictionAttention = buildCyclePacket(
+    const frictionAttention = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test", failureBudget: 3 },
       {
         ...baseContext,
@@ -13719,7 +13783,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
     assert.ok(frictionAttention.summary.failureLoops.some((loop) => loop.action === "park_lane"));
     assert.match(frictionAttention.summary.report, /Park the lane/);
 
-    const unsafeQuestionCycle = buildCyclePacket(
+    const unsafeQuestionCycle = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 6, runId: "manager-test", failureBudget: 3 },
       {
         ...baseContext,
@@ -15462,6 +15526,11 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   const reviewStoryPath = "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md";
   const noReviewSprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-continuous-no-review-test.yaml";
   const reviewStateRoot = mkdtempSync(join(tmpdir(), "manager-continuous-review-"));
+  const continuousRunPlan = (options = {}, context = {}) => buildContinuousRunPlan(options, {
+    promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] },
+    submitPendingPlan: { status: "ready", summary: { planned: 0 }, warnings: [], nextActions: [] },
+    ...context,
+  });
   try {
     writeFileSync(
       reviewSprintPath,
@@ -15488,7 +15557,46 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       ].join("\n"),
     );
 
-  const submitPlan = buildContinuousRunPlan(
+  const reviewRowWithoutProgressPlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-review-row-only", stateRoot: reviewStateRoot },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          runway: { sourcePlanning: { sprintStatus: { path: reviewSprintPath } } },
+          workerProgress: {
+            workerProgress: [
+              {
+                workerId: "codex-reviewer",
+                sessionName: "codex-reviewer",
+                assignmentId: "bmad-1-1-reviewer-lane",
+                progressState: "delivery_gate_ready",
+                checkpointCount: 1,
+              },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: "Run bmad-create-story to create source-owned safe backlog work.",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(reviewRowWithoutProgressPlan.summary.selectedAction.code, "continuous-worker-code-review-request");
+  assert.match(reviewRowWithoutProgressPlan.summary.selectedAction.dryRunCommand, /manager-worker-code-review\.mjs/);
+
+  const submitPlan = continuousRunPlan(
     { maxIterations: 2, intervalMs: 1000, heartbeatEvery: 3 },
     {
       cyclePacket: {
@@ -15526,7 +15634,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.match(submitPlan.summary.selectedAction.dryRunCommand, /manager-worker-submit-pending\.mjs --summary-json --limit 6/);
   assert.equal(submitPlan.summary.applySelectedAction, null);
 
-  const pendingBeforeHandoffPlan = buildContinuousRunPlan(
+  const pendingBeforeHandoffPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15569,7 +15677,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.match(pendingBeforeHandoffPlan.summary.selectedAction.dryRunCommand, /manager-worker-submit-pending\.mjs --summary-json --limit 1/);
   assert.equal(pendingBeforeHandoffPlan.summary.applySelectedAction, null);
 
-  const defaultCadencePlan = buildContinuousRunPlan(
+  const defaultCadencePlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15589,7 +15697,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(defaultCadencePlan.summary.intervalMs, 60000);
 
-  const blockedCyclePlan = buildContinuousRunPlan(
+  const blockedCyclePlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15612,7 +15720,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(blockedCyclePlan.summary.selectedAction, null);
   assert.equal(blockedCyclePlan.nextActions[0].code, "continuous-blocked");
 
-  const signalPlan = buildContinuousRunPlan(
+  const signalPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15650,7 +15758,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.match(signalPlan.summary.selectedAction.dryRunCommand, /manager-worker-progress-signal\.mjs --summary-json --limit 2/);
   assert.equal(signalPlan.summary.applySelectedAction, null);
 
-  const questionPlan = buildContinuousRunPlan(
+  const questionPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15697,7 +15805,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(questionPlan.summary.reviewResourcePolicy.managerLoopBinding.operatorInterruptionCount, 0);
   assert.match(questionPlan.summary.reviewResourcePolicy.managerLoopBinding.nextManagerAction, /no operator interruption/i);
 
-  const operatorInterruptionQuestionPlan = buildContinuousRunPlan(
+  const operatorInterruptionQuestionPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15739,7 +15847,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(operatorInterruptionQuestionPlan.summary.allowedActionCount, 0);
   assert.equal(operatorInterruptionQuestionPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const blockedQuestionFallsThroughToHandoffPlan = buildContinuousRunPlan(
+  const blockedQuestionFallsThroughToHandoffPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15781,7 +15889,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(blockedQuestionFallsThroughToHandoffPlan.summary.allowedActionCount, 0);
   assert.equal(blockedQuestionFallsThroughToHandoffPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const questionBeatsRecoveryAndRefillPlan = buildContinuousRunPlan(
+  const questionBeatsRecoveryAndRefillPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15834,7 +15942,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(questionBeatsRecoveryAndRefillPlan.summary.allowedActionCount, 0);
   assert.equal(questionBeatsRecoveryAndRefillPlan.summary.eligibleActionCount, 4);
 
-  const warmPlan = buildContinuousRunPlan(
+  const warmPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15867,7 +15975,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(warmPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-warm.mjs --summary-json --run-id 'manager-test' --limit 1 --state-root '/tmp/manager-state'");
   assert.equal(warmPlan.summary.applySelectedAction, null);
 
-  const handoffPlan = buildContinuousRunPlan(
+  const handoffPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15900,7 +16008,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(handoffPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-handoff.mjs --summary-json --limit 1 --usage-state normal --resource-state normal");
   assert.equal(handoffPlan.summary.applySelectedAction, null);
 
-  const recoveryPlan = buildContinuousRunPlan(
+  const recoveryPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15940,7 +16048,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(recoveryPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-recovery-inspection.mjs --summary-json --run-id 'manager-test'");
   assert.equal(recoveryPlan.summary.applySelectedAction, null);
 
-  const retirePlan = buildContinuousRunPlan(
+  const retirePlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -15975,7 +16083,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(retirePlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1");
   assert.equal(retirePlan.summary.applySelectedAction, null);
 
-  const laneAdvancePlan = buildContinuousRunPlan(
+  const laneAdvancePlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16006,7 +16114,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(laneAdvancePlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1");
   assert.equal(laneAdvancePlan.summary.applySelectedAction, null);
 
-  const laneAdvanceWithWorkerActionPlan = buildContinuousRunPlan(
+  const laneAdvanceWithWorkerActionPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16053,7 +16161,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       join(reviewResultDir, "bmad-97-2-manager-continuous-review-gate.md"),
       "Status: PASS\n\nNo blocking findings in compact delegated review result.\n",
     );
-    const freshReviewLaneAdvancePlan = buildContinuousRunPlan(
+    const freshReviewLaneAdvancePlan = continuousRunPlan(
       {},
       {
         promptProbe: {
@@ -16136,7 +16244,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       join(reviewResultDir, "bmad-97-2-manager-continuous-review-gate.md"),
       "Status: FAIL\n\n- [High] Fix missing assertion at `src/app.js:12`.\n",
     );
-    const failedReviewFeedbackPlan = buildContinuousRunPlan(
+    const failedReviewFeedbackPlan = continuousRunPlan(
       {},
       {
         cyclePacket: {
@@ -16194,7 +16302,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     rmSync(failedReviewStateRoot, { recursive: true, force: true });
   }
 
-  const promptIdleCompletedPlan = buildContinuousRunPlan(
+  const promptIdleCompletedPlan = continuousRunPlan(
     {},
     {
       promptProbe: {
@@ -16267,7 +16375,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(promptIdleCompletedPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
   assert.equal(promptIdleCompletedPlan.summary.applySelectedAction, null);
 
-  const alreadyAdvancedReviewPlan = buildContinuousRunPlan(
+  const alreadyAdvancedReviewPlan = continuousRunPlan(
     {},
     {
       promptProbe: {
@@ -16334,7 +16442,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(alreadyAdvancedReviewPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-code-review.mjs --summary-json --run-id 'manager-test' --assignment-id 'bmad-97-2-manager-continuous-review-gate'");
   assert.equal(alreadyAdvancedReviewPlan.summary.applySelectedAction, null);
 
-  const openFeedbackReviewPlan = buildContinuousRunPlan(
+  const openFeedbackReviewPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16384,7 +16492,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(openFeedbackReviewPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
   assert.equal(openFeedbackReviewPlan.summary.applySelectedAction, null);
 
-  const promptIdleCheckpointPlan = buildContinuousRunPlan(
+  const promptIdleCheckpointPlan = continuousRunPlan(
     {},
     {
       promptProbe: {
@@ -16425,7 +16533,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(promptIdleCheckpointPlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-progress-signal.mjs --summary-json --limit 1 --prompt-idle --run-id 'manager-test'");
   assert.equal(promptIdleCheckpointPlan.summary.applySelectedAction, null);
 
-  const freshPromptIdleCheckpointPlan = buildContinuousRunPlan(
+  const freshPromptIdleCheckpointPlan = continuousRunPlan(
     {},
     {
       promptProbe: {
@@ -16465,7 +16573,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(freshPromptIdleCheckpointPlan.summary.selectedAction, null);
   assert.equal(freshPromptIdleCheckpointPlan.nextActions[0].code, "continuous-monitor");
 
-  const handoffBeforeDispatchPlan = buildContinuousRunPlan(
+  const handoffBeforeDispatchPlan = continuousRunPlan(
     {},
     {
       handoffPlan: {
@@ -16517,7 +16625,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(handoffBeforeDispatchPlan.summary.selectedAction, null);
   assert.equal(handoffBeforeDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const refillPlan = buildContinuousRunPlan(
+  const refillPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16555,7 +16663,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(refillPlan.summary.selectedAction.authority, "source-owned-refill-planning-existing-gates");
   assert.equal(refillPlan.summary.selectedAction.mutationClass, "local_bmad_refill_artifacts");
 
-  const reviewWorkflowRefillPlan = buildContinuousRunPlan(
+  const reviewWorkflowRefillPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16606,7 +16714,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.mutationClass, "manager_owned_worker_code_review_delegation");
   assert.equal(reviewWorkflowRefillPlan.summary.selectedAction.authority, "manager-owned-worker-code-review-delegation-existing-gates");
 
-  const reviewWorkflowNoReviewerPlan = buildContinuousRunPlan(
+  const reviewWorkflowNoReviewerPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16654,7 +16762,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     "# Prepared delegated review request\n\ncontractVersion: worker_code_review_request.v2\n",
     "utf8",
   );
-  const staleReviewResendPlan = buildContinuousRunPlan(
+  const staleReviewResendPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16717,7 +16825,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
   const twoMinutesAgo = new Date(Date.now() - 120_000);
   utimesSync(defaultCooldownRequestPath, twoMinutesAgo, twoMinutesAgo);
-  const defaultCooldownPlan = buildContinuousRunPlan(
+  const defaultCooldownPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16784,7 +16892,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     ].join("\n"),
     "utf8",
   );
-  const freshPeerRequestPlan = buildContinuousRunPlan(
+  const freshPeerRequestPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16841,7 +16949,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.match(freshPeerRequestPlan.summary.selectedAction.dryRunCommand, /manager-worker-code-review\.mjs/);
   assert.equal(freshPeerRequestPlan.summary.applySelectedAction, null);
 
-  const gatedNeedsReviewRefillPlan = buildContinuousRunPlan(
+  const gatedNeedsReviewRefillPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16876,7 +16984,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(gatedNeedsReviewRefillPlan.nextActions[0].code, "continuous-attention-monitor");
   assert.match(gatedNeedsReviewRefillPlan.nextActions[0].nextAction, /needs_review/);
 
-  const refillBeforeProgressPlan = buildContinuousRunPlan(
+  const refillBeforeProgressPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16907,7 +17015,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(refillBeforeProgressPlan.summary.selectedAction.code, "continuous-worker-progress-signal");
 
-  const dispatchPlan = buildContinuousRunPlan(
+  const dispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16941,7 +17049,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.match(dispatchPlan.summary.selectedAction.dryRunCommand, /codex-workspace\.mjs dispatch-next --dry-run --summary-json/);
   assert.equal(dispatchPlan.summary.applySelectedAction, null);
 
-  const dispatchWithWarmCapacityPlan = buildContinuousRunPlan(
+  const dispatchWithWarmCapacityPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -16973,7 +17081,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(dispatchWithWarmCapacityPlan.summary.selectedAction.code, "continuous-dispatch-apply");
 
-  const dispatchBeforePromptRepairPlan = buildContinuousRunPlan(
+  const dispatchBeforePromptRepairPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17020,7 +17128,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.usefulWorkActions, 0);
   assert.equal(dispatchBeforePromptRepairPlan.summary.usefulWorkPolicy.managerRepairActions, 1);
 
-  const dispatchBeforeChurnedPromptRepairPlan = buildContinuousRunPlan(
+  const dispatchBeforeChurnedPromptRepairPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17068,7 +17176,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(dispatchBeforeChurnedPromptRepairPlan.summary.codexAdvisor.recommendations[0].recommendedResponse, "park_or_degrade_capability");
   assert.equal(dispatchBeforeChurnedPromptRepairPlan.nextActions[0].code, "continuous-dry-run-ready");
 
-  const parkedTmuxStillDispatchesPlan = buildContinuousRunPlan(
+  const parkedTmuxStillDispatchesPlan = continuousRunPlan(
     {},
     {
       managerCapabilityPosture: {
@@ -17126,7 +17234,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(parkedTmuxStillDispatchesPlan.summary.capabilityHolds.heldActions[0].code, "continuous-worker-prompt-probe");
   assert.equal(parkedTmuxStillDispatchesPlan.warnings.some((warning) => warning.code === "capability_posture_hold"), true);
 
-  const parkedDispatchStillRefillsPlan = buildContinuousRunPlan(
+  const parkedDispatchStillRefillsPlan = continuousRunPlan(
     {},
     {
       managerCapabilityPosture: {
@@ -17177,7 +17285,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(parkedDispatchStillRefillsPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "dispatchApply"), true);
   assert.equal(parkedDispatchStillRefillsPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("dispatchApply"), true);
 
-  const parkedReviewDelegationStillAdvancesPlan = buildContinuousRunPlan(
+  const parkedReviewDelegationStillAdvancesPlan = continuousRunPlan(
     {},
     {
       managerCapabilityPosture: {
@@ -17238,7 +17346,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "reviewDelegation"), true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("reviewDelegation"), true);
 
-  const fullCapacityDispatchPlan = buildContinuousRunPlan(
+  const fullCapacityDispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17271,7 +17379,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(fullCapacityDispatchPlan.summary.selectedAction, null);
   assert.equal(fullCapacityDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const warmCapacityDispatchPlan = buildContinuousRunPlan(
+  const warmCapacityDispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17304,7 +17412,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(warmCapacityDispatchPlan.summary.selectedAction, null);
   assert.equal(warmCapacityDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const gatedDispatchCapabilityPlan = buildContinuousRunPlan(
+  const gatedDispatchCapabilityPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17546,7 +17654,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       }),
     ],
   ]) {
-    const invalidReadinessDispatchPlan = buildContinuousRunPlan(
+    const invalidReadinessDispatchPlan = continuousRunPlan(
       {},
       { cyclePacket: dispatchCycle(operationalActions) },
     );
@@ -17554,7 +17662,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     assert.equal(invalidReadinessDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
   }
 
-  const untrustedDispatchPlan = buildContinuousRunPlan(
+  const untrustedDispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: dispatchCycle(operationalActionsFixture()),
@@ -17564,7 +17672,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(untrustedDispatchPlan.summary.selectedAction, null);
   assert.equal(untrustedDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const readOnlyApprovedDispatchPlan = buildContinuousRunPlan(
+  const readOnlyApprovedDispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: dispatchCycle(operationalActionsFixture({
@@ -17601,7 +17709,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       ],
     },
   });
-  const selfReportedApprovedDispatchPlan = buildContinuousRunPlan(
+  const selfReportedApprovedDispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: dispatchCycle(approvedDispatchReadiness),
@@ -17676,7 +17784,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     assert.equal(trustedCapability.targetId, "lane-ready");
     assert.equal(trustedDispatchCycle.summary.continuation.dispatchApplyAllowed, true);
     assert.ok(trustedDispatchCycle.nextActions.some((action) => action.code === "dispatch-preview-ready"));
-    const trustedContinuous = buildContinuousRunPlan(
+    const trustedContinuous = continuousRunPlan(
       {},
       { cyclePacket: trustedDispatchCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
     );
@@ -17684,7 +17792,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
     const mutatedCapabilityCycle = buildTrustedDispatchCycle();
     mutatedCapabilityCycle.summary.operationalActions.actionCapabilities.find((capability) => capability.actionId === "dispatch_apply").targetId = "other-lane";
-    const mutatedCapabilityPlan = buildContinuousRunPlan(
+    const mutatedCapabilityPlan = continuousRunPlan(
       {},
       { cyclePacket: mutatedCapabilityCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
     );
@@ -17695,7 +17803,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     branchOnlyCycle.summary.dispatchPreview.selectedBranch = "lane-ready";
     branchOnlyCycle.summary.dispatcher.selectedLane = null;
     branchOnlyCycle.summary.dispatcher.selectedBranch = "lane-ready";
-    const branchOnlyPlan = buildContinuousRunPlan(
+    const branchOnlyPlan = continuousRunPlan(
       {},
       { cyclePacket: branchOnlyCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
     );
@@ -17703,7 +17811,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
     const mismatchedDispatcherCycle = buildTrustedDispatchCycle();
     mismatchedDispatcherCycle.summary.dispatcher.selectedLane = "other-lane";
-    const mismatchedDispatcherPlan = buildContinuousRunPlan(
+    const mismatchedDispatcherPlan = continuousRunPlan(
       {},
       { cyclePacket: mismatchedDispatcherCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
     );
@@ -17733,7 +17841,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
       },
     );
     assert.equal(callerSuppliedAuthorityCycle.summary.continuation.dispatchApplyAllowed, false);
-    const callerSuppliedAuthorityPlan = buildContinuousRunPlan(
+    const callerSuppliedAuthorityPlan = continuousRunPlan(
       {},
       { cyclePacket: callerSuppliedAuthorityCycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
     );
@@ -17779,7 +17887,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     rmSync(trustedDispatchStateRoot, { recursive: true, force: true });
   }
 
-  const dispatchBlockedSafeContinuation = buildContinuousRunPlan(
+  const dispatchBlockedSafeContinuation = continuousRunPlan(
     {},
     {
       promptProbe: {
@@ -17811,7 +17919,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(dispatchBlockedSafeContinuation.summary.selectedAction.code, "continuous-lane-advance-apply");
   assert.notEqual(dispatchBlockedSafeContinuation.summary.selectedAction.code, "continuous-dispatch-apply");
 
-  const dispatchBlockedFallbackPlan = buildContinuousRunPlan(
+  const dispatchBlockedFallbackPlan = continuousRunPlan(
     {},
     {
       promptProbe: { status: "ready", summary: { probes: [] }, warnings: [] },
@@ -17843,7 +17951,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   const hostileSelectedTargetCycle = dispatchCycle(approvedDispatchReadiness);
   hostileSelectedTargetCycle.summary.dispatchPreview.selectedLane = hostileSelectedTarget;
   assert.doesNotThrow(() => {
-    const hostileTargetPlan = buildContinuousRunPlan(
+    const hostileTargetPlan = continuousRunPlan(
       {},
       {
         promptProbe: { status: "ready", summary: { probes: [] }, warnings: [] },
@@ -17853,7 +17961,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
     assert.equal(hostileTargetPlan.summary.selectedAction, null);
   });
 
-  const noSelectedDispatchPlan = buildContinuousRunPlan(
+  const noSelectedDispatchPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17886,7 +17994,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(noSelectedDispatchPlan.summary.selectedAction, null);
   assert.equal(noSelectedDispatchPlan.nextActions[0].code, "continuous-attention-monitor");
 
-  const gatedAttentionPlan = buildContinuousRunPlan(
+  const gatedAttentionPlan = continuousRunPlan(
     {},
     {
       cyclePacket: {
@@ -17926,6 +18034,7 @@ test("continuous run plan blocks manager-only usage before worker mutation", () 
   const plan = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       cyclePacket: {
         ok: true,
         status: "attention",
@@ -17954,6 +18063,7 @@ test("continuous run plan blocks manager-only usage before worker mutation", () 
   const criticalResource = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       cyclePacket: {
         ok: true,
         status: "attention",
@@ -17985,6 +18095,7 @@ test("continuous run plan blocks manager-only usage before worker mutation", () 
   const continuableBlockerPlan = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       cyclePacket: {
         ok: true,
         status: "attention",
@@ -18018,6 +18129,7 @@ test("continuous prompt-probe strips apply from dry-run command", () => {
   const plan = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       cyclePacket: {
         ok: true,
         status: "attention",
@@ -18054,6 +18166,7 @@ test("continuous prompt-probe strips apply from dry-run command", () => {
   const churnPlan = buildContinuousRunPlan(
     {},
     {
+      ...readyContinuousSubplans(),
       cyclePacket: {
         ok: true,
         status: "attention",
@@ -18134,6 +18247,7 @@ test("manager capability posture persists and can be cleared by fresh evidence",
     const persistedHold = buildContinuousRunPlan(
       { runId: "manager-test", stateRoot },
       {
+        ...readyContinuousSubplans(),
         persistedManagerCapabilityPosture: read.summary.managerCapabilityPosture,
         cyclePacket: {
           ok: true,
@@ -18168,6 +18282,7 @@ test("manager capability posture persists and can be cleared by fresh evidence",
     const heldDespiteCycleEvidence = buildContinuousRunPlan(
       { runId: "manager-test", stateRoot },
       {
+        ...readyContinuousSubplans(),
         persistedManagerCapabilityPosture: read.summary.managerCapabilityPosture,
         cyclePacket: {
           ok: true,
@@ -18234,7 +18349,7 @@ test("cycle self-repair summary replays ledger attempts into continuous churn bu
       assert.equal(append.status, "ready");
     }
 
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { runId: "manager-test", stateRoot },
       {
         usageContext: { status: "normal" },
@@ -18266,6 +18381,7 @@ test("cycle self-repair summary replays ledger attempts into continuous churn bu
     const plan = buildContinuousRunPlan(
       {},
       {
+        ...readyContinuousSubplans(),
         cyclePacket: {
           ok: true,
           status: "attention",
@@ -19223,7 +19339,7 @@ test("progress beacon and cycle packet report final checkpoint summary when sour
 
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-final-report-"));
   try {
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 0, runId: "manager-test" },
       {
         sourceExhausted: true,
@@ -21499,7 +21615,7 @@ test("cleanup plan resumes latest existing manager run when run id is omitted", 
     ledgerCommand({ command: "init", runId: "manager-20260101-001", stateRoot });
     ledgerCommand({ command: "init", runId: "manager-20260201-001", stateRoot });
 
-    const cleanup = buildCleanupPlan({ stateRoot });
+    const cleanup = buildCleanupPlan({ stateRoot }, { staleOwnerInspection: readyStaleOwnerInspectionFixture() });
 
     assert.equal(cleanup.summary.runId, "manager-20260201-001");
     assert.equal(cleanup.summary.managerStatePresent, true);
@@ -22516,13 +22632,14 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-recovery-block-"));
   try {
     seedManagerLedgerForPreflight(stateRoot);
-    const missingEvidenceCycle = buildCyclePacket(
+    const missingEvidenceCycle = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 1, runId: "manager-test" },
       {
         usageContext: { status: "normal", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" } } },
         resourceContext: { status: "normal", summary: { state: "normal" } },
         assignmentSummary: { summary: { backlogStatusCounts: { assignable: 1 }, laneAssignmentStatusCounts: {}, workspaceAssignmentStatusCounts: {} } },
         dispatchPreview: readyDispatchPreviewFixture(),
+        recoveryPlan: undefined,
         stateSignals: { ledger: { state: "active" } },
       },
     );
@@ -22544,6 +22661,7 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
     const missingEvidenceContinuous = buildContinuousRunPlan(
       { runId: "manager-test", stateRoot, intervalMs: 15000 },
       {
+        ...readyContinuousSubplans(),
         cyclePacket: missingEvidenceCycle,
         promptProbe: {
           status: "attention",
@@ -22564,7 +22682,7 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
     assert.equal(missingEvidenceContinuous.summary.allowedActionCount, 0);
     assert.equal(missingEvidenceContinuous.nextActions.some((action) => action.nextAction.includes("--apply")), false);
 
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       {
         stateRoot,
         desiredWorkers: 1,
@@ -22576,6 +22694,7 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
         resourceContext: { status: "normal", summary: { state: "normal" } },
         assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 }, laneAssignmentStatusCounts: {}, workspaceAssignmentStatusCounts: {} } },
         dispatchPreview: readyDispatchPreviewFixture(),
+        recoveryPlan: undefined,
         workerProgressStatus: {
           status: "attention",
           summary: { workerProgress: [] },
@@ -22625,7 +22744,7 @@ test("cycle and continuous plans suppress mutation while split-brain reconciliat
 
     const continuous = buildContinuousRunPlan(
       { runId: "manager-test", stateRoot, intervalMs: 15000 },
-      { cyclePacket: cycle, promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] } },
+      { cyclePacket: cycle, ...readyContinuousSubplans() },
     );
     assert.equal(continuous.status, "blocked");
     assert.equal(continuous.summary.selectedAction, null);
@@ -22683,6 +22802,7 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
           if (command === "gh" && args[0] === "--version") return { status: 0, stdout: "gh version 2.0.0\n", stderr: "" };
           return { status: 127, stdout: "", stderr: "unexpected command" };
         },
+        staleOwnerInspection: readyStaleOwnerInspectionFixture(),
       },
     );
 
@@ -22871,7 +22991,7 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
 });
 
 test("cycle sandbox boundary normalization preserves conservative rerun metadata", () => {
-  const cycle = buildCyclePacket(
+  const cycle = buildFastCyclePacket(
     {},
     {
       preflightStatus: {
@@ -22967,7 +23087,7 @@ test("cycle operational action readiness degrades on missing status evidence and
       /Invalid manager run id/,
     );
 
-    const cycle = buildCyclePacket(
+    const cycle = buildFastCyclePacket(
       { stateRoot, desiredWorkers: 1, runId: "manager-test", now: "not-a-date" },
       {
         preflightStatus: { status: "needs review!*" },
@@ -23004,6 +23124,7 @@ test("cycle operational action readiness degrades on missing status evidence and
     const gatedDispatchContinuous = buildContinuousRunPlan(
       { runId: "manager-test", stateRoot },
       {
+        ...readyContinuousSubplans(),
         cyclePacket: {
           ok: true,
           status: "attention",
@@ -23029,7 +23150,6 @@ test("cycle operational action readiness degrades on missing status evidence and
             },
           ],
         },
-        promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] },
       },
     );
     assert.equal(gatedDispatchContinuous.summary.selectedAction, null);
@@ -23038,6 +23158,7 @@ test("cycle operational action readiness degrades on missing status evidence and
     const degradedWorkerMutationContinuous = buildContinuousRunPlan(
       { runId: "manager-test", stateRoot },
       {
+        ...readyContinuousSubplans(),
         cyclePacket: {
           ok: true,
           status: "attention",
@@ -23057,7 +23178,6 @@ test("cycle operational action readiness degrades on missing status evidence and
             },
           ],
         },
-        promptProbe: { status: "ready", summary: { probes: [] }, warnings: [], nextActions: [] },
       },
     );
     assert.equal(degradedWorkerMutationContinuous.summary.selectedAction, null);

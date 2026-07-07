@@ -18776,10 +18776,11 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
   const dispatchRoutingHold = buildContinuousDispatchRoutingHold(cycle);
   const runId = sanitizeLedgerField(cycle.summary?.run?.runId || resolveManagerRunId(options, context), "", 120);
   const stateRoot = sanitizeLedgerField(cycle.summary?.run?.stateRoot || options.stateRoot || "", "", 260);
-  const delegatedReviewPlan = dryRunExecutionAllowed
+  const reviewDiscoveryNeeded = continuousReviewDiscoveryNeeded(cycle, nextActions);
+  const delegatedReviewPlan = dryRunExecutionAllowed && reviewDiscoveryNeeded
     ? buildBmadCodeReviewRequestPlan({ ...(runId ? { runId } : {}), ...(stateRoot ? { stateRoot } : {}) }, { cyclePacket: cycle })
     : null;
-  const delegatedReviewAction = dryRunExecutionAllowed
+  const delegatedReviewAction = dryRunExecutionAllowed && delegatedReviewPlan
     ? continuousWorkerCodeReviewAction(
       { summary: "Route failed delegated review findings to the owning manager worker." },
       cycle,
@@ -18937,6 +18938,47 @@ export function buildContinuousRunPlan(options = {}, context = {}) {
         ? [{ code: "continuous-attention-monitor", summary: "Manager attention remains, but no auto-safe action is currently available.", nextAction: attentionNextAction }]
         : [{ code: "continuous-monitor", summary: "No manager-owned auto action is currently needed.", nextAction: "Sleep until the next continuous manager poll." }],
   });
+}
+
+function continuousReviewDiscoveryNeeded(cycle = {}, actions = []) {
+  const actionText = (Array.isArray(actions) ? actions : [])
+    .map((action) => [
+      action?.code,
+      action?.summary,
+      action?.nextAction,
+      action?.materializationGate?.workflow,
+      action?.materializationGate?.dryRunCommand,
+      action?.materializationGate?.applyCommand,
+    ].filter(Boolean).join(" "))
+    .join(" ");
+  if (/\b(bmad-code-review|code review|review-ready|manager_review_ready|review_feedback)\b/i.test(actionText)) {
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(cycle.summary || {}, "reviewRequestResendStaleSeconds")) {
+    return true;
+  }
+  if (continuousCycleHasSprintReviewRows(cycle)) {
+    return true;
+  }
+  const rows = Array.isArray(cycle.summary?.workerProgress?.workerProgress)
+    ? cycle.summary.workerProgress.workerProgress
+    : [];
+  return rows.some((row) =>
+    /^(manager_review_ready|review_feedback_stale)$/i.test(String(row?.progressState || "")) ||
+    Number(row?.openStoryReviewFeedbackCount || 0) > 0
+  );
+}
+
+function continuousCycleHasSprintReviewRows(cycle = {}) {
+  const sprintStatusPath = sanitizeRelativeBmadOutputPath(cycle.summary?.runway?.sourcePlanning?.sprintStatus?.path || "");
+  if (!sprintStatusPath) return false;
+  const sprintAbsolute = resolve(repoRoot, sprintStatusPath);
+  if (!existsSync(sprintAbsolute)) return false;
+  try {
+    return sprintStoryRows(readFileSync(sprintAbsolute, "utf8")).some((row) => row.status === "review");
+  } catch {
+    return false;
+  }
 }
 
 export function buildManagerCapabilityPosture(options = {}, context = {}, cycle = {}) {
@@ -20467,6 +20509,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
         applyCommand,
         authority: "existing-bmad-code-review-workflow-request-packet-only",
         mutationClass: "manager_runtime_review_request_packet",
+        targetComponents: reviewPlan.summary?.continuousSelection?.targetComponents,
       };
     }
     const gate = action.materializationGate || null;
