@@ -2,6 +2,7 @@ export * from "./ids";
 export * from "./types";
 export * from "./lifecycle";
 export * from "./authority";
+export * from "./operational-action";
 export * from "./events";
 export * from "./refill";
 export * from "./summary";

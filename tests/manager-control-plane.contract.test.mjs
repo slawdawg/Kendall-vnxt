@@ -14,6 +14,7 @@ const expectedModules = [
   "types.ts",
   "lifecycle.ts",
   "authority.ts",
+  "operational-action.ts",
   "events.ts",
   "refill.ts",
   "summary.ts",
@@ -57,6 +58,18 @@ function extractConstArray(source, exportName) {
   const match = withoutComments.match(new RegExp(`export const ${exportName} = \\[([\\s\\S]*?)\\] as const;`));
   assert.ok(match, `missing exported const array ${exportName}`);
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}
+
+function extractConstObjectArray(source, exportName) {
+  const withoutComments = stripComments(source);
+  const marker = `export const ${exportName} = `;
+  const markerIndex = withoutComments.indexOf(marker);
+  assert.notEqual(markerIndex, -1, `missing exported const object array ${exportName}`);
+  const arrayStart = withoutComments.indexOf("[", markerIndex);
+  const arrayEnd = withoutComments.indexOf("] as const", arrayStart);
+  assert.notEqual(arrayStart, -1, `missing object array start for ${exportName}`);
+  assert.notEqual(arrayEnd, -1, `missing object array end for ${exportName}`);
+  return Function(`"use strict"; return (${withoutComments.slice(arrayStart, arrayEnd + 1)});`)();
 }
 
 function extractRequiredFieldsByContract(source, contractName) {
@@ -107,6 +120,7 @@ test("Manager Control Plane contracts define canonical objects and ids without r
     "refill.ts": ["RefillJob"],
     "summary.ts": ["ManagerExecutionLaneSummary"],
     "authority.ts": ["ManagerAuthorityStage", "ManagerAuthorityDecision", "ManagerRunPreauthorization"],
+    "operational-action.ts": ["ManagerOperationalActionPolicy", "ManagerOperationalActionEvaluation"],
     "events.ts": ["ManagerControlPlaneEvent", "ManagerControlPlaneEventName"]
   })) {
     const source = sourceByModule.get(moduleName);
@@ -140,6 +154,14 @@ test("Manager Control Plane contracts define canonical objects and ids without r
       assert.doesNotMatch(source, pattern, `forbidden dependency or vendor term in ${moduleName}: ${pattern}`);
     }
   }
+});
+
+test("Manager Control Plane runtime operational policy mirrors the TypeScript policy", async () => {
+  const policySource = await readFile(new URL("operational-action.ts", managerRoot), "utf8");
+  const runtimePolicy = JSON.parse(await readFile(new URL("operational-action-policy.runtime.json", managerRoot), "utf8"));
+  const typedPolicy = extractConstObjectArray(policySource, "MANAGER_OPERATIONAL_ACTION_POLICIES");
+
+  assert.deepEqual(runtimePolicy, typedPolicy);
 });
 
 test("Manager Control Plane schema metadata covers required serialized fields and status values", async () => {
