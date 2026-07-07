@@ -405,6 +405,139 @@ test("closed deliver and learn packets need explicit handoff language before bec
   assert.equal(viewModel.summary.actionablePacketCount, 1);
 });
 
+test("contextual action strips are selection scoped and return metadata-only action results", async () => {
+  const {
+    buildContextualActionStripForPacket,
+    buildPipelineActiveBoardViewModel,
+  } = await loadActiveBoardViewModelModule();
+
+  const projection = projectionFixture({
+    gatedControls: [
+      {
+        controlId: "control:cleanup-workspace",
+        operation: "cleanup_workspace",
+        status: "gated",
+        authorityFamily: "cleanup-apply",
+        stopLine: "Cleanup needs exact merged-lane evidence.",
+        nextAction: "Review cleanup dry-run before apply.",
+        packetId: "packet-gated-cleanup",
+        workerRefs: [],
+        evidenceRefs: ["control:cleanup-workspace"],
+        metadataOnly: true,
+      },
+      {
+        controlId: "control:unknown-a",
+        operation: "unknown",
+        status: "gated",
+        authorityFamily: "unknown",
+        stopLine: "Unknown operation needs classification.",
+        nextAction: "Classify before action.",
+        packetId: "packet-gated-cleanup",
+        workerRefs: [],
+        evidenceRefs: ["control:unknown-a"],
+        metadataOnly: true,
+      },
+      {
+        controlId: "control:unknown-b",
+        operation: "unknown",
+        status: "gated",
+        authorityFamily: "unknown",
+        stopLine: "Second unknown operation needs classification.",
+        nextAction: "Classify before action.",
+        packetId: "packet-gated-cleanup",
+        workerRefs: [],
+        evidenceRefs: ["control:unknown-b"],
+        metadataOnly: true,
+      },
+      {
+        controlId: "control:global-github",
+        operation: "github_mutation",
+        status: "gated",
+        authorityFamily: "github-delivery",
+        stopLine: "No GitHub mutation from dashboard.",
+        nextAction: "Use delivery workflow.",
+        packetId: null,
+        workerRefs: [],
+        evidenceRefs: ["control:global-github"],
+        metadataOnly: true,
+      },
+    ],
+    workPackets: [
+      packetFixture({
+        packetId: "packet-gated-cleanup",
+        title: "Cleanup evidence packet",
+        currentStage: "deliver",
+        status: "blocked",
+        blocker: "Cleanup approval is required.",
+        nextAction: "Review cleanup dry-run.",
+        evidenceRefs: ["packet:cleanup-evidence"],
+      }),
+      packetFixture({
+        packetId: "packet-ready-result",
+        title: "Ready result packet",
+        currentStage: "execute",
+        status: "complete",
+        nextAction: "Ready to test in /pipeline.",
+        evidenceRefs: ["packet:ready-evidence"],
+      }),
+      packetFixture({
+        packetId: "packet-global-control-only",
+        title: "Global control should not attach",
+        currentStage: "execute",
+        status: "active",
+        nextAction: "Continue.",
+      }),
+    ],
+    selectedPacketDetails: [
+      detailFixture({
+        packetId: "packet-ready-result",
+        currentStage: "execute",
+        status: "complete",
+        nextAction: "Ready to test in /pipeline.",
+        evidenceRefs: ["packet:ready-evidence"],
+      }),
+    ],
+  });
+
+  const model = buildPipelineActiveBoardViewModel(projection);
+  const gatedStrip = model.contextualActions.byPacketId["packet-gated-cleanup"];
+  const readyStrip = model.contextualActions.byPacketId["packet-ready-result"];
+
+  assert.equal(gatedStrip.visible, true);
+  assert.equal(gatedStrip.selectionType, "packet");
+  assert.equal(gatedStrip.selectionId, "packet-gated-cleanup");
+  assert.equal(gatedStrip.actions.length, 4, "packet gets its gated controls plus the inspect blocker action");
+  assert.equal(gatedStrip.actions[0].actionId, "cleanup_workspace");
+  assert.equal(gatedStrip.actions[0].actionInstanceId, "control:cleanup-workspace");
+  assert.equal(gatedStrip.actions[0].label, "Cleanup");
+  assert.equal(gatedStrip.actions[0].state, "gated");
+  assert.equal(gatedStrip.actions[0].riskTier, "extreme");
+  assert.equal(gatedStrip.actions[0].result.status, "blocked");
+  assert.equal(gatedStrip.actions[0].result.rawPayloadRetained, false);
+  assert.equal(gatedStrip.actions[1].actionInstanceId, "control:unknown-a");
+  assert.equal(gatedStrip.actions[2].actionInstanceId, "control:unknown-b");
+  assert.equal(gatedStrip.actions[1].label, "Unknown");
+  assert.equal(gatedStrip.actions[1].riskTier, "high");
+  assert.equal(new Set(gatedStrip.actions.map((action) => action.actionInstanceId)).size, gatedStrip.actions.length);
+  assert.equal(gatedStrip.actions.every((action) => action.metadataOnly === true), true);
+  assert.equal(JSON.stringify(gatedStrip).includes("control:global-github"), false);
+  assert.equal(model.contextualActions.byPacketId["packet-global-control-only"], undefined);
+
+  assert.equal(readyStrip.visible, true);
+  assert.equal(readyStrip.actions.length, 1);
+  assert.equal(readyStrip.actions[0].actionId, "inspect_ready_to_test");
+  assert.equal(readyStrip.actions[0].actionInstanceId, "packet-ready-result:inspect-ready-to-test");
+  assert.equal(readyStrip.actions[0].state, "available");
+  assert.equal(readyStrip.actions[0].result, null);
+
+  assert.equal(buildContextualActionStripForPacket(
+    packetFixture({ packetId: "fixture-packet", truthLabel: "fixture" }),
+    projection
+  ), null);
+  assert.equal(JSON.stringify(model.contextualActions).includes("raw prompt"), false);
+  assert.equal(JSON.stringify(model.contextualActions).includes("provider payload"), false);
+});
+
 test("fixture, unavailable, and stale-only projections cannot satisfy live or ready-to-test counts", async () => {
   const { buildPipelineActiveBoardViewModel, derivePacketActionability, derivePacketPlacement } = await loadActiveBoardViewModelModule();
 

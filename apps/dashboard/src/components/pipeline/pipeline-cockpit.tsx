@@ -15,6 +15,7 @@ import {
   buildPipelineActiveBoardViewModel,
   type PipelineActiveBoardViewModel,
   type PipelineCompactPacketCard,
+  type PipelineContextualActionStrip,
   type PipelineDiagnosticsItem,
   type PipelineStaleHistoryItem,
 } from "../../lib/pipeline/active-board-view-model";
@@ -103,8 +104,8 @@ export function PipelineCockpit({
   const [staleHistoryOpen, setStaleHistoryOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [usageVisibility, setUsageVisibility] = useState({ claude: true, codex: true });
-  const [currentProjection, setCurrentProjection] = useState<PipelineDashboardProjectionV0 | null>(projection ?? null);
-  const [currentProjectionError, setCurrentProjectionError] = useState<string | null>(projectionError ?? null);
+  const currentProjection = projection ?? null;
+  const currentProjectionError = projectionError ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
   const routeMapRef = useRef<HTMLElement | null>(null);
   const routeRowRef = useRef<HTMLDivElement | null>(null);
@@ -153,6 +154,9 @@ export function PipelineCockpit({
     && !dashboardPackets.some((packet) => packet.packetId === selectedItem.id)
     && !currentProjection?.workPackets.some((packet) => packet.packetId === selectedItem.id)
     && !currentProjection?.selectedPacketDetails.some((detail) => detail.packetId === selectedItem.id);
+  const selectedContextualActionStrip = selectedItem?.type === "packet"
+    ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
+    : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(dashboardPackets);
   const topAttentionPacket = findTopAttentionPacket(dashboardPackets);
@@ -328,12 +332,6 @@ export function PipelineCockpit({
       moveStageFocus(event.key);
     }
   }, [closeSelectedItem, moveStageFocus]);
-
-  useEffect(() => {
-    setCurrentProjection(projection ?? null);
-    setCurrentProjectionError(projectionError ?? null);
-  }, [projection, projectionError]);
-
 
   useEffect(() => {
     const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -629,6 +627,7 @@ export function PipelineCockpit({
               ) : selectedMapPacket ? (
                 <PacketInspection
                   onClose={closeSelectedItem}
+                  contextualActionStrip={selectedContextualActionStrip}
                   packet={selectedMapPacket}
                   projectionDetail={selectedProjectionDetail}
                   projectionError={currentProjectionError}
@@ -636,6 +635,7 @@ export function PipelineCockpit({
               ) : selectedDetailOnlyPacket ? (
                 <PacketInspection
                   onClose={closeSelectedItem}
+                  contextualActionStrip={selectedContextualActionStrip}
                   packet={selectedDetailOnlyPacket}
                   projectionDetail={selectedProjectionDetail}
                   projectionError={currentProjectionError}
@@ -2301,11 +2301,13 @@ function DiagnosticCopyButton({ label, value }: { label: string; value: string }
 }
 
 function PacketInspection({
+  contextualActionStrip,
   onClose,
   packet,
   projectionDetail,
   projectionError,
 }: {
+  contextualActionStrip: PipelineContextualActionStrip | null;
   onClose: () => void;
   packet: ActiveBoardCockpitPacket;
   projectionDetail: ProjectionSelectedPacketDetail | null;
@@ -2349,7 +2351,7 @@ function PacketInspection({
     : "reason codes not present in projection detail";
   const routeSourceContext = packet.routeFork?.sourceContext || "five-whys context not present in projection detail";
   return (
-    <aside aria-label="Packet inspection panel" className="pipeline-inspection-panel rounded-[0.5rem] border p-3" data-pipeline-panel="packet-detail" ref={panelRef} tabIndex={-1}>
+    <aside aria-label="Packet inspection panel" className="pipeline-inspection-panel rounded-[0.5rem] border p-3" data-pipeline-panel="packet-detail" id="pipeline-selected-packet-detail" ref={panelRef} tabIndex={-1}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-[var(--accent)]">Selected packet</p>
@@ -2377,6 +2379,7 @@ function PacketInspection({
         <span className="pipeline-packet-summary-state">{detailState}</span>
         <span>{packet.summary}</span>
       </div>
+      <ContextualActionStripPanel strip={contextualActionStrip} />
       <dl className="mt-3 grid gap-2 text-sm">
         <InspectionRow label="Where" value={detailStage} />
         <InspectionRow label="Status" value={detailState} />
@@ -2471,6 +2474,75 @@ function PacketInspection({
       ) : null}
     </aside>
   );
+}
+
+function ContextualActionStripPanel({ strip }: { strip: PipelineContextualActionStrip | null }) {
+  if (!strip?.visible || strip.actions.length === 0) {
+    return null;
+  }
+  return (
+    <section aria-label="Contextual action strip" className="mt-3 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--accent)_30%,var(--line))] bg-[color-mix(in_srgb,var(--surface)_90%,transparent)] p-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Actions</h3>
+        <span className="rounded-full border border-[var(--line)] px-2 py-0.5 text-xs text-[var(--muted)]">
+          {strip.selectionType} {strip.selectionId}
+        </span>
+      </div>
+      <ul className="mt-2 grid gap-2">
+        {strip.actions.map((action) => (
+          <li
+            aria-label={`Action ${action.label}: ${action.state}; result ${action.result?.label ?? "not run"}`}
+            className="grid min-w-0 gap-2 rounded-[0.375rem] border border-[var(--line)] bg-[var(--surface)] p-2 text-sm md:grid-cols-[auto_minmax(0,1fr)]"
+            key={action.actionInstanceId}
+          >
+            {action.state === "available" ? (
+              <a
+                className="inline-flex h-8 items-center justify-center rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
+                href="#pipeline-selected-packet-detail"
+                title={`${action.reason} ${action.expectedResult}`}
+              >
+                {action.label}
+              </a>
+            ) : (
+              <button
+                className="h-8 rounded-[0.375rem] border border-[var(--line)] px-3 text-sm font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-70"
+                disabled
+                title={`${action.reason} ${action.expectedResult}`}
+                type="button"
+              >
+                {action.label}
+              </button>
+            )}
+            <div className="grid min-w-0 gap-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <ManagerStateChip label={action.state} tone={contextualActionTone(action.state)} />
+                <ManagerStateChip label={action.riskTier} tone={action.riskTier === "low" ? "complete" : action.riskTier === "medium" ? "waiting" : "blocked"} />
+                {action.result ? <ManagerStateChip label={action.result.label} tone={contextualResultTone(action.result.status)} /> : null}
+              </div>
+              <p className="break-words text-xs leading-5 text-[var(--muted)]">{action.reason}</p>
+              {action.result ? (
+                <p aria-live={action.result.status === "failed" || action.result.status === "blocked" ? "assertive" : "polite"} className="break-words text-xs leading-5 text-[var(--muted)]">
+                  Result: {action.result.detail}; correlation {action.result.correlationLabel}; retention metadata-only
+                </p>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function contextualActionTone(state: PipelineContextualActionStrip["actions"][number]["state"]): "active" | "waiting" | "blocked" | "complete" {
+  if (state === "available") return "complete";
+  if (state === "simulated") return "waiting";
+  return "blocked";
+}
+
+function contextualResultTone(status: NonNullable<PipelineContextualActionStrip["actions"][number]["result"]>["status"]): "active" | "waiting" | "blocked" | "complete" {
+  if (status === "accepted") return "complete";
+  if (status === "queued" || status === "idempotent_noop") return "waiting";
+  return "blocked";
 }
 
 function ProjectionDetailUnavailableInspection({ onClose, packet }: { onClose: () => void; packet: PipelineFixturePacket }) {

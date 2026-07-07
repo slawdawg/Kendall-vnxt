@@ -2,6 +2,7 @@ import type {
   AuthoritativePacketStage,
   PipelineDashboardProjectionV0,
   PipelineDashboardWorkPacketV0,
+  PipelineGatedControlV0,
   PipelineManagerSummaryV0,
   PipelineProjectionSourceLabelV0,
   PipelineQueueSummaryV0,
@@ -108,6 +109,35 @@ export type PipelineDiagnosticsItem = {
   retentionClass: "metadata_only";
 };
 
+export type PipelineContextualActionStripItem = {
+  actionInstanceId: string;
+  actionId: string;
+  label: string;
+  state: "available" | "gated" | "blocked" | "simulated";
+  riskTier: "low" | "medium" | "high" | "extreme";
+  reason: string;
+  expectedResult: string;
+  result: PipelineContextualActionResult | null;
+  metadataOnly: true;
+};
+
+export type PipelineContextualActionResult = {
+  status: "accepted" | "queued" | "blocked" | "failed" | "idempotent_noop";
+  label: string;
+  detail: string;
+  correlationLabel: string;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+};
+
+export type PipelineContextualActionStrip = {
+  visible: boolean;
+  selectionType: "packet" | "stage";
+  selectionId: string;
+  actions: PipelineContextualActionStripItem[];
+  metadataOnly: true;
+};
+
 export type PipelineDispatchAffectingManagerState = {
   visible: true;
   reason:
@@ -136,6 +166,9 @@ export type PipelineActiveBoardViewModel = {
   };
   attentionItems: PipelineCompactPacketCard[];
   readyToTestItems: PipelineCompactPacketCard[];
+  contextualActions: {
+    byPacketId: Record<string, PipelineContextualActionStrip>;
+  };
   diagnostics: {
     enabled: false;
     items: PipelineDiagnosticsItem[];
@@ -254,11 +287,150 @@ export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardP
     },
     attentionItems,
     readyToTestItems,
+    contextualActions: {
+      byPacketId: buildContextualActionStrips(projection),
+    },
     diagnostics: {
       enabled: false,
       items: diagnosticsItems,
     },
   };
+}
+
+export function buildContextualActionStripForPacket(
+  packet: PipelineDashboardWorkPacketV0,
+  projection: PipelineDashboardProjectionV0
+): PipelineContextualActionStrip | null {
+  if (!projectionCanShowLiveActiveWork(projection) || packet.truthLabel !== "live") {
+    return null;
+  }
+  const actions = [
+    ...projection.gatedControls
+      .filter((control) => control.packetId === packet.packetId)
+      .map((control) => contextualActionFromGatedControl(control)),
+    ...contextualActionsFromPacketState(packet, projection),
+  ];
+  if (actions.length === 0) {
+    return null;
+  }
+  return {
+    visible: true,
+    selectionType: "packet",
+    selectionId: packet.packetId,
+    actions,
+    metadataOnly: true,
+  };
+}
+
+function buildContextualActionStrips(projection: PipelineDashboardProjectionV0) {
+  const strips: Record<string, PipelineContextualActionStrip> = {};
+  for (const packet of projection.workPackets) {
+    const strip = buildContextualActionStripForPacket(packet, projection);
+    if (strip) {
+      strips[packet.packetId] = strip;
+    }
+  }
+  return strips;
+}
+
+function contextualActionFromGatedControl(control: PipelineGatedControlV0): PipelineContextualActionStripItem {
+  const label = gatedControlActionLabel(control.operation);
+  return {
+    actionInstanceId: control.controlId,
+    actionId: control.operation,
+    label,
+    state: control.status === "action_needed" ? "gated" : control.status,
+    riskTier: gatedControlRiskTier(control.operation),
+    reason: safeCompactActionLabel(control.stopLine) ?? "Control is gated by backend authority.",
+    expectedResult: safeCompactActionLabel(control.nextAction) ?? "Request explicit approval.",
+    result: {
+      status: "blocked",
+      label: "Blocked",
+      detail: safeCompactActionLabel(control.nextAction) ?? "Request explicit approval.",
+      correlationLabel: control.evidenceRefs[0] ?? control.controlId,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    metadataOnly: true,
+  };
+}
+
+function contextualActionsFromPacketState(
+  packet: PipelineDashboardWorkPacketV0,
+  projection: PipelineDashboardProjectionV0
+): PipelineContextualActionStripItem[] {
+  const actions: PipelineContextualActionStripItem[] = [];
+  const actionability = derivePacketActionability(packet, projection);
+  if (actionability === "ready_to_test") {
+    actions.push({
+      actionInstanceId: `${packet.packetId}:inspect-ready-to-test`,
+      actionId: "inspect_ready_to_test",
+      label: "Inspect",
+      state: "available",
+      riskTier: "low",
+      reason: "Packet has live ready-to-test evidence.",
+      expectedResult: "Open packet detail before recording pass or fail.",
+      result: null,
+      metadataOnly: true,
+    });
+  }
+  if (actionability === "operator_attention") {
+    const metadata = buildActionNeededMetadata(packet, projection);
+    actions.push({
+      actionInstanceId: `${packet.packetId}:inspect-blocker`,
+      actionId: "inspect_blocker",
+      label: "Inspect",
+      state: "available",
+      riskTier: "low",
+      reason: metadata.attentionReasonLabel ?? "Attention needed.",
+      expectedResult: metadata.nextOperatorActionLabel ?? "Inspect packet detail.",
+      result: null,
+      metadataOnly: true,
+    });
+  }
+  return actions;
+}
+
+function gatedControlActionLabel(operation: PipelineGatedControlV0["operation"]) {
+  switch (operation) {
+    case "kill_worker":
+      return "Kill";
+    case "drain_worker":
+      return "Drain";
+    case "cleanup_workspace":
+      return "Cleanup";
+    case "takeover_workspace":
+      return "Takeover";
+    case "provider_call":
+      return "Provider";
+    case "github_mutation":
+      return "GitHub";
+    case "worker_launch":
+      return "Launch";
+    case "lease_mutation":
+      return "Lease";
+    case "source_mutation":
+      return "Source";
+    case "terminal_access":
+      return "Terminal";
+    case "raw_payload_retention":
+      return "Retain";
+    default:
+      return "Unknown";
+  }
+}
+
+function gatedControlRiskTier(operation: PipelineGatedControlV0["operation"]): PipelineContextualActionStripItem["riskTier"] {
+  if (operation === "kill_worker" || operation === "provider_call" || operation === "github_mutation" || operation === "worker_launch" || operation === "source_mutation" || operation === "terminal_access" || operation === "raw_payload_retention") {
+    return "high";
+  }
+  if (operation === "cleanup_workspace") {
+    return "extreme";
+  }
+  if (operation === "takeover_workspace" || operation === "lease_mutation" || operation === "drain_worker") {
+    return "medium";
+  }
+  return "high";
 }
 
 function buildExecutionLoopHealthSummary(
