@@ -2351,7 +2351,7 @@ function PacketInspection({
     : "reason codes not present in projection detail";
   const routeSourceContext = packet.routeFork?.sourceContext || "five-whys context not present in projection detail";
   return (
-    <aside aria-label="Packet inspection panel" className="pipeline-inspection-panel rounded-[0.5rem] border p-3" data-pipeline-panel="packet-detail" ref={panelRef} tabIndex={-1}>
+    <aside aria-label="Packet inspection panel" className="pipeline-inspection-panel rounded-[0.5rem] border p-3" data-pipeline-panel="packet-detail" id="pipeline-selected-packet-detail" ref={panelRef} tabIndex={-1}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-[var(--accent)]">Selected packet</p>
@@ -2496,13 +2496,13 @@ function ContextualActionStripPanel({ strip }: { strip: PipelineContextualAction
             key={action.actionInstanceId}
           >
             {action.state === "available" ? (
-              <Link
+              <a
                 className="inline-flex h-8 items-center justify-center rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-                href={`/pipeline/packets/${encodeURIComponent(strip.selectionId)}`}
+                href="#pipeline-selected-packet-detail"
                 title={`${action.reason} ${action.expectedResult}`}
               >
                 {action.label}
-              </Link>
+              </a>
             ) : (
               <button
                 className="h-8 rounded-[0.375rem] border border-[var(--line)] px-3 text-sm font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-70"
