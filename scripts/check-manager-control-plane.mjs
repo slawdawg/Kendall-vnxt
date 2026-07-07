@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { buildCodexAdvisorClassificationPlan, buildCodexAdvisorPacketPlan, buildContinuousRunPlan, buildCyclePacket, buildDeliveryPlan, buildFeedbackPlan, buildManagerSelfRepairSummary, buildProgressBeaconPlan, buildRecoveryPlan, buildSteeringPlan, buildWorkerFrictionPlan, buildWorkerLifecyclePlan, buildWorkerQuestionAnswerPlan, classifyAutoApply, ledgerCommand } from "./lib/manager-control-plane/core.mjs";
+import { buildCodexAdvisorClassificationPlan, buildCodexAdvisorPacketPlan, buildContinuousRunPlan, buildCyclePacket, buildDeliveryPlan, buildFeedbackPlan, buildManagerSelfRepairSummary, buildProgressBeaconPlan, buildRecoveryPlan, buildSourceBackedPacketSeedPlan, buildSteeringPlan, buildWorkerFrictionPlan, buildWorkerLifecyclePlan, buildWorkerQuestionAnswerPlan, classifyAutoApply, ledgerCommand } from "./lib/manager-control-plane/core.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -96,6 +96,7 @@ const requiredFiles = [
   "scripts/manager-capability-posture.mjs",
   "scripts/manager-codex-advisor-packet.mjs",
   "scripts/manager-refill-plan.mjs",
+  "scripts/manager-source-packet-seed.mjs",
   "scripts/manager-cleanup-plan.mjs",
   "scripts/manager-dirty-workspace-preservation.mjs",
   "scripts/manager-stale-owner-inspection.mjs",
@@ -139,6 +140,7 @@ for (const [name, command] of [
   ["manager:codex-advisor", "node ./scripts/manager-codex-advisor-packet.mjs --summary-json"],
   ["manager:cycle", "node ./scripts/manager-cycle-packet.mjs --summary-json"],
   ["manager:refill", "node ./scripts/manager-refill-plan.mjs --summary-json"],
+  ["manager:source-packet-seed", "node ./scripts/manager-source-packet-seed.mjs --summary-json"],
   ["manager:cleanup", "node ./scripts/manager-cleanup-plan.mjs --summary-json"],
   ["manager:dirty-workspace-preservation", "node ./scripts/manager-dirty-workspace-preservation.mjs --summary-json"],
   ["manager:stale-owner", "node ./scripts/manager-stale-owner-inspection.mjs --summary-json"],
@@ -245,6 +247,8 @@ if (existsSync(join(rootDir, "scripts/lib/manager-control-plane/core.mjs"))) {
     "buildTmuxOrientationStatus",
     "buildAssignmentResume",
     "buildRefillPlan",
+    "buildSourceBackedPacketSeedPlan",
+    "source-backed-dispatcher-refill-refresh",
     "buildMatureToolEvaluationPlan",
     "buildLargeSliceContinuationPlan",
     "buildDispatchPreview",
@@ -481,6 +485,23 @@ if (existsSync(join(rootDir, "scripts/lib/manager-control-plane/core.mjs"))) {
   }
   assertCondition(!/send-keys[\s\S]{0,120}(handoff|prompt|assignment|task|branch)/i.test(core), "Manager core must not use send-keys for long handoff text", failures);
 }
+
+const sourceSeed = buildSourceBackedPacketSeedPlan(
+  {
+    runId: "manager-contract",
+    candidateId: "contract-source-seed",
+    sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+    acceptanceCriteria: ["AC contract source seed eligible"],
+    verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+    touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+    riskClass: "low",
+    authorityClass: "allowed_unattended",
+  },
+  {},
+);
+assertCondition(sourceSeed.status === "ready", "Source-backed packet seed must produce an eligible packet", failures);
+assertCondition(sourceSeed.summary.seedPacket?.eligibilityDecision === "eligible", "Source-backed packet seed must run eligibility", failures);
+assertCondition(sourceSeed.summary.rawPayloadRetained === false, "Source-backed packet seed must retain metadata only", failures);
 
 const autoProof = {
   resourceState: "normal",

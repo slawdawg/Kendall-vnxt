@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { runManagerRefillPlan } from "../scripts/manager-refill-plan.mjs";
+import { runManagerSourcePacketSeed } from "../scripts/manager-source-packet-seed.mjs";
 import {
   buildCodexAdvisorClassificationPlan,
   buildCodexAdvisorPacketPlan,
@@ -34,6 +35,7 @@ import {
   buildResourceStatus,
   buildRecoveryPlan,
   buildSourceArtifactDiscoveryPlan,
+  buildSourceBackedPacketSeedPlan,
   buildSourceWorkEligibilityPlan,
   buildManagerRunStartPlan,
   buildSteeringPlan,
@@ -2661,6 +2663,279 @@ test("source work eligibility emits bounded candidate packets from discovered so
   assert.doesNotMatch(JSON.stringify(eligibility.summary), /provider payload|sk-test/i);
 });
 
+test("source-backed packet seed emits one eligible candidate without mutation", () => {
+  const seed = buildSourceBackedPacketSeedPlan(
+    {
+      runId: "manager-test",
+      candidateId: "first-source-backed-packet",
+      title: "First source-backed operational packet",
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      acceptanceCriteria: ["AC seed packet can be evaluated by eligibility"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {},
+  );
+
+  assert.equal(seed.status, "ready");
+  assert.equal(seed.summary.packetState, "eligible");
+  assert.equal(seed.summary.seedPacket.candidateWorkPacketId, "first-source-backed-packet");
+  assert.equal(seed.summary.seedPacket.eligibilityDecision, "eligible");
+  assert.equal(seed.summary.sourceWorkEligibility.eligibleCount, 1);
+  assert.equal(seed.summary.sourceArtifactDiscovery.artifactCount, 1);
+  assert.equal(seed.summary.mutationMode, "none; read-only source-backed packet seed");
+  assert.equal(seed.summary.rawPayloadRetained, false);
+  assert.deepEqual(seed.summary.stopLines, ["do_not_queue_without_eligibility", "do_not_create_worker", "do_not_call_provider", "do_not_retain_raw_payload"]);
+  assert.doesNotMatch(JSON.stringify(seed.summary), /provider payload|sk-test/i);
+});
+
+test("source-backed packet seed validates source refs and preserves stricter duplicate metadata", () => {
+  const unknown = buildSourceBackedPacketSeedPlan(
+    {
+      runId: "manager-test",
+      candidateId: "unknown-source-backed-packet",
+      sourceRefs: ["doc:docs/workflows/does-not-exist.md"],
+      acceptanceCriteria: ["AC unknown source must not self-certify"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {},
+  );
+  assert.equal(unknown.status, "blocked");
+  assert.equal(unknown.summary.packetState, "blocked");
+  assert.equal(unknown.summary.seedPacket.eligibilityReason, "ambiguous_source");
+  assert.equal(unknown.blockers[0].code, "source-backed-seed-blocked");
+
+  const stricterDuplicate = buildSourceBackedPacketSeedPlan(
+    {
+      runId: "manager-test",
+      candidateId: "strict-source-backed-packet",
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      acceptanceCriteria: ["AC strict duplicate source metadata wins"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {
+      sourceArtifacts: [{
+        ref: "doc:docs/workflows/current-session-runbook.md",
+        ownershipBoundary: "bmad_local_planning_state",
+        freshness: "stale",
+      }],
+    },
+  );
+  assert.equal(stricterDuplicate.status, "attention");
+  assert.equal(stricterDuplicate.summary.packetState, "needs_review");
+  assert.equal(stricterDuplicate.summary.sourceArtifactDiscovery.artifacts[0].ownershipBoundary, "bmad_local_planning_state");
+  assert.equal(stricterDuplicate.summary.sourceArtifactDiscovery.artifacts[0].freshness, "stale");
+  assert.equal(stricterDuplicate.summary.seedPacket.eligibilityReason, "source_owned_rewrite_required");
+});
+
+test("source-backed packet seed preserves seed candidate refs and reports dedupe skips", () => {
+  const candidateRefs = buildSourceBackedPacketSeedPlan(
+    { runId: "manager-test" },
+    {
+      seedCandidate: {
+        candidateWorkPacketId: "candidate-source-refs",
+        title: "Candidate source refs",
+        sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+        acceptanceCriteria: ["AC candidate refs are preserved"],
+        verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+        touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+        riskClass: "low",
+        authorityClass: "allowed_unattended",
+      },
+    },
+  );
+  assert.equal(candidateRefs.status, "ready");
+  assert.deepEqual(candidateRefs.summary.seedPacket.sourceRefs, ["doc:docs/workflows/current-session-runbook.md"]);
+
+  const deduped = buildSourceBackedPacketSeedPlan(
+    {
+      runId: "manager-test",
+      candidateId: "duplicate-source-backed-packet",
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      acceptanceCriteria: ["AC duplicate seed is explicit"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {
+      existingCandidateWorkPackets: [{
+        candidateWorkPacketId: "existing-source-backed-packet",
+        sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+        acceptanceCriteria: ["AC duplicate seed is explicit"],
+        touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      }],
+    },
+  );
+  assert.equal(deduped.status, "blocked");
+  assert.equal(deduped.summary.packetState, "skipped");
+  assert.equal(deduped.summary.seedPacket.eligibilityDecision, "skipped");
+  assert.equal(deduped.summary.seedPacket.linkedDuplicateOf, "existing-source-backed-packet");
+  assert.equal(deduped.blockers[0].code, "source-backed-seed-dedupe-skipped");
+});
+
+test("source-backed packet seed defaults stay scoped and do not queue generic runbook work", () => {
+  const { result } = runManagerSourcePacketSeed(["--summary-json", "--run-id", "manager-test"]);
+  assert.notEqual(result.summary.packetState, "eligible");
+  assert.ok(result.summary.seedPacket.sourceRefs.length > 0);
+  assert.ok(result.summary.seedPacket.sourceRefs.every((ref) => !ref.includes("docs/workflows/current-session-runbook.md")));
+
+  const refill = buildRefillPlan(
+    { runId: "manager-test", desiredWorkers: 6 },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 0 },
+          laneAssignmentStatusCounts: { claimed: 0 },
+          workspaceAssignmentStatusCounts: { active: 0 },
+        },
+      },
+    },
+  );
+  assert.equal(refill.status, "blocked");
+  assert.equal(refill.summary.sourceBackedPacketSeed, null);
+  assert.equal(refill.summary.candidateLanes.length, 0);
+  assert.ok(refill.blockers.some((blocker) => blocker.code === "source-evidence-missing"));
+});
+
+test("refill plan does not synthesize source-backed seeds from policy metadata alone", () => {
+  const refill = buildRefillPlan(
+    {
+      runId: "manager-test",
+      desiredWorkers: 1,
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    },
+  );
+
+  assert.equal(refill.status, "refill_needed");
+  assert.equal(refill.summary.sourceBackedPacketSeed, null);
+  assert.equal(refill.summary.refillJob.queuedCount, 0);
+  assert.notEqual(refill.summary.bmadPlanningGap.refillDisposition, "use_existing_source_work");
+});
+
+test("explicit eligible source-backed packet seed feeds refill and continuous refresh", () => {
+  const refill = buildRefillPlan(
+    {
+      runId: "manager-test",
+      desiredWorkers: 6,
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      candidateId: "explicit-source-backed-packet",
+      acceptanceCriteria: ["AC explicit seed has scoped source evidence"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 0 },
+          laneAssignmentStatusCounts: { claimed: 0 },
+          workspaceAssignmentStatusCounts: { active: 0 },
+        },
+      },
+    },
+  );
+
+  assert.equal(refill.status, "refill_needed");
+  assert.equal(refill.summary.sourceBackedPacketSeed.packetState, "eligible");
+  assert.equal(refill.summary.sourceBackedPacketSeed.sourceWorkEligibility.eligibleCount, 1);
+  assert.equal(refill.summary.refillWatermark.queuedCount, 1);
+  assert.equal(refill.summary.refillWatermark.eligibleCandidates[0].candidateId, "explicit-source-backed-packet");
+  assert.equal(refill.nextActions[0].dispatcherRefillAction.code, "source-backed-dispatcher-refill-refresh");
+  assert.match(refill.nextActions[0].nextAction, /manager-refill-plan\.mjs --summary-json/);
+
+  const continuous = buildContinuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+        },
+        warnings: [],
+        nextActions: refill.nextActions,
+      },
+    },
+  );
+
+  assert.equal(continuous.summary.selectedAction.code, "continuous-dispatcher-refill-refresh");
+  assert.equal(continuous.summary.selectedAction.readOnly, true);
+  assert.match(continuous.summary.selectedAction.applyCommand, /manager-refill-plan\.mjs --summary-json/);
+});
+
+test("source-backed packet seed keeps blocked packets visible with typed reason", () => {
+  const blocked = buildSourceBackedPacketSeedPlan(
+    {
+      runId: "manager-test",
+      candidateId: "blocked-source-backed-packet",
+      sourceRefs: ["runtime:manager-runs/manager-test/events.ndjson"],
+      acceptanceCriteria: ["AC blocked packet remains visible"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {
+      sourceArtifacts: [{ ref: "runtime:manager-runs/manager-test/events.ndjson", sourceType: "runtime_state" }],
+    },
+  );
+
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.summary.packetState, "blocked");
+  assert.equal(blocked.summary.seedPacket.candidateWorkPacketId, "blocked-source-backed-packet");
+  assert.equal(blocked.summary.seedPacket.eligibilityDecision, "blocked");
+  assert.equal(blocked.summary.seedPacket.eligibilityReason, "runtime_source_not_deliverable");
+  assert.equal(blocked.blockers[0].code, "source-backed-seed-blocked");
+  assert.match(blocked.nextActions[0].nextAction, /Repair the seed packet inputs/);
+});
+
+test("source-backed packet seed CLI returns bounded summary JSON", () => {
+  const { result } = runManagerSourcePacketSeed([
+    "--summary-json",
+    "--run-id",
+    "manager-test",
+    "--candidate-id",
+    "cli-seed",
+    "--source-ref",
+    "doc:docs/workflows/current-session-runbook.md",
+    "--acceptance-criterion",
+    "AC CLI seed emits bounded packet",
+    "--verification-target",
+    "node --test tests/manager-control-plane.test.mjs",
+    "--touched-surface",
+    "scripts/lib/manager-control-plane/core.mjs",
+    "--risk-class",
+    "low",
+    "--authority-class",
+    "allowed_unattended",
+  ]);
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.summary.seedPacket.candidateWorkPacketId, "cli-seed");
+  assert.equal(result.summary.seedPacket.eligibilityDecision, "eligible");
+  assert.equal(result.summary.rawPayloadRetained, false);
+});
+
 test("source work eligibility rejects incomplete and unsafe source candidates", () => {
   const eligibility = buildSourceWorkEligibilityPlan(
     { runId: "manager-test" },
@@ -2929,8 +3204,113 @@ test("refill plan uses source-work refs directly and does not bypass blocked eli
   assert.equal(blockedDoesNotFallback.status, "refill_needed");
   assert.equal(blockedDoesNotFallback.summary.sourceWorkEligibility.eligibleCount, 0);
   assert.equal(blockedDoesNotFallback.summary.sourceWorkEligibility.blockedCount, 1);
+  assert.equal(blockedDoesNotFallback.summary.sourceWorkEligibility.blockedPackets[0].eligibilityReason, "missing_required_fields");
+  assert.equal(blockedDoesNotFallback.summary.sourceBackedPacketSeed, null);
   assert.equal(blockedDoesNotFallback.summary.refillJob.candidateCount, 0);
   assert.equal(blockedDoesNotFallback.summary.refillJob.queuedCount, 0);
+  assert.ok(blockedDoesNotFallback.warnings.some((warning) => warning.code === "source-work-blocked" && warning.eligibilityReasons.includes("missing_required_fields")));
+});
+
+test("refill plan revalidates caller-supplied eligible seed before queueing", () => {
+  const suppliedSeed = {
+    status: "ready",
+    summary: {
+      packetState: "eligible",
+      seedPacket: {
+        candidateWorkPacketId: "caller-supplied-seed",
+        title: "Caller supplied seed",
+        sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+        acceptanceCriteria: ["AC supplied seed must be revalidated"],
+        verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+        riskClass: "low",
+        touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+        authorityClass: "allowed_unattended",
+        eligibilityDecision: "eligible",
+        rawPayloadRetained: false,
+      },
+    },
+  };
+  const refill = buildRefillPlan(
+    { runId: "manager-test", desiredWorkers: 1 },
+    {
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceBackedPacketSeed: suppliedSeed,
+    },
+  );
+
+  assert.equal(refill.status, "refill_needed");
+  assert.equal(refill.summary.sourceBackedPacketSeed.packetState, "eligible");
+  assert.equal(refill.summary.sourceBackedPacketSeed.sourceWorkEligibility.eligibleCount, 1);
+  assert.equal(refill.summary.sourceBackedPacketSeed.seedPacket.candidateWorkPacketId, "caller-supplied-seed");
+  assert.equal(refill.summary.refillJob.queuedCount, 1);
+
+  const forgedEligibleSeed = {
+    status: "ready",
+    summary: {
+      packetState: "eligible",
+      sourceWorkEligibility: { eligibleCount: 1 },
+      seedPacket: {
+        candidateWorkPacketId: "forged-runtime-seed",
+        title: "Forged runtime seed",
+        sourceRefs: ["runtime:manager-runs/manager-test/events.ndjson"],
+        acceptanceCriteria: ["AC forged packet must be revalidated"],
+        verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+        riskClass: "low",
+        touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+        authorityClass: "allowed_unattended",
+        eligibilityDecision: "eligible",
+        rawPayloadRetained: false,
+      },
+    },
+  };
+  const blocked = buildRefillPlan(
+    { runId: "manager-test", desiredWorkers: 1 },
+    {
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceBackedPacketSeed: forgedEligibleSeed,
+    },
+  );
+
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.summary.sourceBackedPacketSeed.packetState, "blocked");
+  assert.equal(blocked.summary.sourceBackedPacketSeed.seedPacket.eligibilityDecision, "blocked");
+  assert.notEqual(blocked.summary.sourceBackedPacketSeed.seedPacket.eligibilityReason, "eligible");
+  assert.ok(blocked.blockers.some((blocker) => blocker.code === "source-backed-seed-blocked"));
+});
+
+test("refill plan keeps blocked source-backed seed evidence in early blocked output", () => {
+  const blockedSeed = buildSourceBackedPacketSeedPlan(
+    {
+      runId: "manager-test",
+      candidateId: "blocked-runtime-seed",
+      sourceRefs: ["runtime:manager-runs/manager-test/events.ndjson"],
+      acceptanceCriteria: ["AC blocked seed remains visible"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    },
+    {
+      sourceArtifacts: [{ ref: "runtime:manager-runs/manager-test/events.ndjson", sourceType: "runtime_state" }],
+    },
+  );
+  const refill = buildRefillPlan(
+    { runId: "manager-test", desiredWorkers: 1 },
+    {
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceBackedPacketSeed: blockedSeed,
+    },
+  );
+
+  assert.equal(refill.status, "blocked");
+  assert.equal(refill.summary.sourceBackedPacketSeed.packetState, "blocked");
+  assert.equal(refill.summary.sourceBackedPacketSeed.seedPacket.candidateWorkPacketId, "blocked-runtime-seed");
+  assert.equal(refill.summary.sourceBackedPacketSeed.seedPacket.eligibilityReason, "runtime_source_not_deliverable");
+  assert.ok(refill.blockers.some((blocker) => blocker.code === "source-backed-seed-blocked"));
+  assert.ok(refill.warnings.some((warning) => warning.code === "source-backed-seed-blocked"));
 });
 
 test("BMAD planning gap selects the narrowest workflow from planning state and signals", () => {

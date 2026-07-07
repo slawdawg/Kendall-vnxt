@@ -108,6 +108,13 @@ export function parseCommonArgs(argv = []) {
     recoveryPath: "",
     sourceRefs: [],
     evidenceRefs: [],
+    candidateId: "",
+    title: "",
+    acceptanceCriteria: [],
+    verificationTargets: [],
+    touchedSurfaceHint: "",
+    riskClass: "",
+    authorityClass: "",
     correlationId: "",
     causationId: "",
     orderingKey: "",
@@ -189,6 +196,42 @@ export function parseCommonArgs(argv = []) {
       options.sourceRefs.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
     } else if (arg.startsWith("--source-refs=")) {
       options.sourceRefs.push(...arg.slice("--source-refs=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--candidate-id") {
+      options.candidateId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--candidate-id=")) {
+      options.candidateId = arg.slice("--candidate-id=".length);
+    } else if (arg === "--title") {
+      options.title = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--title=")) {
+      options.title = arg.slice("--title=".length);
+    } else if (arg === "--acceptance-criterion") {
+      options.acceptanceCriteria.push(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--acceptance-criterion=")) {
+      options.acceptanceCriteria.push(arg.slice("--acceptance-criterion=".length));
+    } else if (arg === "--acceptance-criteria") {
+      options.acceptanceCriteria.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--acceptance-criteria=")) {
+      options.acceptanceCriteria.push(...arg.slice("--acceptance-criteria=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--verification-target") {
+      options.verificationTargets.push(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--verification-target=")) {
+      options.verificationTargets.push(arg.slice("--verification-target=".length));
+    } else if (arg === "--verification-targets") {
+      options.verificationTargets.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg.startsWith("--verification-targets=")) {
+      options.verificationTargets.push(...arg.slice("--verification-targets=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--touched-surface") {
+      options.touchedSurfaceHint = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--touched-surface=")) {
+      options.touchedSurfaceHint = arg.slice("--touched-surface=".length);
+    } else if (arg === "--risk-class") {
+      options.riskClass = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--risk-class=")) {
+      options.riskClass = arg.slice("--risk-class=".length);
+    } else if (arg === "--authority-class") {
+      options.authorityClass = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--authority-class=")) {
+      options.authorityClass = arg.slice("--authority-class=".length);
     } else if (arg === "--evidence-ref") {
       options.evidenceRefs.push(requiredValue(argv, ++index, arg));
     } else if (arg.startsWith("--evidence-ref=")) {
@@ -9410,6 +9453,142 @@ export function buildSourceWorkEligibilityPlan(options = {}, context = {}) {
   });
 }
 
+export function buildSourceBackedPacketSeedPlan(options = {}, context = {}) {
+  const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
+  const candidateInput = context.seedCandidate || options.seedCandidate || {};
+  const explicitSourceRefs = [
+    ...sourceRefList(options.sourceRefs),
+    ...sourceRefList(context.sourceRefs),
+    ...sourceRefList(context.sourceEvidence),
+    ...sourceRefList(candidateInput.sourceRefs || candidateInput.source_refs || candidateInput.sourceRef || candidateInput.source_ref),
+  ];
+  const sourceRefs = explicitSourceRefs.length > 0 ? explicitSourceRefs : defaultSourceBackedSeedRefs(context);
+  const seedCandidate = sourceBackedSeedCandidate(options, context, sourceRefs);
+  const sourceArtifactDiscovery = context.sourceArtifactDiscovery || buildSourceArtifactDiscoveryPlan(
+    { ...options, sourceArtifactRefs: sourceRefs },
+    context,
+  );
+  const sourceWorkEligibility = buildSourceWorkEligibilityPlan(options, {
+    ...context,
+    sourceArtifactDiscovery,
+    sourceWorkCandidates: [seedCandidate],
+    existingCandidateWorkPackets: context.existingCandidateWorkPackets,
+  });
+  const eligiblePacket = sourceWorkEligibility.summary?.candidateWorkPackets?.[0] || null;
+  const needsReviewPacket = sourceWorkEligibility.summary?.needsReviewPackets?.[0] || null;
+  const blockedPacket = sourceWorkEligibility.summary?.blockedPackets?.[0] || null;
+  const skippedPacket = sourceWorkEligibility.summary?.dedupe?.skippedCandidates?.[0] || null;
+  const packetState = eligiblePacket
+    ? "eligible"
+    : needsReviewPacket
+      ? "needs_review"
+      : blockedPacket
+        ? "blocked"
+        : skippedPacket
+          ? "skipped"
+          : "no_seed";
+  const status = packetState === "eligible" ? "ready" : ["blocked", "skipped"].includes(packetState) ? "blocked" : "attention";
+  return packet({
+    ok: status !== "blocked",
+    status,
+    summary: {
+      runId,
+      seedPacket: eligiblePacket || needsReviewPacket || blockedPacket || skippedPacket || markCandidateWork(normalizeCandidateWorkPacket(seedCandidate, 0, sourceArtifactMap(sourceArtifactDiscovery.summary?.artifacts || [])), "blocked", "no_seed_packet"),
+      packetState,
+      sourceArtifactDiscovery: sourceArtifactDiscovery.summary || null,
+      sourceWorkEligibility: sourceWorkEligibility.summary || null,
+      mutationMode: "none; read-only source-backed packet seed",
+      retention: "metadata_only_seed_packet_and_eligibility_summary",
+      rawPayloadRetained: false,
+      stopLines: ["do_not_queue_without_eligibility", "do_not_create_worker", "do_not_call_provider", "do_not_retain_raw_payload"],
+    },
+    blockers: ["blocked", "skipped"].includes(packetState)
+      ? [{
+          code: packetState === "skipped" ? "source-backed-seed-dedupe-skipped" : "source-backed-seed-blocked",
+          message: packetState === "skipped" ? "Seeded source-backed packet duplicates existing work." : "Seeded source-backed packet did not pass eligibility.",
+          reason: (blockedPacket || skippedPacket)?.eligibilityReason || packetState,
+          nextAction: packetState === "skipped" ? "Use the existing candidate work packet instead of creating a duplicate seed." : "Repair seed source refs, verification targets, authority class, or source-owned rewrite evidence before queueing.",
+        }]
+      : [],
+    warnings: [
+      ...(sourceArtifactDiscovery.warnings || []),
+      ...(sourceWorkEligibility.warnings || []),
+    ],
+    nextActions: packetState === "eligible"
+      ? [{ code: "source-backed-seed-eligible", nextAction: "Pass the eligible CandidateWorkPacket summary to dispatcher refill watermarks; do not mutate from the seed plan itself." }]
+      : packetState === "needs_review"
+        ? [{ code: "source-backed-seed-needs-review", nextAction: "Review the source-backed seed packet before queueing." }]
+        : packetState === "skipped"
+          ? [{ code: "source-backed-seed-dedupe-skipped", nextAction: "Use existing queued or active work instead of creating a duplicate seed." }]
+          : [{ code: "source-backed-seed-blocked", nextAction: "Repair the seed packet inputs or ask for operator direction." }],
+  });
+}
+
+function normalizeSourceBackedPacketSeedForRefill(options = {}, context = {}, sourceArtifactDiscovery = null) {
+  const supplied = context.sourceBackedPacketSeed || null;
+  if (!supplied) return null;
+  const summary = supplied.summary || supplied;
+  const seedPacket = summary?.seedPacket || null;
+  if (!seedPacket) return supplied;
+  if (summary?.packetState !== "eligible" || seedPacket.eligibilityDecision !== "eligible") {
+    return supplied;
+  }
+  return buildSourceBackedPacketSeedPlan(options, {
+    ...context,
+    sourceArtifactDiscovery: sourceArtifactDiscovery || null,
+    seedCandidate: {
+      candidateWorkPacketId: seedPacket.candidateWorkPacketId || seedPacket.candidateId,
+      title: seedPacket.title,
+      sourceRefs: seedPacket.sourceRefs,
+      acceptanceCriteria: seedPacket.acceptanceCriteria,
+      verificationTargets: seedPacket.verificationTargets,
+      riskClass: seedPacket.riskClass,
+      dependencyHints: seedPacket.dependencyHints,
+      touchedSurfaceHint: seedPacket.touchedSurfaceHint,
+      authorityClass: seedPacket.authorityClass,
+      evidenceRefs: seedPacket.evidenceRefs,
+      sourceOwnedRewriteRef: seedPacket.sourceOwnedRewriteRef,
+      repoDeliverable: seedPacket.repoDeliverable,
+    },
+  });
+}
+
+function sourceBackedSeedCandidate(options = {}, context = {}, sourceRefs = []) {
+  const firstRefKey = refillSourceKey(sourceRefs.length > 0 ? sourceRefs : ["source-backed-seed"]);
+  const candidate = context.seedCandidate || options.seedCandidate || {};
+  return {
+    candidateWorkPacketId: sanitizeLedgerField(options.candidateId || candidate.candidateWorkPacketId || candidate.candidateId || `source-backed-seed-${firstRefKey}`, `source-backed-seed-${firstRefKey}`, 120),
+    title: sanitizeLedgerField(options.title || candidate.title || "Source-backed operational packet seed", "Source-backed operational packet seed", 180),
+    sourceRefs,
+    acceptanceCriteria: normalizeCandidateStringList(options.acceptanceCriteria?.length ? options.acceptanceCriteria : candidate.acceptanceCriteria || [
+      "Seeded packet has source-owned evidence and eligibility decision metadata.",
+    ]),
+    verificationTargets: normalizeCandidateStringList(options.verificationTargets?.length ? options.verificationTargets : candidate.verificationTargets || [
+      "node --test tests/manager-control-plane.test.mjs",
+    ]),
+    riskClass: sanitizeLedgerField(options.riskClass || candidate.riskClass || "low", "low", 80),
+    dependencyHints: normalizeCandidateStringList(candidate.dependencyHints || ["after-source-artifact-discovery"]),
+    touchedSurfaceHint: sanitizeLedgerField(options.touchedSurfaceHint || candidate.touchedSurfaceHint || "scripts/lib/manager-control-plane/core.mjs", "scripts/lib/manager-control-plane/core.mjs", 180),
+    authorityClass: sanitizeLedgerField(options.authorityClass || candidate.authorityClass || "allowed_unattended", "allowed_unattended", 80),
+    evidenceRefs: normalizeCandidateStringList(candidate.evidenceRefs || sourceRefs),
+    sourceOwnedRewriteRef: candidate.sourceOwnedRewriteRef || "",
+    repoDeliverable: candidate.repoDeliverable !== false,
+    rawPayloadRetained: false,
+  };
+}
+
+function hasSourceBackedSeedInputs(options = {}, context = {}) {
+  const candidate = context.seedCandidate || options.seedCandidate || null;
+  if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return true;
+  if (context.sourceBackedPacketSeed) return true;
+  return Boolean(
+    options.candidateId ||
+      options.title ||
+      (Array.isArray(options.acceptanceCriteria) && options.acceptanceCriteria.length > 0) ||
+      (Array.isArray(options.verificationTargets) && options.verificationTargets.length > 0),
+  );
+}
+
 export function buildBmadPlanningGapPlan(options = {}, context = {}) {
   const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
   const explicitRefs = [
@@ -10743,6 +10922,36 @@ function uniqueStrings(values = []) {
   return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
+function refillSourceWorkEligibilityWarnings(summary = {}) {
+  const blockedPackets = Array.isArray(summary.blockedPackets) ? summary.blockedPackets : [];
+  const needsReviewPackets = Array.isArray(summary.needsReviewPackets) ? summary.needsReviewPackets : [];
+  const skippedCandidates = Array.isArray(summary.dedupe?.skippedCandidates) ? summary.dedupe.skippedCandidates : [];
+  const compactReasons = (packets) => [...new Set(packets.map((packet) => sanitizeLedgerField(packet.eligibilityReason || "", "", 80)).filter(Boolean))].slice(0, 6);
+  return [
+    ...(blockedPackets.length > 0
+      ? [{
+          code: "source-work-blocked",
+          message: `${blockedPackets.length} source work candidate(s) are blocked and were not queued.`,
+          eligibilityReasons: compactReasons(blockedPackets),
+        }]
+      : []),
+    ...(needsReviewPackets.length > 0
+      ? [{
+          code: "source-work-needs-review",
+          message: `${needsReviewPackets.length} source work candidate(s) require review before queueing.`,
+          eligibilityReasons: compactReasons(needsReviewPackets),
+        }]
+      : []),
+    ...(skippedCandidates.length > 0
+      ? [{
+          code: "source-work-dedupe-skipped",
+          message: `${skippedCandidates.length} duplicate source work candidate(s) were linked or skipped.`,
+          eligibilityReasons: compactReasons(skippedCandidates),
+        }]
+      : []),
+  ];
+}
+
 export function buildRefillPlan(options = {}, context = {}) {
   const desiredWorkers = boundedDesiredWorkers(options.desiredWorkers);
   const apply = options.apply === true;
@@ -10848,9 +11057,22 @@ export function buildRefillPlan(options = {}, context = {}) {
     (hasSourceWorkCandidateInputs(options, context)
       ? buildSourceWorkEligibilityPlan(options, { ...context, sourceArtifactDiscovery })
       : null);
+  const explicitSourceWorkCandidateInputs = sourceWorkCandidateInputs(options, context);
+  const hasExplicitSourceWorkCandidates = explicitSourceWorkCandidateInputs.length > 0;
   const eligibleSourceWorkPackets = Array.isArray(sourceWorkEligibility?.summary?.candidateWorkPackets)
     ? sourceWorkEligibility.summary.candidateWorkPackets
     : [];
+  const shouldBuildSourceBackedSeed = hasSourceBackedSeedInputs(options, context);
+  const suppliedSourceBackedPacketSeed = normalizeSourceBackedPacketSeedForRefill(options, context, sourceArtifactDiscovery);
+  const sourceBackedPacketSeed =
+    suppliedSourceBackedPacketSeed ||
+    (starvation && shouldBuildSourceBackedSeed && !hasExplicitSourceWorkCandidates && eligibleSourceWorkPackets.length === 0
+      ? buildSourceBackedPacketSeedPlan(options, context)
+      : null);
+  const eligibleSeedPackets = !hasExplicitSourceWorkCandidates && sourceBackedPacketSeed?.summary?.packetState === "eligible" && sourceBackedPacketSeed.summary.seedPacket
+    ? [sourceBackedPacketSeed.summary.seedPacket]
+    : [];
+  const refillEligibleSourceWorkPackets = eligibleSourceWorkPackets.length > 0 ? eligibleSourceWorkPackets : eligibleSeedPackets;
   const discoveredSourceRefs = Array.isArray(sourceArtifactDiscovery?.summary?.artifacts)
     ? sourceArtifactDiscovery.summary.artifacts.map((artifact) => artifact.ref).filter(Boolean)
     : [];
@@ -10859,7 +11081,7 @@ export function buildRefillPlan(options = {}, context = {}) {
     ...sourceRefList(context.sourceRefs),
     ...sourceRefList(context.sourceEvidence),
     ...sourceRefList(discoveredSourceRefs),
-    ...eligibleSourceWorkPackets.flatMap((candidate) => sourceRefList(candidate.sourceRefs)),
+    ...refillEligibleSourceWorkPackets.flatMap((candidate) => sourceRefList(candidate.sourceRefs)),
   ];
   const sourceEvidence = normalizeSourceEvidence(explicitSourceRefs.length > 0 ? explicitSourceRefs : defaultSourceRefs(context));
   const sourceSlice = sourceEvidence.valid[0] || null;
@@ -10873,6 +11095,19 @@ export function buildRefillPlan(options = {}, context = {}) {
           },
         ]
       : [];
+  const sourceWorkEligibilityWarnings = sourceWorkEligibility?.summary
+    ? refillSourceWorkEligibilityWarnings(sourceWorkEligibility.summary)
+    : [];
+  const sourceBackedPacketSeedWarnings = sourceBackedPacketSeed?.summary
+    ? [
+        ...(sourceBackedPacketSeed.warnings || []),
+        ...(sourceBackedPacketSeed.blockers || []).map((blocker) => ({
+          code: blocker.code || "source-backed-seed-blocked",
+          message: blocker.message || "Source-backed packet seed did not pass eligibility.",
+          eligibilityReason: blocker.reason || sourceBackedPacketSeed.summary?.seedPacket?.eligibilityReason || null,
+        })),
+      ]
+    : [];
   if (starvation && !sourceSlice) {
     const ambiguous = sourceEvidence.rejected.length > 0;
     return packet({
@@ -10890,6 +11125,7 @@ export function buildRefillPlan(options = {}, context = {}) {
         sourceSlice: null,
         sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
         sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+        sourceBackedPacketSeed: sourceBackedPacketSeed?.summary || null,
         candidateLanes: [],
         closedEvidence,
         workCreationStep: null,
@@ -10904,13 +11140,15 @@ export function buildRefillPlan(options = {}, context = {}) {
             : "No source-owned PRD, runway, story, or repo doc evidence is available for refill planning.",
           nextAction: "Run housekeeping and stop, or ask the operator for product direction before creating new work.",
         },
+        ...(sourceBackedPacketSeed?.blockers || []),
       ],
-      warnings: sourceWarnings,
+      warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings, ...sourceBackedPacketSeedWarnings],
     });
   }
   const sourcePlanning = sourceSlice ? discoverSourcePlanningState(sourceSlice, context) : null;
+  const sourceWorkEligibilityForPlanning = sourceWorkEligibility || (eligibleSeedPackets.length > 0 ? { summary: { eligibleCount: eligibleSeedPackets.length } } : null);
   const bmadPlanningGap = starvation && sourceSlice
-    ? buildBmadPlanningGapPlan(options, { ...context, sourceRefs: [sourceSlice.ref], sourceSlice, sourcePlanning, sourceWorkEligibility })
+    ? buildBmadPlanningGapPlan(options, { ...context, sourceRefs: [sourceSlice.ref], sourceSlice, sourcePlanning, sourceWorkEligibility: sourceWorkEligibilityForPlanning })
     : null;
   let workCreationStep = starvation && sourceSlice && bmadPlanningGap?.summary?.narrowestWorkflow
     ? selectWorkCreationStep(sourceSlice, [...sourceRefList(options.workCreationSignals), ...sourceRefList(context.workCreationSignals), ...sourceRefList(context.operatorSteering)], sourcePlanning, refillNeeded, bmadPlanningGap)
@@ -10943,10 +11181,20 @@ export function buildRefillPlan(options = {}, context = {}) {
       ...context,
       sourceRefs: sourceSlice ? [sourceSlice.ref] : explicitSourceRefs,
       candidateLanes,
-      refillCandidates: sourceWorkEligibility ? eligibleSourceWorkPackets : context.refillCandidates,
+      refillCandidates: refillEligibleSourceWorkPackets.length > 0
+        ? refillEligibleSourceWorkPackets
+        : hasExplicitSourceWorkCandidates
+          ? []
+          : context.refillCandidates,
       dispatchPreview: context.dispatchPreview,
     },
   );
+  const dispatcherRefillAction = sourceBackedDispatcherRefillAction({
+    runId: resolveManagerRunId(options, context),
+    sourceRefs: sourceSlice ? [sourceSlice.ref] : explicitSourceRefs,
+    refillJob: dispatcherRefill.summary?.refillJob || null,
+    refillWatermark: dispatcherRefill.summary || null,
+  });
   if (apply) {
     if (workCreationStep && (requestPacketBlocked || bmadRequestPacketPlan?.summary?.validation?.status !== "ready")) {
       return packet({
@@ -10997,6 +11245,7 @@ export function buildRefillPlan(options = {}, context = {}) {
       candidateLanes,
       sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
       sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+      sourceBackedPacketSeed: sourceBackedPacketSeed?.summary || null,
       bmadPlanningGap: bmadPlanningGap?.summary || null,
       bmadRequestPacket: requestPacketBlocked ? null : bmadRequestPacketPlan?.summary?.requestPacket || null,
       materializationGate,
@@ -11007,19 +11256,40 @@ export function buildRefillPlan(options = {}, context = {}) {
       splitPlan,
       mutationMode: starvation ? "dry_run_required" : "none",
     },
-    warnings: sourceWarnings,
+    warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings, ...sourceBackedPacketSeedWarnings],
     blockers: [...(bmadPlanningGap?.blockers || []), ...(requestPacketBlocked ? bmadRequestPacketPlan.blockers || [] : [])],
     nextActions: starvation
       ? [
           {
             code: "safe-backlog-starvation",
             summary: "Dispatchable safe backlog is below desired worker capacity.",
-            nextAction: materializationGate ? materializationGate.nextAction : workCreationNextAction(workCreationStep),
+            nextAction: dispatcherRefillAction?.nextAction || (materializationGate ? materializationGate.nextAction : workCreationNextAction(workCreationStep)),
             materializationGate: materializationGate ? compactRefillMaterializationGateAction(materializationGate) : null,
+            dispatcherRefillAction,
           },
         ]
       : [],
   });
+}
+
+function sourceBackedDispatcherRefillAction({ runId = "", sourceRefs = [], refillJob = null, refillWatermark = null } = {}) {
+  const queuedCount = nonNegativeInteger(refillJob?.queuedCount ?? refillWatermark?.queuedCount) ?? 0;
+  if (queuedCount < 1) return null;
+  const refs = sourceRefList(sourceRefs).slice(0, 8);
+  const scopedRun = runId ? ` --run-id ${shellSingleQuote(runId)}` : "";
+  const sourceArgs = refs.map((ref) => ` --source-ref ${shellSingleQuote(ref)}`).join("");
+  const dryRunCommand = `node ./scripts/manager-refill-plan.mjs --summary-json${scopedRun}${sourceArgs}`;
+  const jobAction = Array.isArray(refillJob?.nextActions) ? refillJob.nextActions[0] : null;
+  return {
+    code: "source-backed-dispatcher-refill-refresh",
+    summary: "Refresh dispatcher refill state after source-backed seed work was queued.",
+    nextAction: dryRunCommand,
+    dryRunCommand,
+    refillJobId: refillJob?.refillJobId || null,
+    queuedCount,
+    sourceRefs: refs,
+    dispatcherNextAction: jobAction?.nextAction || "Record refill evidence and refresh dispatcher queue summary.",
+  };
 }
 
 function refillTriggerReason(value) {
@@ -11953,7 +12223,7 @@ function sourceArtifactInputs(options = {}, context = {}) {
     ? defaultBacklogSourceRefs({ ...context, discoverDefaultBacklogSources: true })
     : [];
   const contextArtifacts = Array.isArray(context.artifacts) ? context.artifacts : [];
-  return [...explicitRefs, ...explicitArtifacts, ...contextArtifacts, ...defaults, ...backlogDefaults].slice(0, 32);
+  return [...explicitArtifacts, ...contextArtifacts, ...explicitRefs, ...defaults, ...backlogDefaults].slice(0, 32);
 }
 
 function hasSourceArtifactInputs(options = {}, context = {}) {
@@ -12263,6 +12533,14 @@ function defaultSourceRefs(context = {}) {
     .sort((a, b) => sourceArtifactRank(b.name) - sourceArtifactRank(a.name) || b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name))
     .slice(0, 3)
     .map((entry) => `prd:${entry.relativePath}`);
+}
+
+function defaultSourceBackedSeedRefs(context = {}) {
+  const explicitDefaults = sourceRefList(context.defaultSeedSourceRefs || context.default_seed_source_refs);
+  if (explicitDefaults.length > 0) return explicitDefaults;
+  const activeStoryAndSprintRefs = defaultBacklogSourceRefs({ ...context, discoverDefaultBacklogSources: true });
+  if (activeStoryAndSprintRefs.length > 0) return activeStoryAndSprintRefs;
+  return defaultSourceRefs({ ...context, discoverDefaultSources: true }).slice(0, 1);
 }
 
 function defaultBacklogSourceRefs(context = {}) {
@@ -18551,6 +18829,7 @@ function continuousActionPriority(action = {}) {
     ["continuous-worker-handoff", 31],
     ["continuous-worker-progress-signal", 32],
     ["continuous-dispatch-apply", 33],
+    ["continuous-dispatcher-refill-refresh", 33],
     ["continuous-refill-apply", 34],
     ["continuous-worker-prompt-idle-progress-signal", 35],
     ["continuous-worker-recovery-inspection", 55],
@@ -18589,6 +18868,8 @@ function operationalActionIdForContinuousMutation(action = {}) {
   switch (action.code) {
     case "continuous-dispatch-apply":
       return "dispatch_apply";
+    case "continuous-dispatcher-refill-refresh":
+      return "refresh_projection";
     case "continuous-worker-retire":
       return "kill_worker";
     case "continuous-refill-apply":
@@ -19383,6 +19664,21 @@ function buildContinuousAction(action = {}, cycle = {}, capabilityPosture = {}) 
         return null;
       }
       return continuousWorkerCodeReviewAction(action, cycle, reviewPlan);
+    }
+    const dispatcherRefillAction = action.dispatcherRefillAction || null;
+    const dispatcherRefreshCommand = String(dispatcherRefillAction?.dryRunCommand || dispatcherRefillAction?.nextAction || "").trim();
+    if (dispatcherRefreshCommand.startsWith("node ./scripts/manager-refill-plan.mjs ")) {
+      return {
+        code: "continuous-dispatcher-refill-refresh",
+        summary: dispatcherRefillAction.summary || action.summary || "Refresh dispatcher refill state for source-backed queued work.",
+        dryRunCommand: dispatcherRefreshCommand,
+        applyCommand: dispatcherRefreshCommand,
+        authority: "source-backed-dispatcher-refill-refresh-existing-gates",
+        mutationClass: "metadata_only_dispatcher_refill_refresh",
+        readOnly: true,
+        refillJobId: dispatcherRefillAction.refillJobId || null,
+        queuedCount: dispatcherRefillAction.queuedCount || null,
+      };
     }
     const gate = action.materializationGate || null;
     const gateReady = gate?.state === "ready" || gate?.mutationMode === "dry_run_required";
