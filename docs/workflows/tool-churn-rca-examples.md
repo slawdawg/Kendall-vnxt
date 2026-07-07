@@ -61,6 +61,19 @@ Tool Churn RCA Packet
 - Durable fix recommendation: Keep the command result in the lane evidence and add a wrapper/preflight only if the same EROFS signature recurs in ordinary non-sandbox runs.
 ```
 
+## Git Metadata Lock EROFS
+
+```text
+Tool Churn RCA Packet
+- What failed: A read-only Git verification command failed while trying to write a Git metadata lock such as `.git/ORIG_HEAD.lock`.
+- Failure class: sandbox
+- Most likely cause: The sandbox permits repository reads but blocks Git metadata writes needed by the command.
+- Evidence: Output includes `.git/ORIG_HEAD.lock`, `.git/index.lock`, or another `.git/*.lock` path with `EROFS` or `Read-only file system`.
+- Retry stop line: Do not delete lock files, change Git recovery commands, or retry Git wrappers inside the sandbox after this signature appears.
+- One next safe action: Request approval to rerun the exact same read-only verification command outside the sandbox.
+- Durable fix recommendation: Keep this as sandbox-boundary evidence unless the same Git metadata lock failure recurs outside the sandbox.
+```
+
 ## Git Worktree Metadata EROFS
 
 ```text
@@ -85,6 +98,32 @@ Tool Churn RCA Packet
 - Retry stop line: Do not switch between `uv`, `python`, and pnpm wrappers after this cache EROFS signature appears.
 - One next safe action: Request approval to rerun the exact same `uv run --directory services/supervisor ...` command outside the sandbox.
 - Durable fix recommendation: Preserve the outside-sandbox verification result as lane evidence; consider a future uv cache preflight only if the same signature recurs outside managed sandbox constraints.
+```
+
+## Tmux Socket Operation Not Permitted
+
+```text
+Tool Churn RCA Packet
+- What failed: A read-only tmux probe could not connect to the tmux socket.
+- Failure class: sandbox
+- Most likely cause: The sandbox blocked tmux socket access even though the probe was metadata-only.
+- Evidence: Output includes `tmux`, a socket path such as `/tmp/tmux-1000/default`, and `Operation not permitted`.
+- Retry stop line: Do not mutate tmux sessions, restart panes, or switch to pane scrollback capture to work around the socket boundary.
+- One next safe action: Request approval to rerun the exact same read-only tmux or manager orientation command outside the sandbox.
+- Durable fix recommendation: Keep the outside-sandbox probe result as metadata-only lane evidence; update AGENTS.md only if a new recurring command needs an explicit stop line.
+```
+
+## Local Codex Workspace State EROFS
+
+```text
+Tool Churn RCA Packet
+- What failed: A read-only manager or workspace inspection command could not access local Codex workspace state under `.codex-workspaces`.
+- Failure class: sandbox
+- Most likely cause: The sandbox blocked required task, assignment, cleanup, or managed-worktree state access.
+- Evidence: Output includes `.codex-workspaces` or an explicit Codex task/assignment state path with `EROFS` or `Read-only file system`; generic `workspace metadata` text alone is not enough.
+- Retry stop line: Do not treat hidden or unreadable workspace state as empty state, and do not narrow the command to skip the state probe.
+- One next safe action: Request approval to rerun the exact same read-only command outside the sandbox.
+- Durable fix recommendation: Preserve the outside-sandbox result as lane evidence; add a classifier fixture when the signature was not recognized.
 ```
 
 ## PR Review Threads After Green CI

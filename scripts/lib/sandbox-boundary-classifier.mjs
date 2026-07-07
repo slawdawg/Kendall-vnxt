@@ -11,6 +11,13 @@ const READ_ONLY_FILESYSTEM_TARGETS = [
     },
   },
   {
+    signature: ".git metadata read-only filesystem boundary",
+    target: "Git metadata state",
+    matches(text) {
+      return isGitMetadataLockReadOnlyBoundary(text);
+    },
+  },
+  {
     signature: "$HOME/.cache/uv read-only filesystem boundary",
     target: "$HOME/.cache/uv",
     matches(text) {
@@ -28,7 +35,7 @@ const READ_ONLY_FILESYSTEM_TARGETS = [
     signature: "local Codex workspace state read-only filesystem boundary",
     target: "local Codex workspace state",
     matches(text) {
-      return text.includes(".codex-workspaces") || text.includes("codex workspace state") || text.includes("workspace metadata");
+      return isLocalWorkspaceStateReadOnlyBoundary(text);
     },
   },
 ];
@@ -190,6 +197,32 @@ function isSpawnSyncPermissionBoundary(observation, text) {
 
 function isReadOnlyFilesystemBoundary(text) {
   return /read-only file system|erofs/.test(text);
+}
+
+function isGitMetadataLockReadOnlyBoundary(text) {
+  const lines = text.split(/\r?\n/);
+  return lines.some((line, index) => {
+    if (!hasGitMetadataLockPath(line)) {
+      return false;
+    }
+    return (
+      isReadOnlyFilesystemBoundary(line) ||
+      isReadOnlyFilesystemBoundary(lines[index - 1] || "") ||
+      isReadOnlyFilesystemBoundary(lines[index + 1] || "")
+    );
+  });
+}
+
+function hasGitMetadataLockPath(text) {
+  return text.includes(".git/orig_head.lock") || /\.git\/[^\s'"]+\.lock\b/.test(text);
+}
+
+function isLocalWorkspaceStateReadOnlyBoundary(text) {
+  return text.split(/\r?\n/).some((line) => isReadOnlyFilesystemBoundary(line) && isLocalWorkspaceStateLine(line));
+}
+
+function isLocalWorkspaceStateLine(text) {
+  return text.includes(".codex-workspaces") || text.includes("codex workspace state");
 }
 
 function isPermissionBoundary(text) {
