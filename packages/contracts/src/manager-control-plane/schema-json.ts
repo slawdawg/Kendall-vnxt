@@ -336,6 +336,7 @@ export const MANAGER_EXECUTION_LANE_SUMMARY_SERIALIZED_FIELDS = [
   "recovery_attempt_count",
   "last_recovery_at",
   "safe_work_available_count",
+  "metadata_only_queued_count",
   "unsafe_or_gated_work_count",
   "evidence_freshness",
   "event_watermark",

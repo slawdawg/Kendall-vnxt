@@ -2401,12 +2401,46 @@ test("dispatcher refill eligibility keeps ambiguous and unsafe candidates out of
   assert.equal(plan.summary.refillJob.queuedCount, 1);
   assert.equal(plan.summary.refillJob.needsReviewCount, 3);
   assert.equal(plan.summary.refillJob.blockedCount, 1);
+  assert.equal(plan.status, "attention");
+  assert.equal(plan.summary.refillJob.state, "completed");
+  assert.equal(plan.summary.refillJob.result, "queued_with_gated_candidates");
+  assert.equal(plan.summary.refillJob.authorityClass, "block_and_record");
+  assert.ok(plan.nextActions.some((action) => action.code === "dispatcher-refill-mixed-gated"));
   assert.equal(plan.summary.eligibleCandidates.length, 1);
   assert.equal(plan.summary.needsReviewCandidates.length, 3);
   assert.equal(plan.summary.blockedCandidates.length, 1);
   assert.ok(plan.summary.needsReviewCandidates.some((candidate) => candidate.reason === "missing_verification_target"));
   assert.ok(plan.summary.needsReviewCandidates.some((candidate) => candidate.reason === "authority_requires_review"));
   assert.ok(plan.summary.blockedCandidates.some((candidate) => candidate.reason === "ambiguous_source"));
+
+  const continuous = buildContinuousRunPlan(
+    { runId: "manager-test", maxIterations: 1 },
+    {
+      cyclePacket: {
+        ok: true,
+        status: plan.status,
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 0, warm: 0, paused: 0 } },
+          reviewResourcePolicy: null
+        },
+        blockers: [],
+        warnings: plan.warnings,
+        nextActions: plan.nextActions
+      },
+      promptProbe: { status: "ready", warnings: [], nextActions: [] },
+      submitPendingPlan: { status: "ready", warnings: [], nextActions: [] }
+    },
+  );
+  assert.equal(continuous.status, "attention");
+  assert.equal(continuous.summary.cycleStatus, "attention");
+  assert.equal(continuous.summary.selectedAction, null);
+  assert.ok(continuous.nextActions.some((action) =>
+    action.code === "continuous-attention-monitor" &&
+    /surface review-needed or blocked refill candidates/.test(action.nextAction)
+  ));
 });
 
 test("dispatcher refill dedupes duplicate candidates inside the same source batch", () => {
@@ -23040,13 +23074,6 @@ test("ledger init and append-event write only manager-owned runtime state", () =
     assert.equal(unknown.status, "blocked");
     assert.equal(unknown.blockers[0].code, "ledger-event-unknown");
 
-    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8");
-    assert.match(events, /manager\.run\.steered/);
-    assert.match(events, /worker_code_review_request_apply/);
-    assert.match(events, /worker_review_feedback_apply/);
-    assert.match(events, /manager\.self_repair\.attempted/);
-    assert.equal(events.trim().split("\n").length, 6);
-
     const read = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
     assert.equal(read.status, "ready");
     assert.equal(read.summary.replaySummary.runId, "manager-test");
@@ -23055,6 +23082,31 @@ test("ledger init and append-event write only manager-owned runtime state", () =
     assert.equal(read.summary.replaySummary.selfRepair.attemptsByAction["continuous-worker-prompt-probe"], 2);
     assert.equal(read.summary.replaySummary.nextSafeAction, "reconcile_dispatcher_summary");
     assert.equal(read.summary.replaySummary.rawPayloadRetained, false);
+
+    const reviewRequired = ledgerCommand({
+      command: "append-event",
+      runId: "manager-test",
+      stateRoot,
+      eventType: "dispatcher.review.required",
+      summary: "Candidate requires operator review.",
+      authorityBasis: "dispatcher-refill-review-attention",
+      recoveryPath: "inspect review-needed candidate metadata",
+      sourceRefs: ["story:2.2"],
+      evidenceRefs: ["evidence:dispatcher-review"],
+      idempotencyKey: "dispatcher-review-1",
+    });
+    assert.equal(reviewRequired.status, "ready");
+    assert.equal(reviewRequired.summary.event.eventName, "dispatcher.review.required");
+    assert.equal(reviewRequired.summary.event.projectionBehavior, "records_evidence");
+
+    const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8");
+    assert.match(events, /manager\.run\.steered/);
+    assert.match(events, /worker_code_review_request_apply/);
+    assert.match(events, /worker_review_feedback_apply/);
+    assert.match(events, /manager\.self_repair\.attempted/);
+    assert.match(events, /dispatcher\.review\.required/);
+    assert.equal(events.trim().split("\n").length, 7);
+
 
     const selfRepairSummary = buildManagerSelfRepairSummary({ runId: "manager-test", stateRoot });
     assert.equal(selfRepairSummary.status, "ready");

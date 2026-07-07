@@ -117,6 +117,7 @@ export type PipelineManagerExecutionLaneState = {
   feedbackRetention: "metadata_only";
   feedbackRawPayloadRetained: false;
   safeWorkAvailableCount: number;
+  metadataOnlyQueuedCount: number;
   unsafeOrGatedWorkCount: number;
   stateCounts: ManagerControlPlane.ManagerExecutionLaneStateCounts;
   nextAction: string;
@@ -198,6 +199,7 @@ export function projectManagerExecutionLaneSummary(
     feedbackRetention: "metadata_only",
     feedbackRawPayloadRetained: false,
     safeWorkAvailableCount: summary.safeWorkAvailableCount,
+    metadataOnlyQueuedCount: summary.metadataOnlyQueuedCount ?? 0,
     unsafeOrGatedWorkCount: summary.unsafeOrGatedWorkCount,
     stateCounts: summary.stateCounts,
     nextAction: summary.nextAction,
@@ -223,12 +225,8 @@ export function projectManagerExecutionLaneSummary(
     })),
     refillPanel: {
       title: "Refill and bootstrap",
-      state: summary.stateCounts.refilling > 0 ? "refilling" : summary.currentPhase === "no_safe_work" ? "no_safe_work" : "idle",
-      reason: summary.safeWorkAvailableCount > 0
-        ? `${summary.safeWorkAvailableCount} safe item(s) available.`
-        : summary.unsafeOrGatedWorkCount > 0
-          ? `${summary.unsafeOrGatedWorkCount} unsafe or gated item(s) held.`
-          : "No safe work is available from the summary.",
+      state: refillPanelState(summary),
+      reason: refillPanelReason(summary),
       authorityClass: summary.authorityClass,
       authorityReason: authorityReason(summary, "Refill/bootstrap state is read-only in the dashboard."),
       nextAction: summary.nextAction
@@ -586,6 +584,36 @@ function operationAuthorityReason(
   return authorityReason(summary, `${operation} follows the active authority classification.`);
 }
 
+function refillPanelReason(summary: ManagerControlPlane.ManagerExecutionLaneSummary): string {
+  if (summary.safeWorkAvailableCount > 0) {
+    return `${summary.safeWorkAvailableCount} claimable safe item(s) available.`;
+  }
+  const metadataOnlyQueuedCount = summary.metadataOnlyQueuedCount ?? 0;
+  if (metadataOnlyQueuedCount > 0 && summary.unsafeOrGatedWorkCount > 0) {
+    return `${metadataOnlyQueuedCount} metadata-only queued candidate(s) reported; ${summary.unsafeOrGatedWorkCount} unsafe or gated item(s) held.`;
+  }
+  if (metadataOnlyQueuedCount > 0) {
+    return `${metadataOnlyQueuedCount} metadata-only queued candidate(s) reported; no claimable WorkItems are retained.`;
+  }
+  if (summary.unsafeOrGatedWorkCount > 0) {
+    return `${summary.unsafeOrGatedWorkCount} unsafe or gated item(s) held.`;
+  }
+  return "No safe work is available from the summary.";
+}
+
+function refillPanelState(summary: ManagerControlPlane.ManagerExecutionLaneSummary): string {
+  if (summary.stateCounts.refilling > 0) return "refilling";
+  if ((summary.stateCounts.blockedCandidates ?? 0) > 0 || summary.blockers.includes("dispatcher_has_blocked_candidates")) {
+    return "blocked";
+  }
+  if ((summary.stateCounts.needsReviewCandidates ?? 0) > 0 || summary.blockers.includes("dispatcher_has_needs_review_candidates")) {
+    return "needs_review";
+  }
+  if (summary.unsafeOrGatedWorkCount > 0) return "blocked";
+  if (summary.currentPhase === "no_safe_work") return "no_safe_work";
+  return "idle";
+}
+
 function authorityReason(summary: ManagerControlPlane.ManagerExecutionLaneSummary, fallback: string) {
   return summary.authorityBlockedReason ?? summary.authorityStopReason ?? summary.attentionReason ?? fallback;
 }
@@ -679,7 +707,9 @@ const baseCounts: ManagerControlPlane.ManagerExecutionLaneStateCounts = {
   quarantined: 0,
   blocked: 0,
   closed: 0,
+  metadataOnlyQueuedCandidates: 0,
   blockedCandidates: 0,
+  needsReviewCandidates: 0,
   duplicateCandidates: 0,
   noSafeWork: 0
 };
@@ -715,6 +745,7 @@ function managerSummaryFixture(
     recoveryAttemptCount: 0,
     lastRecoveryAt: null,
     safeWorkAvailableCount: 3,
+    metadataOnlyQueuedCount: 0,
     unsafeOrGatedWorkCount: 1,
     evidenceFreshness: "fresh",
     eventWatermark: "evt-manager-fixture",

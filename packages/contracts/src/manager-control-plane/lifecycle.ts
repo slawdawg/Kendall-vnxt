@@ -34,6 +34,7 @@ export const MANAGER_SUMMARY_PHASES = [
   "failed",
   "expired",
   "blocked",
+  "needs_review",
   "closed",
   "manager_only",
   "unknown",

@@ -42,6 +42,7 @@ export interface DispatcherRefillResult {
   queuedWorkItems: readonly ManagerControlPlane.WorkItem[];
   duplicateCandidates: readonly ManagerControlPlane.CandidateWorkPacket[];
   blockedCandidates: readonly ManagerControlPlane.CandidateWorkPacket[];
+  needsReviewCandidates: readonly ManagerControlPlane.CandidateWorkPacket[];
   events: readonly ManagerControlPlane.ManagerControlPlaneEvent[];
 }
 

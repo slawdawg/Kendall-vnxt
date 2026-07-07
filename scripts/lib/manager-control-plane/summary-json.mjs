@@ -52,6 +52,7 @@ function pickManagerSummaryFields(summary) {
     recoveryAttemptCount: summary.recoveryAttemptCount,
     lastRecoveryAt: summary.lastRecoveryAt ?? null,
     safeWorkAvailableCount: summary.safeWorkAvailableCount,
+    metadataOnlyQueuedCount: summary.metadataOnlyQueuedCount ?? 0,
     unsafeOrGatedWorkCount: summary.unsafeOrGatedWorkCount,
     evidenceFreshness: summary.evidenceFreshness,
     eventWatermark: summary.eventWatermark,

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, join, relative } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const contractsRoot = new URL("../packages/contracts/src/", import.meta.url);
 const managerRoot = new URL("../packages/contracts/src/manager-control-plane/", import.meta.url);
@@ -169,6 +171,8 @@ test("Manager Control Plane schema metadata covers required serialized fields an
   const lifecycleSource = await readFile(new URL("lifecycle.ts", managerRoot), "utf8");
   const authoritySource = await readFile(new URL("authority.ts", managerRoot), "utf8");
   const eventsSource = await readFile(new URL("events.ts", managerRoot), "utf8");
+  const refillSource = await readFile(new URL("refill.ts", managerRoot), "utf8");
+  const summarySource = await readFile(new URL("summary.ts", managerRoot), "utf8");
 
   for (const literal of [
     "eligible",
@@ -217,6 +221,8 @@ test("Manager Control Plane schema metadata covers required serialized fields an
     "dispatcher.refill.started",
     "dispatcher.refill.completed",
     "dispatcher.authority.blocked",
+    "dispatcher.candidate.blocked",
+    "dispatcher.review.required",
     "dispatcher.summary.updated",
     "dispatcher.summary.stale",
     "dispatcher.progress.observed",
@@ -235,6 +241,22 @@ test("Manager Control Plane schema metadata covers required serialized fields an
     "manager.replay.summarized"
   ]) {
     assert.match(eventsSource, new RegExp(`"${eventName.replaceAll(".", "\\.")}"`), `missing event name ${eventName}`);
+  }
+
+  for (const literal of [
+    "queued_with_gated_candidates",
+    "needsReviewCount",
+    "blockedCount"
+  ]) {
+    assert.match(refillSource, new RegExp(literal), `missing refill contract literal/field ${literal}`);
+  }
+
+  for (const literal of [
+    "metadataOnlyQueuedCandidates",
+    "metadataOnlyQueuedCount",
+    "needsReviewCandidates"
+  ]) {
+    assert.match(summarySource, new RegExp(literal), `missing summary contract field ${literal}`);
   }
 
   const requiredByContract = {
@@ -383,7 +405,7 @@ test("Manager Control Plane schema metadata covers required serialized fields an
   );
   assertRequiredFields(
     "ManagerExecutionLaneSummary serialized truth fields",
-    ["state_counts", "raw_state_labels", "evidence_links", "feedback_routes", "affected_delivery_gates", "feedback_retention", "feedback_raw_payload_retained"],
+    ["state_counts", "metadata_only_queued_count", "raw_state_labels", "evidence_links", "feedback_routes", "affected_delivery_gates", "feedback_retention", "feedback_raw_payload_retained"],
     extractConstArray(schemaSource, "MANAGER_EXECUTION_LANE_SUMMARY_SERIALIZED_FIELDS")
   );
   assert.equal(extractRequiredFieldsByContract(schemaSource, "WorkItem").includes("lease_id"), false);
@@ -487,6 +509,42 @@ test("Implementation Run Contract schema records authority scope resume and deli
 test("Manager Control Plane contract TypeScript surface compiles", () => {
   const tscPath = "apps/dashboard/node_modules/.bin/tsc";
   assert.equal(existsSync(tscPath), true, "expected dashboard TypeScript compiler to be installed");
+  const tempDir = mkdtempSync(join(tmpdir(), "manager-contract-behavior-"));
+  const managerRootPath = fileURLToPath(managerRoot);
+  const importRoot = relative(tempDir, managerRootPath).replace(/\\/g, "/");
+  const importPrefix = importRoot.startsWith(".") ? importRoot : `./${importRoot}`;
+  const behaviorPath = join(tempDir, "contract-behavior.ts");
+  writeFileSync(
+    behaviorPath,
+    [
+      `import { MANAGER_CONTROL_PLANE_EVENT_NAMES } from "${importPrefix}/events.ts";`,
+      `import type { EvidenceRefId, ManagerEventId, ManagerRunId } from "${importPrefix}/ids.ts";`,
+      `import type { RefillResult } from "${importPrefix}/refill.ts";`,
+      `import type { ManagerExecutionLaneStateCounts, ManagerExecutionLaneSummary } from "${importPrefix}/summary.ts";`,
+      "",
+      `const eventNames: readonly string[] = MANAGER_CONTROL_PLANE_EVENT_NAMES;`,
+      `if (!eventNames.includes("dispatcher.review.required")) throw new Error("missing event export");`,
+      `const result: RefillResult = "queued_with_gated_candidates";`,
+      `const stateCounts: ManagerExecutionLaneStateCounts = {`,
+      `  totalWorkItems: 0, totalLeases: 0, totalAttempts: 0, eligible: 0, queued: 0, leased: 0, running: 0, refilling: 0,`,
+      `  completed: 0, failed: 0, expired: 0, quarantined: 0, blocked: 0, closed: 0, metadataOnlyQueuedCandidates: 2,`,
+      `  blockedCandidates: 1, needsReviewCandidates: 1, duplicateCandidates: 0, noSafeWork: 0`,
+      `};`,
+      `const summary: ManagerExecutionLaneSummary = {`,
+      `  runId: "run-1" as ManagerRunId, proofMode: "backend_proof", stateSource: "projection", lastObservedAt: "2026-06-30T00:00:00.000Z",`,
+      `  freshness: "fresh", currentPhase: "needs_review", nextAction: result, operatorAttentionRequired: true, recoveryStatus: "not_needed",`,
+      `  recoveryAttemptCount: 0, safeWorkAvailableCount: 0, metadataOnlyQueuedCount: 2, unsafeOrGatedWorkCount: 2,`,
+      `  evidenceFreshness: "fresh", eventWatermark: "event-1" as ManagerEventId, sourceCursor: "cursor-1", authorityStage: "backend_proof",`,
+      `  authorityClass: "block_and_record", queuedWorkItemIds: [], activeWorkItemIds: [], evidenceRefs: ["evidence-1" as EvidenceRefId], evidenceLinks: [],`,
+      `  stateCounts, rawStateLabels: ["refill:queued_metadata"], blockers: ["dispatcher_has_needs_review_candidates"], warnings: [],`,
+      `  feedbackRoutes: [], affectedDeliveryGates: [], feedbackRecordPolicy: "metadata_only_feedback_record",`,
+      `  feedbackUnrelatedLanePolicy: "continue_unrelated_safe_lanes", feedbackRetention: "metadata_only", feedbackRawPayloadRetained: false`,
+      `};`,
+      `if (summary.metadataOnlyQueuedCount !== summary.stateCounts.metadataOnlyQueuedCandidates) throw new Error("metadata-only queue mismatch");`,
+      ""
+    ].join("\n"),
+    "utf8"
+  );
   const result = spawnSync(
     tscPath,
     [
@@ -500,9 +558,14 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       "ES2022",
       "--strict",
       "--skipLibCheck",
-      "packages/contracts/src/index.ts"
+      "packages/contracts/src/index.ts",
+      behaviorPath
     ],
     { encoding: "utf8" }
   );
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  try {
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });

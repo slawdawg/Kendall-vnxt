@@ -1451,6 +1451,44 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "Git mutation should expose the delivery_phase stop line"
   );
 
+  const metadataOnlyQueuedProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-metadata-only-queued",
+    safeWorkAvailableCount: 0,
+    metadataOnlyQueuedCount: 3,
+    unsafeOrGatedWorkCount: 0,
+    queuedWorkItemIds: [],
+    activeWorkItemIds: [],
+    stateCounts: {
+      ...baseManagerFixture.stateCounts,
+      queued: 0,
+      leased: 0,
+      running: 0,
+      metadataOnlyQueuedCandidates: 3
+    },
+    rawStateLabels: ["refill:queued_metadata", "fixture-backed"]
+  });
+  assert.match(metadataOnlyQueuedProjection.refillPanel.reason, /3 metadata-only queued candidate\(s\) reported/);
+  assert.doesNotMatch(metadataOnlyQueuedProjection.refillPanel.reason, /claimable safe item\(s\) available/);
+
+  const needsReviewRefillProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-refill-needs-review",
+    safeWorkAvailableCount: 0,
+    unsafeOrGatedWorkCount: 2,
+    stateCounts: {
+      ...baseManagerFixture.stateCounts,
+      queued: 0,
+      refilling: 0,
+      needsReviewCandidates: 2
+    },
+    blockers: ["dispatcher_has_needs_review_candidates"],
+    warnings: ["needs_review_candidates_recorded"],
+    rawStateLabels: ["candidate:needs_review", "fixture-backed"]
+  });
+  assert.equal(needsReviewRefillProjection.refillPanel.state, "needs_review");
+  assert.match(needsReviewRefillProjection.refillPanel.reason, /2 unsafe or gated item\(s\) held/);
+
   const deliveryAuthorizedProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
     ...baseManagerFixture,
     runId: "run-manager-delivery-authorized",
