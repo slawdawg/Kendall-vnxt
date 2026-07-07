@@ -30,6 +30,7 @@ const COMMANDS = Object.freeze({
   testAntiChurnEventWriter: ["pnpm", "run", "test:anti-churn-event-writer"],
   testAntiChurnSignatureClassifier: ["pnpm", "run", "test:anti-churn-signature-classifier"],
   testCheckPlan: ["pnpm", "run", "test:check-plan"],
+  testStaticBundles: ["pnpm", "run", "test:static-bundles"],
   checkStatic: ["pnpm", "run", "check:static"],
 });
 
@@ -43,7 +44,7 @@ const SURFACE_COMMANDS = Object.freeze({
   pipeline: [COMMANDS.checkDashboardPipelineBoundary, COMMANDS.testPipelineImplementationReadiness, COMMANDS.testDashboardPipelineFixtures],
   supervisor: [COMMANDS.testSupervisorProfile],
   antiChurn: [COMMANDS.testSandboxBoundaryClassifier, COMMANDS.testAntiChurnEventWriter, COMMANDS.testAntiChurnSignatureClassifier],
-  ciAcceleration: [COMMANDS.testCheckPlan],
+  ciAcceleration: [COMMANDS.testCheckPlan, COMMANDS.testStaticBundles],
   managerDispatcherPort: [COMMANDS.testManagerControlPlaneDispatcherPort],
 });
 
@@ -151,6 +152,11 @@ function classifyFile(path) {
   if (/^(scripts\/.*anti-churn|scripts\/lib\/anti-churn|scripts\/lib\/sandbox-boundary|tests\/anti-churn|tests\/sandbox-boundary)/.test(file)) {
     surfaces.add("antiChurn");
     reasons.push(`${file}: anti-churn or sandbox boundary surface`);
+  }
+  if (/^(scripts\/run-static-bundle\.mjs|tests\/static-bundles\.test\.mjs)$/.test(file)) {
+    requiresFullStatic = true;
+    surfaces.add("ciAcceleration");
+    reasons.push(`${file}: static bundle topology changes require full static confidence`);
   }
   if (/^(scripts\/check-plan\.mjs|tests\/check-plan\.test\.mjs|docs\/workflows\/ci-acceleration-plan\.md)$/.test(file)) {
     surfaces.add("ciAcceleration");

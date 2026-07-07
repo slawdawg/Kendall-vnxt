@@ -13,6 +13,10 @@ Pull requests run a final `check` job backed by component jobs:
 - `static` runs the deterministic repository drift checks through
   `pnpm run check:static` only when `scripts/check-plan.mjs --ci-outputs`
   marks full static confidence as required.
+- `static_bundle` runs reporting-only matrix jobs for `core`, `manager`,
+  `workspace`, `policy`, `pipeline-dashboard`, and `anti-churn` when full
+  static is required. These jobs are non-blocking measurement checks for the
+  next parallel gate shape; the final `check` job does not require them yet.
 - `javascript` runs only when dashboard, shared package, JavaScript lockfile, or
   JavaScript workflow inputs changed.
 - `supervisor` runs only when supervisor service files, supervisor test runner
@@ -41,6 +45,7 @@ pnpm run check:workspace-fast
 pnpm run check:sandbox-fast
 pnpm run check:dashboard-fast
 pnpm run check:static
+pnpm run check:static-bundles
 pnpm run build:dashboard
 pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k routing
 ```
@@ -52,6 +57,7 @@ Use the narrower fast suites when the change touches only one friction surface:
 - `check:sandbox-fast` for sandbox-boundary and anti-churn routing.
 - `check:dashboard-fast` for dashboard E2E runner contracts and pipeline
   fixture smoke coverage.
+- `check:static-<bundle>` for one static bundle measurement lane.
 
 Use the profiled supervisor suite when test runtime is the question:
 

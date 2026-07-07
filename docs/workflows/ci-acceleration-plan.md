@@ -85,7 +85,10 @@ Keep full verification for:
    aggregate.
 6. Route pull request CI component jobs from `check-plan --ci-outputs` so
    `static` runs only when the planner marks full static confidence required.
-7. Add CI jobs for bundles as non-required reporting checks.
+7. Add CI jobs for bundles as non-required reporting checks. Current slice:
+   `static_bundle` matrix jobs run only when the planner requires full static,
+   use non-blocking job outcomes for measurement, and final `check` still
+   depends on the monolithic `static` job for merge authority.
 8. Compare bundle results against monolithic static.
 9. Promote bundles to required checks and retire the monolithic PR static job.
 10. Add duration artifacts and optimize bundle balance from evidence.
@@ -141,6 +144,12 @@ Observed second measurement result, PR #403:
 
 This proves focused docs/planner-policy PRs no longer pay the static,
 JavaScript build, or supervisor-profile wait.
+
+Next measurement target: package, workflow, or static-contract PRs should run
+both the monolithic `static` job and the non-required `static_bundle` matrix. A
+bundle failure should be treated as measurement evidence while `static` remains
+the required authority. Compare the matrix durations and failures against
+`static` before promoting bundles to required checks.
 
 ## Stop Lines
 

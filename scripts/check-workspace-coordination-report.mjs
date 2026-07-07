@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { staticBundleNames } from "./run-static-bundle.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -37,6 +38,10 @@ function ciJobBlock(jobName) {
   jobKeyPattern.lastIndex = jobStart + `\n  ${jobName}:`.length;
   const nextJob = jobKeyPattern.exec(ciWorkflow);
   return nextJob ? ciWorkflow.slice(jobStart, nextJob.index) : ciWorkflow.slice(jobStart);
+}
+
+function ciMatrixBundleNames(jobName) {
+  return [...ciJobBlock(jobName).matchAll(/^\s+- ([a-z][a-z-]*)$/gm)].map((match) => match[1]);
 }
 
 function assertCiHookBeforeCheck({ packageScriptName, ciJobName, ciCheckCommand }, failures) {
@@ -141,6 +146,11 @@ assertCondition(
   failures,
 );
 assertCondition(
+  packageJson.scripts?.["check:static-workspace"] === "node ./scripts/run-static-bundle.mjs workspace",
+  "package.json must define check:static-workspace as node ./scripts/run-static-bundle.mjs workspace",
+  failures,
+);
+assertCondition(
   packageCommands("check")[0] === "pnpm run preflight" &&
     packageCommands("check")[1] === "pnpm run check:fast",
   "pnpm run check must run preflight and then pnpm run check:fast before the long full chain",
@@ -207,6 +217,21 @@ for (const ciJobName of ["fast", "static"]) {
     failures,
   );
 }
+for (const beforeText of [
+  "pnpm install --frozen-lockfile",
+  "git config core.hooksPath .githooks",
+  "git fetch origin main:refs/remotes/origin/main",
+]) {
+  assertCiTextOrder(
+    {
+      ciJobName: "static_bundle",
+      beforeText,
+      afterText: 'pnpm run "check:static-${{ matrix.bundle }}"',
+      message: `${ciWorkflowPath} must run ${beforeText} before static bundle reporting checks`,
+    },
+    failures,
+  );
+}
 assertCondition(
   ciJobBlock("static").includes("- fast"),
   `${ciWorkflowPath} static job must depend on the fast job`,
@@ -215,6 +240,18 @@ assertCondition(
 assertCondition(
   ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
   `${ciWorkflowPath} static job must run only when the changed-file planner requires static checks`,
+  failures,
+);
+assertCondition(
+  ciJobBlock("static_bundle").includes("needs.changes.outputs.static == 'true'") &&
+    ciJobBlock("static_bundle").includes("fail-fast: false") &&
+    ciJobBlock("static_bundle").includes("continue-on-error: true"),
+  `${ciWorkflowPath} static_bundle job must be reporting-only and run only when the changed-file planner requires static checks`,
+  failures,
+);
+assertCondition(
+  JSON.stringify(ciMatrixBundleNames("static_bundle")) === JSON.stringify(staticBundleNames()),
+  `${ciWorkflowPath} static_bundle matrix entries must match scripts/run-static-bundle.mjs STATIC_BUNDLES`,
   failures,
 );
 assertCondition(
@@ -228,6 +265,11 @@ assertCondition(
   ciJobBlock("check").includes('needs.changes.outputs.static') &&
     ciJobBlock("check").includes("Static checks were required but did not pass"),
   `${ciWorkflowPath} final check job must require static checks only when the planner selects them`,
+  failures,
+);
+assertCondition(
+  !ciJobBlock("check").includes("static_bundle"),
+  `${ciWorkflowPath} final check job must not require static_bundle while it is reporting-only`,
   failures,
 );
 

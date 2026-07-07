@@ -101,6 +101,47 @@ jobs:
       - name: Run static repository checks
         run: pnpm run check:static
 
+  static_bundle:
+    if: github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        bundle:
+          - core
+          - manager
+          - workspace
+          - policy
+          - pipeline-dashboard
+          - anti-churn
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure repo-local Git hooks
+        run: git config core.hooksPath .githooks
+
+      - name: Fetch base branch for workspace protocol tests
+        run: git fetch origin main:refs/remotes/origin/main
+
+      - name: Run static bundle report
+        run: pnpm run "check:static-${{ matrix.bundle }}"
+
   javascript:
     if: github.event_name == 'pull_request' && needs.changes.outputs.javascript == 'true'
     needs: changes
