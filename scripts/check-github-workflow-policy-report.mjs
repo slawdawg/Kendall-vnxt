@@ -23,6 +23,12 @@ function assertNotIncludes(source, text, label, failures) {
   assertCondition(!source.includes(text), `${label} must not include ${text}`, failures);
 }
 
+function assertCiJobIncludes(ciJobName, requiredText, message, failures) {
+  const job = ciJobBlock(ciJobName);
+  assertCondition(job, `.github/workflows/ci.yml must define the ${ciJobName} job`, failures);
+  assertCondition(job.includes(requiredText), message, failures);
+}
+
 function ciJobBlock(jobName) {
   const jobStart = ciWorkflow.indexOf(`\n  ${jobName}:`);
   if (jobStart === -1) return "";
@@ -92,6 +98,11 @@ assertCondition(
   "pnpm run check:static must include pnpm run test:static-bundles",
   failures,
 );
+assertCondition(
+  packageJson.scripts?.["check:static"]?.includes("pnpm run test:static-bundle-summary"),
+  "pnpm run check:static must include pnpm run test:static-bundle-summary",
+  failures,
+);
 for (const bundleName of ["core", "manager", "workspace", "policy", "pipeline-dashboard", "anti-churn"]) {
   assertCondition(
     packageJson.scripts?.[`check:static-${bundleName}`] === `node ./scripts/run-static-bundle.mjs ${bundleName}`,
@@ -107,6 +118,11 @@ assertCondition(
 assertCondition(
   packageJson.scripts?.["test:static-bundles"] === "node --test tests/static-bundles.test.mjs",
   "package.json must define test:static-bundles as node --test tests/static-bundles.test.mjs",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.["test:static-bundle-summary"] === "node --test tests/static-bundles.test.mjs",
+  "package.json must define test:static-bundle-summary as node --test tests/static-bundles.test.mjs",
   failures,
 );
 assertCondition(
@@ -132,9 +148,19 @@ for (const ciFastCommand of [
 for (const ciText of [
   "fast:",
   "static_bundle:",
+  "static_bundle_summary:",
   "needs: changes",
   "fail-fast: false",
-  "pnpm run \"check:static-${{ matrix.bundle }}\"",
+  "node ./scripts/run-static-bundle.mjs \"${{ matrix.bundle }}\"",
+  "--report \"$report_dir/${{ matrix.bundle }}.json\"",
+  "--head-sha \"${{ github.event.pull_request.head.sha }}\"",
+  "actions/upload-artifact@v4",
+  "actions/download-artifact@v4",
+  "static-bundle-report-${{ matrix.bundle }}",
+  "static-bundle-summary",
+  "node ./scripts/summarize-static-bundle-reports.mjs",
+  "--static-result \"${{ needs.static.result }}\"",
+  "--static-bundle-result \"${{ needs.static_bundle.result }}\"",
   "node ./scripts/check-plan.mjs",
   "--ci-outputs",
   "RUNNER_TEMP",
@@ -162,6 +188,51 @@ assertCondition(
   ".github/workflows/ci.yml static_bundle matrix entries must match scripts/run-static-bundle.mjs STATIC_BUNDLES",
   failures,
 );
+for (const requiredText of [
+  'node ./scripts/run-static-bundle.mjs "${{ matrix.bundle }}"',
+  '--report "$report_dir/${{ matrix.bundle }}.json"',
+  '--head-sha "${{ github.event.pull_request.head.sha }}"',
+  "actions/upload-artifact@v4",
+  "static-bundle-report-${{ matrix.bundle }}",
+  "${{ runner.temp }}/static-bundle-reports/${{ matrix.bundle }}.json",
+]) {
+  assertCiJobIncludes(
+    "static_bundle",
+    requiredText,
+    `.github/workflows/ci.yml static_bundle job must include ${requiredText}`,
+    failures,
+  );
+}
+assertCondition(
+  ciJobBlock("static_bundle_summary").includes("continue-on-error: true") &&
+    ciJobBlock("static_bundle_summary").includes("- changes") &&
+    ciJobBlock("static_bundle_summary").includes("- static") &&
+    ciJobBlock("static_bundle_summary").includes("- static_bundle") &&
+    ciJobBlock("static_bundle_summary").includes("needs.changes.outputs.static == 'true'"),
+  ".github/workflows/ci.yml static_bundle_summary job must remain reporting-only and compare monolithic static with bundle reports when the planner selects static checks",
+  failures,
+);
+for (const requiredText of [
+  "Download static bundle timing reports\n        continue-on-error: true",
+  "actions/download-artifact@v4",
+  "pattern: static-bundle-report-*",
+  "merge-multiple: true",
+  "node ./scripts/summarize-static-bundle-reports.mjs",
+  '--reports-dir "${RUNNER_TEMP}/static-bundle-reports"',
+  '--head-sha "${{ github.event.pull_request.head.sha }}"',
+  '--static-result "${{ needs.static.result }}"',
+  '--static-bundle-result "${{ needs.static_bundle.result }}"',
+  "actions/upload-artifact@v4",
+  "name: static-bundle-summary",
+  "${{ runner.temp }}/static-bundle-summary/static-bundle-summary.json",
+]) {
+  assertCiJobIncludes(
+    "static_bundle_summary",
+    requiredText,
+    `.github/workflows/ci.yml static_bundle_summary job must include ${requiredText}`,
+    failures,
+  );
+}
 assertCondition(
   ciJobBlock("check").includes('needs.changes.outputs.static') &&
     ciJobBlock("check").includes("Static checks were required but did not pass"),
@@ -171,6 +242,11 @@ assertCondition(
 assertCondition(
   !ciJobBlock("check").includes("static_bundle"),
   ".github/workflows/ci.yml final check job must not require static_bundle while it is reporting-only",
+  failures,
+);
+assertCondition(
+  !ciJobBlock("check").includes("static_bundle_summary"),
+  ".github/workflows/ci.yml final check job must not require static_bundle_summary while bundles are reporting-only",
   failures,
 );
 assertNotIncludes(

@@ -2023,6 +2023,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-fast",
         "test-check-plan",
         "test-static-bundles",
+        "test-static-bundle-summary",
         "check-authority-readiness",
         "check-branch-protection-readiness",
         "check-adaptive-scoring",
@@ -2119,6 +2120,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-fast" in static_group["commandIds"]
     assert "test-check-plan" in static_group["commandIds"]
     assert "test-static-bundles" in static_group["commandIds"]
+    assert "test-static-bundle-summary" in static_group["commandIds"]
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-review-resource-policy" in static_group["commandIds"]
     assert "check-runtime-review" in static_group["commandIds"]

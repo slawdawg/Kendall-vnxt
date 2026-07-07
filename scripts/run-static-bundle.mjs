@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const STATIC_BUNDLES = Object.freeze({
@@ -15,6 +17,7 @@ export const STATIC_BUNDLES = Object.freeze({
     "test:clean-install-boundary",
     "test:knx-obsidian-memory",
     "test:static-bundles",
+    "test:static-bundle-summary",
   ],
   manager: [
     "test:manager-quality-gate",
@@ -112,41 +115,162 @@ export function commandsForBundle(name) {
   return commands;
 }
 
+function statusFromResult(result) {
+  return result.status === 0 ? "passed" : "failed";
+}
+
+export function buildStaticBundleReport({
+  bundleName,
+  commands,
+  commandResults,
+  startedAtMs,
+  completedAtMs,
+  startedAt = null,
+  completedAt = null,
+  headSha = null,
+}) {
+  const failedCommand = commandResults.find((command) => command.status !== "passed") ?? null;
+  return {
+    schemaVersion: 1,
+    bundle: bundleName,
+    headSha,
+    status: failedCommand ? "failed" : "passed",
+    commandCount: commands.length,
+    completedCommandCount: commandResults.length,
+    startedAt,
+    completedAt,
+    durationMs: Math.max(0, completedAtMs - startedAtMs),
+    failedCommand: failedCommand?.command ?? null,
+    commands: commandResults,
+  };
+}
+
+function writeReport(reportPath, report) {
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+}
+
 function runPnpmScript(scriptName) {
   const startedAt = Date.now();
   console.log(`\n[static-bundle] pnpm run ${scriptName}`);
   const result = spawnSync("pnpm", ["run", scriptName], {
     stdio: "inherit",
   });
-  const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  const completedAt = Date.now();
+  const elapsedMs = completedAt - startedAt;
+  const elapsedSeconds = (elapsedMs / 1000).toFixed(1);
+  const commandResult = {
+    command: scriptName,
+    status: statusFromResult(result),
+    exitCode: result.status,
+    signal: result.signal,
+    durationMs: elapsedMs,
+  };
 
   if (result.status !== 0) {
     console.error(`[static-bundle] failed after ${elapsedSeconds}s: pnpm run ${scriptName}`);
-    process.exit(result.status ?? 1);
+    return commandResult;
   }
 
   console.log(`[static-bundle] passed in ${elapsedSeconds}s: pnpm run ${scriptName}`);
+  return commandResult;
 }
 
-export function runStaticBundle(name) {
+export function parseStaticBundleArgs(argv) {
+  const [bundleName, ...rest] = argv;
+  let reportPath = null;
+  let headSha = null;
+
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
+    if (arg === "--report") {
+      reportPath = rest[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--report=")) {
+      reportPath = arg.slice("--report=".length);
+      continue;
+    }
+    if (arg === "--head-sha") {
+      headSha = rest[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--head-sha=")) {
+      headSha = arg.slice("--head-sha=".length);
+      continue;
+    }
+    throw new Error(`Unknown option "${arg}". Expected --report <path> or --head-sha <sha>`);
+  }
+
+  if (reportPath === "") {
+    reportPath = null;
+  }
+  if (headSha === "") {
+    headSha = null;
+  }
+
+  return { bundleName, reportPath, headSha };
+}
+
+export function runStaticBundle(name, { reportPath = null, headSha = null } = {}) {
   const commands = commandsForBundle(name);
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  const commandResults = [];
   console.log(`[static-bundle] ${name}: ${commands.length} commands`);
 
   for (const command of commands) {
-    runPnpmScript(command);
+    const commandResult = runPnpmScript(command);
+    commandResults.push(commandResult);
+    if (commandResult.status !== "passed") {
+      break;
+    }
   }
+
+  const report = buildStaticBundleReport({
+    bundleName: name,
+    commands,
+    commandResults,
+    startedAtMs,
+    completedAtMs: Date.now(),
+    startedAt,
+    completedAt: new Date().toISOString(),
+    headSha,
+  });
+
+  if (reportPath) {
+    writeReport(reportPath, report);
+  }
+
+  return report;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const bundleName = process.argv[2];
+  let parsedArgs;
 
-  if (!bundleName) {
+  try {
+    parsedArgs = parseStaticBundleArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    console.error(`Usage: node ./scripts/run-static-bundle.mjs <${staticBundleNames().join("|")}|all> [--report <path>] [--head-sha <sha>]`);
+    process.exit(2);
+  }
+
+  if (!parsedArgs.bundleName) {
     console.error(`Usage: node ./scripts/run-static-bundle.mjs <${staticBundleNames().join("|")}|all>`);
     process.exit(2);
   }
 
   try {
-    runStaticBundle(bundleName);
+    const report = runStaticBundle(parsedArgs.bundleName, {
+      reportPath: parsedArgs.reportPath,
+      headSha: parsedArgs.headSha,
+    });
+    if (report.status !== "passed") {
+      process.exit(1);
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exit(2);

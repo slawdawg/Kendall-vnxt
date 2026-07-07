@@ -50,6 +50,7 @@ test("check plan maps CI acceleration planner files to focused planner tests", (
 test("check plan maps static bundle files to focused bundle tests", () => {
   const plan = buildCheckPlan([
     "scripts/run-static-bundle.mjs",
+    "scripts/summarize-static-bundle-reports.mjs",
     "tests/static-bundles.test.mjs",
   ]);
 

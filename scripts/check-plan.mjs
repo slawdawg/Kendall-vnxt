@@ -153,7 +153,7 @@ function classifyFile(path) {
     surfaces.add("antiChurn");
     reasons.push(`${file}: anti-churn or sandbox boundary surface`);
   }
-  if (/^(scripts\/run-static-bundle\.mjs|tests\/static-bundles\.test\.mjs)$/.test(file)) {
+  if (/^(scripts\/run-static-bundle\.mjs|scripts\/summarize-static-bundle-reports\.mjs|tests\/static-bundles\.test\.mjs)$/.test(file)) {
     requiresFullStatic = true;
     surfaces.add("ciAcceleration");
     reasons.push(`${file}: static bundle topology changes require full static confidence`);
