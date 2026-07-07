@@ -600,6 +600,8 @@ Stop for explicit operator approval before:
 Focused checks:
 
 ```bash
+pnpm run test:manager-control-plane:contracts
+pnpm run test:manager-control-plane:focused
 pnpm run test:manager-control-plane
 pnpm run test:manager-control-plane-contract
 pnpm run test:manager-control-plane-dispatcher-port

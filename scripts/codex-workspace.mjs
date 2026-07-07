@@ -5679,6 +5679,7 @@ function dispatchPacket(selected, evaluations, context) {
 
 function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan }) {
   const blockedCandidates = plan.evaluations.filter((evaluation) => !evaluation.claimable);
+  const targetComponents = dispatchContinuousTargetComponents(plan.packet);
   return {
     currentOwner,
     stateRoot: state.root,
@@ -5706,6 +5707,14 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
       stopLines: plan.packet.stop_lines,
       authorityDecision: plan.packet.authority_decision,
       generatedAt: plan.packet.generated_at,
+    },
+    continuousSelection: {
+      code: "continuous-dispatch-apply",
+      mutationClass: "assignment_workspace_claim_only",
+      targetComponents,
+      targetKey: targetComponents.join("|"),
+      allowed: plan.packet.allowed === true,
+      status: plan.packet.allowed === true ? "ready" : "blocked",
     },
     counts: {
       total: plan.evaluations.length,
@@ -5759,6 +5768,13 @@ function buildDispatchNextBlockedApplySummary({ state, currentOwner, staleAfterS
     mutation: "none; blocked apply made no assignment/workspace mutation",
     rawPayloadRetained: false,
   };
+}
+
+function dispatchContinuousTargetComponents(packet = {}) {
+  return [
+    packet.selected_lane ? `assignment:${packet.selected_lane}` : "",
+    packet.branch ? `branch:${packet.branch}` : "",
+  ].filter(Boolean).sort();
 }
 
 function dispatchNextBlockedReasons(packet) {

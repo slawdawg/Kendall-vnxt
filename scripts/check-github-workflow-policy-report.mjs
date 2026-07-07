@@ -22,6 +22,9 @@ const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const readme = readWorkspaceFile("README.md");
 const connectorWorkflow = readWorkspaceFile("docs/github-connector-workflow.md");
 const currentSessionRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
+const ciGateBehavior = readWorkspaceFile("docs/workflows/ci-gate-behavior.md");
+const ciWorkflow = readWorkspaceFile(".github/workflows/ci.yml");
+const fastWorkflowRunner = readWorkspaceFile("scripts/run-fast-workflow-checks.mjs");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
@@ -42,6 +45,16 @@ assertCondition(
   failures,
 );
 assertCondition(
+  packageJson.scripts?.["check:fast"] === "node ./scripts/run-fast-workflow-checks.mjs all",
+  "package.json must define check:fast as node ./scripts/run-fast-workflow-checks.mjs all",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.["check:ci-fast"] === "node ./scripts/run-fast-workflow-checks.mjs ci",
+  "package.json must define check:ci-fast as node ./scripts/run-fast-workflow-checks.mjs ci",
+  failures,
+);
+assertCondition(
   packageJson.scripts?.["check:static"]?.includes("pnpm run check:github-workflow-policy"),
   "pnpm run check:static must include pnpm run check:github-workflow-policy",
   failures,
@@ -52,10 +65,38 @@ assertCondition(
   failures,
 );
 assertCondition(
+  packageJson.scripts?.["check:static"]?.startsWith("pnpm run check:fast"),
+  "pnpm run check:static must run pnpm run check:fast before the long static chain",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.check?.startsWith("pnpm run preflight && pnpm run check:fast"),
+  "pnpm run check must run pnpm run check:fast immediately after preflight",
+  failures,
+);
+assertCondition(
   packageJson.scripts?.["doctor:github"] === "node ./scripts/github-sync-doctor.mjs",
   "package.json must retain doctor:github as node ./scripts/github-sync-doctor.mjs",
   failures,
 );
+for (const ciFastCommand of [
+  '"check:github-workflow-policy"',
+  '"check:workspace-coordination"',
+]) {
+  assertCondition(
+    fastWorkflowRunner.includes(ciFastCommand),
+    `Fast workflow runner must include CI command ${ciFastCommand}`,
+    failures,
+  );
+}
+for (const ciText of [
+  "fast:",
+  "needs: changes",
+  "pnpm run check:fast",
+  "Fast workflow checks failed or did not complete",
+]) {
+  assertIncludes(ciWorkflow, ciText, ".github/workflows/ci.yml", failures);
+}
 
 for (const text of [
   "pnpm run check:github-workflow-policy",
@@ -67,9 +108,20 @@ for (const text of [
 
 for (const text of [
   "pnpm run check:github-workflow-policy",
+  "pnpm run check:fast",
+  "pnpm run check:ci-fast",
   "This runbook also anchors runbook verification for the active check chain.",
 ]) {
   assertIncludes(currentSessionRunbook, text, "Current session runbook", failures);
+}
+
+for (const text of [
+  "pnpm run check:fast",
+  "pnpm run check:ci-fast",
+  "workspace delivery command readiness",
+  "sandbox-boundary and anti-churn routing",
+]) {
+  assertIncludes(ciGateBehavior, text, "docs/workflows/ci-gate-behavior.md", failures);
 }
 
 for (const text of [

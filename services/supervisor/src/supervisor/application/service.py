@@ -3950,6 +3950,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-fast",
+                label="Fast workflow gate",
+                command="pnpm run check:fast",
+                status="required",
+                requiredFor=["CI workflow changes", "workspace delivery checks", "sandbox-boundary routing", "dashboard E2E runner contracts"],
+                evidence=[
+                    "Runs the fast CI, workspace, sandbox-boundary, anti-churn, and dashboard E2E contract checks before the long static chain.",
+                    "Fails workflow-friction regressions before broad local or CI verification.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-docs",
                 label="Documentation authority drift",
                 command="pnpm run check:docs",
@@ -4984,6 +4995,7 @@ class SupervisorService:
                 status="required",
                 summary="Run documentation, report, runtime evidence, safe backlog, runbook, and policy drift checks before browser or full test work.",
                 commandIds=[
+                    "check-fast",
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",
