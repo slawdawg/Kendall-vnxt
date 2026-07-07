@@ -54,6 +54,7 @@ first pass when only one surface changed.
 `pnpm run check:fast`,
 `pnpm run test:check-plan`,
 `pnpm run test:static-bundles`,
+`pnpm run test:static-bundle-summary`,
 `pnpm run check:governed-worker-execution-dry-run`,
 `pnpm run check:documentation-authority`,
 `pnpm run check:legacy-planning-inventory`,

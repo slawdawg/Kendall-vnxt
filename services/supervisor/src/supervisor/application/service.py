@@ -3983,6 +3983,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-static-bundle-summary",
+                label="Static bundle summary tests",
+                command="pnpm run test:static-bundle-summary",
+                status="required",
+                requiredFor=["static bundle timing reports", "same-head static bundle summary evidence", "promotion-readiness guardrails"],
+                evidence=[
+                    "Validates bundle timing JSON reports include head SHA and duration metadata.",
+                    "Confirms same-head monolithic-vs-bundle summaries keep static bundles reporting-only until repeated equivalence evidence exists.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-docs",
                 label="Documentation authority drift",
                 command="pnpm run check:docs",
@@ -5020,6 +5031,7 @@ class SupervisorService:
                     "check-fast",
                     "test-check-plan",
                     "test-static-bundles",
+                    "test-static-bundle-summary",
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",

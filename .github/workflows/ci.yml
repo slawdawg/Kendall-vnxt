@@ -140,7 +140,64 @@ jobs:
         run: git fetch origin main:refs/remotes/origin/main
 
       - name: Run static bundle report
-        run: pnpm run "check:static-${{ matrix.bundle }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          report_dir="${RUNNER_TEMP}/static-bundle-reports"
+          mkdir -p "$report_dir"
+          node ./scripts/run-static-bundle.mjs "${{ matrix.bundle }}" \
+            --report "$report_dir/${{ matrix.bundle }}.json" \
+            --head-sha "${{ github.event.pull_request.head.sha }}"
+
+      - name: Upload static bundle timing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-bundle-report-${{ matrix.bundle }}
+          path: ${{ runner.temp }}/static-bundle-reports/${{ matrix.bundle }}.json
+          if-no-files-found: warn
+
+  static_bundle_summary:
+    if: always() && github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
+    needs:
+      - changes
+      - static
+      - static_bundle
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download static bundle timing reports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: static-bundle-report-*
+          path: ${{ runner.temp }}/static-bundle-reports
+          merge-multiple: true
+
+      - name: Summarize static bundle evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary_dir="${RUNNER_TEMP}/static-bundle-summary"
+          mkdir -p "$summary_dir"
+          node ./scripts/summarize-static-bundle-reports.mjs \
+            --reports-dir "${RUNNER_TEMP}/static-bundle-reports" \
+            --out "$summary_dir/static-bundle-summary.json" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --static-result "${{ needs.static.result }}" \
+            --static-bundle-result "${{ needs.static_bundle.result }}"
+
+      - name: Upload static bundle summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-bundle-summary
+          path: ${{ runner.temp }}/static-bundle-summary/static-bundle-summary.json
+          if-no-files-found: warn
 
   javascript:
     if: github.event_name == 'pull_request' && needs.changes.outputs.javascript == 'true'
