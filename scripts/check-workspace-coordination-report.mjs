@@ -213,10 +213,21 @@ assertCondition(
   failures,
 );
 assertCondition(
+  ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
+  `${ciWorkflowPath} static job must run only when the changed-file planner requires static checks`,
+  failures,
+);
+assertCondition(
   ciJobBlock("check").includes("- fast") &&
     ciJobBlock("check").includes('needs.fast.result') &&
     ciJobBlock("check").includes("Fast workflow checks failed or did not complete"),
   `${ciWorkflowPath} final check job must require the fast job result`,
+  failures,
+);
+assertCondition(
+  ciJobBlock("check").includes('needs.changes.outputs.static') &&
+    ciJobBlock("check").includes("Static checks were required but did not pass"),
+  `${ciWorkflowPath} final check job must require static checks only when the planner selects them`,
   failures,
 );
 

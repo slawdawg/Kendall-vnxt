@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { buildCheckPlan, classifyFile, collectChangedFiles } from "../scripts/check-plan.mjs";
+import { buildCheckPlan, buildCiOutputs, classifyFile, collectChangedFiles } from "../scripts/check-plan.mjs";
 
 test("check plan maps manager changes to focused manager checks", () => {
   const plan = buildCheckPlan([
@@ -46,6 +46,18 @@ test("check plan maps CI acceleration planner files to focused planner tests", (
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:check-plan"));
 });
 
+test("check plan maps CI policy drift scripts without full static escalation", () => {
+  const plan = buildCheckPlan([
+    "scripts/check-github-workflow-policy-report.mjs",
+    "scripts/check-workspace-coordination-report.mjs",
+  ]);
+
+  assert.equal(plan.requiresFullStatic, false);
+  assert.deepEqual(plan.surfaces, ["workflow"]);
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:github-workflow-policy"));
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-coordination"));
+});
+
 test("check plan maps manager dispatcher-port helpers to focused dispatcher-port tests", () => {
   const plan = buildCheckPlan([
     "tests/helpers/manager-control-plane/workflow-core-loader.mjs",
@@ -81,6 +93,67 @@ test("check plan maps dashboard and pipeline changes without full static escalat
   assert.ok(plan.surfaces.includes("pipeline"));
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run build:dashboard"));
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:pipeline-implementation-readiness"));
+});
+
+test("CI outputs route static only when the planner requires full static", () => {
+  const plannerOnly = buildCiOutputs(buildCheckPlan([
+    "scripts/check-plan.mjs",
+    "tests/check-plan.test.mjs",
+  ]));
+
+  assert.equal(plannerOnly.static, false);
+  assert.equal(plannerOnly.javascript, false);
+  assert.equal(plannerOnly.supervisor, false);
+  assert.deepEqual(plannerOnly.surfaces, ["ciAcceleration"]);
+
+  const dashboard = buildCiOutputs(buildCheckPlan(["apps/dashboard/src/app/page.tsx"]));
+  assert.equal(dashboard.static, false);
+  assert.equal(dashboard.javascript, true);
+  assert.equal(dashboard.supervisor, false);
+
+  const supervisor = buildCiOutputs(buildCheckPlan(["services/supervisor/src/supervisor/application/service.py"]));
+  assert.equal(supervisor.static, false);
+  assert.equal(supervisor.javascript, false);
+  assert.equal(supervisor.supervisor, true);
+
+  const e2eScript = buildCiOutputs(buildCheckPlan(["scripts/run-controls-e2e.mjs"]));
+  assert.equal(e2eScript.static, false);
+  assert.equal(e2eScript.javascript, true);
+  assert.equal(e2eScript.supervisor, false);
+
+  const supervisorRunner = buildCiOutputs(buildCheckPlan(["scripts/run-supervisor-tests.mjs"]));
+  assert.equal(supervisorRunner.static, false);
+  assert.equal(supervisorRunner.javascript, false);
+  assert.equal(supervisorRunner.supervisor, true);
+
+  const supervisorPreflight = buildCiOutputs(buildCheckPlan(["scripts/preflight.mjs"]));
+  assert.equal(supervisorPreflight.static, false);
+  assert.equal(supervisorPreflight.javascript, false);
+  assert.equal(supervisorPreflight.supervisor, true);
+});
+
+test("CI outputs preserve broad gates for package and workflow changes", () => {
+  const outputs = buildCiOutputs(buildCheckPlan([
+    "package.json",
+    ".github/workflows/ci.yml",
+  ]));
+
+  assert.equal(outputs.static, true);
+  assert.equal(outputs.javascript, true);
+  assert.equal(outputs.supervisor, true);
+  assert.equal(outputs.requiresFullStatic, true);
+
+  const sharedPackage = buildCiOutputs(buildCheckPlan(["packages/contracts/src/workflow.ts"]));
+  assert.equal(sharedPackage.static, true);
+  assert.equal(sharedPackage.javascript, true);
+  assert.equal(sharedPackage.supervisor, true);
+  assert.equal(sharedPackage.requiresFullStatic, true);
+
+  const otherWorkflow = buildCiOutputs(buildCheckPlan([".github/workflows/resolve-pr-review-threads.yml"]));
+  assert.equal(otherWorkflow.static, true);
+  assert.equal(otherWorkflow.javascript, true);
+  assert.equal(otherWorkflow.supervisor, true);
+  assert.equal(otherWorkflow.requiresFullStatic, true);
 });
 
 test("check plan escalates unknown paths", () => {

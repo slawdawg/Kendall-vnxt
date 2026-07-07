@@ -93,10 +93,18 @@ function classifyFile(path) {
     requiresFullStatic = true;
     reasons.push(`${file}: CI workflow changes affect check authority`);
   }
-  if (/^(package\.json|pnpm-lock\.yaml)$/.test(file)) {
+  if (/^scripts\/check-(?:github-workflow-policy|workspace-coordination)-report\.mjs$/.test(file)) {
+    surfaces.add("workflow");
+    reasons.push(`${file}: CI workflow policy drift-check surface`);
+  }
+  if (/^(package\.json|pnpm-lock\.yaml|packages\/)/.test(file)) {
     surfaces.add("package");
     requiresFullStatic = true;
     reasons.push(`${file}: package or dependency graph changes require full static confidence`);
+  }
+  if (/^scripts\/preflight\.mjs$/.test(file)) {
+    surfaces.add("supervisor");
+    reasons.push(`${file}: supervisor preflight input surface`);
   }
   if (
     /^scripts\/(?:check-manager-control-plane|run-manager-control-plane-shards)\.mjs$/.test(file) ||
@@ -128,7 +136,7 @@ function classifyFile(path) {
     surfaces.add("workspace");
     reasons.push(`${file}: workspace protocol surface`);
   }
-  if (/^(apps\/dashboard\/|tests\/dashboard-|tests\/e2e\/|playwright\.config\.)/.test(file)) {
+  if (/^(apps\/dashboard\/|tests\/dashboard-|tests\/e2e\/|playwright\.config\.|scripts\/.*e2e.*\.mjs$)/.test(file)) {
     surfaces.add("dashboard");
     reasons.push(`${file}: dashboard surface`);
   }
@@ -200,6 +208,23 @@ function buildCheckPlan(files = [], options = {}) {
     quickFailCommands: quickFail.commands.map((entry) => ({ ...entry, commandText: commandToString(entry.command) })),
     jsonParseFiles: quickFail.internalJsonFiles,
     commands: finalCommands.map((command) => ({ command, commandText: commandToString(command) })),
+  };
+}
+
+function buildCiOutputs(plan) {
+  const changedFiles = new Set(plan.changedFiles);
+  const packageOrWorkflowChanged = [...changedFiles].some((file) =>
+    /^(package\.json|pnpm-lock\.yaml|packages\/|\.github\/workflows\/)/.test(file)
+  );
+  const surfaces = new Set(plan.surfaces);
+  return {
+    static: plan.requiresFullStatic,
+    javascript: packageOrWorkflowChanged || surfaces.has("dashboard"),
+    supervisor: packageOrWorkflowChanged || surfaces.has("supervisor"),
+    requiresFullStatic: plan.requiresFullStatic,
+    surfaces: plan.surfaces,
+    changedFiles: plan.changedFiles,
+    commands: plan.commands.map((command) => command.commandText),
   };
 }
 
@@ -276,6 +301,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     base: "origin/dev",
     head: "HEAD",
     json: false,
+    ciOutputs: false,
     run: false,
     quickFailOnly: false,
     files: [],
@@ -285,11 +311,12 @@ function parseArgs(argv = process.argv.slice(2)) {
     if (arg === "--base") options.base = argv[++index] || "";
     else if (arg === "--head") options.head = argv[++index] || "";
     else if (arg === "--json") options.json = true;
+    else if (arg === "--ci-outputs") options.ciOutputs = true;
     else if (arg === "--run") options.run = true;
     else if (arg === "--quick-fail") options.quickFailOnly = true;
     else if (arg === "--files") options.files = (argv[++index] || "").split(",").map((file) => file.trim()).filter(Boolean);
     else if (arg === "--help" || arg === "-h") {
-      console.log("Usage: node ./scripts/check-plan.mjs [--base origin/dev] [--head HEAD] [--files a,b] [--json] [--run] [--quick-fail]");
+      console.log("Usage: node ./scripts/check-plan.mjs [--base origin/dev] [--head HEAD] [--files a,b] [--json] [--ci-outputs] [--run] [--quick-fail]");
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);
@@ -318,7 +345,9 @@ function main() {
   const options = parseArgs();
   const changedFiles = collectChangedFiles({ base: options.base, head: options.head, explicitFiles: options.files });
   const plan = buildCheckPlan(changedFiles, { base: options.base, head: options.head });
-  if (options.json) {
+  if (options.ciOutputs) {
+    console.log(JSON.stringify(buildCiOutputs(plan), null, 2));
+  } else if (options.json) {
     console.log(JSON.stringify(plan, null, 2));
   } else {
     printPlan(plan);
@@ -339,6 +368,7 @@ if (invokedPath === "scripts/check-plan.mjs") {
 
 export {
   buildCheckPlan,
+  buildCiOutputs,
   buildQuickFailPlan,
   classifyFile,
   collectChangedFiles,
