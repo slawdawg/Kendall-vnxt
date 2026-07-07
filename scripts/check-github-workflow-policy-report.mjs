@@ -18,6 +18,10 @@ function assertIncludes(source, text, label, failures) {
   assertCondition(source.includes(text), `${label} must include ${text}`, failures);
 }
 
+function assertNotIncludes(source, text, label, failures) {
+  assertCondition(!source.includes(text), `${label} must not include ${text}`, failures);
+}
+
 function ciJobBlock(jobName) {
   const jobStart = ciWorkflow.indexOf(`\n  ${jobName}:`);
   if (jobStart === -1) return "";
@@ -103,6 +107,7 @@ for (const ciText of [
   "needs: changes",
   "node ./scripts/check-plan.mjs",
   "--ci-outputs",
+  "RUNNER_TEMP",
   "static: ${{ steps.filter.outputs.static }}",
   "pnpm run check:fast",
   "Fast workflow checks failed or did not complete",
@@ -119,6 +124,18 @@ assertCondition(
   ciJobBlock("check").includes('needs.changes.outputs.static') &&
     ciJobBlock("check").includes("Static checks were required but did not pass"),
   ".github/workflows/ci.yml final check job must require static only when the planner selects it",
+  failures,
+);
+assertNotIncludes(
+  ciJobBlock("changes"),
+  "> ci-outputs.json",
+  ".github/workflows/ci.yml changes job",
+  failures,
+);
+assertNotIncludes(
+  ciJobBlock("changes"),
+  'readFileSync("ci-outputs.json"',
+  ".github/workflows/ci.yml changes job",
   failures,
 );
 
