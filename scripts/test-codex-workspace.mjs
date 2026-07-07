@@ -9,6 +9,50 @@ const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
 const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
 
 try {
+  test("child JSON command guard reports empty stdout as sandbox/process boundary", () => {
+    const guarded = guardExpectedJsonResult(["list", "--summary-json"], {
+      code: 1,
+      stdout: "",
+      stderr: "SyntaxError: Unexpected end of JSON input",
+    });
+
+    assert(guarded.code === 1, guarded.stderr);
+    assert(guarded.stderr.includes("sandbox/process boundary"), guarded.stderr);
+    assert(guarded.stderr.includes("expectedJson=true"), guarded.stderr);
+    assert(guarded.stderr.includes("stdoutLength=0"), guarded.stderr);
+    assert(guarded.stderr.includes("exitCode=1"), guarded.stderr);
+    assert(guarded.stderr.includes("node ./scripts/codex-workspace.mjs list --summary-json"), guarded.stderr);
+    assert(guarded.stderr.includes("rerun the exact same read-only command outside the sandbox"), guarded.stderr);
+  });
+
+  test("child JSON command guard reports fixture child empty stdout", () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-json-boundary-fixture-"));
+    try {
+      const fixtureScript = join(fixtureRoot, "empty-json-child.mjs");
+      writeFileSync(fixtureScript, "process.stderr.write('fixture stderr with space'); process.exit(1);\n");
+      const child = spawnSync(process.execPath, [fixtureScript, "--summary-json", "--label", "value with space"], {
+        cwd: fixtureRoot,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      const guarded = guardExpectedJsonResult(["--summary-json", "--label", "value with space"], {
+        code: child.status ?? 1,
+        stdout: child.stdout || "",
+        stderr: child.stderr || child.error?.message || "",
+      }, {
+        commandPrefix: ["node", fixtureScript],
+      });
+
+      assert(guarded.code === 1, guarded.stderr);
+      assert(guarded.stderr.includes("sandbox/process boundary"), guarded.stderr);
+      assert(guarded.stderr.includes("fixture stderr with space"), guarded.stderr);
+      assert(guarded.stderr.includes("'value with space'"), guarded.stderr);
+      assert(guarded.stderr.includes(fixtureScript), guarded.stderr);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   test("doctor accepts an empty state root", () => {
     const result = run(["doctor", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
@@ -5577,11 +5621,48 @@ function run(args) {
     },
     stdio: "pipe",
   });
-  return {
+  return guardExpectedJsonResult(args, {
     code: result.status ?? 1,
+    stdout: result.stdout || "",
+    stderr: result.stderr || result.error?.message || "",
+  }, {
+    commandPrefix: ["node", "./scripts/codex-workspace.mjs"],
+  });
+}
+
+function expectsJson(args = []) {
+  return args.includes("--summary-json") || args.includes("--json");
+}
+
+function guardExpectedJsonResult(args = [], result = {}, options = {}) {
+  const guarded = {
+    code: result.code ?? 1,
     stdout: result.stdout || "",
     stderr: result.stderr || "",
   };
+  if (!expectsJson(args) || guarded.stdout.trim() !== "") {
+    return guarded;
+  }
+  const command = renderCommand([...(options.commandPrefix || ["node", "./scripts/codex-workspace.mjs"]), ...args]);
+  const stderrExcerpt = guarded.stderr.trim().slice(0, 280) || "(empty stderr)";
+  guarded.code = guarded.code === 0 ? 1 : guarded.code;
+  guarded.stderr = [
+    "sandbox/process boundary: child command expected JSON but emitted empty stdout",
+    `command=${command}`,
+    "expectedJson=true",
+    "stdoutLength=0",
+    `stderrExcerpt=${stderrExcerpt}`,
+    `exitCode=${guarded.code}`,
+    "nextAction=report this boundary and rerun the exact same read-only command outside the sandbox when the command is read-only",
+  ].join("\n");
+  return guarded;
+}
+
+function renderCommand(parts = []) {
+  return parts.map((part) => {
+    const value = String(part);
+    return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\"'\"'")}'`;
+  }).join(" ");
 }
 
 function taskSnapshot(tasksDir) {
@@ -6062,11 +6143,13 @@ function runFixtureScript(fixture, args, options = {}) {
     env: options.env || process.env,
     stdio: "pipe",
   });
-  return {
+  return guardExpectedJsonResult(args, {
     code: result.status ?? 1,
     stdout: result.stdout || "",
     stderr: result.stderr || result.error?.message || "",
-  };
+  }, {
+    commandPrefix: ["node", fixture.script],
+  });
 }
 
 function copyWorkspaceScriptFixture(fixtureRoot) {

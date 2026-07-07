@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { assertWorkspaceStateStorage, workspaceState } from "../codex-workspace-state.mjs";
 import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-routing.mjs";
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
+import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const LEDGER_ACTION_FINGERPRINT_VERSION = "manager-ledger-action-fingerprint.v2";
@@ -3163,6 +3164,16 @@ function applyLaneAdvancementHeartbeat(lane = {}, context = {}, options = {}) {
       assignmentId: lane.assignmentId,
       targetPhase: lane.targetPhase,
       error: result.error || "codex-workspace heartbeat failed",
+      ...(result.sandboxBoundary ? {
+        failureClass: result.failureClass,
+        sandboxBoundary: result.sandboxBoundary,
+        sandboxSignatureClass: result.sandboxSignatureClass,
+        rerunRequirement: result.rerunRequirement,
+        sandboxBoundaryPacket: result.sandboxBoundaryPacket || null,
+        safe_rerun: result.safe_rerun || "none",
+        mutation: result.mutation || "unknown",
+        retryStopLine: result.retryStopLine,
+      } : {}),
     };
   }
   return {
@@ -13054,6 +13065,7 @@ export function buildCleanupPlan(options = {}, context = {}) {
   const paths = managerRunPaths(runId, runOptions, context);
   const oldManagerState = existsSync(paths.root);
   const staleOwner = context.staleOwnerInspection || buildStaleOwnerInspection(runOptions, context);
+  const sandboxBoundary = sandboxBoundaryFromPacket(staleOwner, "node ./scripts/manager-stale-owner-inspection.mjs --summary-json");
   const staleOwnerBlockers = staleOwnerBlockersForCleanup(staleOwner);
   const cleanupCandidates = Array.isArray(staleOwner.summary?.inspections)
     ? staleOwner.summary.inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate")
@@ -13070,17 +13082,21 @@ export function buildCleanupPlan(options = {}, context = {}) {
   const dirtyPreservation = dirtyWorkspaces.length > 0
     ? context.dirtyWorkspacePreservation || buildDirtyWorkspacePreservation(runOptions, { ...context, staleOwnerInspection: staleOwner })
     : null;
-  if (staleOwnerBlockers.length > 0) {
+  if (staleOwnerBlockers.length > 0 || sandboxBoundary) {
+    const blockers = [
+      ...staleOwnerBlockers,
+      ...(sandboxBoundary ? [sandboxBoundaryBlocker(sandboxBoundary, "cleanup-plan-sandbox-incomplete")] : []),
+    ];
     return packet({
       ok: false,
-      status: "blocked",
+      status: sandboxBoundary && staleOwnerBlockers.length === 0 ? "sandbox_incomplete" : "blocked",
       summary: {
         runId,
         managerStatePresent: oldManagerState,
-        mutationMode: "blocked_stale_owner_inspection",
+        mutationMode: sandboxBoundary ? "blocked_sandbox_incomplete" : "blocked_stale_owner_inspection",
         cleanupScopes: ["manager-run-state", "merged-managed-lanes", "closed-assignments"],
         staleOwnerCleanup: {
-          mutationMode: "blocked_until_exact_stale_owner_evidence",
+          mutationMode: sandboxBoundary ? "blocked_until_sandbox_complete_evidence" : "blocked_until_exact_stale_owner_evidence",
           targetCount: staleOwner.summary?.targetCount || 0,
           cleanupCandidateCount,
           dirtyWorkspaceCount,
@@ -13089,13 +13105,15 @@ export function buildCleanupPlan(options = {}, context = {}) {
           dirtyPreservation: null,
           retention: "metadata_only_stale_owner_cleanup_summary",
         },
+        sandboxBoundary: Boolean(sandboxBoundary),
+        sandboxBoundaryPacket: sandboxBoundary || null,
       },
-      blockers: staleOwnerBlockers,
+      blockers,
       warnings: staleOwner.warnings || [],
-      nextActions: staleOwnerBlockers.map((blocker) => ({
+      nextActions: blockers.map((blocker) => ({
         code: blocker.code,
         summary: blocker.message || blocker.code,
-        nextAction: blocker.nextAction || "Refresh manager stale-owner inspection before cleanup planning.",
+        nextAction: blocker.nextAction || sandboxBoundary?.next_action || "Refresh manager stale-owner inspection before cleanup planning.",
       })),
     });
   }
@@ -14253,7 +14271,35 @@ function toolFailureSandboxSignature(result = {}) {
 
 function withToolFailureMetadata(result = {}, options = {}) {
   const commandShape = options.commandShape || result.commandShape || "";
-  const sandboxSignatureClass = toolFailureSandboxSignature({ ...result, commandShape });
+  if (result.sandboxBoundary === true) {
+    const safeRerun = result.safe_rerun || result.sandboxBoundaryPacket?.safe_rerun || "none";
+    const mutation = result.mutation || result.sandboxBoundaryPacket?.mutation || "unknown";
+    return {
+      ...result,
+      ok: false,
+      commandShape,
+      failureClass: "sandbox",
+      sandboxBoundary: true,
+      sandboxSignatureClass: result.sandboxSignatureClass || result.sandboxBoundaryPacket?.signature || "known sandbox boundary",
+      rerunRequirement: result.rerunRequirement || (safeRerun === "exact_command_outside_sandbox_when_read_only"
+        ? "Rerun the exact same read-only command outside the sandbox once."
+        : "No outside-sandbox rerun is authorized unless this command is proven read-only."),
+      sandboxBoundaryPacket: result.sandboxBoundaryPacket || null,
+      safe_rerun: safeRerun,
+      mutation,
+      retryStopLine: result.retryStopLine || "Do not change wrapper, scope, command shape, or target; record the outside-sandbox result.",
+    };
+  }
+  const sandboxBoundaryPacket = classifySandboxBoundaryResult({
+    command: commandShape,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    errorCode: result.errorCode || result.code || "",
+    errorMessage: result.error || result.message || "",
+    readOnly: options.readOnly === true,
+    expectedJson: options.expectedJson === true,
+  });
+  const sandboxSignatureClass = toolFailureSandboxSignature({ ...result, commandShape }) || sandboxBoundaryPacket?.signature || "";
   if (!sandboxSignatureClass) return commandShape ? { ...result, commandShape } : result;
   const surface = sanitizeLedgerField(commandShape || "tool command", "tool command", 160);
   return {
@@ -14265,13 +14311,16 @@ function withToolFailureMetadata(result = {}, options = {}) {
     failureClass: "sandbox",
     sandboxBoundary: true,
     sandboxSignatureClass,
-    rerunRequirement: "Rerun the exact same read-only command outside the sandbox once.",
+    rerunRequirement: sandboxBoundaryPacket?.safe_rerun === "exact_command_outside_sandbox_when_read_only" ? "Rerun the exact same read-only command outside the sandbox once." : "No outside-sandbox rerun is authorized unless this command is proven read-only.",
+    sandboxBoundaryPacket,
+    safe_rerun: sandboxBoundaryPacket?.safe_rerun || "none",
+    mutation: sandboxBoundaryPacket?.mutation || "unknown",
     retryStopLine: "Do not change wrapper, scope, command shape, or target; record the outside-sandbox result.",
   };
 }
 
 function toolFailureNotice(result = {}, options = {}) {
-  const enriched = withToolFailureMetadata(result, { commandShape: options.commandShape || result.commandShape || "" });
+  const enriched = withToolFailureMetadata(result, { commandShape: options.commandShape || result.commandShape || "", readOnly: options.readOnly !== false });
   const code = options.code || "tool-unavailable";
   const fallbackMessage = options.fallbackMessage || "Tool unavailable.";
   if (!enriched.sandboxBoundary) {
@@ -14289,8 +14338,65 @@ function toolFailureNotice(result = {}, options = {}) {
     failureClass: "sandbox",
     sandboxBoundary: true,
     sandboxSignatureClass: enriched.sandboxSignatureClass,
-    rerunRequirement: "Rerun the exact same read-only command outside the sandbox once.",
+    rerunRequirement: enriched.rerunRequirement,
+    sandboxBoundaryPacket: enriched.sandboxBoundaryPacket || null,
+    safe_rerun: enriched.safe_rerun || "none",
+    mutation: enriched.mutation || "unknown",
     retryStopLine: "Do not change wrapper, scope, command shape, or target; record the outside-sandbox result.",
+    rawPayloadRetained: false,
+  };
+}
+
+function sandboxBoundaryFromPacket(packet = {}, command = "") {
+  const notices = [
+    ...(Array.isArray(packet.blockers) ? packet.blockers : []),
+    ...(Array.isArray(packet.warnings) ? packet.warnings : []),
+  ];
+  const explicit = packet.summary?.sandboxBoundaryPacket || packet.sandboxBoundaryPacket || notices.find((notice) => notice?.sandboxBoundaryPacket)?.sandboxBoundaryPacket;
+  if (explicit?.boundary) return explicit;
+  const sandboxNotice = notices.find((notice) => notice?.sandboxBoundary);
+  if (!sandboxNotice && packet.summary?.sandboxBoundary !== true && packet.sandboxBoundary !== true) return null;
+  const noticeSafeRerun = typeof sandboxNotice?.safe_rerun === "string" ? sandboxNotice.safe_rerun : null;
+  const noticeMutation = typeof sandboxNotice?.mutation === "string" ? sandboxNotice.mutation : null;
+  const classified = classifySandboxBoundaryResult({
+    command: sandboxNotice?.commandShape || command,
+    stderr: [
+      sandboxNotice?.message || "",
+      sandboxNotice?.sandboxSignatureClass || "",
+      sandboxNotice?.nextAction || "",
+    ].join("\n"),
+    readOnly: noticeSafeRerun ? noticeSafeRerun === "exact_command_outside_sandbox_when_read_only" : true,
+  });
+  if (classified) {
+    return {
+      ...classified,
+      safe_rerun: noticeSafeRerun || classified.safe_rerun,
+      mutation: noticeMutation || classified.mutation,
+      next_action: sandboxNotice?.nextAction || classified.next_action,
+    };
+  }
+  return {
+    boundary: true,
+    class: "sandbox",
+    signature: sandboxNotice?.sandboxSignatureClass || "known sandbox boundary",
+    command: sandboxNotice?.commandShape || command || "unknown-command",
+    safe_rerun: noticeSafeRerun || "exact_command_outside_sandbox_when_read_only",
+    mutation: noticeMutation || "none",
+    next_action: sandboxNotice?.nextAction || "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+    evidence_summary: sandboxNotice?.message || "Manager evidence is incomplete because a known sandbox boundary blocked local state inspection.",
+  };
+}
+
+function sandboxBoundaryBlocker(boundary = {}, code = "known-sandbox-boundary") {
+  return {
+    code,
+    message: boundary.evidence_summary || "Manager evidence is incomplete because a known sandbox boundary blocked local state inspection.",
+    nextAction: boundary.next_action || "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+    failureClass: "sandbox",
+    sandboxBoundary: true,
+    sandboxBoundaryPacket: boundary,
+    safe_rerun: boundary.safe_rerun || "none",
+    mutation: boundary.mutation || "unknown",
     rawPayloadRetained: false,
   };
 }
@@ -15700,10 +15806,12 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
   const targetEvidenceBlockers = staleOwnerTargetEvidenceBlockers(resume, targets);
   const failed = inspections.filter((inspection) => !inspection.ok);
   const cleanupCandidates = inspections.filter((inspection) => inspection.classification === "stale_record_cleanup_candidate");
+  const sandboxBoundary = sandboxBoundaryFromPacket(resume, "node ./scripts/manager-resume-state.mjs --summary-json");
   const dirtyWorkspaces = inspections.filter((inspection) => inspection.classification === "dirty_workspace_preservation_required");
   const approvalCandidates = inspections.filter((inspection) => inspection.classification === "takeover_apply_candidate_with_approval");
   const blockers = [
     ...targetEvidenceBlockers,
+    ...(sandboxBoundary ? [sandboxBoundaryBlocker(sandboxBoundary, "stale-owner-sandbox-incomplete")] : []),
     ...failed.map((inspection) => ({
       code: "stale-owner-inspection-failed",
       message: inspection.error || `Failed stale-owner inspection for ${inspection.id || "(missing id)"}.`,
@@ -15723,6 +15831,8 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
       inspections,
       mutation: "none; dry-run takeover evidence only",
       retention: "metadata_only_stale_owner_inspection",
+      sandboxBoundary: Boolean(sandboxBoundary),
+      sandboxBoundaryPacket: sandboxBoundary || null,
     },
     blockers,
     warnings: [
@@ -16088,6 +16198,7 @@ export function buildPreflight(options = {}, context = {}) {
   }
   blockerList.push(...(ledger.blockers || []));
   blockerList.push(...(refill.blockers || []));
+  blockerList.push(...((cleanup.blockers || []).map((blocker) => ({ ...blocker, code: blocker.code || "preflight-cleanup-blocked" }))));
   const warnings = uniqueWarnings([
     ...(repo.warnings || []),
     ...(branch.warnings || []),
@@ -16099,6 +16210,7 @@ export function buildPreflight(options = {}, context = {}) {
     ...(resource.warnings || []),
     ...(workers.warnings || []),
     ...(refill.warnings || []),
+    ...(cleanup.warnings || []),
   ]);
   const nextActions = uniqueActions([
     ...(blockerList.length > 0
@@ -16111,6 +16223,7 @@ export function buildPreflight(options = {}, context = {}) {
     ...(dispatcher.nextActions || []),
     ...(refill.nextActions || []),
     ...(usage.nextActions || []),
+    ...(cleanup.nextActions || []),
   ]);
   const recommendedNextAction = nextActions[0]?.nextAction || (blockerList.length > 0 ? "Resolve preflight blockers before manager mutation." : "Preflight ready; continue with bounded manager cycle.");
   return packet({
@@ -16584,7 +16697,7 @@ function summarizeLedgerDispatcherSummary(summary = null) {
 }
 
 function runReadOnlyTool(runner, command, args, context = {}) {
-  const commandShape = [command, ...args].join(" ");
+  const commandShape = renderCommandShape([command, ...args]);
   try {
     const result = runner(command, args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 5000 });
     if (!result || typeof result !== "object") {
@@ -16592,15 +16705,15 @@ function runReadOnlyTool(runner, command, args, context = {}) {
     }
     const stdout = String(result?.stdout || "").trim();
     const stderr = String(result?.stderr || "").trim();
-    if (result?.error) return withToolFailureMetadata({ ok: false, stdout, stderr, error: result.error.message || `${command} unavailable`, errorCode: result.error.code || "" }, { commandShape });
+    if (result?.error) return withToolFailureMetadata({ ok: false, stdout, stderr, error: result.error.message || `${command} unavailable`, errorCode: result.error.code || "" }, { commandShape, readOnly: true });
     if (typeof result.status !== "number") {
-      return withToolFailureMetadata({ ok: false, stdout, stderr, error: `${command} returned malformed result` }, { commandShape });
+      return withToolFailureMetadata({ ok: false, stdout, stderr, error: `${command} returned malformed result` }, { commandShape, readOnly: true });
     }
     const status = Number(result.status);
-    if (status !== 0) return withToolFailureMetadata({ ok: false, stdout, stderr, error: stderr || stdout || `${command} exited ${status}` }, { commandShape });
+    if (status !== 0) return withToolFailureMetadata({ ok: false, stdout, stderr, error: stderr || stdout || `${command} exited ${status}` }, { commandShape, readOnly: true });
     return { ok: true, stdout, stderr };
   } catch (error) {
-    return withToolFailureMetadata({ ok: false, stdout: "", stderr: "", error: error instanceof Error ? error.message : String(error), errorCode: error?.code || "" }, { commandShape });
+    return withToolFailureMetadata({ ok: false, stdout: "", stderr: "", error: error instanceof Error ? error.message : String(error), errorCode: error?.code || "" }, { commandShape, readOnly: true });
   }
 }
 
@@ -16625,6 +16738,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     : buildUsageStatus(usageInput);
   const resources = resourceContext && (safeReadProperty(resourceContext, "status", null) || safeReadProperty(resourceContext, "state", null)) ? normalizePacketContext(resourceContext) : buildResourceStatus(resourceContext || {});
   const preflight = preflightStatus ? normalizePacketContext(preflightStatus) : buildPreflight(readOnlyRunOptions, context);
+  const preflightSandboxBoundary = sandboxBoundaryFromPacket(preflight, "node ./scripts/manager-preflight.mjs --summary-json");
   const dispatchPreview = dispatchPreviewContext ? normalizeDispatchPreviewContext(dispatchPreviewContext) : buildDispatchPreview(readOnlyRunOptions, context);
   const runway = buildRefillPlan(readOnlyRunOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
   const workers = workerStatus ? normalizePacketContext(workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
@@ -16896,6 +17010,8 @@ export function buildCyclePacket(options = {}, context = {}) {
         ledgerStatus: preflightSummary.ledger?.status || "unknown",
         blockerCount: preflight.blockers?.length || 0,
         warningCount: preflight.warnings?.length || 0,
+        sandboxBoundary: Boolean(preflightSandboxBoundary),
+        sandboxBoundaryPacket: preflightSandboxBoundary || null,
         recommendedNextAction: sanitizeLedgerField(preflightSummary.recommendedNextAction || "", "", 180),
         mutation: "none; read-only preflight summary",
         rawPayloadRetained: false,
@@ -16953,7 +17069,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       report: sanitizeLedgerField(report, "Manager: status unavailable", 600),
     },
     blockers: sanitizeCyclePacketValue(reportedBlockers),
-    warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(persistedCapabilityPosture.warnings || []), ...(selfRepair.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
+    warnings: sanitizeCyclePacketValue(uniqueWarnings([...(usage.warnings || []), ...(resources.warnings || []), ...(preflight.warnings || []), ...(persistedCapabilityPosture.warnings || []), ...(selfRepair.warnings || []), ...(workers.warnings || []), ...(workerProgress.warnings || []), ...(laneAdvance.warnings || []), ...(runway.warnings || []), ...(dispatchPreview.warnings || []), ...(signalGaps.warnings || []), ...(observations.warnings || []), ...(friction.warnings || []), ...(steering.warnings || []), ...(feedback.warnings || [])])),
     nextActions: cycleRecommendedActions,
   });
   return cyclePacket;
@@ -20163,11 +20279,22 @@ function managerWorkspaceCommandUsesOwner(command) {
   return ["assignment-report", "dispatch-next", "claim-next"].includes(command);
 }
 
+export function workspaceJsonCommandIsReadOnly(args = []) {
+  const command = args[0];
+  if (command === "assignment-report") return args.includes("--summary-json");
+  if (command === "dispatch-next" || command === "claim-next" || command === "takeover") {
+    return args.includes("--dry-run") && args.includes("--summary-json");
+  }
+  if (command === "close-assignments") return args.includes("--summary-json") && !args.includes("--apply");
+  return false;
+}
+
 function runWorkspaceJson(args, context = {}) {
-  const commandShape = `node ./scripts/codex-workspace.mjs ${args.join(" ")}`;
+  const commandShape = renderCommandShape(["node", "./scripts/codex-workspace.mjs", ...args]);
+  const readOnly = workspaceJsonCommandIsReadOnly(args);
   if (context.workspaceRunner) {
     const result = context.workspaceRunner(args);
-    return result?.ok === false ? withToolFailureMetadata(result, { commandShape: result.commandShape || commandShape }) : result;
+    return result?.ok === false ? withToolFailureMetadata(result, { commandShape: result.commandShape || commandShape, readOnly, expectedJson: true }) : result;
   }
   const result = spawnSync(process.execPath, [join(repoRoot, "scripts/codex-workspace.mjs"), ...args], {
     cwd: repoRoot,
@@ -20176,19 +20303,26 @@ function runWorkspaceJson(args, context = {}) {
     timeout: context.timeoutMs || 5000,
   });
   if (result.error) {
-    return withToolFailureMetadata({ ok: false, error: result.error.message || "workspace command failed", errorCode: result.error.code || "", commandShape }, { commandShape });
+    return withToolFailureMetadata({ ok: false, error: result.error.message || "workspace command failed", errorCode: result.error.code || "", commandShape }, { commandShape, readOnly, expectedJson: true });
   }
   if ((result.status ?? 1) !== 0) {
-    return withToolFailureMetadata({ ok: false, error: (result.stderr || result.stdout || result.error?.message || "workspace command failed").trim(), stderr: result.stderr || "", stdout: result.stdout || "", commandShape }, { commandShape });
+    return withToolFailureMetadata({ ok: false, error: (result.stderr || result.stdout || result.error?.message || "workspace command failed").trim(), stderr: result.stderr || "", stdout: result.stdout || "", commandShape }, { commandShape, readOnly, expectedJson: true });
   }
   if (!String(result.stdout || "").trim()) {
-    return { ok: false, error: "workspace command produced no JSON output", commandShape };
+    return withToolFailureMetadata({ ok: false, error: "workspace command produced no JSON output", stdout: "", stderr: "", commandShape }, { commandShape, readOnly, expectedJson: true });
   }
   try {
     return JSON.parse(result.stdout);
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error), commandShape };
+    return withToolFailureMetadata({ ok: false, error: error instanceof Error ? error.message : String(error), stdout: result.stdout || "", stderr: result.stderr || "", commandShape }, { commandShape, readOnly, expectedJson: true });
   }
+}
+
+function renderCommandShape(parts = []) {
+  return parts.map((part) => {
+    const value = String(part);
+    return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : shellSingleQuote(value);
+  }).join(" ");
 }
 
 function readAssignmentSummaryFile(path) {

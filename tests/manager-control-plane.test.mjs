@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { runManagerRefillPlan } from "../scripts/manager-refill-plan.mjs";
@@ -63,12 +63,13 @@ import {
   parseCodexFetcherUsage,
   parseCodexUsageOutput,
   readManagerCapabilityPosture,
+  workspaceJsonCommandIsReadOnly,
   writeManagerCapabilityPosture,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
 function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
   const path = join(process.cwd(), relativePath);
-  mkdirSync(join(path, ".."), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   if (!existsSync(path)) {
     writeFileSync(path, content);
   }
@@ -4743,6 +4744,24 @@ test("blocks refill decisions when assignment inventory is unavailable or malfor
   assert.doesNotMatch(unavailable.blockers[0].message, /spawnSync|EPERM/);
   assert.equal(unavailable.nextActions.length, 0);
   assert.equal(unavailable.summary.workCreationStep, null);
+
+  const emptyJsonSandbox = buildRefillPlan(
+    { desiredWorkers: 3 },
+    {
+      workspaceRunner: () => ({
+        ok: false,
+        stdout: "",
+        stderr: "SyntaxError: Unexpected end of JSON input",
+      }),
+    },
+  );
+  assert.equal(emptyJsonSandbox.ok, false);
+  assert.equal(emptyJsonSandbox.summary.sandboxBoundary, true);
+  assert.equal(emptyJsonSandbox.blockers[0].code, "assignment-report-unavailable");
+  assert.equal(emptyJsonSandbox.blockers[0].failureClass, "sandbox");
+  assert.equal(emptyJsonSandbox.blockers[0].sandboxSignatureClass, "empty JSON stdout sandbox/process boundary");
+  assert.equal(emptyJsonSandbox.blockers[0].safe_rerun, "exact_command_outside_sandbox_when_read_only");
+  assert.match(emptyJsonSandbox.blockers[0].nextAction, /rerun the exact same read-only manager command outside the sandbox once/i);
 
   const malformed = buildRefillPlan(
     { desiredWorkers: -2 },
@@ -11336,7 +11355,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.operationalActions.actionSchemaVersion, "pipeline-operational-action/v0");
     assert.equal(cycle.summary.operationalActions.operationalMode, "read_only");
     assert.equal(cycle.summary.operationalActions.freshnessState, "live");
-    assert.equal(cycle.summary.operationalActions.readinessState, "ready");
+    assert.equal(cycle.summary.operationalActions.readinessState, "degraded");
     assert.equal(cycle.summary.operationalActions.metadataOnly, true);
     assert.equal(cycle.summary.operationalActions.rawPayloadRetained, false);
     assert.equal(Object.hasOwn(cycle.summary.operationalActions, "mutation"), false);
@@ -12127,6 +12146,124 @@ test("stale-owner inspection preserves direct evidence blockers without source c
   assert.equal(cleanup.status, "blocked");
   assert.equal(cleanup.summary.staleOwnerCleanup.mutationMode, "blocked_until_exact_stale_owner_evidence");
   assert.equal(preservation.status, "blocked");
+});
+
+test("cleanup plan fails closed when stale-owner evidence is sandbox incomplete", () => {
+  const cleanup = buildCleanupPlan(
+    { runId: "manager-test" },
+    {
+      staleOwnerInspection: {
+        ok: true,
+        status: "ready",
+        summary: {
+          runId: "manager-test",
+          targetCount: 0,
+          cleanupCandidateCount: 0,
+          dirtyWorkspaceCount: 0,
+          takeoverApprovalCandidateCount: 0,
+          inspections: [],
+          sandboxBoundary: true,
+          sandboxBoundaryPacket: {
+            boundary: true,
+            class: "sandbox",
+            signature: "workspace metadata sandbox permission boundary",
+            command: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+            safe_rerun: "exact_command_outside_sandbox_when_read_only",
+            mutation: "none",
+            next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+            evidence_summary: "Workspace metadata inspection was hidden by the sandbox.",
+          },
+        },
+        blockers: [],
+        warnings: [],
+      },
+    },
+  );
+
+  assert.equal(cleanup.ok, false);
+  assert.equal(cleanup.status, "sandbox_incomplete");
+  assert.equal(cleanup.summary.mutationMode, "blocked_sandbox_incomplete");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupCandidateCount, 0);
+  assert.equal(cleanup.summary.sandboxBoundary, true);
+  assert.equal(cleanup.blockers[0].sandboxBoundary, true);
+  assert.match(cleanup.blockers[0].nextAction, /exact same read-only manager command outside the sandbox/);
+});
+
+test("stale-owner inspection blocks directly when resume evidence is sandbox incomplete", () => {
+  const inspection = buildStaleOwnerInspection(
+    { runId: "manager-test" },
+    {
+      resumeState: {
+        summary: {
+          ledger: { runId: "manager-test" },
+          takeoverInspection: { targets: [] },
+          sandboxBoundary: true,
+          sandboxBoundaryPacket: {
+            boundary: true,
+            class: "sandbox",
+            signature: "workspace metadata sandbox permission boundary",
+            command: "node ./scripts/manager-resume-state.mjs --summary-json",
+            safe_rerun: "exact_command_outside_sandbox_when_read_only",
+            mutation: "none",
+            next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+            evidence_summary: "Resume assignment inventory was hidden by the sandbox.",
+          },
+        },
+        blockers: [],
+        warnings: [],
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.status, "blocked");
+  assert.equal(inspection.summary.sandboxBoundary, true);
+  assert.equal(inspection.blockers[0].code, "stale-owner-sandbox-incomplete");
+  assert.equal(inspection.nextActions[0].code, "stale-owner-sandbox-incomplete");
+  assert.match(inspection.nextActions[0].nextAction, /exact same read-only manager command outside the sandbox/);
+});
+
+test("cleanup plan keeps stale-owner and sandbox blockers together", () => {
+  const cleanup = buildCleanupPlan(
+    { runId: "manager-test" },
+    {
+      staleOwnerInspection: {
+        ok: false,
+        status: "blocked",
+        summary: {
+          targetCount: 1,
+          cleanupCandidateCount: 0,
+          dirtyWorkspaceCount: 0,
+          takeoverApprovalCandidateCount: 0,
+          inspections: [],
+          sandboxBoundary: true,
+          sandboxBoundaryPacket: {
+            boundary: true,
+            class: "sandbox",
+            signature: "workspace metadata sandbox permission boundary",
+            command: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+            safe_rerun: "exact_command_outside_sandbox_when_read_only",
+            mutation: "none",
+            next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+            evidence_summary: "Workspace metadata inspection was hidden by the sandbox.",
+          },
+        },
+        blockers: [
+          {
+            code: "stale-owner-target-evidence-unavailable",
+            message: "Stale-owner target detail is incomplete.",
+            nextAction: "Refresh stale-owner target evidence.",
+          },
+        ],
+        warnings: [],
+      },
+    },
+  );
+
+  assert.equal(cleanup.status, "blocked");
+  assert.ok(cleanup.blockers.some((blocker) => blocker.code === "stale-owner-target-evidence-unavailable"));
+  assert.ok(cleanup.blockers.some((blocker) => blocker.code === "cleanup-plan-sandbox-incomplete"));
+  assert.equal(cleanup.nextActions.length, 2);
 });
 
 test("stale-owner inspection blocks when stale counts lack exact target rows", () => {
@@ -13822,6 +13959,69 @@ test("lane advancement apply uses owner-checked heartbeat metadata only", () => 
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("workspace JSON read-only classification does not authorize heartbeat mutation reruns", () => {
+  assert.equal(workspaceJsonCommandIsReadOnly(["assignment-report", "--summary-json"]), true);
+  assert.equal(workspaceJsonCommandIsReadOnly(["dispatch-next", "--dry-run", "--summary-json"]), true);
+  assert.equal(workspaceJsonCommandIsReadOnly(["claim-next", "--dry-run", "--summary-json"]), true);
+  assert.equal(workspaceJsonCommandIsReadOnly(["takeover", "lane-2", "--dry-run", "--summary-json"]), true);
+  assert.equal(workspaceJsonCommandIsReadOnly(["close-assignments", "--ids", "lane-2", "--summary-json"]), true);
+  assert.equal(workspaceJsonCommandIsReadOnly(["heartbeat", "lane-2", "--owner", "owner-1", "--json"]), false);
+  assert.equal(workspaceJsonCommandIsReadOnly(["dispatch-next", "--apply", "--summary-json"]), false);
+  assert.equal(workspaceJsonCommandIsReadOnly(["close-assignments", "--ids", "lane-2", "--summary-json", "--apply"]), false);
+});
+
+test("lane advancement heartbeat failure preserves conservative sandbox rerun metadata", () => {
+  const plan = buildLaneAdvancementPlan(
+    { runId: "manager-test", apply: true, limit: 1 },
+    {
+      workerStatus: {
+        summary: {
+          workers: [
+            {
+              workerId: "codex-2",
+              owner: "manager-test/codex-2",
+              runId: "manager-test",
+              sessionName: "codex-2",
+              state: "active",
+              assignmentId: "lane-2",
+              taskId: "task-2",
+              lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      assignmentSummary: {
+        summary: {
+          laneAssignments: [{ assignmentId: "lane-2", taskId: "task-2", owner: "owner-1", phase: "handoff" }],
+        },
+      },
+      checkpoints: [
+        {
+          checkpointId: "checkpoint-1",
+          timestamp: "2026-06-29T00:05:00.000Z",
+          actor: "codex-2",
+          assignmentId: "lane-2",
+          summary: "Implemented and verified. Ready for manager review; staged implementation unchanged.",
+          sourceRefs: ["assignment:lane-2"],
+        },
+      ],
+      workspaceRunner() {
+        return {
+          ok: false,
+          stdout: "",
+          stderr: "SyntaxError: Unexpected end of JSON input",
+          status: 1,
+        };
+      },
+    },
+  );
+
+  assert.equal(plan.status, "blocked");
+  assert.equal(plan.summary.results[0].sandboxBoundary, true);
+  assert.equal(plan.summary.results[0].safe_rerun, "none");
+  assert.equal(plan.summary.results[0].mutation, "none");
 });
 
 test("lane advancement dedupes workers by assignment and preserves command identifiers", () => {
@@ -17202,6 +17402,8 @@ test("continuous run loop requires machine-readable summary JSON for selected co
   assert.match(runLoopSource, /Continuous command must emit --summary-json/);
   assert.match(runLoopSource, /Continuous command did not emit parseable summary JSON/);
   assert.match(runLoopSource, /Continuous command emitted non-object summary JSON/);
+  assert.match(runLoopSource, /known_sandbox_boundary/);
+  assert.match(runLoopSource, /firstSandboxBoundary/);
   assert.doesNotMatch(runLoopSource, /packet:\s*\{\s*ok:\s*true,\s*summary:\s*\{\s*stdout/);
 });
 
@@ -21565,7 +21767,24 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     assert.equal(githubCliWarning.sandboxSignatureClass, "process-spawn-eperm");
     assert.ok(sandboxWarnings.every((warning) => warning.failureClass === "sandbox"));
     assert.ok(sandboxWarnings.every((warning) => /exact same read-only command outside the sandbox once/i.test(warning.rerunRequirement)));
+    assert.equal(repoRootWarning.sandboxBoundaryPacket.boundary, true);
+    assert.equal(repoRootWarning.safe_rerun, "exact_command_outside_sandbox_when_read_only");
     assert.ok(sandboxWarnings.every((warning) => !/spawnSync|EPERM/.test(warning.message)));
+
+    const cycleWithSandboxPreflight = buildCyclePacket(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 6, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 6, active: 0 }, candidateStateCounts: { assignable: 6 } },
+        gitRunner: () => ({ status: 1, stdout: "", stderr: "spawnSync git EPERM" }),
+        ghRunner: () => ({ status: 1, stdout: "", stderr: "spawnSync gh EPERM" }),
+      },
+    );
+    assert.equal(cycleWithSandboxPreflight.summary.preflight.sandboxBoundary, true);
+    assert.equal(cycleWithSandboxPreflight.summary.preflight.sandboxBoundaryPacket.boundary, true);
+    assert.ok(cycleWithSandboxPreflight.warnings.some((warning) => warning.sandboxBoundary));
 
     const spawnError = Object.assign(new Error("spawnSync git EPERM"), { code: "EPERM" });
     const nullStatusSpawnRunner = buildPreflight(
@@ -21601,6 +21820,42 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("cycle sandbox boundary normalization preserves conservative rerun metadata", () => {
+  const cycle = buildCyclePacket(
+    {},
+    {
+      preflightStatus: {
+        status: "sandbox_incomplete",
+        warnings: [
+          {
+            code: "legacy-sandbox-boundary",
+            message: "older sandbox boundary notice",
+            nextAction: "Inspect the boundary before rerun.",
+            failureClass: "sandbox",
+            sandboxBoundary: true,
+            sandboxSignatureClass: "legacy-normalized-boundary",
+            safe_rerun: "none",
+            mutation: "unknown",
+            rawPayloadRetained: false,
+          },
+        ],
+        summary: {
+          sandboxBoundary: true,
+        },
+      },
+    },
+  );
+
+  assert.equal(cycle.summary.preflight.sandboxBoundary, true);
+  assert.equal(cycle.summary.preflight.sandboxBoundaryPacket.safe_rerun, "none");
+  assert.equal(cycle.summary.preflight.sandboxBoundaryPacket.mutation, "unknown");
+  const sandboxWarning = cycle.warnings.find((warning) => warning.code === "legacy-sandbox-boundary");
+  assert.ok(sandboxWarning);
+  assert.equal(sandboxWarning.safe_rerun, "none");
+  assert.equal(sandboxWarning.mutation, "unknown");
+  assert.doesNotMatch(sandboxWarning.nextAction, /exact same read-only/i);
 });
 
 test("cycle packet includes bounded preflight readiness without raw logs", () => {
