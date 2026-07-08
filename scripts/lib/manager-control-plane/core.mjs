@@ -12023,12 +12023,20 @@ function applyCourseCorrectionRefill(step = {}, context = {}) {
     };
   }
   const source = readFileSync(sprintAbsolute, "utf8");
-  const storyStatuses = step.sourcePlanning?.sprintStatus?.storyStatuses || countSprintStories(source).storyStatuses || {};
+  const storyStatuses = countSprintStories(source, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {};
   const items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses);
   if (items.length === 0) {
     return {
-      ok: false,
-      blockers: [{ code: "course-correction-no-new-items", message: "Course-correction draft has no new backlog items to add.", nextAction: "Create a new source-owned PRD slice or adjust the draft." }],
+      ok: true,
+      mutationMode: "none",
+      summary: {
+        reason: "course_correction_backlog_already_materialized",
+        proposalPath: sanitizeRelativeBmadOutputPath(draft.outputPath || "") || null,
+        sprintStatusPath: sprintPath,
+        addedBacklogCount: 0,
+        addedBacklogItems: [],
+        nextAction: "Run manager-refill-plan again; it should route to bmad-create-story if scoped backlog remains.",
+      },
     };
   }
   const proposalPath = sanitizeRelativeBmadOutputPath(draft.outputPath || "");
@@ -12140,16 +12148,24 @@ function backlogStoryKeysFromSprintStatus(content = "") {
 
 function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}) {
   const existingIds = new Set(Object.keys(storyStatuses || {}));
-  const sourceItems = Array.isArray(draft.proposedBacklogItems) && draft.proposedBacklogItems.length > 0
-    ? draft.proposedBacklogItems
-    : nextEpicBacklogItems(storyStatuses);
+  const explicitItems = [
+    ...(Array.isArray(draft.candidateBacklogItems) ? draft.candidateBacklogItems : []),
+    ...(Array.isArray(draft.proposedBacklogItems) ? draft.proposedBacklogItems : []),
+  ];
+  const sourceItems = explicitItems.length > 0 ? explicitItems : nextEpicBacklogItems(storyStatuses);
+  const seenIds = new Set();
   const nonDuplicate = sourceItems
     .map((item) => ({
       id: sanitizeLedgerField(item.id || "", "", 120),
       title: sanitizeLedgerField(item.title || titleFromStoryKey(item.id || ""), "", 180),
     }))
-    .filter((item) => item.id && item.title && !existingIds.has(item.id));
+    .filter((item) => {
+      if (!item.id || !item.title || existingIds.has(item.id) || seenIds.has(item.id)) return false;
+      seenIds.add(item.id);
+      return true;
+    });
   if (nonDuplicate.length > 0) return nonDuplicate.slice(0, 6);
+  if (explicitItems.length > 0) return [];
   return nextEpicBacklogItems(storyStatuses).slice(0, 6);
 }
 
@@ -13810,11 +13826,11 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   if (workflow !== "bmad-correct-course") return null;
   const draft = packet.courseCorrectionDraft || null;
   const storyInputs = packet.storyCreationInputs || null;
-  const selectedCandidate =
-    firstBacklogCandidate(draft?.candidateBacklogItems) ||
-    firstBacklogCandidate(draft?.proposedBacklogItems) ||
-    (storyInputs?.storyKey ? { id: storyInputs.storyKey, title: titleFromStoryKey(storyInputs.storyKey) } : null);
   const sprintStatusPath = sanitizeLedgerField(packet.sprintStatusPath || storyInputs?.sprintStatusPath || sourcePlanning?.sprintStatus?.path || "", "", 220);
+  const storyStatuses = courseCorrectionStoryStatusesForGate(sourcePlanning, sprintStatusPath);
+  const selectedCandidate =
+    firstBacklogCandidate(courseCorrectionBacklogItemsForStatus(draft, storyStatuses)) ||
+    (storyInputs?.storyKey ? { id: storyInputs.storyKey, title: titleFromStoryKey(storyInputs.storyKey) } : null);
   const proposalOutputPath = sanitizeLedgerField(draft?.outputPath || "", "", 220) || null;
   const sourceRef = sanitizeLedgerField(sourceSlice?.ref || workCreationStep.sourceRef || packet.sourceRefs?.[0] || "", "", 220);
   const dryRunCommand = "node ./scripts/manager-refill-plan.mjs --summary-json";
@@ -13874,6 +13890,17 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
     retention: "metadata_only_refill_materialization_gate",
     rawPayloadRetained: false,
   };
+}
+
+function courseCorrectionStoryStatusesForGate(sourcePlanning = null, sprintStatusPath = "") {
+  if (isPlainObject(sourcePlanning?.sprintStatus?.storyStatuses)) {
+    return sourcePlanning.sprintStatus.storyStatuses;
+  }
+  const safePath = sanitizeRelativeBmadOutputPath(sprintStatusPath || sourcePlanning?.sprintStatus?.path || "");
+  if (!safePath) return {};
+  const absolutePath = resolve(repoRoot, safePath);
+  if (!isInsideOrSame(absolutePath, repoRoot) || !existsSync(absolutePath)) return {};
+  return countSprintStories(readFileSync(absolutePath, "utf8"), { artifactDir: dirname(absolutePath) }).storyStatuses;
 }
 
 function buildStoryCreationMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null) {
