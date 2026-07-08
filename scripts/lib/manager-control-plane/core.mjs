@@ -12481,6 +12481,12 @@ function sanitizeRelativeBmadOutputPath(path = "") {
   return normalized;
 }
 
+function sanitizeBmadStoryArtifactPath(path = "") {
+  const normalized = sanitizeRelativeBmadOutputPath(path);
+  if (!/^_bmad-output\/implementation-artifacts\/\d+-\d+-[a-z0-9-]+\.md$/i.test(normalized)) return "";
+  return normalized;
+}
+
 function titleFromStoryKey(storyKey = "") {
   return String(storyKey || "")
     .replace(/^\d+-\d+-/, "")
@@ -20808,6 +20814,39 @@ function buildRefillApplyGateEvidence(action = {}, gate = {}) {
   };
 }
 
+function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
+  if (gate?.workflow !== "bmad-create-story") return null;
+  const selectedStoryId = String(gate.selectedCandidateStory?.id || gate.storyKey || "").trim();
+  const normalizedStoryId = /^\d+-\d+-[a-z0-9-]+$/i.test(selectedStoryId) ? selectedStoryId : "";
+  const derivedStoryPath = normalizedStoryId ? `_bmad-output/implementation-artifacts/${normalizedStoryId}.md` : "";
+  const storyArtifacts = [
+    sanitizeBmadStoryArtifactPath(gate.storyOutputPath),
+    derivedStoryPath,
+  ].filter(Boolean).map((path) => sanitizeBmadStoryArtifactPath(path)).filter(Boolean);
+  const uniqueStoryArtifacts = Array.from(new Set(storyArtifacts));
+  const nextManagerAction = sanitizeLedgerField(
+    gate.nextAction || gate.applyCommand || action.nextAction || "Review the manager story creation apply gate before applying local BMAD story artifacts.",
+    "Review the manager story creation apply gate before applying local BMAD story artifacts.",
+    260,
+  );
+  return {
+    implementationChangedFiles: [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ],
+    verificationCommands: [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+    ],
+    verificationStatus: "recommended_not_executed_by_loop",
+    nextManagerAction,
+    localBmadStoryArtifacts: uniqueStoryArtifacts.slice(0, 8),
+    localBmadArtifactsIgnored: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function buildContinuousAction(action = {}, cycle = {}) {
   const nextAction = String(action.nextAction || "").trim();
   if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
@@ -20983,6 +21022,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
       authority: "source-owned-refill-planning-existing-gates",
       mutationClass: "local_bmad_refill_artifacts",
       refillApplyGateEvidence: buildRefillApplyGateEvidence(action, gate),
+      storyCreationApplyGateEvidence: buildStoryCreationApplyGateEvidence(action, gate),
     };
   }
   if (action.code === "dispatch-preview-ready") {
