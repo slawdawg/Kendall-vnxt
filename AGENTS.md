@@ -38,6 +38,13 @@
     nested Node child processes are unavailable in the sandbox; run the exact
     same command outside the sandbox only when full CLI integration coverage is
     required.
+  - `node ./scripts/run-manager-control-plane-shards.mjs ...` from a managed
+    worktree under `.codex-workspaces`: manager tests create ignored BMAD
+    fixture and worktree-local state. When the worktree is outside the sandbox
+    writable root, do not run the shard in the sandbox first. Request approval
+    for the exact focused shard outside the sandbox, especially after an
+    `ENOENT`, `EROFS`, `EACCES`, or `EPERM` fixture/state write signature under
+    `_bmad-output`, `.git/worktrees`, or managed-worktree temp state.
   - `pnpm run build:dashboard` and any broader verification command that routes
     to it, including `pnpm run check:changed` when dashboard files or full
     static checks are selected: the root build command now self-skips in the

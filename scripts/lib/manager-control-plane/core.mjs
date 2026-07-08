@@ -2859,6 +2859,103 @@ function continuousCommandLimit(command = "", fallback = 6) {
   return Math.max(0, Math.min(6, nonNegativeInteger(match[1]) ?? fallback ?? 6));
 }
 
+function continuousWorkerRetireCommandProof(command = "") {
+  const text = String(command || "").trim();
+  const blockers = [];
+  const tokens = tokenizeContinuousCommand(text);
+  if (!Array.isArray(tokens) || tokens[0] !== "node" || tokens[1] !== "./scripts/manager-worker-retire.mjs") {
+    blockers.push("unexpected-command-family");
+  }
+  if (/[;&|`<>\n\r]/.test(text) || /\$\s*\(/.test(text)) {
+    blockers.push("shell-control-token");
+  }
+  if (containsForbiddenRetainedText(text)) {
+    blockers.push("raw-payload-or-secret-marker");
+  }
+  const allowedFlags = new Set([
+    "summary-json",
+    "run-id",
+    "state-root",
+    "worker-id",
+    "session-name",
+    "assignment-id",
+    "task-id",
+    "limit",
+    "resource-state",
+    "retire-blocked-question",
+    "apply",
+  ]);
+  const valueFlags = new Set(["run-id", "state-root", "worker-id", "session-name", "assignment-id", "task-id", "limit", "resource-state"]);
+  const booleanFlags = new Set(["summary-json", "retire-blocked-question", "apply"]);
+  if (Array.isArray(tokens)) {
+    for (let index = 2; index < tokens.length; index += 1) {
+      const token = tokens[index] || "";
+      if (!token.startsWith("--")) {
+        blockers.push(`unexpected-token:${sanitizeLedgerField(token, "token", 80)}`);
+        continue;
+      }
+      const [rawFlag, inlineValue] = token.slice(2).split(/=(.*)/s, 2);
+      const flag = sanitizeLedgerField(rawFlag || "", "", 80);
+      if (!allowedFlags.has(flag)) {
+        blockers.push(`unsupported-flag:${flag || "unknown"}`);
+        continue;
+      }
+      if (booleanFlags.has(flag)) {
+        if (inlineValue !== undefined) blockers.push(`unexpected-value:${flag}`);
+        continue;
+      }
+      if (valueFlags.has(flag)) {
+        if (inlineValue !== undefined) continue;
+        const next = tokens[index + 1];
+        if (!next || String(next).startsWith("--")) {
+          blockers.push(`missing-value:${flag}`);
+          continue;
+        }
+        index += 1;
+      }
+    }
+  }
+  const scope = continuousCommandScope(text);
+  return {
+    commandFamily: "manager-worker-retire",
+    commandLabel: scope ? `manager-worker-retire dry-run (${scope})` : "manager-worker-retire dry-run",
+    commandScope: scope || "unscoped",
+    commandAllowed: blockers.length === 0,
+    blockers: [...new Set(blockers)].slice(0, 6),
+  };
+}
+
+function tokenizeContinuousCommand(command = "") {
+  const tokens = [];
+  let current = "";
+  let quote = "";
+  for (const char of String(command || "").trim()) {
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (quote) return null;
+  if (current) tokens.push(current);
+  return tokens;
+}
+
 function managerHandoffLaneCandidates(assignmentSummary = {}, options = {}) {
   const lanes = Array.isArray(assignmentSummary.laneAssignments) ? assignmentSummary.laneAssignments : [];
   const excludeAssignmentIds = options.excludeAssignmentIds instanceof Set ? options.excludeAssignmentIds : new Set();
@@ -20702,6 +20799,8 @@ function buildContinuousAction(action = {}, cycle = {}) {
   }
   if (action.code === "worker-progress-recovery_submit_unanswered" && nextAction.startsWith("node ./scripts/manager-worker-retire.mjs ")) {
     const dryRunCommand = nextAction.replace(/\s+--apply\b/g, "");
+    const retireCommandProof = continuousWorkerRetireCommandProof(dryRunCommand);
+    if (!retireCommandProof.commandAllowed) return null;
     return {
       code: "continuous-worker-retire",
       summary: action.summary || "Retire recovery-stuck manager-owned worker.",
@@ -20710,6 +20809,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
       authority: "manager-owned-worker-retire-after-recovery-existing-gates",
       mutationClass: "manager_owned_worker_retire",
       targetComponents: action.targetComponents,
+      workerRetirementReassignment: buildWorkerRetirementReassignmentProof(action, cycle, retireCommandProof),
     };
   }
   if (action.code === "manager-lane-advance-ready" && nextAction.startsWith("node ./scripts/manager-lane-advance.mjs ")) {
@@ -20823,6 +20923,40 @@ function buildContinuousAction(action = {}, cycle = {}) {
     };
   }
   return null;
+}
+
+function buildWorkerRetirementReassignmentProof(action = {}, cycle = {}, commandProof = continuousWorkerRetireCommandProof(action.nextAction || "")) {
+  const runId = cycle.summary?.run?.runId ? [`run:${cycle.summary.run.runId}`] : [];
+  const exactTarget = continuousCommandExactWorkerTarget(action.nextAction || "");
+  const targetComponents = continuousTargetComponentsFromRows(
+    [
+      ...(Array.isArray(action.targetComponents) ? action.targetComponents : []),
+      ...(Object.keys(exactTarget).length > 0 ? [exactTarget] : []),
+    ],
+    runId,
+  );
+  return {
+    schemaVersion: "worker_retirement_reassignment.v1",
+    basis: "recovery_submit_unanswered",
+    allowedMutation: "manager_owned_worker_session_retire_only",
+    retirementGate: "manager-worker-retire-existing-gates",
+    reassignmentGate: "manager-owned-lease-reassignment",
+    recoveryPath: "warm_or_reuse_capacity_then_reassign_only_after_owner_and_lease_evidence",
+    reassignmentBoundary: "worker retirement does not take over, reassign, dispatch, deliver, clean up, call providers, or retain raw payloads",
+    commandFamily: commandProof.commandFamily,
+    commandScope: commandProof.commandScope,
+    commandAllowed: commandProof.commandAllowed,
+    nextManagerAction: sanitizeLedgerField(commandProof.commandLabel || "manager-worker-retire dry-run", "manager-worker-retire dry-run", 260),
+    stopLines: [
+      "no assignment takeover",
+      "no dispatch apply",
+      "no delivery or cleanup mutation",
+      "no provider calls or secrets",
+      "no raw prompt, provider payload, reasoning trace, or tmux scrollback retention",
+    ],
+    targetComponents,
+    rawPayloadRetained: false,
+  };
 }
 
 function withContinuousActionTargetKey(action = null, cycle = {}) {

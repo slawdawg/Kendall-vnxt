@@ -87,6 +87,19 @@ Tool Churn RCA Packet
 - Durable fix recommendation: Keep this as an environment-boundary note in lane evidence unless the test can be refactored to use an isolated temporary repository without weakening cleanup or worktree coverage.
 ```
 
+## Managed Worktree Manager Shard Fixture Write
+
+```text
+Tool Churn RCA Packet
+- What failed: `node ./scripts/run-manager-control-plane-shards.mjs <shard> --jobs 1` or the underlying `node --test tests/manager-control-plane.test.mjs` failed before executing the target assertions.
+- Failure class: sandbox
+- Most likely cause: The managed worktree lives outside the sandbox writable root, while manager tests create ignored BMAD fixture or worktree-local state under `_bmad-output`, `.git/worktrees`, or managed-worktree temp paths.
+- Evidence: Output includes `ENOENT`, `EROFS`, `EACCES`, or `EPERM` while creating or opening ignored fixture/state paths such as `_bmad-output/planning-artifacts/...`.
+- Retry stop line: Do not retry the same manager shard or underlying Node test inside the sandbox after this signature appears, and do not change the shard/test scope to hide the boundary.
+- One next safe action: Request approval to rerun the exact same focused manager shard outside the sandbox.
+- Durable fix recommendation: Add the command family to `AGENTS.md` known sandbox-boundary commands and preserve the outside-sandbox verification result as lane evidence.
+```
+
 ## Supervisor Uv Cache EROFS
 
 ```text
