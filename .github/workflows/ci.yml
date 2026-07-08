@@ -226,6 +226,7 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.supervisor == 'true'
     needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 8
 
     steps:
       - name: Check out repository
@@ -249,8 +250,11 @@ jobs:
       - name: Sync supervisor virtualenv
         run: uv sync --directory services/supervisor --locked
 
+      - name: Run supervisor preflight
+        run: pnpm run test:supervisor:preflight
+
       - name: Run supervisor tests with duration profile
-        run: pnpm run test:supervisor:profile
+        run: pnpm run test:supervisor:profile -- --timeout-ms=360000
 
   full:
     if: github.event_name == 'push'

@@ -7,6 +7,7 @@ export const STATIC_BUNDLES = Object.freeze({
   core: [
     "check:fast",
     "test:check-plan",
+    "test:supervisor-runner",
     "check:docs",
     "check:github-workflow-policy",
     "check:workspace-coordination",

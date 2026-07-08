@@ -3972,6 +3972,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-supervisor-runner",
+                label="Supervisor runner diagnostics tests",
+                command="pnpm run test:supervisor-runner",
+                status="required",
+                requiredFor=["supervisor test runner changes", "CI timeout diagnostics", "supervisor preflight/profile routing"],
+                evidence=[
+                    "Rejects conflicting supervisor phase flags before a verification can become a no-op.",
+                    "Confirms timeout diagnostics hard-kill a child process that ignores graceful termination.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-static-bundles",
                 label="Static bundle topology tests",
                 command="pnpm run test:static-bundles",
@@ -5030,6 +5041,7 @@ class SupervisorService:
                 commandIds=[
                     "check-fast",
                     "test-check-plan",
+                    "test-supervisor-runner",
                     "test-static-bundles",
                     "test-static-bundle-summary",
                     "check-docs",

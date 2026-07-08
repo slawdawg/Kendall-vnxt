@@ -53,6 +53,7 @@ first pass when only one surface changed.
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:fast`,
 `pnpm run test:check-plan`,
+`pnpm run test:supervisor-runner`,
 `pnpm run test:static-bundles`,
 `pnpm run test:static-bundle-summary`,
 `pnpm run check:governed-worker-execution-dry-run`,
@@ -120,5 +121,5 @@ verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run test:anti-churn-hook-transaction-store`,
 `pnpm run test:anti-churn-source-apply`,
 `pnpm run test:anti-churn-verification-rollback`,
-`pnpm run test:dashboard-e2e-runner`, `pnpm run build:dashboard`, and
-`pnpm run test:supervisor`.
+`pnpm run test:dashboard-e2e-runner`, `pnpm run build:dashboard`,
+`pnpm run test:supervisor-runner`, and `pnpm run test:supervisor`.
