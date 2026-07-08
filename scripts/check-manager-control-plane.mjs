@@ -551,6 +551,15 @@ const invalidProof = classifyAutoApply("ledger.append", { ...autoProof, authorit
 assertCondition(invalidProof.posture === "dry_run_required", "Manager core must reject arbitrary proof strings", failures);
 const blocked = classifyAutoApply("ledger.append", { ...autoProof, resourceState: "critical" });
 assertCondition(blocked.posture === "blocked", "Manager core must block manager-owned mutation under critical resource pressure", failures);
+const deliverySubagentAuditContract = {
+  status: "merge-ready",
+  headSha: "abc",
+  agent: "delivery-auditor",
+  summary: "Independent delivery subagent found the exact-head delivery gates merge-ready.",
+  evidenceRefs: ["evidence:delivery-subagent-audit"],
+  metadataOnly: true,
+  rawPayloadRetained: false,
+};
 const deliveryReady = buildDeliveryPlan({
   runId: "manager-contract",
   lane: {
@@ -573,6 +582,7 @@ const deliveryReady = buildDeliveryPlan({
     reviewThreadsHeadSha: "abc",
     reviewEvidenceKind: "thread_aware_review_threads",
     threadAwareReviewInspected: true,
+    deliverySubagentAudit: deliverySubagentAuditContract,
     requestedChanges: "none",
     requestedChangesHeadSha: "abc",
     localVerification: "passed",
@@ -643,6 +653,7 @@ const cleanupReady = buildDeliveryPlan({
       evidencePath: "_bmad-output/evidence/cleanup-lane-contract.json",
       blockedCaseBehavior: "block and preserve lane evidence",
       idempotencyCondition: "target_absent_or_already_closed_at_exact_head",
+      deliverySubagentAudit: deliverySubagentAuditContract,
       dryRun: {
         target: { worktreePath: "/tmp/kendall/lane-contract", localBranch: "codex/lane-contract", remoteBranch: "codex/lane-contract" },
         expectedHeadSha: "abc",
