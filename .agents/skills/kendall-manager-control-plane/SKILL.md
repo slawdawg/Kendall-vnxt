@@ -97,6 +97,16 @@ affected manager capability, surface the blocker, and continue any safe
 dispatch/refill/review/delivery work that does not depend on the broken
 capability.
 
+Known sandbox, permission, process, or filesystem boundaries are not manager
+self-repair opportunities. When a known boundary is hit, fix or refresh the
+prevention layer before the next similar attempt: update the wrapper,
+preflight, sandbox-boundary classifier, known-boundary registry in `AGENTS.md`,
+or a source-owned RCA example so future runs skip or route before the same
+EPERM/EACCES/EROFS path runs. If the same known boundary recurs after a
+prevention rule exists, treat the prevention layer as the defect and repair or
+park that layer rather than adding another edge-case handler for the original
+boundary.
+
 Self-repair budget:
 
 1. At most one manager self-repair action may run in a cycle before a useful

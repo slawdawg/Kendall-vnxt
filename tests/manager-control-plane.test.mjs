@@ -940,7 +940,9 @@ test("refill plan exposes bounded correct-course materialization gate", () => {
   assert.equal(plan.summary.materializationGate.sourceRef, "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md");
   assert.equal(plan.summary.materializationGate.sprintStatusPath, "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml");
   assert.equal(plan.summary.materializationGate.proposalOutputPath, "_bmad-output/planning-artifacts/sprint-change-proposal-manager-materialization-gate-test.md");
-  assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "6-1-planning-only-bmad-refill-continuation");
+  const selectedCandidateId = plan.summary.materializationGate.selectedCandidateStory.id;
+  assert.match(selectedCandidateId, /^\d+-1-[a-z0-9-]+$/);
+  assert.equal(existsSync(join(process.cwd(), "_bmad-output/implementation-artifacts", `${selectedCandidateId}.md`)), false);
   assert.equal(plan.summary.materializationGate.nextWorkflow, "bmad-create-story");
   assert.equal(plan.summary.materializationGate.dryRunCommand, "node ./scripts/manager-refill-plan.mjs --summary-json");
   assert.equal(plan.summary.materializationGate.applyCommand, "node ./scripts/manager-refill-plan.mjs --summary-json --apply --source-ref 'prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md'");
@@ -954,9 +956,50 @@ test("refill plan exposes bounded correct-course materialization gate", () => {
   assert.ok(plan.summary.materializationGate.stopLines.includes("no_provider_calls"));
   assert.equal(plan.summary.materializationGate.rawPayloadRetained, false);
   assert.match(plan.nextActions[0].nextAction, /only through the existing approved local BMAD output gate/);
-  assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, "6-1-planning-only-bmad-refill-continuation");
+  assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, selectedCandidateId);
   assert.equal(plan.nextActions[0].materializationGate.applyRequiresExistingGate, true);
   assert.doesNotMatch(JSON.stringify(plan.summary.materializationGate), /capture-pane|provider payload|reasoning trace|raw prompt/i);
+});
+
+test("refill plan skips correct-course candidates that already have local story artifacts", () => {
+  for (const storyKey of [
+    "6-1-planning-only-bmad-refill-continuation",
+    "6-2-correct-course-backlog-materialization",
+    "6-3-stale-owner-takeover-inspection-packet",
+    "6-4-one-lane-dispatch-dogfood-harness",
+    "6-5-worker-ramp-readiness-gate",
+    "6-6-overnight-run-recovery-and-housekeeping",
+  ]) {
+    ensureIgnoredBmadFixture(`_bmad-output/implementation-artifacts/${storyKey}.md`, `# ${storyKey}\n\n## Status\nDone\n`);
+  }
+
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 }, laneAssignmentStatusCounts: { active: 1 } } },
+      dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+      sourcePlanningState: {
+        sourceKey: "manager-existing-artifact-collision-test",
+        sprintStatus: {
+          exists: true,
+          path: "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml",
+          backlogStories: 0,
+          readyStories: 6,
+          readyForDevStories: 6,
+          activeStories: 0,
+          doneStories: 16,
+          nextBacklogStoryKey: null,
+        },
+      },
+      authorityClass: "low_risk",
+    },
+  );
+
+  const selectedCandidateId = plan.summary.materializationGate.selectedCandidateStory.id;
+  assert.equal(plan.summary.materializationGate.state, "ready");
+  assert.doesNotMatch(selectedCandidateId, /^6-/);
+  assert.equal(existsSync(join(process.cwd(), "_bmad-output/implementation-artifacts", `${selectedCandidateId}.md`)), false);
+  assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, selectedCandidateId);
 });
 
 test("refill materialization gate requires request packet authorization before apply", () => {
@@ -1856,10 +1899,12 @@ test("refill apply materializes nonduplicate course-correction backlog locally",
     assert.equal(packet.summary.workflow, "bmad-correct-course");
     assert.equal(packet.summary.mutationMode, "local_bmad_course_correction_backlog_only");
     assert.equal(packet.summary.result.addedBacklogCount, 6);
-    assert.equal(packet.summary.result.addedBacklogItems[0].id, "6-1-planning-only-bmad-refill-continuation");
+    const selectedCandidateId = packet.summary.result.addedBacklogItems[0].id;
+    const selectedEpic = Number(selectedCandidateId.match(/^(\d+)-/)?.[1] || 0);
+    assert.match(selectedCandidateId, /^\d+-1-[a-z0-9-]+$/);
     const sprint = readFileSync(sprintPath, "utf8");
-    assert.match(sprint, /epic-6: in-progress/);
-    assert.match(sprint, /6-1-planning-only-bmad-refill-continuation: backlog/);
+    assert.match(sprint, new RegExp(`epic-${selectedEpic}: in-progress`));
+    assert.match(sprint, new RegExp(`${selectedCandidateId}: backlog`));
     assert.match(readFileSync(proposalPath, "utf8"), /Manager Control Plane Backlog Refill Proposal/);
   } finally {
     rmSync(sprintPath, { force: true });
@@ -1922,7 +1967,7 @@ test("refill dry-run and apply use the same course-correction backlog candidate"
     );
 
     assert.equal(dryRun.summary.materializationGate.state, "ready");
-    assert.equal(selectedCandidate.id, "6-1-planning-only-bmad-refill-continuation");
+    assert.match(selectedCandidate.id, /^\d+-1-[a-z0-9-]+$/);
     assert.deepEqual(applied.summary.result.addedBacklogItems[0], selectedCandidate);
 
     const sprint = readFileSync(sprintPath, "utf8");
@@ -1931,7 +1976,25 @@ test("refill dry-run and apply use the same course-correction backlog candidate"
     assert.match(sprint, /5-3-manager-review-delivery-queue: in-progress/);
     assert.match(sprint, /5-4-worker-retirement-and-reassignment: backlog/);
     assert.doesNotMatch(sprint, /5-1-manager-refill-apply-gate: backlog/);
-    assert.match(sprint, /6-1-planning-only-bmad-refill-continuation: backlog/);
+    assert.match(sprint, new RegExp(`${selectedCandidate.id}: backlog`));
+
+    const staleDryRun = buildRefillPlan(
+      { desiredWorkers: 6, authorityClass: "low_risk", sourceRefs: [sourceRef] },
+      {
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+        sourcePlanningState: {
+          ...sourcePlanningState,
+          sprintStatus: {
+            ...sourcePlanningState.sprintStatus,
+            storyStatuses: {},
+          },
+        },
+      },
+    );
+    assert.equal(staleDryRun.summary.materializationGate.state, "blocked");
+    assert.ok(staleDryRun.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+    assert.notEqual(staleDryRun.summary.materializationGate.selectedCandidateStory?.id, applied.summary.result.addedBacklogItems[0].id.replace(/^(\d+)-/, (_, epic) => `${Number(epic) + 1}-`));
 
     const reapplied = buildRefillPlan(
       { apply: true, desiredWorkers: 6, authorityClass: "allowed_unattended", sourceRefs: [sourceRef] },
@@ -1951,7 +2014,7 @@ test("refill dry-run and apply use the same course-correction backlog candidate"
     assert.equal(reapplied.summary.result.reason, "course_correction_backlog_already_materialized");
     assert.equal(reapplied.summary.result.addedBacklogCount, 0);
     assert.deepEqual(reapplied.summary.result.addedBacklogItems, []);
-    assert.equal((readFileSync(sprintPath, "utf8").match(/6-1-planning-only-bmad-refill-continuation: backlog/g) || []).length, 1);
+    assert.equal((readFileSync(sprintPath, "utf8").match(new RegExp(`${selectedCandidate.id}: backlog`, "g")) || []).length, 1);
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(proposalPath, { force: true });
