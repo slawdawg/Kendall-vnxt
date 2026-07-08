@@ -36,6 +36,12 @@
   that, treat the prevention layer as defective work and fix that layer before
   retrying the original command.
 - Known Kendall_Nxt sandbox-boundary commands:
+  - Do not wrap manager scripts in node -e/spawnSync("node", ...) inside the
+    sandbox to compact their JSON output. Nested Node process creation can hit
+    the known spawnSync node EPERM boundary before the manager script itself
+    runs. Use the direct manager command when sandbox-safe, or request the exact
+    read-only outside-sandbox run for compact projection when child-process
+    wrapping is needed.
   - `node ./scripts/manager-preflight.mjs --summary-json`: if Git, tmux,
     assignment, or local workspace probes hit EPERM/EACCES, stop sandbox retries
     and request the exact same read-only outside-sandbox rerun.
