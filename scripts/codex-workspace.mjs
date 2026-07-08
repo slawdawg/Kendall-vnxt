@@ -242,11 +242,21 @@ cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
   --summary-json            Without --apply, print a compact JSON cleanup summary.
+  --delivery-audit-agent <id> Agent or reviewer id for independent delivery audit evidence.
+  --delivery-audit-status <status> Delivery audit recommendation. Must be cleanup-ready.
+  --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
+  --take-ownership          Reassign a lane and linked assignment to the current owner before cleanup.
+  --takeover-reason <text>  Required with --take-ownership when another owner is recorded.
 
 cleanup-current options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
   --summary-json            Without --apply, print a compact JSON cleanup summary.
+  --delivery-audit-agent <id> Agent or reviewer id for independent delivery audit evidence.
+  --delivery-audit-status <status> Delivery audit recommendation. Must be cleanup-ready.
+  --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
+  --take-ownership          Reassign a lane and linked assignment to the current owner before cleanup.
+  --takeover-reason <text>  Required with --take-ownership when another owner is recorded.
 
 cleanup-integrated options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -2456,7 +2466,7 @@ function shapeDeliverySubagentAuditEvidence(manifest, options = {}, context = {}
   }
   if (!status) {
     blockers.push("Delivery subagent audit status missing");
-  } else if (status !== "merge-ready") {
+  } else if (!deliveryAuditAcceptableStatuses(context).includes(status)) {
     blockers.push(`Delivery subagent audit status is ${status}`);
   }
   if (!headSha) {
@@ -2479,6 +2489,11 @@ function shapeDeliverySubagentAuditEvidence(manifest, options = {}, context = {}
   };
 }
 
+function deliveryAuditAcceptableStatuses(context = {}) {
+  const statuses = Array.isArray(context.acceptableStatuses) ? context.acceptableStatuses : ["merge-ready"];
+  return statuses.map((status) => normalizeDeliveryAuditStatus(status)).filter(Boolean);
+}
+
 function normalizeDeliveryAuditStatus(value) {
   const status = safeMetadataText(value, 80)
     .toLowerCase()
@@ -2488,6 +2503,9 @@ function normalizeDeliveryAuditStatus(value) {
   }
   if (["merge-ready", "merge-ready.", "ready"].includes(status)) {
     return "merge-ready";
+  }
+  if (["cleanup-ready", "cleanup-ready."].includes(status)) {
+    return "cleanup-ready";
   }
   if (["hold", "needs-coordinator-action", "needs-action", "blocked"].includes(status)) {
     return status;
@@ -3340,7 +3358,7 @@ function cleanupMerged(argv, mode = {}) {
       continue;
     }
 
-    const cleanupAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr);
+    const cleanupAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr, { options });
     if (cleanupAuditBlocker && (options.summaryJson || options.dryRun || !apply)) {
       if (options.summaryJson) {
         summaryResults.push(
@@ -3389,10 +3407,12 @@ function cleanupMerged(argv, mode = {}) {
         if (lockedWorktreeStatus.dirty) {
           throw new Error("Worktree is not clean after acquiring cleanup lock.");
         }
-        const lockedAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, lockedPr);
+        const lockedAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, lockedPr, { options });
         if (lockedAuditBlocker) {
           throw new Error(lockedAuditBlocker);
         }
+        preflightAssignmentClosureForCleanedManifest(state, manifest, options);
+        recordCleanupDeliverySubagentAudit(manifest, lockedPr, options);
         cleanupMergedResources(manifest, state, { cleanupCwd: lockedCleanupCwd, deleteRemote, pr: lockedPr });
         appendAuthorityDecision(manifest, manifest.cleanup_authority_decision);
         manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, manifest.anti_churn_finalization || {}, {
@@ -3408,7 +3428,7 @@ function cleanupMerged(argv, mode = {}) {
         manifest.closed_at = new Date().toISOString();
         manifest.updated_at = manifest.closed_at;
         manifest.cleanup_error = null;
-        const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest);
+        const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest, options);
         if (assignmentClosure?.closed) {
           manifest.source_assignment_closed_at = assignmentClosure.closedAt;
           appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
@@ -3520,7 +3540,7 @@ function shapeCleanupAuthorityDecision(manifest, pr, options = {}) {
     "expected base branch",
     "worktree is clean",
     "exact PR head evidence exists",
-    "delivery subagent audit recommends merge-ready for exact head",
+    "delivery subagent audit recommends cleanup-ready for exact head",
     "local branch head matches expected head before deletion",
     deleteRemote ? "remote branch head matches expected head before deletion" : "",
     "cleanup mutation requires --apply",
@@ -3578,6 +3598,33 @@ function cleanupWorktreeSummary(worktreeStatus) {
   };
 }
 
+function preflightAssignmentClosureForCleanedManifest(state, manifest, options = {}) {
+  const assignmentId = String(manifest.source_assignment_id || "").trim();
+  if (!assignmentId) {
+    return null;
+  }
+  assertSafeTaskId(assignmentId);
+  const path = assignmentPath(state, assignmentId);
+  if (!existsSync(path)) {
+    return null;
+  }
+  const assignment = readAssignment(path);
+  validateAssignment(assignment, path);
+  if (assignment.status === "closed") {
+    return { closeable: false, assignmentId };
+  }
+  const assignmentBranch = assignment.branch || assignment.source_backlog_item?.branch_name || "";
+  if (assignmentBranch !== manifest.branch) {
+    throw new Error(`Assignment ${assignmentId} branch ${assignmentBranch || "missing"} does not match cleaned branch ${manifest.branch}.`);
+  }
+  if (assignment.owner && manifest.owner && assignment.owner !== manifest.owner) {
+    if (!options.takeOwnership || !validTakeoverReason(options.takeoverReason)) {
+      throw new Error(`Assignment ${assignmentId} is owned by ${assignment.owner}, expected ${manifest.owner}.`);
+    }
+  }
+  return { closeable: true, assignmentId };
+}
+
 function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
   const assignmentId = String(manifest.source_assignment_id || "").trim();
   if (!assignmentId) {
@@ -3600,7 +3647,16 @@ function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
       throw new Error(`Assignment ${assignmentId} branch ${assignmentBranch || "missing"} does not match cleaned branch ${manifest.branch}.`);
     }
     if (assignment.owner && manifest.owner && assignment.owner !== manifest.owner) {
-      throw new Error(`Assignment ${assignmentId} is owned by ${assignment.owner}, expected ${manifest.owner}.`);
+      if (!options.takeOwnership || !validTakeoverReason(options.takeoverReason)) {
+        throw new Error(`Assignment ${assignmentId} is owned by ${assignment.owner}, expected ${manifest.owner}.`);
+      }
+      const previousOwner = assignment.owner;
+      assignment.owner = manifest.owner;
+      assignment.owner_updated_at = new Date().toISOString();
+      assignment.events = [
+        ...(Array.isArray(assignment.events) ? assignment.events : []),
+        taskEvent("cleanup_takeover_applied", `owner ${previousOwner} -> ${manifest.owner}: ${String(options.takeoverReason || "").trim()}`),
+      ];
     }
 
     const closedAt = new Date().toISOString();
@@ -4213,13 +4269,32 @@ function cleanupMergedResources(manifest, state, options) {
   });
 }
 
-function cleanupDeliverySubagentAuditBlocker(manifest, pr) {
+function cleanupDeliverySubagentAuditBlocker(manifest, pr, context = {}) {
   const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
-  const audit = shapeDeliverySubagentAuditEvidence(manifest, {}, {
+  const audit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, context.options || {}, {
     expectedHeadSha,
     checkedAt: new Date().toISOString(),
   });
   return audit.blockers.length ? audit.blockers.join("; ") : "";
+}
+
+function shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, options = {}, context = {}) {
+  return shapeDeliverySubagentAuditEvidence(manifest, options, {
+    ...context,
+    expectedHeadSha: context.expectedHeadSha || expectedCleanupHeadSha(manifest, pr),
+    acceptableStatuses: ["cleanup-ready"],
+  });
+}
+
+function recordCleanupDeliverySubagentAudit(manifest, pr, options = {}) {
+  const checkedAt = new Date().toISOString();
+  const audit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, options, { checkedAt });
+  if (audit.blockers.length) {
+    throw new Error(audit.blockers.join("; "));
+  }
+  manifest.delivery_subagent_audit = audit;
+  manifest.delivery_subagent_audit_checked_at = checkedAt;
+  appendTaskEvent(manifest, "cleanup_delivery_audit_revalidated", `${audit.status} ${audit.headSha || "unknown-head"}`);
 }
 
 function preflightCleanupBranchHeads(manifest, cleanupCwd, expectedHeadSha, deleteRemote) {
