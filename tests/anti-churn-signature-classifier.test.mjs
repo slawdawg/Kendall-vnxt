@@ -99,6 +99,11 @@ test("known sandbox and read-only filesystem signatures become churn event input
     assert.match(result.event.nextSafeAction, nextSafeAction);
     assert.match(result.event.evidenceSummary, evidenceSummary);
     assert.equal(result.event.createdAt, "2026-06-22T12:00:00Z");
+    if (result.event.failureClass === "sandbox" && result.event.signature !== "sandbox runner timeout before output") {
+      assert.equal(result.event.durableFixRequired, true);
+      assert.equal(result.event.metadata.durableBoundaryAvoidanceRequired, true);
+      assert.match(result.event.durableFixRecommendation, /skip this known boundary/i);
+    }
   }
 });
 

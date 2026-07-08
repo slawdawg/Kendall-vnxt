@@ -133,7 +133,9 @@ function buildReadOnlyEvent(observation, signature, evidenceTarget) {
     signature,
     evidenceSummary: `${evidenceTarget} hit a read-only filesystem boundary while running a read-only verification command.`,
     wrongRetryPattern: "retrying the same read-only verification command inside the sandbox after a filesystem boundary",
-    nextSafeAction: `request approval to rerun the exact same read-only command outside the sandbox: ${observation.command}`,
+    nextSafeAction: `record or refresh durable boundary guidance so future runs skip this sandbox attempt, then request approval to rerun the exact same read-only command outside the sandbox: ${observation.command}`,
+    durableFixRequired: true,
+    durableFixRecommendation: "Add or refresh AGENTS.md, tool-churn RCA examples, or a project-owned wrapper/preflight so future runs skip this known boundary before the next similar sandbox attempt.",
   });
 }
 
@@ -171,9 +173,12 @@ function buildEvent(observation, fields) {
     evidenceSummary: fields.evidenceSummary,
     wrongRetryPattern: fields.wrongRetryPattern,
     nextSafeAction: fields.nextSafeAction,
+    durableFixRequired: fields.durableFixRequired === true,
+    ...(fields.durableFixRecommendation ? { durableFixRecommendation: fields.durableFixRecommendation } : {}),
     createdAt: observation.createdAt || new Date().toISOString(),
     metadata: {
       wrongRetryPrevented: true,
+      durableBoundaryAvoidanceRequired: fields.durableFixRequired === true,
     },
   };
 }

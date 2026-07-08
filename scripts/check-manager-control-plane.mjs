@@ -890,6 +890,8 @@ const retrySandbox = buildRecoveryPlan({
 assertCondition(retrySandbox.summary.retryRoutes[0]?.failureClass === "sandbox", "Recovery retry route must classify known sandbox boundaries", failures);
 assertCondition(retrySandbox.summary.retryRoutes[0]?.rerunRequirement === "Rerun the exact same read-only verification command outside the sandbox once.", "Recovery sandbox retry route must preserve exact outside-sandbox rerun requirement", failures);
 assertCondition(!String(retrySandbox.summary.retryRoutes[0]?.failureSignature || "").includes("spawnSync"), "Recovery retry route must store metadata-only sandbox signatures", failures);
+assertCondition(retrySandbox.summary.retryRoutes[0]?.durableFixRequired === true, "Recovery sandbox retry route must require durable boundary avoidance", failures);
+assertCondition(/skip.*known sandbox attempt|durable avoidance/i.test(String(retrySandbox.summary.retryRoutes[0]?.durableFixRecommendation || "")), "Recovery sandbox retry route must tell future runs to avoid the known sandbox attempt", failures);
 const retryFirstSandbox = buildRecoveryPlan({
   runId: "manager-contract",
   stateSignals: readyReconciliationSignals(),

@@ -264,6 +264,66 @@ function buildWorkerSummary(worker, records, options) {
   };
 }
 
+function buildStabilityProof({ status, workerCycles, loopFailures, requiredCycles, since }) {
+  const stableWorkers = workerCycles.filter((worker) => worker.status === "stable");
+  const observingWorkers = workerCycles.filter((worker) => worker.status === "observing");
+  const attentionWorkers = workerCycles.filter((worker) => worker.status === "attention");
+  const cleanCounts = workerCycles.map((worker) => worker.cleanCycleCount);
+  const minCleanCycles = cleanCounts.length > 0 ? Math.min(...cleanCounts) : 0;
+  const maxCleanCycles = cleanCounts.length > 0 ? Math.max(...cleanCounts) : 0;
+  const remainingCycles = workerCycles.reduce((total, worker) => total + worker.remainingCycles, 0);
+  const latestCheckpointAt = workerCycles
+    .map((worker) => worker.latestCheckpointAt)
+    .filter(Boolean)
+    .sort((left, right) => timeMs(left) - timeMs(right))
+    .at(-1) || "";
+  const blockers = [
+    ...(workerCycles.length === 0 ? ["no_active_manager_owned_codex_workers"] : []),
+    ...(attentionWorkers.length > 0 ? ["attention_worker_present"] : []),
+    ...(loopFailures.length > 0 ? ["continuous_loop_failure_present"] : []),
+    ...(observingWorkers.length > 0 ? ["clean_cycle_target_incomplete"] : []),
+  ];
+  const proven = status === "stable" && blockers.length === 0 && workerCycles.length > 0;
+
+  return {
+    schemaVersion: "manager-worker-clean-cycle-stability-proof/v1",
+    proofStatus: proven ? "proven" : status === "attention" ? "attention" : "observing",
+    proven,
+    target: {
+      requiredCleanCyclesPerWorker: requiredCycles,
+      scope: "active manager-owned codex workers in this manager run",
+    },
+    observationWindow: {
+      since: sanitize(since),
+      latestCheckpointAt: sanitize(latestCheckpointAt),
+    },
+    workerCounts: {
+      active: workerCycles.length,
+      stable: stableWorkers.length,
+      observing: observingWorkers.length,
+      attention: attentionWorkers.length,
+    },
+    cleanCycleRange: {
+      min: minCleanCycles,
+      max: maxCleanCycles,
+      remainingTotal: remainingCycles,
+    },
+    stableWorkerIds: stableWorkers.map((worker) => worker.workerId),
+    attentionWorkerIds: attentionWorkers.map((worker) => worker.workerId),
+    loopFailureCount: loopFailures.length,
+    blockers,
+    evidenceRefs: [
+      "manager-run:workers.json",
+      "manager-run:checkpoints.json",
+      "manager-run:questions.ndjson",
+      "manager-run:events.ndjson",
+      "manager-run:logs/continuous-loop*.jsonl",
+    ],
+    rawPayloadRetained: false,
+    mutation: "none",
+  };
+}
+
 export function buildWorkerCleanCycleObserver(input = {}, options = {}) {
   const requiredCycles = options.requiredCycles || DEFAULT_REQUIRED_CYCLES;
   const sinceMs = timeMs(options.since);
@@ -287,6 +347,7 @@ export function buildWorkerCleanCycleObserver(input = {}, options = {}) {
     ...loopFailures.map((failure) => `continuous loop ${failure.file}${failure.iteration ? ` iteration ${failure.iteration}` : ""} reported ${failure.status}`),
   ];
   const status = blockers.length > 0 ? "attention" : stableWorkers.length === workerCycles.length && workerCycles.length > 0 ? "stable" : "observing";
+  const stabilityProof = buildStabilityProof({ status, workerCycles, loopFailures, requiredCycles, since: options.since });
 
   return {
     ok: status !== "attention",
@@ -302,6 +363,7 @@ export function buildWorkerCleanCycleObserver(input = {}, options = {}) {
     stableWorkerCount: stableWorkers.length,
     observingWorkerCount: observingWorkers.length,
     attentionWorkerCount: attentionWorkers.length,
+    stabilityProof,
     stopLines: WORKER_CLEAN_CYCLE_STOP_LINES,
     nextManagerAction:
       status === "stable"

@@ -18,6 +18,15 @@
   files, do not change test scope or command shape. Record the sandbox boundary
   and request approval to rerun the exact same read-only verification command
   outside the sandbox.
+- When a command hits a known sandbox, permission, process, or filesystem
+  boundary, do not leave the learning as chat memory. Add or refresh the
+  durable boundary rule before the next similar run, using the narrowest
+  source-owned place that can prevent the repeat: this file for agent behavior,
+  `docs/workflows/tool-churn-rca-examples.md` for concrete packets, or the
+  project wrapper/preflight when code can skip the known-bad path. The desired
+  future behavior is to avoid the known sandbox attempt entirely and route
+  straight to the approved exact outside-sandbox/read-only path or documented
+  skip, not to rediscover the same EPERM/EACCES/EROFS failure.
 - Known Kendall_Nxt sandbox-boundary commands:
   - `node ./scripts/manager-preflight.mjs --summary-json`: if Git, tmux,
     assignment, or local workspace probes hit EPERM/EACCES, stop sandbox retries
