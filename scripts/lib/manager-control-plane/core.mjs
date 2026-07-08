@@ -20847,6 +20847,54 @@ function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
   };
 }
 
+function buildReviewDeliveryQueueEvidence(action = {}, cycle = {}) {
+  const limitMatch = String(action.applyCommand || action.nextAction || "").match(/\s--limit(?:=|\s+)(\d+)/);
+  const queueLimit = Math.max(1, Math.min(8, nonNegativeInteger(limitMatch?.[1]) ?? 8));
+  const targetComponents = Array.isArray(action.targetComponents) ? action.targetComponents : [];
+  const componentAssignments = targetComponents
+    .map((component) => String(component || "").match(/^assignment:(.+)$/)?.[1] || "")
+    .filter((assignmentId) => isSafeCommandIdentifier(assignmentId))
+    .slice(0, queueLimit);
+  const laneAdvanceAssignments = (Array.isArray(cycle.summary?.laneAdvance?.readyLanes) ? cycle.summary.laneAdvance.readyLanes : [])
+    .map((lane) => sanitizeIdentifierField(lane.assignmentId || "", "", 140))
+    .filter((assignmentId) => isSafeCommandIdentifier(assignmentId))
+    .slice(0, queueLimit);
+  const progressRows = Array.isArray(cycle.summary?.workerProgress?.workerProgress)
+    ? cycle.summary.workerProgress.workerProgress
+    : [];
+  const progressAssignments = progressRows
+    .filter((row) => ["manager_review_ready", "delivery_gate_ready"].includes(String(row?.progressState || "")))
+    .map((row) => sanitizeIdentifierField(row.assignmentId || "", "", 140))
+    .filter((assignmentId) => isSafeCommandIdentifier(assignmentId))
+    .slice(0, queueLimit);
+  const queuedAssignments = componentAssignments.length > 0
+    ? componentAssignments
+    : laneAdvanceAssignments.length > 0
+      ? laneAdvanceAssignments
+      : progressAssignments;
+  const nextManagerAction = sanitizeLedgerField(
+    action.applyCommand || action.nextAction || "Review the manager review/delivery queue gate before advancing lane metadata.",
+    "Review the manager review/delivery queue gate before advancing lane metadata.",
+    260,
+  );
+  return {
+    implementationChangedFiles: [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ],
+    verificationCommands: [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+    ],
+    verificationStatus: "recommended_not_executed_by_loop",
+    nextManagerAction,
+    queuedAssignments,
+    localBmadArtifactsIgnored: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function buildContinuousAction(action = {}, cycle = {}) {
   const nextAction = String(action.nextAction || "").trim();
   if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
@@ -20958,6 +21006,11 @@ function buildContinuousAction(action = {}, cycle = {}) {
       applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
       authority: "manager-owned-lane-advancement-heartbeat-existing-gates",
       mutationClass: "lane_advancement_heartbeat_metadata_only",
+      targetComponents: action.targetComponents,
+      reviewDeliveryQueueEvidence: buildReviewDeliveryQueueEvidence({
+        ...action,
+        applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
+      }, cycle),
     };
   }
   if (action.code === "safe-backlog-starvation") {

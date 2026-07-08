@@ -18012,8 +18012,102 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
+  assert.deepEqual(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.implementationChangedFiles, [
+    "scripts/lib/manager-control-plane/core.mjs",
+    "tests/manager-control-plane.test.mjs",
+  ]);
+  assert.deepEqual(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.verificationCommands, [
+    "node --test tests/manager-control-plane.test.mjs",
+    "node ./scripts/check-manager-control-plane.mjs",
+  ]);
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.verificationStatus, "recommended_not_executed_by_loop");
+  assert.match(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.nextManagerAction, /manager-lane-advance\.mjs --summary-json --limit 1 --apply/);
+  assert.deepEqual(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, ["bmad-97-2-manager-continuous-review-gate"]);
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.localBmadArtifactsIgnored, true);
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.metadataOnly, true);
+  assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.rawPayloadRetained, false);
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-3-manager-review-delivery-queue.md");
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "reviewDelegation"), true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("reviewDelegation"), true);
+
+  const targetedLaneAdvanceEvidencePlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+          laneAdvance: {
+            readyLaneCount: 2,
+            readyLanes: [
+              { assignmentId: "lane-ready-a" },
+              { assignmentId: "lane-ready-b" },
+            ],
+          },
+          workerProgress: {
+            workerProgress: [
+              { assignmentId: "worker-progress-a", progressState: "manager_review_ready" },
+              { assignmentId: "worker-progress-b", progressState: "delivery_gate_ready" },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance review-ready lane metadata.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit=1",
+            targetComponents: ["assignment:explicit-a", "assignment:explicit-b"],
+          },
+        ],
+      },
+    },
+  );
+
+  assert.deepEqual(targetedLaneAdvanceEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, ["explicit-a"]);
+
+  const laneReadyFallbackEvidencePlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+          laneAdvance: {
+            readyLaneCount: 2,
+            readyLanes: [
+              { assignmentId: "lane-ready-a" },
+              { assignmentId: "lane-ready-b" },
+            ],
+          },
+          workerProgress: {
+            workerProgress: [
+              { assignmentId: "worker-progress-a", progressState: "manager_review_ready" },
+              { assignmentId: "worker-progress-b", progressState: "delivery_gate_ready" },
+            ],
+          },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance review-ready lane metadata.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit=1",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.deepEqual(laneReadyFallbackEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, ["lane-ready-a"]);
 
   const fullCapacityDispatchPlan = continuousRunPlan(
     {},
