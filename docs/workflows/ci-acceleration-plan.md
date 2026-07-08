@@ -85,14 +85,19 @@ Keep full verification for:
    aggregate.
 6. Route pull request CI component jobs from `check-plan --ci-outputs` so
    `static` runs only when the planner marks full static confidence required.
-7. Add CI jobs for bundles as non-required reporting checks. Current slice:
-   `static_bundle` matrix jobs run only when the planner requires full static,
-   use non-blocking job outcomes for measurement, and final `check` still
-   depends on the monolithic `static` job for merge authority.
+7. Add CI jobs for bundles as non-required reporting checks. Completed slice:
+   `static_bundle` matrix jobs ran only when the planner required full static,
+   used non-blocking job outcomes for measurement, and final `check` still
+   depended on the monolithic `static` job for merge authority.
 8. Compare bundle results against monolithic static with same-head summary
-   artifacts.
-9. Promote bundles to required checks only after repeated same-head equivalence
-   evidence exists, then retire the monolithic PR static job.
+   artifacts. Three recent same-head CI runs on 2026-07-07 showed the
+   monolithic `static` job and all six bundle shards passing for the same run
+   heads.
+9. Promote bundles to required checks after repeated same-head equivalence
+   evidence exists, then retire the monolithic PR static rerun. Current slice:
+   `static_bundle` is required when full static is selected, and the retained
+   `static` job fans in the required bundle matrix result for final `check`
+   authority.
 10. Optimize bundle balance from duration artifacts.
 
 ## Gate Evidence
@@ -147,24 +152,28 @@ Observed second measurement result, PR #403:
 This proves focused docs/planner-policy PRs no longer pay the static,
 JavaScript build, or supervisor-profile wait.
 
-Next measurement target: package, workflow, or static-contract PRs should run
-both the monolithic `static` job and the non-required `static_bundle` matrix. A
-bundle failure should be treated as measurement evidence while `static` remains
-the required authority. Compare the matrix durations and failures against
-`static` before promoting bundles to required checks.
+Static bundle promotion evidence:
 
-Current reporting slice:
+- CI run `28904369189`, head `5735452f19be5ffd9dd801a92e87e62fe11ac95c`:
+  monolithic `static` passed in 3m23s after the longest required bundle shard
+  had already passed in 1m20s.
+- CI run `28906354384`, head `703081dd1bb1a367e6114df36e11b59c5f93c075`:
+  monolithic `static` passed in 3m37s after the longest required bundle shard
+  had already passed in 1m20s.
+- CI run `28906460696`, head `3259f42b238600f7a43b1c892a8b3348390be769`:
+  monolithic `static` passed in 3m37s after all six bundle shards passed; the
+  longest bundle shard was 1m30s.
+
+Current required bundle slice:
 
 - Each `static_bundle` matrix entry writes a timing JSON report with the bundle
   name, PR head SHA, command durations, first failed command, and total duration.
 - CI uploads each bundle report as `static-bundle-report-<bundle>`.
 - `static_bundle_summary` downloads those reports and writes
-  `static-bundle-summary`, comparing the non-blocking bundle evidence with the
-  monolithic `static` job result for the exact same PR head SHA.
-- Promotion remains blocked in the summary output until at least three
-  consecutive same-head CI summaries show monolithic static success and all
-  bundle reports passing. Until that policy changes, final `check` must not
-  depend on `static_bundle` or `static_bundle_summary`.
+  `static-bundle-summary`, recording the required bundle gate evidence for the
+  exact same PR head SHA.
+- The retained `static` job remains the final-check authority surface and fails
+  if `changes`, `fast`, or the required `static_bundle` matrix did not pass.
 
 ## Stop Lines
 
