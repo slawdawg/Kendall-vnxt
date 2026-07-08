@@ -74,9 +74,16 @@ evidence packet instead of interrupting for approval.
 
 The default allowance is:
 
-- Use the repository's configured provider and model defaults. If the party-mode
-  skill chooses a lighter configured model for a brief round, treat that as
-  covered model selection.
+- Use the repository's configured provider and model defaults. For Kendall_Nxt
+  manager-control-plane work, the manager session should use `5.5 high`, while
+  spawned subagents, BMAD party-mode reviewers, and worker helper agents should
+  prefer `5.5 medium`.
+- Escalate a subagent above `5.5 medium` only for concrete higher-risk work,
+  such as complex architecture, security-sensitive review, broad cross-module
+  reasoning, unresolved failed verification, or a specific operator request.
+  Record the reason and model tier in the lane evidence.
+- If the party-mode skill chooses a lighter configured model for a brief round,
+  treat that as covered model selection.
 - Run no more than one party-mode or subagent round per lane phase unless the
   next round is needed to address a concrete finding, failed verification, or
   unresolved design risk.
@@ -320,9 +327,10 @@ These surfaces are not automatically covered by `standard-delivery`:
 - Provider calls, paid execution, model selection, or budget changes outside
   the bounded party-mode allowance.
 - BMAD party mode or spawned BMAD subagents that override configured
-  provider/model defaults, exceed the bounded party-mode allowance, or retain raw
-  provider payloads. These are not automatic; fall back to the normal lane flow
-  unless the named objective requires expanded party-mode authority.
+  provider/model defaults, exceed the bounded party-mode allowance, escalate
+  above `5.5 medium` without concrete lane risk, or retain raw provider
+  payloads. These are not automatic; fall back to the normal lane flow unless
+  the named objective requires expanded party-mode authority.
 - Worker or process launch.
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
