@@ -189,6 +189,15 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   provider payload retention, paid-usage expansion, GitHub mutation, cleanup,
   worker launch, or any platform/tool policy that still requires explicit
   approval.
+- Default Codex model routing for governed manager work is: the manager/control
+  plane session should use `5.5 high`; spawned subagents, BMAD party-mode
+  reviewers, and worker helper agents should prefer `5.5 medium`. Escalate a
+  subagent above `5.5 medium` only when the lane has concrete higher-risk needs
+  such as complex architecture, security-sensitive review, broad cross-module
+  reasoning, unresolved failed verification, or a specific operator request.
+  Record any model-tier escalation in the lane evidence. This default does not
+  override platform availability, tenant policy, provider authentication,
+  budget, or sandbox restrictions.
 - Claude Code CLI read-only review is a durable approved review lane when all
   of these are true: the operator asks for Claude review or the active
   end-to-end lane explicitly calls for independent Claude critique; the command
@@ -362,6 +371,9 @@ through merge and cleanup", or "see this lane through end to end".
   approval. Record the party-mode run purpose, agents used, allowance basis,
   retained evidence, and result in the lane evidence packet instead of
   interrupting for approval.
+  For this repo, those configured defaults are `5.5 high` for the
+  manager/control-plane session and `5.5 medium` for spawned subagents and
+  BMAD party-mode reviewers unless concrete lane risk warrants escalation.
   The default allowance is one party-mode or subagent round per lane phase,
   normally two to four BMAD agents per round, with local artifact retention
   limited to summaries, paths, findings, and verification evidence rather than
