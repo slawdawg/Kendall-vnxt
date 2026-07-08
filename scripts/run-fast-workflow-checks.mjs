@@ -19,6 +19,7 @@ const suites = {
     "test:anti-churn-apply-safe-gate",
   ],
   dashboard: [
+    "test:dashboard-build-boundary",
     "check:e2e-report",
     "test:dashboard-e2e-runner",
     "check:dashboard-pipeline-boundary",

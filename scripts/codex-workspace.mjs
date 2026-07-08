@@ -226,7 +226,7 @@ resume options:
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
   --stage-all               Stage all current worktree changes before commit.
-  --verify <profile>        Verification profile: preflight, check, codex-workspace.
+  --verify <profile>        Verification profile: scoped, preflight, check, check-fast, manager-control-plane, docs, codex-workspace.
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
@@ -2046,8 +2046,9 @@ function finishPr(argv) {
   });
   const { manifest, path: manifestPath } = manifestRecord;
 
-  const verifyProfile = options.noVerify ? "" : String(options.verify || "");
-  const verifyCommand = verifyProfile ? verificationCommand(verifyProfile) : [];
+  if (!options.noVerify) {
+    assertKnownVerificationProfile(String(options.verify || ""));
+  }
   assertLaneOwner(manifest, options);
   requireGh("finish-pr");
   if (manifest.mode === "experiment") {
@@ -2060,6 +2061,10 @@ function finishPr(argv) {
 
   let worktreeStatus = parseStatus(manifest.worktree_path);
   const preflightReconciledCommit = reconcileExistingTaskCommit(manifest, worktreeStatus);
+  const verificationPlan = options.noVerify
+    ? { profile: "", resolvedProfile: "", command: [], changedFiles: [], reason: "explicit-no-verify" }
+    : resolveVerificationPlan(String(options.verify || ""), manifest, worktreeStatus);
+  const verifyCommand = verificationPlan.command;
   const commitMessage = String(options.message || manifest.title || manifest.description);
   const prTitle = String(options.title || manifest.title || manifest.description);
   const prBody = String(
@@ -2194,6 +2199,7 @@ function finishPr(argv) {
       prBody,
       verifyCommand,
       noVerify: Boolean(options.noVerify),
+      verificationPlan,
     });
     appendAuthorityDecision(manifest, manifest.pr_delivery_evidence.authorityDecision);
     manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, {
@@ -2942,6 +2948,9 @@ function shapeLaneAuthorityDecisions(manifest, options = {}) {
 function shapePrDeliveryEvidence(manifest, options = {}) {
   const prBody = typeof options.prBody === "string" ? options.prBody : "";
   const verifyCommand = Array.isArray(options.verifyCommand) ? options.verifyCommand.filter(Boolean).join(" ") : "";
+  const verificationPlan = options.verificationPlan && typeof options.verificationPlan === "object" && !Array.isArray(options.verificationPlan)
+    ? options.verificationPlan
+    : {};
   const verificationGateSatisfied = Boolean(verifyCommand) || Boolean(options.noVerify);
   const requiredGates = [
     "clean worktree or intentionally staged changes",
@@ -2979,6 +2988,10 @@ function shapePrDeliveryEvidence(manifest, options = {}) {
       ? {
           status: "passed",
           command: verifyCommand,
+          profile: verificationPlan.profile || null,
+          resolvedProfile: verificationPlan.resolvedProfile || null,
+          reason: verificationPlan.reason || null,
+          changedFileCount: Array.isArray(verificationPlan.changedFiles) ? verificationPlan.changedFiles.length : 0,
           verifiedAt: manifest.last_verified_at || null,
         }
       : {
@@ -4972,14 +4985,95 @@ function assertCurrentBranch(manifest) {
   }
 }
 
+function resolveVerificationPlan(profile, manifest, worktreeStatus) {
+  const requestedProfile = String(profile || "").trim();
+  if (!requestedProfile) {
+    return { profile: "", resolvedProfile: "", command: [], changedFiles: [], reason: "no-verification-profile" };
+  }
+  const changedFiles = verificationChangedFiles(manifest, worktreeStatus);
+  const resolvedProfile = requestedProfile === "scoped" || requestedProfile === "auto"
+    ? scopedVerificationProfile(changedFiles)
+    : requestedProfile;
+  return {
+    profile: requestedProfile,
+    resolvedProfile,
+    command: verificationCommand(resolvedProfile),
+    changedFiles,
+    reason: requestedProfile === resolvedProfile ? "explicit-profile" : "changed-file-scope",
+  };
+}
+
+function assertKnownVerificationProfile(profile) {
+  const requestedProfile = String(profile || "").trim();
+  if (!requestedProfile) return;
+  if (requestedProfile === "scoped" || requestedProfile === "auto") return;
+  verificationCommand(requestedProfile);
+}
+
+function scopedVerificationProfile(changedFiles = []) {
+  const files = uniqueTextValues(changedFiles);
+  if (files.length === 0) return "check-fast";
+  if (files.every((file) => isDocsOnlyVerificationPath(file))) return "docs";
+  if (files.every((file) => isManagerControlPlaneVerificationPath(file))) return "manager-control-plane";
+  if (files.every((file) => isCodexWorkspaceVerificationPath(file))) return "codex-workspace";
+  return "check-fast";
+}
+
+function isDocsOnlyVerificationPath(file) {
+  return /^(AGENTS\.md|README\.md|docs\/.*\.md|docs\/.*\.json|docs\/.*\.ya?ml)$/.test(file);
+}
+
+function isManagerControlPlaneVerificationPath(file) {
+  return (
+    /^scripts\/manager-[^/]+\.mjs$/.test(file) ||
+    /^scripts\/check-manager-control-plane\.mjs$/.test(file) ||
+    /^scripts\/run-manager-control-plane-[^/]+\.mjs$/.test(file) ||
+    /^scripts\/lib\/manager-control-plane(?:\/|\.mjs$)/.test(file) ||
+    /^tests\/manager-control-plane(?:[./-]|$)/.test(file) ||
+    /^tests\/helpers\/manager-control-plane(?:\/|$)/.test(file) ||
+    /^\.agents\/skills\/kendall-manager-control-plane(?:\/|$)/.test(file)
+  );
+}
+
+function isCodexWorkspaceVerificationPath(file) {
+  return (
+    file === "scripts/codex-workspace.mjs" ||
+    file === "scripts/test-codex-workspace.mjs" ||
+    /^scripts\/lib\/codex-workspace/.test(file) ||
+    /^tests\/codex-workspace/.test(file) ||
+    file === "AGENTS.md"
+  );
+}
+
+function verificationChangedFiles(manifest, worktreeStatus) {
+  const files = new Set(statusPaths(worktreeStatus));
+  for (const file of committedChangedFiles(manifest)) {
+    files.add(file);
+  }
+  return [...files].sort();
+}
+
+function committedChangedFiles(manifest) {
+  const baseRef = String(manifest.base_ref || `origin/${manifest.base_branch || ""}` || manifest.base_branch || "").trim();
+  if (!baseRef) return [];
+  const base = git(["merge-base", "HEAD", baseRef], { cwd: manifest.worktree_path });
+  if (base.code !== 0 || !base.stdout.trim()) return [];
+  const result = git(["diff", "--name-only", `${base.stdout.trim()}..HEAD`], { cwd: manifest.worktree_path });
+  if (result.code !== 0) return [];
+  return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
 function verificationCommand(profile) {
   const profiles = {
     preflight: ["node", "./scripts/preflight.mjs"],
     check: ["pnpm", "run", "check"],
+    "check-fast": ["pnpm", "run", "check:fast"],
+    "manager-control-plane": ["pnpm", "run", "check:manager-control-plane:delivery"],
+    docs: ["pnpm", "run", "check:docs"],
     "codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],
   };
   if (!profiles[profile]) {
-    throw new Error(`Unknown verification profile: ${profile}. Use preflight, check, or codex-workspace.`);
+    throw new Error(`Unknown verification profile: ${profile}. Use scoped, preflight, check, check-fast, manager-control-plane, docs, or codex-workspace.`);
   }
   return profiles[profile];
 }
