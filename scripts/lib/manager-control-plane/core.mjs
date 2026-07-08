@@ -5544,6 +5544,9 @@ function buildWorkerOwnerDelegationRequest(worker = {}, paths = {}) {
 
 function renderWorkerOwnerDelegationFile(request = {}) {
   const ownerFlag = request.laneOwner ? ` --owner ${shellSingleQuote(request.laneOwner)}` : "";
+  const delegatedCleanupFlags = request.laneOwner
+    ? ` --delegated-cleanup-owner ${shellSingleQuote(request.laneOwner)} --delegation-evidence ${shellSingleQuote(`manager owner delegation ${request.runId}/${request.workerId}/${request.assignmentId}`)}`
+    : "";
   return [
     "# Manager Owner Delegation",
     "",
@@ -5553,9 +5556,14 @@ function renderWorkerOwnerDelegationFile(request = {}) {
     `laneOwner: ${request.laneOwner}`,
     "",
     "The manager already owns this lane and is delegating execution to this manager-owned worker. Use the lane owner override for workspace commands. Do not run takeover for this fresh manager-owned lane.",
+    "For approved stale-record assignment cleanup only, use the delegated cleanup owner flags below together with the explicit operator approval evidence. Do not use the delegated cleanup owner for takeover or general mutation.",
     "",
     "```bash",
     `node ./scripts/codex-workspace.mjs resume ${shellSingleQuote(request.assignmentId)}${ownerFlag}`,
+    "```",
+    "",
+    "```bash",
+    `node ./scripts/codex-workspace.mjs close-assignments --ids ${shellSingleQuote(request.assignmentId)} --summary-json --allow-stale-record-cleanup --approval '<operator approval evidence>'${delegatedCleanupFlags}`,
     "```",
     "",
     "After resuming, continue the assigned story and write compact checkpoints through manager-ledger.",

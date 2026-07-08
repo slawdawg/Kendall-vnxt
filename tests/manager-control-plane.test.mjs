@@ -11449,6 +11449,8 @@ test("worker owner delegation gate sends delegated owner override without takeov
     const requestText = readFileSync(requestPath, "utf8");
     assert.match(readFileSync(pastePath, "utf8"), /\n$/);
     assert.match(requestText, /--owner 'manager-runner'/);
+    assert.match(requestText, /--delegated-cleanup-owner 'manager-runner'/);
+    assert.match(requestText, /--delegation-evidence 'manager owner delegation manager-test\/codex-1\/lane-1'/);
     assert.match(requestText, /Do not run takeover/);
     assert.match(readFileSync(pastePath, "utf8"), /Please read and follow this manager owner delegation file/);
     assert.doesNotMatch(readFileSync(pastePath, "utf8"), /# Manager Owner Delegation/);

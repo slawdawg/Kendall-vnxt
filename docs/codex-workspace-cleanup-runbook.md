@@ -45,6 +45,27 @@ node ./scripts/codex-workspace.mjs cleanup-orphans <name-fragment> --apply
 
 Use `--all --apply` only after reviewing the dry-run output.
 
+For assignment closeout, dry-run first and keep the closeout evidence bounded
+to metadata:
+
+```bash
+node ./scripts/codex-workspace.mjs close-assignments --ids <assignment-id> --summary-json
+```
+
+When a manager-owned worker has a fresh runner owner id but the assignment is
+owned by the manager's stable lane owner, do not use takeover or a broad
+`--owner` impersonation for abandoned stale records. Use the manager owner
+delegation file and explicit operator approval with the narrow stale-record
+cleanup flags:
+
+```bash
+node ./scripts/codex-workspace.mjs close-assignments --ids <assignment-id> --summary-json --allow-stale-record-cleanup --approval "<operator approval evidence>" --delegated-cleanup-owner <stable-owner> --delegation-evidence "<manager delegation evidence>"
+```
+
+Apply only after the summary shows the expected assignment id, matching closed
+manifest, missing worktree, absent local/remote branch, no PR evidence, and the
+delegated cleanup owner matching the assignment owner.
+
 Supervisor tests should run through the hardened wrapper:
 
 ```bash
