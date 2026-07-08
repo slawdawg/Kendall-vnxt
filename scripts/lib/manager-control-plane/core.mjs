@@ -57,7 +57,7 @@ const CONTINUOUS_APPLY_MUTATION_GATES = Object.freeze({
   manager_owned_worker_code_review_delegation: "workerMutation",
   manager_owned_worker_review_feedback: "workerMutation",
   assignment_workspace_claim_only: "dispatchApply",
-  assignment_heartbeat_metadata_only: "laneAdvance",
+  lane_advancement_heartbeat_metadata_only: "laneAdvance",
   manager_runtime_review_request_packet: "reviewRequest",
   metadata_only_worker_recovery_inspection: "recoveryInspection",
 });
@@ -2819,6 +2819,13 @@ function continuousWorkerMutationTargetProofReady(mutationClass = "", targetComp
   return continuousTargetComponentsFromRows(targetComponents).some((component) => /^(worker|session|assignment|task):/.test(component));
 }
 
+function continuousLaneAdvanceTargetProofReady(mutationClass = "", targetComponents = []) {
+  if (String(mutationClass || "") !== "lane_advancement_heartbeat_metadata_only") return true;
+  const components = continuousTargetComponentsFromRows(targetComponents);
+  return components.some((component) => component.startsWith("run:")) &&
+    components.some((component) => component.startsWith("assignment:"));
+}
+
 function continuousWorkerProgressActionTargets(action = {}, summary = {}, options = {}) {
   const workers = Array.isArray(summary.workerProgress) ? summary.workerProgress : [];
   const code = String(action.code || "");
@@ -3509,7 +3516,7 @@ export function buildLaneAdvancementPlan(options = {}, context = {}) {
       readyLanes,
       continuousSelection: applyReadyLanes.length > 0 ? buildContinuousSelectionProof({
         code: "continuous-lane-advance-apply",
-        mutationClass: "assignment_heartbeat_metadata_only",
+        mutationClass: "lane_advancement_heartbeat_metadata_only",
         runId,
         targets: applyReadyLanes,
       }) : null,
@@ -20062,6 +20069,13 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
         "Refresh the selected worker action with exact target evidence before enabling continuous apply.",
       ));
     }
+    if (selectedAction && !selectedDryRunOnly && !continuousLaneAdvanceTargetProofReady(selectedMutationClass, selectedAction.targetComponents || [])) {
+      blockers.push(runtimeBlocker(
+        "lane-advance-target-not-proven",
+        "Continuous lane advancement requires exact run and assignment target proof.",
+        "Refresh the selected lane advancement action with exact run and assignment evidence before enabling continuous apply.",
+      ));
+    }
     const selectedGateField = CONTINUOUS_APPLY_GATE_FIELDS[selectedGate] || "";
     if (!selectedDryRunOnly && selectedGateField && continuation[selectedGateField] !== true) {
       blockers.push(runtimeBlocker(
@@ -20648,8 +20662,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
       dryRunCommand: nextAction,
       applyCommand: nextAction.includes(" --apply") ? nextAction : `${nextAction} --apply`,
       authority: "manager-owned-lane-advancement-heartbeat-existing-gates",
-      mutationClass: "assignment_heartbeat_metadata_only",
-      dryRunOnly: true,
+      mutationClass: "lane_advancement_heartbeat_metadata_only",
     };
   }
   if (action.code === "safe-backlog-starvation") {
