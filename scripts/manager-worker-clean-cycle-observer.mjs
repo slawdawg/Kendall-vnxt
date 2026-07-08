@@ -18,6 +18,13 @@ export const WORKER_CLEAN_CYCLE_STOP_LINES = Object.freeze([
   "no tmux scrollback or raw provider payload retention",
 ]);
 
+const TEN_CYCLE_STABILITY_OBSERVER_STOP_LINES = Object.freeze([
+  ...WORKER_CLEAN_CYCLE_STOP_LINES,
+  "no assignment takeover",
+  "no merge mutation",
+  "no GitHub delivery mutation",
+]);
+
 function usage() {
   return [
     "Usage: node ./scripts/manager-worker-clean-cycle-observer.mjs [--run-id <id>] [--since <iso>] [--summary-json]",
@@ -324,6 +331,37 @@ function buildStabilityProof({ status, workerCycles, loopFailures, requiredCycle
   };
 }
 
+function buildTenCycleStabilityObserverEvidence({ requiredCycles, nextManagerAction }) {
+  if (requiredCycles !== DEFAULT_REQUIRED_CYCLES) return null;
+  return {
+    schemaVersion: "ten_cycle_stability_observer.v1",
+    implementationChangedFiles: [
+      "scripts/manager-worker-clean-cycle-observer.mjs",
+      "tests/manager-worker-clean-cycle-observer.test.mjs",
+    ],
+    verificationCommands: [
+      "node --test tests/manager-worker-clean-cycle-observer.test.mjs",
+      "node --check scripts/manager-worker-clean-cycle-observer.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+      "node --test tests/manager-control-plane.test.mjs",
+    ],
+    verificationStatus: "recommended_not_executed_by_loop",
+    verificationEvidencePolicy: "loop_recommends_commands_delivery_records_results",
+    verificationResultsSource: "dev_agent_record_and_delivery_packet",
+    requiredCleanCyclesPerWorker: requiredCycles,
+    nextManagerAction: sanitize(nextManagerAction),
+    stopLines: TEN_CYCLE_STABILITY_OBSERVER_STOP_LINES,
+    localBmadArtifactBoundary: {
+      path: "_bmad-output/implementation-artifacts/7-5-ten-cycle-stability-observer.md",
+      expectedIgnored: true,
+      runtimeVerified: false,
+      verificationSource: "regression_test_git_check_ignore_and_ls_files",
+    },
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 export function buildWorkerCleanCycleObserver(input = {}, options = {}) {
   const requiredCycles = options.requiredCycles || DEFAULT_REQUIRED_CYCLES;
   const sinceMs = timeMs(options.since);
@@ -348,6 +386,12 @@ export function buildWorkerCleanCycleObserver(input = {}, options = {}) {
   ];
   const status = blockers.length > 0 ? "attention" : stableWorkers.length === workerCycles.length && workerCycles.length > 0 ? "stable" : "observing";
   const stabilityProof = buildStabilityProof({ status, workerCycles, loopFailures, requiredCycles, since: options.since });
+  const nextManagerAction =
+    status === "stable"
+      ? "record worker-cycle stability evidence and keep continuous mode running"
+      : status === "attention"
+        ? "fix the manager path that created attention before restarting the clean-cycle streak"
+        : "continue observing active workers until every codex session reaches the required clean-cycle streak";
 
   return {
     ok: status !== "attention",
@@ -365,12 +409,8 @@ export function buildWorkerCleanCycleObserver(input = {}, options = {}) {
     attentionWorkerCount: attentionWorkers.length,
     stabilityProof,
     stopLines: WORKER_CLEAN_CYCLE_STOP_LINES,
-    nextManagerAction:
-      status === "stable"
-        ? "record worker-cycle stability evidence and keep continuous mode running"
-        : status === "attention"
-          ? "fix the manager path that created attention before restarting the clean-cycle streak"
-          : "continue observing active workers until every codex session reaches the required clean-cycle streak",
+    nextManagerAction,
+    tenCycleStabilityObserverEvidence: buildTenCycleStabilityObserverEvidence({ requiredCycles, nextManagerAction }),
     workerCycles,
     blockers,
     warnings: loopFailures.length > 0 ? ["continuous loop failure evidence is global, not attributed to a single worker"] : [],
