@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,25 @@ import {
 } from "../scripts/manager-worker-clean-cycle-observer.mjs";
 
 const since = "2026-06-29T16:52:00.000Z";
+const repoRoot = new URL("..", import.meta.url);
+
+function assertLocalBmadStoryArtifact(relativePath) {
+  const ignored = spawnSync("git", ["check-ignore", "-q", "--", relativePath], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(ignored.error, undefined, `${relativePath} git check-ignore should execute`);
+  assert.equal(ignored.signal, null, `${relativePath} git check-ignore should not terminate by signal`);
+  assert.equal(ignored.status, 0, `${relativePath} should be ignored by git`);
+
+  const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(tracked.error, undefined, `${relativePath} git ls-files should execute`);
+  assert.equal(tracked.signal, null, `${relativePath} git ls-files should not terminate by signal`);
+  assert.equal(tracked.status, 1, `${relativePath} should not be tracked by git`);
+}
 
 function worker(workerId, assignmentId, overrides = {}) {
   return {
@@ -73,6 +93,50 @@ test("reports stable only when every active worker reaches required clean cycles
   assert.equal(packet.stabilityProof.rawPayloadRetained, false);
   assert.equal(packet.stabilityProof.mutation, "none");
   assert(packet.stabilityProof.evidenceRefs.every((ref) => ref.startsWith("manager-run:")));
+
+  assert.equal(packet.tenCycleStabilityObserverEvidence.schemaVersion, "ten_cycle_stability_observer.v1");
+  assert.deepEqual(packet.tenCycleStabilityObserverEvidence.implementationChangedFiles, [
+    "scripts/manager-worker-clean-cycle-observer.mjs",
+    "tests/manager-worker-clean-cycle-observer.test.mjs",
+  ]);
+  assert.deepEqual(packet.tenCycleStabilityObserverEvidence.verificationCommands, [
+    "node --test tests/manager-worker-clean-cycle-observer.test.mjs",
+    "node --check scripts/manager-worker-clean-cycle-observer.mjs",
+    "node ./scripts/check-manager-control-plane.mjs",
+    "node --test tests/manager-control-plane.test.mjs",
+  ]);
+  assert.equal(packet.tenCycleStabilityObserverEvidence.verificationStatus, "recommended_not_executed_by_loop");
+  assert.equal(packet.tenCycleStabilityObserverEvidence.verificationEvidencePolicy, "loop_recommends_commands_delivery_records_results");
+  assert.equal(packet.tenCycleStabilityObserverEvidence.verificationResultsSource, "dev_agent_record_and_delivery_packet");
+  assert.equal(packet.tenCycleStabilityObserverEvidence.requiredCleanCyclesPerWorker, 10);
+  assert.equal(packet.tenCycleStabilityObserverEvidence.nextManagerAction, packet.nextManagerAction);
+  assert.deepEqual(packet.tenCycleStabilityObserverEvidence.stopLines.slice(0, WORKER_CLEAN_CYCLE_STOP_LINES.length), WORKER_CLEAN_CYCLE_STOP_LINES);
+  assert(packet.tenCycleStabilityObserverEvidence.stopLines.includes("no assignment takeover"));
+  assert(packet.tenCycleStabilityObserverEvidence.stopLines.includes("no merge mutation"));
+  assert(packet.tenCycleStabilityObserverEvidence.stopLines.includes("no GitHub delivery mutation"));
+  assert.deepEqual(packet.tenCycleStabilityObserverEvidence.localBmadArtifactBoundary, {
+    path: "_bmad-output/implementation-artifacts/7-5-ten-cycle-stability-observer.md",
+    expectedIgnored: true,
+    runtimeVerified: false,
+    verificationSource: "regression_test_git_check_ignore_and_ls_files",
+  });
+  assert.equal(packet.tenCycleStabilityObserverEvidence.metadataOnly, true);
+  assert.equal(packet.tenCycleStabilityObserverEvidence.rawPayloadRetained, false);
+  assert.doesNotMatch(JSON.stringify(packet.tenCycleStabilityObserverEvidence), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-5-ten-cycle-stability-observer.md");
+});
+
+test("does not emit ten-cycle evidence for custom required cycle thresholds", () => {
+  const packet = buildWorkerCleanCycleObserver(baseInput({ checkpoints: [...checkpoints("lane-a", 5), ...checkpoints("lane-b", 5)] }), {
+    runId: "manager-test",
+    since,
+    requiredCycles: 5,
+  });
+
+  assert.equal(packet.status, "stable");
+  assert.equal(packet.requiredCycles, 5);
+  assert.equal(packet.tenCycleStabilityObserverEvidence, null);
+  assert.equal(packet.stabilityProof.target.requiredCleanCyclesPerWorker, 5);
 });
 
 test("continues observing when workers have fewer than the required clean cycles", () => {
