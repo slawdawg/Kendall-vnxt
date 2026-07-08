@@ -130,6 +130,27 @@ Recommend exactly one durable fix unless the issue needs a larger story:
 - Create an approval packet when the next action crosses authority boundaries.
 - Record the issue in the current story Dev Agent Record if it is local to the story.
 
+## Known Boundary Prevention
+
+When the failure class is `sandbox` or `permission` and the signature is already
+known in `AGENTS.md`, the durable fix is not complete until future runs avoid
+the known-bad attempt. Use the narrowest prevention layer that can act before
+the failure:
+
+- wrapper/preflight/classifier code when the command can detect and skip or
+  route the known boundary before invoking the failing subprocess;
+- `AGENTS.md` known-boundary registry when the prevention is agent behavior or
+  exact outside-sandbox routing;
+- `docs/workflows/tool-churn-rca-examples.md` when a concrete packet would stop
+  vague retries;
+- a backlog story only when the prevention layer is too large for the current
+  lane.
+
+If a known boundary recurs after a prevention rule exists, classify the broken
+prevention rule as the defect. Do not keep issuing RCA packets for the original
+EPERM/EACCES/EROFS signature unless new evidence shows it is a different
+boundary.
+
 ## Non-Goals
 
 This workflow does not approve destructive cleanup, GitHub mutation, provider

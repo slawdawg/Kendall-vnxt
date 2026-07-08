@@ -5,6 +5,7 @@ import { availableParallelism } from "node:os";
 import { readFileSync } from "node:fs";
 
 const TEST_FILE = "tests/manager-control-plane.test.mjs";
+const MAX_TEST_NAMES_PER_INVOCATION = 24;
 
 const shardDefinitions = [
   {
@@ -214,6 +215,29 @@ function runShard(shardId, { allowEmpty = false } = {}) {
     }
     return Promise.resolve({ shardId, status: 1, stdout: "", stderr: `Shard ${shardId} has no tests\n`, durationMs: 0 });
   }
+  const chunks = chunkArray(names, MAX_TEST_NAMES_PER_INVOCATION);
+  if (chunks.length > 1) return runShardChunks(shardId, chunks);
+  return runShardChunk(shardId, chunks[0]);
+}
+
+async function runShardChunks(shardId, chunks) {
+  const started = Date.now();
+  const results = [];
+  for (const [index, names] of chunks.entries()) {
+    const result = await runShardChunk(shardId, names, { chunkIndex: index + 1, chunkCount: chunks.length });
+    results.push(result);
+  }
+  return {
+    shardId,
+    status: results.every((result) => result.status === 0) ? 0 : 1,
+    stdout: results.map((result) => result.stdout).filter(Boolean).join("\n"),
+    stderr: results.map((result) => result.stderr).filter(Boolean).join("\n"),
+    error: results.find((result) => result.error)?.error,
+    durationMs: Date.now() - started,
+  };
+}
+
+function runShardChunk(shardId, names, { chunkIndex = 1, chunkCount = 1 } = {}) {
   const pattern = `^(?:${names.map(escapeRegExp).join("|")})$`;
   const started = Date.now();
   const child = spawn(process.execPath, [
@@ -239,12 +263,23 @@ function runShard(shardId, { allowEmpty = false } = {}) {
 
   return new Promise((resolve) => {
     child.on("error", (error) => {
-      resolve({ shardId, status: 1, stdout, stderr, error, durationMs: Date.now() - started });
+      resolve({ shardId, status: 1, stdout, stderr: annotateChunk(stderr, chunkIndex, chunkCount), error, durationMs: Date.now() - started });
     });
     child.on("close", (status) => {
-      resolve({ shardId, status: typeof status === "number" ? status : 1, stdout, stderr, durationMs: Date.now() - started });
+      resolve({
+        shardId,
+        status: typeof status === "number" ? status : 1,
+        stdout: annotateChunk(stdout, chunkIndex, chunkCount),
+        stderr: annotateChunk(stderr, chunkIndex, chunkCount),
+        durationMs: Date.now() - started,
+      });
     });
   });
+}
+
+function annotateChunk(output, chunkIndex, chunkCount) {
+  if (!output || chunkCount <= 1) return output;
+  return `[chunk ${chunkIndex}/${chunkCount}]\n${output}`;
 }
 
 function summarizePassingOutput(output) {
@@ -271,6 +306,14 @@ function failUsage(message) {
   console.error(`Usage: node ./scripts/run-manager-control-plane-shards.mjs [all|${shardDefinitions.map((shard) => shard.id).join("|")}] [--jobs N]`);
   console.error("       node ./scripts/run-manager-control-plane-shards.mjs --list");
   process.exit(64);
+}
+
+function chunkArray(values, size) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function escapeRegExp(value) {
