@@ -15648,6 +15648,44 @@ test("runtime readiness gates continuous apply to explicit existing manager gate
   assert.equal(laneAdvanceGateMissing.status, "blocked");
   assert.ok(laneAdvanceGateMissing.blockers.some((blocker) => blocker.code === "lane-advance-gate-not-proven"));
 
+  const refillApplyReady = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "normal" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: { refillApplyAllowed: true },
+      selectedAction: {
+        code: "continuous-refill-apply",
+        mutationClass: "local_bmad_refill_artifacts",
+      },
+    },
+  );
+  assert.equal(refillApplyReady.status, "ready");
+  assert.equal(refillApplyReady.summary.gates.refillArtifactApply, "existing_gate_only");
+  assert.equal(refillApplyReady.summary.gates.dispatchApply, "blocked_or_not_requested");
+  assert.equal(refillApplyReady.summary.gates.delivery, "blocked_or_not_requested");
+
+  const refillApplyGateMissing = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "normal" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: {},
+      selectedAction: {
+        code: "continuous-refill-apply",
+        mutationClass: "local_bmad_refill_artifacts",
+      },
+    },
+  );
+  assert.equal(refillApplyGateMissing.status, "blocked");
+  assert.ok(refillApplyGateMissing.blockers.some((blocker) => blocker.code === "refill-apply-gate-not-proven"));
+
   const blocked = buildRuntimeReadinessPlan(
     { runtimeMode: "continuous_apply" },
     {
@@ -17222,6 +17260,20 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(refillPlan.summary.applySelectedAction, null);
   assert.equal(refillPlan.summary.selectedAction.authority, "source-owned-refill-planning-existing-gates");
   assert.equal(refillPlan.summary.selectedAction.mutationClass, "local_bmad_refill_artifacts");
+  assert.deepEqual(refillPlan.summary.selectedAction.refillApplyGateEvidence.implementationChangedFiles, [
+    "scripts/lib/manager-control-plane/core.mjs",
+    "tests/manager-control-plane.test.mjs",
+  ]);
+  assert.deepEqual(refillPlan.summary.selectedAction.refillApplyGateEvidence.verificationCommands, [
+    "node --test tests/manager-control-plane.test.mjs",
+    "node ./scripts/check-manager-control-plane.mjs",
+  ]);
+  assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.verificationStatus, "recommended_not_executed_by_loop");
+  assert.match(refillPlan.summary.selectedAction.refillApplyGateEvidence.nextManagerAction, /manager-refill-plan\.mjs --summary-json --apply/);
+  assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.localBmadArtifactsIgnored, true);
+  assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.metadataOnly, true);
+  assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.rawPayloadRetained, false);
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-1-manager-refill-apply-gate.md");
 
   const reviewWorkflowRefillPlan = continuousRunPlan(
     {},
