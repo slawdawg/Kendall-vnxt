@@ -12352,6 +12352,8 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.providerUsageAllowed, false);
     assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.deliveryBoundary.dispatchApplyAuthorityExpanded, false);
     assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.qualityGates.localVerification, "not_evaluated");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.qualityGates.deliverySubagentAudit, "not_evaluated");
+    assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.qualityGates.cleanupDeliverySubagentAudit, "not_evaluated");
     assert.ok(cycle.summary.qualityDeliveryEvidenceBoundaryProof.evidenceRefs.includes("delivery:not_requested"));
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "takeover-inspection-required"));
@@ -20724,6 +20726,15 @@ function deliveryLaneFixture(overrides = {}) {
     reviewThreadsHeadSha: "abc123",
     reviewEvidenceKind: "thread_aware_review_threads",
     threadAwareReviewInspected: true,
+    deliverySubagentAudit: {
+      status: "merge-ready",
+      headSha: "abc123",
+      agent: "delivery-auditor",
+      summary: "Delivery subagent found local verification, checks, review threads, and cleanup gates merge-ready.",
+      evidenceRefs: ["evidence:delivery-subagent-audit"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
     requestedChanges: "none",
     requestedChangesHeadSha: "abc123",
     localVerification: "passed",
@@ -21369,10 +21380,49 @@ test("delivery plan records structured exact-head merge criteria before mutation
   assert.equal(plan.summary.mergePlan.criteria.find((criterion) => criterion.key === "expectedBaseBranch").source, "delivery_phase.targetBase+lane.baseBranch");
   assert.equal(plan.summary.mergePlan.criteria.find((criterion) => criterion.key === "exactReviewedHeadSha").headSha, "abc123");
   assert.equal(plan.summary.mergePlan.criteria.find((criterion) => criterion.key === "threadAwareReviewState").source, "thread_aware_review_threads");
+  assert.equal(plan.summary.mergePlan.criteria.find((criterion) => criterion.key === "deliverySubagentAudit").status, "proven");
+  assert.equal(plan.summary.mergePlan.deliverySubagentAudit.status, "merge_ready");
+  assert.equal(plan.summary.mergePlan.deliverySubagentAudit.headSha, "abc123");
+  assert.equal(plan.summary.mergePlan.deliverySubagentAudit.agent, "delivery-auditor");
+  assert.equal(plan.summary.mergePlan.deliverySubagentAudit.rawPayloadRetained, false);
   assert.equal(plan.summary.mergePlan.criteria.find((criterion) => criterion.key === "checkRunExactHead").source, "check_runs");
   assert.equal(plan.summary.mergePlan.result.rawPayloadRetained, false);
   assert.equal(plan.summary.mergePlan.result.prUrl, "https://github.example/Kendall_Nxt/pull/42");
   assert.equal(plan.summary.mergePlan.result.mergeMethod, "merge");
+});
+
+test("delivery plan blocks merge when delivery subagent audit evidence is missing or stale", () => {
+  const missingAudit = buildDeliveryPlan({
+    runId: "manager-test",
+    requestedOperation: "merge",
+    lane: deliveryLaneFixture({ deliverySubagentAudit: null }),
+    deliveryPhase: deliveryPhaseFixture(),
+  });
+  assert.equal(missingAudit.status, "blocked");
+  assert.ok(missingAudit.summary.mergePlan.missingEvidence.includes("deliverySubagentAudit"));
+  assert.equal(missingAudit.summary.mergePlan.deliverySubagentAudit, null);
+  assert.equal(missingAudit.summary.mergePlan.criteria.find((criterion) => criterion.key === "deliverySubagentAudit").reason, "delivery_subagent_audit_missing");
+
+  const staleAudit = buildDeliveryPlan({
+    runId: "manager-test",
+    requestedOperation: "merge",
+    lane: deliveryLaneFixture({
+      deliverySubagentAudit: {
+        status: "merge-ready",
+        headSha: "old-head",
+        agent: "delivery-auditor",
+        summary: "Audit was for an older head.",
+        evidenceRefs: ["evidence:delivery-subagent-audit"],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+    }),
+    deliveryPhase: deliveryPhaseFixture(),
+  });
+  assert.equal(staleAudit.status, "blocked");
+  assert.ok(staleAudit.summary.mergePlan.missingEvidence.includes("deliverySubagentAudit"));
+  assert.equal(staleAudit.summary.mergePlan.deliverySubagentAudit.headSha, "old-head");
+  assert.ok(staleAudit.summary.mergePlan.deliverySubagentAudit.missingFields.includes("headSha"));
 });
 
 test("delivery plan blocks unproven stale or ambiguous merge criteria", () => {
@@ -21681,6 +21731,9 @@ test("delivery cleanup plan records structured scoped dry-run criteria", () => {
   for (const key of ["objectType", "ownershipProof", "expectedHeadSha", "worktreePath", "localBranch", "remoteBranch", "assignmentState", "evidencePath", "blockedCaseBehavior", "idempotencyCondition", "dryRunEvidence"]) {
     assert.equal(plan.summary.cleanupPlan.criteria.find((criterion) => criterion.key === key)?.status, "proven", key);
   }
+  assert.equal(plan.summary.cleanupPlan.criteria.find((criterion) => criterion.key === "deliverySubagentAudit")?.status, "proven");
+  assert.equal(plan.summary.cleanupPlan.deliverySubagentAudit.status, "merge_ready");
+  assert.equal(plan.summary.cleanupPlan.deliverySubagentAudit.headSha, "abc123");
 });
 
 test("delivery cleanup plan blocks stale unsafe or raw cleanup evidence", () => {
@@ -21726,6 +21779,58 @@ test("delivery cleanup plan blocks stale unsafe or raw cleanup evidence", () => 
   for (const missing of ["expectedHeadSha", "worktreePath", "assignmentState", "ownershipProof", "evidencePath", "blockedCaseBehavior", "idempotencyCondition", "dryRunEvidence", "rawPayloadRetained"]) {
     assert.ok(stale.summary.cleanupPlan.missingEvidence.includes(missing), missing);
   }
+});
+
+test("delivery cleanup plan requires exact-head delivery subagent audit evidence", () => {
+  const cleanupEvidence = {
+    mergedPr: true,
+    expectedHeadSha: "abc123",
+    worktreePath: "/tmp/kendall/codex-42",
+    localBranch: "codex/story-42",
+    remoteBranch: "codex/story-42",
+    assignmentState: "closed",
+    objectType: "merged-managed-lane",
+    ownershipProof: "manager assignment owner matches manager-test/lane-a",
+    evidencePath: "_bmad-output/evidence/cleanup-lane-42.json",
+    blockedCaseBehavior: "block and preserve lane evidence",
+    idempotencyCondition: "target_absent_or_already_closed_at_exact_head",
+    deliverySubagentAudit: {
+      status: "hold",
+      headSha: "old-head",
+      agent: "delivery-auditor",
+      summary: "Audit held cleanup for a stale head.",
+      evidenceRefs: ["evidence:delivery-subagent-audit"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    dryRun: {
+      target: {
+        worktreePath: "/tmp/kendall/codex-42",
+        localBranch: "codex/story-42",
+        remoteBranch: "codex/story-42",
+      },
+      expectedHeadSha: "abc123",
+      wouldDelete: ["worktree:/tmp/kendall/codex-42"],
+      skipped: [],
+      finalExpectedState: "worktree_absent_branches_absent_assignment_closed",
+      rollbackNote: "restore branch from exact head abc123",
+      evidenceRefs: ["evidence:cleanup-dry-run"],
+      rawPayloadRetained: false,
+    },
+  };
+
+  const staleAudit = buildDeliveryPlan({
+    runId: "manager-test",
+    requestedOperation: "cleanup",
+    lane: deliveryLaneFixture({ mergeState: "merged", cleanupEvidence }),
+    deliveryPhase: deliveryPhaseFixture(),
+  });
+
+  assert.equal(staleAudit.status, "blocked");
+  assert.ok(staleAudit.summary.cleanupPlan.missingEvidence.includes("deliverySubagentAudit"));
+  assert.equal(staleAudit.summary.cleanupPlan.deliverySubagentAudit.status, "hold");
+  assert.ok(staleAudit.summary.cleanupPlan.deliverySubagentAudit.missingFields.includes("status"));
+  assert.ok(staleAudit.summary.cleanupPlan.deliverySubagentAudit.missingFields.includes("headSha"));
 });
 
 test("delivery cleanup plan records apply result metadata and idempotent repeats", () => {

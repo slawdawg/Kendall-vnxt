@@ -15879,6 +15879,7 @@ function buildMergeProofPlan({ lane = {}, requestedOperation = "", deliveryAutho
   const uncoveredHighRiskSurfaces = highRiskSurfaces.filter((surface) => !authorityCoveredSurfaces.has(surface));
   const draftEvidence = normalizeDraftEvidence(lane);
   const mergeResult = buildMergeResultEvidence(lane.mergeResult || lane.merge_result);
+  const deliverySubagentAudit = buildDeliverySubagentAuditEvidence(lane.deliverySubagentAudit || lane.delivery_subagent_audit, { expectedHeadSha: headSha });
   const criteria = [];
 
   criteria.push(mergeCriterion({
@@ -15991,6 +15992,15 @@ function buildMergeProofPlan({ lane = {}, requestedOperation = "", deliveryAutho
     proven: threadAwareReviewInspected === true && reviewEvidenceIsThreadAware(reviewEvidenceKind),
   }));
   criteria.push(mergeCriterion({
+    key: "deliverySubagentAudit",
+    source: "lane.deliverySubagentAudit",
+    expected: "merge-ready audit for exact head with compact metadata",
+    observed: deliverySubagentAudit ? deliverySubagentAudit.status : null,
+    headSha: deliverySubagentAudit?.headSha || null,
+    proven: Boolean(deliverySubagentAudit?.complete),
+    reason: deliverySubagentAudit ? deliverySubagentAudit.missingFields.join(",") : "delivery_subagent_audit_missing",
+  }));
+  criteria.push(mergeCriterion({
     key: "requestedChangesCleared",
     source: "lane.requestedChanges",
     expected: "none",
@@ -16074,8 +16084,9 @@ function buildMergeProofPlan({ lane = {}, requestedOperation = "", deliveryAutho
     prUrl: sanitizeLedgerField(lane.prUrl || lane.pr_url || "", "", 260) || null,
     exactHeadSha: headSha || null,
     baseBranch: baseBranch || null,
-    gates: ["codex-workspace.mjs finish-pr", "GitHub PR exact-head merge", "thread-aware review-thread check", "exact-head check runs", "local verification", "cleanup-current/cleanup-merged", "blocking-feedback gate"],
+    gates: ["codex-workspace.mjs finish-pr", "delivery subagent audit evidence", "GitHub PR exact-head merge", "thread-aware review-thread check", "exact-head check runs", "local verification", "cleanup-current/cleanup-merged", "blocking-feedback gate"],
     criteria,
+    deliverySubagentAudit,
     highRiskSurfaces,
     authorityCoveredSurfaces: [...authorityCoveredSurfaces],
     missingEvidence,
@@ -16083,6 +16094,36 @@ function buildMergeProofPlan({ lane = {}, requestedOperation = "", deliveryAutho
     result: mergeResult,
     mutationMode: ready ? "existing_gates_required" : "blocked_until_merge_criteria_proven",
     rawPayloadRetained: false,
+  };
+}
+
+function buildDeliverySubagentAuditEvidence(audit = null, { expectedHeadSha = "" } = {}) {
+  if (!isPlainObject(audit)) return null;
+  const status = normalizeMergeStateValue(audit.status || audit.auditStatus || audit.audit_status || "");
+  const headSha = sanitizeLedgerField(audit.headSha || audit.head_sha || audit.prHeadSha || audit.pr_head_sha || "", "", 80);
+  const agent = sanitizeLedgerField(audit.agent || audit.agentName || audit.agent_name || audit.deliveryAuditAgent || audit.delivery_audit_agent || "", "", 160);
+  const summary = sanitizeLedgerField(audit.summary || audit.auditSummary || audit.audit_summary || "", "", 500);
+  const evidenceRefs = normalizePrEvidenceStringList(audit.evidenceRefs || audit.evidence_refs || audit.evidenceRef || audit.evidence_ref, { limit: 20, maxLength: 180 });
+  const metadataOnly = audit.metadataOnly === true || audit.metadata_only === true;
+  const rawPayloadRetained = audit.rawPayloadRetained === false || audit.raw_payload_retained === false ? false : true;
+  const missingFields = [];
+  if (status !== "merge_ready") missingFields.push("status");
+  if (!expectedHeadSha || headSha !== expectedHeadSha) missingFields.push("headSha");
+  if (!agent) missingFields.push("agent");
+  if (!summary) missingFields.push("summary");
+  if (evidenceRefs.length === 0) missingFields.push("evidenceRefs");
+  if (metadataOnly !== true) missingFields.push("metadataOnly");
+  if (rawPayloadRetained !== false) missingFields.push("rawPayloadRetained");
+  return {
+    status: status || null,
+    headSha: headSha || null,
+    agent: agent || null,
+    summary: summary || null,
+    evidenceRefs,
+    metadataOnly,
+    rawPayloadRetained,
+    missingFields,
+    complete: missingFields.length === 0,
   };
 }
 
@@ -16178,6 +16219,10 @@ function buildDeliveryCleanupPlan(lane = {}, { deliveryAuthority = {}, requested
   const dryRun = buildCleanupDryRunEvidence(evidence.dryRun || evidence.dry_run || null, { expected, expectedHeadSha: headSha });
   const applyResult = buildCleanupApplyResultEvidence(evidence.applyResult || evidence.apply_result || null, { expected, expectedHeadSha: headSha, finalExpectedState: dryRun?.finalExpectedState || "" });
   const deferred = cleanupShouldDefer(lane, requestedOperation);
+  const deliverySubagentAudit = buildDeliverySubagentAuditEvidence(
+    evidence.deliverySubagentAudit || evidence.delivery_subagent_audit || lane.deliverySubagentAudit || lane.delivery_subagent_audit,
+    { expectedHeadSha: headSha },
+  );
   const criteria = [
     cleanupCriterion({
       key: "managerOwnedLane",
@@ -16294,6 +16339,15 @@ function buildDeliveryCleanupPlan(lane = {}, { deliveryAuthority = {}, requested
       proven: deliveryAuthority.status === "active" && cleanupTargetsMatch(deliveryAuthority.cleanupTargets || {}, expected),
     }),
     cleanupCriterion({
+      key: "deliverySubagentAudit",
+      source: "lane.cleanupEvidence.deliverySubagentAudit+lane.deliverySubagentAudit",
+      expected: "merge-ready audit for exact head with compact metadata",
+      observed: deliverySubagentAudit ? deliverySubagentAudit.status : null,
+      headSha: deliverySubagentAudit?.headSha || null,
+      proven: Boolean(deliverySubagentAudit?.complete),
+      reason: deliverySubagentAudit ? deliverySubagentAudit.missingFields.join(",") : "delivery_subagent_audit_missing",
+    }),
+    cleanupCriterion({
       key: "evidencePath",
       source: "lane.cleanupEvidence.evidencePath",
       expected: "present",
@@ -16356,6 +16410,7 @@ function buildDeliveryCleanupPlan(lane = {}, { deliveryAuthority = {}, requested
     assignmentState: assignmentState || null,
     criteria,
     missingEvidence,
+    deliverySubagentAudit,
     dryRun,
     applyResult,
     deferral: deferred
@@ -18422,8 +18477,10 @@ function buildQualityDeliveryEvidenceBoundaryProof({ runId = "", delivery = {}, 
       exactHead: criterionStatus("exactReviewedHeadSha"),
       exactHeadChecks: criterionStatus("checkRunExactHead"),
       threadAwareReview: criterionStatus("threadAwareReviewState"),
+      deliverySubagentAudit: criterionStatus("deliverySubagentAudit"),
       changedFilesBoundToHead: criterionStatus("changedFilesEvidence"),
       highRiskSurfacesCovered: criterionStatus("highRiskSurfacesCovered"),
+      cleanupDeliverySubagentAudit: cleanupCriterionStatus("deliverySubagentAudit"),
       cleanupDryRunEvidence: cleanupCriterionStatus("dryRunEvidence"),
       cleanupRawPayloadRetained: cleanupCriterionStatus("rawPayloadRetained"),
       mergeCriteria: { proven: provenMergeCriteria, total: noDeliveryRequested ? 0 : mergeCriteria.length },
