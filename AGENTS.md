@@ -34,14 +34,16 @@
     `sandbox_incomplete`; do not treat hidden workspace state as zero cleanup
     targets.
   - `node ./scripts/test-codex-workspace.mjs`: empty child stdout where JSON is
-    expected is a sandbox/process boundary; report command metadata before the
-    exact same outside-sandbox rerun.
+    expected is a sandbox/process boundary. The suite now self-skips when
+    nested Node child processes are unavailable in the sandbox; run the exact
+    same command outside the sandbox only when full CLI integration coverage is
+    required.
   - `pnpm run build:dashboard` and any broader verification command that routes
     to it, including `pnpm run check:changed` when dashboard files or full
-    static checks are selected: Turbopack process/socket setup is a known EPERM
-    sandbox boundary. Do not preflight this path inside the sandbox after the
-    route is known; request the outside-sandbox verification run directly and
-    record that the escalation is for the known Turbopack EPERM boundary.
+    static checks are selected: the root build command now self-skips in the
+    Codex sandbox before invoking Turbopack. Treat that skip as boundary
+    evidence, not a failed build. Run the exact same command outside the
+    sandbox only when full dashboard build coverage is required.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying
@@ -420,7 +422,7 @@ surface is `node ./scripts/codex-workspace.mjs`.
   is idle; only then pass `--take-ownership --takeover-reason "<reason>"` and
   record the previous owner.
 - When the operator says "finish this as a PR", run the smallest relevant verification,
-  then use `node ./scripts/codex-workspace.mjs finish-pr` from the task
+  then use `node ./scripts/codex-workspace.mjs finish-pr --verify scoped` from the task
   worktree or pass a task query from another worktree. Stage intended files
   explicitly before `finish-pr`; use `--stage-all` only after confirming the
   full worktree diff belongs to the task. Merge only when the active goal's
