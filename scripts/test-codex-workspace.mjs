@@ -2112,6 +2112,7 @@ try {
       assert(packet.closeoutHandoffEvidence.verified.matchingClosedWorkspaceCount === 1, result.stdout || result.stderr);
       assert(packet.closeoutHandoffEvidence.nextManagerAction.includes("Review this dry-run summary"), result.stdout || result.stderr);
       assert(packet.closeoutHandoffEvidence.resultRefs[0].assignmentId === "dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.resultRefs[0].manifestTaskId === "closed-summary-lane", result.stdout || result.stderr);
       const [closeout] = packet.results;
       assert(closeout.assignmentId === "dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
       assert(closeout.status === "closeable", result.stdout || result.stderr);
@@ -2131,6 +2132,21 @@ try {
       const sensitivePacket = JSON.parse(sensitiveOwnerResult.stdout);
       assert(/^\[redacted-(token|retention-field)\]$/.test(sensitivePacket.closeoutHandoffEvidence.owner), sensitiveOwnerResult.stdout || sensitiveOwnerResult.stderr);
       assert(!/raw prompt|provider payload|sk-closeout-secret/i.test(JSON.stringify(sensitivePacket.closeoutHandoffEvidence.resultRefs)), sensitiveOwnerResult.stdout || sensitiveOwnerResult.stderr);
+      assert(!/raw prompt|provider payload|sk-closeout-secret/i.test(sensitivePacket.currentOwner), sensitiveOwnerResult.stdout || sensitiveOwnerResult.stderr);
+      const broadSensitiveOwnerResult = run([
+        "close-assignments",
+        "--ids",
+        "dispatcher-queue-handoff-summary-refresh",
+        "--summary-json",
+        "--owner",
+        "OPENAI_API_KEY=abc raw scrollback",
+        "--state-root",
+        closeoutStateRoot,
+      ]);
+      assert(broadSensitiveOwnerResult.code === 0, broadSensitiveOwnerResult.stderr || broadSensitiveOwnerResult.stdout);
+      const broadSensitivePacket = JSON.parse(broadSensitiveOwnerResult.stdout);
+      assert(broadSensitivePacket.closeoutHandoffEvidence.owner === "[redacted-retention-field]", broadSensitiveOwnerResult.stdout || broadSensitiveOwnerResult.stderr);
+      assert(broadSensitivePacket.currentOwner === "[redacted-retention-field]", broadSensitiveOwnerResult.stdout || broadSensitiveOwnerResult.stderr);
       assert(closeout.branch === "codex/dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
       assert(closeout.owner === "runner-a", result.stdout || result.stderr);
       assert(taskSnapshot(tasksDir) === beforeTasks, "close-assignments summary-json mutated manifests");

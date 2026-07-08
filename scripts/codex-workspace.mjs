@@ -1795,8 +1795,8 @@ function buildCloseAssignmentsSummary({ state, currentOwner, plans }) {
   return {
     generatedAt: new Date().toISOString(),
     stateRoot: state.root,
-    currentOwner,
-    delegatedCleanupOwner: delegatedCleanup?.delegatedCleanupOwner || null,
+    currentOwner: sanitizeCloseoutEvidenceField(currentOwner, 180) || null,
+    delegatedCleanupOwner: sanitizeCloseoutEvidenceField(delegatedCleanup?.delegatedCleanupOwner || "", 180) || null,
     delegatedCleanupEvidence: delegatedCleanup?.delegationEvidence || null,
     counts,
     statusCounts: countByField(results, "status"),
@@ -1833,6 +1833,7 @@ function closeAssignmentsEvidenceSummary({ currentOwner, counts, results = [], m
     resultRefs: results.map((result) => ({
       assignmentId: sanitizeCloseoutEvidenceField(result.assignmentId, 180),
       taskId: sanitizeCloseoutEvidenceField(result.taskId, 180),
+      manifestTaskId: sanitizeCloseoutEvidenceField(result.manifestTaskId, 180),
       closeoutMode: sanitizeCloseoutEvidenceField(result.closeoutMode, 80),
       status: sanitizeCloseoutEvidenceField(result.status, 80),
     })).slice(0, 10),
@@ -1846,7 +1847,7 @@ function sanitizeCloseoutEvidenceField(value, maxLength = 180) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   if (/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/i.test(text)) return "[redacted-token]";
-  if (/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|tmux scrollback|secret|password|credential)\b/i.test(text)) {
+  if (/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|tmux scrollback|raw scrollback|OPENAI_API_KEY|secret|password|credential)\b/i.test(text)) {
     return "[redacted-retention-field]";
   }
   return text.slice(0, maxLength);
