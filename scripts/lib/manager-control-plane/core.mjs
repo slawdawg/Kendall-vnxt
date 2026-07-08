@@ -21118,9 +21118,11 @@ function buildContinuousAction(action = {}, cycle = {}) {
   return null;
 }
 
-function buildWorkerRetirementReassignmentProof(action = {}, cycle = {}, commandProof = continuousWorkerRetireCommandProof(action.nextAction || "")) {
+function buildWorkerRetirementReassignmentProof(action = {}, cycle = {}, commandProof = null) {
   const runId = cycle.summary?.run?.runId ? [`run:${cycle.summary.run.runId}`] : [];
-  const exactTarget = continuousCommandExactWorkerTarget(action.nextAction || "");
+  const command = String(action.nextAction || action.dryRunCommand || action.applyCommand || "");
+  const proof = commandProof || continuousWorkerRetireCommandProof(command);
+  const exactTarget = continuousCommandExactWorkerTarget(command);
   const targetComponents = continuousTargetComponentsFromRows(
     [
       ...(Array.isArray(action.targetComponents) ? action.targetComponents : []),
@@ -21130,16 +21132,27 @@ function buildWorkerRetirementReassignmentProof(action = {}, cycle = {}, command
   );
   return {
     schemaVersion: "worker_retirement_reassignment.v1",
-    basis: "recovery_submit_unanswered",
+    basis: workerRetirementReassignmentBasis(command),
     allowedMutation: "manager_owned_worker_session_retire_only",
     retirementGate: "manager-worker-retire-existing-gates",
     reassignmentGate: "manager-owned-lease-reassignment",
     recoveryPath: "warm_or_reuse_capacity_then_reassign_only_after_owner_and_lease_evidence",
     reassignmentBoundary: "worker retirement does not take over, reassign, dispatch, deliver, clean up, call providers, or retain raw payloads",
-    commandFamily: commandProof.commandFamily,
-    commandScope: commandProof.commandScope,
-    commandAllowed: commandProof.commandAllowed,
-    nextManagerAction: sanitizeLedgerField(commandProof.commandLabel || "manager-worker-retire dry-run", "manager-worker-retire dry-run", 260),
+    implementationChangedFiles: [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ],
+    verificationCommands: [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+    ],
+    verificationStatus: "recommended_not_executed_by_loop",
+    verificationEvidencePolicy: "loop_recommends_commands_delivery_records_results",
+    verificationResultsSource: "dev_agent_record_and_delivery_packet",
+    commandFamily: proof.commandFamily,
+    commandScope: proof.commandScope,
+    commandAllowed: proof.commandAllowed,
+    nextManagerAction: sanitizeLedgerField(proof.commandLabel || "manager-worker-retire dry-run", "manager-worker-retire dry-run", 260),
     stopLines: [
       "no assignment takeover",
       "no dispatch apply",
@@ -21148,8 +21161,34 @@ function buildWorkerRetirementReassignmentProof(action = {}, cycle = {}, command
       "no raw prompt, provider payload, reasoning trace, or tmux scrollback retention",
     ],
     targetComponents,
+    localBmadArtifactsIgnored: true,
+    metadataOnly: true,
     rawPayloadRetained: false,
   };
+}
+
+function workerRetirementReassignmentBasis(command = "") {
+  const tokens = tokenizeContinuousCommand(command);
+  let resourceState = "";
+  let retireBlockedQuestion = false;
+  if (Array.isArray(tokens)) {
+    for (let index = 2; index < tokens.length; index += 1) {
+      const token = String(tokens[index] || "");
+      if (!token.startsWith("--")) continue;
+      const [rawFlag, inlineValue] = token.slice(2).split(/=(.*)/s, 2);
+      if (rawFlag === "retire-blocked-question") {
+        retireBlockedQuestion = true;
+        continue;
+      }
+      if (rawFlag === "resource-state") {
+        resourceState = sanitizeLedgerField(inlineValue ?? tokens[index + 1] ?? "", "", 80);
+        if (inlineValue === undefined) index += 1;
+      }
+    }
+  }
+  if (resourceState === "critical") return "critical_resource_pressure";
+  if (retireBlockedQuestion) return "unsafe_question_policy_blocked";
+  return "recovery_submit_unanswered";
 }
 
 function withContinuousActionTargetKey(action = null, cycle = {}) {
