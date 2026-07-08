@@ -382,6 +382,18 @@ function selectedActionsMatchForApply(selected = {}, applySelected = {}) {
   );
 }
 
+function projectContinuousLoopSelectedAction(action = null) {
+  if (!action) return null;
+  return {
+    code: action.code,
+    mutationClass: action.mutationClass,
+    authority: action.authority,
+    targetKey: action.targetKey,
+    targetComponents: action.targetComponents,
+    ...(action.workerRetirementReassignment ? { workerRetirementReassignment: action.workerRetirementReassignment } : {}),
+  };
+}
+
 function workerMutationTargetProofReady(mutationClass = "", targetComponents = []) {
   if (!String(mutationClass || "").startsWith("manager_owned_worker_")) return true;
   return canonicalTargetComponents(targetComponents).some((component) => /^(worker|session|assignment|task):/.test(component));
@@ -727,20 +739,8 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
           path: postureWrite?.summary?.path || persistedCapabilityPosture.summary?.path || null,
           rawPayloadRetained: false,
         },
-        selectedAction: selected ? {
-          code: selected.code,
-          mutationClass: selected.mutationClass,
-          authority: selected.authority,
-          targetKey: selected.targetKey,
-          targetComponents: selected.targetComponents,
-        } : null,
-        applySelectedAction: applySelected ? {
-          code: applySelected.code,
-          mutationClass: applySelected.mutationClass,
-          authority: applySelected.authority,
-          targetKey: applySelected.targetKey,
-          targetComponents: applySelected.targetComponents,
-        } : null,
+        selectedAction: projectContinuousLoopSelectedAction(selected),
+        applySelectedAction: projectContinuousLoopSelectedAction(applySelected),
         runtimeReadiness: plan.summary?.runtimeReadiness,
         blockers: plan.blockers || [],
         warnings: [...(persistedCapabilityPosture.warnings || []), ...(postureWrite?.warnings || []), ...(plan.warnings || [])],

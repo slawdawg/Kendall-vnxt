@@ -15602,6 +15602,76 @@ test("runtime readiness gates continuous apply to explicit existing manager gate
   assert.ok(blocked.blockers.some((blocker) => blocker.code === "worker-mutation-gate-not-proven"));
 });
 
+test("manager run loop preserves worker retirement reassignment proof in dogfood packet", async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-run-loop-retire-proof-"));
+  try {
+    const packets = [];
+    const selectedAction = {
+      code: "continuous-worker-retire",
+      mutationClass: "manager_owned_worker_retire",
+      authority: "manager-owned-worker-retire-after-recovery-existing-gates",
+      targetKey: "assignment:lane-1|run:manager-test|worker:codex-1",
+      targetComponents: ["assignment:lane-1", "run:manager-test", "worker:codex-1"],
+      workerRetirementReassignment: {
+        schemaVersion: "worker_retirement_reassignment.v1",
+        basis: "recovery_submit_unanswered",
+        allowedMutation: "manager_owned_worker_session_retire_only",
+        retirementGate: "manager-worker-retire-existing-gates",
+        reassignmentGate: "manager-owned-lease-reassignment",
+        recoveryPath: "warm_or_reuse_capacity_then_reassign_only_after_owner_and_lease_evidence",
+        reassignmentBoundary: "worker retirement does not take over, reassign, dispatch, deliver, clean up, call providers, or retain raw payloads",
+        commandFamily: "manager-worker-retire",
+        commandScope: "worker-id:codex-1|assignment-id:lane-1",
+        commandAllowed: true,
+        nextManagerAction: "manager-worker-retire dry-run (worker-id:codex-1|assignment-id:lane-1)",
+        stopLines: ["no assignment takeover", "no dispatch apply", "no delivery or cleanup mutation", "no provider calls or secrets"],
+        targetComponents: ["assignment:lane-1", "run:manager-test", "worker:codex-1"],
+        rawPayloadRetained: false,
+      },
+    };
+
+    await runManagerRunLoop(
+      {
+        runId: "manager-test",
+        stateRoot,
+        maxIterations: 1,
+        summaryJson: true,
+        runtimeMode: "continuous_dry_run",
+      },
+      {
+        buildPreflight: () => ({ ok: true, status: "ready", summary: {}, blockers: [], warnings: [] }),
+        buildContinuousRunPlan: () => ({
+          ok: true,
+          status: "attention",
+          summary: {
+            workerCounts: { active: 1, warm: 0, paused: 0 },
+            usageState: "normal",
+            resourceState: "normal",
+            selectedAction,
+            applySelectedAction: null,
+            runtimeReadiness: { allowedExecutionMode: "continuous_dry_run" },
+          },
+          blockers: [],
+          warnings: [],
+          nextActions: [],
+        }),
+        executeContinuousSelectedAction: () => ({ ok: true, status: "attention", summary: {}, blockers: [], warnings: [], nextActions: [], continueLoop: false }),
+        writePacket: (packet) => packets.push(packet),
+        sleep: async () => {},
+      },
+    );
+
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].summary.selectedAction.code, "continuous-worker-retire");
+    assert.equal(packets[0].summary.selectedAction.workerRetirementReassignment.schemaVersion, "worker_retirement_reassignment.v1");
+    assert.equal(packets[0].summary.selectedAction.workerRetirementReassignment.rawPayloadRetained, false);
+    assert.equal(packets[0].summary.applySelectedAction, null);
+    assert.doesNotMatch(JSON.stringify(packets[0].summary.selectedAction.workerRetirementReassignment), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("runtime parser rejects empty modes and duplicate exact target flags", () => {
   assert.throws(
     () => parseCommonArgs(["--runtime-mode", ""]),
@@ -16372,7 +16442,104 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(retirePlan.status, "attention");
   assert.equal(retirePlan.summary.selectedAction.code, "continuous-worker-retire");
   assert.equal(retirePlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1");
+  assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.schemaVersion, "worker_retirement_reassignment.v1");
+  assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.allowedMutation, "manager_owned_worker_session_retire_only");
+  assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.reassignmentGate, "manager-owned-lease-reassignment");
+  assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.commandFamily, "manager-worker-retire");
+  assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.commandAllowed, true);
+  assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.rawPayloadRetained, false);
+  assert.match(retirePlan.summary.selectedAction.workerRetirementReassignment.nextManagerAction, /manager-worker-retire dry-run/);
+  assert.doesNotMatch(retirePlan.summary.selectedAction.workerRetirementReassignment.nextManagerAction, /--/);
+  assert.deepEqual(retirePlan.summary.selectedAction.workerRetirementReassignment.stopLines, [
+    "no assignment takeover",
+    "no dispatch apply",
+    "no delivery or cleanup mutation",
+    "no provider calls or secrets",
+    "no raw prompt, provider payload, reasoning trace, or tmux scrollback retention",
+  ]);
+  assert.doesNotMatch(JSON.stringify(retirePlan.summary.selectedAction.workerRetirementReassignment), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
   assert.equal(retirePlan.summary.applySelectedAction, null);
+
+  const exactRetirePlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+        },
+        warnings: [{ code: "worker-progress-attention", message: "1 active worker needs attention." }],
+        nextActions: [
+          {
+            code: "worker-progress-recovery_submit_unanswered",
+            summary: "codex-1 recovery submit unanswered.",
+            nextAction: "node ./scripts/manager-worker-retire.mjs --summary-json --worker-id codex-1 --assignment-id lane-1",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.ok(exactRetirePlan.summary.selectedAction.workerRetirementReassignment.targetComponents.includes("worker:codex-1"));
+  assert.ok(exactRetirePlan.summary.selectedAction.workerRetirementReassignment.targetComponents.includes("assignment:lane-1"));
+
+  const unsafeRetireCommandPlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+        },
+        warnings: [{ code: "worker-progress-attention", message: "1 active worker needs attention." }],
+        nextActions: [
+          {
+            code: "worker-progress-recovery_submit_unanswered",
+            summary: "codex-1 recovery submit unanswered.",
+            nextAction: "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1 --provider-payload sk-test",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(unsafeRetireCommandPlan.summary.selectedAction, null);
+  assert.equal(unsafeRetireCommandPlan.summary.selectedActionCount, 0);
+
+  const trailingTokenRetireCommandPlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+        },
+        warnings: [{ code: "worker-progress-attention", message: "1 active worker needs attention." }],
+        nextActions: [
+          {
+            code: "worker-progress-recovery_submit_unanswered",
+            summary: "codex-1 recovery submit unanswered.",
+            nextAction: "node ./scripts/manager-worker-retire.mjs --summary-json --limit 1 unexpected-token",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(trailingTokenRetireCommandPlan.summary.selectedAction, null);
+  assert.equal(trailingTokenRetireCommandPlan.summary.selectedActionCount, 0);
 
   const laneAdvancePlan = continuousRunPlan(
     {},
