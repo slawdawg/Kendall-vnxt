@@ -4767,7 +4767,8 @@ function findAssignment(state, query) {
     return null;
   }
 
-  const matches = readAssignments(state).filter(({ assignment }) =>
+  const records = readAssignments(state);
+  const searchableValues = (assignment) =>
     [
       assignment.assignment_id,
       assignment.task_id,
@@ -4775,9 +4776,20 @@ function findAssignment(state, query) {
       assignment.branch,
       assignment.source_backlog_item?.item_id,
       assignment.source_backlog_item?.branch_name,
-    ]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(normalized)),
+    ].filter(Boolean);
+
+  const exactMatches = records.filter(({ assignment }) =>
+    searchableValues(assignment).some((value) => String(value).toLowerCase() === normalized),
+  );
+  if (exactMatches.length === 1) {
+    return exactMatches[0];
+  }
+  if (exactMatches.length > 1) {
+    throw new Error(`Query matched multiple assignments: ${exactMatches.map((m) => m.assignment.assignment_id).join(", ")}`);
+  }
+
+  const matches = records.filter(({ assignment }) =>
+    searchableValues(assignment).some((value) => String(value).toLowerCase().includes(normalized)),
   );
 
   if (matches.length === 0) {

@@ -4366,6 +4366,53 @@ try {
     }
   });
 
+  test("takeover exact assignment id wins before fuzzy assignment matches", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-exact-id-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      for (const assignmentId of ["18-1-manager-refill-apply-gate", "8-1-manager-refill-apply-gate"]) {
+        writeFileSync(
+          join(assignmentsDir, `${assignmentId}.json`),
+          `${JSON.stringify(
+            {
+              assignment_id: assignmentId,
+              task_id: `20260629-${assignmentId}`,
+              lane_slug: assignmentId,
+              branch: `codex/${assignmentId}`,
+              status: "claimed",
+              owner: "runner-b",
+              updated_at: "2026-06-21T00:00:00.000Z",
+              last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+
+      const result = run([
+        "takeover",
+        "8-1-manager-refill-apply-gate",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("- target assignment 8-1-manager-refill-apply-gate"), result.stdout || result.stderr);
+      assert(!result.stderr.includes("Query matched multiple assignments"), result.stderr || result.stdout);
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("takeover summary-json previews compact takeover evidence without mutation", () => {
     const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-summary-json-"));
     try {
