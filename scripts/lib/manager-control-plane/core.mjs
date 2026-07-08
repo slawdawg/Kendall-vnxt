@@ -12228,7 +12228,16 @@ function renderCourseCorrectionProposal(draft = {}, items = []) {
 
 function renderManagerGeneratedStory(storyKey = "", step = {}) {
   const title = titleFromStoryKey(storyKey);
-  const sourceRef = step.sourceRef || step.sourcePlanning?.sourceKey || "manager-control-plane";
+  const sourceRefs = [
+    ...sourceRefList(step.workCreationPacket?.sourceRefs),
+    ...sourceRefList(step.sourceRef),
+    ...sourceRefList(step.sourcePlanning?.sourceKey),
+  ]
+    .map((ref) => sanitizeLedgerField(ref, "", 180))
+    .filter(Boolean);
+  const uniqueSourceRefs = [...new Set(sourceRefs)].slice(0, 6);
+  const sprintTracker = sanitizeLedgerField(step.workCreationPacket?.storyCreationInputs?.sprintStatusPath || step.workCreationPacket?.sprintStatusPath || "unknown", "unknown", 220);
+  const verificationCommand = "node --test tests/manager-control-plane.test.mjs";
   return [
     `# Story ${storyKey}: ${title}`,
     "",
@@ -12247,21 +12256,55 @@ function renderManagerGeneratedStory(storyKey = "", step = {}) {
     "3. The slice leaves compact evidence of what changed, how it was verified, and the next manager action.",
     "4. The change can be dogfooded by the continuous manager loop without direct worker intervention.",
     "",
+    "## Tasks/Subtasks",
+    "",
+    `- [ ] Add regression coverage for ${title}.`,
+    "  - [ ] Cover the manager-control-plane behavior named by this story before changing implementation.",
+    "  - [ ] Assert compact evidence includes changed files, verification, and the next manager action.",
+    "  - [ ] Assert local BMAD story artifacts remain ignored and untracked.",
+    `- [ ] Implement the bounded ${title} slice.`,
+    "  - [ ] Use existing manager-control-plane scripts, helpers, and gates before adding new surfaces.",
+    "  - [ ] Preserve stop lines for worker mutation, dispatch apply, provider calls, GitHub delivery, takeover, merge, and cleanup.",
+    "  - [ ] Keep any artifact materialization local, explicit, metadata-bounded, and reversible.",
+    "- [ ] Verify and dogfood the slice.",
+    `  - [ ] Run focused manager-control-plane verification: \`${verificationCommand}\`.`,
+    "  - [ ] Run the configured manager-control-plane check if this slice touches shared manager contracts.",
+    "  - [ ] Record verification evidence and the next safe manager action in the Dev Agent Record.",
+    "",
     "## Source Context",
     "",
-    `- Source: ${sanitizeLedgerField(sourceRef, "", 180)}`,
-    `- Sprint tracker: ${step.workCreationPacket?.storyCreationInputs?.sprintStatusPath || "unknown"}`,
+    ...((uniqueSourceRefs.length > 0 ? uniqueSourceRefs : ["manager-control-plane"]).map((ref) => `- Source: ${ref}`)),
+    `- Sprint tracker: ${sprintTracker}`,
+    `- Story key: ${sanitizeLedgerField(storyKey, "", 140)}`,
     "",
     "## Dev Notes",
     "",
+    `- Story title derived from backlog key: ${title}.`,
+    "- Treat this file as local BMAD implementation state until a source-owned change rewrites any durable decision into repo code, docs, scripts, or tests.",
     "- Use existing manager-control-plane scripts and tests before adding new surfaces.",
     "- Prefer metadata-only summaries over raw tmux scrollback or provider payload retention.",
     "- Keep mutations local and reversible unless an existing gate explicitly authorizes more.",
+    "- Do not broaden worker, dispatch, provider, GitHub, takeover, merge, or cleanup authority.",
     "",
     "## Verification",
     "",
     "- Run focused manager-control-plane checks for the touched script or workflow.",
     "- Dogfood one continuous cycle when the change affects manager loop behavior.",
+    "- Preserve evidence as command names, paths, compact findings, and next actions only.",
+    "",
+    "## Dev Agent Record",
+    "",
+    "### Implementation Plan",
+    "",
+    "Use tests first. Keep implementation scoped to the named manager-control-plane slice and preserve existing authority gates.",
+    "",
+    "### Debug Log",
+    "",
+    "### Completion Notes",
+    "",
+    "### File List",
+    "",
+    "### Change Log",
     "",
   ].join("\n");
 }

@@ -5982,6 +5982,7 @@ function buildDispatchNextApplySummary({ state, currentOwner, staleAfterSeconds,
       nextCommand: applied.packet.next_command,
       handoff: applied.packet.handoff,
       readiness: applied.packet.readiness,
+      localArtifactSeed: applied.packet.local_artifact_seed,
       stopLines: applied.packet.stop_lines,
       authorityDecision: applied.packet.authority_decision,
       generatedAt: applied.packet.generated_at,
@@ -6305,6 +6306,11 @@ function createDispatchWorkspace(item, assignment, context) {
       ? ["worktree", "add", "--detach", worktreePath, baseRef]
       : ["worktree", "add", "-b", branch, worktreePath, baseRef];
     runChecked("git", worktreeArgs, { cwd: repoRoot });
+    const localArtifactSeed = seedDispatchLocalBmadArtifacts(item, worktreePath);
+    if (localArtifactSeed.paths.length > 0) {
+      manifest.local_artifact_seed = localArtifactSeed;
+      manifest.events.push(taskEvent("local_bmad_artifacts_seeded", `${localArtifactSeed.paths.length} selected BMAD artifact(s) seeded locally`));
+    }
     writeManifest(manifestPath, manifest);
   });
 
@@ -6431,6 +6437,7 @@ function summarizeCommandOutput(output) {
 function dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction, candidateStateCounts = {}) {
   const generatedAt = new Date().toISOString();
   const stopLines = stopLinesForSafeBacklogItem(selected.item, defaultDispatchStopLines());
+  const localArtifactSeed = manifest.local_artifact_seed || localBmadArtifactSeedNone();
   return {
     schema_version: 1,
     lane: selected.item.itemId,
@@ -6440,8 +6447,11 @@ function dispatchHandoffPacket(selected, context, manifest, readiness, workspace
     worktree_path: manifest.worktree_path,
     task_id: manifest.task_id,
     readiness,
+    local_artifact_seed: localArtifactSeed,
     next_command: `cd ${manifest.worktree_path}`,
-    handoff: "resume this prepared worktree; no worker or provider process launched",
+    handoff: localArtifactSeed.paths.length > 0
+      ? "resume this prepared worktree; selected local BMAD story artifacts were seeded; no worker or provider process launched"
+      : "resume this prepared worktree; no worker or provider process launched",
     stop_lines: stopLines,
     candidate_state_counts: candidateStateCounts,
     authority_decision: shapeAuthorityDecisionEvidence({
@@ -6473,16 +6483,106 @@ function dispatchHandoffPacket(selected, context, manifest, readiness, workspace
         `task:${manifest.task_id}`,
         `branch:${manifest.branch}`,
         `readiness:${readiness.status}`,
+        ...(localArtifactSeed.paths.length > 0 ? [`local-bmad-artifact-seed:${localArtifactSeed.paths.length}`] : []),
       ],
       nextSafeAction:
         readiness.status === "failed"
           ? "Fix readiness failure before handing the lane to a worker."
-          : "Resume the prepared worktree; no worker was launched by dispatch-next.",
+          : localArtifactSeed.paths.length > 0
+            ? "Resume the prepared worktree with the selected local BMAD story artifacts already seeded; no worker was launched by dispatch-next."
+            : "Resume the prepared worktree; no worker was launched by dispatch-next.",
       recoveryPath: "Re-run dispatch-next dry-run before another apply if readiness or ownership evidence changes.",
       generatedAt,
     }),
     generated_at: generatedAt,
   };
+}
+
+function localBmadArtifactSeedNone() {
+  return {
+    mode: "none",
+    paths: [],
+    retention: "metadata_only",
+    rawPayloadRetained: false,
+  };
+}
+
+function seedDispatchLocalBmadArtifacts(item = {}, worktreePath = "") {
+  const selected = [
+    { kind: "sprint_status", path: item.sourcePath },
+    { kind: "story", path: item.storyPath },
+  ]
+    .map((entry) => ({ kind: entry.kind, path: normalizeSelectedBmadArtifactPath(entry.path) }))
+    .filter((entry) => entry.path);
+  const unique = [];
+  const seen = new Set();
+  for (const entry of selected) {
+    if (seen.has(entry.path)) continue;
+    seen.add(entry.path);
+    unique.push(entry);
+  }
+  if (unique.length === 0) return localBmadArtifactSeedNone();
+  const copied = [];
+  const exclude = ensureWorktreeLocalBmadExclude(worktreePath);
+  if (!exclude.ok) {
+    throw new Error(`BMAD artifact ignore setup failed: ${exclude.reason}`);
+  }
+  for (const entry of unique) {
+    const sourceAbsolute = join(repoRoot, entry.path);
+    if (!existsSync(sourceAbsolute)) {
+      throw new Error(`Selected BMAD artifact is missing: ${entry.path}`);
+    }
+    const content = readFileSync(sourceAbsolute, "utf8");
+    const targetAbsolute = join(worktreePath, entry.path);
+    mkdirSync(dirname(targetAbsolute), { recursive: true });
+    writeFileSync(targetAbsolute, content, "utf8");
+    copied.push({
+      path: entry.path,
+      kind: entry.kind,
+      bytes: Buffer.byteLength(content, "utf8"),
+    });
+  }
+  if (copied.length === 0) return localBmadArtifactSeedNone();
+  return {
+    mode: "selected_local_bmad_story_artifacts",
+    paths: copied,
+    retention: "metadata_only",
+    rawPayloadRetained: false,
+    source: "dispatch-selected-safe-backlog-item",
+    copiedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeSelectedBmadArtifactPath(path = "") {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!normalized.startsWith("_bmad-output/implementation-artifacts/") || normalized.includes("..")) return "";
+  if (!/^_bmad-output\/implementation-artifacts\/(?:sprint-status[^/]*\.ya?ml|\d+-\d+-[a-z0-9-]+\.md)$/i.test(normalized)) return "";
+  const absolute = resolve(repoRoot, normalized);
+  const rel = relative(repoRoot, absolute);
+  if (!rel || rel.startsWith("..") || resolve(repoRoot, rel) !== absolute) return "";
+  return normalized;
+}
+
+function ensureWorktreeLocalBmadExclude(worktreePath = "") {
+  const result = git(["rev-parse", "--git-path", "info/exclude"], { cwd: worktreePath });
+  if (result.code !== 0 || !result.stdout.trim()) {
+    return { ok: false, reason: result.stderr || result.stdout || "git-exclude-path-unavailable" };
+  }
+  const excludePath = resolve(worktreePath, result.stdout.trim());
+  mkdirSync(dirname(excludePath), { recursive: true });
+  const existing = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
+  if (/^_bmad-output\/\s*$/m.test(existing)) return { ok: true, path: excludePath };
+  const next = `${existing.replace(/\s*$/u, "")}${existing.trim() ? "\n" : ""}_bmad-output/\n`;
+  writeFileSync(excludePath, next, "utf8");
+  const verify = spawnSync("git", ["check-ignore", "-q", "--", "_bmad-output/implementation-artifacts/seed-check.md"], {
+    cwd: worktreePath,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (verify.status !== 0) {
+    return { ok: false, reason: "git-ignore-verification-failed" };
+  }
+  return { ok: true, path: excludePath };
 }
 
 function recordManifestDispatchHandoff(manifest, packet, context) {

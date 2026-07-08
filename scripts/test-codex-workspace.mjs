@@ -3115,6 +3115,66 @@ try {
     }
   });
 
+  test("dispatch-next apply seeds selected BMAD story artifacts into prepared worktree", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const dispatchStateRoot = mkdtempSync(join(rootDir, ".codex-workspace-bmad-seed-state-"));
+    try {
+      seedFixtureSafeBacklogSource(fixture.root, [
+        {
+          itemId: "static-ready",
+          status: "ready",
+          priority: "P1",
+          recommendedSliceSize: "small",
+          laneSlug: "static-ready",
+        },
+      ]);
+      seedFixtureBmadSprintStatus(fixture.root);
+      seedClaimedSafeBacklogAssignment(dispatchStateRoot, "static-ready", "runner-b");
+
+      const result = runFixtureScript(fixture, [
+        "dispatch-next",
+        "--apply",
+        "--summary-json",
+        "--readiness",
+        "none",
+        "--no-fetch",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      const seed = packet.dispatch.localArtifactSeed;
+      assert(seed, result.stdout || result.stderr);
+      assert(seed.mode === "selected_local_bmad_story_artifacts", result.stdout || result.stderr);
+      assert(seed.retention === "metadata_only", result.stdout || result.stderr);
+      assert(seed.rawPayloadRetained === false, result.stdout || result.stderr);
+      assert(seed.paths.length === 2, result.stdout || result.stderr);
+      assert(seed.paths.some((entry) => entry.kind === "sprint_status" && entry.path === "_bmad-output/implementation-artifacts/sprint-status.yaml"), result.stdout || result.stderr);
+      assert(seed.paths.some((entry) => entry.kind === "story" && entry.path === "_bmad-output/implementation-artifacts/9-9-ready-story.md"), result.stdout || result.stderr);
+
+      const worktreePath = packet.dispatch.worktreePath;
+      assert(readFileSync(join(worktreePath, "_bmad-output", "implementation-artifacts", "sprint-status.yaml"), "utf8").includes("9-9-ready-story"), result.stdout || result.stderr);
+      assert(readFileSync(join(worktreePath, "_bmad-output", "implementation-artifacts", "9-9-ready-story.md"), "utf8").includes("Ready story body"), result.stdout || result.stderr);
+      assert(!existsSync(join(worktreePath, "_bmad-output", "implementation-artifacts", "9-10-missing-story.md")), "dispatch seeded an unselected BMAD story");
+      const ignoredStory = spawnSync("git", ["check-ignore", "-q", "--", "_bmad-output/implementation-artifacts/9-9-ready-story.md"], {
+        cwd: worktreePath,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      assert(ignoredStory.status === 0, "seeded story must remain ignored local BMAD output");
+
+      const manifest = JSON.parse(readFileSync(packet.manifestPath, "utf8"));
+      assert(manifest.local_artifact_seed.paths.length === 2, result.stdout || result.stderr);
+      assert(manifest.local_artifact_seed.rawPayloadRetained === false, result.stdout || result.stderr);
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("claim-next summary-json explains blocked preview when no safe lane is claimable", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-no-safe-preview-"));
     try {
@@ -6813,6 +6873,7 @@ function createIntegratedCleanupFixture(options = {}) {
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  commitFile(fixtureRoot, ".gitignore", "_bmad-output/\n", "ignore local bmad output");
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
   runGit(remoteRoot, ["init", "--bare", "-q"]);

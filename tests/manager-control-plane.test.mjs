@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -87,6 +88,28 @@ function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
     }
   }
   return relativePath;
+}
+
+function assertLocalBmadStoryArtifact(relativePath) {
+  assert.match(relativePath, /^_bmad-output\/implementation-artifacts\/[^/]+\.md$/);
+  const ignored = spawnSync("git", ["check-ignore", "-q", "--", relativePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(ignored.status, 0, `${relativePath} must remain ignored local BMAD output`);
+  const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(tracked.status, 1, `${relativePath} must not be tracked source`);
+}
+
+function assertGeneratedStoryIsDeveloperUsable(content) {
+  assert.match(content, /^## Tasks\/Subtasks$/m);
+  assert.match(content, /^- \[ \] /m);
+  for (const section of ["Dev Notes", "Verification", "Dev Agent Record", "File List", "Change Log"]) {
+    assert.match(content, new RegExp(`^#{2,3} ${section}$`, "m"));
+  }
 }
 
 for (const [relativePath, content] of [
@@ -1909,7 +1932,10 @@ test("refill apply creates the next story file from scoped backlog", () => {
     assert.equal(packet.summary.workflow, "bmad-create-story");
     assert.equal(packet.summary.mutationMode, "local_bmad_story_file_only");
     assert.equal(packet.summary.result.storyPath, storyPath);
-    assert.match(readFileSync(storyPath, "utf8"), /# Story 9-1-manager-story-creation-apply-gate/);
+    const story = readFileSync(storyPath, "utf8");
+    assert.match(story, /# Story 9-1-manager-story-creation-apply-gate/);
+    assertGeneratedStoryIsDeveloperUsable(story);
+    assertLocalBmadStoryArtifact(storyPath);
     assert.match(readFileSync(sprintPath, "utf8"), /9-1-manager-story-creation-apply-gate: ready-for-dev/);
   } finally {
     rmSync(sprintPath, { force: true });
@@ -2057,8 +2083,14 @@ test("refill apply promotes enough scoped backlog stories to cover refill gap", 
       "9-1-manager-story-creation-apply-gate",
       "9-2-manager-review-delivery-queue",
     ]);
-    assert.match(readFileSync(firstStoryPath, "utf8"), /# Story 9-1-manager-story-creation-apply-gate/);
-    assert.match(readFileSync(secondStoryPath, "utf8"), /# Story 9-2-manager-review-delivery-queue/);
+    const firstStory = readFileSync(firstStoryPath, "utf8");
+    const secondStory = readFileSync(secondStoryPath, "utf8");
+    assert.match(firstStory, /# Story 9-1-manager-story-creation-apply-gate/);
+    assert.match(secondStory, /# Story 9-2-manager-review-delivery-queue/);
+    assertGeneratedStoryIsDeveloperUsable(firstStory);
+    assertGeneratedStoryIsDeveloperUsable(secondStory);
+    assertLocalBmadStoryArtifact(firstStoryPath);
+    assertLocalBmadStoryArtifact(secondStoryPath);
     const sprint = readFileSync(sprintPath, "utf8");
     assert.match(sprint, /9-1-manager-story-creation-apply-gate: ready-for-dev/);
     assert.match(sprint, /9-2-manager-review-delivery-queue: ready-for-dev/);
