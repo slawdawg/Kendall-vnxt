@@ -16377,6 +16377,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
             materializationGate: {
               state: "ready",
               workflow: "bmad-create-story",
+              storyOutputPath: "_bmad-output/implementation-artifacts/1-2-approved-source-intake.md",
+              selectedCandidateStory: { id: "1-2-approved-source-intake", title: "Approved Source Intake" },
               dryRunCommand: "node ./scripts/manager-refill-plan.mjs --summary-json",
               applyCommand: "node ./scripts/manager-refill-plan.mjs --summary-json --apply --source-ref 'prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md'",
               mutationMode: "dry_run_required",
@@ -17244,6 +17246,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
             materializationGate: {
               state: "ready",
               workflow: "bmad-create-story",
+              storyOutputPath: "_bmad-output/implementation-artifacts/1-2-approved-source-intake.md",
+              selectedCandidateStory: { id: "1-2-approved-source-intake", title: "Approved Source Intake" },
               dryRunCommand: "node ./scripts/manager-refill-plan.mjs --summary-json",
               applyCommand: "node ./scripts/manager-refill-plan.mjs --summary-json --apply --source-ref 'prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md'",
               mutationMode: "dry_run_required",
@@ -17273,7 +17277,60 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.localBmadArtifactsIgnored, true);
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.metadataOnly, true);
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.rawPayloadRetained, false);
+  assert.deepEqual(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.implementationChangedFiles, [
+    "scripts/lib/manager-control-plane/core.mjs",
+    "tests/manager-control-plane.test.mjs",
+  ]);
+  assert.deepEqual(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.verificationCommands, [
+    "node --test tests/manager-control-plane.test.mjs",
+    "node ./scripts/check-manager-control-plane.mjs",
+  ]);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.verificationStatus, "recommended_not_executed_by_loop");
+  assert.match(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.nextManagerAction, /manager-refill-plan\.mjs --summary-json --apply/);
+  assert.deepEqual(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadStoryArtifacts, [
+    "_bmad-output/implementation-artifacts/1-2-approved-source-intake.md",
+  ]);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadArtifactsIgnored, true);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.metadataOnly, true);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.rawPayloadRetained, false);
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-1-manager-refill-apply-gate.md");
+
+  const unsafeStoryArtifactPlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "safe-backlog-starvation",
+            summary: "Dispatchable safe backlog is below desired worker capacity.",
+            nextAction: "Run bmad-create-story to create source-owned safe backlog work.",
+            materializationGate: {
+              state: "ready",
+              workflow: "bmad-create-story",
+              storyOutputPath: "/tmp/outside.md",
+              selectedCandidateStory: { id: "../outside", title: "Unsafe Story" },
+              dryRunCommand: "node ./scripts/manager-refill-plan.mjs --summary-json",
+              applyCommand: "node ./scripts/manager-refill-plan.mjs --summary-json --apply",
+              mutationMode: "dry_run_required",
+            },
+          },
+        ],
+      },
+    },
+  );
+
+  assert.deepEqual(unsafeStoryArtifactPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadStoryArtifacts, []);
+  assert.equal(unsafeStoryArtifactPlan.summary.selectedAction.storyCreationApplyGateEvidence.metadataOnly, true);
+  assert.equal(unsafeStoryArtifactPlan.summary.selectedAction.storyCreationApplyGateEvidence.rawPayloadRetained, false);
 
   const reviewWorkflowRefillPlan = continuousRunPlan(
     {},
