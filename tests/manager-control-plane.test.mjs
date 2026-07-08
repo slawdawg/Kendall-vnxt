@@ -1833,11 +1833,102 @@ test("refill apply materializes nonduplicate course-correction backlog locally",
     assert.equal(packet.summary.workflow, "bmad-correct-course");
     assert.equal(packet.summary.mutationMode, "local_bmad_course_correction_backlog_only");
     assert.equal(packet.summary.result.addedBacklogCount, 6);
-    assert.equal(packet.summary.result.addedBacklogItems[0].id, "2-1-manager-refill-apply-gate");
+    assert.equal(packet.summary.result.addedBacklogItems[0].id, "6-1-planning-only-bmad-refill-continuation");
     const sprint = readFileSync(sprintPath, "utf8");
-    assert.match(sprint, /epic-2: in-progress/);
-    assert.match(sprint, /2-1-manager-refill-apply-gate: backlog/);
+    assert.match(sprint, /epic-6: in-progress/);
+    assert.match(sprint, /6-1-planning-only-bmad-refill-continuation: backlog/);
     assert.match(readFileSync(proposalPath, "utf8"), /Manager Control Plane Backlog Refill Proposal/);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(proposalPath, { force: true });
+  }
+});
+
+test("refill dry-run and apply use the same course-correction backlog candidate", () => {
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-refill-apply-consistency-test.yaml";
+  const proposalPath = "_bmad-output/planning-artifacts/sprint-change-proposal-operational-pipeline-refill-apply-consistency.md";
+  const sourceRef = "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const sourcePlanningState = {
+    sourceKey: "operational-pipeline-refill-apply-consistency",
+    sprintStatus: {
+      exists: true,
+      path: sprintPath,
+      backlogStories: 0,
+      readyStories: 1,
+      readyForDevStories: 1,
+      activeStories: 1,
+      doneStories: 1,
+      nextBacklogStoryKey: null,
+    },
+  };
+
+  try {
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-06",
+        "last_updated: 2026-07-06",
+        "development_status:",
+        "  epic-5: in-progress",
+        "  5-1-manager-refill-apply-gate: done",
+        "  5-2-manager-story-creation-apply-gate: ready-for-dev",
+        "  5-3-manager-review-delivery-queue: in-progress",
+        "  5-4-worker-retirement-and-reassignment: backlog",
+        "  epic-5-retrospective: optional",
+        "",
+      ].join("\n"),
+    );
+
+    const dryRun = buildRefillPlan(
+      { desiredWorkers: 6, authorityClass: "low_risk", sourceRefs: [sourceRef] },
+      {
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+        sourcePlanningState,
+      },
+    );
+    const selectedCandidate = dryRun.summary.materializationGate.selectedCandidateStory;
+
+    const applied = buildRefillPlan(
+      { apply: true, desiredWorkers: 6, authorityClass: "allowed_unattended", sourceRefs: [sourceRef] },
+      {
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+        sourcePlanningState,
+      },
+    );
+
+    assert.equal(dryRun.summary.materializationGate.state, "ready");
+    assert.equal(selectedCandidate.id, "6-1-planning-only-bmad-refill-continuation");
+    assert.deepEqual(applied.summary.result.addedBacklogItems[0], selectedCandidate);
+
+    const sprint = readFileSync(sprintPath, "utf8");
+    assert.match(sprint, /5-1-manager-refill-apply-gate: done/);
+    assert.match(sprint, /5-2-manager-story-creation-apply-gate: ready-for-dev/);
+    assert.match(sprint, /5-3-manager-review-delivery-queue: in-progress/);
+    assert.match(sprint, /5-4-worker-retirement-and-reassignment: backlog/);
+    assert.doesNotMatch(sprint, /5-1-manager-refill-apply-gate: backlog/);
+    assert.match(sprint, /6-1-planning-only-bmad-refill-continuation: backlog/);
+
+    const reapplied = buildRefillPlan(
+      { apply: true, desiredWorkers: 6, authorityClass: "allowed_unattended", sourceRefs: [sourceRef] },
+      {
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+        sourcePlanningState: {
+          ...sourcePlanningState,
+          sprintStatus: {
+            ...sourcePlanningState.sprintStatus,
+            storyStatuses: {},
+          },
+        },
+      },
+    );
+    assert.equal(reapplied.summary.mutationMode, "none");
+    assert.equal(reapplied.summary.result.reason, "course_correction_backlog_already_materialized");
+    assert.equal(reapplied.summary.result.addedBacklogCount, 0);
+    assert.deepEqual(reapplied.summary.result.addedBacklogItems, []);
+    assert.equal((readFileSync(sprintPath, "utf8").match(/6-1-planning-only-bmad-refill-continuation: backlog/g) || []).length, 1);
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(proposalPath, { force: true });
