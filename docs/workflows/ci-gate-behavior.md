@@ -10,17 +10,17 @@ Pull requests run a final `check` job backed by component jobs:
 - `fast` always runs `pnpm run check:fast` before the broader static gate. It
   covers CI policy wiring, workspace delivery command readiness,
   sandbox-boundary and anti-churn routing, and dashboard E2E runner contracts.
-- `static` runs the deterministic repository drift checks through
-  `pnpm run check:static` only when `scripts/check-plan.mjs --ci-outputs`
-  marks full static confidence as required.
-- `static_bundle` runs reporting-only matrix jobs for `core`, `manager`,
-  `workspace`, `policy`, `pipeline-dashboard`, and `anti-churn` when full
-  static is required. These jobs are non-blocking measurement checks for the
-  next parallel gate shape; the final `check` job does not require them yet.
+- `static_bundle` runs required matrix jobs for `core`, `manager`,
+  `workspace`, `policy`, `pipeline-dashboard`, and `anti-churn` when
+  `scripts/check-plan.mjs --ci-outputs` marks full static confidence as
+  required.
+- `static` is the retained aggregate static gate. It does not rerun
+  `pnpm run check:static` in PR CI; it fans in `changes`, `fast`, and the
+  required `static_bundle` matrix result so existing final-check semantics keep
+  a stable `static` authority point without duplicating the long static chain.
 - `static_bundle_summary` downloads the bundle timing JSON artifacts and writes
-  a same-head monolithic-vs-bundle summary artifact. It remains non-blocking and
-  reports `not_ready` for promotion until repeated same-head equivalence
-  evidence exists.
+  a same-head bundle summary artifact. It remains non-blocking and records that
+  the final static gate now requires the bundle matrix.
 - `javascript` runs only when dashboard, shared package, JavaScript lockfile, or
   JavaScript workflow inputs changed.
 - `supervisor` runs only when supervisor service files, supervisor test runner
@@ -62,9 +62,9 @@ Use the narrower fast suites when the change touches only one friction surface:
 - `check:sandbox-fast` for sandbox-boundary and anti-churn routing.
 - `check:dashboard-fast` for dashboard E2E runner contracts and pipeline
   fixture smoke coverage.
-- `check:static-<bundle>` for one static bundle measurement lane.
+- `check:static-<bundle>` for one static bundle lane.
 - `node ./scripts/summarize-static-bundle-reports.mjs --reports-dir <dir>` for
-  the same-head summary used by the reporting-only CI artifact.
+  the same-head summary used by the CI artifact.
 
 Use the profiled supervisor suite when test runtime is the question:
 

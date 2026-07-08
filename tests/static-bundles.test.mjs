@@ -147,6 +147,9 @@ test("static bundle summary compares bundle reports with monolithic static resul
 
   assert.equal(summary.schemaVersion, 1);
   assert.equal(summary.headSha, "abc123");
+  assert.equal(summary.monolithicStaticResult, "success");
+  assert.equal(summary.staticGateResult, "success");
+  assert.equal(summary.staticBundleRequired, false);
   assert.equal(summary.sameHead.status, "matched");
   assert.equal(summary.equivalence.status, "matched");
   assert.equal(summary.promotionReadiness.status, "not_ready");
@@ -158,6 +161,115 @@ test("static bundle summary compares bundle reports with monolithic static resul
   assert.deepEqual(summary.equivalence.failedBundles, []);
   assert.deepEqual(summary.equivalence.incompleteBundles, []);
   assert.deepEqual(summary.equivalence.duplicateBundles, []);
+});
+
+test("static bundle summary records promoted required bundle gate", () => {
+  const reportsDir = mkdtempSync(join(tmpdir(), "static-bundle-summary-"));
+  for (const bundleName of staticBundleNames()) {
+    writeFileSync(
+      join(reportsDir, `${bundleName}.json`),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        bundle: bundleName,
+        headSha: "abc123",
+        status: "passed",
+        durationMs: 100,
+        commandCount: STATIC_BUNDLES[bundleName].length,
+        completedCommandCount: STATIC_BUNDLES[bundleName].length,
+        failedCommand: null,
+        commands: [],
+      })}\n`,
+    );
+  }
+
+  const summary = summarizeStaticBundleReports({
+    reportsDir,
+    headSha: "abc123",
+    staticResult: "success",
+    staticBundleResult: "success",
+    staticBundleRequired: true,
+    generatedAt: "2026-07-08T00:00:00.000Z",
+  });
+
+  assert.equal(summary.monolithicStaticResult, null);
+  assert.equal(summary.staticGateResult, "success");
+  assert.equal(summary.staticBundleRequired, true);
+  assert.equal(summary.sameHead.status, "matched");
+  assert.equal(summary.equivalence.status, "matched");
+  assert.equal(summary.promotionReadiness.status, "promoted");
+  assert.equal(summary.promotionReadiness.reportingOnly, false);
+  assert.equal(summary.promotionReadiness.finalCheckRequiresStaticBundles, true);
+  assert.equal(summary.promotionReadiness.observedConsecutiveEquivalentRuns, 3);
+});
+
+test("static bundle summary does not promote mismatched required bundle evidence", () => {
+  const reportsDir = mkdtempSync(join(tmpdir(), "static-bundle-summary-"));
+  for (const bundleName of staticBundleNames()) {
+    writeFileSync(
+      join(reportsDir, `${bundleName}.json`),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        bundle: bundleName,
+        headSha: bundleName === "core" ? "older" : "abc123",
+        status: "passed",
+        durationMs: 100,
+        commandCount: STATIC_BUNDLES[bundleName].length,
+        completedCommandCount: STATIC_BUNDLES[bundleName].length,
+        failedCommand: null,
+        commands: [],
+      })}\n`,
+    );
+  }
+
+  const summary = summarizeStaticBundleReports({
+    reportsDir,
+    headSha: "abc123",
+    staticResult: "success",
+    staticBundleResult: "success",
+    staticBundleRequired: true,
+  });
+
+  assert.equal(summary.sameHead.status, "not_matched");
+  assert.equal(summary.equivalence.status, "not_matched");
+  assert.equal(summary.promotionReadiness.status, "not_ready");
+  assert.equal(summary.promotionReadiness.finalCheckRequiresStaticBundles, true);
+  assert.equal(summary.promotionReadiness.observedConsecutiveEquivalentRuns, 0);
+});
+
+test("static bundle summary does not promote failed or skipped required bundle job results", () => {
+  for (const staticBundleResult of ["failure", "skipped"]) {
+    const reportsDir = mkdtempSync(join(tmpdir(), "static-bundle-summary-"));
+    for (const bundleName of staticBundleNames()) {
+      writeFileSync(
+        join(reportsDir, `${bundleName}.json`),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          bundle: bundleName,
+          headSha: "abc123",
+          status: "passed",
+          durationMs: 100,
+          commandCount: STATIC_BUNDLES[bundleName].length,
+          completedCommandCount: STATIC_BUNDLES[bundleName].length,
+          failedCommand: null,
+          commands: [],
+        })}\n`,
+      );
+    }
+
+    const summary = summarizeStaticBundleReports({
+      reportsDir,
+      headSha: "abc123",
+      staticResult: "success",
+      staticBundleResult,
+      staticBundleRequired: true,
+    });
+
+    assert.equal(summary.sameHead.status, "matched");
+    assert.equal(summary.equivalence.status, "not_matched");
+    assert.equal(summary.promotionReadiness.status, "not_ready");
+    assert.equal(summary.promotionReadiness.finalCheckRequiresStaticBundles, true);
+    assert.equal(summary.promotionReadiness.observedConsecutiveEquivalentRuns, 0);
+  }
 });
 
 test("static bundle summary rejects cross-head evidence for promotion", () => {

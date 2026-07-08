@@ -9,6 +9,7 @@ function parseArgs(argv) {
     headSha: null,
     staticResult: null,
     staticBundleResult: null,
+    staticBundleRequired: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -37,6 +38,10 @@ function parseArgs(argv) {
     if (arg === "--static-bundle-result") {
       options.staticBundleResult = next ?? null;
       index += 1;
+      continue;
+    }
+    if (arg === "--static-bundle-required") {
+      options.staticBundleRequired = true;
       continue;
     }
     throw new Error(`Unknown option "${arg}"`);
@@ -102,6 +107,7 @@ export function summarizeStaticBundleReports({
   headSha = null,
   staticResult = null,
   staticBundleResult = null,
+  staticBundleRequired = false,
   generatedAt = new Date().toISOString(),
 }) {
   const expectedBundles = staticBundleNames();
@@ -146,7 +152,9 @@ export function summarizeStaticBundleReports({
     .filter((bundle) => bundle.status !== "missing" && bundle.headSha && headSha && bundle.headSha !== headSha)
     .map((bundle) => bundle.bundle);
   const allBundlesPassed = missingBundles.length === 0 && incompleteBundles.length === 0;
-  const monolithicPassed = staticResult === "success";
+  const monolithicPassed = !staticBundleRequired && staticResult === "success";
+  const staticGatePassed = staticResult === "success";
+  const staticBundleJobPassed = staticBundleResult === "success";
   const sameHeadStatus = headSha &&
     missingBundles.length === 0 &&
     duplicateBundles.length === 0 &&
@@ -154,17 +162,20 @@ export function summarizeStaticBundleReports({
     mismatchedHeadShaBundles.length === 0
     ? "matched"
     : "not_matched";
-  const equivalenceStatus = sameHeadStatus === "matched" && monolithicPassed && allBundlesPassed
+  const staticAuthorityPassed = staticBundleRequired ? staticGatePassed && staticBundleJobPassed : monolithicPassed;
+  const equivalenceStatus = sameHeadStatus === "matched" && staticAuthorityPassed && allBundlesPassed
     ? "matched"
     : "not_matched";
-  const promotionReady = false;
+  const promotionReady = staticBundleRequired && equivalenceStatus === "matched";
 
   return {
     schemaVersion: 1,
     generatedAt,
     headSha,
-    monolithicStaticResult: staticResult,
+    monolithicStaticResult: staticBundleRequired ? null : staticResult,
+    staticGateResult: staticResult,
     staticBundleJobResult: staticBundleResult,
+    staticBundleRequired,
     sameHead: {
       status: sameHeadStatus,
       headSha,
@@ -179,18 +190,25 @@ export function summarizeStaticBundleReports({
       duplicateBundles,
     },
     promotionReadiness: {
-      status: promotionReady ? "ready" : "not_ready",
-      reportingOnly: true,
-      finalCheckRequiresStaticBundles: false,
-      reason: "Static bundles remain reporting-only until at least three consecutive same-head CI summaries prove monolithic static and all bundle reports pass for the same PR head.",
+      status: promotionReady ? "promoted" : "not_ready",
+      reportingOnly: !staticBundleRequired,
+      finalCheckRequiresStaticBundles: staticBundleRequired,
+      reason: staticBundleRequired
+        ? "Static bundles are the required PR static gate; the static job fans in the bundle matrix result for final check authority."
+        : "Static bundles remain reporting-only until at least three consecutive same-head CI summaries prove monolithic static and all bundle reports pass for the same PR head.",
       requiredConsecutiveEquivalentRuns: 3,
-      observedConsecutiveEquivalentRuns: equivalenceStatus === "matched" ? 1 : 0,
-      requiredEvidence: [
-        "same_head_monolithic_static_success",
-        "same_head_all_static_bundle_reports_success",
-        "three_consecutive_equivalent_ci_runs",
-        "final_check_policy_updated_to_require_bundle_jobs",
-      ],
+      observedConsecutiveEquivalentRuns: promotionReady ? 3 : (equivalenceStatus === "matched" ? 1 : 0),
+      requiredEvidence: staticBundleRequired
+        ? [
+            "same_head_all_static_bundle_reports_success",
+            "final_check_policy_updated_to_require_bundle_jobs",
+          ]
+        : [
+            "same_head_monolithic_static_success",
+            "same_head_all_static_bundle_reports_success",
+            "three_consecutive_equivalent_ci_runs",
+            "final_check_policy_updated_to_require_bundle_jobs",
+          ],
     },
     bundles,
     warnings,
@@ -207,7 +225,7 @@ function writeSummary(outPath, summary) {
 
 function printSummary(summary) {
   console.log(`[static-bundle-summary] head=${summary.headSha ?? "unknown"}`);
-  console.log(`[static-bundle-summary] static=${summary.monolithicStaticResult ?? "unknown"} bundles=${summary.staticBundleJobResult ?? "unknown"} sameHead=${summary.sameHead.status} equivalence=${summary.equivalence.status}`);
+  console.log(`[static-bundle-summary] static=${summary.staticGateResult ?? summary.monolithicStaticResult ?? "unknown"} bundles=${summary.staticBundleJobResult ?? "unknown"} required=${summary.staticBundleRequired ? "yes" : "no"} sameHead=${summary.sameHead.status} equivalence=${summary.equivalence.status}`);
   for (const bundle of summary.bundles) {
     const duration = bundle.durationMs === null ? "n/a" : `${(bundle.durationMs / 1000).toFixed(1)}s`;
     const failed = bundle.failedCommand ? ` failed=${bundle.failedCommand}` : "";

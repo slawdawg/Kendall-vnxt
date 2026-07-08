@@ -184,14 +184,6 @@ for (const workspaceFastCommand of [
   );
 }
 
-assertCiHookBeforeCheck(
-  { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
-  failures,
-);
-assertCiBaseRefBeforeCheck(
-  { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
-  failures,
-);
 assertCiHookBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
 assertCiBaseRefBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
 for (const ciJobName of ["fast", "full"]) {
@@ -214,17 +206,15 @@ for (const ciJobName of ["fast", "full"]) {
     failures,
   );
 }
-for (const ciJobName of ["fast", "static"]) {
-  assertCiTextOrder(
-    {
-      ciJobName,
-      beforeText: "pnpm install --frozen-lockfile",
-      afterText: ciJobName === "fast" ? "pnpm run check:fast" : "pnpm run check:static",
-      message: `${ciWorkflowPath} must install JavaScript dependencies before running dependency-backed ${ciJobName} checks`,
-    },
-    failures,
-  );
-}
+assertCiTextOrder(
+  {
+    ciJobName: "fast",
+    beforeText: "pnpm install --frozen-lockfile",
+    afterText: "pnpm run check:fast",
+    message: `${ciWorkflowPath} must install JavaScript dependencies before running dependency-backed fast checks`,
+  },
+  failures,
+);
 for (const beforeText of [
   "pnpm install --frozen-lockfile",
   "git config core.hooksPath .githooks",
@@ -246,6 +236,13 @@ assertCondition(
   failures,
 );
 assertCondition(
+  ciJobBlock("static").includes("- static_bundle") &&
+    ciJobBlock("static").includes("Verify required static bundle gate") &&
+    ciJobBlock("static").includes("Static bundle checks were required but did not pass"),
+  `${ciWorkflowPath} static job must fan in the required static_bundle matrix result`,
+  failures,
+);
+assertCondition(
   ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
   `${ciWorkflowPath} static job must run only when the changed-file planner requires static checks`,
   failures,
@@ -253,8 +250,8 @@ assertCondition(
 assertCondition(
   ciJobBlock("static_bundle").includes("needs.changes.outputs.static == 'true'") &&
     ciJobBlock("static_bundle").includes("fail-fast: false") &&
-    ciJobBlock("static_bundle").includes("continue-on-error: true"),
-  `${ciWorkflowPath} static_bundle job must be reporting-only and run only when the changed-file planner requires static checks`,
+    !ciJobBlock("static_bundle").includes("continue-on-error: true"),
+  `${ciWorkflowPath} static_bundle job must be required and run only when the changed-file planner requires static checks`,
   failures,
 );
 assertCondition(
@@ -283,7 +280,7 @@ assertCondition(
     ciJobBlock("static_bundle_summary").includes("- static") &&
     ciJobBlock("static_bundle_summary").includes("- static_bundle") &&
     ciJobBlock("static_bundle_summary").includes("needs.changes.outputs.static == 'true'"),
-  `${ciWorkflowPath} static_bundle_summary job must remain reporting-only and compare monolithic static with bundle reports when the planner selects static checks`,
+  `${ciWorkflowPath} static_bundle_summary job must remain reporting-only and summarize required bundle reports when the planner selects static checks`,
   failures,
 );
 for (const requiredText of [
@@ -296,6 +293,7 @@ for (const requiredText of [
   '--head-sha "${{ github.event.pull_request.head.sha }}"',
   '--static-result "${{ needs.static.result }}"',
   '--static-bundle-result "${{ needs.static_bundle.result }}"',
+  "--static-bundle-required",
   "actions/upload-artifact@v4",
   "name: static-bundle-summary",
   "${{ runner.temp }}/static-bundle-summary/static-bundle-summary.json",
@@ -321,8 +319,9 @@ assertCondition(
   failures,
 );
 assertCondition(
-  !ciJobBlock("check").includes("static_bundle"),
-  `${ciWorkflowPath} final check job must not require static_bundle while it is reporting-only`,
+  ciJobBlock("static").includes("static_bundle") &&
+    !ciJobBlock("check").includes("static_bundle"),
+  `${ciWorkflowPath} final check job must require static_bundle through the retained static fan-in job`,
   failures,
 );
 assertCondition(

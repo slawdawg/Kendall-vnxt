@@ -70,42 +70,40 @@ jobs:
         run: pnpm run check:fast
 
   static:
-    if: github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
+    if: always() && github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
     needs:
       - changes
       - fast
+      - static_bundle
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Verify required static bundle gate
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Enable Corepack
-        run: corepack enable
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "Change detection failed before static gate: ${{ needs.changes.result }}"
+            exit 1
+          fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+          if [ "${{ needs.fast.result }}" != "success" ]; then
+            echo "Fast workflow checks failed before static gate: ${{ needs.fast.result }}"
+            exit 1
+          fi
 
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
+          if [ "${{ needs.static_bundle.result }}" != "success" ]; then
+            echo "Static bundle checks were required but did not pass: ${{ needs.static_bundle.result }}"
+            exit 1
+          fi
 
-      - name: Configure repo-local Git hooks
-        run: git config core.hooksPath .githooks
-
-      - name: Fetch base branch for workspace protocol tests
-        run: git fetch origin main:refs/remotes/origin/main
-
-      - name: Run static repository checks
-        run: pnpm run check:static
+          echo "Required static bundle checks passed."
 
   static_bundle:
     if: github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
     needs: changes
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -189,7 +187,8 @@ jobs:
             --out "$summary_dir/static-bundle-summary.json" \
             --head-sha "${{ github.event.pull_request.head.sha }}" \
             --static-result "${{ needs.static.result }}" \
-            --static-bundle-result "${{ needs.static_bundle.result }}"
+            --static-bundle-result "${{ needs.static_bundle.result }}" \
+            --static-bundle-required
 
       - name: Upload static bundle summary
         if: always()
