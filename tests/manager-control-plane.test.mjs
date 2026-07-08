@@ -22247,6 +22247,18 @@ test("cleanup plan includes stale owner cleanup and dirty preservation summary",
       closeAssignmentsSummary: {
         counts: { total: 2, closeable: 0, alreadyClosed: 0, blocked: 2 },
         statusCounts: { blocked: 2 },
+        closeoutHandoffEvidence: {
+          schemaVersion: "assignment-closeout-handoff-evidence/v1",
+          retention: "metadata_only_no_raw_prompts_provider_payloads_or_tmux_scrollback",
+          authority: "close-assignments-summary-json-dry-run",
+          changed: "none; close-assignments summary dry-run only",
+          verified: {
+            matchingClosedWorkspaceCount: -1,
+            staleRecordCleanupEligibleCount: Number.POSITIVE_INFINITY,
+            blockedCount: 2,
+          },
+          nextManagerAction: "Preserve this closeout summary and request explicit cleanup approval before any --apply or gate expansion.",
+        },
         results: [
           { assignmentId: "stale-a", status: "blocked", reason: "assignment owner old-owner does not match manager-owner" },
           { assignmentId: "stale-b", status: "blocked", reason: "assignment owner old-owner does not match manager-owner" },
@@ -22275,6 +22287,12 @@ test("cleanup plan includes stale owner cleanup and dirty preservation summary",
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupCandidateCount, 2);
   assert.equal(cleanup.summary.staleOwnerCleanup.dirtyWorkspaceCount, 1);
   assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.counts.blocked, 2);
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.closeoutHandoffEvidence.schemaVersion, "assignment-closeout-handoff-evidence/v1");
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.closeoutHandoffEvidence.verified.matchingClosedWorkspaceCount, 0);
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.closeoutHandoffEvidence.verified.staleRecordCleanupEligibleCount, 0);
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.closeoutHandoffEvidence.verified.blockedCount, 2);
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.closeoutHandoffEvidence.retention, "metadata_only_no_raw_prompts_provider_payloads_or_tmux_scrollback");
+  assert.match(cleanup.summary.staleOwnerCleanup.closeoutPreview.closeoutHandoffEvidence.nextManagerAction, /request explicit cleanup approval/);
   assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.blockedReasons[0].assignmentId, "stale-a");
   assert.equal(cleanup.warnings[0].code, "dirty-stale-owner-workspaces");
   assert.equal(cleanup.nextActions[0].code, "stale-assignment-closeout-approval-needed");

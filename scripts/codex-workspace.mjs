@@ -1786,23 +1786,70 @@ function closeAssignments(argv) {
 function buildCloseAssignmentsSummary({ state, currentOwner, plans }) {
   const results = plans.map(shapeAssignmentCloseoutPlan);
   const delegatedCleanup = plans.find((plan) => plan.delegatedCleanup);
+  const counts = {
+    total: results.length,
+    closeable: results.filter((result) => result.status === "closeable").length,
+    alreadyClosed: results.filter((result) => result.status === "already_closed").length,
+    blocked: results.filter((result) => result.status === "blocked").length,
+  };
   return {
     generatedAt: new Date().toISOString(),
     stateRoot: state.root,
     currentOwner,
     delegatedCleanupOwner: delegatedCleanup?.delegatedCleanupOwner || null,
     delegatedCleanupEvidence: delegatedCleanup?.delegationEvidence || null,
-    counts: {
-      total: results.length,
-      closeable: results.filter((result) => result.status === "closeable").length,
-      alreadyClosed: results.filter((result) => result.status === "already_closed").length,
-      blocked: results.filter((result) => result.status === "blocked").length,
-    },
+    counts,
     statusCounts: countByField(results, "status"),
+    closeoutHandoffEvidence: closeAssignmentsEvidenceSummary({ currentOwner, counts, results, mode: "dry_run" }),
     results: results.slice(0, 10),
     resultsTruncated: results.length > 10,
     mutation: "none; summary only",
   };
+}
+
+function closeAssignmentsEvidenceSummary({ currentOwner, counts, results = [], mode = "dry_run", closedAt = null } = {}) {
+  const closeable = Number(counts?.closeable || 0);
+  const blocked = Number(counts?.blocked || 0);
+  const alreadyClosed = Number(counts?.alreadyClosed || 0);
+  const changed = mode === "apply"
+    ? `closed ${closeable} assignment record(s); skipped ${alreadyClosed} already-closed record(s)`
+    : "none; close-assignments summary dry-run only";
+  const nextManagerAction = blocked > 0
+    ? "Preserve this closeout summary and request explicit cleanup approval before any --apply or gate expansion."
+    : closeable > 0 && mode !== "apply"
+      ? "Review this dry-run summary before any close-assignments --apply."
+      : "Return to manager cleanup planning or active worker monitoring.";
+  return {
+    schemaVersion: "assignment-closeout-handoff-evidence/v1",
+    retention: "metadata_only_no_raw_prompts_provider_payloads_or_tmux_scrollback",
+    authority: mode === "apply" ? "existing-close-assignments-apply-gate" : "close-assignments-summary-json-dry-run",
+    owner: sanitizeCloseoutEvidenceField(currentOwner, 180) || null,
+    changed,
+    verified: {
+      matchingClosedWorkspaceCount: results.filter((result) => result.closeoutMode === "closed_workspace").length,
+      staleRecordCleanupEligibleCount: results.filter((result) => result.staleRecordCleanupEligible).length,
+      blockedCount: blocked,
+    },
+    resultRefs: results.map((result) => ({
+      assignmentId: sanitizeCloseoutEvidenceField(result.assignmentId, 180),
+      taskId: sanitizeCloseoutEvidenceField(result.taskId, 180),
+      closeoutMode: sanitizeCloseoutEvidenceField(result.closeoutMode, 80),
+      status: sanitizeCloseoutEvidenceField(result.status, 80),
+    })).slice(0, 10),
+    resultRefsTruncated: results.length > 10,
+    nextManagerAction,
+    closedAt,
+  };
+}
+
+function sanitizeCloseoutEvidenceField(value, maxLength = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/i.test(text)) return "[redacted-token]";
+  if (/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|tmux scrollback|secret|password|credential)\b/i.test(text)) {
+    return "[redacted-retention-field]";
+  }
+  return text.slice(0, maxLength);
 }
 
 function shapeAssignmentCloseoutPlan(plan) {
@@ -3826,6 +3873,13 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner, options = {}
         ? `operator-approved stale record cleanup from closed workspace ${plan.manifest.task_id}`
         : `closed from completed workspace ${plan.manifest.task_id}`;
     assignment.closeout_mode = plan.closeoutMode;
+    assignment.closeout_handoff_evidence = closeAssignmentsEvidenceSummary({
+      currentOwner,
+      counts: { total: 1, closeable: 1, alreadyClosed: 0, blocked: 0 },
+      results: [shapeAssignmentCloseoutPlan(plan)],
+      mode: "apply",
+      closedAt,
+    });
     if (plan.closeoutMode === "stale_record_cleanup") {
       assignment.closeout_approval_evidence = String(options.approval || "").trim();
       assignment.closeout_abandonment_evidence = plan.staleRecordCleanupEvidence;

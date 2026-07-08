@@ -14489,6 +14489,7 @@ function compactCloseoutPreview(preview = {}) {
     available: true,
     counts: packetSummary.counts || {},
     statusCounts: packetSummary.statusCounts || {},
+    closeoutHandoffEvidence: compactCloseoutHandoffEvidence(packetSummary.closeoutHandoffEvidence),
     blockedReasons: Array.isArray(packetSummary.results)
       ? packetSummary.results
         .filter((result) => result.status === "blocked")
@@ -14500,6 +14501,29 @@ function compactCloseoutPreview(preview = {}) {
       : [],
     mutation: "none; close-assignments dry-run summary only",
   };
+}
+
+function compactCloseoutHandoffEvidence(evidence = null) {
+  if (!evidence || typeof evidence !== "object") return null;
+  return {
+    schemaVersion: sanitizeLedgerField(evidence.schemaVersion || "", "", 80),
+    retention: sanitizeLedgerField(evidence.retention || "", "", 120),
+    authority: sanitizeLedgerField(evidence.authority || "", "", 120),
+    changed: sanitizeLedgerField(evidence.changed || "", "", 220),
+    verified: evidence.verified && typeof evidence.verified === "object"
+      ? {
+          matchingClosedWorkspaceCount: compactCloseoutEvidenceCount(evidence.verified.matchingClosedWorkspaceCount),
+          staleRecordCleanupEligibleCount: compactCloseoutEvidenceCount(evidence.verified.staleRecordCleanupEligibleCount),
+          blockedCount: compactCloseoutEvidenceCount(evidence.verified.blockedCount),
+        }
+      : null,
+    nextManagerAction: sanitizeLedgerField(evidence.nextManagerAction || "", "", 240),
+  };
+}
+
+function compactCloseoutEvidenceCount(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : 0;
 }
 
 function compactDirtyWorkspacePreservation(preservation = {}) {

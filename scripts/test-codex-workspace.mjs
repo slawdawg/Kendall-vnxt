@@ -2106,10 +2106,31 @@ try {
       assert(packet.counts.closeable === 1, result.stdout || result.stderr);
       assert(packet.statusCounts.closeable === 1, result.stdout || result.stderr);
       assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.schemaVersion === "assignment-closeout-handoff-evidence/v1", result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.retention === "metadata_only_no_raw_prompts_provider_payloads_or_tmux_scrollback", result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.changed === "none; close-assignments summary dry-run only", result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.verified.matchingClosedWorkspaceCount === 1, result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.nextManagerAction.includes("Review this dry-run summary"), result.stdout || result.stderr);
+      assert(packet.closeoutHandoffEvidence.resultRefs[0].assignmentId === "dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
       const [closeout] = packet.results;
       assert(closeout.assignmentId === "dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
       assert(closeout.status === "closeable", result.stdout || result.stderr);
       assert(closeout.manifestTaskId === "closed-summary-lane", result.stdout || result.stderr);
+
+      const sensitiveOwnerResult = run([
+        "close-assignments",
+        "--ids",
+        "dispatcher-queue-handoff-summary-refresh",
+        "--summary-json",
+        "--owner",
+        "raw prompt sk-closeout-secret provider payload",
+        "--state-root",
+        closeoutStateRoot,
+      ]);
+      assert(sensitiveOwnerResult.code === 0, sensitiveOwnerResult.stderr || sensitiveOwnerResult.stdout);
+      const sensitivePacket = JSON.parse(sensitiveOwnerResult.stdout);
+      assert(/^\[redacted-(token|retention-field)\]$/.test(sensitivePacket.closeoutHandoffEvidence.owner), sensitiveOwnerResult.stdout || sensitiveOwnerResult.stderr);
+      assert(!/raw prompt|provider payload|sk-closeout-secret/i.test(JSON.stringify(sensitivePacket.closeoutHandoffEvidence.resultRefs)), sensitiveOwnerResult.stdout || sensitiveOwnerResult.stderr);
       assert(closeout.branch === "codex/dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
       assert(closeout.owner === "runner-a", result.stdout || result.stderr);
       assert(taskSnapshot(tasksDir) === beforeTasks, "close-assignments summary-json mutated manifests");
@@ -2180,6 +2201,11 @@ try {
       assert(assignment.current_command === null, JSON.stringify(assignment));
       assert(assignment.last_result === "closed from completed workspace closed-audit-export-lane", JSON.stringify(assignment));
       assert(typeof assignment.closed_at === "string", JSON.stringify(assignment));
+      assert(assignment.closeout_handoff_evidence.schemaVersion === "assignment-closeout-handoff-evidence/v1", JSON.stringify(assignment));
+      assert(assignment.closeout_handoff_evidence.authority === "existing-close-assignments-apply-gate", JSON.stringify(assignment));
+      assert(assignment.closeout_handoff_evidence.changed.includes("closed 1 assignment record"), JSON.stringify(assignment));
+      assert(assignment.closeout_handoff_evidence.verified.matchingClosedWorkspaceCount === 1, JSON.stringify(assignment));
+      assert(assignment.closeout_handoff_evidence.nextManagerAction.includes("Return to manager cleanup planning"), JSON.stringify(assignment));
       assert(manifest.source_assignment_closed_at === assignment.closed_at, JSON.stringify(manifest));
       assert(manifest.events.some((event) => event.type === "assignment_closed"), JSON.stringify(manifest));
     } finally {
