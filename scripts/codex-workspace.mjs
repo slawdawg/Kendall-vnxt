@@ -234,6 +234,9 @@ finish-pr options:
 verify-pr-gates options:
   --apply                   Record gate evidence in the manifest. Without this, gate check is dry-run.
   --summary-json            Without --apply, print a compact JSON gate packet.
+  --delivery-audit-agent <id> Agent or reviewer id for independent delivery audit evidence.
+  --delivery-audit-status <status> Delivery audit recommendation. Must be merge-ready for low-risk merge.
+  --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
 
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -2239,7 +2242,7 @@ function verifyPrGates(argv) {
   assertCurrentBranch(manifest);
   reconcileManifest(manifest, { refreshPr: true });
 
-  const packet = buildPrGateEvidence(manifest);
+  const packet = buildPrGateEvidence(manifest, { options });
   if (options.summaryJson) {
     console.log(JSON.stringify(packet, null, 2));
     return;
@@ -2263,7 +2266,7 @@ function verifyPrGates(argv) {
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
     assertCurrentBranch(manifest);
-    const lockedPacket = buildPrGateEvidence(manifest);
+    const lockedPacket = buildPrGateEvidence(manifest, { options });
     if (!lockedPacket.lowRiskReady) {
       printBlocked("verify-pr-gates", renderPrGateEvidence(lockedPacket));
       throw new Error(`PR gate evidence changed under lock: ${lockedPacket.blockers.join("; ")}`);
@@ -2272,6 +2275,8 @@ function verifyPrGates(argv) {
     manifest.pr_review_state_checked_at = lockedPacket.checkedAt;
     manifest.pr_checks_state_checked_at = lockedPacket.checkedAt;
     manifest.pr_exact_head_checked_at = lockedPacket.checkedAt;
+    manifest.delivery_subagent_audit = lockedPacket.deliverySubagentAudit;
+    manifest.delivery_subagent_audit_checked_at = lockedPacket.checkedAt;
     manifest.pr_delivery_head_sha = lockedPacket.expectedHeadSha;
     manifest.pr_url = lockedPacket.pr.url || manifest.pr_url;
     manifest.pr_number = lockedPacket.pr.number || manifest.pr_number;
@@ -2280,6 +2285,7 @@ function verifyPrGates(argv) {
       worktreeStatus: parseStatus(manifest.worktree_path),
       prDeliveryEvidence: manifest.pr_delivery_evidence || null,
       prGateEvidence: lockedPacket,
+      deliverySubagentAudit: lockedPacket.deliverySubagentAudit,
     });
     manifest.updated_at = lockedPacket.checkedAt;
     appendTaskEvent(manifest, "pr_gate_evidence_recorded", `PR ${lockedPacket.pr.number} ${lockedPacket.expectedHeadSha}`);
@@ -2289,7 +2295,7 @@ function verifyPrGates(argv) {
   printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
 }
 
-function buildPrGateEvidence(manifest) {
+function buildPrGateEvidence(manifest, context = {}) {
   const checkedAt = new Date().toISOString();
   const pr = prViewForGates(manifest);
   if (!pr) {
@@ -2299,10 +2305,15 @@ function buildPrGateEvidence(manifest) {
   const repository = githubRepository(manifest);
   const reviewThreadState = fetchReviewThreadState(manifest, repository, pr.number);
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup);
+  const deliverySubagentAudit = shapeDeliverySubagentAuditEvidence(manifest, context.options || {}, {
+    checkedAt,
+    expectedHeadSha: headState.expectedHeadSha,
+  });
   const blockers = prGateBlockers(manifest, pr, {
     headState,
     checks,
     reviewThreadState,
+    deliverySubagentAudit,
   });
   const requiredGates = [
     "PR open and non-draft",
@@ -2311,12 +2322,14 @@ function buildPrGateEvidence(manifest) {
     "GitHub merge state clean",
     "all reported checks completed successfully",
     "thread-aware review query returned no unresolved non-outdated threads",
+    "delivery subagent audit recommends merge-ready for exact head",
   ];
   const stopLines = [
     "metadata-only evidence; no merge",
     "no review-thread mutation",
     "no check bypass",
     "no cleanup",
+    "no raw provider payload retention",
   ];
   const status = blockers.length ? "blocked" : "passed";
 
@@ -2344,6 +2357,7 @@ function buildPrGateEvidence(manifest) {
     },
     checks,
     reviewThreads: reviewThreadState,
+    deliverySubagentAudit,
     blockers,
     requiredGates,
     stopLines,
@@ -2360,6 +2374,7 @@ function buildPrGateEvidence(manifest) {
         `task:${manifest.task_id}`,
         pr.number ? `pr:${pr.number}` : "",
         headState.expectedHeadSha ? `expected-head:${headState.expectedHeadSha}` : "",
+        deliverySubagentAudit.agent ? `delivery-audit-agent:${deliverySubagentAudit.agent}` : "",
       ],
       nextSafeAction:
         blockers.length === 0
@@ -2371,6 +2386,72 @@ function buildPrGateEvidence(manifest) {
     recoveryPath: "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
     metadataOnly: true,
   };
+}
+
+function shapeDeliverySubagentAuditEvidence(manifest, options = {}, context = {}) {
+  const existing = manifest.delivery_subagent_audit && typeof manifest.delivery_subagent_audit === "object"
+    ? manifest.delivery_subagent_audit
+    : {};
+  const status = normalizeDeliveryAuditStatus(options.deliveryAuditStatus ?? existing.status);
+  const agent = safeMetadataText(options.deliveryAuditAgent ?? existing.agent, 120);
+  const summary = safeMetadataText(options.deliveryAuditSummary ?? existing.summary, 500);
+  const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
+  const headSha = safeMetadataText(options.deliveryAuditHeadSha ?? existing.headSha ?? expectedHeadSha, 80);
+  const checkedAt = context.checkedAt || new Date().toISOString();
+  const blockers = [];
+
+  if (!agent) {
+    blockers.push("Delivery subagent audit agent missing");
+  }
+  if (!summary) {
+    blockers.push("Delivery subagent audit summary missing");
+  }
+  if (!status) {
+    blockers.push("Delivery subagent audit status missing");
+  } else if (status !== "merge-ready") {
+    blockers.push(`Delivery subagent audit status is ${status}`);
+  }
+  if (!headSha) {
+    blockers.push("Delivery subagent audit head missing");
+  } else if (expectedHeadSha && headSha !== expectedHeadSha) {
+    blockers.push(`Delivery subagent audit head ${headSha} does not match expected head ${expectedHeadSha}`);
+  }
+
+  return {
+    schemaVersion: 1,
+    status: status || "missing",
+    agent: agent || null,
+    summary: summary || null,
+    headSha: headSha || null,
+    checkedAt,
+    source: "delivery-subagent",
+    blockers,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function normalizeDeliveryAuditStatus(value) {
+  const status = safeMetadataText(value, 80)
+    .toLowerCase()
+    .replace(/_/g, "-");
+  if (!status) {
+    return "";
+  }
+  if (["merge-ready", "merge-ready.", "ready"].includes(status)) {
+    return "merge-ready";
+  }
+  if (["hold", "needs-coordinator-action", "needs-action", "blocked"].includes(status)) {
+    return status;
+  }
+  return status;
+}
+
+function safeMetadataText(value, maxLength) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
 }
 
 function prGateHeadState(manifest) {
@@ -2444,6 +2525,7 @@ function prGateBlockers(manifest, pr, context) {
   if (context.reviewThreadState.unresolvedNonOutdatedCount > 0) {
     blockers.push(`Unresolved non-outdated review threads: ${context.reviewThreadState.unresolvedNonOutdatedCount}`);
   }
+  blockers.push(...(context.deliverySubagentAudit?.blockers || []));
   return blockers;
 }
 
@@ -2455,6 +2537,7 @@ function renderPrGateEvidence(packet = {}) {
     `mergeStateStatus ${packet.pr?.mergeStateStatus || "unknown"}`,
     `checks total=${packet.checks?.total ?? 0} passed=${packet.checks?.passed?.length ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0}`,
     `reviewThreads unresolvedNonOutdated=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} outdated=${packet.reviewThreads?.outdatedCount ?? "unknown"}`,
+    `deliveryAudit status=${packet.deliverySubagentAudit?.status || "unknown"} agent=${packet.deliverySubagentAudit?.agent || "unknown"}`,
     `status ${packet.status || "unknown"}`,
   ];
 }
@@ -2853,6 +2936,9 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
   const prGateEvidence = Object.hasOwn(options, "prGateEvidence")
     ? options.prGateEvidence
     : manifest.pr_gate_evidence || existingPacket.pr_gate || null;
+  const deliverySubagentAudit = Object.hasOwn(options, "deliverySubagentAudit")
+    ? options.deliverySubagentAudit
+    : manifest.delivery_subagent_audit || existingPacket.delivery_subagent_audit || null;
   const cleanupAuthorityDecision = Object.hasOwn(options, "cleanupAuthorityDecision")
     ? options.cleanupAuthorityDecision
     : manifest.cleanup_authority_decision || existingPacket.cleanup || null;
@@ -2866,6 +2952,7 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
     anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
     pr_delivery: prDeliveryEvidence,
     pr_gate: prGateEvidence,
+    delivery_subagent_audit: deliverySubagentAudit,
     cleanup: cleanupAuthorityDecision,
     authority_decisions: shapeLaneAuthorityDecisions(manifest, {
       ...options,
@@ -3205,6 +3292,22 @@ function cleanupMerged(argv, mode = {}) {
       continue;
     }
 
+    const cleanupAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr);
+    if (cleanupAuditBlocker && (options.summaryJson || options.dryRun || !apply)) {
+      if (options.summaryJson) {
+        summaryResults.push(
+          cleanupMergedSkipSummary(manifest, "skipped_delivery_audit_missing", cleanupAuditBlocker, {
+            pr,
+            worktreeStatus,
+            deleteRemote,
+          }),
+        );
+        continue;
+      }
+      console.log(`SKIP ${manifest.task_id}: ${cleanupAuditBlocker}`);
+      continue;
+    }
+
     const plan = cleanupMergedPlan(manifest, pr, { cleanupCwd, deleteRemote });
     if (options.summaryJson) {
       summaryResults.push(cleanupMergedReadySummary(manifest, pr, { cleanupCwd, deleteRemote, plan, worktreeStatus }));
@@ -3237,6 +3340,10 @@ function cleanupMerged(argv, mode = {}) {
         const lockedWorktreeStatus = worktreeCleanupStatus(manifest, lockedCleanupCwd);
         if (lockedWorktreeStatus.dirty) {
           throw new Error("Worktree is not clean after acquiring cleanup lock.");
+        }
+        const lockedAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, lockedPr);
+        if (lockedAuditBlocker) {
+          throw new Error(lockedAuditBlocker);
         }
         cleanupMergedResources(manifest, state, { cleanupCwd: lockedCleanupCwd, deleteRemote, pr: lockedPr });
         appendAuthorityDecision(manifest, manifest.cleanup_authority_decision);
@@ -3365,6 +3472,7 @@ function shapeCleanupAuthorityDecision(manifest, pr, options = {}) {
     "expected base branch",
     "worktree is clean",
     "exact PR head evidence exists",
+    "delivery subagent audit recommends merge-ready for exact head",
     "local branch head matches expected head before deletion",
     deleteRemote ? "remote branch head matches expected head before deletion" : "",
     "cleanup mutation requires --apply",
@@ -4012,6 +4120,10 @@ function cleanupMergedPlan(manifest, pr, options) {
 function cleanupMergedResources(manifest, state, options) {
   const cleanupStartedAt = new Date().toISOString();
   const expectedHeadSha = requireCleanupHeadSha(manifest, options.pr);
+  const auditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, options.pr);
+  if (auditBlocker) {
+    throw new Error(auditBlocker);
+  }
   preflightCleanupBranchHeads(manifest, options.cleanupCwd, expectedHeadSha, options.deleteRemote);
   manifest.cleanup_started_at = manifest.cleanup_started_at || cleanupStartedAt;
   manifest.cleanup_owner = manifest.owner || null;
@@ -4044,6 +4156,15 @@ function cleanupMergedResources(manifest, state, options) {
       `expected-head:${expectedHeadSha}`,
     ],
   });
+}
+
+function cleanupDeliverySubagentAuditBlocker(manifest, pr) {
+  const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
+  const audit = shapeDeliverySubagentAuditEvidence(manifest, {}, {
+    expectedHeadSha,
+    checkedAt: new Date().toISOString(),
+  });
+  return audit.blockers.length ? audit.blockers.join("; ") : "";
 }
 
 function preflightCleanupBranchHeads(manifest, cleanupCwd, expectedHeadSha, deleteRemote) {
