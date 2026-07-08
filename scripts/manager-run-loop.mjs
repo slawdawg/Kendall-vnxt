@@ -376,6 +376,7 @@ function selectedActionsMatchForApply(selected = {}, applySelected = {}) {
       dryRun.commandFingerprint === apply.commandFingerprint &&
       dryRun.targetComponents.length > 0 &&
       workerMutationTargetProofReady(dryRun.mutationClass, dryRun.targetComponents) &&
+      laneAdvanceTargetProofReady(dryRun.mutationClass, dryRun.targetComponents) &&
       sameCanonicalComponents(dryRun.targetComponents, apply.targetComponents) &&
       (!dryRun.target || !apply.target || dryRun.target === apply.target),
   );
@@ -384,6 +385,13 @@ function selectedActionsMatchForApply(selected = {}, applySelected = {}) {
 function workerMutationTargetProofReady(mutationClass = "", targetComponents = []) {
   if (!String(mutationClass || "").startsWith("manager_owned_worker_")) return true;
   return canonicalTargetComponents(targetComponents).some((component) => /^(worker|session|assignment|task):/.test(component));
+}
+
+function laneAdvanceTargetProofReady(mutationClass = "", targetComponents = []) {
+  if (String(mutationClass || "") !== "lane_advancement_heartbeat_metadata_only") return true;
+  const components = canonicalTargetComponents(targetComponents);
+  return components.some((component) => component.startsWith("run:")) &&
+    components.some((component) => component.startsWith("assignment:"));
 }
 
 function dryRunOnlyMutationClass(mutationClass = "") {

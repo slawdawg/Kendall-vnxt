@@ -15524,6 +15524,65 @@ test("runtime readiness gates continuous apply to explicit existing manager gate
     assert.equal(reviewMutationReady.summary.gates.workerMutation, "existing_gate_only");
   }
 
+  const laneAdvanceReady = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "normal" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: { laneAdvanceAllowed: true },
+      selectedAction: {
+        code: "continuous-lane-advance-apply",
+        mutationClass: "lane_advancement_heartbeat_metadata_only",
+        targetComponents: ["run:manager-test", "assignment:lane-review-ready"],
+      },
+    },
+  );
+  assert.equal(laneAdvanceReady.status, "ready");
+  assert.equal(laneAdvanceReady.summary.gates.laneAdvance, "existing_gate_only");
+  assert.equal(laneAdvanceReady.summary.gates.delivery, "blocked_or_not_requested");
+  assert.equal(laneAdvanceReady.summary.gates.cleanup, "blocked");
+
+  const laneAdvanceMissingTarget = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "normal" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: { laneAdvanceAllowed: true },
+      selectedAction: {
+        code: "continuous-lane-advance-apply",
+        mutationClass: "lane_advancement_heartbeat_metadata_only",
+        targetComponents: ["assignment:lane-review-ready"],
+      },
+    },
+  );
+  assert.equal(laneAdvanceMissingTarget.status, "blocked");
+  assert.ok(laneAdvanceMissingTarget.blockers.some((blocker) => blocker.code === "lane-advance-target-not-proven"));
+
+  const laneAdvanceGateMissing = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      cycleStatus: "attention",
+      cycleOk: true,
+      usage: { state: "normal" },
+      resources: { state: "normal" },
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      continuation: { laneAdvanceAllowed: false },
+      selectedAction: {
+        code: "continuous-lane-advance-apply",
+        mutationClass: "lane_advancement_heartbeat_metadata_only",
+        targetComponents: ["run:manager-test", "assignment:lane-review-ready"],
+      },
+    },
+  );
+  assert.equal(laneAdvanceGateMissing.status, "blocked");
+  assert.ok(laneAdvanceGateMissing.blockers.some((blocker) => blocker.code === "lane-advance-gate-not-proven"));
+
   const blocked = buildRuntimeReadinessPlan(
     { runtimeMode: "continuous_apply" },
     {
@@ -15644,6 +15703,111 @@ test("continuous execution separates dry-run proof from apply mutation", () => {
   assert.equal(appliedWithUnrelatedDryRunBlockers.ok, true);
   assert.equal(calls.length, 2);
   assert.ok(appliedWithUnrelatedDryRunBlockers.summary.dryRun.blockers.some((blocker) => blocker.code === "unrelated-question-blocked"));
+
+  const laneAdvanceSelected = {
+    code: "continuous-lane-advance-apply",
+    dryRunCommand: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id manager-test",
+    mutationClass: "lane_advancement_heartbeat_metadata_only",
+    targetComponents: ["assignment:lane-review-ready", "run:manager-test"],
+    targetKey: "assignment:lane-review-ready|run:manager-test",
+  };
+  const laneAdvanceApplySelected = {
+    ...laneAdvanceSelected,
+    applyCommand: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id manager-test --apply",
+  };
+  calls.length = 0;
+  const laneAdvanceApplied = executeContinuousSelectedAction({
+    selected: laneAdvanceSelected,
+    applySelected: laneAdvanceApplySelected,
+    runCommand(command) {
+      calls.push(command);
+      return { ok: true, packet: proofPacket(laneAdvanceApplySelected) };
+    },
+  });
+  assert.equal(laneAdvanceApplied.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /manager-lane-advance\.mjs/);
+  assert.match(calls[1], /--apply/);
+
+  calls.length = 0;
+  const laneAdvanceWithoutRunProof = executeContinuousSelectedAction({
+    selected: {
+      ...laneAdvanceSelected,
+      targetComponents: ["assignment:lane-review-ready"],
+      targetKey: "assignment:lane-review-ready",
+    },
+    applySelected: {
+      ...laneAdvanceApplySelected,
+      targetComponents: ["assignment:lane-review-ready"],
+      targetKey: "assignment:lane-review-ready",
+    },
+    runCommand(command) {
+      calls.push(command);
+      return {
+        ok: true,
+        packet: proofPacket({
+          ...laneAdvanceApplySelected,
+          targetComponents: ["assignment:lane-review-ready"],
+          targetKey: "assignment:lane-review-ready",
+        }),
+      };
+    },
+  });
+  assert.equal(laneAdvanceWithoutRunProof.ok, false);
+  assert.equal(laneAdvanceWithoutRunProof.blockers[0].code, "continuous-selected-action-pair-mismatch");
+  assert.equal(calls.length, 1);
+
+  calls.length = 0;
+  const genericHeartbeatStillDryRunOnly = executeContinuousSelectedAction({
+    selected: {
+      code: "continuous-generic-heartbeat",
+      dryRunCommand: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id manager-test",
+      mutationClass: "assignment_heartbeat_metadata_only",
+      targetComponents: ["assignment:lane-review-ready", "run:manager-test"],
+      targetKey: "assignment:lane-review-ready|run:manager-test",
+    },
+    applySelected: {
+      code: "continuous-generic-heartbeat",
+      dryRunCommand: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id manager-test",
+      applyCommand: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1 --run-id manager-test --apply",
+      mutationClass: "assignment_heartbeat_metadata_only",
+      targetComponents: ["assignment:lane-review-ready", "run:manager-test"],
+      targetKey: "assignment:lane-review-ready|run:manager-test",
+    },
+    runCommand(command) {
+      calls.push(command);
+      return { ok: true, packet: proofPacket({ code: "continuous-generic-heartbeat", mutationClass: "assignment_heartbeat_metadata_only", targetComponents: ["assignment:lane-review-ready", "run:manager-test"], targetKey: "assignment:lane-review-ready|run:manager-test" }) };
+    },
+  });
+  assert.equal(genericHeartbeatStillDryRunOnly.ok, false);
+  assert.equal(genericHeartbeatStillDryRunOnly.blockers[0].code, "continuous-apply-dry-run-only-mutation-class");
+  assert.equal(calls.length, 1);
+
+  calls.length = 0;
+  const dispatchStillDryRunOnly = executeContinuousSelectedAction({
+    selected: {
+      code: "continuous-dispatch-apply",
+      dryRunCommand: "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json",
+      mutationClass: "assignment_workspace_claim_only",
+      targetComponents: ["assignment:lane-ready"],
+      targetKey: "assignment:lane-ready",
+    },
+    applySelected: {
+      code: "continuous-dispatch-apply",
+      dryRunCommand: "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json",
+      applyCommand: "node ./scripts/codex-workspace.mjs dispatch-next --summary-json --apply",
+      mutationClass: "assignment_workspace_claim_only",
+      targetComponents: ["assignment:lane-ready"],
+      targetKey: "assignment:lane-ready",
+    },
+    runCommand(command) {
+      calls.push(command);
+      return { ok: true, packet: proofPacket({ code: "continuous-dispatch-apply", mutationClass: "assignment_workspace_claim_only", targetComponents: ["assignment:lane-ready"], targetKey: "assignment:lane-ready" }) };
+    },
+  });
+  assert.equal(dispatchStillDryRunOnly.ok, false);
+  assert.equal(dispatchStillDryRunOnly.blockers[0].code, "continuous-apply-dry-run-only-mutation-class");
+  assert.equal(calls.length, 1);
 });
 
 test("continuous run plan selects only manager-owned worker auto actions", () => {
@@ -16238,6 +16402,43 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(laneAdvancePlan.summary.selectedAction.readOnly, undefined);
   assert.equal(laneAdvancePlan.summary.selectedAction.dryRunCommand, "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1");
   assert.equal(laneAdvancePlan.summary.applySelectedAction, null);
+
+  const laneAdvanceApplyPlan = continuousRunPlan(
+    { runtimeMode: "continuous_apply" },
+    {
+      preflight: { status: "ready", blockerCount: 0, blockers: [] },
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal" },
+          resources: { state: "normal" },
+          workers: { workerCounts: { active: 1, warm: 0, paused: 0 } },
+          continuation: { laneAdvanceAllowed: true },
+          laneAdvance: {
+            readyLanes: [{ assignmentId: "lane-review-ready" }],
+          },
+          runway: { sourcePlanning: { sprintStatus: { path: noReviewSprintPath } } },
+        },
+        warnings: [{ code: "manager-lane-advance-ready", message: "1 active lane appears ready." }],
+        nextActions: [
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance review-ready lane.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 1",
+          },
+        ],
+      },
+    },
+  );
+
+  assert.equal(laneAdvanceApplyPlan.status, "attention");
+  assert.equal(laneAdvanceApplyPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
+  assert.equal(laneAdvanceApplyPlan.summary.applySelectedAction.code, "continuous-lane-advance-apply");
+  assert.equal(laneAdvanceApplyPlan.summary.runtimeReadiness.gates.laneAdvance, "existing_gate_only");
+  assert.equal(laneAdvanceApplyPlan.summary.runtimeReadiness.gates.delivery, "blocked_or_not_requested");
+  assert.equal(laneAdvanceApplyPlan.summary.runtimeReadiness.gates.cleanup, "blocked");
 
   const laneAdvanceWithWorkerActionPlan = continuousRunPlan(
     {},
