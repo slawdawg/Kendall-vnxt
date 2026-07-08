@@ -24553,6 +24553,163 @@ test("stale owner inspection aggregates dry-run takeover evidence into cleanup a
   assert.doesNotMatch(JSON.stringify(inspection), /--apply|capture-pane|provider payload|reasoning trace|raw prompt/i);
 });
 
+test("stale owner inspection gates unresolved sanitized records from closeout preview", () => {
+  const resumeState = {
+    summary: {
+      ledger: { runId: "manager-test" },
+      takeoverInspection: {
+        targets: [
+          {
+            kind: "lane_assignment",
+            id: "3-3-execution-[redacted-retention-term]-and-failure-evidence",
+            owner: "old-owner",
+            branch: "codex/3-3-execution-[redacted-retention-term]-and-failure-evidence",
+          },
+          {
+            kind: "lane_assignment",
+            id: "closed-lane",
+            owner: "old-owner",
+            branch: "codex/closed-lane",
+          },
+          { kind: "lane_assignment", id: "apply-lane", owner: "old-owner", branch: "codex/apply-lane" },
+        ],
+      },
+    },
+  };
+  const closeAssignmentsCalls = [];
+  const inspection = buildStaleOwnerInspection(
+    { runId: "manager-test" },
+    {
+      resumeState,
+      takeoverResults: {
+        "3-3-execution-[redacted-retention-term]-and-failure-evidence": {
+          ok: false,
+          error: "FAIL: No workspace matched query: 3-3-execution-[redacted-retention-term]-and-failure-evidence",
+        },
+        "closed-lane": {
+          decision: "blocked",
+          allowed: false,
+          worktree: { exists: false, status: "missing" },
+          branch: { branch: "codex/closed-lane", localSha: null, remoteSha: null },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+          blockers: ["assignment worktree is missing"],
+        },
+        "apply-lane": {
+          decision: "allowed",
+          allowed: true,
+          worktree: { exists: true, status: "clean" },
+          branch: { branch: "codex/apply-lane", localSha: "def456", remoteSha: "def456" },
+          pr: { status: "open", pr_number: 12 },
+          dirtyState: { dirty: false },
+          blockers: [],
+        },
+      },
+    },
+  );
+  const cleanup = buildCleanupPlan(
+    { runId: "manager-test" },
+    {
+      staleOwnerInspection: inspection,
+      closeAssignmentsSummary: {
+        ok: true,
+        summary: {
+          counts: { total: 2, closeable: 0, blocked: 2 },
+          results: [
+            { assignmentId: "closed-lane", status: "blocked", reason: "owner mismatch" },
+            { assignmentId: "3-3-execution-[redacted-retention-term]-and-failure-evidence", status: "blocked", reason: "legacy id" },
+          ],
+        },
+      },
+      workspaceRunner(args) {
+        closeAssignmentsCalls.push(args);
+        return {
+          ok: true,
+          summary: {
+            counts: { total: 1, closeable: 0, blocked: 1 },
+            results: [
+              { assignmentId: "closed-lane", status: "blocked", reason: "owner mismatch" },
+            ],
+          },
+        };
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, true);
+  assert.equal(inspection.summary.cleanupCandidateCount, 1);
+  assert.equal(inspection.summary.canonicalCloseoutEvidenceCount, 1);
+  assert.equal(inspection.summary.takeoverApprovalCandidateCount, 1);
+  assert.equal(inspection.blockers.length, 0);
+  const byId = new Map(inspection.summary.inspections.map((entry) => [entry.id, entry]));
+  const unresolved = byId.get("3-3-execution-[redacted-retention-term]-and-failure-evidence");
+  assert.equal(unresolved.classification, "stale_record_canonical_evidence_required");
+  assert.equal(unresolved.resolutionStatus, "unresolved_exact_target");
+  assert.equal(unresolved.closeoutReady, false);
+  assert.equal(unresolved.closeoutRequiresCanonicalEvidence, true);
+  assert.equal(unresolved.worktreeStatus, "not_recorded");
+  assert.equal(unresolved.branchStatus, "no_head_evidence");
+  assert.equal(unresolved.prStatus, "none");
+  assert.match(unresolved.nextAction, /do not pass the sanitized or legacy id/);
+  assert.equal(byId.get("closed-lane").classification, "stale_record_cleanup_candidate");
+  assert.equal(byId.get("apply-lane").classification, "takeover_apply_candidate_with_approval");
+  assert.deepEqual(closeAssignmentsCalls, [["close-assignments", "--ids", "closed-lane", "--summary-json"]]);
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.counts.total, 1);
+  assert.equal(cleanup.summary.staleOwnerCleanup.closeoutPreview.blockedReasons[0].assignmentId, "closed-lane");
+  assert.equal(cleanup.nextActions[0].code, "stale-assignment-closeout-approval-needed");
+  assert.equal(cleanup.nextActions[1].code, "stale-record-canonical-closeout-evidence-needed");
+  assert.doesNotMatch(JSON.stringify(inspection), /--apply|provider payload|reasoning trace|raw prompt/i);
+});
+
+test("stale owner inspection fails closed when unresolved target still has live evidence", () => {
+  const liveEvidenceCases = [
+    ["worktreePath", { worktreePath: "/tmp/legacy-live-task" }],
+    ["legacy worktree", { worktree: "/tmp/legacy-live-task" }],
+    ["localSha", { localSha: "abc123" }],
+    ["remoteSha", { remoteSha: "def456" }],
+    ["prNumber", { prNumber: 12 }],
+    ["prUrl", { prUrl: "https://github.example/pr/12" }],
+    ["prStatus", { prStatus: "present_unverified" }],
+  ];
+
+  for (const [label, liveEvidence] of liveEvidenceCases) {
+    const inspection = buildStaleOwnerInspection(
+      { runId: "manager-test" },
+      {
+        resumeState: {
+          summary: {
+            ledger: { runId: "manager-test" },
+            takeoverInspection: {
+              targets: [
+                {
+                  kind: "workspace_assignment",
+                  id: `legacy-live-task-${label.replaceAll(" ", "-")}`,
+                  owner: "old-owner",
+                  branch: "codex/legacy-live-task",
+                  ...liveEvidence,
+                },
+              ],
+            },
+          },
+        },
+        takeoverResults: {
+          [`legacy-live-task-${label.replaceAll(" ", "-")}`]: {
+            ok: false,
+            error: `FAIL: No workspace matched query: legacy-live-task-${label.replaceAll(" ", "-")}`,
+          },
+        },
+      },
+    );
+
+    assert.equal(inspection.ok, false, label);
+    assert.equal(inspection.status, "blocked", label);
+    assert.equal(inspection.summary.cleanupCandidateCount, 0, label);
+    assert.equal(inspection.summary.canonicalCloseoutEvidenceCount, 0, label);
+    assert.equal(inspection.blockers[0].code, "stale-owner-inspection-failed", label);
+    assert.match(inspection.blockers[0].nextAction, /takeover 'legacy-live-task-/, label);
+  }
+});
+
 test("stale owner inspection forwards explicit state root to takeover dry-runs", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-stale-owner-state-root-"));
   try {
