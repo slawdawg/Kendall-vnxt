@@ -14455,6 +14455,12 @@ export function buildCleanupPlan(options = {}, context = {}) {
           takeoverApprovalCandidateCount: staleOwner.summary?.takeoverApprovalCandidateCount || 0,
           closeoutPreview: null,
           dirtyPreservation: null,
+          cleanupHandoffCloseoutEvidence: buildCleanupHandoffCloseoutEvidence({
+            planStatus: sandboxBoundary && staleOwnerBlockers.length === 0 ? "sandbox_incomplete" : "blocked",
+            blockerCodes: blockers.map((blocker) => blocker.code || blocker.sourceCode).filter(Boolean),
+            closeoutPreview: null,
+            dirtyPreservation: null,
+          }),
           retention: "metadata_only_stale_owner_cleanup_summary",
         },
         sandboxBoundary: Boolean(sandboxBoundary),
@@ -14484,6 +14490,12 @@ export function buildCleanupPlan(options = {}, context = {}) {
         takeoverApprovalCandidateCount: staleOwner.summary?.takeoverApprovalCandidateCount || 0,
         closeoutPreview: closeoutPreview ? compactCloseoutPreview(closeoutPreview) : null,
         dirtyPreservation: dirtyPreservation ? compactDirtyWorkspacePreservation(dirtyPreservation) : null,
+        cleanupHandoffCloseoutEvidence: buildCleanupHandoffCloseoutEvidence({
+          planStatus: "ready",
+          blockerCodes: [],
+          closeoutPreview,
+          dirtyPreservation,
+        }),
         retention: "metadata_only_stale_owner_cleanup_summary",
       },
     },
@@ -14498,6 +14510,65 @@ export function buildCleanupPlan(options = {}, context = {}) {
       dirtyPreservation,
     }),
   });
+}
+
+function buildCleanupHandoffCloseoutEvidence({ planStatus = "ready", blockerCodes = [], closeoutPreview = null, dirtyPreservation = null } = {}) {
+  const blocked = planStatus !== "ready";
+  const sanitizedBlockerCodes = Array.isArray(blockerCodes)
+    ? blockerCodes.map((code) => sanitizeLedgerField(code || "", "", 120)).filter(Boolean).slice(0, 8)
+    : [];
+  return {
+    schemaVersion: "cleanup_handoff_closeout.v1",
+    planStatus: sanitizeLedgerField(planStatus || "ready", "ready", 80),
+    blockerCodes: sanitizedBlockerCodes,
+    implementationChangedFiles: [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ],
+    verificationCommands: [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+    ],
+    verificationStatus: "recommended_not_executed_by_loop",
+    verificationEvidencePolicy: "loop_recommends_commands_delivery_records_results",
+    verificationResultsSource: "dev_agent_record_and_delivery_packet",
+    closeoutGate: "codex-workspace-close-assignments-existing-gates",
+    cleanupGate: "codex-workspace-cleanup-current-cleanup-merged-existing-gates",
+    allowedMutation: "none_from_manager_cleanup_plan; existing workspace cleanup gates only",
+    closeoutPreviewAvailable: cleanupHandoffPacketAvailable(closeoutPreview),
+    dirtyPreservationAvailable: cleanupHandoffPacketAvailable(dirtyPreservation),
+    localBmadStoryArtifact: {
+      path: "_bmad-output/implementation-artifacts/7-6-cleanup-and-handoff-closeout.md",
+      expectedIgnored: true,
+      verificationSource: "regression_test_git_check_ignore_and_ls_files",
+    },
+    nextManagerAction: blocked
+      ? "Preserve blocked cleanup and handoff closeout evidence; resolve cleanup blockers before any closeout, delivery, or cleanup apply gate."
+      : "Preserve cleanup and handoff closeout evidence, then continue through existing closeout, delivery, and cleanup gates.",
+    stopLines: [
+      "no worker mutation",
+      "no dispatch apply",
+      "no provider calls or secrets",
+      "no GitHub delivery mutation",
+      "no assignment takeover",
+      "no merge mutation",
+      "no cleanup apply outside existing cleanup gates",
+      "no raw prompt, provider payload, reasoning trace, or tmux scrollback retention",
+    ],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function cleanupHandoffPacketAvailable(packet = null) {
+  if (!packet || typeof packet !== "object") return false;
+  if (packet.ok === false || packet.error) return false;
+  if (packet.status === "blocked" || packet.status === "sandbox_incomplete") return false;
+  if (Array.isArray(packet.blockers) && packet.blockers.length > 0) return false;
+  const summary = packet.summary && typeof packet.summary === "object" ? packet.summary : packet;
+  if (summary.status === "blocked" || summary.status === "sandbox_incomplete") return false;
+  if (Array.isArray(summary.blockers) && summary.blockers.length > 0) return false;
+  return true;
 }
 
 function staleOwnerInspectionCloseoutPreviewReady(inspection = {}) {

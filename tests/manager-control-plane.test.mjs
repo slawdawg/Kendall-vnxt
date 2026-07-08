@@ -22677,11 +22677,109 @@ test("cleanup plan includes stale owner cleanup and dirty preservation summary",
   assert.match(cleanup.nextActions[0].nextAction, /request explicit stale-record closeout approval/);
   assert.equal(cleanup.summary.staleOwnerCleanup.dirtyPreservation.preservedCount, 1);
   assert.equal(cleanup.summary.staleOwnerCleanup.dirtyPreservation.evidence[0].pathSamples[0], "docs/workflows/example.md");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.schemaVersion, "cleanup_handoff_closeout.v1");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.planStatus, "ready");
+  assert.deepEqual(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.blockerCodes, []);
+  assert.deepEqual(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.implementationChangedFiles, [
+    "scripts/lib/manager-control-plane/core.mjs",
+    "tests/manager-control-plane.test.mjs",
+  ]);
+  assert.deepEqual(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.verificationCommands, [
+    "node --test tests/manager-control-plane.test.mjs",
+    "node ./scripts/check-manager-control-plane.mjs",
+  ]);
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.verificationStatus, "recommended_not_executed_by_loop");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.verificationEvidencePolicy, "loop_recommends_commands_delivery_records_results");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.verificationResultsSource, "dev_agent_record_and_delivery_packet");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.closeoutPreviewAvailable, true);
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.dirtyPreservationAvailable, true);
+  assert.match(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.nextManagerAction, /Preserve cleanup and handoff closeout evidence/);
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no worker mutation"));
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no dispatch apply"));
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no provider calls or secrets"));
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no GitHub delivery mutation"));
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no assignment takeover"));
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no merge mutation"));
+  assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no cleanup apply outside existing cleanup gates"));
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.localBmadStoryArtifact.path, "_bmad-output/implementation-artifacts/7-6-cleanup-and-handoff-closeout.md");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.localBmadStoryArtifact.expectedIgnored, true);
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.metadataOnly, true);
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.rawPayloadRetained, false);
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-6-cleanup-and-handoff-closeout.md");
+  assert.doesNotMatch(JSON.stringify(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
   assert.equal(cleanup.nextActions[1].code, "dirty-workspace-preservation-complete");
   assert.match(cleanup.nextActions[1].nextAction, /Review preservation packet/);
   assert.equal(cleanup.nextActions[2].code, "cleanup-apply-gated");
   assert.doesNotMatch(JSON.stringify(cleanup.nextActions), /manager-cleanup-plan\.mjs --summary-json/);
   assert.equal(cleanup.summary.staleOwnerCleanup.retention, "metadata_only_stale_owner_cleanup_summary");
+});
+
+test("cleanup handoff closeout evidence reflects blocked and unavailable cleanup packets", () => {
+  const blockedCleanup = buildCleanupPlan(
+    { runId: "manager-test" },
+    {
+      staleOwnerInspection: {
+        summary: {
+          targetCount: 1,
+          cleanupCandidateCount: 1,
+          dirtyWorkspaceCount: 0,
+          inspections: [
+            { id: "stale-a", classification: "stale_record_cleanup_candidate" },
+          ],
+        },
+        blockers: [
+          { code: "stale-owner-detail-truncated", message: "details truncated" },
+        ],
+      },
+    },
+  );
+
+  assert.equal(blockedCleanup.status, "blocked");
+  assert.equal(blockedCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.planStatus, "blocked");
+  assert.deepEqual(blockedCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.blockerCodes, ["stale-owner-detail-truncated"]);
+  assert.equal(blockedCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.closeoutPreviewAvailable, false);
+  assert.equal(blockedCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.dirtyPreservationAvailable, false);
+  assert.match(blockedCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.nextManagerAction, /resolve cleanup blockers/);
+  assert.doesNotMatch(blockedCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.nextManagerAction, /continue through existing closeout/);
+
+  const unavailablePacketCleanup = buildCleanupPlan(
+    { runId: "manager-test" },
+    {
+      staleOwnerInspection: {
+        summary: {
+          targetCount: 2,
+          cleanupCandidateCount: 1,
+          dirtyWorkspaceCount: 1,
+          inspections: [
+            { id: "stale-a", classification: "stale_record_cleanup_candidate" },
+            { id: "dirty-c", classification: "dirty_workspace_preservation_required" },
+          ],
+        },
+      },
+      closeAssignmentsSummary: {
+        status: "blocked",
+        blockers: [{ code: "owner-mismatch" }],
+        counts: { total: 1, closeable: 0, alreadyClosed: 0, blocked: 1 },
+        results: [
+          { assignmentId: "stale-a", status: "blocked", reason: "assignment owner old-owner does not match manager-owner" },
+        ],
+      },
+      dirtyWorkspacePreservation: {
+        status: "blocked",
+        summary: {
+          targetCount: 1,
+          preservedCount: 0,
+          evidence: [],
+        },
+        blockers: [{ code: "dirty-status-unavailable" }],
+      },
+    },
+  );
+
+  assert.equal(unavailablePacketCleanup.status, "ready");
+  assert.equal(unavailablePacketCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.planStatus, "ready");
+  assert.equal(unavailablePacketCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.closeoutPreviewAvailable, false);
+  assert.equal(unavailablePacketCleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.dirtyPreservationAvailable, false);
 });
 
 test("dirty workspace preservation captures bounded status metadata without diffs", () => {
