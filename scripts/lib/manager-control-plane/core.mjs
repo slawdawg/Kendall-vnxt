@@ -12134,7 +12134,7 @@ function applyCourseCorrectionRefill(step = {}, context = {}) {
   }
   const source = readFileSync(sprintAbsolute, "utf8");
   const storyStatuses = countSprintStories(source, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {};
-  const items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses);
+  const items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir: dirname(sprintAbsolute) });
   if (items.length === 0) {
     return {
       ok: true,
@@ -12256,13 +12256,14 @@ function backlogStoryKeysFromSprintStatus(content = "") {
     .filter(Boolean);
 }
 
-function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}) {
+function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, options = {}) {
   const existingIds = new Set(Object.keys(storyStatuses || {}));
+  const artifactDir = options.artifactDir || "";
   const explicitItems = [
     ...(Array.isArray(draft.candidateBacklogItems) ? draft.candidateBacklogItems : []),
     ...(Array.isArray(draft.proposedBacklogItems) ? draft.proposedBacklogItems : []),
   ];
-  const sourceItems = explicitItems.length > 0 ? explicitItems : nextEpicBacklogItems(storyStatuses);
+  const sourceItems = explicitItems.length > 0 ? explicitItems : [];
   const seenIds = new Set();
   const nonDuplicate = sourceItems
     .map((item) => ({
@@ -12270,20 +12271,46 @@ function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}) {
       title: sanitizeLedgerField(item.title || titleFromStoryKey(item.id || ""), "", 180),
     }))
     .filter((item) => {
-      if (!item.id || !item.title || existingIds.has(item.id) || seenIds.has(item.id)) return false;
+      if (!isBmadStoryKey(item.id) || !item.title || existingIds.has(item.id) || storyArtifactExists(item.id, artifactDir) || seenIds.has(item.id)) return false;
       seenIds.add(item.id);
       return true;
     });
   if (nonDuplicate.length > 0) return nonDuplicate.slice(0, 6);
-  if (explicitItems.length > 0) return [];
-  return nextEpicBacklogItems(storyStatuses).slice(0, 6);
+  if (explicitItems.length > 0) {
+    const minimumEpic = Math.max(0, ...explicitItems.map((item) => Number(String(item?.id || "").match(/^(\d+)-/)?.[1] || 0))) + 1;
+    if (hasActiveGeneratedEpicBlock(storyStatuses, { minimumEpic })) return [];
+    return nextAvailableEpicBacklogItems(storyStatuses, { artifactDir, minimumEpic }).slice(0, 6);
+  }
+  return nextAvailableEpicBacklogItems(storyStatuses, { artifactDir }).slice(0, 6);
 }
 
-function nextEpicBacklogItems(storyStatuses = {}) {
+function hasActiveGeneratedEpicBlock(storyStatuses = {}, { minimumEpic = 1 } = {}) {
+  const epicNumbers = Object.keys(storyStatuses || {})
+    .map((key) => Number(String(key).match(/^(\d+)-\d+-/)?.[1] || 0))
+    .filter((number) => Number.isInteger(number) && number >= minimumEpic);
+  for (const epic of [...new Set(epicNumbers)].sort((left, right) => left - right)) {
+    const statuses = nextEpicBacklogItems(epic)
+      .map((item) => sanitizeLedgerField(storyStatuses?.[item.id] || "", "", 80).toLowerCase())
+      .filter(Boolean);
+    if (statuses.some((status) => !["done", "closed", "complete", "completed"].includes(status))) return true;
+  }
+  return false;
+}
+
+function nextAvailableEpicBacklogItems(storyStatuses = {}, { artifactDir = "", minimumEpic = 1 } = {}) {
   const epicNumbers = Object.keys(storyStatuses || {})
     .map((key) => Number(String(key).match(/^(\d+)-\d+-/)?.[1] || 0))
     .filter((number) => Number.isInteger(number) && number > 0);
-  const nextEpic = Math.max(0, ...epicNumbers) + 1;
+  let nextEpic = Math.max(minimumEpic - 1, 0, ...epicNumbers) + 1;
+  for (let attempts = 0; attempts < 100; attempts += 1) {
+    const items = nextEpicBacklogItems(nextEpic);
+    if (items.every((item) => !storyStatuses?.[item.id] && !storyArtifactExists(item.id, artifactDir))) return items;
+    nextEpic += 1;
+  }
+  return [];
+}
+
+function nextEpicBacklogItems(nextEpic) {
   return [
     ["manager-refill-apply-gate", "Manager refill apply gate"],
     ["manager-story-creation-apply-gate", "Manager story creation apply gate"],
@@ -12295,6 +12322,15 @@ function nextEpicBacklogItems(storyStatuses = {}) {
     id: `${nextEpic}-${index + 1}-${slug}`,
     title,
   }));
+}
+
+function storyArtifactExists(storyKey, artifactDir = "") {
+  if (!isBmadStoryKey(storyKey) || !artifactDir) return false;
+  return existsSync(join(artifactDir, `${storyKey}.md`));
+}
+
+function isBmadStoryKey(storyKey = "") {
+  return /^\d+-\d+-[a-z0-9-]+$/i.test(String(storyKey || ""));
 }
 
 function appendBacklogItemsToSprintStatus(source = "", items = []) {
@@ -13938,8 +13974,10 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   const storyInputs = packet.storyCreationInputs || null;
   const sprintStatusPath = sanitizeLedgerField(packet.sprintStatusPath || storyInputs?.sprintStatusPath || sourcePlanning?.sprintStatus?.path || "", "", 220);
   const storyStatuses = courseCorrectionStoryStatusesForGate(sourcePlanning, sprintStatusPath);
+  const safeSprintPath = sanitizeRelativeBmadOutputPath(sprintStatusPath);
+  const artifactDir = safeSprintPath ? dirname(resolve(repoRoot, safeSprintPath)) : "";
   const selectedCandidate =
-    firstBacklogCandidate(courseCorrectionBacklogItemsForStatus(draft, storyStatuses)) ||
+    firstBacklogCandidate(courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir })) ||
     (storyInputs?.storyKey ? { id: storyInputs.storyKey, title: titleFromStoryKey(storyInputs.storyKey) } : null);
   const proposalOutputPath = sanitizeLedgerField(draft?.outputPath || "", "", 220) || null;
   const sourceRef = sanitizeLedgerField(sourceSlice?.ref || workCreationStep.sourceRef || packet.sourceRefs?.[0] || "", "", 220);
@@ -14003,13 +14041,12 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
 }
 
 function courseCorrectionStoryStatusesForGate(sourcePlanning = null, sprintStatusPath = "") {
-  if (isPlainObject(sourcePlanning?.sprintStatus?.storyStatuses)) {
-    return sourcePlanning.sprintStatus.storyStatuses;
-  }
   const safePath = sanitizeRelativeBmadOutputPath(sprintStatusPath || sourcePlanning?.sprintStatus?.path || "");
-  if (!safePath) return {};
+  if (!safePath) return isPlainObject(sourcePlanning?.sprintStatus?.storyStatuses) ? sourcePlanning.sprintStatus.storyStatuses : {};
   const absolutePath = resolve(repoRoot, safePath);
-  if (!isInsideOrSame(absolutePath, repoRoot) || !existsSync(absolutePath)) return {};
+  if (!isInsideOrSame(absolutePath, repoRoot) || !existsSync(absolutePath)) {
+    return isPlainObject(sourcePlanning?.sprintStatus?.storyStatuses) ? sourcePlanning.sprintStatus.storyStatuses : {};
+  }
   return countSprintStories(readFileSync(absolutePath, "utf8"), { artifactDir: dirname(absolutePath) }).storyStatuses;
 }
 

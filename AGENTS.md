@@ -27,6 +27,14 @@
   future behavior is to avoid the known sandbox attempt entirely and route
   straight to the approved exact outside-sandbox/read-only path or documented
   skip, not to rediscover the same EPERM/EACCES/EROFS failure.
+- Known boundary hits require a durable prevention step, not just a note. Before
+  continuing similar work, either patch the wrapper/preflight/classifier so the
+  known-bad sandbox path is skipped or routed first, add the command to the
+  known-boundary registry below with an exact stop line, or record why the
+  boundary is unavoidable and what source-owned check now detects it before the
+  expensive/failing path runs. If the same known boundary is hit again after
+  that, treat the prevention layer as defective work and fix that layer before
+  retrying the original command.
 - Known Kendall_Nxt sandbox-boundary commands:
   - Do not wrap manager scripts in node -e/spawnSync("node", ...) inside the
     sandbox to compact their JSON output. Nested Node process creation can hit
