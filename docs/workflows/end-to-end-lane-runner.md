@@ -136,6 +136,11 @@ cannot be completed without expanded party-mode authority.
    explicit supported lifecycle path.
 7. **Deliver PR.** Commit intended files, push the lane branch, open or update
    the PR, and monitor checks and review state.
+   Before merge, run an independent delivery subagent audit for the exact PR
+   head. Record only bounded metadata in `verify-pr-gates`: auditor id,
+   `merge-ready`/hold status, exact head SHA, and a short summary. Do not make
+   `codex-workspace.mjs` launch subagents, provider calls, or retain raw audit
+   transcripts.
 8. **Merge.** Merge only when the low-risk checklist is proven for the exact
    head SHA or when an explicit higher-risk approval covers the residual risk.
    If merge is blocked after checks are green, inspect thread-aware review
@@ -156,7 +161,7 @@ cannot be completed without expanded party-mode authority.
    run first. Add `--summary-json` when an automation runner needs the bounded
    cleanup-readiness packet instead of human-readable plan text. Apply cleanup
    only when the dry-run output names the expected PR, owner, worktree, local
-   branch, and remote branch for the current lane.
+   branch, remote branch, and delivery subagent audit for the current lane.
    Cleanup is resumable; if a previous attempt removed the worktree but stopped
    before branch deletion or manifest closure, rerun the same cleanup command
    from a stable worktree.

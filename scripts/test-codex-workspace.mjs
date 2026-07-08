@@ -1080,11 +1080,14 @@ try {
     assert(evidence[0].includes('"exact PR head matches local delivery head"'), "gate evidence must require exact-head proof");
     assert(evidence[0].includes('"thread-aware review query returned no unresolved non-outdated threads"'), "gate evidence must require thread-aware review proof");
     assert(evidence[0].includes('"all reported checks completed successfully"'), "gate evidence must require check proof");
+    assert(evidence[0].includes('"delivery subagent audit recommends merge-ready for exact head"'), "gate evidence must require delivery subagent audit proof");
+    assert(evidence[0].includes("shapeDeliverySubagentAuditEvidence"), "gate evidence must shape delivery subagent audit metadata");
     assert(evidence[0].includes("metadataOnly: true"), "gate evidence must be metadata-only");
 
     const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
     assert(packetBlock, "lane evidence packet source not found");
     assert(packetBlock[0].includes("pr_gate: prGateEvidence"), "lane packet must attach PR gate evidence");
+    assert(packetBlock[0].includes("delivery_subagent_audit: deliverySubagentAudit"), "lane packet must attach delivery subagent audit evidence");
     assert(packetBlock[0].includes("manifest.pr_gate_evidence || existingPacket.pr_gate"), "lane packet must preserve existing PR gate evidence");
   });
 
@@ -6003,7 +6006,21 @@ try {
 
       const result = runFixtureScript(
         fixture,
-        ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        [
+          "verify-pr-gates",
+          "resumed-task",
+          "--apply",
+          "--owner",
+          "runner-a",
+          "--delivery-audit-agent",
+          "Wegener",
+          "--delivery-audit-status",
+          "merge-ready",
+          "--delivery-audit-summary",
+          "Exact-head delivery audit passed.",
+          "--state-root",
+          fixture.stateRoot,
+        ],
         { cwd: fixture.worktree, env: fixture.env },
       );
 
@@ -6016,6 +6033,10 @@ try {
       assert(manifest.pr_gate_evidence.checks.total === 1, "gate evidence missing check rollup");
       assert(manifest.pr_gate_evidence.checks.passed.length === 1, "gate evidence did not classify passed check");
       assert(manifest.pr_gate_evidence.reviewThreads.unresolvedNonOutdatedCount === 0, "gate evidence did not prove resolved review threads");
+      assert(manifest.pr_gate_evidence.deliverySubagentAudit.status === "merge-ready", "gate evidence missing delivery audit status");
+      assert(manifest.delivery_subagent_audit?.agent === "Wegener", "manifest missing delivery subagent audit agent");
+      assert(manifest.delivery_subagent_audit?.headSha === manifest.pr_gate_evidence.expectedHeadSha, "delivery audit must bind to exact head");
+      assert(manifest.delivery_subagent_audit_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing delivery audit freshness timestamp");
       assert(manifest.pr_gate_evidence.authorityDecision?.operation === "verify-pr-gates", "PR gate authority decision missing");
       assert(manifest.pr_gate_evidence.authorityDecision?.authorityFamily === "delivery-gate", "PR gate authority family missing");
       assert(manifest.pr_gate_evidence.authorityDecision?.allowed === true, "PR gate authority decision not allowed");
@@ -6023,6 +6044,10 @@ try {
       assert(manifest.pr_checks_state_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing checks freshness timestamp");
       assert(manifest.pr_exact_head_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing exact-head freshness timestamp");
       assert(manifest.lane_evidence_packet?.pr_gate?.status === "passed", "lane packet missing PR gate evidence");
+      assert(
+        manifest.lane_evidence_packet?.delivery_subagent_audit?.status === "merge-ready",
+        "lane evidence packet missing delivery subagent audit",
+      );
       assert(
         manifest.lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "verify-pr-gates"),
         "lane evidence packet missing verify-pr-gates authority decision",
@@ -6045,6 +6070,60 @@ try {
     }
   });
 
+  test("verify-pr-gates fails closed without delivery subagent audit evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "verify-pr-gates unexpectedly passed without delivery audit evidence");
+      assert(result.stderr.includes("Delivery subagent audit agent missing"), result.stderr || result.stdout);
+      assert(result.stderr.includes("Delivery subagent audit status missing"), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.pr_gate_evidence, "manifest must not record gate evidence without delivery audit");
+      assert(!manifest.delivery_subagent_audit, "manifest must not record missing delivery audit evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates fails closed when delivery subagent audit is stale", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates",
+          "resumed-task",
+          "--apply",
+          "--owner",
+          "runner-a",
+          "--delivery-audit-agent",
+          "Wegener",
+          "--delivery-audit-status",
+          "merge-ready",
+          "--delivery-audit-summary",
+          "Audit from an older PR head.",
+          "--delivery-audit-head-sha",
+          "0000000000000000000000000000000000000000",
+          "--state-root",
+          fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "verify-pr-gates unexpectedly passed with stale delivery audit evidence");
+      assert(result.stderr.includes("Delivery subagent audit head 0000000000000000000000000000000000000000"), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.pr_gate_evidence, "manifest must not record gate evidence with stale delivery audit");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates fails closed on unresolved non-outdated review threads", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
@@ -6060,7 +6139,21 @@ try {
     try {
       const result = runFixtureScript(
         fixture,
-        ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        [
+          "verify-pr-gates",
+          "resumed-task",
+          "--apply",
+          "--owner",
+          "runner-a",
+          "--delivery-audit-agent",
+          "Wegener",
+          "--delivery-audit-status",
+          "merge-ready",
+          "--delivery-audit-summary",
+          "Exact-head delivery audit passed.",
+          "--state-root",
+          fixture.stateRoot,
+        ],
         { cwd: fixture.worktree, env: fixture.env },
       );
 
@@ -6103,7 +6196,21 @@ try {
       try {
         const result = runFixtureScript(
           fixture,
-          ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          [
+            "verify-pr-gates",
+            "resumed-task",
+            "--apply",
+            "--owner",
+            "runner-a",
+            "--delivery-audit-agent",
+            "Wegener",
+            "--delivery-audit-status",
+            "merge-ready",
+            "--delivery-audit-summary",
+            "Exact-head delivery audit passed.",
+            "--state-root",
+            fixture.stateRoot,
+          ],
           { cwd: fixture.worktree, env: fixture.env },
         );
 
@@ -6145,7 +6252,21 @@ try {
         }
         const result = runFixtureScript(
           fixture,
-          ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          [
+            "verify-pr-gates",
+            "resumed-task",
+            "--apply",
+            "--owner",
+            "runner-a",
+            "--delivery-audit-agent",
+            "Wegener",
+            "--delivery-audit-status",
+            "merge-ready",
+            "--delivery-audit-summary",
+            "Exact-head delivery audit passed.",
+            "--state-root",
+            fixture.stateRoot,
+          ],
           { cwd: fixture.worktree, env: fixture.env },
         );
 
@@ -6233,12 +6354,45 @@ try {
       );
       assert(manifest.lane_evidence_packet?.pr_delivery?.operation === "create-pr", "cleanup dropped PR delivery evidence");
       assert(manifest.lane_evidence_packet?.pr_gate?.status === "passed", "cleanup dropped PR gate evidence");
+      assert(
+        manifest.lane_evidence_packet?.delivery_subagent_audit?.status === "merge-ready",
+        "cleanup dropped delivery subagent audit evidence",
+      );
       assert(manifest.source_assignment_closed_at, "manifest missing source assignment closure timestamp");
       const assignment = readJson(join(fixture.stateRoot, "assignments", "cleanup-assignment.json"));
       assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
       assert(assignment.phase === "closed", `assignment phase is ${assignment.phase}`);
       assert(assignment.closed_at, "assignment missing closed_at");
       assert(assignment.last_result === "closed after cleanup of cleanup-task", `assignment last_result is ${assignment.last_result}`);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged summary-json blocks missing delivery subagent audit evidence", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.delivery_subagent_audit;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 0, `cleanupReady count is ${summary.counts.cleanupReady}`);
+      const [cleanup] = summary.results;
+      assert(cleanup.status === "skipped_delivery_audit_missing", `status is ${cleanup.status}`);
+      assert(cleanup.reason.includes("Delivery subagent audit agent missing"), cleanup.reason);
+      assert(cleanup.authorityDecision?.decision === "blocked", "cleanup audit blocker authority decision not blocked");
+      assert(
+        cleanup.authorityDecision?.blockedReasons?.some((reason) => reason.includes("Delivery subagent audit")),
+        "cleanup audit blocker authority decision missing audit blocker",
+      );
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -6887,6 +7041,18 @@ function createMergedCleanupFixture() {
       pr_number: 123,
       pr_delivery_head_sha: branchHead,
       source_assignment_id: "cleanup-assignment",
+      delivery_subagent_audit: {
+        schemaVersion: 1,
+        status: "merge-ready",
+        agent: "Wegener",
+        summary: "Exact-head delivery audit passed.",
+        headSha: branchHead,
+        checkedAt: "2026-06-21T00:00:00.000Z",
+        source: "delivery-subagent",
+        blockers: [],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
       owner: "runner-a",
       events: [],
     }, null, 2)}\n`,
