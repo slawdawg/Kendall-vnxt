@@ -6397,7 +6397,7 @@ try {
       assert(manifest.lane_evidence_packet?.pr_delivery?.operation === "create-pr", "cleanup dropped PR delivery evidence");
       assert(manifest.lane_evidence_packet?.pr_gate?.status === "passed", "cleanup dropped PR gate evidence");
       assert(
-        manifest.lane_evidence_packet?.delivery_subagent_audit?.status === "merge-ready",
+        manifest.lane_evidence_packet?.delivery_subagent_audit?.status === "cleanup-ready",
         "cleanup dropped delivery subagent audit evidence",
       );
       assert(manifest.source_assignment_closed_at, "manifest missing source assignment closure timestamp");
@@ -6434,6 +6434,165 @@ try {
       assert(
         cleanup.authorityDecision?.blockedReasons?.some((reason) => reason.includes("Delivery subagent audit")),
         "cleanup audit blocker authority decision missing audit blocker",
+      );
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged summary-json accepts exact-head post-merge delivery audit evidence", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.delivery_subagent_audit;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+
+      const result = runFixtureScript(
+        fixture,
+        [
+          "cleanup-merged",
+          "cleanup-task",
+          "--summary-json",
+          "--delete-remote",
+          "--owner",
+          "runner-a",
+          "--delivery-audit-agent",
+          "Bacon",
+          "--delivery-audit-status",
+          "cleanup-ready",
+          "--delivery-audit-summary",
+          "Post-merge cleanup audit passed for exact head.",
+          "--delivery-audit-head-sha",
+          expectedHead,
+          "--take-ownership",
+          "--takeover-reason",
+          "merged PR cleanup after manager dispatcher lane completed",
+          "--state-root",
+          fixture.stateRoot,
+        ],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 1, `cleanupReady count is ${summary.counts.cleanupReady}`);
+      assert(summary.results[0].status === "ready", `status is ${summary.results[0].status}`);
+      const updated = readJson(manifestPath);
+      assert(!updated.delivery_subagent_audit, "summary-json must not persist cleanup audit evidence");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged apply blocks assignment owner mismatch before deleting resources", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.delivery_subagent_audit;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+      const assignment = readJson(assignmentPath);
+      assignment.owner = "manager-20260706-001/dispatcher";
+      writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+
+      const result = runFixtureScript(
+        fixture,
+        [
+          "cleanup-merged",
+          "cleanup-task",
+          "--apply",
+          "--delete-remote",
+          "--owner",
+          "runner-a",
+          "--delivery-audit-agent",
+          "Bacon",
+          "--delivery-audit-status",
+          "cleanup-ready",
+          "--delivery-audit-summary",
+          "Post-merge cleanup audit passed for exact head.",
+          "--delivery-audit-head-sha",
+          expectedHead,
+          "--state-root",
+          fixture.stateRoot,
+        ],
+        { env: fixture.env },
+      );
+      assert(result.code !== 0, "cleanup unexpectedly applied without assignment takeover");
+      assert(result.stderr.includes("Assignment cleanup-assignment is owned by manager-20260706-001/dispatcher"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "cleanup removed worktree before assignment preflight");
+      assert(branchExists(fixture.root, fixture.branch), "cleanup deleted local branch before assignment preflight");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup deleted remote branch before assignment preflight");
+      const updated = readJson(manifestPath);
+      assert(updated.status === "cleanup_partial", `manifest status is ${updated.status}`);
+      assert(!updated.worktree_removed_at, "manifest recorded worktree removal before assignment preflight");
+      assert(!updated.local_branch_deleted_at, "manifest recorded local branch deletion before assignment preflight");
+      assert(!updated.remote_branch_deleted_at, "manifest recorded remote branch deletion before assignment preflight");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged apply records post-merge cleanup audit evidence before cleanup", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.delivery_subagent_audit;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+      const assignment = readJson(assignmentPath);
+      assignment.owner = "manager-20260706-001/dispatcher";
+      writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+
+      const result = runFixtureScript(
+        fixture,
+        [
+          "cleanup-merged",
+          "cleanup-task",
+          "--apply",
+          "--delete-remote",
+          "--owner",
+          "runner-a",
+          "--delivery-audit-agent",
+          "Bacon",
+          "--delivery-audit-status",
+          "cleanup-ready",
+          "--delivery-audit-summary",
+          "Post-merge cleanup audit passed for exact head.",
+          "--delivery-audit-head-sha",
+          expectedHead,
+          "--take-ownership",
+          "--takeover-reason",
+          "merged PR cleanup after manager dispatcher lane completed",
+          "--state-root",
+          fixture.stateRoot,
+        ],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const updated = readJson(manifestPath);
+      assert(updated.status === "closed", `manifest status is ${updated.status}`);
+      assert(updated.delivery_subagent_audit?.status === "cleanup-ready", "manifest missing cleanup-ready audit");
+      assert(updated.delivery_subagent_audit?.agent === "Bacon", "manifest missing cleanup audit agent");
+      assert(updated.delivery_subagent_audit?.headSha === expectedHead, "cleanup audit must bind to exact head");
+      assert(
+        updated.lane_evidence_packet?.delivery_subagent_audit?.status === "cleanup-ready",
+        "lane packet missing cleanup audit evidence",
+      );
+      assert(
+        updated.events.some((event) => event.type === "cleanup_delivery_audit_revalidated"),
+        "manifest missing cleanup audit revalidation event",
+      );
+      const closedAssignment = readJson(assignmentPath);
+      assert(closedAssignment.status === "closed", `assignment status is ${closedAssignment.status}`);
+      assert(closedAssignment.owner === "runner-a", `assignment owner is ${closedAssignment.owner}`);
+      assert(
+        closedAssignment.events.some((event) => event.type === "cleanup_takeover_applied"),
+        "assignment missing cleanup takeover event",
       );
     } finally {
       cleanupMergedCleanupFixture(fixture);
@@ -7085,9 +7244,9 @@ function createMergedCleanupFixture() {
       source_assignment_id: "cleanup-assignment",
       delivery_subagent_audit: {
         schemaVersion: 1,
-        status: "merge-ready",
+        status: "cleanup-ready",
         agent: "Wegener",
-        summary: "Exact-head delivery audit passed.",
+        summary: "Exact-head cleanup audit passed.",
         headSha: branchHead,
         checkedAt: "2026-06-21T00:00:00.000Z",
         source: "delivery-subagent",
