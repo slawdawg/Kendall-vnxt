@@ -2464,6 +2464,150 @@ try {
     }
   });
 
+  test("close-assignments approved manager stale cleanup blocks fresh worker without delegation evidence", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-manager-delegation-blocked-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-manager-stale-record-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-manager-stale-record-lane",
+            branch: "codex/manager-stale-record-cleanup-fixture",
+            worktree_path: join(closeoutStateRoot, "worktrees", "missing-manager-stale-record"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "manager-stable/dispatcher",
+            source_assignment_id: "manager-stale-record-cleanup-fixture",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "manager-stale-record-cleanup-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "manager-stale-record-cleanup-fixture",
+            task_id: "closed-manager-stale-record-lane",
+            branch: "codex/manager-stale-record-cleanup-fixture",
+            status: "active",
+            owner: "manager-stable/dispatcher",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "manager-stale-record-cleanup-fixture",
+        "--owner",
+        "manager-stable/codex-fresh",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--summary-json",
+      ], { env });
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.counts.blocked === 1, result.stdout || result.stderr);
+      assert(packet.results[0].status === "blocked", result.stdout || result.stderr);
+      assert(packet.results[0].reason.includes("requires delegated cleanup owner evidence"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "blocked manager delegated stale cleanup mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments delegated stable owner closes approved manager stale cleanup from fresh worker", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-manager-delegation-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-manager-delegated-stale-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-manager-delegated-stale-lane",
+            branch: "codex/manager-delegated-stale-cleanup-fixture",
+            worktree_path: join(closeoutStateRoot, "worktrees", "missing-manager-delegated-stale"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "manager-stable/dispatcher",
+            source_assignment_id: "manager-delegated-stale-cleanup-fixture",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "manager-delegated-stale-cleanup-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "manager-delegated-stale-cleanup-fixture",
+            task_id: "closed-manager-delegated-stale-lane",
+            branch: "codex/manager-delegated-stale-cleanup-fixture",
+            status: "active",
+            owner: "manager-stable/dispatcher",
+            phase: "handoff",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "manager-delegated-stale-cleanup-fixture",
+        "--owner",
+        "manager-stable/codex-fresh",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--delegated-cleanup-owner",
+        "manager-stable/dispatcher",
+        "--delegation-evidence",
+        "manager delegated stable owner evidence",
+        "--apply",
+      ], { env });
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("approved stale record cleanup delegated from manager-stable/dispatcher"), result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "manager-delegated-stale-cleanup-fixture.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync(join(tasksDir, "closed-manager-delegated-stale-lane.json"), "utf8"));
+      assert(assignment.status === "closed", JSON.stringify(assignment));
+      assert(assignment.closeout_mode === "stale_record_cleanup", JSON.stringify(assignment));
+      assert(assignment.closeout_approval_evidence === "operator approved stale cleanup", JSON.stringify(assignment));
+      assert(assignment.closeout_delegated_owner === "manager-stable/dispatcher", JSON.stringify(assignment));
+      assert(assignment.closeout_delegation_evidence === "manager delegated stable owner evidence", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.worktreeStatus === "missing", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.remoteBranchStatus === "absent", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.prStatus === "none", JSON.stringify(assignment));
+      assert(manifest.source_assignment_closed_at === assignment.closed_at, JSON.stringify(manifest));
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("close-assignments stale cleanup fails closed when worktree still exists", () => {
     const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-stale-live-"));
     try {

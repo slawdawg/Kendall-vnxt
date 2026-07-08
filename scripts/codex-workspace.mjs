@@ -189,6 +189,8 @@ close-assignments options:
   --summary-json            Without --apply, print a bounded JSON closeout summary.
   --allow-stale-record-cleanup Allow explicitly approved closeout of abandoned stale assignment records.
   --approval <text>         Required with --allow-stale-record-cleanup --apply.
+  --delegated-cleanup-owner <id> Stable owner delegated to this worker for approved stale-record cleanup only.
+  --delegation-evidence <text> Required with --delegated-cleanup-owner. Metadata-only delegation evidence.
 
 takeover options:
   --dry-run                 Print takeover packet without mutation.
@@ -1746,6 +1748,8 @@ function closeAssignments(argv) {
   const closeoutOptions = {
     allowStaleRecordCleanup: Boolean(options.allowStaleRecordCleanup),
     approval: String(options.approval || "").trim(),
+    delegatedCleanupOwner: String(options.delegatedCleanupOwner || "").trim(),
+    delegationEvidence: String(options.delegationEvidence || "").trim(),
   };
   const plans = records.map((record) => assignmentCloseoutPlan(record, manifests, currentOwner, closeoutOptions));
   const lines = plans.map(renderAssignmentCloseoutPlan);
@@ -1778,10 +1782,13 @@ function closeAssignments(argv) {
 
 function buildCloseAssignmentsSummary({ state, currentOwner, plans }) {
   const results = plans.map(shapeAssignmentCloseoutPlan);
+  const delegatedCleanup = plans.find((plan) => plan.delegatedCleanup);
   return {
     generatedAt: new Date().toISOString(),
     stateRoot: state.root,
     currentOwner,
+    delegatedCleanupOwner: delegatedCleanup?.delegatedCleanupOwner || null,
+    delegatedCleanupEvidence: delegatedCleanup?.delegationEvidence || null,
     counts: {
       total: results.length,
       closeable: results.filter((result) => result.status === "closeable").length,
@@ -1807,6 +1814,7 @@ function shapeAssignmentCloseoutPlan(plan) {
     closeoutMode: plan.closeoutMode || "blocked",
     staleRecordCleanupEligible: Boolean(plan.staleRecordCleanupEligible),
     staleRecordCleanupEvidence: plan.staleRecordCleanupEvidence || null,
+    delegatedCleanup: plan.delegatedCleanup || null,
     assignmentPath: plan.assignmentPath,
     manifestPath: plan.manifestPath,
   };
@@ -3447,6 +3455,7 @@ function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
   validateAssignment(assignment, record.path);
   const assignmentId = assignment.assignment_id;
   const manifestRecord = closedManifestForAssignment(assignment, manifests);
+  const delegatedCleanup = delegatedCleanupEvidence(assignment, currentOwner, options);
   const base = {
     assignmentId,
     assignmentPath: record.path,
@@ -3458,6 +3467,9 @@ function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
     closeoutMode: "blocked",
     staleRecordCleanupEligible: false,
     staleRecordCleanupEvidence: null,
+    delegatedCleanup,
+    delegatedCleanupOwner: delegatedCleanup?.owner || null,
+    delegationEvidence: delegatedCleanup?.evidence || null,
     reason: "",
   };
 
@@ -3496,10 +3508,24 @@ function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
           reason: "stale record cleanup requires --approval evidence in at least 10 non-whitespace characters",
         };
       }
+      if (managerStaleCleanupDelegationRequired(assignment.owner, currentOwner) && !delegatedCleanup?.valid) {
+        return {
+          ...staleBase,
+          reason: delegatedCleanup?.reason || `manager-owned worker ${currentOwner} requires delegated cleanup owner evidence for assignment owner ${assignment.owner}`,
+        };
+      }
+      if (options.delegatedCleanupOwner && !delegatedCleanup.valid) {
+        return {
+          ...staleBase,
+          reason: delegatedCleanup.reason,
+        };
+      }
       return {
         ...staleBase,
         closeable: true,
-        reason: `approved stale record cleanup; assignment owner ${assignment.owner} does not match ${currentOwner}; worktree, branch, and PR evidence absent`,
+        reason: delegatedCleanup?.valid
+          ? `approved stale record cleanup delegated from ${delegatedCleanup.owner} to ${currentOwner}; worktree, branch, and PR evidence absent`
+          : `approved stale record cleanup; assignment owner ${assignment.owner} does not match ${currentOwner}; worktree, branch, and PR evidence absent`,
       };
     }
     return { ...base, reason: `assignment owner ${assignment.owner} does not match ${currentOwner}` };
@@ -3511,6 +3537,35 @@ function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
     closeoutMode: "closed_workspace",
     reason: `closed workspace evidence ${manifest.task_id}`,
   };
+}
+
+function delegatedCleanupEvidence(assignment, currentOwner, options = {}) {
+  const owner = String(options.delegatedCleanupOwner || "").trim();
+  if (!owner) return null;
+  const evidence = String(options.delegationEvidence || "").trim();
+  if (!options.allowStaleRecordCleanup) {
+    return { owner, evidence, valid: false, reason: "--delegated-cleanup-owner is only supported with --allow-stale-record-cleanup" };
+  }
+  if (!validTakeoverReason(options.approval)) {
+    return { owner, evidence, valid: false, reason: "delegated stale cleanup requires explicit --approval evidence" };
+  }
+  if (!validTakeoverReason(evidence)) {
+    return { owner, evidence, valid: false, reason: "--delegation-evidence must cite stable owner delegation in at least 10 non-whitespace characters" };
+  }
+  if (!assignment.owner) {
+    return { owner, evidence, valid: false, reason: "delegated stale cleanup requires assignment owner evidence" };
+  }
+  if (assignment.owner !== owner) {
+    return { owner, evidence, valid: false, reason: `delegated cleanup owner ${owner} does not match assignment owner ${assignment.owner}` };
+  }
+  if (owner === currentOwner) {
+    return { owner, evidence, valid: false, reason: "delegated cleanup owner matches current owner; use normal closeout or stale cleanup without delegation" };
+  }
+  return { owner, evidence, valid: true, reason: "delegated stable owner evidence matches assignment owner" };
+}
+
+function managerStaleCleanupDelegationRequired(assignmentOwner, currentOwner) {
+  return Boolean(assignmentOwner && currentOwner && assignmentOwner !== currentOwner && isManagerOwner(assignmentOwner) && isManagerOwner(currentOwner));
 }
 
 function staleRecordCleanupCloseoutEvidence(assignment, manifest) {
@@ -3653,6 +3708,10 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner, options = {}
     if (plan.closeoutMode === "stale_record_cleanup") {
       assignment.closeout_approval_evidence = String(options.approval || "").trim();
       assignment.closeout_abandonment_evidence = plan.staleRecordCleanupEvidence;
+      if (plan.delegatedCleanup?.valid) {
+        assignment.closeout_delegated_owner = plan.delegatedCleanup.owner;
+        assignment.closeout_delegation_evidence = plan.delegatedCleanup.evidence;
+      }
     }
     assignment.events = [
       ...(Array.isArray(assignment.events) ? assignment.events : []),
