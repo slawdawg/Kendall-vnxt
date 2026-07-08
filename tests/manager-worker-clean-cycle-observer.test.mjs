@@ -64,6 +64,15 @@ test("reports stable only when every active worker reaches required clean cycles
   assert.deepEqual(packet.stopLines, WORKER_CLEAN_CYCLE_STOP_LINES);
   assert.match(packet.retention, /raw payloads and tmux scrollback omitted/);
   assert(packet.workerCycles.every((row) => row.cleanCycleCount === 10));
+  assert.equal(packet.stabilityProof.proofStatus, "proven");
+  assert.equal(packet.stabilityProof.proven, true);
+  assert.equal(packet.stabilityProof.target.requiredCleanCyclesPerWorker, 10);
+  assert.deepEqual(packet.stabilityProof.workerCounts, { active: 2, stable: 2, observing: 0, attention: 0 });
+  assert.deepEqual(packet.stabilityProof.cleanCycleRange, { min: 10, max: 10, remainingTotal: 0 });
+  assert.deepEqual(packet.stabilityProof.stableWorkerIds, ["codex-2", "codex-3"]);
+  assert.equal(packet.stabilityProof.rawPayloadRetained, false);
+  assert.equal(packet.stabilityProof.mutation, "none");
+  assert(packet.stabilityProof.evidenceRefs.every((ref) => ref.startsWith("manager-run:")));
 });
 
 test("continues observing when workers have fewer than the required clean cycles", () => {
@@ -78,6 +87,10 @@ test("continues observing when workers have fewer than the required clean cycles
   assert.equal(packet.observingWorkerCount, 2);
   assert.equal(packet.workerCycles.find((row) => row.workerId === "codex-2").remainingCycles, 7);
   assert.equal(packet.workerCycles.find((row) => row.workerId === "codex-3").remainingCycles, 3);
+  assert.equal(packet.stabilityProof.proofStatus, "observing");
+  assert.equal(packet.stabilityProof.proven, false);
+  assert.deepEqual(packet.stabilityProof.cleanCycleRange, { min: 3, max: 7, remainingTotal: 10 });
+  assert(packet.stabilityProof.blockers.includes("clean_cycle_target_incomplete"));
 });
 
 test("surfaces unresolved worker questions as attention", () => {
@@ -99,6 +112,38 @@ test("surfaces unresolved worker questions as attention", () => {
   assert.equal(packet.ok, false);
   assert.equal(packet.attentionWorkerCount, 1);
   assert(packet.blockers.includes("codex-2: 1 unanswered compact worker question(s)"));
+  assert.equal(packet.stabilityProof.proofStatus, "attention");
+  assert.equal(packet.stabilityProof.proven, false);
+  assert.deepEqual(packet.stabilityProof.attentionWorkerIds, ["codex-2"]);
+  assert(packet.stabilityProof.blockers.includes("attention_worker_present"));
+});
+
+test("stability proof reports latest checkpoint by parsed time, not lexical order", () => {
+  const workers = [worker("codex-2", "lane-a"), worker("codex-3", "lane-b")];
+  const packet = buildWorkerCleanCycleObserver(
+    baseInput({
+      workers,
+      workerStatusPacket: { summary: { workers } },
+      checkpoints: [
+        {
+          checkpointId: "checkpoint-lane-a-1",
+          timestamp: "07/10/2026 00:00:00 GMT",
+          summary: "compact checkpoint non iso",
+          sourceRefs: ["assignment:lane-a"],
+        },
+        {
+          checkpointId: "checkpoint-lane-b-1",
+          timestamp: "2026-07-09T00:00:00.000Z",
+          summary: "compact checkpoint iso",
+          sourceRefs: ["assignment:lane-b"],
+        },
+      ],
+    }),
+    { runId: "manager-test", since, requiredCycles: 1 },
+  );
+
+  assert.equal(packet.status, "stable");
+  assert.equal(packet.stabilityProof.observationWindow.latestCheckpointAt, "07/10/2026 00:00:00 GMT");
 });
 
 test("does not block on worker questions already answered by the manager", () => {

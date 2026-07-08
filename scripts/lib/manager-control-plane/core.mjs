@@ -1366,8 +1366,13 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
   }
 
   const criticalResourceBlocked = blockers.some((blocker) => blocker.code === "resource-not-normal" && String(resourceState) === "critical");
-  const paused = blockers.some((blocker) => blocker.code === "usage-not-normal" || (blocker.code === "resource-not-normal" && !criticalResourceBlocked));
-  const status = blockers.length === 0 ? "ready" : paused && !criticalResourceBlocked ? "paused" : "blocked";
+  const proofBlocked = blockers.some((blocker) => String(blocker.code || "").startsWith("throughput-proof-"));
+  const pauseOnlyBlocker = (blocker) =>
+    blocker.code === "usage-not-normal" ||
+    blocker.code === "worker-target-stop-line" ||
+    (blocker.code === "resource-not-normal" && !criticalResourceBlocked);
+  const paused = !proofBlocked && blockers.length > 0 && blockers.every(pauseOnlyBlocker);
+  const status = blockers.length === 0 ? "ready" : paused ? "paused" : "blocked";
   return packet({
     ok: blockers.length === 0,
     status,
@@ -1406,7 +1411,8 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
         method: "tmux capture-pane after C-m submit",
         failureRoute: "manager-worker-submit-pending or pointer receipt repair before more text is sent",
       },
-      nextLiveDogfoodCommand: `node ./scripts/manager-run-loop.mjs --run-id ${runId} --interval-ms 60000 --max-iterations 10 --summary-json`,
+      nextLiveDogfoodCommand: `node ./scripts/manager-run-loop.mjs --run-id ${shellSingleQuote(runId)} --interval-ms 60000 --max-iterations 10 --summary-json`,
+      nextStabilityObserverCommand: `node ./scripts/manager-worker-clean-cycle-observer.mjs --run-id ${shellSingleQuote(runId)} --required-cycles 10 --summary-json`,
       stopLines: [
         "readiness only",
         "no live tmux mutation",
@@ -15850,7 +15856,7 @@ function retryRouteNextAction(action, sandboxBoundary = false) {
 }
 
 function retryRouteDurableFix(action = "", sandboxBoundary = false) {
-  if (sandboxBoundary) return "Record the sandbox boundary in lane evidence; add a wrapper or preflight only if the same boundary recurs outside sandbox constraints.";
+  if (sandboxBoundary) return "Record the sandbox boundary in lane evidence and add or refresh durable avoidance before the next similar run: AGENTS.md guidance, a Tool Churn RCA example, or a project-owned wrapper/preflight that skips the known sandbox attempt and routes to the approved exact outside-sandbox/read-only path.";
   if (action === "tool_churn_rca") return "Create or update durable fix guidance after RCA identifies the root cause.";
   if (action === "focused_verification") return "Add focused verification coverage or narrow the failing check to the changed surface.";
   if (action === "model_escalation") return "Record the escalation rule so future similar failures choose the right model before retry.";
@@ -15921,6 +15927,7 @@ function buildRetryRoute(signal = {}, context = {}) {
     retryStopLine,
     oneNextSafeAction,
     durableFixRecommendation,
+    durableFixRequired: classification.sandboxBoundary || action === "tool_churn_rca",
     resumeCriteria,
     rerunRequirement: classification.sandboxBoundary && readOnlyVerification ? "Rerun the exact same read-only verification command outside the sandbox once." : null,
     parkedLane: action === "park_lane" || blockedAfterSafeWork

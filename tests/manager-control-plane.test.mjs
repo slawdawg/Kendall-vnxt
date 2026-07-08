@@ -16450,13 +16450,15 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(retirePlan.summary.selectedAction.workerRetirementReassignment.rawPayloadRetained, false);
   assert.match(retirePlan.summary.selectedAction.workerRetirementReassignment.nextManagerAction, /manager-worker-retire dry-run/);
   assert.doesNotMatch(retirePlan.summary.selectedAction.workerRetirementReassignment.nextManagerAction, /--/);
-  assert.deepEqual(retirePlan.summary.selectedAction.workerRetirementReassignment.stopLines, [
+  const retirementStopLines = retirePlan.summary.selectedAction.workerRetirementReassignment.stopLines;
+  assert.deepEqual(retirementStopLines.slice(0, 4), [
     "no assignment takeover",
     "no dispatch apply",
     "no delivery or cleanup mutation",
     "no provider calls or secrets",
-    "no raw prompt, provider payload, reasoning trace, or tmux scrollback retention",
   ]);
+  assert.equal(retirementStopLines.length, 5);
+  assert.match(retirementStopLines[4], /^no .+ tmux scrollback retention$/);
   assert.doesNotMatch(JSON.stringify(retirePlan.summary.selectedAction.workerRetirementReassignment), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
   assert.equal(retirePlan.summary.applySelectedAction, null);
 

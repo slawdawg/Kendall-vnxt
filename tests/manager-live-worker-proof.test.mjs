@@ -189,6 +189,8 @@ test("live worker proof readiness is ready when proof, workers, posture, and rec
     assert(packet.nextActions.some((action) => action.code === "start-live-worker-proof"));
     assert.match(packet.summary.nextLiveDogfoodCommand, /manager-run-loop/);
     assert.match(packet.summary.nextLiveDogfoodCommand, /--max-iterations 10/);
+    assert.match(packet.summary.nextStabilityObserverCommand, /manager-worker-clean-cycle-observer/);
+    assert.match(packet.summary.nextStabilityObserverCommand, /--required-cycles 10/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
