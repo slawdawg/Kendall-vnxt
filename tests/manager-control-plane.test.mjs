@@ -1002,6 +1002,238 @@ test("refill plan skips correct-course candidates that already have local story 
   assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, selectedCandidateId);
 });
 
+test("refill materialization uses closed assignment evidence when sprint tracker is stale", () => {
+  const sprintPath = ensureIgnoredBmadFixture(
+    "_bmad-output/implementation-artifacts/sprint-status-manager-closed-overlay-test.yaml",
+    `generated: 2026-07-08T00:00:00+00:00
+last_updated: 2026-07-08
+project: Kendall_Nxt
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/slaw_dawg/Kendall_Nxt/_bmad-output/implementation-artifacts
+source_key: manager-closed-overlay-test
+source_ref: _bmad-output/planning-artifacts/epics.md
+
+development_status:
+  epic-6: in-progress
+  6-1-planning-only-bmad-refill-continuation: done
+  6-2-correct-course-backlog-materialization: done
+  6-3-stale-owner-takeover-inspection-packet: done
+  6-4-one-lane-dispatch-dogfood-harness: done
+  6-5-worker-ramp-readiness-gate: done
+  6-6-overnight-run-recovery-and-housekeeping: done
+  epic-7: in-progress
+  7-1-manager-refill-apply-gate: ready-for-dev
+  7-2-manager-story-creation-apply-gate: ready-for-dev
+  7-3-manager-review-delivery-queue: ready-for-dev
+  7-4-worker-retirement-and-reassignment: ready-for-dev
+  7-5-ten-cycle-stability-observer: ready-for-dev
+  7-6-cleanup-and-handoff-closeout: ready-for-dev
+`,
+  );
+
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 84 },
+          laneAssignmentStatusCounts: { active: 1, closed: 6 },
+          laneAssignments: [
+            "7-1-manager-refill-apply-gate",
+            "7-2-manager-story-creation-apply-gate",
+            "7-3-manager-review-delivery-queue",
+            "7-4-worker-retirement-and-reassignment",
+            "7-5-ten-cycle-stability-observer",
+            "7-6-cleanup-and-handoff-closeout",
+          ].map((storyKey) => ({
+            assignmentId: `bmad-${storyKey}`,
+            taskId: `20260708-bmad-${storyKey}`,
+            branch: `codex/bmad-${storyKey}`,
+            status: "closed",
+            phase: "closed",
+            reasonCode: "assignment_closed",
+          })),
+        },
+      },
+      dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+      sourcePlanningState: {
+        sourceKey: "manager-closed-overlay-test",
+        sprintStatus: {
+          exists: true,
+          path: sprintPath,
+          backlogStories: 0,
+          readyStories: 6,
+          readyForDevStories: 6,
+          activeStories: 0,
+          doneStories: 6,
+          nextBacklogStoryKey: null,
+        },
+      },
+      authorityClass: "low_risk",
+    },
+  );
+
+  assert.equal(plan.summary.materializationGate.state, "ready");
+  const selectedEpic = Number(String(plan.summary.materializationGate.selectedCandidateStory.id).match(/^(\d+)-/)?.[1] || 0);
+  assert.ok(selectedEpic > 7);
+  assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, plan.summary.materializationGate.selectedCandidateStory.id);
+});
+
+test("refill materialization ignores closed-looking backlog candidate rows", () => {
+  const sprintPath = ensureIgnoredBmadFixture(
+    "_bmad-output/implementation-artifacts/sprint-status-manager-backlog-overlay-test.yaml",
+    `generated: 2026-07-08T00:00:00+00:00
+development_status:
+  epic-7: in-progress
+  7-1-manager-refill-apply-gate: ready-for-dev
+  7-2-manager-story-creation-apply-gate: ready-for-dev
+  7-3-manager-review-delivery-queue: ready-for-dev
+  7-4-worker-retirement-and-reassignment: ready-for-dev
+  7-5-ten-cycle-stability-observer: ready-for-dev
+  7-6-cleanup-and-handoff-closeout: ready-for-dev
+`,
+  );
+
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 84 },
+          laneAssignmentStatusCounts: { active: 1 },
+          backlogCandidates: [
+            { item_id: "7-1-manager-refill-apply-gate", status: "closed", reasonCode: "closed_assignment_evidence" },
+            { item_id: "7-2-manager-story-creation-apply-gate", status: "closed", reasonCode: "closed_assignment_evidence" },
+            { item_id: "7-3-manager-review-delivery-queue", status: "closed", reasonCode: "closed_assignment_evidence" },
+            { item_id: "7-4-worker-retirement-and-reassignment", status: "closed", reasonCode: "closed_assignment_evidence" },
+            { item_id: "7-5-ten-cycle-stability-observer", status: "closed", reasonCode: "closed_assignment_evidence" },
+            { item_id: "7-6-cleanup-and-handoff-closeout", status: "closed", reasonCode: "closed_assignment_evidence" },
+          ],
+        },
+      },
+      dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+      sourcePlanningState: {
+        sourceKey: "manager-backlog-overlay-test",
+        sprintStatus: { exists: true, path: sprintPath, backlogStories: 0, readyStories: 6, readyForDevStories: 6, activeStories: 0, doneStories: 0, nextBacklogStoryKey: null },
+      },
+      authorityClass: "low_risk",
+    },
+  );
+
+  assert.equal(plan.summary.materializationGate.state, "blocked");
+  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+});
+
+test("refill materialization ignores dirty active assignment evidence despite closed reason", () => {
+  const sprintPath = ensureIgnoredBmadFixture(
+    "_bmad-output/implementation-artifacts/sprint-status-manager-dirty-overlay-test.yaml",
+    `generated: 2026-07-08T00:00:00+00:00
+development_status:
+  epic-7: in-progress
+  7-1-manager-refill-apply-gate: ready-for-dev
+  7-2-manager-story-creation-apply-gate: ready-for-dev
+  7-3-manager-review-delivery-queue: ready-for-dev
+  7-4-worker-retirement-and-reassignment: ready-for-dev
+  7-5-ten-cycle-stability-observer: ready-for-dev
+  7-6-cleanup-and-handoff-closeout: ready-for-dev
+`,
+  );
+
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 84 },
+          laneAssignmentStatusCounts: { active: 1 },
+          laneAssignments: [
+            "7-1-manager-refill-apply-gate",
+            "7-2-manager-story-creation-apply-gate",
+            "7-3-manager-review-delivery-queue",
+            "7-4-worker-retirement-and-reassignment",
+            "7-5-ten-cycle-stability-observer",
+            "7-6-cleanup-and-handoff-closeout",
+          ].map((storyKey) => ({
+            assignmentId: `bmad-${storyKey}`,
+            taskId: `20260708-bmad-${storyKey}`,
+            branch: `codex/bmad-${storyKey}`,
+            status: "active",
+            phase: "in_progress",
+            reasonCode: "assignment_closed",
+            dirty: true,
+          })),
+        },
+      },
+      dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+      sourcePlanningState: {
+        sourceKey: "manager-dirty-overlay-test",
+        sprintStatus: { exists: true, path: sprintPath, backlogStories: 0, readyStories: 6, readyForDevStories: 6, activeStories: 0, doneStories: 0, nextBacklogStoryKey: null },
+      },
+      authorityClass: "low_risk",
+    },
+  );
+
+  assert.equal(plan.summary.materializationGate.state, "blocked");
+  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+});
+
+test("refill materialization reads closed workspace evidence when workspace summary is truncated", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-closed-workspace-overlay-"));
+  const tasksRoot = join(stateRoot, "tasks");
+  mkdirSync(tasksRoot, { recursive: true });
+  for (const storyKey of [
+    "7-1-manager-refill-apply-gate",
+    "7-2-manager-story-creation-apply-gate",
+    "7-3-manager-review-delivery-queue",
+    "7-4-worker-retirement-and-reassignment",
+    "7-5-ten-cycle-stability-observer",
+    "7-6-cleanup-and-handoff-closeout",
+  ]) {
+    writeFileSync(join(tasksRoot, `20260708-bmad-${storyKey}.json`), JSON.stringify({
+      taskId: `20260708-bmad-${storyKey}`,
+      branch: `codex/bmad-${storyKey}`,
+      status: "closed",
+    }), "utf8");
+  }
+  const sprintPath = ensureIgnoredBmadFixture(
+    "_bmad-output/implementation-artifacts/sprint-status-manager-workspace-overlay-test.yaml",
+    `generated: 2026-07-08T00:00:00+00:00
+development_status:
+  epic-7: in-progress
+  7-1-manager-refill-apply-gate: ready-for-dev
+  7-2-manager-story-creation-apply-gate: ready-for-dev
+  7-3-manager-review-delivery-queue: ready-for-dev
+  7-4-worker-retirement-and-reassignment: ready-for-dev
+  7-5-ten-cycle-stability-observer: ready-for-dev
+  7-6-cleanup-and-handoff-closeout: ready-for-dev
+`,
+  );
+
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, stateRoot, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 84 },
+          laneAssignmentStatusCounts: { active: 1 },
+          workspaceAssignmentsTruncated: true,
+        },
+      },
+      dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+      sourcePlanningState: {
+        sourceKey: "manager-workspace-overlay-test",
+        sprintStatus: { exists: true, path: sprintPath, backlogStories: 0, readyStories: 6, readyForDevStories: 6, activeStories: 0, doneStories: 0, nextBacklogStoryKey: null },
+      },
+      authorityClass: "low_risk",
+    },
+  );
+
+  assert.equal(plan.summary.materializationGate.state, "ready");
+  const selectedEpic = Number(String(plan.summary.materializationGate.selectedCandidateStory.id).match(/^(\d+)-/)?.[1] || 0);
+  assert.ok(selectedEpic > 7);
+});
+
 test("refill materialization gate requires request packet authorization before apply", () => {
   const plan = buildRefillPlan(
     { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },

@@ -11642,7 +11642,14 @@ export function buildRefillPlan(options = {}, context = {}) {
       },
     };
   }
-  const materializationGate = buildRefillMaterializationGate(workCreationStep, sourceSlice, sourcePlanning, bmadRequestPacketPlan?.summary?.validation || null);
+  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
+  const materializationGate = buildRefillMaterializationGate(
+    workCreationStep,
+    sourceSlice,
+    sourcePlanning,
+    bmadRequestPacketPlan?.summary?.validation || null,
+    { closedStoryStatuses },
+  );
   const splitPlan = starvation && sourceSlice ? buildSplitPlan(context.splitHints || options.splitHints || null) : null;
   const candidateLanes = starvation && workCreationStep && !requestPacketBlocked ? buildCandidateLanePackets(refillNeeded, sourceSlice, workCreationStep, splitPlan) : [];
   const dispatcherRefill = buildDispatcherRefillWatermarkPlan(
@@ -11700,7 +11707,7 @@ export function buildRefillPlan(options = {}, context = {}) {
       sourceSlice,
       sourcePlanning,
       workCreationStep,
-    }, context);
+    }, { ...context, closedStoryStatuses });
     return refillApply;
   }
   return packet({
@@ -12135,7 +12142,10 @@ function applyCourseCorrectionRefill(step = {}, context = {}) {
     };
   }
   const source = readFileSync(sprintAbsolute, "utf8");
-  const storyStatuses = countSprintStories(source, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {};
+  const storyStatuses = mergeStoryStatusOverlays(
+    countSprintStories(source, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {},
+    context.closedStoryStatuses,
+  );
   const items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir: dirname(sprintAbsolute) });
   if (items.length === 0) {
     return {
@@ -12259,7 +12269,8 @@ function backlogStoryKeysFromSprintStatus(content = "") {
 }
 
 function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, options = {}) {
-  const existingIds = new Set(Object.keys(storyStatuses || {}));
+  const effectiveStoryStatuses = mergeStoryStatusOverlays(storyStatuses, options.closedStoryStatuses);
+  const existingIds = new Set(Object.keys(effectiveStoryStatuses || {}));
   const artifactDir = options.artifactDir || "";
   const explicitItems = [
     ...(Array.isArray(draft.candidateBacklogItems) ? draft.candidateBacklogItems : []),
@@ -12280,10 +12291,10 @@ function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, o
   if (nonDuplicate.length > 0) return nonDuplicate.slice(0, 6);
   if (explicitItems.length > 0) {
     const minimumEpic = Math.max(0, ...explicitItems.map((item) => Number(String(item?.id || "").match(/^(\d+)-/)?.[1] || 0))) + 1;
-    if (hasActiveGeneratedEpicBlock(storyStatuses, { minimumEpic })) return [];
-    return nextAvailableEpicBacklogItems(storyStatuses, { artifactDir, minimumEpic }).slice(0, 6);
+    if (hasActiveGeneratedEpicBlock(effectiveStoryStatuses, { minimumEpic })) return [];
+    return nextAvailableEpicBacklogItems(effectiveStoryStatuses, { artifactDir, minimumEpic }).slice(0, 6);
   }
-  return nextAvailableEpicBacklogItems(storyStatuses, { artifactDir }).slice(0, 6);
+  return nextAvailableEpicBacklogItems(effectiveStoryStatuses, { artifactDir }).slice(0, 6);
 }
 
 function hasActiveGeneratedEpicBlock(storyStatuses = {}, { minimumEpic = 1 } = {}) {
@@ -12664,6 +12675,100 @@ function summarizeActiveLaneEvidence(assignment = {}, options = {}) {
     hasDetailedLaneAssignments,
     truncated: allActive.length > active.length,
   };
+}
+
+function closedAssignmentStoryStatusOverlay(assignment = {}, options = {}) {
+  const summary = assignment?.summary || assignment || {};
+  const primaryRows = [
+    ...(Array.isArray(summary.laneAssignments || assignment?.laneAssignments) ? summary.laneAssignments || assignment?.laneAssignments : []),
+    ...(Array.isArray(summary.workspaceAssignments || assignment?.workspaceAssignments) ? summary.workspaceAssignments || assignment?.workspaceAssignments : []),
+  ];
+  const stateRoot = options.stateRoot || workspaceState(options).root;
+  const fallbackRows =
+    [
+      ...(summary.laneAssignmentsTruncated || summary.laneAssignments_truncated
+        ? safeReadAssignmentFileLaneEvidence(stateRoot, summary.currentOwner)
+        : []),
+      ...(summary.workspaceAssignmentsTruncated || summary.workspaceAssignments_truncated
+        ? safeReadWorkspaceFileAssignmentEvidence(stateRoot)
+        : []),
+    ];
+  const overlay = {};
+  for (const row of [...primaryRows, ...fallbackRows]) {
+    const storyKey = bmadStoryKeyFromAssignmentEvidence(row);
+    if (!storyKey || !assignmentEvidenceIsClosed(row)) continue;
+    overlay[storyKey] = "done";
+    overlay[assignmentIdForStoryKey(storyKey)] = "done";
+  }
+  return overlay;
+}
+
+function mergeStoryStatusOverlays(base = {}, overlay = {}) {
+  return {
+    ...(isPlainObject(base) ? base : {}),
+    ...(isPlainObject(overlay) ? overlay : {}),
+  };
+}
+
+function assignmentEvidenceIsClosed(row = {}) {
+  const closedStates = new Set(["closed", "done", "merged", "complete", "completed"]);
+  const activeStates = new Set(["active", "claimed", "in_progress", "in-progress", "review", "review_ready", "delivery_ready", "handoff"]);
+  const status = sanitizeLedgerField(row.status || row.state || row.manifestStatus || row.manifest_status || "", "", 80).toLowerCase();
+  const phase = sanitizeLedgerField(row.phase || "", "", 80).toLowerCase();
+  const reasonCode = sanitizeLedgerField(row.reasonCode || row.reason_code || "", "", 120).toLowerCase();
+  const worktreeStatus = sanitizeLedgerField(row.worktreeStatus || row.worktree_status || "", "", 80).toLowerCase();
+  if (activeStates.has(status) || activeStates.has(phase) || row.dirty === true || row.dirtyWorktree === true || row.dirty_worktree === true || worktreeStatus === "dirty") return false;
+  return (
+    closedStates.has(status) ||
+    closedStates.has(phase) ||
+    ["assignment_closed", "closed_assignment_evidence", "closed_workspace_evidence", "workspace_manifest_closed"].includes(reasonCode)
+  );
+}
+
+function bmadStoryKeyFromAssignmentEvidence(row = {}) {
+  const fields = [
+    ["assignment", row.assignmentId],
+    ["assignment", row.assignment_id],
+    ["assignment", row.item_id],
+    ["assignment", row.itemId],
+    ["assignment", row.id],
+    ["task", row.taskId],
+    ["task", row.task_id],
+    ["branch", row.branch],
+  ];
+  for (const [field, value] of fields) {
+    const storyKey = bmadStoryKeyFromEvidenceValue(value, field);
+    if (storyKey) return storyKey;
+  }
+  return "";
+}
+
+function bmadStoryKeyFromEvidenceValue(value = "", field = "assignment") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (field === "branch" && !/^codex\/bmad-\d+-\d+-/i.test(raw)) return "";
+  if (field === "task" && !/(?:^|[^a-z0-9])bmad-\d+-\d+-[a-z0-9-]+/i.test(raw)) return "";
+  const normalized = normalizeBmadStoryAssignmentId(raw);
+  if (field === "assignment" && isBmadStoryKey(normalized)) return normalized;
+  const bmadMatch = raw.match(/(?:^|[^a-z0-9])bmad-(\d+-\d+-[a-z0-9-]+)/i);
+  if (bmadMatch?.[1] && isBmadStoryKey(bmadMatch[1])) return sanitizeLedgerField(bmadMatch[1], "", 140);
+  return "";
+}
+
+function safeReadAssignmentFileLaneEvidence(stateRoot = "", currentOwner = "") {
+  try {
+    return readAssignmentFileLaneEvidence(stateRoot, currentOwner);
+  } catch {
+    return [];
+  }
+}
+
+function safeReadWorkspaceFileAssignmentEvidence(stateRoot = "") {
+  try {
+    return readWorkspaceFileAssignmentEvidence(stateRoot);
+  } catch {
+    return [];
+  }
 }
 
 function isNonWorkerLanePhase(phase = "") {
@@ -13970,7 +14075,7 @@ function buildWorkCreationPacket(step, sourceSlice, signals = [], refillNeeded =
   return packet;
 }
 
-function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null) {
+function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null, options = {}) {
   const packet = workCreationStep?.workCreationPacket;
   if (!workCreationStep?.workflow || !packet) return null;
   const workflow = sanitizeLedgerField(workCreationStep.workflow, "", 80);
@@ -13981,7 +14086,10 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   const draft = packet.courseCorrectionDraft || null;
   const storyInputs = packet.storyCreationInputs || null;
   const sprintStatusPath = sanitizeLedgerField(packet.sprintStatusPath || storyInputs?.sprintStatusPath || sourcePlanning?.sprintStatus?.path || "", "", 220);
-  const storyStatuses = courseCorrectionStoryStatusesForGate(sourcePlanning, sprintStatusPath);
+  const storyStatuses = mergeStoryStatusOverlays(
+    courseCorrectionStoryStatusesForGate(sourcePlanning, sprintStatusPath),
+    options.closedStoryStatuses,
+  );
   const safeSprintPath = sanitizeRelativeBmadOutputPath(sprintStatusPath);
   const artifactDir = safeSprintPath ? dirname(resolve(repoRoot, safeSprintPath)) : "";
   const selectedCandidate =
