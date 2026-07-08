@@ -382,6 +382,12 @@ through merge and cleanup", or "see this lane through end to end".
   raw provider payloads. If a possible party-mode run would exceed the
   allowance, skip party mode and continue the normal lane flow unless the named
   objective requires expanded party-mode authority.
+- Use a delivery subagent for standard-delivery evidence gates from now on
+  unless no subagent tooling is available. The delivery subagent should inspect
+  the exact PR head, changed-file scope, check status, thread-aware review
+  state, merge-risk exclusions, cleanup plan, and evidence packet, then return
+  a bounded merge/hold recommendation before the coordinator merges or cleans
+  up the lane.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,

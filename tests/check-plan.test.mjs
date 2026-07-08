@@ -130,6 +130,7 @@ test("CI outputs route static only when the planner requires full static", () =>
   assert.equal(supervisor.static, false);
   assert.equal(supervisor.javascript, false);
   assert.equal(supervisor.supervisor, true);
+  assert.deepEqual(supervisor.commands, ["pnpm run test:supervisor-runner", "pnpm run test:supervisor:preflight", "pnpm run test:supervisor:profile"]);
 
   const e2eScript = buildCiOutputs(buildCheckPlan(["scripts/run-controls-e2e.mjs"]));
   assert.equal(e2eScript.static, false);
