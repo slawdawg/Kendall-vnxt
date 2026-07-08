@@ -60,6 +60,7 @@ const CONTINUOUS_APPLY_MUTATION_GATES = Object.freeze({
   lane_advancement_heartbeat_metadata_only: "laneAdvance",
   manager_runtime_review_request_packet: "reviewRequest",
   metadata_only_worker_recovery_inspection: "recoveryInspection",
+  local_bmad_refill_artifacts: "refillApply",
 });
 const CONTINUOUS_APPLY_GATE_FIELDS = Object.freeze({
   workerMutation: "workerMutationAllowed",
@@ -67,6 +68,7 @@ const CONTINUOUS_APPLY_GATE_FIELDS = Object.freeze({
   laneAdvance: "laneAdvanceAllowed",
   reviewRequest: "reviewRequestAllowed",
   recoveryInspection: "recoveryInspectionAllowed",
+  refillApply: "refillApplyAllowed",
 });
 const RUNTIME_MODE_ALIASES = Object.freeze({
   backendproof: "backend_proof",
@@ -20348,7 +20350,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
         laneAdvance: continuousApplyReady && selectedGate === "laneAdvance" ? "existing_gate_only" : "blocked_or_not_requested",
         reviewRequest: continuousApplyReady && selectedGate === "reviewRequest" ? "existing_gate_only" : "blocked_or_not_requested",
         recoveryInspection: continuousApplyReady && selectedGate === "recoveryInspection" ? "existing_gate_only" : "blocked_or_not_requested",
-        refillArtifactApply: "blocked",
+        refillArtifactApply: continuousApplyReady && selectedGate === "refillApply" ? "existing_gate_only" : "blocked_or_not_requested",
         delivery: "blocked_or_not_requested",
         cleanup: "blocked",
         externalServiceCalls: "blocked",
@@ -20777,6 +20779,35 @@ function continuousReviewTargetHasOpenFeedback(cycle = {}, storyKey = "") {
   );
 }
 
+function buildRefillApplyGateEvidence(action = {}, gate = {}) {
+  const artifactPaths = [
+    gate.sprintStatusPath,
+    gate.storyOutputPath,
+    gate.proposalOutputPath,
+  ].filter(Boolean).map((path) => sanitizeLedgerField(path, "", 220)).filter(Boolean);
+  const nextManagerAction = sanitizeLedgerField(
+    gate.nextAction || gate.applyCommand || action.nextAction || "Review the manager refill apply gate before applying local BMAD artifacts.",
+    "Review the manager refill apply gate before applying local BMAD artifacts.",
+    260,
+  );
+  return {
+    implementationChangedFiles: [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ],
+    verificationCommands: [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+    ],
+    verificationStatus: "recommended_not_executed_by_loop",
+    nextManagerAction,
+    localBmadArtifacts: artifactPaths.slice(0, 8),
+    localBmadArtifactsIgnored: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function buildContinuousAction(action = {}, cycle = {}) {
   const nextAction = String(action.nextAction || "").trim();
   if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
@@ -20951,6 +20982,7 @@ function buildContinuousAction(action = {}, cycle = {}) {
       applyCommand,
       authority: "source-owned-refill-planning-existing-gates",
       mutationClass: "local_bmad_refill_artifacts",
+      refillApplyGateEvidence: buildRefillApplyGateEvidence(action, gate),
     };
   }
   if (action.code === "dispatch-preview-ready") {
