@@ -90,25 +90,23 @@ $bmad-dev-story again for required review fixes ->
 $bmad-correct-course if implementation reveals material PRD, architecture, UX, or story changes ->
 $bmad-retrospective after each completed epic.
 
-Code review is not complete when findings are merely recorded. For every review-ready lane, delegate $bmad-code-review to a manager-owned worker when one is available, write compact findings to the story/runtime evidence, apply or dispatch all unambiguous patch findings, rerun focused verification, rerun delegated code review, and repeat until the review is clean or only explicitly deferred/operator-gated items remain. The manager should orchestrate, validate compact evidence, route feedback, and enforce delivery gates. In autonomous mode, no available reviewer is a hold or warm-worker problem, not automatic permission for manager-local review; manager-local review requires an explicit manual decision or a stop-line investigation where delegation is unsafe.
+Code review is not complete when findings are merely recorded. For every review-ready lane, delegate $bmad-code-review to a manager-owned worker when one is available, write compact findings to the story/runtime evidence, apply or dispatch all unambiguous patch findings, rerun focused verification, rerun delegated code review, and repeat until the review is clean or only explicitly deferred/operator-gated items remain. The manager should orchestrate, validate compact evidence, route feedback, and enforce delivery gates. Implementation, verification, review, review-fix, and delivery execution remain worker/subagent responsibilities; the manager session must not perform them locally. In autonomous mode, no available reviewer is a hold or warm-worker problem, not automatic permission for manager-local review; manager-local review requires an explicit manual decision or a stop-line investigation where delegation is unsafe.
 
 The manager must also delegate review-thread fixes, code-review patch findings,
-CI-failure fixes, and retest loops. If delivery discovers an unresolved GitHub
-review thread or another source-edit requirement, the manager routes the fix to
-the owning worker or an existing manager feedback gate first. If no suitable
-manager-owned `codex-*` worker is available, or the task is an independent
-read-only audit, the manager may spawn a bounded worker subagent. Prefer
-existing manager-owned workers over API subagents for implementation,
-review-fix loops, and focused retesting so work stays in the manager ledger and
-does not exhaust the separate subagent pool. The manager may inspect compact
-evidence, verify results, and run coordinator-owned delivery evidence gates,
-including low-risk merge and cleanup when `standard-delivery` repo policy
-criteria are proven. It must not patch or retest the lane locally, or execute
-delivery/cleanup outside those repo-authorized gates, unless the operator
-explicitly approves an exception or no worker/subagent delegation mechanism is
-available and all other safe progress is blocked. Any manager-local
-patch/retest or delivery/cleanup exception must record the exception, reason,
-touched files or operations, verification, and why waiting would block progress.
+CI-failure fixes, retest loops, and delivery/cleanup execution. If delivery
+discovers an unresolved GitHub review thread or another source-edit requirement,
+the manager routes the fix to the owning worker or an existing manager feedback
+gate first. If no suitable manager-owned `codex-*` worker is available, or the
+task is an independent read-only audit, the manager may spawn a bounded worker
+subagent. Prefer existing manager-owned workers over API subagents for
+implementation, review-fix loops, focused retesting, and delivery so work stays
+in the manager ledger and does not exhaust the separate subagent pool. The
+manager may inspect compact evidence, run orchestration gates, and record
+results, but must not patch, retest, review, merge, or clean up the lane locally.
+Any exception requires explicit operator approval or the absence of a usable
+worker/subagent delegation mechanism with all other safe progress blocked, plus
+metadata-only evidence of the exception, reason, touched files or operations,
+verification, and why waiting would block progress.
 
 Keep the queue full from the authoritative PRD while implementation backlog remains. If safe backlog gets low, create the next story or planning artifact from approved PRD/BMAD sources instead of letting workers idle. When no PRD backlog remains, do not create post-slice work just to keep workers busy; proceed only to review fixes, required retrospectives, final audit, or a separately approved next source-owned PRD.
 
@@ -131,14 +129,15 @@ Within the selected PRD scope, the manager may:
   workers only through existing manager gates.
 - Create and update BMAD local planning/story/review/retro artifacts under
   `_bmad-output`.
-- Complete BMAD code-review cycles by applying unambiguous review patch
-  findings, dispatching correction work, rerunning focused verification, and
-  rerunning review until clean or explicitly gated.
-- Edit source code, tests, docs, and repo policy needed to complete PRD stories.
-- Run local verification commands.
+- Dispatch implementation, code review, review-fix, and verification work to
+  the owning worker or a bounded manager-owned worker/subagent through existing
+  gates, then inspect compact evidence and record the returned result.
+- Coordinate source-owned edits through the owning worker or delegated
+  subagent; the manager session does not implement lane source changes.
 - Create managed worktrees and branches for lanes.
-- Open/update PRs and perform low-risk delivery only when repo policy gates are
-  satisfied.
+- Request delegated workers/subagents to open/update PRs and perform low-risk
+  delivery only when repo policy gates are satisfied; the manager inspects the
+  exact-head evidence and enforces the gate without executing delivery locally.
 
 Stop for explicit approval before:
 
@@ -155,6 +154,51 @@ Stop for explicit approval before:
 - Work creation without source-owned PRD/runway/story/doc evidence.
 - Merging a PR that does not satisfy the low-risk delivery criteria in
   `AGENTS.md`.
+
+## Standing Operator Delegation Profile
+
+The operator may explicitly activate this profile for the current goal by
+stating that manager planning, worker/subagent delegation, dispatch, recovery,
+ownership handling, and standard delivery should proceed without repeated
+per-operation prompts. When activated, the manager records the delegation in
+the lane evidence and may continue these operations within the resolved PRD
+source bundle:
+
+- Reconcile and materialize local BMAD planning/story/review/retro state.
+- Launch, restart, monitor, hand off, answer, and retire manager-owned Codex
+  workers or bounded worker subagents through existing gates.
+- Claim and dispatch source-owned lanes with `dispatch-next --apply` after a
+  fresh exact-target dry run.
+- Perform manager-owned recovery and ownership continuation, including a
+  stale-owner takeover only when the exact target, preservation packet,
+  ownership evidence, and workspace gates all pass.
+- Dispatch workers/subagents to create worktrees/branches, implement, verify,
+  review, deliver, merge, and clean up when all standard-delivery criteria are
+  proven; the manager records compact evidence and does not execute those lane
+  operations in its own session.
+
+This profile never authorizes the manager session to implement source changes,
+run lane verification or retest loops, conduct code review, fix review or CI
+findings, commit, push, open or update a PR, merge, or clean up a lane. Those
+operations remain delegated worker/subagent responsibilities, with only the
+explicit no-delegation exception in the repository policy available after all
+safe alternatives are exhausted.
+
+This delegation is durable until the operator revokes it, the active PRD/source
+bundle changes, or a non-delegable stop line is reached. It is not permission
+to bypass a failed gate; a failed or ambiguous gate is held and reported while
+unrelated safe work continues. The manager must still stop for secrets,
+credentials, provider-account or payment changes, production deploys, schema
+migrations, force-push/history rewrites, unknown/non-manager process
+termination, raw prompt/provider/payload retention, failed required checks,
+high-risk merge, destructive cleanup outside approved roots, or any system,
+tenant, platform, or sandbox restriction. Those boundaries cannot be granted
+by a repo document or chat delegation.
+
+Evidence requirements remain metadata-only: authority basis, scope, exact
+target, dry-run result, ownership/provenance, verification, recovery path, and
+next action. No raw prompts, completions, reasoning traces, provider payloads,
+secrets, or unnecessary source copies may be retained.
 
 ## Definition Of Done
 

@@ -19,6 +19,8 @@ const WORKER_CODE_REVIEW_REQUEST_VERSION = "worker_code_review_request.v2";
 const RECOVERY_HOUSEKEEPING_EVIDENCE_VERSION = "manager-recovery-housekeeping-evidence.v1";
 const PROMPT_IDLE_CHECKPOINT_STALE_SECONDS = 180;
 const WORKER_CODE_REVIEW_RESEND_STALE_SECONDS = 300;
+const DEFAULT_MODEL_ROUTING_MODEL = "gpt-5.6-luna";
+const DEFAULT_MODEL_ROUTING_EFFORT = "high";
 
 export const MANAGER_WORKER_LIFECYCLE_STATES = Object.freeze([
   "busy",
@@ -5685,7 +5687,14 @@ export function buildWorkerOwnerDelegationPlan(options = {}, context = {}) {
 
 function buildWorkerQuestionAnswerRequest(question = {}, workers = [], paths = {}, options = {}) {
   const questionId = sanitizeLedgerField(question.questionId || question.id || "question", "question", 100);
-  const sourceRefs = compactSanitizedRefs([...sourceRefList(question.sourceRefs), ...sourceRefList(question.sourceRef)]);
+  const questionSourceRefs = compactSanitizedRefs([
+    ...sourceRefList(question.sourceRefs),
+    ...sourceRefList(question.sourceRef),
+  ]);
+  const activeSourceRefs = compactSanitizedRefs([
+    ...sourceRefList(options.sourceRefs),
+  ]);
+  const sourceRefs = compactSanitizedRefs([...questionSourceRefs, ...activeSourceRefs]);
   const assignmentId = assignmentIdFromSourceRefs(sourceRefs);
   const worker = workers.find((candidate) =>
     (question.actor && candidate.workerId === question.actor) ||
@@ -5693,7 +5702,15 @@ function buildWorkerQuestionAnswerRequest(question = {}, workers = [], paths = {
     (assignmentId && candidate.assignmentId === assignmentId),
   );
   if (!worker) return null;
-  const policyDecision = buildQuestionDecision({ ...question, sourceRefs });
+  const policyDecision = buildQuestionDecision({ ...question, sourceRefs }, {
+    authorityClass: options.authorityClass,
+    assignmentId: worker.assignmentId || assignmentId,
+    taskId: worker.taskId || question.taskId,
+    runId: options.runId,
+    workerId: worker.workerId,
+    activeSourceRefs,
+    questionSourceRefs,
+  });
   const answerPolicyDecision = options.answer ? buildQuestionDecision({
     questionId,
     workerId: worker.workerId,
@@ -5701,6 +5718,14 @@ function buildWorkerQuestionAnswerRequest(question = {}, workers = [], paths = {
     summary: options.answer,
     sourceRefs,
     materialDecision: true,
+  }, {
+    authorityClass: options.authorityClass,
+    assignmentId: worker.assignmentId || assignmentId,
+    taskId: worker.taskId || question.taskId,
+    runId: options.runId,
+    workerId: worker.workerId,
+    activeSourceRefs,
+    questionSourceRefs,
   }) : null;
   const effectivePolicyDecision = answerPolicyDecision || policyDecision;
   const answer = sanitizeLedgerField(options.answer || effectivePolicyDecision.compactAnswer || compactQuestionAnswer(question), "Apply source context and repo policy with best judgment.", 500);
@@ -8466,7 +8491,7 @@ function feedbackSummary(feedback = {}, classification = "future_work") {
   return surface ? `${classification} feedback for ${surface}` : `${classification} feedback`;
 }
 
-function buildQuestionDecision(question = {}) {
+function buildQuestionDecision(question = {}, context = {}) {
   const rawSourceRefs = [...sourceRefList(question.sourceRefs), ...sourceRefList(question.sourceRef)];
   const sourceEvidence = dependencyLoopSourceRefs(rawSourceRefs);
   const sourceRefs = sourceEvidence.refs;
@@ -8515,6 +8540,20 @@ function buildQuestionDecision(question = {}) {
     };
   }
   if (unsafeStopLines.length > 0) {
+    if (standingDelegationAllowsRecovery(question, context, unsafeStopLines)) {
+      return {
+        ...base,
+        decision: "answer_with_best_judgment",
+        compactAnswer: "Continue only within the exact current manager-owned assignment and cited PRD/story scope; do not take over unrelated ownership or cross any non-delegable stop line.",
+        answerPolicy: "standing_operator_delegation_existing_gates",
+        recordPolicy: "material_decision_only",
+        leaseContinuation: "allowed",
+        operatorInterruption: false,
+        reasonCodes: ["standing_operator_delegation"],
+        stopLines: [],
+        dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "allowed" }),
+      };
+    }
     return {
       ...base,
       decision: "block_unsafe_continuation",
@@ -8600,6 +8639,27 @@ function buildQuestionDecision(question = {}) {
     stopLines: ["source_or_policy_classification_required"],
     dependencyImpact: workerDependencyImpact({ laneId, leaseId, workerId, continuation: "parked" }),
   };
+}
+
+function standingDelegationAllowsRecovery(question = {}, context = {}, unsafeStopLines = []) {
+  if (String(context.authorityClass || "").toLowerCase() !== "allowed_unattended") return false;
+  if (!Array.isArray(unsafeStopLines) || unsafeStopLines.length !== 1 || unsafeStopLines[0] !== "recovery_or_ownership_requires_operator_approval") return false;
+  const sourceRefs = compactSanitizedRefs(question.sourceRefs || []);
+  const questionSourceRefs = compactSanitizedRefs(context.questionSourceRefs || sourceRefs);
+  const activeSourceRefs = compactSanitizedRefs(context.activeSourceRefs || []);
+  const questionPrdRefs = questionSourceRefs.filter((ref) => /^prd:/i.test(ref));
+  const prdRef = questionPrdRefs[0] || "";
+  const activePrdRefs = activeSourceRefs.filter((ref) => /^prd:/i.test(ref));
+  const assignmentRef = sourceRefs.find((ref) => /^assignment:/i.test(ref));
+  const expectedAssignment = sanitizeLedgerField(context.assignmentId || question.assignmentId || question.laneId || "", "", 140);
+  const actualAssignment = assignmentRef ? assignmentRef.replace(/^assignment:/i, "") : "";
+  const taskRef = sourceRefs.find((ref) => /^task:/i.test(ref));
+  const expectedTask = sanitizeLedgerField(context.taskId || question.taskId || "", "", 140);
+  const actualTask = taskRef ? taskRef.replace(/^task:/i, "") : "";
+  if (questionPrdRefs.length !== 1 || !prdRef || activePrdRefs.length !== 1 || prdRef !== activePrdRefs[0]) return false;
+  if (!assignmentRef || !expectedAssignment || actualAssignment !== expectedAssignment) return false;
+  if (!taskRef || !expectedTask || actualTask !== expectedTask) return false;
+  return Boolean(sanitizeLedgerField(context.runId || "", "", 120) && sanitizeLedgerField(context.workerId || "", "", 80));
 }
 
 function buildReviewResourceHumanAttentionPolicy(questionHandling = []) {
@@ -9219,17 +9279,18 @@ function buildModelRoutingDecision(taskRisk = {}, context = {}) {
     ...(sourceRefList(taskRisk?.sourceRefs)),
     ...(sourceRefList(context.sourceRefs)),
   ]);
-  const nonTerraRequested = modelEvidence.requestedModel && modelEvidence.requestedModel !== "gpt-5.6-terra" && modelEvidence.requestedModel !== "gpt-5.3-codex-spark";
-  const nonTerraEligible = !highRisk && nonTerraRequested && modelEvidence.sparkAdvantages.length > 0;
+  const nonDefaultRequested = modelEvidence.requestedModel && modelEvidence.requestedModel !== DEFAULT_MODEL_ROUTING_MODEL && modelEvidence.requestedModel !== "gpt-5.3-codex-spark";
+  const nonDefaultEligible = !highRisk && nonDefaultRequested && modelEvidence.sparkAdvantages.length > 0;
   const selectedModel = malformedRoutingEvidence || highRisk
-    ? "gpt-5.6-terra"
+    ? DEFAULT_MODEL_ROUTING_MODEL
     : sparkEligible ? "gpt-5.3-codex-spark"
-      : nonTerraEligible ? modelEvidence.requestedModel
-        : "gpt-5.6-terra";
+      : nonDefaultEligible ? modelEvidence.requestedModel
+        : DEFAULT_MODEL_ROUTING_MODEL;
   const selectedEffort = malformedRoutingEvidence || highRisk
-    ? (malformedRoutingEvidence ? "medium" : "high")
-    : nonTerraEligible ? (modelEvidence.requestedEffort || "medium")
-      : "medium";
+    ? DEFAULT_MODEL_ROUTING_EFFORT
+    : sparkEligible ? (modelEvidence.requestedEffort || "medium")
+    : nonDefaultEligible ? (modelEvidence.requestedEffort || DEFAULT_MODEL_ROUTING_EFFORT)
+      : DEFAULT_MODEL_ROUTING_EFFORT;
   const availability = modelEvidence.platformAvailability;
   const selectedPairSupported = availability.status !== "provided" || availability.pairs.has(`${selectedModel}:${selectedEffort}`);
   const deferUnsupportedPair = !malformedRoutingEvidence && availability.status === "provided" && !selectedPairSupported;
@@ -9239,7 +9300,7 @@ function buildModelRoutingDecision(taskRisk = {}, context = {}) {
     ? ["quality_risk_requires_one_step_effort_escalation"]
     : sparkEligible
       ? ["documented_spark_advantage", `spark_advantage_${modelEvidence.sparkAdvantages[0]}`, "structured_spark_evidence", "narrow_bounded_task"]
-      : nonTerraEligible
+      : nonDefaultEligible
         ? ["platform_available_non_terra_5_6", `documented_advantage_${modelEvidence.sparkAdvantages[0]}`]
       : ["default_external_route", "routine_bounded_task"];
   if (malformedRoutingEvidence) selectionRationale.splice(0, selectionRationale.length, "malformed_routing_evidence_safe_default");
@@ -9248,7 +9309,7 @@ function buildModelRoutingDecision(taskRisk = {}, context = {}) {
   if (modelEvidence.requestedEffort && modelEvidence.requestedEffort !== selectedEffort) selectionRationale.push("requested_effort_did_not_override_quality_posture");
   return {
     routing: highRisk ? "high_effort_task_fit" : "standard_task_fit",
-    reasoningEffort: highRisk ? "high" : "medium",
+    reasoningEffort: selectedEffort,
     modelClass: highRisk ? "best_available_for_task_complexity" : "appropriate_for_bounded_implementation",
     recommendedModel,
     recommendedEffort,
@@ -9347,7 +9408,9 @@ function normalizedModelRoutingEffort(value, fieldName, unknownValues) {
 }
 
 function displayModelName(model = "") {
-  return model === "gpt-5.6-terra" ? "GPT-5.6 Terra" : model;
+  if (model === "gpt-5.6-luna") return "GPT-5.6 Luna";
+  if (model === "gpt-5.6-terra") return "GPT-5.6 Terra";
+  return model;
 }
 
 function compactSparkAdvantageEvidenceRefs(value, unknownValues) {

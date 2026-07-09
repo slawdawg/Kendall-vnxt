@@ -12691,6 +12691,103 @@ test("worker question answer gate blocks unsafe continuation and source-less ans
   }
 });
 
+test("worker question answer gate accepts durable delegated recovery for the exact PRD assignment", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-question-delegated-recovery-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerStatus = {
+      summary: {
+        workers: [{
+          workerId: "codex-5",
+          owner: "manager-test/codex-5",
+          runId: "manager-test",
+          sessionName: "codex-5",
+          state: "active",
+          assignmentId: "lane-5",
+          taskId: "task-5",
+        }],
+      },
+    };
+    const questions = [{
+      questionId: "delegated-recovery",
+      actor: "codex-5",
+      questionType: "implementation",
+      summary: "Continue the assigned lane after the manager-owned handoff.",
+      requestedAction: "ownership_recovery",
+      authorityFamily: "worker-ownership",
+      sourceRefs: [
+        "assignment:lane-5",
+        "task:task-5",
+        "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+      ],
+      materialDecision: true,
+    }];
+    const preview = buildWorkerQuestionAnswerPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        authorityClass: "allowed_unattended",
+        sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md"],
+      },
+      { workerStatus, questions, events: [] },
+    );
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.planned, 1);
+    assert.equal(preview.summary.requests[0].leaseContinuation, "allowed");
+    assert.deepEqual(preview.summary.requests[0].reasonCodes, ["standing_operator_delegation"]);
+    assert.match(preview.summary.requests[0].compactAnswer, /exact current manager-owned assignment/);
+
+    const unrelatedPrd = buildWorkerQuestionAnswerPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        authorityClass: "allowed_unattended",
+        sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md"],
+      },
+      {
+        workerStatus,
+        questions: [{
+          ...questions[0],
+          questionId: "delegated-recovery-unrelated-prd",
+          sourceRefs: ["assignment:lane-5", "task:task-5", "prd:_bmad-output/planning-artifacts/prds/unrelated-prd.md"],
+        }],
+        events: [],
+      },
+    );
+    assert.equal(unrelatedPrd.status, "attention");
+    assert.equal(unrelatedPrd.summary.planned, 0);
+    assert.equal(unrelatedPrd.summary.blockedQuestions[0].decision, "block_unsafe_continuation");
+
+    const mixedPrd = buildWorkerQuestionAnswerPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        authorityClass: "allowed_unattended",
+        sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md"],
+      },
+      {
+        workerStatus,
+        questions: [{
+          ...questions[0],
+          questionId: "delegated-recovery-mixed-prd",
+          sourceRefs: [
+            "assignment:lane-5",
+            "task:task-5",
+            "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+            "prd:_bmad-output/planning-artifacts/prds/unrelated-prd.md",
+          ],
+        }],
+        events: [],
+      },
+    );
+    assert.equal(mixedPrd.status, "attention");
+    assert.equal(mixedPrd.summary.planned, 0);
+    assert.equal(mixedPrd.summary.blockedQuestions[0].decision, "block_unsafe_continuation");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker question answer gate surfaces mixed blocked and allowed batches", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-question-mixed-policy-"));
   try {
@@ -22666,7 +22763,7 @@ test("worker friction model routing records bounded policy metadata for routing 
     },
   );
   assert.equal(routine.summary.modelRouting.routing, "standard_task_fit");
-  assert.equal(routine.summary.modelRouting.reasoningEffort, "medium");
+  assert.equal(routine.summary.modelRouting.reasoningEffort, "high");
   assert.equal(routine.summary.modelRouting.escalationRule, "none");
   assert.equal(routine.summary.modelRouting.expectedVerificationBoundary, "focused_verification");
   assert.equal(routine.summary.modelRouting.costPosture, "cheapest_expected_correct");
@@ -22698,8 +22795,8 @@ test("worker friction model routing recommends concrete models only from bounded
     { runId: "manager-test" },
     { taskRisk: { taskType: "implementation", ambiguity: "low", blastRadius: "low" }, usageState: "normal" },
   );
-  assert.equal(routine.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
-  assert.equal(routine.summary.modelRouting.recommendedEffort, "medium");
+  assert.equal(routine.summary.modelRouting.recommendedModel, "GPT-5.6 Luna");
+  assert.equal(routine.summary.modelRouting.recommendedEffort, "high");
   assert.equal(routine.summary.modelRouting.tokenUseGuard, "compact_packet_no_duplicate_retry");
 
   const spark = buildWorkerFrictionPlan(
@@ -22738,7 +22835,7 @@ test("worker friction model routing recommends concrete models only from bounded
       usageState: "normal",
     },
   );
-  assert.equal(unevidencedTriage.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(unevidencedTriage.summary.modelRouting.recommendedModel, "GPT-5.6 Luna");
   assert.equal(unevidencedTriage.summary.modelRouting.recommendedEffort, "high");
   assert.ok(unevidencedTriage.summary.modelRouting.riskSignals.includes("task-type-high-reasoning"));
 
@@ -22758,7 +22855,7 @@ test("worker friction model routing recommends concrete models only from bounded
       usageState: "normal",
     },
   );
-  assert.equal(triageWithVerificationRisk.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(triageWithVerificationRisk.summary.modelRouting.recommendedModel, "GPT-5.6 Luna");
   assert.equal(triageWithVerificationRisk.summary.modelRouting.recommendedEffort, "high");
   assert.ok(triageWithVerificationRisk.summary.modelRouting.riskSignals.includes("high-verification-difficulty"));
 
@@ -22766,7 +22863,7 @@ test("worker friction model routing recommends concrete models only from bounded
     { runId: "manager-test" },
     { taskRisk: { taskType: "security", requestedModel: "gpt-5.3-codex-spark", sparkAdvantage: "cost" }, usageState: "normal" },
   );
-  assert.equal(highRisk.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(highRisk.summary.modelRouting.recommendedModel, "GPT-5.6 Luna");
   assert.equal(highRisk.summary.modelRouting.recommendedEffort, "high");
   assert.equal(highRisk.summary.modelRouting.providerInvocation, false);
   assert.equal(highRisk.summary.modelRouting.executionAuthorityChanged, false);
@@ -22809,8 +22906,8 @@ test("worker friction model routing recommends concrete models only from bounded
     { runId: "manager-test" },
     { taskRisk: { requestedModel: "unknown-provider", requestedEffort: "maximum", sparkAdvantage: "raw prompt" }, usageState: "normal" },
   );
-  assert.equal(malformed.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
-  assert.equal(malformed.summary.modelRouting.recommendedEffort, "medium");
+  assert.equal(malformed.summary.modelRouting.recommendedModel, "GPT-5.6 Luna");
+  assert.equal(malformed.summary.modelRouting.recommendedEffort, "high");
   assert.deepEqual(malformed.summary.modelRouting.invalidInputSignals, ["invalid_requestedModel", "invalid_requestedEffort", "invalid_sparkAdvantage"]);
   assert.doesNotMatch(JSON.stringify(malformed.summary.modelRouting), /unknown-provider|maximum|raw prompt/i);
 });
