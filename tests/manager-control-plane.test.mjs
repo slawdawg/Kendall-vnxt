@@ -227,6 +227,10 @@ for (const [relativePath, content] of [
     "# Story 21.3: Manager Review Delivery Queue\n\n## Status\nreview\n",
   ],
   [
+    "_bmad-output/implementation-artifacts/21-4-worker-retirement-and-reassignment.md",
+    "# Story 21.4: Worker Retirement and Reassignment\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for plan-only retirement assertions.\n",
+  ],
+  [
     "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md",
     "# Story 97.2: Manager Continuous Review Gate\n\n## Status\nreview\n",
   ],
