@@ -6168,6 +6168,111 @@ test("worker status computes adaptive target from safe work supply", () => {
     assert.equal(runwayBacked.summary.targets.activeAssignments, 4);
     assert.equal(runwayBacked.summary.targets.allowedTarget, 4);
 
+    const claimedHandoffBacked = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        assignmentSummary: {
+          summary: {
+            laneAssignments: Array.from({ length: 6 }, (_, index) => ({
+              assignmentId: `bmad-20-${index + 1}-manager-control-plane`,
+              taskId: `20260708-bmad-20-${index + 1}-manager-control-plane`,
+              status: "active",
+              phase: "handoff",
+              branch: `codex/bmad-20-${index + 1}-manager-control-plane`,
+            })),
+          },
+        },
+        refillPlan: {
+          summary: {
+            safeWorkSupply: 0,
+            candidateLanes: [],
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 0 },
+            candidateStateCounts: { blocked: 109 },
+          },
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    assert.equal(claimedHandoffBacked.summary.targets.safeWorkSupply, 6);
+    assert.equal(claimedHandoffBacked.summary.targets.activeAssignments, 6);
+    assert.equal(claimedHandoffBacked.summary.targets.startTarget, 6);
+    assert.equal(claimedHandoffBacked.summary.lifecyclePlan.startWarmCandidates.length, 6);
+
+    const inventoryBackedWithoutRunway = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        assignmentSummary: {
+          summary: {
+            laneAssignments: Array.from({ length: 2 }, (_, index) => ({
+              assignmentId: `bmad-21-${index + 1}-manager-control-plane`,
+              taskId: `20260708-bmad-21-${index + 1}-manager-control-plane`,
+              status: "active",
+              phase: "handoff",
+              branch: `codex/bmad-21-${index + 1}-manager-control-plane`,
+            })),
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 0 },
+            candidateStateCounts: { blocked: 109 },
+          },
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    assert.equal(inventoryBackedWithoutRunway.summary.targets.safeWorkSupply, 2);
+    assert.equal(inventoryBackedWithoutRunway.summary.targets.activeAssignments, 2);
+    assert.equal(inventoryBackedWithoutRunway.summary.targets.startTarget, 2);
+
+    const reviewOnlyStatusBuckets = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        assignmentSummary: {
+          summary: {
+            laneAssignmentStatusCounts: {
+              review: 4,
+            },
+          },
+        },
+        refillPlan: {
+          summary: {
+            safeWorkSupply: 0,
+            candidateLanes: [],
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 0 },
+            candidateStateCounts: { blocked: 109 },
+          },
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+      },
+    );
+    assert.equal(reviewOnlyStatusBuckets.summary.targets.safeWorkSupply, 0);
+    assert.equal(reviewOnlyStatusBuckets.summary.targets.activeAssignments, 0);
+    assert.equal(reviewOnlyStatusBuckets.summary.targets.startTarget, 0);
+
     const previewBacked = buildWorkerStatus(
       { runId: "manager-test", stateRoot, desiredWorkers: 6 },
       {
