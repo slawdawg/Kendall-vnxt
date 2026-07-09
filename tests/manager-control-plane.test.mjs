@@ -113,9 +113,7 @@ function assertExistingLocalBmadStoryArtifact(relativePath) {
   assert.match(content, /^## Dev Agent Record$/m);
 }
 
-function assertWorkerRetirement22StoryEvidence(relativePath) {
-  assertExistingLocalBmadStoryArtifact(relativePath);
-  const content = readFileSync(join(process.cwd(), relativePath), "utf8");
+function assertWorkerRetirement22StoryEvidence(content) {
   assert.match(content, /^# Story 22-4-worker-retirement-and-reassignment: Worker Retirement And Reassignment$/m);
   assert.match(content, /^### File List\s+- tests\/manager-control-plane\.test\.mjs$/m);
   assert.match(content, /`node --test tests\/manager-control-plane\.test\.mjs`/);
@@ -124,6 +122,8 @@ function assertWorkerRetirement22StoryEvidence(relativePath) {
   assert.match(content, /no dispatchable safe backlog lane/);
   assert.match(content, /Next manager action: resolve dispatcher\/preflight blockers before manager mutation/);
 }
+
+const WORKER_RETIREMENT_22_STORY_EVIDENCE = "# Story 22-4-worker-retirement-and-reassignment: Worker Retirement And Reassignment\n\n## Status\nreview\n\n## Acceptance Criteria\n1. The implementation is scoped to the named manager-control-plane slice.\n2. The manager preserves existing safety gates for worker mutation, dispatch apply, delivery, cleanup, and provider usage.\n3. The slice leaves compact evidence of what changed, how it was verified, and the next manager action.\n4. The change can be dogfooded by the continuous manager loop without direct worker intervention.\n\n## Tasks/Subtasks\n- [x] Add regression coverage for Worker Retirement And Reassignment.\n- [x] Implement the bounded Worker Retirement And Reassignment slice.\n- [x] Verify and dogfood the slice.\n\n## Verification\n- `node --test tests/manager-control-plane.test.mjs`\n- `node ./scripts/check-manager-control-plane.mjs`\n\n## Dev Agent Record\n\n### Completion Notes\n- Fixture-backed story artifact preserves the 22-4 manager-control-plane contract, changed files, verification, dogfood blocker result, and next manager action for clean-worktree tests.\n- Changed files: `tests/manager-control-plane.test.mjs`.\n- Dogfood evidence: outside-sandbox continuous dry-run preflight reached live manager blockers: no dispatchable safe backlog lane, no dispatch preview, and stale/unavailable dispatcher summary. Mutation remained blocked.\n- Next manager action: resolve dispatcher/preflight blockers before manager mutation.\n\n### File List\n- tests/manager-control-plane.test.mjs\n\n### Change Log\n- Fixture seed for worker retirement/reassignment clean-checkout assertions.\n";
 
 function assertGeneratedStoryIsDeveloperUsable(content) {
   assert.match(content, /^## Tasks\/Subtasks$/m);
@@ -241,10 +241,6 @@ for (const [relativePath, content] of [
   [
     "_bmad-output/implementation-artifacts/21-4-worker-retirement-and-reassignment.md",
     "# Story 21.4: Worker Retirement and Reassignment\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for plan-only retirement assertions.\n",
-  ],
-  [
-    "_bmad-output/implementation-artifacts/22-4-worker-retirement-and-reassignment.md",
-    "# Story 22-4-worker-retirement-and-reassignment: Worker Retirement And Reassignment\n\n## Status\nreview\n\n## Acceptance Criteria\n1. The implementation is scoped to the named manager-control-plane slice.\n2. The manager preserves existing safety gates for worker mutation, dispatch apply, delivery, cleanup, and provider usage.\n3. The slice leaves compact evidence of what changed, how it was verified, and the next manager action.\n4. The change can be dogfooded by the continuous manager loop without direct worker intervention.\n\n## Tasks/Subtasks\n- [x] Add regression coverage for Worker Retirement And Reassignment.\n- [x] Implement the bounded Worker Retirement And Reassignment slice.\n- [x] Verify and dogfood the slice.\n\n## Verification\n- `node --test tests/manager-control-plane.test.mjs`\n- `node ./scripts/check-manager-control-plane.mjs`\n\n## Dev Agent Record\n\n### Completion Notes\n- Fixture-backed story artifact preserves the 22-4 manager-control-plane contract, changed files, verification, dogfood blocker result, and next manager action for clean-worktree tests.\n- Changed files: `tests/manager-control-plane.test.mjs`.\n- Dogfood evidence: outside-sandbox continuous dry-run preflight reached live manager blockers: no dispatchable safe backlog lane, no dispatch preview, and stale/unavailable dispatcher summary. Mutation remained blocked.\n- Next manager action: resolve dispatcher/preflight blockers before manager mutation.\n\n### File List\n- tests/manager-control-plane.test.mjs\n\n### Change Log\n- Fixture seed for worker retirement/reassignment clean-checkout assertions.\n",
   ],
   [
     "_bmad-output/implementation-artifacts/21-2-manager-story-creation-apply-gate.md",
@@ -17237,7 +17233,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-4-worker-retirement-and-reassignment.md");
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/20-4-worker-retirement-and-reassignment.md");
   assertExistingLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-4-worker-retirement-and-reassignment.md");
-  assertWorkerRetirement22StoryEvidence("_bmad-output/implementation-artifacts/22-4-worker-retirement-and-reassignment.md");
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/22-4-worker-retirement-and-reassignment.md");
+  assertWorkerRetirement22StoryEvidence(WORKER_RETIREMENT_22_STORY_EVIDENCE);
 
   const laneAdvancePlan = continuousRunPlan(
     {},
