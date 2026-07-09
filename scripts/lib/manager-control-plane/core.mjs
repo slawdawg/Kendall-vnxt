@@ -1955,7 +1955,9 @@ function buildWorkerTargetStatus(options = {}, context = {}) {
     : dispatchable === null
       ? (activeAssignments > 0 ? activeAssignments : null)
       : dispatchable + refillableWorkCount + activeAssignments;
-  const safeWorkSupply = runwaySafeWorkSupply ?? (inventorySafeWorkSupply === null ? null : Math.min(maxTarget, inventorySafeWorkSupply));
+  const safeWorkSupply = runwaySafeWorkSupply == null
+    ? (inventorySafeWorkSupply === null ? null : Math.min(maxTarget, inventorySafeWorkSupply))
+    : Math.min(maxTarget, Math.max(runwaySafeWorkSupply, activeAssignments));
   const reasons = [];
   const blockers = [];
   const warnings = [];
@@ -9383,7 +9385,7 @@ function buildWorkerTmuxWarnings(tmuxSummary = {}) {
 
 function countActiveAssignments(counts = {}) {
   return Object.entries(counts).reduce((total, [status, count]) => {
-    if (!/\b(active|assigned|claimed|in_progress|in-progress|review)\b/i.test(status)) return total;
+    if (!/\b(active|assigned|claimed|in_progress|in-progress)\b/i.test(status)) return total;
     return total + (nonNegativeInteger(count) || 0);
   }, 0);
 }
