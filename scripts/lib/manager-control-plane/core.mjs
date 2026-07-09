@@ -166,7 +166,9 @@ export function defaultCodexUsageFetcher(usagePath = defaultAgentUsageScript()) 
 }
 
 export function parseCommonArgs(argv = []) {
+  const originalArgv = Array.isArray(argv) ? argv.map((arg) => String(arg)) : [];
   const options = {
+    originalArgv,
     summaryJson: false,
     runId: "",
     desiredWorkers: 6,
@@ -1430,7 +1432,7 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
         ],
         nextManagerAction: nextStabilityObserverCommand,
         localBmadArtifactBoundary: {
-          path: "_bmad-output/implementation-artifacts/20-5-ten-cycle-stability-observer.md",
+          path: "_bmad-output/implementation-artifacts/21-5-ten-cycle-stability-observer.md",
           expectedIgnored: true,
           runtimeVerified: false,
           verificationSource: "regression_test_git_check_ignore_and_ls_files",
@@ -14684,7 +14686,7 @@ function buildCleanupHandoffCloseoutEvidence({ planStatus = "ready", blockerCode
     closeoutPreviewAvailable: cleanupHandoffPacketAvailable(closeoutPreview),
     dirtyPreservationAvailable: cleanupHandoffPacketAvailable(dirtyPreservation),
     localBmadStoryArtifact: {
-      path: "_bmad-output/implementation-artifacts/20-6-cleanup-and-handoff-closeout.md",
+      path: "_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md",
       expectedIgnored: true,
       verificationSource: "regression_test_git_check_ignore_and_ls_files",
     },
@@ -17116,6 +17118,75 @@ export function buildLedgerReadiness(options = {}, context = {}) {
 }
 
 export function buildResumeState(options = {}, context = {}) {
+  const sandboxEvidence = managerSandboxPreventionEvidence(context);
+  if (sandboxEvidence) {
+    const runId = safeReadProperty(options, "runId", "") || safeReadProperty(context, "runId", "") || "unresolved";
+    const stateRoot = safeReadProperty(options, "stateRoot", "") || safeReadProperty(context.env || {}, "CODEX_WORKSPACE_ROOT", "") || null;
+    const boundary = managerSandboxPreventionPacket(
+      managerReadOnlyCommandShape("manager-resume-state.mjs", options),
+      sandboxEvidence,
+      ["workspace assignment report", "tmux orientation", "manager-owned tmux pane reconciliation"],
+    );
+    const blocker = sandboxBoundaryBlocker(boundary, "resume-known-sandbox-boundary");
+    return packet({
+      ok: false,
+      status: "sandbox_incomplete",
+      summary: {
+        runId,
+        ledger: {
+          runId,
+          stateRoot,
+          status: "not_probed_known_sandbox_boundary",
+          schemaGaps: [],
+          schemaGapCount: 0,
+        },
+        assignment: {
+          available: false,
+          source: "assignment-report",
+          sandboxBoundary: true,
+          sandboxSignatureClass: boundary.signature,
+        },
+        tmux: {
+          orientation: "metadata-only",
+          mutation: "not-allowed",
+          available: false,
+          paneCount: 0,
+          managerOwnedPanes: 0,
+          takeoverRequiredPanes: 0,
+          unmanagedPanes: 0,
+          missingWorktrees: 0,
+          dirtyPanes: 0,
+          unknownDirtyPanes: 0,
+          malformedPaneMetadata: 0,
+          workspaceErrorCount: 0,
+          error: boundary.evidence_summary,
+          sandboxBoundary: true,
+          sandboxSignatureClass: boundary.signature,
+        },
+        takeoverInspection: buildTakeoverInspectionPlan({ available: false, sandboxBoundary: true }),
+        workspace: {
+          ok: stateRoot ? null : false,
+          stateRoot,
+          proof: null,
+          proofStatus: stateRoot ? "not_probed_known_sandbox_boundary" : "unresolved_known_sandbox_boundary",
+        },
+        schemaGaps: [],
+        sandboxBoundary: true,
+        sandboxBoundaryPacket: boundary,
+        skippedProbeSurfaces: boundary.skipped_surfaces,
+        resumeActions: [],
+      },
+      blockers: [
+        blocker,
+      ],
+      warnings: [managerSandboxPreventionNotice(boundary, "resume-known-sandbox-boundary")],
+      nextActions: [{
+        code: "resume-known-sandbox-boundary-action",
+        summary: blocker.message,
+        nextAction: blocker.nextAction,
+      }],
+    });
+  }
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const workspace = getWorkspaceProof(runOptions, context);
   const ledger = buildLedgerReadiness(runOptions, context);
@@ -17921,7 +17992,295 @@ function isBlockedOwnership(value) {
   return /^(outside-manager-owner|outside|external|ambiguous|unknown)$/i.test(String(value || "").trim());
 }
 
+const EXACT_READ_ONLY_SANDBOX_RERUN = "exact_command_outside_sandbox_when_read_only";
+
+function requiresExactReadOnlySandboxRerun(boundary = {}) {
+  if (!boundary?.boundary) return false;
+  if (String(boundary.class || "").trim() !== "sandbox") return false;
+  if (String(boundary.safe_rerun || "").trim() !== EXACT_READ_ONLY_SANDBOX_RERUN) return false;
+  return /^none\b/i.test(String(boundary.mutation || ""));
+}
+
+function isManagerProbeScopedSandboxBoundary(boundary = {}) {
+  if (!requiresExactReadOnlySandboxRerun(boundary)) return false;
+  const commandText = String(boundary.command || boundary.exact_rerun_command || "");
+  const signatureText = String(boundary.signature || "");
+  if (/\bmanager-(?:preflight|resume-state|cycle-packet)\.mjs\b/i.test(commandText)) return true;
+  if (/\bcodex-workspace\.mjs\b/i.test(commandText)) return true;
+  if (/\btmux(?:\s+|$)|\btmux-orientation-report\.mjs\b/i.test(commandText)) return true;
+  if (commandText.trim()) return false;
+  return signatureText === "known-manager-sandbox-probe-boundary";
+}
+
+function scopedManagerSandboxEvidenceString(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/\b(?:knownSandboxedManagerProbes|knownSandboxBoundary|KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY|known-manager-sandbox-probe-boundary)\b/i.test(text)) {
+    return sanitizeLedgerField(text, "context-scoped-manager-sandbox-evidence", 120);
+  }
+  if (/\bmanager-(?:preflight|resume-state|cycle-packet)\.mjs\b/i.test(text)) {
+    return sanitizeLedgerField(text, "context-scoped-manager-sandbox-evidence", 120);
+  }
+  if (/\bcodex-workspace\.mjs\b/i.test(text)) {
+    return sanitizeLedgerField(text, "context-scoped-manager-sandbox-evidence", 120);
+  }
+  if (/\b(?:command|commandShape|exact_rerun_command)\s*[:=]\s*(?:'|")?tmux\b/i.test(text)) {
+    return sanitizeLedgerField(text, "context-scoped-manager-sandbox-evidence", 120);
+  }
+  if (/\btmux-orientation-report\.mjs\b/i.test(text)) {
+    return sanitizeLedgerField(text, "context-scoped-manager-sandbox-evidence", 120);
+  }
+  return "";
+}
+
+function managerSandboxPreventionEvidence(context = {}) {
+  if (context.disableSandboxProbePrevention === true) return null;
+  const env = context.env || {};
+  if (env.KENDALL_MANAGER_ALLOW_SANDBOX_PROBES === "1") return null;
+  if (context.knownSandboxedManagerProbes === true || context.knownSandboxBoundary === true) {
+    return "context-marked-known-sandbox";
+  }
+  if (typeof context.sandboxBoundaryEvidence === "string" && context.sandboxBoundaryEvidence.trim()) {
+    return scopedManagerSandboxEvidenceString(context.sandboxBoundaryEvidence) || null;
+  }
+  const priorBoundary = context.sandboxBoundaryPacket || context.priorSandboxBoundaryPacket || context.priorClassifiedSandboxBoundary;
+  if (isManagerProbeScopedSandboxBoundary(priorBoundary)) {
+    return sanitizeLedgerField(`prior:${priorBoundary.signature || priorBoundary.class || "classified-manager-sandbox-boundary"}`, "prior-classified-manager-sandbox-boundary", 120);
+  }
+  if (env.KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY === "1") return "env:KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY";
+  return null;
+}
+
+function managerSandboxPreventionPacket(commandShape, evidence, skippedSurfaces = []) {
+  const command = sanitizeLedgerCommandField(commandShape, "node ./scripts/manager-preflight.mjs --summary-json");
+  const surfaces = skippedSurfaces
+    .map((surface) => sanitizeLedgerField(surface, "", 80))
+    .filter(Boolean)
+    .slice(0, 8);
+  return {
+    boundary: true,
+    class: "sandbox",
+    signature: "known-manager-sandbox-probe-boundary",
+    command,
+    exact_rerun_command: command,
+    command_display: sanitizeLedgerField(command, "node ./scripts/manager-preflight.mjs --summary-json", 420),
+    safe_rerun: "exact_command_outside_sandbox_when_read_only",
+    mutation: "none",
+    next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once; if KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY remains set in that shell, unset it or set KENDALL_MANAGER_ALLOW_SANDBOX_PROBES=1 for the approved rerun. Record the result before changing scope or repairing code.",
+    evidence_summary: `Known sandbox evidence (${sanitizeLedgerField(evidence, "sandbox evidence", 120)}) means manager probe paths were skipped before child-process or tmux EPERM.`,
+    skipped_surfaces: surfaces,
+    rawPayloadRetained: false,
+  };
+}
+
+function managerCycleSandboxPlaceholder(kind = "usage", boundary = {}) {
+  return {
+    state: "unknown",
+    status: "unknown",
+    source: `not_probed_known_sandbox_boundary:${kind}`,
+    sampled: false,
+    sandboxBoundary: true,
+    sandboxBoundaryPacket: boundary,
+    mutation: "none; metadata-only placeholder",
+    rawPayloadRetained: false,
+  };
+}
+
+function managerCycleSandboxWorkersPlaceholder(runOptions = {}, boundary = {}) {
+  const desired = Math.max(0, Math.min(6, nonNegativeInteger(runOptions.desiredWorkers) ?? 0));
+  const startWarmCandidates = Array.from({ length: desired }, (_, index) => ({
+    workerId: `not-probed-known-sandbox-boundary-${index + 1}`,
+    sessionName: `not-probed-known-sandbox-boundary-${index + 1}`,
+    state: "not_probed_known_sandbox_boundary",
+    sandboxBoundary: true,
+    mutation: "none; metadata-only placeholder",
+    rawPayloadRetained: false,
+  }));
+  return {
+    status: "unknown",
+    state: "not_probed_known_sandbox_boundary",
+    workerCounts: { total: 0, active: 0, warm: 0, paused: 0, unknown: 0 },
+    targets: {
+      desiredTarget: desired,
+      allowedTarget: 0,
+      startTarget: 0,
+      safeWorkSupply: 0,
+      sandboxBoundary: true,
+      rawPayloadRetained: false,
+    },
+    lifecyclePlan: {
+      startWarmCandidates,
+      terminationPlan: [],
+      sandboxBoundary: true,
+      rawPayloadRetained: false,
+    },
+    sandboxBoundary: true,
+    sandboxBoundaryPacket: boundary,
+    mutation: "none; metadata-only placeholder",
+    rawPayloadRetained: false,
+  };
+}
+
+function managerCycleSandboxContinuationPlaceholder(boundary = {}) {
+  return {
+    state: "sandbox_incomplete",
+    canContinue: false,
+    workerStartAllowed: false,
+    workerMutationAllowed: false,
+    dispatchApplyAllowed: false,
+    allowedActions: [],
+    blockedActions: ["manager_owned_worker_warm", "dispatch_apply"],
+    reason: "Known sandbox evidence prevented manager cycle probes before child-process or tmux inspection.",
+    sandboxBoundary: true,
+    sandboxBoundaryPacket: boundary,
+    rawPayloadRetained: false,
+  };
+}
+
+function buildCycleKnownSandboxBoundaryPacket(runOptions = {}, boundary = {}) {
+  const blocker = sandboxBoundaryBlocker(boundary, "cycle-known-sandbox-boundary");
+  const warning = managerSandboxPreventionNotice(boundary, "cycle-known-sandbox-boundary");
+  const nextAction = {
+    code: "cycle-known-sandbox-boundary-action",
+    summary: blocker.message,
+    nextAction: blocker.nextAction,
+  };
+  return packet({
+    ok: false,
+    status: "sandbox_incomplete",
+    summary: {
+      run: {
+        runId: runOptions.runId,
+        stateRoot: runOptions.stateRoot || "",
+        state: "sandbox_incomplete",
+      },
+      usage: managerCycleSandboxPlaceholder("usage", boundary),
+      resources: managerCycleSandboxPlaceholder("resources", boundary),
+      workers: managerCycleSandboxWorkersPlaceholder(runOptions, boundary),
+      preflight: {
+        status: "not_probed_known_sandbox_boundary",
+        sandboxBoundary: true,
+        sandboxBoundaryPacket: boundary,
+        blockerCount: 1,
+        warningCount: 1,
+      },
+      continuation: managerCycleSandboxContinuationPlaceholder(boundary),
+      dispatchPreview: { status: "not_probed_known_sandbox_boundary", counts: {}, sandboxBoundary: true, rawPayloadRetained: false },
+      runway: { status: "not_probed_known_sandbox_boundary", safeWorkSupply: 0, candidateLanes: [], sandboxBoundary: true, rawPayloadRetained: false },
+      cleanup: { status: "not_probed_known_sandbox_boundary", sandboxBoundary: true, rawPayloadRetained: false },
+      resume: { status: "not_probed_known_sandbox_boundary", blockerCount: 1, sandboxBoundary: true, rawPayloadRetained: false },
+      operationalActions: { readinessState: "sandbox_incomplete", sandboxBoundary: true, rawPayloadRetained: false },
+      recommendedNextAction: boundary.next_action || blocker.nextAction,
+      mutation: "none; cycle packet skipped known sandbox probe paths before usage/resource/preflight builders",
+      rawPayloadRetained: false,
+    },
+    blockers: [blocker],
+    warnings: [warning],
+    nextActions: [nextAction],
+  });
+}
+
+function managerSandboxPreventionNotice(boundary, code = "known-manager-sandbox-boundary") {
+  return {
+    code,
+    message: boundary.evidence_summary,
+    nextAction: boundary.next_action,
+    failureClass: "sandbox",
+    sandboxBoundary: true,
+    sandboxSignatureClass: boundary.signature,
+    rerunRequirement: "Rerun the exact same read-only command outside the sandbox once.",
+    retryStopLine: "Do not run manager child-process, git, gh, workspace, or tmux probes again in this sandbox for the same command.",
+    sandboxBoundaryPacket: boundary,
+    safe_rerun: boundary.safe_rerun,
+    mutation: boundary.mutation,
+    rawPayloadRetained: false,
+  };
+}
+
+function managerReadOnlyCommandShape(scriptName, options = {}) {
+  const originalArgv = Array.isArray(options.originalArgv)
+    ? options.originalArgv
+    : Array.isArray(options.rawArgs)
+      ? options.rawArgs
+      : Array.isArray(options.argv)
+        ? options.argv
+        : null;
+  if (originalArgv?.length) {
+    return renderCommandShape(["node", `./scripts/${scriptName}`, ...originalArgv]);
+  }
+  const parts = ["node", `./scripts/${scriptName}`, "--summary-json"];
+  if (options.runId) parts.push("--run-id", options.runId);
+  if (options.stateRoot) parts.push("--state-root", options.stateRoot);
+  if (Number.isFinite(Number(options.desiredWorkers)) && Number(options.desiredWorkers) !== 6) {
+    parts.push("--desired-workers", String(Math.trunc(Number(options.desiredWorkers))));
+  }
+  if (Number.isFinite(Number(options.limit))) parts.push("--limit", String(Math.trunc(Number(options.limit))));
+  if (Number.isFinite(Number(options.maxIterations))) parts.push("--max-iterations", String(Math.trunc(Number(options.maxIterations))));
+  if (Number.isFinite(Number(options.intervalMs)) && Number(options.intervalMs) !== 60000) {
+    parts.push("--interval-ms", String(Math.trunc(Number(options.intervalMs))));
+  }
+  if (Number.isFinite(Number(options.heartbeatEvery)) && Number(options.heartbeatEvery) !== 1) {
+    parts.push("--heartbeat-every", String(Math.trunc(Number(options.heartbeatEvery))));
+  }
+  if (options.usageState) parts.push("--usage-state", options.usageState);
+  if (options.resourceState) parts.push("--resource-state", options.resourceState);
+  const steeringInstruction = options.steeringInstruction ?? options.operatorInstruction;
+  if (steeringInstruction) parts.push("--steering", steeringInstruction);
+  const operatorFeedback = options.operatorFeedback ?? options.feedback;
+  if (operatorFeedback) parts.push("--feedback", operatorFeedback);
+  if (options.runtimeMode) parts.push("--runtime-mode", options.runtimeMode);
+  return renderCommandShape(parts);
+}
+
 export function buildPreflight(options = {}, context = {}) {
+  const sandboxEvidence = managerSandboxPreventionEvidence(context);
+  if (sandboxEvidence) {
+    const runId = safeReadProperty(options, "runId", "") || safeReadProperty(context, "runId", "") || "unresolved";
+    const stateRoot = safeReadProperty(options, "stateRoot", "") || safeReadProperty(context.env || {}, "CODEX_WORKSPACE_ROOT", "") || null;
+    const boundary = managerSandboxPreventionPacket(
+      managerReadOnlyCommandShape("manager-preflight.mjs", options),
+      sandboxEvidence,
+      ["git repo metadata", "GitHub CLI availability", "tmux orientation", "workspace assignment report", "dispatch preview", "worker status probes", "cleanup workspace metadata"],
+    );
+    const blocker = sandboxBoundaryBlocker(boundary, "preflight-known-sandbox-boundary");
+    const warnings = [managerSandboxPreventionNotice(boundary, "preflight-known-sandbox-boundary")];
+    return packet({
+      ok: false,
+      status: "sandbox_incomplete",
+      summary: {
+        repoRoot,
+        workspace: {
+          ok: stateRoot ? null : false,
+          stateRoot,
+          proof: null,
+          proofStatus: stateRoot ? "not_probed_known_sandbox_boundary" : "unresolved_known_sandbox_boundary",
+        },
+        ledger: {
+          status: "not_probed_known_sandbox_boundary",
+          runId,
+          root: stateRoot ? join(stateRoot, "manager-runs", runId) : null,
+          files: {},
+          schemaGapCount: 0,
+          dispatcherSummary: null,
+        },
+        sandboxBoundary: true,
+        sandboxBoundaryPacket: boundary,
+        skippedProbeSurfaces: boundary.skipped_surfaces,
+        recommendedNextAction: boundary.next_action,
+        mutation: "none; read-only preflight summary skipped known sandbox probe paths",
+        rawPayloadRetained: false,
+      },
+      blockers: [
+        blocker,
+      ],
+      warnings,
+      nextActions: [{
+        code: "preflight-known-sandbox-boundary-action",
+        summary: blocker.message,
+        nextAction: blocker.nextAction,
+      }],
+    });
+  }
   const runOptions = { ...options, runId: resolveManagerRunId(options, context), apply: false };
   const workspace = getWorkspaceProof(runOptions, context);
   const repo = buildRepoPreflightStatus(context);
@@ -18941,6 +19300,15 @@ export function buildCyclePacket(options = {}, context = {}) {
   context = safePlainObjectSnapshot(context) || {};
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const readOnlyRunOptions = { ...runOptions, apply: false };
+  const cycleSandboxEvidence = managerSandboxPreventionEvidence(context);
+  if (cycleSandboxEvidence) {
+    const boundary = managerSandboxPreventionPacket(
+      managerReadOnlyCommandShape("manager-cycle-packet.mjs", readOnlyRunOptions),
+      cycleSandboxEvidence,
+      ["provider usage status", "host resource status", "preflight manager probes", "dispatch preview", "worker status probes", "tmux orientation", "workspace assignment report"],
+    );
+    return buildCycleKnownSandboxBoundaryPacket(readOnlyRunOptions, boundary);
+  }
   const usageContext = safePlainObjectSnapshot(safeReadProperty(context, "usageContext", {})) || {};
   const resourceContext = safePlainObjectSnapshot(safeReadProperty(context, "resourceContext", {})) || {};
   const preflightStatus = safeReadProperty(context, "preflightStatus", null);
@@ -18958,6 +19326,54 @@ export function buildCyclePacket(options = {}, context = {}) {
   const resources = resourceContext && (safeReadProperty(resourceContext, "status", null) || safeReadProperty(resourceContext, "state", null)) ? normalizePacketContext(resourceContext) : buildResourceStatus(resourceContext || {});
   const preflight = preflightStatus ? normalizePacketContext(preflightStatus) : buildPreflight(readOnlyRunOptions, context);
   const preflightSandboxBoundary = sandboxBoundaryFromPacket(preflight, "node ./scripts/manager-preflight.mjs --summary-json");
+  if (
+    requiresExactReadOnlySandboxRerun(preflightSandboxBoundary) &&
+    preflightSandboxBoundary.signature === "known-manager-sandbox-probe-boundary"
+  ) {
+    const boundaryBlocker = sandboxBoundaryBlocker(preflightSandboxBoundary, "cycle-preflight-known-sandbox-boundary");
+    const blockers = [
+      ...(Array.isArray(preflight.blockers) ? preflight.blockers : []),
+      boundaryBlocker,
+    ].filter((blocker, index, list) => {
+      const key = `${blocker?.code || ""}:${blocker?.message || ""}`;
+      return index === list.findIndex((candidate) => `${candidate?.code || ""}:${candidate?.message || ""}` === key);
+    });
+    const warnings = uniqueWarnings(Array.isArray(preflight.warnings) ? preflight.warnings : []);
+    const nextActions = uniqueActions([
+      ...(Array.isArray(preflight.nextActions) ? preflight.nextActions : []),
+      {
+        code: "cycle-preflight-known-sandbox-boundary-action",
+        summary: boundaryBlocker.message,
+        nextAction: boundaryBlocker.nextAction,
+      },
+    ]);
+    return packet({
+      ok: false,
+      status: "sandbox_incomplete",
+      summary: {
+        run: {
+          runId: runOptions.runId,
+          stateRoot: readOnlyRunOptions.stateRoot || "",
+          state: "sandbox_incomplete",
+        },
+        usage: usage.summary || usage,
+        resources: resources.summary || resources,
+        preflight: {
+          status: preflight.status || "sandbox_incomplete",
+          sandboxBoundary: true,
+          sandboxBoundaryPacket: preflightSandboxBoundary,
+          blockerCount: blockers.length,
+          warningCount: warnings.length,
+        },
+        recommendedNextAction: preflightSandboxBoundary.next_action || boundaryBlocker.nextAction,
+        mutation: "none; cycle packet skipped downstream manager probes after known preflight sandbox boundary",
+        rawPayloadRetained: false,
+      },
+      blockers,
+      warnings,
+      nextActions,
+    });
+  }
   const dispatchPreview = dispatchPreviewContext ? normalizeDispatchPreviewContext(dispatchPreviewContext) : buildDispatchPreview(readOnlyRunOptions, context);
   const runway = buildRefillPlan(readOnlyRunOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
   const workers = workerStatus ? normalizePacketContext(workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
@@ -21067,6 +21483,8 @@ function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
     nextManagerAction,
     localBmadStoryArtifacts: uniqueStoryArtifacts.slice(0, 8),
     applyMutationMode: "local_bmad_story_file_only",
+    storyCreationGate: "manager-refill-plan-bmad-create-story-existing-gates",
+    deliveryCleanupAllowed: false,
     safetyStopLines: safetyStopLines.slice(0, 16),
     localBmadArtifactsIgnored: true,
     metadataOnly: true,
@@ -24157,6 +24575,16 @@ function sanitizeLedgerField(value, fallback, maxLength) {
     .replace(/\s+/g, " ")
     .trim();
   return (text || fallback).slice(0, maxLength);
+}
+
+function sanitizeLedgerCommandField(value, fallback) {
+  return safeString(value, fallback)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[redacted-token]")
+    .replace(/\b(raw prompt|completion|reasoning trace|provider payload|raw transcript|transcript|stack dump|source dump|source copy|raw source|console log|raw log|raw scrollback|OPENAI_API_KEY|password|secret)\b/gi, "[redacted-retention-term]")
+    .replace(/([_-])completion(?=$|[_-])/gi, "$1[redacted-retention-term]")
+    .replace(/\s+/g, " ")
+    .trim() || fallback;
 }
 
 function sanitizeIdentifierField(value, fallback = "", maxLength = 140) {
