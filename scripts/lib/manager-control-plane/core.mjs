@@ -13736,6 +13736,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
     "node ./scripts/manager-bmad-code-review.mjs --summary-json",
     runId ? `--run-id ${shellSingleQuote(runId)}` : "",
     options.stateRoot ? `--state-root ${shellSingleQuote(options.stateRoot)}` : "",
+    options.assignmentSummaryFile ? `--assignment-summary-file ${shellSingleQuote(options.assignmentSummaryFile)}` : "",
     sprintStatusPath ? `--sprint-status-path ${shellSingleQuote(sprintStatusPath)}` : "",
     requestedStoryKey ? `--story-key ${shellSingleQuote(requestedStoryKey)}` : "",
   ].filter(Boolean).join(" ");
@@ -13781,8 +13782,14 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
 
   const content = readFileSync(sprintAbsolute, "utf8");
   const rows = sprintStoryRows(content);
+  const assignmentEvidence =
+    context.assignmentSummary ||
+    context.cyclePacket?.summary?.assignment ||
+    context.cyclePacket?.summary?.assignmentSummary ||
+    readAssignmentSummaryFile(options.assignmentSummaryFile) ||
+    {};
   const closedStoryStatuses = closedAssignmentStoryStatusOverlay(
-    context.assignmentSummary || context.cyclePacket?.summary?.assignment || context.cyclePacket?.summary?.assignmentSummary || {},
+    assignmentEvidence,
     options,
   );
   const effectiveStoryStatuses = mergeStoryStatusOverlays(
@@ -13845,6 +13852,8 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
         explicitReviewReadyCandidate: sanitizeCyclePacketValue(effectiveExplicitReadyRow),
         openReviewFeedbackCount: reviewRowsWithOpenFeedback.length + (requestedStoryHasOpenFeedback && !reviewRowsWithOpenFeedback.some((row) => row.storyKey === requestedStoryKey) ? 1 : 0),
         candidates: sanitizeCyclePacketValue(candidateRows.slice(0, 6)),
+        dryRunCommand,
+        applyCommand,
         mutationMode: "none",
         rawPayloadRetained: false,
       },

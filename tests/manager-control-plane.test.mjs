@@ -1599,6 +1599,7 @@ test("bmad code review request plan suppresses stale review rows closed by assig
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-bmad-review-closed-overlay-"));
   const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-review-closed-overlay-test.yaml";
   const storyPath = "_bmad-output/implementation-artifacts/97-2-manager-review-closed-overlay.md";
+  const assignmentSummaryPath = join(stateRoot, "assignment-summary.json");
   try {
     ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
     writeFileSync(
@@ -1613,28 +1614,33 @@ test("bmad code review request plan suppresses stale review rows closed by assig
       ].join("\n"),
     );
     writeFileSync(storyPath, "# Story 97-2-manager-review-closed-overlay\n\nImplementation evidence was already delivered.\n", "utf8");
+    writeFileSync(
+      assignmentSummaryPath,
+      JSON.stringify({
+        summary: {
+          laneAssignments: [{
+            assignmentId: "bmad-97-2-manager-review-closed-overlay",
+            taskId: "20260702-bmad-97-2-manager-review-closed-overlay",
+            branch: "codex/bmad-97-2-manager-review-closed-overlay",
+            status: "closed",
+            phase: "closed",
+            reasonCode: "assignment_closed",
+          }],
+        },
+      }),
+      "utf8",
+    );
 
     const plan = buildBmadCodeReviewRequestPlan(
       {
         allowExplicitReviewReadyAssignment: true,
+        assignmentSummaryFile: assignmentSummaryPath,
         requestedStoryKey: "97-2-manager-review-closed-overlay",
         runId: "manager-test",
         stateRoot,
         sprintStatusPath: sprintPath,
       },
       {
-        assignmentSummary: {
-          summary: {
-            laneAssignments: [{
-              assignmentId: "bmad-97-2-manager-review-closed-overlay",
-              taskId: "20260702-bmad-97-2-manager-review-closed-overlay",
-              branch: "codex/bmad-97-2-manager-review-closed-overlay",
-              status: "closed",
-              phase: "closed",
-              reasonCode: "assignment_closed",
-            }],
-          },
-        },
         progressStatus: {
           summary: {
             workerProgress: [{
@@ -1652,6 +1658,7 @@ test("bmad code review request plan suppresses stale review rows closed by assig
     assert.equal(plan.summary.staleClosedReviewStoryCount, 1);
     assert.equal(plan.summary.eligibleStoryCount, 0);
     assert.equal(plan.summary.explicitReviewReadyCandidate, null);
+    assert.match(plan.summary.dryRunCommand, /--assignment-summary-file/);
     assert.equal(plan.blockers[0].code, "bmad-code-review-no-review-work");
   } finally {
     rmSync(sprintPath, { force: true });
