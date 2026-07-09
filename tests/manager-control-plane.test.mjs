@@ -6531,7 +6531,7 @@ test("live worker readiness exposes ten-cycle stability observer evidence", () =
     ]);
     assert.equal(readiness.summary.tenCycleStabilityObserverEvidence.nextManagerAction, readiness.summary.nextStabilityObserverCommand);
     assert.deepEqual(readiness.summary.tenCycleStabilityObserverEvidence.localBmadArtifactBoundary, {
-      path: "_bmad-output/implementation-artifacts/21-5-ten-cycle-stability-observer.md",
+      path: "_bmad-output/implementation-artifacts/22-5-ten-cycle-stability-observer.md",
       expectedIgnored: true,
       runtimeVerified: false,
       verificationSource: "regression_test_git_check_ignore_and_ls_files",
@@ -6547,7 +6547,7 @@ test("live worker readiness exposes ten-cycle stability observer evidence", () =
     assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no merge mutation"));
     assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no GitHub delivery mutation"));
     assert.doesNotMatch(JSON.stringify(readiness.summary.tenCycleStabilityObserverEvidence), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
-    assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-5-ten-cycle-stability-observer.md");
+    assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/22-5-ten-cycle-stability-observer.md");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
