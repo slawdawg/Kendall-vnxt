@@ -11681,7 +11681,10 @@ export function buildRefillPlan(options = {}, context = {}) {
       warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings, ...sourceBackedPacketSeedWarnings],
     });
   }
-  const sourcePlanning = sourceSlice ? discoverSourcePlanningState(sourceSlice, context) : null;
+  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
+  const sourcePlanning = sourceSlice
+    ? applyClosedStoryStatusOverlayToSourcePlanning(discoverSourcePlanningState(sourceSlice, context), closedStoryStatuses)
+    : null;
   const sourceWorkEligibilityForPlanning = sourceWorkEligibility || (eligibleSeedPackets.length > 0 ? { summary: { eligibleCount: eligibleSeedPackets.length } } : null);
   const bmadPlanningGap = starvation && sourceSlice
     ? buildBmadPlanningGapPlan(options, { ...context, sourceRefs: [sourceSlice.ref], sourceSlice, sourcePlanning, sourceWorkEligibility: sourceWorkEligibilityForPlanning })
@@ -11704,7 +11707,6 @@ export function buildRefillPlan(options = {}, context = {}) {
       },
     };
   }
-  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
   const materializationGate = buildRefillMaterializationGate(
     workCreationStep,
     sourceSlice,
@@ -12772,6 +12774,75 @@ function mergeStoryStatusOverlays(base = {}, overlay = {}) {
   };
 }
 
+function applyClosedStoryStatusOverlayToSourcePlanning(sourcePlanning = null, closedStoryStatuses = {}) {
+  if (!sourcePlanning?.sprintStatus || !isPlainObject(closedStoryStatuses) || Object.keys(closedStoryStatuses).length === 0) {
+    return sourcePlanning;
+  }
+  const sprintStatus = sourcePlanning.sprintStatus;
+  const storyStatuses = sourcePlanningSprintStoryStatuses(sprintStatus);
+  if (Object.keys(storyStatuses).length === 0) return sourcePlanning;
+  const effectiveStoryStatuses = mergeStoryStatusOverlays(storyStatuses, closedStoryStatuses);
+  const counts = summarizeStoryStatuses(effectiveStoryStatuses);
+  return {
+    ...sourcePlanning,
+    sprintStatus: {
+      ...sprintStatus,
+      ...counts,
+      storyStatuses: effectiveStoryStatuses,
+      storyStatusOverlay: {
+        source: "closed_assignment_evidence",
+        closedStoryCount: Object.entries(storyStatuses).filter(([storyKey, status]) => status !== "done" && effectiveStoryStatuses[storyKey] === "done").length,
+        rawPayloadRetained: false,
+      },
+    },
+  };
+}
+
+function sourcePlanningSprintStoryStatuses(sprintStatus = {}) {
+  const safePath = sanitizeRelativeBmadOutputPath(sprintStatus.path || "");
+  if (safePath) {
+    const absolutePath = resolve(repoRoot, safePath);
+    if (isInsideOrSame(absolutePath, repoRoot) && existsSync(absolutePath)) {
+      return countSprintStories(readFileSync(absolutePath, "utf8"), { artifactDir: dirname(absolutePath) }).storyStatuses || {};
+    }
+  }
+  if (isPlainObject(sprintStatus.storyStatuses) && Object.keys(sprintStatus.storyStatuses).length > 0) {
+    return sprintStatus.storyStatuses;
+  }
+  return {};
+}
+
+function summarizeStoryStatuses(storyStatuses = {}) {
+  const counts = {
+    backlogStories: 0,
+    readyStories: 0,
+    reviewReadyStories: 0,
+    readyForDevStories: 0,
+    activeStories: 0,
+    doneStories: 0,
+    nextBacklogStoryKey: null,
+  };
+  for (const [storyKey, rawStatus] of Object.entries(storyStatuses)) {
+    if (!/^\d+-\d+-[a-z0-9-]+$/i.test(storyKey)) continue;
+    const status = normalizeSprintStoryStatus(rawStatus);
+    if (status === "backlog") {
+      counts.backlogStories += 1;
+      counts.nextBacklogStoryKey ||= storyKey;
+    } else if (status === "ready-for-dev") {
+      counts.readyStories += 1;
+      counts.readyForDevStories += 1;
+    } else if (status === "review") {
+      counts.readyStories += 1;
+      counts.reviewReadyStories += 1;
+    } else if (status === "in-progress") {
+      counts.activeStories += 1;
+    } else if (status === "done") {
+      counts.doneStories += 1;
+    }
+  }
+  return counts;
+}
+
 function assignmentEvidenceIsClosed(row = {}) {
   const closedStates = new Set(["closed", "done", "merged", "complete", "completed"]);
   const activeStates = new Set(["active", "claimed", "in_progress", "in-progress", "review", "review_ready", "delivery_ready", "handoff"]);
@@ -13710,7 +13781,21 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
 
   const content = readFileSync(sprintAbsolute, "utf8");
   const rows = sprintStoryRows(content);
-  const reviewRows = rows.filter((row) => row.status === "review");
+  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(
+    context.assignmentSummary || context.cyclePacket?.summary?.assignment || context.cyclePacket?.summary?.assignmentSummary || {},
+    options,
+  );
+  const effectiveStoryStatuses = mergeStoryStatusOverlays(
+    Object.fromEntries(rows.map((row) => [row.storyKey, normalizeSprintStoryStatus(row.status) || row.status])),
+    closedStoryStatuses,
+  );
+  const effectiveRows = rows.map((row) => ({
+    ...row,
+    status: effectiveStoryStatuses[row.storyKey] || row.status,
+    trackerStatus: row.status,
+  }));
+  const reviewRows = effectiveRows.filter((row) => row.status === "review");
+  const staleClosedReviewRows = rows.filter((row) => row.status === "review" && effectiveStoryStatuses[row.storyKey] === "done");
   const eligibleRows = reviewRows
     .filter((row) => !requestedStoryKey || row.storyKey === requestedStoryKey)
     .filter((row) => !storyHasOpenReviewFeedback(context.progressStatus, row.storyKey))
@@ -13752,6 +13837,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
         sprintStatusPath,
         requestedStoryKey: requestedStoryKey || null,
         reviewStoryCount: reviewRows.length,
+        staleClosedReviewStoryCount: staleClosedReviewRows.length,
         eligibleStoryCount: candidateRows.length,
         explicitReviewReadyCandidate: sanitizeCyclePacketValue(explicitReadyRow),
         openReviewFeedbackCount: reviewRowsWithOpenFeedback.length + (requestedStoryHasOpenFeedback && !reviewRowsWithOpenFeedback.some((row) => row.storyKey === requestedStoryKey) ? 1 : 0),
@@ -13866,6 +13952,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
       alreadyPrepared,
       applied,
       reviewStoryCount: reviewRows.length,
+      staleClosedReviewStoryCount: staleClosedReviewRows.length,
       selectedFromExplicitProgress: selected.source === "manager_worker_progress",
       candidates: sanitizeCyclePacketValue(candidateRows.slice(0, 6)),
       dryRunCommand,

@@ -926,7 +926,7 @@ test("verified claimed lanes do not count as worker-eligible safe supply", () =>
       sourcePlanningState: {
         sprintStatus: {
           exists: true,
-          path: "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml",
+          path: "_bmad-output/implementation-artifacts/sprint-status-manager-stale-delivered-overlay-test.yaml",
           backlogStories: 0,
           readyStories: 6,
           readyForDevStories: 6,
@@ -1480,6 +1480,69 @@ test("refill plan does not expose correct-course materialization gate for review
   assert.equal(plan.nextActions[0].materializationGate, null);
 });
 
+test("refill plan treats stale review and active sprint rows as done from closed delivery evidence", () => {
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 80 },
+          laneAssignmentStatusCounts: { active: 1, closed: 2 },
+          laneAssignments: [
+            {
+              assignmentId: "bmad-97-3-stale-review-delivered",
+              taskId: "20260702-bmad-97-3-stale-review-delivered",
+              branch: "codex/bmad-97-3-stale-review-delivered",
+              status: "closed",
+              phase: "closed",
+              reasonCode: "assignment_closed",
+            },
+            {
+              assignmentId: "bmad-97-4-stale-active-delivered",
+              taskId: "20260702-bmad-97-4-stale-active-delivered",
+              branch: "codex/bmad-97-4-stale-active-delivered",
+              status: "closed",
+              phase: "closed",
+              reasonCode: "assignment_closed",
+            },
+          ],
+        },
+      },
+      dispatchPreview: {
+        summary: {
+          counts: { dispatchable: 0, active: 1 },
+          candidateStateCounts: { active: 1 },
+        },
+      },
+      sourcePlanningState: {
+        sourceKey: "manager-stale-delivered-overlay-test",
+        sprintStatus: {
+          exists: true,
+          path: "_bmad-output/implementation-artifacts/sprint-status-manager-stale-delivered-overlay-test.yaml",
+          backlogStories: 0,
+          readyStories: 1,
+          reviewReadyStories: 1,
+          readyForDevStories: 0,
+          activeStories: 1,
+          doneStories: 0,
+          nextBacklogStoryKey: null,
+          storyStatuses: {
+            "97-3-stale-review-delivered": "review",
+            "97-4-stale-active-delivered": "in-progress",
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(plan.status, "refill_needed");
+  assert.equal(plan.summary.sourcePlanning.sprintStatus.reviewReadyStories, 0);
+  assert.equal(plan.summary.sourcePlanning.sprintStatus.activeStories, 0);
+  assert.equal(plan.summary.sourcePlanning.sprintStatus.doneStories, 2);
+  assert.equal(plan.summary.workCreationStep.workflow, "bmad-correct-course");
+  assert.notEqual(plan.summary.workCreationStep.workflow, "bmad-code-review");
+});
+
 test("bmad code review request plan prepares manager runtime packet only", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-bmad-review-request-"));
   const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-review-request-test.yaml";
@@ -1525,6 +1588,54 @@ test("bmad code review request plan prepares manager runtime packet only", () =>
     const repeated = buildBmadCodeReviewRequestPlan({ apply: true, runId: "manager-test", stateRoot, sprintStatusPath: sprintPath });
     assert.equal(repeated.summary.alreadyPrepared, true);
     assert.equal(repeated.summary.applied, false);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("bmad code review request plan suppresses stale review rows closed by assignment evidence", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-bmad-review-closed-overlay-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-review-closed-overlay-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/97-2-manager-review-closed-overlay.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-02",
+        "last_updated: 2026-07-02",
+        "development_status:",
+        "  epic-97: in-progress",
+        "  97-2-manager-review-closed-overlay: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 97-2-manager-review-closed-overlay\n\nImplementation evidence was already delivered.\n", "utf8");
+
+    const plan = buildBmadCodeReviewRequestPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath },
+      {
+        assignmentSummary: {
+          summary: {
+            laneAssignments: [{
+              assignmentId: "bmad-97-2-manager-review-closed-overlay",
+              taskId: "20260702-bmad-97-2-manager-review-closed-overlay",
+              branch: "codex/bmad-97-2-manager-review-closed-overlay",
+              status: "closed",
+              phase: "closed",
+              reasonCode: "assignment_closed",
+            }],
+          },
+        },
+      },
+    );
+
+    assert.equal(plan.status, "blocked");
+    assert.equal(plan.summary.reviewStoryCount, 0);
+    assert.equal(plan.summary.staleClosedReviewStoryCount, 1);
+    assert.equal(plan.blockers[0].code, "bmad-code-review-no-review-work");
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
