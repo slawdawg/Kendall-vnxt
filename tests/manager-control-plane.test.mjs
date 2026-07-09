@@ -231,6 +231,14 @@ for (const [relativePath, content] of [
     "# Story 21.4: Worker Retirement and Reassignment\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for plan-only retirement assertions.\n",
   ],
   [
+    "_bmad-output/implementation-artifacts/21-2-manager-story-creation-apply-gate.md",
+    "# Story 21.2: Manager Story Creation Apply Gate\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for story creation apply gate assertions.\n",
+  ],
+  [
+    "_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md",
+    "# Story 21.6: Cleanup and Handoff Closeout\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for cleanup and handoff closeout assertions.\n",
+  ],
+  [
     "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md",
     "# Story 97.2: Manager Continuous Review Gate\n\n## Status\nreview\n",
   ],
@@ -17876,7 +17884,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadArtifactsIgnored, true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.metadataOnly, true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.rawPayloadRetained, false);
-  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-2-manager-story-creation-apply-gate.md");
+  assertExistingLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-2-manager-story-creation-apply-gate.md");
 
   const unsafeStoryArtifactPlan = continuousRunPlan(
     {},
@@ -23224,7 +23232,7 @@ test("cleanup plan includes stale owner cleanup and dirty preservation summary",
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.localBmadStoryArtifact.expectedIgnored, true);
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.metadataOnly, true);
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.rawPayloadRetained, false);
-  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md");
+  assertExistingLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md");
   assert.doesNotMatch(JSON.stringify(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
   assert.equal(cleanup.nextActions[1].code, "dirty-workspace-preservation-complete");
   assert.match(cleanup.nextActions[1].nextAction, /Review preservation packet/);
