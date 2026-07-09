@@ -12332,7 +12332,7 @@ function backlogStoryKeysFromSprintStatus(content = "") {
     .filter(Boolean);
 }
 
-function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, options = {}) {
+export function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, options = {}) {
   const effectiveStoryStatuses = mergeStoryStatusOverlays(storyStatuses, options.closedStoryStatuses);
   const existingIds = new Set(Object.keys(effectiveStoryStatuses || {}));
   const artifactDir = options.artifactDir || "";
@@ -12370,7 +12370,10 @@ function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, o
 }
 
 function hasActiveRebasedBacklogTemplateBlock(templateItems = [], storyStatuses = {}, { activeMinimumEpic = 1 } = {}) {
-  const templates = rebaseBacklogTemplates(templateItems);
+  const templates = dedupeBacklogTemplates([
+    ...rebaseBacklogTemplates(templateItems),
+    ...legacyGeneratedBacklogTemplates(),
+  ]);
   if (templates.length === 0) return false;
   const epicNumbers = Object.keys(storyStatuses || {})
     .map((key) => Number(String(key).match(/^(\d+)-\d+-/)?.[1] || 0))
@@ -12413,7 +12416,7 @@ function nextAvailableRebasedBacklogItems(templateItems = [], storyStatuses = {}
 }
 
 function rebaseBacklogTemplates(templateItems = []) {
-  return templateItems
+  return dedupeBacklogTemplates(templateItems
     .map((item) => {
       const match = String(item.id || "").match(/^\d+-(\d+)-([a-z0-9-]+)$/i);
       if (!match) return null;
@@ -12424,8 +12427,22 @@ function rebaseBacklogTemplates(templateItems = []) {
       };
     })
     .filter((item) => Number.isInteger(item?.slot) && item.slot > 0 && item.slug && item.title)
-    .sort((left, right) => left.slot - right.slot)
+    .sort((left, right) => left.slot - right.slot))
     .slice(0, 6);
+}
+
+function dedupeBacklogTemplates(templateItems = []) {
+  const seen = new Set();
+  return templateItems.filter((item) => {
+    const key = `${item.slot}:${item.slug}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function legacyGeneratedBacklogTemplates() {
+  return rebaseBacklogTemplates(nextEpicBacklogItems(1));
 }
 
 function storyStatusIsClosed(status = "") {

@@ -63,6 +63,7 @@ import {
   buildWorkerWarmPlan,
   buildWorkerStatus,
   classifyAutoApply,
+  courseCorrectionBacklogItemsForStatus,
   countSprintStories,
   ledgerCommand,
   parseCommonArgs,
@@ -73,6 +74,15 @@ import {
   writeManagerCapabilityPosture,
   MANAGER_RUNTIME_OPERATIONAL_MODES,
 } from "../scripts/lib/manager-control-plane/core.mjs";
+
+const COURSE_CORRECTION_TEMPLATE_ITEMS = [
+  { id: "6-1-planning-only-bmad-refill-continuation", title: "Planning-Only BMAD Refill Continuation" },
+  { id: "6-2-correct-course-backlog-materialization", title: "Correct-Course Backlog Materialization" },
+  { id: "6-3-stale-owner-takeover-inspection-packet", title: "Stale Owner Takeover Inspection Packet" },
+  { id: "6-4-one-lane-dispatch-dogfood-harness", title: "One-Lane Dispatch Dogfood Harness" },
+  { id: "6-5-worker-ramp-readiness-gate", title: "Worker Ramp Readiness Gate" },
+  { id: "6-6-overnight-run-recovery-and-housekeeping", title: "Overnight Run Recovery and Housekeeping" },
+];
 
 function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
   const path = join(process.cwd(), relativePath);
@@ -1197,6 +1207,50 @@ test("refill materialization rebases stale course-correction template after done
   }
 });
 
+test("course-correction backlog rebase de-dupes duplicate candidate and proposed templates", () => {
+  const storyStatuses = {};
+  for (const epic of [6, 22]) {
+    for (const item of COURSE_CORRECTION_TEMPLATE_ITEMS) {
+      storyStatuses[item.id.replace(/^6-/, `${epic}-`)] = "done";
+    }
+  }
+
+  const items = courseCorrectionBacklogItemsForStatus(
+    {
+      candidateBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
+      proposedBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
+    },
+    storyStatuses,
+  );
+
+  assert.equal(items.length, 6);
+  assert.deepEqual(items.map((item) => item.id), [
+    "23-1-planning-only-bmad-refill-continuation",
+    "23-2-correct-course-backlog-materialization",
+    "23-3-stale-owner-takeover-inspection-packet",
+    "23-4-one-lane-dispatch-dogfood-harness",
+    "23-5-worker-ramp-readiness-gate",
+    "23-6-overnight-run-recovery-and-housekeeping",
+  ]);
+  assert.equal(new Set(items.map((item) => item.id)).size, items.length);
+});
+
+test("course-correction backlog rebase blocks while legacy generated backlog is active", () => {
+  const storyStatuses = {};
+  for (const item of COURSE_CORRECTION_TEMPLATE_ITEMS) {
+    storyStatuses[item.id] = "done";
+  }
+  storyStatuses["7-1-manager-refill-apply-gate"] = "ready-for-dev";
+  storyStatuses["7-2-manager-story-creation-apply-gate"] = "in-progress";
+
+  const items = courseCorrectionBacklogItemsForStatus(
+    { candidateBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS },
+    storyStatuses,
+  );
+
+  assert.deepEqual(items, []);
+});
+
 test("refill materialization does not treat closed-looking backlog candidate rows as completion evidence", () => {
   const sprintPath = ensureIgnoredBmadFixture(
     "_bmad-output/implementation-artifacts/sprint-status-manager-backlog-overlay-test.yaml",
@@ -1238,9 +1292,9 @@ development_status:
     },
   );
 
-  assert.equal(plan.summary.materializationGate.state, "ready");
-  assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
-  assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "8-1-planning-only-bmad-refill-continuation");
+  assert.equal(plan.summary.materializationGate.state, "blocked");
+  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+  assert.equal(plan.summary.materializationGate.selectedCandidateStory, null);
 });
 
 test("refill materialization does not treat dirty active assignment evidence as completion evidence", () => {
@@ -1292,9 +1346,9 @@ development_status:
     },
   );
 
-  assert.equal(plan.summary.materializationGate.state, "ready");
-  assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
-  assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "8-1-planning-only-bmad-refill-continuation");
+  assert.equal(plan.summary.materializationGate.state, "blocked");
+  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+  assert.equal(plan.summary.materializationGate.selectedCandidateStory, null);
 });
 
 test("refill materialization reads closed workspace evidence when workspace summary is truncated", () => {
