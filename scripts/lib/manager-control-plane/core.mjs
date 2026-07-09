@@ -21008,6 +21008,14 @@ function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
     "Review the manager story creation apply gate before applying local BMAD story artifacts.",
     260,
   );
+  const safetyStopLines = Array.from(new Set([
+    "no_worker_mutation",
+    "no_dispatch_apply",
+    "no_provider_calls",
+    "no_git_or_github_mutation",
+    "no_delivery_or_cleanup_apply",
+    ...sourceRefList(gate.stopLines),
+  ].map((stopLine) => sanitizeLedgerField(stopLine, "", 120)).filter(Boolean)));
   return {
     implementationChangedFiles: [
       "scripts/lib/manager-control-plane/core.mjs",
@@ -21020,6 +21028,8 @@ function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
     verificationStatus: "recommended_not_executed_by_loop",
     nextManagerAction,
     localBmadStoryArtifacts: uniqueStoryArtifacts.slice(0, 8),
+    applyMutationMode: "local_bmad_story_file_only",
+    safetyStopLines: safetyStopLines.slice(0, 16),
     localBmadArtifactsIgnored: true,
     metadataOnly: true,
     rawPayloadRetained: false,
