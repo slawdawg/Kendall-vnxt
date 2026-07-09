@@ -9143,8 +9143,10 @@ function buildModelRoutingDecision(taskRisk = {}, context = {}) {
   const usage = normalizeModelRoutingUsageState(context.usageState);
   const usageState = usage.state;
   const normalized = normalizeModelRoutingRisk(taskRisk);
+  const modelEvidence = normalizeModelRoutingEvidence(taskRisk);
   const signals = [];
-  if (highReasoningTaskType(normalized.taskType)) signals.push("task-type-high-reasoning");
+  const genericTaskTypeRisk = highReasoningTaskType(normalized.taskType);
+  if (genericTaskTypeRisk) signals.push("task-type-high-reasoning");
   if (positiveRiskValue(normalized.ambiguity, ["high", "ambiguous"])) signals.push("high-ambiguity");
   if (positiveRiskValue(normalized.blastRadius, ["broad", "high", "large"])) signals.push("broad-blast-radius");
   if (positiveBoolean(normalized.crossCuttingDesign)) signals.push("cross-cutting-design");
@@ -9152,17 +9154,68 @@ function buildModelRoutingDecision(taskRisk = {}, context = {}) {
   if (hasAmbiguousVerificationSignal(context.failureSignals || [])) signals.push("ambiguous-verification-failure");
   if (positiveRiskValue(normalized.expectedReworkCost, ["high", "expensive", "large"])) signals.push("high-expected-rework-cost");
   if (positiveRiskValue(normalized.verificationDifficulty, ["high", "hard", "ambiguous"])) signals.push("high-verification-difficulty");
+  const invalidInputs = [...new Set([...normalized.unknownValues, ...modelEvidence.unknownValues])];
   if (normalized.unknownValues.length > 0) signals.push("unknown-task-risk-input");
-  const highRisk = signals.length > 0;
+  const sparkEligible = isBoundedSparkTask(normalized)
+    && modelEvidence.sparkAdvantages.length > 0
+    && modelEvidence.sparkEvidenceRefs.length > 0
+    && signals.every((signal) => signal === "task-type-high-reasoning");
+  // A documented narrow Spark route may supersede only the coarse task-type
+  // heuristic. Any concrete ambiguity, blast-radius, failure, verification,
+  // rework, or malformed-input signal keeps the conservative high-risk route.
+  if (sparkEligible && genericTaskTypeRisk) {
+    const genericRiskIndex = signals.indexOf("task-type-high-reasoning");
+    if (genericRiskIndex >= 0) signals.splice(genericRiskIndex, 1);
+  }
+  const malformedRoutingEvidence = modelEvidence.unknownValues.length > 0;
+  const highRisk = !malformedRoutingEvidence && signals.length > 0;
   const constrainedUsage = usageState !== "normal";
   const sourceRefs = compactModelRoutingSourceRefs([
     ...(sourceRefList(taskRisk?.sourceRefs)),
     ...(sourceRefList(context.sourceRefs)),
   ]);
+  const nonTerraRequested = modelEvidence.requestedModel && modelEvidence.requestedModel !== "gpt-5.6-terra" && modelEvidence.requestedModel !== "gpt-5.3-codex-spark";
+  const nonTerraEligible = !highRisk && nonTerraRequested && modelEvidence.sparkAdvantages.length > 0;
+  const selectedModel = malformedRoutingEvidence || highRisk
+    ? "gpt-5.6-terra"
+    : sparkEligible ? "gpt-5.3-codex-spark"
+      : nonTerraEligible ? modelEvidence.requestedModel
+        : "gpt-5.6-terra";
+  const selectedEffort = malformedRoutingEvidence || highRisk
+    ? (malformedRoutingEvidence ? "medium" : "high")
+    : nonTerraEligible ? (modelEvidence.requestedEffort || "medium")
+      : "medium";
+  const availability = modelEvidence.platformAvailability;
+  const selectedPairSupported = availability.status !== "provided" || availability.pairs.has(`${selectedModel}:${selectedEffort}`);
+  const deferUnsupportedPair = !malformedRoutingEvidence && availability.status === "provided" && !selectedPairSupported;
+  const recommendedModel = deferUnsupportedPair ? null : displayModelName(selectedModel);
+  const recommendedEffort = deferUnsupportedPair ? null : selectedEffort;
+  const selectionRationale = highRisk
+    ? ["quality_risk_requires_one_step_effort_escalation"]
+    : sparkEligible
+      ? ["documented_spark_advantage", `spark_advantage_${modelEvidence.sparkAdvantages[0]}`, "structured_spark_evidence", "narrow_bounded_task"]
+      : nonTerraEligible
+        ? ["platform_available_non_terra_5_6", `documented_advantage_${modelEvidence.sparkAdvantages[0]}`]
+      : ["default_external_route", "routine_bounded_task"];
+  if (malformedRoutingEvidence) selectionRationale.splice(0, selectionRationale.length, "malformed_routing_evidence_safe_default");
+  if (deferUnsupportedPair) selectionRationale.splice(0, selectionRationale.length, "selected_pair_not_platform_supported");
+  if (modelEvidence.requestedModel === "gpt-5.3-codex-spark" && !sparkEligible) selectionRationale.push("spark_request_not_evidence_eligible");
+  if (modelEvidence.requestedEffort && modelEvidence.requestedEffort !== selectedEffort) selectionRationale.push("requested_effort_did_not_override_quality_posture");
   return {
     routing: highRisk ? "high_effort_task_fit" : "standard_task_fit",
     reasoningEffort: highRisk ? "high" : "medium",
     modelClass: highRisk ? "best_available_for_task_complexity" : "appropriate_for_bounded_implementation",
+    recommendedModel,
+    recommendedEffort,
+    recommendationStatus: deferUnsupportedPair ? "deferred" : "ready",
+    deferralReason: deferUnsupportedPair ? "selected_model_effort_not_platform_supported" : null,
+    modelAvailability: availability.status === "provided" ? "bounded_allowlist" : "platform_confirmation_required",
+    supportedEffortRequired: true,
+    selectionRationale,
+    tokenUseGuard: "compact_packet_no_duplicate_retry",
+    automaticModelSwitching: false,
+    providerInvocation: false,
+    executionAuthorityChanged: false,
     qualityPolicy: "preserve_task_fit_quality",
     usageState,
     usageAdjustment: constrainedUsage ? "reduce_dispatch_not_model_quality" : "none",
@@ -9174,11 +9227,130 @@ function buildModelRoutingDecision(taskRisk = {}, context = {}) {
     expectedVerificationBoundary: highRisk ? "focused_plus_integration_verification" : "focused_verification",
     costPosture: highRisk ? "avoid_underfit_rework" : "cheapest_expected_correct",
     taskType: normalized.taskType,
-    inputStatus: normalized.unknownValues.length > 0 ? "unknown_values_ignored" : "recognized",
-    ignoredInputs: normalized.unknownValues,
+    inputStatus: invalidInputs.length > 0 ? "unknown_values_ignored" : "recognized",
+    ignoredInputs: invalidInputs,
+    invalidInputSignals: invalidInputs.map((field) => `invalid_${field}`),
+    sparkEvidenceRefs: modelEvidence.sparkEvidenceRefs,
     sourceRefs,
     rawPayloadRetained: false,
   };
+}
+
+function isBoundedSparkTask(risk = {}) {
+  return ["implementation", "coding", "triage", "test", "testing"].includes(risk.taskType)
+    && risk.ambiguity === "low"
+    && risk.blastRadius === "low"
+    && risk.expectedReworkCost === "low"
+    && risk.verificationDifficulty === "low"
+    && risk.crossCuttingDesign === false
+    && risk.repeatedFailure === false;
+}
+
+function normalizeModelRoutingEvidence(taskRisk = {}) {
+  const risk = isPlainObject(taskRisk) ? taskRisk : {};
+  const unknownValues = [];
+  const requestedModel = normalizedModelRoutingChoice(
+    risk.recommendedModel || risk.requestedModel || risk.model,
+    "requestedModel",
+    unknownValues,
+  );
+  const requestedEffort = normalizedModelRoutingEffort(
+    risk.recommendedEffort || risk.requestedEffort || risk.effort,
+    "requestedEffort",
+    unknownValues,
+  );
+  const sparkAdvantages = normalizedSparkAdvantages(
+    risk.sparkAdvantages || risk.sparkAdvantage || risk.modelAdvantage,
+    unknownValues,
+  );
+  const sparkEvidenceRefs = compactSparkAdvantageEvidenceRefs(
+    risk.sparkEvidenceRefs || risk.sparkEvidenceRef || risk.modelAdvantageEvidenceRefs,
+    unknownValues,
+  );
+  const platformAvailability = normalizePlatformAvailability(risk.platformAvailability, unknownValues);
+  return { requestedModel, requestedEffort, sparkAdvantages, sparkEvidenceRefs, platformAvailability, unknownValues };
+}
+
+function normalizedModelRoutingChoice(value, fieldName, unknownValues) {
+  if (value === undefined || value === null || value === "") return "";
+  if (Array.isArray(value) || isPlainObject(value)) {
+    unknownValues.push(fieldName);
+    return "";
+  }
+  const normalized = String(value).trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (!/^(gpt-5\.6-[a-z0-9-]{1,60}|gpt-5-6-[a-z0-9-]{1,60}|5\.6-[a-z0-9-]{1,60}|gpt-5\.3-codex-spark|gpt-5-3-codex-spark)$/.test(normalized)) {
+    unknownValues.push(fieldName);
+    return "";
+  }
+  return normalized === "gpt-5-6-terra" || normalized === "5.6-terra" ? "gpt-5.6-terra"
+    : normalized === "gpt-5-3-codex-spark" ? "gpt-5.3-codex-spark"
+      : normalized.replace(/^gpt-5-6-/, "gpt-5.6-").replace(/^5\.6-/, "gpt-5.6-");
+}
+
+function normalizedModelRoutingEffort(value, fieldName, unknownValues) {
+  if (value === undefined || value === null || value === "") return "";
+  if (Array.isArray(value) || isPlainObject(value)) {
+    unknownValues.push(fieldName);
+    return "";
+  }
+  const normalized = String(value).trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (!["minimal", "low", "medium", "high", "xhigh"].includes(normalized)) {
+    unknownValues.push(fieldName);
+    return "";
+  }
+  return normalized;
+}
+
+function displayModelName(model = "") {
+  return model === "gpt-5.6-terra" ? "GPT-5.6 Terra" : model;
+}
+
+function compactSparkAdvantageEvidenceRefs(value, unknownValues) {
+  if (value === undefined || value === null || value === "") return [];
+  const refs = compactSanitizedRefs(value)
+    .filter((ref) => /^(provider|local-eval):[a-z0-9][a-z0-9._/-]{0,160}$/i.test(ref))
+    .filter((ref) => !/\[redacted-(retention-term|token)\]/i.test(ref));
+  if (refs.length === 0) unknownValues.push("sparkEvidenceRef");
+  return refs;
+}
+
+function normalizePlatformAvailability(value, unknownValues) {
+  if (value === undefined || value === null || value === "") return { status: "not_provided", pairs: new Set() };
+  if (!isPlainObject(value) || (!Array.isArray(value.models) && !isPlainObject(value.models))) {
+    unknownValues.push("platformAvailability");
+    return { status: "invalid", pairs: new Set() };
+  }
+  const rows = Array.isArray(value.models)
+    ? value.models
+    : Object.entries(value.models).map(([model, efforts]) => ({ model, efforts }));
+  const pairs = new Set();
+  for (const row of rows.slice(0, 8)) {
+    if (!isPlainObject(row)) continue;
+    const model = normalizedModelRoutingChoice(row.model, "platformAvailability", unknownValues);
+    const efforts = Array.isArray(row.efforts || row.supportedEfforts) ? (row.efforts || row.supportedEfforts) : [];
+    for (const effort of efforts.slice(0, 5)) {
+      const normalizedEffort = normalizedModelRoutingEffort(effort, "platformAvailability", []);
+      if (["minimal", "low", "medium", "high", "xhigh"].includes(normalizedEffort) && model) pairs.add(`${model}:${normalizedEffort}`);
+    }
+  }
+  if (pairs.size === 0) unknownValues.push("platformAvailability");
+  return { status: pairs.size > 0 ? "provided" : "invalid", pairs };
+}
+
+function normalizedSparkAdvantages(value, unknownValues) {
+  if (value === undefined || value === null || value === "") return [];
+  const values = Array.isArray(value) ? value : [value];
+  const advantages = [];
+  for (const item of values.slice(0, 3)) {
+    if (isPlainObject(item) || Array.isArray(item)) {
+      unknownValues.push("sparkAdvantage");
+      continue;
+    }
+    const normalized = String(item).trim().toLowerCase().replace(/[_\s]+/g, "-");
+    if (["task-fit", "latency", "cost"].includes(normalized)) advantages.push(normalized);
+    else unknownValues.push("sparkAdvantage");
+  }
+  return [...new Set(advantages)];
 }
 
 function positiveRiskValue(value, allowed = []) {
@@ -9202,7 +9374,7 @@ function normalizeModelRoutingUsageState(value) {
 }
 
 function highReasoningTaskType(taskType = "") {
-  return /^(architecture|design|planning|recovery|security|migration|cross-cutting|cross_cutting|delivery|cleanup)$/.test(String(taskType || "").trim().toLowerCase());
+  return /^(architecture|design|planning|recovery|security|migration|cross-cutting|cross_cutting|delivery|cleanup|triage)$/.test(String(taskType || "").trim().toLowerCase());
 }
 
 function hasAmbiguousVerificationSignal(signals = []) {
