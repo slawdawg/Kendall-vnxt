@@ -1188,6 +1188,10 @@ test("refill materialization rebases stale course-correction template after done
       path: "_bmad-output/implementation-artifacts/23-1-planning-only-bmad-refill-continuation.md",
       content: "# Story 23.1: Planning-Only BMAD Refill Continuation\n\n## Status\nready-for-dev\n",
     },
+    {
+      path: "_bmad-output/implementation-artifacts/24-1-planning-only-bmad-refill-continuation.md",
+      content: "# Story 24.1: Planning-Only BMAD Refill Continuation\n\n## Status\nin-progress\n",
+    },
   ];
   const originalStoryFixtures = seededStoryFixtures.map((fixture) => {
     const absolutePath = join(process.cwd(), fixture.path);
@@ -1227,14 +1231,19 @@ test("refill materialization rebases stale course-correction template after done
 
     assert.equal(plan.summary.materializationGate.state, "ready");
     assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
-    assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "24-1-planning-only-bmad-refill-continuation");
+    assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "25-1-planning-only-bmad-refill-continuation");
     assert.equal(plan.summary.materializationGate.selectedCandidateStory.title, "Planning-Only BMAD Refill Continuation");
     assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/23-1-planning-only-bmad-refill-continuation.md");
+    assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/24-1-planning-only-bmad-refill-continuation.md");
     assert.equal(
       readFileSync(join(process.cwd(), "_bmad-output/implementation-artifacts/23-1-planning-only-bmad-refill-continuation.md"), "utf8"),
       seededStoryFixtures[1].content,
     );
-    assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, "24-1-planning-only-bmad-refill-continuation");
+    assert.equal(
+      readFileSync(join(process.cwd(), "_bmad-output/implementation-artifacts/24-1-planning-only-bmad-refill-continuation.md"), "utf8"),
+      seededStoryFixtures[2].content,
+    );
+    assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, "25-1-planning-only-bmad-refill-continuation");
   } finally {
     for (const fixture of originalStoryFixtures) {
       if (fixture.existed) {
@@ -9497,6 +9506,10 @@ test("worker handoff reuses warm workers with closed assignment metadata", () =>
     const preview = buildWorkerHandoffPlan(
       { runId: "manager-test", stateRoot, limit: 1 },
       {
+        storyStatuses: {
+          "2-1-runtime-port-interfaces-and-local-proof-adapters": "done",
+          "2-3-runtime-readiness-and-operational-modes": "ready-for-dev",
+        },
         workerStatus: {
           status: "ready",
           summary: {
