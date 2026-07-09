@@ -227,6 +227,10 @@ for (const [relativePath, content] of [
     "# Story 21.3: Manager Review Delivery Queue\n\n## Status\nreview\n",
   ],
   [
+    "_bmad-output/implementation-artifacts/22-3-manager-review-delivery-queue.md",
+    "# Story 22.3: Manager Review Delivery Queue\n\n## Status\nreview\n",
+  ],
+  [
     "_bmad-output/implementation-artifacts/21-4-worker-retirement-and-reassignment.md",
     "# Story 21.4: Worker Retirement and Reassignment\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for plan-only retirement assertions.\n",
   ],
@@ -18624,6 +18628,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md");
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-3-manager-review-delivery-queue.md");
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-3-manager-review-delivery-queue.md");
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/22-3-manager-review-delivery-queue.md");
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "reviewDelegation"), true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("reviewDelegation"), true);
 
