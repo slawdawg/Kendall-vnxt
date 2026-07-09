@@ -12342,36 +12342,94 @@ function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, o
   ];
   const sourceItems = explicitItems.length > 0 ? explicitItems : [];
   const seenIds = new Set();
-  const nonDuplicate = sourceItems
+  const normalizedExplicitItems = sourceItems
     .map((item) => ({
       id: sanitizeLedgerField(item.id || "", "", 120),
       title: sanitizeLedgerField(item.title || titleFromStoryKey(item.id || ""), "", 180),
     }))
+    .filter((item) => isBmadStoryKey(item.id) && item.title);
+  const nonDuplicate = normalizedExplicitItems
     .filter((item) => {
-      if (!isBmadStoryKey(item.id) || !item.title || existingIds.has(item.id) || storyArtifactExists(item.id, artifactDir) || seenIds.has(item.id)) return false;
+      if (existingIds.has(item.id) || storyArtifactExists(item.id, artifactDir) || seenIds.has(item.id)) return false;
       seenIds.add(item.id);
       return true;
     });
   if (nonDuplicate.length > 0) return nonDuplicate.slice(0, 6);
-  if (explicitItems.length > 0) {
-    const minimumEpic = Math.max(0, ...explicitItems.map((item) => Number(String(item?.id || "").match(/^(\d+)-/)?.[1] || 0))) + 1;
-    if (hasActiveGeneratedEpicBlock(effectiveStoryStatuses, { minimumEpic })) return [];
+  if (normalizedExplicitItems.length > 0) {
+    const explicitEpicNumbers = normalizedExplicitItems
+      .map((item) => Number(String(item?.id || "").match(/^(\d+)-/)?.[1] || 0))
+      .filter((number) => Number.isInteger(number) && number > 0);
+    const activeMinimumEpic = Math.min(...explicitEpicNumbers);
+    const minimumEpic = Math.max(0, ...explicitEpicNumbers) + 1;
+    if (hasActiveRebasedBacklogTemplateBlock(normalizedExplicitItems, effectiveStoryStatuses, { activeMinimumEpic })) return [];
+    const rebasedItems = nextAvailableRebasedBacklogItems(normalizedExplicitItems, effectiveStoryStatuses, { artifactDir, minimumEpic, activeMinimumEpic });
+    if (rebasedItems.length > 0) return rebasedItems.slice(0, 6);
     return nextAvailableEpicBacklogItems(effectiveStoryStatuses, { artifactDir, minimumEpic }).slice(0, 6);
   }
   return nextAvailableEpicBacklogItems(effectiveStoryStatuses, { artifactDir }).slice(0, 6);
 }
 
-function hasActiveGeneratedEpicBlock(storyStatuses = {}, { minimumEpic = 1 } = {}) {
+function hasActiveRebasedBacklogTemplateBlock(templateItems = [], storyStatuses = {}, { activeMinimumEpic = 1 } = {}) {
+  const templates = rebaseBacklogTemplates(templateItems);
+  if (templates.length === 0) return false;
   const epicNumbers = Object.keys(storyStatuses || {})
     .map((key) => Number(String(key).match(/^(\d+)-\d+-/)?.[1] || 0))
-    .filter((number) => Number.isInteger(number) && number >= minimumEpic);
+    .filter((number) => Number.isInteger(number) && number >= activeMinimumEpic);
   for (const epic of [...new Set(epicNumbers)].sort((left, right) => left - right)) {
-    const statuses = nextEpicBacklogItems(epic)
-      .map((item) => sanitizeLedgerField(storyStatuses?.[item.id] || "", "", 80).toLowerCase())
+    const statuses = templates
+      .map((item) => sanitizeLedgerField(storyStatuses?.[`${epic}-${item.slot}-${item.slug}`] || "", "", 80).toLowerCase())
       .filter(Boolean);
-    if (statuses.some((status) => !["done", "closed", "complete", "completed"].includes(status))) return true;
+    if (statuses.some((status) => !storyStatusIsClosed(status))) return true;
   }
   return false;
+}
+
+function nextAvailableRebasedBacklogItems(templateItems = [], storyStatuses = {}, { artifactDir = "", minimumEpic = 1, activeMinimumEpic = minimumEpic } = {}) {
+  const templates = rebaseBacklogTemplates(templateItems);
+  if (templates.length === 0) return [];
+  const epicNumbers = Object.keys(storyStatuses || {})
+    .map((key) => Number(String(key).match(/^(\d+)-\d+-/)?.[1] || 0))
+    .filter((number) => Number.isInteger(number) && number > 0);
+  for (const epic of [...new Set(epicNumbers)].filter((epic) => epic >= activeMinimumEpic).sort((left, right) => left - right)) {
+    const statuses = templates
+      .map((item) => sanitizeLedgerField(storyStatuses?.[`${epic}-${item.slot}-${item.slug}`] || "", "", 80).toLowerCase())
+      .filter(Boolean);
+    if (statuses.some((status) => !storyStatusIsClosed(status))) return [];
+  }
+  let nextEpic = Math.max(minimumEpic - 1, 0, ...epicNumbers) + 1;
+  for (let attempts = 0; attempts < 100; attempts += 1) {
+    const items = templates.map((item) => ({
+      id: `${nextEpic}-${item.slot}-${item.slug}`,
+      title: item.title,
+    }));
+    const statuses = items
+      .map((item) => sanitizeLedgerField(storyStatuses?.[item.id] || "", "", 80).toLowerCase())
+      .filter(Boolean);
+    if (statuses.some((status) => !storyStatusIsClosed(status))) return [];
+    if (items.every((item) => !storyStatuses?.[item.id] && !storyArtifactExists(item.id, artifactDir))) return items;
+    nextEpic += 1;
+  }
+  return [];
+}
+
+function rebaseBacklogTemplates(templateItems = []) {
+  return templateItems
+    .map((item) => {
+      const match = String(item.id || "").match(/^\d+-(\d+)-([a-z0-9-]+)$/i);
+      if (!match) return null;
+      return {
+        slot: Number(match[1]),
+        slug: match[2],
+        title: sanitizeLedgerField(item.title || titleFromStoryKey(item.id), titleFromStoryKey(item.id), 180),
+      };
+    })
+    .filter((item) => Number.isInteger(item?.slot) && item.slot > 0 && item.slug && item.title)
+    .sort((left, right) => left.slot - right.slot)
+    .slice(0, 6);
+}
+
+function storyStatusIsClosed(status = "") {
+  return ["done", "closed", "complete", "completed"].includes(String(status || "").toLowerCase());
 }
 
 function nextAvailableEpicBacklogItems(storyStatuses = {}, { artifactDir = "", minimumEpic = 1 } = {}) {

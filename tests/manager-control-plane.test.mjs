@@ -1133,7 +1133,71 @@ development_status:
   assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, plan.summary.materializationGate.selectedCandidateStory.id);
 });
 
-test("refill materialization ignores closed-looking backlog candidate rows", () => {
+test("refill materialization rebases stale course-correction template after done generated epics", () => {
+  const sprintPath = ensureIgnoredBmadFixture(
+    "_bmad-output/implementation-artifacts/sprint-status-manager-stale-template-rebase-test.yaml",
+    [
+      "generated: 2026-07-09T00:00:00+00:00",
+      "last_updated: 2026-07-09",
+      "development_status:",
+      "  epic-6: in-progress",
+      "  6-1-planning-only-bmad-refill-continuation: done",
+      "  6-2-correct-course-backlog-materialization: done",
+      "  6-3-stale-owner-takeover-inspection-packet: done",
+      "  6-4-one-lane-dispatch-dogfood-harness: done",
+      "  6-5-worker-ramp-readiness-gate: done",
+      "  6-6-overnight-run-recovery-and-housekeeping: done",
+      "  epic-7: in-progress",
+      "  7-1-planning-only-bmad-refill-continuation: done",
+      "  7-2-correct-course-backlog-materialization: done",
+      "  7-3-stale-owner-takeover-inspection-packet: done",
+      "  7-4-one-lane-dispatch-dogfood-harness: done",
+      "  7-5-worker-ramp-readiness-gate: done",
+      "  7-6-overnight-run-recovery-and-housekeeping: done",
+      "  epic-22: in-progress",
+      "  22-1-planning-only-bmad-refill-continuation: done",
+      "  22-2-correct-course-backlog-materialization: done",
+      "  22-3-stale-owner-takeover-inspection-packet: done",
+      "  22-4-one-lane-dispatch-dogfood-harness: done",
+      "  22-5-worker-ramp-readiness-gate: done",
+      "  22-6-overnight-run-recovery-and-housekeeping: done",
+      "",
+    ].join("\n"),
+  );
+  try {
+    const plan = buildRefillPlan(
+      { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+      {
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 96 }, laneAssignmentStatusCounts: { active: 1 } } },
+        dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+        sourcePlanningState: {
+          sourceKey: "manager-stale-template-rebase-test",
+          sprintStatus: {
+            exists: true,
+            path: sprintPath,
+            backlogStories: 0,
+            readyStories: 0,
+            readyForDevStories: 0,
+            activeStories: 0,
+            doneStories: 18,
+            nextBacklogStoryKey: null,
+          },
+        },
+        authorityClass: "low_risk",
+      },
+    );
+
+    assert.equal(plan.summary.materializationGate.state, "ready");
+    assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
+    assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "23-1-planning-only-bmad-refill-continuation");
+    assert.equal(plan.summary.materializationGate.selectedCandidateStory.title, "Planning-Only BMAD Refill Continuation");
+    assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, "23-1-planning-only-bmad-refill-continuation");
+  } finally {
+    rmSync(sprintPath, { force: true });
+  }
+});
+
+test("refill materialization does not treat closed-looking backlog candidate rows as completion evidence", () => {
   const sprintPath = ensureIgnoredBmadFixture(
     "_bmad-output/implementation-artifacts/sprint-status-manager-backlog-overlay-test.yaml",
     `generated: 2026-07-08T00:00:00+00:00
@@ -1174,11 +1238,12 @@ development_status:
     },
   );
 
-  assert.equal(plan.summary.materializationGate.state, "blocked");
-  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+  assert.equal(plan.summary.materializationGate.state, "ready");
+  assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
+  assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "8-1-planning-only-bmad-refill-continuation");
 });
 
-test("refill materialization ignores dirty active assignment evidence despite closed reason", () => {
+test("refill materialization does not treat dirty active assignment evidence as completion evidence", () => {
   const sprintPath = ensureIgnoredBmadFixture(
     "_bmad-output/implementation-artifacts/sprint-status-manager-dirty-overlay-test.yaml",
     `generated: 2026-07-08T00:00:00+00:00
@@ -1227,8 +1292,9 @@ development_status:
     },
   );
 
-  assert.equal(plan.summary.materializationGate.state, "blocked");
-  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
+  assert.equal(plan.summary.materializationGate.state, "ready");
+  assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
+  assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "8-1-planning-only-bmad-refill-continuation");
 });
 
 test("refill materialization reads closed workspace evidence when workspace summary is truncated", () => {
