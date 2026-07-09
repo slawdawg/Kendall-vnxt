@@ -7084,6 +7084,21 @@ test("worker governor records dispatcher truth target decision and bounded count
     assert.equal(status.summary.targets.allowedTarget, 6);
     assert.equal(status.summary.targets.startTarget, 6);
     assert.equal(status.summary.targets.rawPayloadRetained, false);
+    assert.equal(status.summary.targets.workerRampReadinessGate.status, "ready");
+    assert.equal(status.summary.targets.workerRampReadinessGate.rampStage, "six_worker_ready");
+    assert.equal(status.summary.targets.workerRampReadinessGate.nextAllowedWorkerCount, 6);
+    assert.equal(status.summary.targets.workerRampReadinessGate.compactEvidence.changedBehavior, "worker_ramp_readiness_gate");
+    assert.equal(status.summary.targets.workerRampReadinessGate.compactEvidence.verification, "not_reported_by_runtime_preview");
+    assert.match(status.summary.targets.workerRampReadinessGate.compactEvidence.nextManagerAction, /Readiness evidence supports requesting up to 6 manager-owned worker/);
+    assert.match(status.summary.targets.workerRampReadinessGate.compactEvidence.nextManagerAction, /stop before mutation authority/);
+    assert.deepEqual(status.summary.targets.workerRampReadinessGate.blockerClasses, []);
+    assert.deepEqual(status.summary.targets.workerRampReadinessGate.reasonClasses, []);
+    assert.deepEqual(status.summary.targets.workerRampReadinessGate.warningClasses, []);
+    assert.ok(status.summary.targets.workerRampReadinessGate.stopLines.includes("no_worker_mutation"));
+    assert.ok(status.summary.targets.workerRampReadinessGate.stopLines.includes("no_dispatch_apply"));
+    assert.ok(status.summary.targets.workerRampReadinessGate.stopLines.includes("no_provider_calls"));
+    assert.equal(status.summary.targets.workerRampReadinessGate.rawPayloadRetained, false);
+    assert.doesNotMatch(JSON.stringify(status.summary.targets.workerRampReadinessGate), /capture-pane|provider payload|reasoning trace|raw prompt/i);
 
     const activeLeaseBacked = buildWorkerStatus(
       { runId: "manager-test", stateRoot, desiredWorkers: 2 },
@@ -7136,6 +7151,11 @@ test("worker governor records dispatcher truth target decision and bounded count
     assert.equal(mixedBlockedQueue.summary.targets.sourceBlockedCount, 118);
     assert.equal(mixedBlockedQueue.summary.targets.startTarget, 0);
     assert.equal(mixedBlockedQueue.summary.lifecyclePlan.startWarmCandidates.length, 0);
+    assert.equal(mixedBlockedQueue.summary.targets.workerRampReadinessGate.status, "blocked");
+    assert.equal(mixedBlockedQueue.summary.targets.workerRampReadinessGate.rampStage, "hold");
+    assert.equal(mixedBlockedQueue.summary.targets.workerRampReadinessGate.nextAllowedWorkerCount, 0);
+    assert.ok(mixedBlockedQueue.summary.targets.workerRampReadinessGate.blockerClasses.includes("source-exhausted") === false);
+    assert.ok(mixedBlockedQueue.summary.targets.workerRampReadinessGate.reasonClasses.includes("source-exhausted") === false);
 
     const malformedTarget = buildWorkerStatus(
       { runId: "manager-test", stateRoot, desiredWorkers: "six" },
@@ -7160,10 +7180,69 @@ test("worker governor records dispatcher truth target decision and bounded count
     assert.equal(malformedTarget.summary.targets.configuredDesired, 0);
     assert.equal(malformedTarget.summary.targets.allowedTarget, 0);
     assert.equal(malformedTarget.summary.targets.startTarget, 0);
+    assert.equal(malformedTarget.summary.targets.workerRampReadinessGate.status, "blocked");
+    assert.ok(malformedTarget.summary.targets.workerRampReadinessGate.blockerClasses.includes("worker-target-count-malformed"));
     assert.ok(malformedTarget.blockers.some((blocker) => blocker.code === "worker-target-count-malformed"));
+
+    const drainWithActiveLease = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        assignmentSummary: {
+          summary: {
+            backlogStatusCounts: { assignable: 6 },
+            laneAssignmentStatusCounts: { active: 2 },
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 4, active: 2 },
+            candidateStateCounts: { assignable: 4, active: 2 },
+          },
+        },
+        usageContext: { status: "drain" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: passedFakeWorkerHarness,
+      },
+    );
+    assert.equal(drainWithActiveLease.summary.targets.allowedTarget, 2);
+    assert.equal(drainWithActiveLease.summary.targets.startTarget, 0);
+    assert.equal(drainWithActiveLease.summary.targets.workerRampReadinessGate.status, "blocked");
+    assert.equal(drainWithActiveLease.summary.targets.workerRampReadinessGate.nextAllowedWorkerCount, 0);
+    assert.ok(drainWithActiveLease.summary.targets.workerRampReadinessGate.reasonClasses.includes("usage-drain"));
+    assert.ok(drainWithActiveLease.summary.targets.workerRampReadinessGate.readinessBlockingClasses.includes("usage-drain"));
+
+    const unknownUsageWithNumericStart = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 2 },
+      {
+        assignmentSummary: {
+          summary: {
+            backlogStatusCounts: { assignable: 2 },
+            laneAssignmentStatusCounts: {},
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 2, active: 0 },
+            candidateStateCounts: { assignable: 2 },
+          },
+        },
+        usageContext: { status: "unknown" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: passedFakeWorkerHarness,
+      },
+    );
+    assert.equal(unknownUsageWithNumericStart.summary.targets.startTarget, 2);
+    assert.equal(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.status, "blocked");
+    assert.equal(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.nextAllowedWorkerCount, 0);
+    assert.ok(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.warningClasses.includes("usage-target-unknown"));
+    assert.ok(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.readinessBlockingClasses.includes("usage-target-unknown"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("worker ramp readiness gate keeps local BMAD artifact ignored", () => {
+  assertExistingLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/23-5-worker-ramp-readiness-gate.md");
 });
 
 test("live worker readiness exposes ten-cycle stability observer evidence", () => {
@@ -15319,6 +15398,15 @@ test("cycle continuation permits manager-owned warm starts when healthy capacity
     assert.equal(cycle.summary.continuation.state, "worker_warm_ready");
     assert.equal(cycle.summary.continuation.workerStartAllowed, true);
     assert.equal(cycle.summary.workers.lifecyclePlan.startWarmCandidates.length, 2);
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.status, "ready");
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.rampStage, "two_worker_ready");
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.nextAllowedWorkerCount, 2);
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.compactEvidence.changedBehavior, "worker_ramp_readiness_gate");
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.compactEvidence.retention, "metadata_only");
+    assert.match(cycle.summary.workers.targets.workerRampReadinessGate.compactEvidence.nextManagerAction, /Readiness evidence supports requesting up to 2 manager-owned worker/);
+    assert.match(cycle.summary.workers.targets.workerRampReadinessGate.compactEvidence.nextManagerAction, /separate worker warm gate/);
+    assert.ok(cycle.summary.workers.targets.workerRampReadinessGate.stopLines.includes("no_worker_mutation"));
+    assert.doesNotMatch(JSON.stringify(cycle.summary.workers.targets.workerRampReadinessGate), /dispatch-next --apply|provider payload|reasoning trace|raw prompt|capture-pane/i);
     assert.equal(cycle.summary.recommendedActions[0].code, "manager-owned-worker-warm-ready");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
