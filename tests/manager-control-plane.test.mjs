@@ -27146,7 +27146,269 @@ test("stale owner inspection aggregates dry-run takeover evidence into cleanup a
   assert.equal(byId.get("apply-lane").classification, "takeover_apply_candidate_with_approval");
   assert.equal(inspection.nextActions[0].code, "stale-owner-cleanup-inspection");
   assert.equal(inspection.nextActions[0].nextAction, "node ./scripts/manager-cleanup-plan.mjs --summary-json");
+  assert.equal(Object.hasOwn(inspection.summary.compactEvidence, "storyArtifact"), false);
+  assert.deepEqual(inspection.summary.compactEvidence.changedFiles, []);
+  assert.deepEqual(inspection.summary.compactEvidence.nextManagerActions.map((action) => action.code), [
+    "stale-owner-cleanup-inspection",
+    "stale-owner-dirty-workspace-inspection",
+    "stale-owner-takeover-approval-needed",
+  ]);
+  assert.equal(inspection.summary.compactEvidence.nextManagerActions[0].summary, "1 stale owner target(s) appear to be cleanup candidates, not takeover candidates.");
   assert.doesNotMatch(JSON.stringify(inspection), /--apply|capture-pane|provider payload|reasoning trace|raw prompt/i);
+});
+
+test("stale owner inspection packet records stop lines and compact story evidence", () => {
+  const storyPath = `_bmad-output/implementation-artifacts/fixture-stale-owner-inspection-packet-${process.pid}-${Date.now()}.md`;
+  const storyContent = [
+    "# Story 23-3-stale-owner-takeover-inspection-packet: Stale Owner Takeover Inspection Packet",
+    "",
+    "## Status",
+    "in-progress",
+    "",
+    "## Acceptance Criteria",
+    "1. Stale-owner takeover inspection packet preserves manager safety gates.",
+    "",
+    "## Dev Agent Record",
+    "- Changed files: `scripts/lib/manager-control-plane/core.mjs`, `tests/manager-control-plane.test.mjs`.",
+    "- Verification: `node --test tests/manager-control-plane.test.mjs`, `node ./scripts/check-manager-control-plane.mjs`.",
+    "- Next manager action: rerun BMAD code review for `23-3-stale-owner-takeover-inspection-packet`.",
+    "",
+  ].join("\n");
+  const storyAbsolutePath = join(process.cwd(), storyPath);
+
+  try {
+    ensureIgnoredBmadFixture(storyPath, storyContent);
+    assertExistingLocalBmadStoryArtifact(storyPath);
+
+    const inspection = buildStaleOwnerInspection(
+      {
+        runId: "manager-test",
+        compactEvidence: {
+          storyArtifact: storyPath,
+          changedFiles: [
+            "scripts/lib/manager-control-plane/core.mjs",
+            "tests/manager-control-plane.test.mjs",
+            "provider payload should be filtered",
+            ...Array.from({ length: 20 }, (_value, index) => `overflow-file-${index}.mjs`),
+          ],
+          verification: [
+            "node --test tests/manager-control-plane.test.mjs",
+            "node ./scripts/check-manager-control-plane.mjs",
+            "raw prompt should be filtered",
+            ...Array.from({ length: 20 }, (_value, index) => `verification-overflow-${index}`),
+          ],
+        },
+      },
+      {
+        resumeState: {
+          summary: {
+            ledger: { runId: "manager-test" },
+            takeoverInspection: {
+              targets: [
+                {
+                  kind: "lane_assignment",
+                  id: "legacy-canonical-evidence",
+                  owner: "old-owner",
+                  branch: "codex/legacy-canonical-evidence",
+                },
+                { kind: "lane_assignment", id: "missing-lane", owner: "old-owner", branch: "codex/missing-lane" },
+                { kind: "lane_assignment", id: "apply-lane", owner: "old-owner", branch: "codex/apply-lane" },
+              ],
+            },
+          },
+        },
+        takeoverResults: {
+          "legacy-canonical-evidence": {
+            ok: false,
+            error: "FAIL: No workspace matched query: legacy-canonical-evidence",
+          },
+          "missing-lane": {
+            decision: "blocked",
+            allowed: false,
+            worktree: { exists: false, status: "missing" },
+            branch: { branch: "codex/missing-lane", localSha: null, remoteSha: null },
+            pr: { status: "none", pr_url: null, pr_number: null },
+            dirtyState: { dirty: false },
+            blockers: ["assignment worktree is missing"],
+          },
+          "apply-lane": {
+            decision: "allowed",
+            allowed: true,
+            worktree: { exists: true, status: "clean" },
+            branch: { branch: "codex/apply-lane", localSha: "def456", remoteSha: "def456" },
+            pr: { status: "open", pr_number: 12 },
+            dirtyState: { dirty: false },
+            blockers: [],
+          },
+        },
+      },
+    );
+
+    assert.equal(inspection.status, "attention");
+    assert.deepEqual(inspection.summary.stopLines, [
+      "do_not_mutate_workers",
+      "do_not_apply_dispatch",
+      "do_not_call_providers",
+      "do_not_mutate_github_delivery",
+      "do_not_apply_takeover_without_explicit_operator_approval",
+      "do_not_merge_or_cleanup",
+    ]);
+    assert.deepEqual(inspection.summary.compactEvidence.changedFiles, [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+      "overflow-file-0.mjs",
+      "overflow-file-1.mjs",
+      "overflow-file-2.mjs",
+      "overflow-file-3.mjs",
+      "overflow-file-4.mjs",
+      "overflow-file-5.mjs",
+      "overflow-file-6.mjs",
+      "overflow-file-7.mjs",
+      "overflow-file-8.mjs",
+      "overflow-file-9.mjs",
+    ]);
+    assert.deepEqual(inspection.summary.compactEvidence.verification, [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+      "verification-overflow-0",
+      "verification-overflow-1",
+      "verification-overflow-2",
+      "verification-overflow-3",
+      "verification-overflow-4",
+      "verification-overflow-5",
+    ]);
+    assert.equal(
+      inspection.summary.compactEvidence.nextManagerAction,
+      "Resolve canonical closeout evidence for the exact stale assignment ids before cleanup or takeover apply.",
+    );
+    assert.deepEqual(inspection.summary.compactEvidence.nextManagerActions, [
+      {
+        code: "stale-owner-canonical-closeout-evidence-needed",
+        summary: "1 stale owner target(s) need canonical closeout evidence before cleanup or takeover decisions.",
+        nextAction: "Resolve canonical closeout evidence for the exact stale assignment ids before cleanup or takeover apply.",
+      },
+      {
+        code: "stale-owner-cleanup-inspection",
+        summary: "1 stale owner target(s) appear to be cleanup candidates, not takeover candidates.",
+        nextAction: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
+      },
+      {
+        code: "stale-owner-takeover-approval-needed",
+        summary: "1 stale owner target(s) passed dry-run takeover gates but still need explicit operator approval.",
+        nextAction: "Ask operator for explicit takeover apply approval for the exact target ids.",
+      },
+    ]);
+    assert.deepEqual(inspection.nextActions.map((action) => action.code), [
+      "stale-owner-canonical-closeout-evidence-needed",
+      "stale-owner-cleanup-inspection",
+      "stale-owner-takeover-approval-needed",
+    ]);
+    assert.equal(
+      inspection.nextActions.find((action) => action.code === "stale-owner-takeover-approval-needed").nextAction,
+      "Ask operator for explicit takeover apply approval for the exact target ids.",
+    );
+    assert.equal(inspection.summary.compactEvidence.storyArtifact, storyPath);
+    assert.doesNotMatch(JSON.stringify(inspection.summary.compactEvidence), /provider payload|reasoning trace|raw prompt|capture-pane/i);
+  } finally {
+    rmSync(storyAbsolutePath, { force: true });
+  }
+});
+
+test("stale owner inspection CLI supplies default compact evidence metadata", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-stale-owner-cli-"));
+  try {
+    const result = spawnSync(
+      "node",
+      [
+        "./scripts/manager-stale-owner-inspection.mjs",
+        "--summary-json",
+        "--run-id",
+        "manager-test",
+        "--state-root",
+        stateRoot,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY: "1" },
+      },
+    );
+    if (!result.stdout.trim()) {
+      assert.ok(result.error || /EPERM|permission|sandbox/i.test(result.stderr || ""), "empty CLI stdout must be a sandbox/process boundary");
+      const script = readFileSync(join(process.cwd(), "scripts/manager-stale-owner-inspection.mjs"), "utf8");
+      assert.match(script, /storyArtifact: "_bmad-output\/implementation-artifacts\/23-3-stale-owner-takeover-inspection-packet\.md"/);
+      assert.match(script, /tests\/manager-control-plane\.test\.mjs/);
+      return;
+    }
+    assert.equal(result.status, 0);
+    assert.equal(result.signal, null);
+    const packet = JSON.parse(result.stdout);
+    assert.equal(packet.summary.compactEvidence.storyArtifact, "_bmad-output/implementation-artifacts/23-3-stale-owner-takeover-inspection-packet.md");
+    assert.deepEqual(packet.summary.compactEvidence.changedFiles, [
+      "scripts/manager-stale-owner-inspection.mjs",
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ]);
+    assert.deepEqual(packet.summary.compactEvidence.verification, [
+      "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+    ]);
+    assert.ok(packet.summary.compactEvidence.nextManagerActions.length > 0);
+    assert.doesNotMatch(JSON.stringify(packet.summary.compactEvidence), /provider payload|reasoning trace|raw prompt|capture-pane/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale owner compact evidence merges defaults and filters unsafe action metadata", () => {
+  const targets = Array.from({ length: 12 }, (_value, index) => ({
+    kind: "lane_assignment",
+    id: `failed-lane-${index}`,
+    owner: "old-owner",
+    branch: `codex/failed-lane-${index}`,
+  }));
+  const takeoverResults = Object.fromEntries(targets.map((target, index) => [
+    target.id,
+    {
+      ok: false,
+      error: index === 1 ? "raw prompt should be filtered" : index === 2 ? "tmux scrollback should be filtered" : `dry-run failed ${index}`,
+    },
+  ]));
+  const inspection = buildStaleOwnerInspection(
+    {
+      runId: "manager-test",
+      compactEvidence: {
+        storyArtifact: "_bmad-output/implementation-artifacts/safe-default.md",
+        changedFiles: ["scripts/default.mjs", "session history should be filtered"],
+        verification: ["default verification", "scrollback history should be filtered"],
+      },
+    },
+    {
+      compactEvidence: {
+        storyArtifact: "raw prompt story artifact should be dropped",
+        changedFiles: ["scripts/context.mjs", "tmux scrollback should be filtered"],
+        verification: ["context verification"],
+      },
+      resumeState: {
+        summary: {
+          ledger: { runId: "manager-test" },
+          takeoverInspection: { targets },
+        },
+      },
+      takeoverResults,
+    },
+  );
+
+  assert.equal(inspection.summary.compactEvidence.storyArtifact, "_bmad-output/implementation-artifacts/safe-default.md");
+  assert.deepEqual(inspection.summary.compactEvidence.changedFiles, ["scripts/default.mjs", "scripts/context.mjs"]);
+  assert.deepEqual(inspection.summary.compactEvidence.verification, ["default verification", "context verification"]);
+  assert.equal(inspection.summary.compactEvidence.nextManagerActions.length, 8);
+  assert.deepEqual(
+    inspection.summary.compactEvidence.nextManagerActions.map((action) => action.code),
+    Array.from({ length: 8 }, () => "stale-owner-inspection-failed"),
+  );
+  assert.doesNotMatch(JSON.stringify(inspection.summary.compactEvidence), /provider payload|reasoning trace|raw prompt|capture-pane/i);
 });
 
 test("stale owner inspection gates unresolved sanitized records from closeout preview", () => {
