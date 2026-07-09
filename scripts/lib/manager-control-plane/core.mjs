@@ -12749,6 +12749,18 @@ export function buildDispatchPreview(options = {}, context = {}) {
       nextActionGuidance,
       operationalDispatchAuthority: trustedOperationalDispatchAuthority,
       recoveryPath,
+      oneLaneDispatchDogfood: buildOneLaneDispatchDogfoodHarness({
+        status: allowed ? "ready" : "blocked",
+        allowed,
+        selectedLane,
+        selectedBranch,
+        baseBranch,
+        claimAction,
+        claimMutation,
+        workspaceAction,
+        recoveryPath,
+        blockers: [...evidenceBlockers, ...dispatchBlockers],
+      }),
       blockers: [...evidenceBlockers, ...dispatchBlockers],
       stopLines: Array.isArray(dispatch.stopLines)
         ? dispatch.stopLines.slice(0, 12)
@@ -12772,6 +12784,50 @@ export function buildDispatchPreview(options = {}, context = {}) {
   });
   if (!callerSuppliedPreview) markTrustedDispatchPreviewAuthority(result);
   return result;
+}
+
+function buildOneLaneDispatchDogfoodHarness(dispatch = {}) {
+  const selectedLane = sanitizeLedgerField(dispatch.selectedLane || "", "", 140);
+  const baseBranch = sanitizeLedgerField(dispatch.baseBranch || "", "", 120);
+  const recoveryPath = sanitizeLedgerField(dispatch.recoveryPath || "", "", 220);
+  const effectiveStatus = sanitizeLedgerField(dispatch.status || "", "", 80) || "unknown";
+  const blockers = Array.isArray(dispatch.blockers) ? dispatch.blockers : [];
+  const blockerCount = blockers.length;
+  const ready = dispatch.allowed === true && effectiveStatus === "ready" && blockerCount === 0 && selectedLane && baseBranch && recoveryPath;
+  return {
+    status: ready ? "ready" : "blocked",
+    selectedLane: selectedLane || null,
+    selectedBranch: sanitizeLedgerField(dispatch.selectedBranch || "", "", 160) || null,
+    baseBranch: baseBranch || null,
+    claimAction: sanitizeLedgerField(dispatch.claimAction || "", "", 180) || null,
+    claimMutation: sanitizeLedgerField(dispatch.claimMutation || "", "", 120) || null,
+    workspaceAction: sanitizeLedgerField(dispatch.workspaceAction || "", "", 160) || null,
+    recoveryPath: recoveryPath || null,
+    mutation: "none; dry-run dispatch preview only",
+    compactEvidence: {
+      changedBehavior: "one_lane_dispatch_dogfood_preview",
+      selectedLane: selectedLane || null,
+      baseBranch: baseBranch || null,
+      recoveryPath: recoveryPath || null,
+      blockerCount,
+      verification: "not_reported_by_runtime_preview",
+      nextManagerAction: ready
+        ? "Review one-lane dispatch dry-run evidence, then request explicit dispatch apply approval only through existing gates."
+        : "Repair or unblock one-lane dispatch dry-run evidence before any dispatch apply request.",
+      retention: "metadata_only",
+    },
+    stopLines: [
+      "no_dispatch_apply",
+      "no_worker_mutation",
+      "no_worker_launch_or_kill",
+      "no_takeover",
+      "no_provider_calls",
+      "no_git_or_github_mutation",
+      "no_merge_or_cleanup",
+      "no_raw_pane_or_provider_payload_retention",
+    ],
+    rawPayloadRetained: false,
+  };
 }
 
 function markTrustedDispatchPreviewAuthority(previewPacket = {}) {
@@ -22860,14 +22916,28 @@ function normalizeDispatchPreviewContext(context = {}) {
       ...(Array.isArray(dispatch.blockers) ? dispatch.blockers : []),
     ];
     const allowed = context.allowed ?? summary.allowed ?? dispatch.allowed ?? null;
+    const status = normalized.status === "blocked" || blockers.length > 0 || allowed === false ? "blocked" : normalized.status;
+    const normalizedDogfood = buildOneLaneDispatchDogfoodHarness({
+      status,
+      allowed,
+      selectedLane: summary.selectedLane || dispatch.selectedLane || summary.selected?.itemId || null,
+      selectedBranch: summary.selectedBranch || dispatch.branch || summary.selected?.branch || null,
+      baseBranch: summary.baseBranch || summary.base_branch || dispatch.baseBranch || dispatch.base_branch || summary.selected?.baseBranch || summary.selected?.base_branch || null,
+      claimAction: summary.claimAction || dispatch.claimAction || summary.selected?.action || null,
+      claimMutation: summary.claimMutation || dispatch.claimMutation || summary.selected?.mutation || null,
+      workspaceAction: summary.workspaceAction || dispatch.workspaceAction || null,
+      recoveryPath: summary.recoveryPath || summary.recovery_path || dispatch.recoveryPath || dispatch.recovery_path || summary.selected?.recoveryPath || summary.selected?.recovery_path || null,
+      blockers,
+    });
     return packet({
       ...normalized,
       ok: normalized.ok && blockers.length === 0 && allowed !== false && normalized.status !== "blocked",
-      status: normalized.status === "blocked" || blockers.length > 0 || allowed === false ? "blocked" : normalized.status,
+      status,
       summary: {
         ...summary,
         allowed,
         blockers,
+        oneLaneDispatchDogfood: normalizedDogfood,
         dispatch: {
           ...dispatch,
           allowed,
@@ -22878,7 +22948,11 @@ function normalizeDispatchPreviewContext(context = {}) {
     });
   }
   const dispatch = context.dispatch || {};
-  const status = context.status || (dispatch.allowed === false ? "blocked" : "ready");
+  const blockers = [
+    ...(Array.isArray(context.blockers) ? context.blockers : []),
+    ...(Array.isArray(dispatch.blockers) ? dispatch.blockers : []),
+  ];
+  const status = blockers.length > 0 ? "blocked" : context.status || (dispatch.allowed === false ? "blocked" : "ready");
   const summary = {
     ...context,
     allowed: context.allowed ?? dispatch.allowed ?? null,
@@ -22887,20 +22961,34 @@ function normalizeDispatchPreviewContext(context = {}) {
     baseBranch: context.baseBranch || context.base_branch || dispatch.baseBranch || dispatch.base_branch || context.selected?.baseBranch || context.selected?.base_branch || null,
     claimMutation: context.claimMutation || dispatch.claimMutation || context.selected?.mutation || null,
     recoveryPath: context.recoveryPath || context.recovery_path || dispatch.recoveryPath || dispatch.recovery_path || context.selected?.recoveryPath || context.selected?.recovery_path || null,
+    blockers,
   };
+  summary.oneLaneDispatchDogfood = buildOneLaneDispatchDogfoodHarness({
+    status,
+    allowed: summary.allowed,
+    selectedLane: summary.selectedLane,
+    selectedBranch: summary.selectedBranch,
+    baseBranch: summary.baseBranch,
+    claimAction: context.claimAction || dispatch.claimAction || context.selected?.action || null,
+    claimMutation: summary.claimMutation,
+    workspaceAction: context.workspaceAction || dispatch.workspaceAction || null,
+    recoveryPath: summary.recoveryPath,
+    blockers,
+  });
+  const nextActions = context.nextActions || (status === "ready" && summary.allowed === true && blockers.length === 0 && summary.oneLaneDispatchDogfood.status === "ready"
+    ? [{
+        code: "dispatch-preview-ready",
+        summary: dispatch.claimAction || context.selected?.action || "Safe dispatch preview is ready.",
+        nextAction: dispatch.nextActionGuidance || context.selected?.nextAction || "Review dispatch preview before apply.",
+      }]
+    : []);
   return packet({
     ok: context.ok ?? status !== "blocked",
     status,
     summary,
-    blockers: context.blockers || [],
+    blockers,
     warnings: context.warnings || [],
-    nextActions: context.nextActions || (dispatch.allowed === true
-      ? [{
-          code: "dispatch-preview-ready",
-          summary: dispatch.claimAction || context.selected?.action || "Safe dispatch preview is ready.",
-          nextAction: dispatch.nextActionGuidance || context.selected?.nextAction || "Review dispatch preview before apply.",
-        }]
-      : []),
+    nextActions,
   });
 }
 
