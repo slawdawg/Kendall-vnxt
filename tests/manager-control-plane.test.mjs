@@ -1615,7 +1615,13 @@ test("bmad code review request plan suppresses stale review rows closed by assig
     writeFileSync(storyPath, "# Story 97-2-manager-review-closed-overlay\n\nImplementation evidence was already delivered.\n", "utf8");
 
     const plan = buildBmadCodeReviewRequestPlan(
-      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath },
+      {
+        allowExplicitReviewReadyAssignment: true,
+        requestedStoryKey: "97-2-manager-review-closed-overlay",
+        runId: "manager-test",
+        stateRoot,
+        sprintStatusPath: sprintPath,
+      },
       {
         assignmentSummary: {
           summary: {
@@ -1629,12 +1635,23 @@ test("bmad code review request plan suppresses stale review rows closed by assig
             }],
           },
         },
+        progressStatus: {
+          summary: {
+            workerProgress: [{
+              assignmentId: "bmad-97-2-manager-review-closed-overlay",
+              workerId: "codex-1",
+              progressState: "manager_review_ready",
+            }],
+          },
+        },
       },
     );
 
     assert.equal(plan.status, "blocked");
     assert.equal(plan.summary.reviewStoryCount, 0);
     assert.equal(plan.summary.staleClosedReviewStoryCount, 1);
+    assert.equal(plan.summary.eligibleStoryCount, 0);
+    assert.equal(plan.summary.explicitReviewReadyCandidate, null);
     assert.equal(plan.blockers[0].code, "bmad-code-review-no-review-work");
   } finally {
     rmSync(sprintPath, { force: true });

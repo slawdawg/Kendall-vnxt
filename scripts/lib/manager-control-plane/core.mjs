@@ -13819,9 +13819,12 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
     requestedStoryKey,
     sprintStatusPath,
     progressStatus: context.progressStatus,
-  });
+  }).filter((row) => effectiveStoryStatuses[row.storyKey] !== "done");
+  const effectiveExplicitReadyRow = explicitReadyRow && effectiveStoryStatuses[explicitReadyRow.storyKey] !== "done"
+    ? explicitReadyRow
+    : null;
   const candidateRows = [...eligibleRows, ...progressReadyRows];
-  const selected = candidateRows.find((row) => row.storyExists) || explicitReadyRow;
+  const selected = candidateRows.find((row) => row.storyExists) || effectiveExplicitReadyRow;
   const requestedStoryHasOpenFeedback = requestedStoryKey
     ? storyHasOpenReviewFeedback(context.progressStatus, requestedStoryKey)
     : false;
@@ -13839,7 +13842,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
         reviewStoryCount: reviewRows.length,
         staleClosedReviewStoryCount: staleClosedReviewRows.length,
         eligibleStoryCount: candidateRows.length,
-        explicitReviewReadyCandidate: sanitizeCyclePacketValue(explicitReadyRow),
+        explicitReviewReadyCandidate: sanitizeCyclePacketValue(effectiveExplicitReadyRow),
         openReviewFeedbackCount: reviewRowsWithOpenFeedback.length + (requestedStoryHasOpenFeedback && !reviewRowsWithOpenFeedback.some((row) => row.storyKey === requestedStoryKey) ? 1 : 0),
         candidates: sanitizeCyclePacketValue(candidateRows.slice(0, 6)),
         mutationMode: "none",
