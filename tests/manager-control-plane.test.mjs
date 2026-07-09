@@ -17845,6 +17845,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   ]);
   assertLocalBmadStoryArtifact(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadStoryArtifacts[0]);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.applyMutationMode, "local_bmad_story_file_only");
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.storyCreationGate, "manager-refill-plan-bmad-create-story-existing-gates");
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.deliveryCleanupAllowed, false);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_worker_mutation"), true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_dispatch_apply"), true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_provider_calls"), true);
@@ -17853,7 +17855,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadArtifactsIgnored, true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.metadataOnly, true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.rawPayloadRetained, false);
-  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-1-manager-refill-apply-gate.md");
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-2-manager-story-creation-apply-gate.md");
 
   const unsafeStoryArtifactPlan = continuousRunPlan(
     {},

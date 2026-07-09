@@ -21067,6 +21067,8 @@ function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
     nextManagerAction,
     localBmadStoryArtifacts: uniqueStoryArtifacts.slice(0, 8),
     applyMutationMode: "local_bmad_story_file_only",
+    storyCreationGate: "manager-refill-plan-bmad-create-story-existing-gates",
+    deliveryCleanupAllowed: false,
     safetyStopLines: safetyStopLines.slice(0, 16),
     localBmadArtifactsIgnored: true,
     metadataOnly: true,
