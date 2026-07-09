@@ -424,6 +424,24 @@ Avoid broad backlog searches. Prefer exact sprint trackers, package scripts, run
   completed prompt-idle worker, warm/reuse a manager-owned reviewer when gates
   allow, or surface the no-reviewer hold; manager-local review requires an
   explicit manual decision.
+- The manager session must not implement source fixes or run the patch/retest
+  loop for a worker lane after BMAD review findings, GitHub review threads,
+  CI failures, or delivery-gate feedback. Route that work to the owning worker,
+  a manager-owned review-feedback gate, or another manager-owned `codex-*`
+  worker first. If no suitable manager-owned worker is available, or the task is
+  an independent read-only audit, the manager may spawn a bounded worker
+  subagent. Prefer existing manager-owned workers over API subagents for
+  implementation, review-fix loops, and focused retesting so work stays in the
+  manager ledger and does not exhaust the separate subagent pool. The manager
+  may inspect compact evidence, run dry-run/apply orchestration gates, record
+  verification/delivery evidence, and execute coordinator-owned delivery gates
+  that repo policy authorizes, including low-risk merge and cleanup under
+  `standard-delivery` criteria. Manager-local patch/retest execution, or
+  delivery/cleanup execution outside those repo-authorized gates, is allowed
+  only by explicit operator exception or when no worker/subagent delegation
+  mechanism is available and all safe progress is blocked; record the
+  exception, reason, touched files or operations, verification, and why waiting
+  would block progress.
 - When BMAD code review finds patch issues for a manager-owned worker lane, use
   `node ./scripts/manager-worker-review-feedback.mjs --summary-json --assignment-id <id> --review-findings-file <path>`
   as the dry-run gate before any `--apply` feedback route. The gate must write a

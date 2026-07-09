@@ -24150,6 +24150,7 @@ test("cycle keeps safe work moving when retry lane is parked with continuation e
           totalMemory: 10_000,
           loadAverage: [1, 1, 1],
         },
+        preflightStatus: { status: "ready", summary: { ok: true }, blockers: [], warnings: [] },
         assignmentSummary: {
           summary: {
             backlogStatusCounts: { assignable: 1, closed: 78 },
@@ -24545,6 +24546,11 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     );
     assert.equal(cycleWithSandboxPreflight.summary.preflight.sandboxBoundary, true);
     assert.equal(cycleWithSandboxPreflight.summary.preflight.sandboxBoundaryPacket.boundary, true);
+    assert.notEqual(cycleWithSandboxPreflight.status, "sandbox_incomplete");
+    assert.ok(cycleWithSandboxPreflight.summary.workers.lifecyclePlan);
+    assert.equal(cycleWithSandboxPreflight.summary.workers.rawPayloadRetained ?? false, false);
+    assert.equal(cycleWithSandboxPreflight.blockers.some((blocker) => blocker.code === "cycle-preflight-known-sandbox-boundary"), false);
+    assert.doesNotMatch(String(cycleWithSandboxPreflight.summary.mutation || ""), /skipped downstream manager probes/);
     assert.ok(cycleWithSandboxPreflight.warnings.some((warning) => warning.sandboxBoundary));
 
     const spawnError = Object.assign(new Error("spawnSync git EPERM"), { code: "EPERM" });
@@ -24564,6 +24570,306 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     assert.equal(nullStatusWarning.sandboxSignatureClass, "process-spawn-eperm");
     assert.match(nullStatusWarning.rerunRequirement, /exact same read-only command outside the sandbox once/i);
     assert.doesNotMatch(nullStatusWarning.message, /spawnSync|EPERM/);
+
+    let preflightProbeAttempts = 0;
+    const genericCodexEnvPreflight = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        env: { CODEX_SANDBOX_NETWORK_DISABLED: "1", CODEX_CI: "1" },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 0, active: 0, closed: 78 }, candidateStateCounts: { closed: 78 } },
+        gitRunner: () => ({ status: 0, stdout: process.cwd(), stderr: "" }),
+        ghRunner: () => ({ status: 0, stdout: "gh version 2.0.0\n", stderr: "" }),
+        workspaceRunner: () => ({
+          ok: true,
+          stateRoot,
+          manifests: [],
+          manifestErrors: [],
+          summary: {
+            backlogStatusCounts: { assignable: 0, closed: 78 },
+            laneAssignmentStatusCounts: {},
+            workspaceAssignmentStatusCounts: {},
+          },
+        }),
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+      },
+    );
+    assert.notEqual(genericCodexEnvPreflight.status, "sandbox_incomplete");
+    assert.notEqual(genericCodexEnvPreflight.summary.sandboxBoundary, true);
+
+    const preventedSandboxPreflight = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        env: { KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY: "1" },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        gitRunner: () => {
+          preflightProbeAttempts += 1;
+          throw new Error("git probe should be skipped for known sandbox boundary");
+        },
+        ghRunner: () => {
+          preflightProbeAttempts += 1;
+          throw new Error("gh probe should be skipped for known sandbox boundary");
+        },
+        workspaceRunner: () => {
+          preflightProbeAttempts += 1;
+          throw new Error("workspace probe should be skipped for known sandbox boundary");
+        },
+        tmuxContext: {
+          runner: () => {
+            preflightProbeAttempts += 1;
+            throw new Error("tmux probe should be skipped for known sandbox boundary");
+          },
+        },
+      },
+    );
+    assert.equal(preflightProbeAttempts, 0);
+    assert.equal(preventedSandboxPreflight.status, "sandbox_incomplete");
+    assert.equal(preventedSandboxPreflight.summary.sandboxBoundary, true);
+    assert.equal(preventedSandboxPreflight.summary.sandboxBoundaryPacket.signature, "known-manager-sandbox-probe-boundary");
+    assert.equal(preventedSandboxPreflight.summary.sandboxBoundaryPacket.safe_rerun, "exact_command_outside_sandbox_when_read_only");
+    assert.ok(preventedSandboxPreflight.summary.skippedProbeSurfaces.includes("git repo metadata"));
+    assert.ok(preventedSandboxPreflight.summary.skippedProbeSurfaces.includes("tmux orientation"));
+    assert.ok(preventedSandboxPreflight.blockers.some((blocker) => blocker.code === "preflight-known-sandbox-boundary"));
+    assert.match(preventedSandboxPreflight.blockers.find((blocker) => blocker.code === "preflight-known-sandbox-boundary").nextAction, /exact same read-only manager command outside the sandbox once/i);
+    assert.match(preventedSandboxPreflight.summary.recommendedNextAction, /KENDALL_MANAGER_ALLOW_SANDBOX_PROBES=1/);
+
+    const approvedRerunPreflight = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        env: {
+          KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY: "1",
+          KENDALL_MANAGER_ALLOW_SANDBOX_PROBES: "1",
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 0, active: 0, closed: 78 }, candidateStateCounts: { closed: 78 } },
+        gitRunner: () => ({ status: 0, stdout: process.cwd(), stderr: "" }),
+        ghRunner: () => ({ status: 0, stdout: "gh version 2.0.0\n", stderr: "" }),
+        workspaceRunner: () => ({
+          ok: true,
+          stateRoot,
+          manifests: [],
+          manifestErrors: [],
+          summary: {
+            backlogStatusCounts: { assignable: 0, closed: 78 },
+            laneAssignmentStatusCounts: {},
+            workspaceAssignmentStatusCounts: {},
+          },
+        }),
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+      },
+    );
+    assert.notEqual(approvedRerunPreflight.status, "sandbox_incomplete");
+    assert.notEqual(approvedRerunPreflight.summary.sandboxBoundary, true);
+
+    const flaggedCommandShapePreflight = buildPreflight(
+      {
+        stateRoot,
+        desiredWorkers: 2,
+        runId: "manager-test",
+        limit: 3,
+        maxIterations: 1,
+        intervalMs: 15000,
+        usageState: "paused",
+        resourceState: "normal",
+        steeringInstruction: "focus on setup churn",
+        operatorFeedback: "operator asked for exact cycle state",
+      },
+      {
+        knownSandboxedManagerProbes: true,
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+      },
+    );
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--desired-workers 2/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--limit 3/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--max-iterations 1/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--interval-ms 15000/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--usage-state paused/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--resource-state normal/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--steering 'focus on setup churn'/);
+    assert.match(flaggedCommandShapePreflight.summary.sandboxBoundaryPacket.command, /--feedback 'operator asked for exact cycle state'/);
+
+    const longSteering = `review ${"sandbox-safe ".repeat(45)}final-steering-token`;
+    const longFeedback = `feedback ${"manager-proof ".repeat(45)}final-feedback-token`;
+    const longCommandShapePreflight = buildPreflight(
+      {
+        stateRoot,
+        desiredWorkers: 2,
+        runId: "manager-test",
+        steeringInstruction: longSteering,
+        operatorFeedback: longFeedback,
+      },
+      {
+        knownSandboxedManagerProbes: true,
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+      },
+    );
+    const longBoundary = longCommandShapePreflight.summary.sandboxBoundaryPacket;
+    assert.equal(longBoundary.command, longBoundary.exact_rerun_command);
+    assert.match(longBoundary.command, /final-steering-token/);
+    assert.match(longBoundary.command, /final-feedback-token/);
+    assert.match(longBoundary.command, /--steering 'review sandbox-safe/);
+    assert.match(longBoundary.command, /--feedback 'feedback manager-proof/);
+    assert.ok(longBoundary.command.length > longBoundary.command_display.length);
+    assert.doesNotMatch(longBoundary.command, /\n/);
+
+    let unrelatedPriorBoundaryProbeAttempts = 0;
+    const unrelatedPriorBoundaryPreflight = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        priorSandboxBoundaryPacket: {
+          boundary: true,
+          class: "sandbox",
+          signature: "unrelated docs EPERM mentions manager-cycle-packet codex-workspace tmux-orientation workspace-assignment worker-status-probe",
+          command: "node ./scripts/check-docs.mjs --summary-json",
+          safe_rerun: "exact_command_outside_sandbox_when_read_only",
+          mutation: "none",
+          next_action: "Request approval to rerun the exact same read-only command outside the sandbox.",
+          evidence_summary: "Manager docs check hit EPERM while reading generated docs that mention workspace cleanup and tmux orientation policy.",
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 0, active: 0, closed: 78 }, candidateStateCounts: { closed: 78 } },
+        gitRunner: () => {
+          unrelatedPriorBoundaryProbeAttempts += 1;
+          return { status: 0, stdout: process.cwd(), stderr: "" };
+        },
+        ghRunner: () => ({ status: 0, stdout: "gh version 2.0.0\n", stderr: "" }),
+        workspaceRunner: () => ({
+          ok: true,
+          stateRoot,
+          manifests: [],
+          manifestErrors: [],
+          summary: {
+            backlogStatusCounts: { assignable: 0, closed: 78 },
+            laneAssignmentStatusCounts: {},
+            workspaceAssignmentStatusCounts: {},
+          },
+        }),
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+      },
+    );
+    assert.ok(unrelatedPriorBoundaryProbeAttempts > 0);
+    assert.notEqual(unrelatedPriorBoundaryPreflight.status, "sandbox_incomplete");
+    assert.notEqual(unrelatedPriorBoundaryPreflight.summary.sandboxBoundary, true);
+
+    const originalArgv = parseCommonArgs([
+      "--feedback",
+      "operator asked for exact cycle state",
+      "--summary-json",
+      "--once",
+      "--steering",
+      "focus on setup churn",
+      "--desired-workers",
+      "6",
+    ]);
+    const originalArgvPreflight = buildPreflight(
+      originalArgv,
+      {
+        knownSandboxedManagerProbes: true,
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+      },
+    );
+    assert.equal(
+      originalArgvPreflight.summary.sandboxBoundaryPacket.exact_rerun_command,
+      "node ./scripts/manager-preflight.mjs --feedback 'operator asked for exact cycle state' --summary-json --once --steering 'focus on setup churn' --desired-workers 6",
+    );
+    assert.match(originalArgvPreflight.summary.sandboxBoundaryPacket.command, /--once/);
+    assert.doesNotMatch(originalArgvPreflight.summary.sandboxBoundaryPacket.command, /--max-iterations 1/);
+    assert.match(originalArgvPreflight.summary.sandboxBoundaryPacket.command, /--feedback 'operator asked for exact cycle state' --summary-json --once --steering 'focus on setup churn' --desired-workers 6/);
+
+    let unrelatedStringProbeAttempts = 0;
+    const unrelatedStringPreflight = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test" },
+      {
+        sandboxBoundaryEvidence: "docs mentioned EPERM while describing workspace cleanup and tmux orientation policy",
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 78 } } },
+        dispatchPreview: { counts: { dispatchable: 0, active: 0, closed: 78 }, candidateStateCounts: { closed: 78 } },
+        gitRunner: () => {
+          unrelatedStringProbeAttempts += 1;
+          return { status: 0, stdout: process.cwd(), stderr: "" };
+        },
+        ghRunner: () => ({ status: 0, stdout: "gh version 2.0.0\n", stderr: "" }),
+        workspaceRunner: () => ({
+          ok: true,
+          stateRoot,
+          manifests: [],
+          manifestErrors: [],
+          summary: {
+            backlogStatusCounts: { assignable: 0, closed: 78 },
+            laneAssignmentStatusCounts: {},
+            workspaceAssignmentStatusCounts: {},
+          },
+        }),
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+      },
+    );
+    assert.ok(unrelatedStringProbeAttempts > 0);
+    assert.notEqual(unrelatedStringPreflight.status, "sandbox_incomplete");
+    assert.notEqual(unrelatedStringPreflight.summary.sandboxBoundary, true);
+
+    let scopedPriorBoundaryProbeAttempts = 0;
+    const scopedPriorBoundaryPreflight = buildPreflight(
+      { stateRoot, desiredWorkers: 6, runId: "manager-test", steeringInstruction: "status", operatorFeedback: "operator wants cycle packet" },
+      {
+        priorSandboxBoundaryPacket: {
+          boundary: true,
+          class: "sandbox",
+          signature: "spawnSync EPERM sandbox boundary",
+          command: "node ./scripts/manager-cycle-packet.mjs --summary-json --steering status",
+          safe_rerun: "exact_command_outside_sandbox_when_read_only",
+          mutation: "none",
+          next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+          evidence_summary: "Manager cycle packet hit EPERM while probing tmux.",
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        gitRunner: () => {
+          scopedPriorBoundaryProbeAttempts += 1;
+          throw new Error("git probe should be skipped for scoped prior sandbox boundary");
+        },
+        ghRunner: () => {
+          scopedPriorBoundaryProbeAttempts += 1;
+          throw new Error("gh probe should be skipped for scoped prior sandbox boundary");
+        },
+        workspaceRunner: () => {
+          scopedPriorBoundaryProbeAttempts += 1;
+          throw new Error("workspace probe should be skipped for scoped prior sandbox boundary");
+        },
+        tmuxContext: {
+          runner: () => {
+            scopedPriorBoundaryProbeAttempts += 1;
+            throw new Error("tmux probe should be skipped for scoped prior sandbox boundary");
+          },
+        },
+      },
+    );
+    assert.equal(scopedPriorBoundaryProbeAttempts, 0);
+    assert.equal(scopedPriorBoundaryPreflight.status, "sandbox_incomplete");
+    assert.match(scopedPriorBoundaryPreflight.summary.sandboxBoundaryPacket.command, /--steering status/);
+    assert.match(scopedPriorBoundaryPreflight.summary.sandboxBoundaryPacket.command, /--feedback 'operator wants cycle packet'/);
 
     const forcedReadOnly = buildPreflight(
       { stateRoot, desiredWorkers: 6, runId: "manager-test", apply: true },
@@ -24617,6 +24923,121 @@ test("cycle sandbox boundary normalization preserves conservative rerun metadata
   assert.equal(sandboxWarning.safe_rerun, "none");
   assert.equal(sandboxWarning.mutation, "unknown");
   assert.doesNotMatch(sandboxWarning.nextAction, /exact same read-only/i);
+});
+
+test("cycle known sandbox boundary skips usage resource and preflight probes before EPERM", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-known-sandbox-"));
+  try {
+    const usagePath = join(stateRoot, "agent_usage.sh");
+    writeFileSync(usagePath, "#!/usr/bin/env bash\n");
+    let probeAttempts = 0;
+    const cycle = buildCyclePacket(
+      {
+        desiredWorkers: 2,
+        runId: "manager-test",
+        stateRoot,
+        usagePath,
+        fetcherPath: join(stateRoot, "fetch_usage.py"),
+      },
+      {
+        env: { KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY: "1" },
+        usageContext: {
+          usagePath,
+          runner: () => {
+            probeAttempts += 1;
+            throw new Error("usage runner should be skipped for known sandbox boundary");
+          },
+        },
+        gitRunner: () => {
+          probeAttempts += 1;
+          throw new Error("preflight git probe should be skipped for known sandbox boundary");
+        },
+        workspaceRunner: () => {
+          probeAttempts += 1;
+          throw new Error("workspace probe should be skipped for known sandbox boundary");
+        },
+        tmuxContext: {
+          runner: () => {
+            probeAttempts += 1;
+            throw new Error("tmux probe should be skipped for known sandbox boundary");
+          },
+        },
+      },
+    );
+
+    assert.equal(probeAttempts, 0);
+    assert.equal(cycle.status, "sandbox_incomplete");
+    assert.equal(cycle.summary.usage.source, "not_probed_known_sandbox_boundary:usage");
+    assert.equal(cycle.summary.resources.source, "not_probed_known_sandbox_boundary:resources");
+    assert.equal(cycle.summary.preflight.status, "not_probed_known_sandbox_boundary");
+    assert.equal(cycle.summary.preflight.sandboxBoundaryPacket.signature, "known-manager-sandbox-probe-boundary");
+    assert.match(cycle.summary.preflight.sandboxBoundaryPacket.command, /node \.\/scripts\/manager-cycle-packet\.mjs --summary-json/);
+    assert.match(cycle.summary.preflight.sandboxBoundaryPacket.command, /--desired-workers 2/);
+    assert.ok(cycle.summary.preflight.sandboxBoundaryPacket.skipped_surfaces.includes("provider usage status"));
+    assert.ok(cycle.summary.preflight.sandboxBoundaryPacket.skipped_surfaces.includes("host resource status"));
+    assert.ok(cycle.blockers.some((blocker) => blocker.code === "cycle-known-sandbox-boundary"));
+    assert.match(cycle.summary.recommendedNextAction, /exact same read-only manager command outside the sandbox once/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("cycle unrelated sandbox evidence string does not skip usage resource or preflight probes", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-cycle-unrelated-sandbox-"));
+  try {
+    const usagePath = join(stateRoot, "agent_usage.sh");
+    writeFileSync(usagePath, "#!/usr/bin/env bash\n");
+    let usageProbeAttempts = 0;
+    let preflightProbeAttempts = 0;
+    const cycle = buildCyclePacket(
+      { desiredWorkers: 1, runId: "manager-test", stateRoot, usagePath },
+      {
+        sandboxBoundaryEvidence: "unrelated note: EPERM appeared in docs about workspace and tmux cleanup",
+        usageContext: {
+          usagePath,
+          runner: () => {
+            usageProbeAttempts += 1;
+            return { status: 0, stdout: ">_ 85% 03:16", stderr: "" };
+          },
+        },
+        resourceContext: {
+          cpuCount: 8,
+          freeMemory: 8_000,
+          totalMemory: 10_000,
+          loadAverage: [1, 1, 1],
+        },
+        gitRunner: () => {
+          preflightProbeAttempts += 1;
+          return { status: 0, stdout: "dev\n", stderr: "" };
+        },
+        ghRunner: () => ({ status: 0, stdout: "gh version 2.0.0\n", stderr: "" }),
+        workspaceRunner: () => ({
+          ok: true,
+          stateRoot,
+          manifests: [],
+          manifestErrors: [],
+          summary: {
+            backlogStatusCounts: { assignable: 0, closed: 78 },
+            laneAssignmentStatusCounts: {},
+            workspaceAssignmentStatusCounts: {},
+          },
+        }),
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+      },
+    );
+
+    assert.ok(usageProbeAttempts > 0);
+    assert.ok(preflightProbeAttempts > 0);
+    assert.equal(cycle.summary.usage.source, "agent-usage-tmux");
+    assert.equal(cycle.summary.resources.state, "normal");
+    assert.notEqual(cycle.status, "sandbox_incomplete");
+    assert.notEqual(cycle.summary.preflight.sandboxBoundary, true);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("cycle packet includes bounded preflight readiness without raw logs", () => {
@@ -26041,6 +26462,44 @@ test("resume state routes sandbox EPERM as a boundary instead of inventory repai
     assert.equal(tmuxBlocker.sandboxSignatureClass, "process-spawn-eperm");
     assert.match(tmuxBlocker.nextAction, /rerun the exact same read-only manager command outside the sandbox once/i);
     assert.doesNotMatch(tmuxBlocker.message, /spawnSync|EPERM/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("resume state skips known sandboxed assignment and tmux probes before EPERM", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-resume-prevent-sandbox-"));
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    let probeAttempts = 0;
+    const resume = buildResumeState(
+      { runId: "manager-test", stateRoot },
+      {
+        env: { KENDALL_MANAGER_KNOWN_SANDBOX_BOUNDARY: "1" },
+        workspaceRunner: () => {
+          probeAttempts += 1;
+          throw new Error("assignment probe should be skipped for known sandbox boundary");
+        },
+        tmuxContext: {
+          runner: () => {
+            probeAttempts += 1;
+            throw new Error("tmux probe should be skipped for known sandbox boundary");
+          },
+        },
+      },
+    );
+
+    assert.equal(probeAttempts, 0);
+    assert.equal(resume.status, "sandbox_incomplete");
+    assert.equal(resume.summary.assignment.sandboxBoundary, true);
+    assert.equal(resume.summary.tmux.sandboxBoundary, true);
+    assert.equal(resume.summary.sandboxBoundaryPacket.signature, "known-manager-sandbox-probe-boundary");
+    assert.ok(resume.summary.skippedProbeSurfaces.includes("workspace assignment report"));
+    assert.ok(resume.summary.skippedProbeSurfaces.includes("tmux orientation"));
+    const blocker = resume.blockers.find((item) => item.code === "resume-known-sandbox-boundary");
+    assert.ok(blocker);
+    assert.equal(blocker.sandboxBoundary, true);
+    assert.match(blocker.nextAction, /exact same read-only manager command outside the sandbox once/i);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
