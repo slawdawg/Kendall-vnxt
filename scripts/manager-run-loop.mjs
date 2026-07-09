@@ -6,6 +6,7 @@ import {
   buildBmadCodeReviewRequestPlan,
   buildContinuousRunPlan,
   buildPreflight,
+  buildRecoveryHousekeepingEvidenceRecord,
   buildRuntimeReadinessPlan,
   ledgerCommand,
   parseCommonArgs,
@@ -638,6 +639,7 @@ function sleep(ms) {
 export async function runManagerRunLoop(options = parseCommonArgs(process.argv.slice(2)), context = {}) {
   const buildPreflightFn = context.buildPreflight || buildPreflight;
   const buildContinuousRunPlanFn = context.buildContinuousRunPlan || buildContinuousRunPlan;
+  const buildRecoveryHousekeepingEvidenceRecordFn = context.buildRecoveryHousekeepingEvidenceRecord || buildRecoveryHousekeepingEvidenceRecord;
   const executeContinuousSelectedActionFn = context.executeContinuousSelectedAction || executeContinuousSelectedAction;
   const writePacketFn = context.writePacket || writePacket;
   const sleepFn = context.sleep || sleep;
@@ -710,11 +712,33 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
       break;
     }
 
-    const plan = buildContinuousRunPlanFn(options, {
+    let plan = buildContinuousRunPlanFn(options, {
       preflight: preflightContext,
       preflightStatus: preflight,
       persistedManagerCapabilityPosture: persistedCapabilityPosture.summary?.managerCapabilityPosture || null,
     });
+    const evidenceRunId = plan.summary?.runId || options.runId || "";
+    const recoveryHousekeepingEvidence = evidenceRunId
+      ? buildRecoveryHousekeepingEvidenceRecordFn({
+          runId: evidenceRunId,
+          stateRoot: options.stateRoot,
+          apply: true,
+          evidenceId: `continuous-loop-${iteration}`,
+          sourceRefs: [`manager-cycle:${evidenceRunId}`],
+          changedFiles: [],
+          verificationStatus: "not_reported",
+          verificationCommands: [],
+        })
+      : null;
+    // Rebuild after the manager-owned metadata record is persisted so the
+    // same --once cycle consumes only the validated record, never caller data.
+    if (recoveryHousekeepingEvidence?.summary?.applied === true) {
+      plan = buildContinuousRunPlanFn(options, {
+        preflight: preflightContext,
+        preflightStatus: preflight,
+        persistedManagerCapabilityPosture: persistedCapabilityPosture.summary?.managerCapabilityPosture || null,
+      });
+    }
     const postureWrite = plan.ok !== false && plan.summary?.managerCapabilityPosture
       ? writeManagerCapabilityPosture(plan.summary.managerCapabilityPosture, options)
       : null;
@@ -737,6 +761,13 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
           readStatus: persistedCapabilityPosture.status,
           writeStatus: postureWrite?.status || "not_written",
           path: postureWrite?.summary?.path || persistedCapabilityPosture.summary?.path || null,
+          rawPayloadRetained: false,
+        },
+        recoveryHousekeepingEvidence: {
+          status: recoveryHousekeepingEvidence?.status || "not_written",
+          applied: recoveryHousekeepingEvidence?.summary?.applied === true,
+          evidenceId: recoveryHousekeepingEvidence?.summary?.record?.evidenceId || null,
+          recordPath: recoveryHousekeepingEvidence?.summary?.recordPath || null,
           rawPayloadRetained: false,
         },
         selectedAction: projectContinuousLoopSelectedAction(selected),
