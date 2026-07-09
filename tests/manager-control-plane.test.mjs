@@ -17827,6 +17827,10 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   ]);
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.verificationStatus, "recommended_not_executed_by_loop");
   assert.match(refillPlan.summary.selectedAction.refillApplyGateEvidence.nextManagerAction, /manager-refill-plan\.mjs --summary-json --apply/);
+  assert.deepEqual(refillPlan.summary.selectedAction.refillApplyGateEvidence.localBmadArtifacts, [
+    "_bmad-output/implementation-artifacts/1-2-approved-source-intake.md",
+  ]);
+  assertLocalBmadStoryArtifact(refillPlan.summary.selectedAction.refillApplyGateEvidence.localBmadArtifacts[0]);
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.localBmadArtifactsIgnored, true);
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.metadataOnly, true);
   assert.equal(refillPlan.summary.selectedAction.refillApplyGateEvidence.rawPayloadRetained, false);
