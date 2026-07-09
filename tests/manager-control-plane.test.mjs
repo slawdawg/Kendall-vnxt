@@ -1656,6 +1656,7 @@ test("bmad code review request plan suppresses stale review rows closed by assig
     assert.equal(plan.status, "blocked");
     assert.equal(plan.summary.reviewStoryCount, 0);
     assert.equal(plan.summary.staleClosedReviewStoryCount, 1);
+    assert.equal(plan.summary.staleClosedProgressCandidateCount, 1);
     assert.equal(plan.summary.eligibleStoryCount, 0);
     assert.equal(plan.summary.explicitReviewReadyCandidate, null);
     assert.match(plan.summary.dryRunCommand, /--assignment-summary-file/);
@@ -1663,6 +1664,95 @@ test("bmad code review request plan suppresses stale review rows closed by assig
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("bmad code review request plan suppresses closed progress candidates with or without tracker review status", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-bmad-review-closed-progress-"));
+  const cases = [
+    {
+      storyKey: "97-3-manager-review-closed-progress-review",
+      trackerStatus: "review",
+      progressState: "manager_review_ready",
+      closedStatuses: null,
+    },
+    {
+      storyKey: "97-4-manager-review-closed-progress-delivery",
+      trackerStatus: "in-progress",
+      progressState: "delivery_gate_ready",
+      closedStatuses: { "bmad-97-4-manager-review-closed-progress-delivery": "done" },
+    },
+  ];
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    for (const testCase of cases) {
+      const sprintPath = `_bmad-output/implementation-artifacts/sprint-status-${testCase.storyKey}.yaml`;
+      const storyPath = `_bmad-output/implementation-artifacts/${testCase.storyKey}.md`;
+      writeFileSync(
+        sprintPath,
+        [
+          "generated: 2026-07-02",
+          "last_updated: 2026-07-02",
+          "development_status:",
+          "  epic-97: in-progress",
+          `  ${testCase.storyKey}: ${testCase.trackerStatus}`,
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(storyPath, `# Story ${testCase.storyKey}\n\nImplementation evidence was already delivered.\n`, "utf8");
+
+      const plan = buildBmadCodeReviewRequestPlan(
+        {
+          allowExplicitReviewReadyAssignment: true,
+          runId: "manager-test",
+          stateRoot,
+          sprintStatusPath: sprintPath,
+          storyKey: testCase.storyKey,
+        },
+        {
+          assignmentSummary: testCase.closedStatuses
+            ? null
+            : {
+                summary: {
+                  laneAssignments: [{
+                    assignmentId: `bmad-${testCase.storyKey}`,
+                    taskId: `20260702-bmad-${testCase.storyKey}`,
+                    branch: `codex/bmad-${testCase.storyKey}`,
+                    status: "closed",
+                    phase: "closed",
+                    reasonCode: "assignment_closed",
+                  }],
+                },
+              },
+          closedStoryStatuses: testCase.closedStatuses,
+          progressStatus: {
+            summary: {
+              workerProgress: [{
+                assignmentId: `bmad-${testCase.storyKey}`,
+                workerId: "codex-1",
+                progressState: testCase.progressState,
+              }],
+            },
+          },
+        },
+      );
+
+      assert.equal(plan.status, "blocked");
+      assert.equal(plan.summary.eligibleStoryCount, 0);
+      assert.equal(plan.summary.staleClosedProgressCandidateCount, 1);
+      assert.equal(plan.summary.explicitReviewReadyCandidate, null);
+      assert.equal(plan.summary.candidates.length, 0);
+      assert.equal(plan.blockers[0].code, "bmad-code-review-no-review-work");
+
+      rmSync(sprintPath, { force: true });
+      rmSync(storyPath, { force: true });
+    }
+  } finally {
+    for (const testCase of cases) {
+      rmSync(`_bmad-output/implementation-artifacts/sprint-status-${testCase.storyKey}.yaml`, { force: true });
+      rmSync(`_bmad-output/implementation-artifacts/${testCase.storyKey}.md`, { force: true });
+    }
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });

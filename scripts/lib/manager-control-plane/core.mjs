@@ -13722,6 +13722,16 @@ function storyHasOpenReviewFeedback(progressStatus = null, storyKey = "") {
   return buildOpenStoryReviewFeedbackSummary(storyKey).openCount > 0;
 }
 
+function reviewCandidateMarkedDone(row = {}, storyStatuses = {}) {
+  const storyKey = normalizeBmadStoryAssignmentId(row.storyKey || row.assignmentId || "");
+  const assignmentId = sanitizeLedgerField(row.assignmentId || assignmentIdForStoryKey(storyKey), "", 140);
+  return (
+    isDoneSprintStory(assignmentId, storyStatuses) ||
+    isDoneSprintStory(storyKey, storyStatuses) ||
+    isDoneSprintStory(assignmentIdForStoryKey(storyKey), storyStatuses)
+  );
+}
+
 export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
   const runId = sanitizeLedgerField(resolveManagerRunId(options, context) || "manager-run", "manager-run", 120);
   const paths = managerRunPaths(runId, options, context);
@@ -13788,9 +13798,12 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
     context.cyclePacket?.summary?.assignmentSummary ||
     readAssignmentSummaryFile(options.assignmentSummaryFile) ||
     {};
-  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(
-    assignmentEvidence,
-    options,
+  const closedStoryStatuses = mergeStoryStatusOverlays(
+    context.closedStoryStatuses,
+    closedAssignmentStoryStatusOverlay(
+      assignmentEvidence,
+      options,
+    ),
   );
   const effectiveStoryStatuses = mergeStoryStatusOverlays(
     Object.fromEntries(rows.map((row) => [row.storyKey, normalizeSprintStoryStatus(row.status) || row.status])),
@@ -13802,9 +13815,10 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
     trackerStatus: row.status,
   }));
   const reviewRows = effectiveRows.filter((row) => row.status === "review");
-  const staleClosedReviewRows = rows.filter((row) => row.status === "review" && effectiveStoryStatuses[row.storyKey] === "done");
+  const staleClosedReviewRows = rows.filter((row) => row.status === "review" && reviewCandidateMarkedDone(row, effectiveStoryStatuses));
   const eligibleRows = reviewRows
     .filter((row) => !requestedStoryKey || row.storyKey === requestedStoryKey)
+    .filter((row) => !reviewCandidateMarkedDone(row, effectiveStoryStatuses))
     .filter((row) => !storyHasOpenReviewFeedback(context.progressStatus, row.storyKey))
     .map((row) => {
       const storyPath = `_bmad-output/implementation-artifacts/${row.storyKey}.md`;
@@ -13822,14 +13836,18 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
     progressStatus: context.progressStatus,
     allowExplicitReviewReadyAssignment: options.allowExplicitReviewReadyAssignment === true,
   });
-  const progressReadyRows = buildProgressReviewReadyStoryRows({
+  const rawProgressReadyRows = buildProgressReviewReadyStoryRows({
     requestedStoryKey,
     sprintStatusPath,
     progressStatus: context.progressStatus,
-  }).filter((row) => effectiveStoryStatuses[row.storyKey] !== "done");
-  const effectiveExplicitReadyRow = explicitReadyRow && effectiveStoryStatuses[explicitReadyRow.storyKey] !== "done"
+  });
+  const staleClosedProgressRows = rawProgressReadyRows.filter((row) => reviewCandidateMarkedDone(row, effectiveStoryStatuses));
+  const progressReadyRows = rawProgressReadyRows.filter((row) => !reviewCandidateMarkedDone(row, effectiveStoryStatuses));
+  const effectiveExplicitReadyRow = explicitReadyRow && !reviewCandidateMarkedDone(explicitReadyRow, effectiveStoryStatuses)
     ? explicitReadyRow
     : null;
+  const staleClosedProgressCandidateKeys = new Set(staleClosedProgressRows.map((row) => row.storyKey).filter(Boolean));
+  if (explicitReadyRow && !effectiveExplicitReadyRow) staleClosedProgressCandidateKeys.add(explicitReadyRow.storyKey);
   const candidateRows = [...eligibleRows, ...progressReadyRows];
   const selected = candidateRows.find((row) => row.storyExists) || effectiveExplicitReadyRow;
   const requestedStoryHasOpenFeedback = requestedStoryKey
@@ -13848,6 +13866,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
         requestedStoryKey: requestedStoryKey || null,
         reviewStoryCount: reviewRows.length,
         staleClosedReviewStoryCount: staleClosedReviewRows.length,
+        staleClosedProgressCandidateCount: staleClosedProgressCandidateKeys.size,
         eligibleStoryCount: candidateRows.length,
         explicitReviewReadyCandidate: sanitizeCyclePacketValue(effectiveExplicitReadyRow),
         openReviewFeedbackCount: reviewRowsWithOpenFeedback.length + (requestedStoryHasOpenFeedback && !reviewRowsWithOpenFeedback.some((row) => row.storyKey === requestedStoryKey) ? 1 : 0),
@@ -13965,6 +13984,7 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
       applied,
       reviewStoryCount: reviewRows.length,
       staleClosedReviewStoryCount: staleClosedReviewRows.length,
+      staleClosedProgressCandidateCount: staleClosedProgressCandidateKeys.size,
       selectedFromExplicitProgress: selected.source === "manager_worker_progress",
       candidates: sanitizeCyclePacketValue(candidateRows.slice(0, 6)),
       dryRunCommand,
