@@ -1604,7 +1604,11 @@ test("worker code review gate delegates BMAD review to a manager-owned worker", 
     assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /storySourcePath: .*3-2-minimum-happy-path-operational-loop\.md|storySourcePath: .*8-8-worker-code-review-target\.md/);
     assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /If the ignored BMAD story or sprint artifact is absent from the target lane/);
     assert.match(readFileSync(applied.summary.results[0].pastePath, "utf8"), /^Start delegated code review now\./);
-    assert.match(readFileSync(applied.summary.results[0].requestPath, "utf8"), /Write the compact findings artifact to this exact path:/);
+    const requestText = readFileSync(applied.summary.results[0].requestPath, "utf8");
+    assert.match(requestText, /Write the compact findings artifact to this exact path:/);
+    assert.match(requestText, /Evidence retention: metadata_only/);
+    assert.match(requestText, /do not restate retention policy terms/);
+    assert.doesNotMatch(requestText, /Do not store raw prompts, completions, reasoning traces, provider payloads/);
     assert.deepEqual(tmuxCalls.filter((call) => call.args[0] === "send-keys").at(-1).args.slice(-1), ["C-m"]);
 
     const rotated = buildWorkerCodeReviewPlan(
@@ -1782,6 +1786,68 @@ test("worker code review gate routes fresh failed result to review feedback", ()
     assert.equal(preview.nextActions[0].code, "worker-code-review-failed-result-ready");
     assert.match(preview.nextActions[0].nextAction, /manager-worker-review-feedback\.mjs/);
     assert.match(preview.nextActions[0].nextAction, /--review-findings-file/);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review gate regenerates fresh failed result when findings are not route-safe", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-code-review-unsafe-result-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-worker-code-review-unsafe-result-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-23-worker-code-review-unsafe-result.md";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-23-worker-code-review-unsafe-result: review",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-23-worker-code-review-unsafe-result\n\nStatus: review\n");
+    const resultPath = join(stateRoot, "manager-runs", "manager-test", "review-results", "bmad-8-23-worker-code-review-unsafe-result.md");
+    mkdirSync(join(resultPath, ".."), { recursive: true });
+    writeFileSync(resultPath, "Status: FAIL\n\n- [High] Remove provider payload wording from retained review notes.\n");
+
+    const preview = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-23-worker-code-review-unsafe-result" },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-1",
+                sessionName: "codex-1",
+                assignmentId: "bmad-8-23-worker-code-review-unsafe-result",
+                taskId: "task-target",
+                progressState: "manager_review_ready",
+              },
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "bmad-1-1-other-complete-lane",
+                taskId: "task-reviewer",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.resultExists, true);
+    assert.equal(preview.summary.resultFresh, false);
+    assert.equal(preview.summary.resultRetentionUnsafe, true);
+    assert.equal(preview.summary.requests[0].workerId, "codex-2");
+    assert.match(preview.nextActions[0].summary, /not route-safe/);
+    assert.match(preview.nextActions[0].nextAction, /manager-worker-code-review\.mjs/);
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
@@ -27125,6 +27191,76 @@ test("review feedback apply validates metadata before tmux mutation", () => {
     assert.deepEqual(tmuxCalls, []);
     assert.equal(existsSync(join(stateRoot, "manager-runs", "manager-test", "review-feedback")), false);
   } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("review feedback can route after failed review when feedback left sprint status in progress", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-feedback-in-progress-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-review-feedback-in-progress-test.yaml";
+  const storyPath = "_bmad-output/implementation-artifacts/8-24-review-feedback-in-progress.md";
+  const resultsRoot = join(stateRoot, "manager-runs", "manager-test", "review-results");
+  const findingsPath = join(resultsRoot, "bmad-8-24-review-feedback-in-progress.md");
+  try {
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-05",
+        "last_updated: 2026-07-05",
+        "development_status:",
+        "  epic-8: in-progress",
+        "  8-24-review-feedback-in-progress: in_progress",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, "# Story 8-24-review-feedback-in-progress\n\nStatus: in_progress\n");
+    mkdirSync(resultsRoot, { recursive: true });
+    writeFileSync(findingsPath, "# Review Findings\n\nStatus: FAIL\n\n- [High] Fix missing assertion at `src/app.js:12`.\n");
+
+    const tmuxCalls = [];
+    const applied = buildWorkerReviewFeedbackPlan(
+      {
+        runId: "manager-test",
+        stateRoot,
+        sprintStatusPath: sprintPath,
+        assignmentId: "bmad-8-24-review-feedback-in-progress",
+        reviewFindingsFile: findingsPath,
+        apply: true,
+      },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [
+              {
+                workerId: "codex-2",
+                sessionName: "codex-2",
+                assignmentId: "bmad-8-24-review-feedback-in-progress",
+                taskId: "task-story-8-24",
+                laneOwner: "manager-test/codex-2",
+                progressState: "manager_review_ready",
+              },
+            ],
+          },
+        },
+        tmuxRunner: (cmd, args) => {
+          tmuxCalls.push({ cmd, args });
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%88\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        runner: () => ({ status: 0, stdout: "", stderr: "" }),
+        receiptSettleMs: 0,
+      },
+    );
+
+    assert.equal(applied.status, "ready");
+    assert.equal(applied.summary.results[0].status, "review_feedback_sent");
+    assert.equal(applied.summary.results[0].heartbeat.ok, true);
+    assert.equal(applied.summary.results[0].statusUpdate.sprintStatusUpdated, false);
+    assert.deepEqual(tmuxCalls.filter((call) => call.args[0] === "send-keys").at(-1).args.slice(-1), ["C-m"]);
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });

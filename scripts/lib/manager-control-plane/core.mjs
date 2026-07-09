@@ -4593,9 +4593,10 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   };
   const freshness = buildWorkerCodeReviewFreshness({ paths, targetAssignmentId, target }, runOptions, context);
   const reviewAttemptSummary = buildWorkerCodeReviewAttemptSummary({ paths, targetAssignmentId, invalidatorMs: freshness.latestInvalidatorMs }, runOptions, context);
-  if (freshness.resultFresh === true) {
-    const resultPath = join(paths.root, "review-results", `${targetAssignmentId}.md`);
-    const resultFailed = reviewResultIsFail(resultPath);
+  const freshResultPath = join(paths.root, "review-results", `${targetAssignmentId}.md`);
+  const freshResultFailed = freshness.resultFresh === true ? reviewResultIsFail(freshResultPath) : false;
+  const freshResultRetentionBlocker = freshResultFailed ? reviewFindingsRetentionBlocker(freshResultPath) : null;
+  if (freshness.resultFresh === true && !freshResultRetentionBlocker) {
     const scopedStateRoot = runOptions.stateRoot ? ` --state-root ${shellSingleQuote(runOptions.stateRoot)}` : "";
     return packet({
       status: "ready",
@@ -4610,23 +4611,23 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
         requestContractFresh: freshness.requestFresh,
         resultExists: true,
         resultFresh: true,
-        resultFailed,
+        resultFailed: freshResultFailed,
         resultComplete: true,
-        resultPath,
+        resultPath: freshResultPath,
         reviewFreshness: sanitizeCyclePacketValue(freshness),
         reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
         requests: [],
-        results: runOptions.apply ? [{ status: "fresh_review_result_exists", resultPath }] : undefined,
+        results: runOptions.apply ? [{ status: "fresh_review_result_exists", resultPath: freshResultPath }] : undefined,
         retention: "review_result_path_and_summary",
       },
       nextActions: [{
-        code: resultFailed ? "worker-code-review-failed-result-ready" : "worker-code-review-result-ready",
-        summary: resultFailed
+        code: freshResultFailed ? "worker-code-review-failed-result-ready" : "worker-code-review-result-ready",
+        summary: freshResultFailed
           ? "Fresh delegated worker code review result failed; route compact findings back to the owning worker."
           : "Fresh delegated worker code review result exists; route findings or delivery next.",
-        nextAction: resultFailed
-          ? `node ./scripts/manager-worker-review-feedback.mjs --summary-json --run-id ${shellSingleQuote(runId)}${scopedStateRoot} --assignment-id ${shellSingleQuote(targetAssignmentId)} --review-findings-file ${shellSingleQuote(resultPath)}`
-          : `Review compact findings at ${resultPath}.`,
+        nextAction: freshResultFailed
+          ? `node ./scripts/manager-worker-review-feedback.mjs --summary-json --run-id ${shellSingleQuote(runId)}${scopedStateRoot} --assignment-id ${shellSingleQuote(targetAssignmentId)} --review-findings-file ${shellSingleQuote(freshResultPath)}`
+          : `Review compact findings at ${freshResultPath}.`,
       }],
     });
   }
@@ -4657,8 +4658,12 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   const requestContractFresh = requestExists && fileContainsText(request.requestPath, `contractVersion: ${WORKER_CODE_REVIEW_REQUEST_VERSION}`);
   const requestFresh = requestExists && requestContractFresh && (freshness.latestInvalidatorMs === 0 || requestMtimeMs >= freshness.latestInvalidatorMs);
   const resultComplete = reviewResultHasTerminalStatus(request.resultPath);
+  const resultRetentionBlocker = resultExists && reviewResultIsFail(request.resultPath)
+    ? reviewFindingsRetentionBlocker(request.resultPath)
+    : null;
   const resultFresh = resultExists
     && resultComplete
+    && !resultRetentionBlocker
     && (freshness.latestInvalidatorMs === 0 || freshness.resultMtimeMs >= freshness.latestInvalidatorMs)
     && (!requestExists || (requestContractFresh && freshness.resultMtimeMs >= requestMtimeMs));
   const requestAgeSeconds = requestExists ? fileAgeSeconds(request.requestPath, runOptions, context) : null;
@@ -4717,6 +4722,7 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
         resultExists,
         resultFresh,
         resultComplete,
+        resultRetentionUnsafe: Boolean(resultRetentionBlocker),
         reviewFreshness: sanitizeCyclePacketValue(freshness),
         requestAgeSeconds,
         reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
@@ -4730,7 +4736,9 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
             ? "Fresh delegated worker code review result exists; route findings or delivery next."
             : "Delegated worker code review request already exists; wait for reviewer checkpoint or findings, or resend if the prompt is visibly idle."
           : resultExists && !resultFresh
-            ? "Delegated worker code review result is stale after newer review feedback or target checkpoint; delegate a fresh review."
+            ? resultRetentionBlocker
+              ? "Delegated worker code review result is not route-safe; delegate a fresh compact review."
+              : "Delegated worker code review result is stale after newer review feedback or target checkpoint; delegate a fresh review."
           : "Delegate BMAD code review to a manager-owned worker.",
         nextAction: requestFresh
           ? resultFresh
@@ -6080,7 +6088,7 @@ function renderWorkerCodeReviewFile(request = {}) {
     "",
     `Write the compact findings artifact to this exact path: ${request.resultPath}`,
     "",
-    "Include only finding severity, file/line references, rationale, required fix, verification gaps, and an exact standalone terminal marker line: `Status: PASS` when there are no required fixes, or `Status: FAIL` when required fixes remain. Do not store raw prompts, completions, reasoning traces, provider payloads, secrets, or broad source copies.",
+    "Include only finding severity, file/line references, rationale, required fix, verification gaps, and an exact standalone terminal marker line: `Status: PASS` when there are no required fixes, or `Status: FAIL` when required fixes remain. Add `Evidence retention: metadata_only` and do not restate retention policy terms or copy request instructions into the result.",
     "",
     "After writing the findings artifact, append a compact manager checkpoint:",
     "",
@@ -6147,7 +6155,21 @@ function validateWorkerReviewFeedbackMetadata(request = {}, options = {}, contex
   }
   const sprintSource = readFileSync(absoluteSprintPath, "utf8");
   const reviewPattern = new RegExp(`^\\s*${escapeRegExp(storyKey)}:\\s*review\\s*$`, "mi");
+  const inProgressPattern = new RegExp(`^\\s*${escapeRegExp(storyKey)}:\\s*in[_-]?progress\\s*$`, "mi");
   if (!reviewPattern.test(sprintSource)) {
+    const progressState = sanitizeLedgerField(request.progressState || "", "", 80);
+    const failedReviewResultReady = ["manager_review_ready", "delivery_gate_ready"].includes(progressState)
+      && reviewResultIsFail(request.findingsPath || "");
+    if (inProgressPattern.test(sprintSource) && failedReviewResultReady) {
+      return {
+        ok: true,
+        storyKey,
+        sprintStatusPath: sprintPath,
+        sprintStatus: "in_progress",
+        progressState,
+        overrideBasis: "fresh_failed_review_result_with_manager_review_ready_checkpoint",
+      };
+    }
     return { ok: false, storyKey, sprintStatusPath: sprintPath, code: "review-feedback-sprint-status-not-review", message: "Review feedback apply requires the target BMAD story to still be in review status before worker mutation.", nextAction: "Refresh sprint status and only route review feedback for stories currently in review." };
   }
   return { ok: true, storyKey, sprintStatusPath: sprintPath };
