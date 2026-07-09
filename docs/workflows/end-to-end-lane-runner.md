@@ -76,11 +76,11 @@ The default allowance is:
 
 - Use the repository's configured provider and model defaults. For Kendall_Nxt
   manager-control-plane work, the manager session, spawned subagents, BMAD
-  party-mode reviewers, and worker helper agents should use `5.6 Terra` at
-  `medium` effort by default.
+  party-mode reviewers, and worker helper agents should use `5.6 Luna` at
+  `high` effort by default.
 - Any platform-available GPT-5.6 model variant and every effort level it
   supports, plus `gpt-5.3-codex-spark` at its supported effort levels, are
-  valid choices. Escalate above `medium` effort or select a non-default model
+  valid choices. Escalate above `high` effort or select a non-default model
   only for concrete higher-risk work,
   such as complex architecture, security-sensitive review, broad cross-module
   reasoning, unresolved failed verification, or a specific operator request.
@@ -126,26 +126,34 @@ cannot be completed without expanded party-mode authority.
    within configured provider/model defaults and the bounded party-mode
    allowance.
    Keep generated BMAD work products local.
-4. **Implement.** Make scoped source-owned changes. Prefer existing repository
-   patterns over new abstractions.
-5. **Review.** Route implemented code changes through `bmad-code-review` when a
-   review is requested or when the lane changes behavior, automation, or
-   shared contracts.
-6. **Verify.** Run the smallest meaningful check first, then broaden when the
-   touched surface crosses packages, APIs, workflows, or user-facing behavior.
+4. **Implement.** The owning worker or a delegated implementation subagent makes
+   scoped source-owned changes. Prefer existing repository patterns over new
+   abstractions; the manager session remains orchestration-only.
+5. **Review.** Delegate implemented code changes through `bmad-code-review` to
+   a manager-owned worker or bounded review subagent when the lane changes
+   behavior, automation, or shared contracts. The manager records compact
+   findings and routes fixes; it does not review the lane itself.
+6. **Verify.** The owning worker or a delegated verification subagent runs the
+   smallest meaningful check first, then broadens when the touched surface
+   crosses packages, APIs, workflows, or user-facing behavior. The manager
+   records the returned evidence without running the lane retest locally.
    If the branch has no source diff after a base refresh and scoped verification
    passes, classify it as a no-source refresh lane: preserve the evidence
    packet, do not create an empty PR, and close or clean up only through an
    explicit supported lifecycle path.
-7. **Deliver PR.** Commit intended files, push the lane branch, open or update
-   the PR, and monitor checks and review state.
+7. **Deliver PR.** A delegated delivery worker or subagent commits intended
+   files, pushes the lane branch, opens or updates the PR, and monitors checks
+   and review state. The manager records compact delivery evidence and does not
+   execute these lane mutations in its own session.
    Before merge, run an independent delivery subagent audit for the exact PR
    head. Record only bounded metadata in `verify-pr-gates`: auditor id,
    `merge-ready`/hold status, exact head SHA, and a short summary. Do not make
    `codex-workspace.mjs` launch subagents, provider calls, or retain raw audit
    transcripts.
-8. **Merge.** Merge only when the low-risk checklist is proven for the exact
-   head SHA or when an explicit higher-risk approval covers the residual risk.
+8. **Merge.** The delegated delivery worker merges only when the low-risk
+   checklist is proven for the exact head SHA or when an explicit higher-risk
+   approval covers the residual risk. The manager inspects the evidence and
+   enforces the gate but does not merge from the manager session.
    If merge is blocked after checks are green, inspect thread-aware review
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
@@ -159,7 +167,8 @@ cannot be completed without expanded party-mode authority.
    merge evidence.
    Use `doctor --summary-json` when automation needs a bounded readiness packet
    instead of human-readable doctor output.
-9. **Cleanup.** Prefer `cleanup-current --delete-remote` from inside the lane,
+9. **Cleanup.** The delegated delivery/cleanup worker should prefer
+   `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
    run first. Add `--summary-json` when an automation runner needs the bounded
    cleanup-readiness packet instead of human-readable plan text. Apply cleanup
@@ -336,7 +345,7 @@ These surfaces are not automatically covered by `standard-delivery`:
   the bounded party-mode allowance.
 - BMAD party mode or spawned BMAD subagents that override configured
   provider/model defaults, exceed the bounded party-mode allowance, escalate
-  above `medium` effort or select a non-default model without
+  above `high` effort or select a non-default model without
   concrete lane risk, or retain raw provider payloads. These are not automatic;
   fall back to the normal lane flow unless the named objective requires expanded
   party-mode authority.

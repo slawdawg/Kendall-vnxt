@@ -226,37 +226,32 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   provider payload retention, paid-usage expansion, GitHub mutation, cleanup,
   worker launch, or any platform/tool policy that still requires explicit
   approval.
-- Default Codex model routing for governed manager work is `5.6 Terra` at
-  `medium` effort for the manager/control-plane session, spawned subagents,
+- Default Codex model routing for governed manager work is `5.6 Luna` at
+  `high` effort for the manager/control-plane session, spawned subagents,
   BMAD party-mode reviewers, and worker helper agents. Any platform-available
   GPT-5.6 model variant, plus `gpt-5.3-codex-spark`, and every effort level
   supported by the selected model are valid routing choices. Escalate above
-  `medium`, or choose a non-default model, only when the lane has concrete
+  `high`, or choose a non-default model, only when the lane has concrete
   higher-risk needs
   such as complex architecture, security-sensitive review, broad cross-module
   reasoning, unresolved failed verification, or a specific operator request.
   Record the selected variant, effort, and rationale for any non-default route
   in lane evidence. This default does not override platform availability,
   tenant policy, provider authentication, budget, or sandbox restrictions.
-- The manager/control-plane session must not implement review-thread fixes,
-  code-review patch findings, or retest loops for a lane itself. When GitHub
-  review threads, delegated code-review findings, CI failures, or delivery-gate
-  feedback require source edits or focused retesting, the manager must route
-  that work to the owning worker or a manager-owned worker feedback gate first.
-  If no suitable manager-owned `codex-*` worker is available, or the task is an
-  independent read-only audit, the manager may spawn a bounded worker subagent.
-  Prefer existing manager-owned workers over API subagents for implementation,
-  review-fix loops and focused retesting so work stays in the manager ledger
-  and does not exhaust the separate subagent pool. The manager may inspect
-  compact evidence, run dry-run/apply orchestration gates, record verification
-  and delivery evidence, and perform coordinator-owned delivery actions that
-  repo policy already authorizes, including low-risk merge and cleanup under
-  `standard-delivery` criteria. Manager-local patch/retest execution, or
-  delivery/cleanup execution outside those repo-authorized gates, is allowed
-  only after an explicit operator exception or when no worker/subagent
-  delegation mechanism is available and the manager records the exception,
-  reason, touched files or operations, verification, and why waiting would block
-  all safe progress.
+- The manager/control-plane session is orchestration-only for lane work. It must
+  not implement source changes, run lane verification or retest loops, conduct
+  code review, fix review-thread or CI findings, commit, push, open or update a
+  PR, merge, or clean up the lane itself. Route implementation, verification,
+  review, review-fix, and delivery/cleanup execution to the owning worker or a
+  manager-owned worker/subagent first. Prefer existing manager-owned workers
+  over API subagents so the work stays in the manager ledger and does not
+  exhaust the separate subagent pool. The manager may inspect compact evidence,
+  run dry-run/apply orchestration gates, dispatch or answer workers, and record
+  verification and delivery evidence. A manager-local execution exception is
+  allowed only after an explicit operator exception or when no worker/subagent
+  delegation mechanism is available and all safe progress is blocked; record the
+  exception, reason, touched files or operations, verification, and why waiting
+  would block progress.
 - Claude Code CLI read-only review is a durable approved review lane when all
   of these are true: the operator asks for Claude review or the active
   end-to-end lane explicitly calls for independent Claude critique; the command
@@ -430,7 +425,7 @@ through merge and cleanup", or "see this lane through end to end".
   approval. Record the party-mode run purpose, agents used, allowance basis,
   retained evidence, and result in the lane evidence packet instead of
   interrupting for approval.
-  For this repo, the configured default is `5.6 Terra` at `medium` effort for
+  For this repo, the configured default is `5.6 Luna` at `high` effort for
   the manager/control-plane session, spawned subagents, and BMAD party-mode
   reviewers. Any platform-available GPT-5.6 variant and its supported effort
   levels, plus `gpt-5.3-codex-spark` at its supported effort levels, remain
