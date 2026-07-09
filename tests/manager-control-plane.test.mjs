@@ -105,6 +105,14 @@ function assertLocalBmadStoryArtifact(relativePath) {
   assert.equal(tracked.status, 1, `${relativePath} must not be tracked source`);
 }
 
+function assertExistingLocalBmadStoryArtifact(relativePath) {
+  assertLocalBmadStoryArtifact(relativePath);
+  const content = readFileSync(join(process.cwd(), relativePath), "utf8");
+  assert.match(content, /^# Story /m);
+  assert.match(content, /^## Acceptance Criteria$/m);
+  assert.match(content, /^## Dev Agent Record$/m);
+}
+
 function assertGeneratedStoryIsDeveloperUsable(content) {
   assert.match(content, /^## Tasks\/Subtasks$/m);
   assert.match(content, /^- \[ \] /m);
@@ -17196,6 +17204,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(trailingTokenRetireCommandPlan.summary.selectedActionCount, 0);
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-4-worker-retirement-and-reassignment.md");
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/20-4-worker-retirement-and-reassignment.md");
+  assertExistingLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-4-worker-retirement-and-reassignment.md");
 
   const laneAdvancePlan = continuousRunPlan(
     {},
