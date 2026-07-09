@@ -14648,7 +14648,7 @@ function buildCleanupHandoffCloseoutEvidence({ planStatus = "ready", blockerCode
     closeoutPreviewAvailable: cleanupHandoffPacketAvailable(closeoutPreview),
     dirtyPreservationAvailable: cleanupHandoffPacketAvailable(dirtyPreservation),
     localBmadStoryArtifact: {
-      path: "_bmad-output/implementation-artifacts/7-6-cleanup-and-handoff-closeout.md",
+      path: "_bmad-output/implementation-artifacts/20-6-cleanup-and-handoff-closeout.md",
       expectedIgnored: true,
       verificationSource: "regression_test_git_check_ignore_and_ls_files",
     },
