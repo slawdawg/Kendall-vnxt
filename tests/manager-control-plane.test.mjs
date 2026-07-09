@@ -261,6 +261,10 @@ for (const [relativePath, content] of [
     "# Story 21.2: Manager Story Creation Apply Gate\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for story creation apply gate assertions.\n",
   ],
   [
+    "_bmad-output/implementation-artifacts/22-2-manager-story-creation-apply-gate.md",
+    "# Story 22.2: Manager Story Creation Apply Gate\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for story creation apply gate assertions.\n",
+  ],
+  [
     "_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md",
     "# Story 21.6: Cleanup and Handoff Closeout\n\n## Status\nreview\n\n## Acceptance Criteria\n- Fixture-backed story artifact exists for manager control plane tests.\n\n## Dev Agent Record\nFixture seed for cleanup and handoff closeout assertions.\n",
   ],
@@ -1174,7 +1178,30 @@ test("refill materialization rebases stale course-correction template after done
       "",
     ].join("\n"),
   );
+  const seededStoryFixtures = [
+    {
+      path: "_bmad-output/implementation-artifacts/22-2-correct-course-backlog-materialization.md",
+      content: "# Story 22.2: Correct Course Backlog Materialization\n\n## Status\nDone\n",
+    },
+    {
+      path: "_bmad-output/implementation-artifacts/23-1-planning-only-bmad-refill-continuation.md",
+      content: "# Story 23.1: Planning-Only BMAD Refill Continuation\n\n## Status\nready-for-dev\n",
+    },
+  ];
+  const originalStoryFixtures = seededStoryFixtures.map((fixture) => {
+    const absolutePath = join(process.cwd(), fixture.path);
+    return {
+      ...fixture,
+      existed: existsSync(absolutePath),
+      originalContent: existsSync(absolutePath) ? readFileSync(absolutePath, "utf8") : "",
+    };
+  });
   try {
+    for (const fixture of originalStoryFixtures) {
+      rmSync(fixture.path, { force: true });
+      ensureIgnoredBmadFixture(fixture.path, fixture.content);
+      assert.equal(readFileSync(join(process.cwd(), fixture.path), "utf8"), fixture.content);
+    }
     const plan = buildRefillPlan(
       { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
       {
@@ -1199,10 +1226,22 @@ test("refill materialization rebases stale course-correction template after done
 
     assert.equal(plan.summary.materializationGate.state, "ready");
     assert.deepEqual(plan.summary.materializationGate.missingRequiredFields, []);
-    assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "23-1-planning-only-bmad-refill-continuation");
+    assert.equal(plan.summary.materializationGate.selectedCandidateStory.id, "24-1-planning-only-bmad-refill-continuation");
     assert.equal(plan.summary.materializationGate.selectedCandidateStory.title, "Planning-Only BMAD Refill Continuation");
-    assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, "23-1-planning-only-bmad-refill-continuation");
+    assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/23-1-planning-only-bmad-refill-continuation.md");
+    assert.equal(
+      readFileSync(join(process.cwd(), "_bmad-output/implementation-artifacts/23-1-planning-only-bmad-refill-continuation.md"), "utf8"),
+      seededStoryFixtures[1].content,
+    );
+    assert.equal(plan.nextActions[0].materializationGate.selectedCandidateStory.id, "24-1-planning-only-bmad-refill-continuation");
   } finally {
+    for (const fixture of originalStoryFixtures) {
+      if (fixture.existed) {
+        writeFileSync(join(process.cwd(), fixture.path), fixture.originalContent);
+      } else {
+        rmSync(fixture.path, { force: true });
+      }
+    }
     rmSync(sprintPath, { force: true });
   }
 });
