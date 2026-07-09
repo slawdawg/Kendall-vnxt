@@ -37,6 +37,7 @@ import {
   buildRefillPlan,
   buildResourceStatus,
   buildRecoveryPlan,
+  buildRecoveryHousekeepingEvidenceRecord,
   buildRuntimeReadinessPlan,
   buildSourceArtifactDiscoveryPlan,
   buildSourceBackedPacketSeedPlan,
@@ -13624,6 +13625,25 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
           },
         },
         dispatchPreview: readyDispatchPreviewFixture(),
+        cleanupPlan: {
+          status: "blocked",
+          blockers: [{ code: "cleanup-apply-gated", nextAction: "Preserve cleanup evidence before mutation." }],
+          summary: {
+            mutationMode: "dry_run_required",
+            cleanupScopes: ["manager-run-state"],
+            cleanupHandoffCloseoutEvidence: {
+              implementationChangedFiles: ["scripts/lib/manager-control-plane/core.mjs", "tests/manager-control-plane.test.mjs"],
+              verificationCommands: ["node --test tests/manager-control-plane.test.mjs"],
+              verificationStatus: "recommended_not_executed_by_loop",
+            },
+            recoveryHousekeepingEvidence: {
+              sourceRefs: ["manager-cycle:manager-test"],
+              changedFiles: ["scripts/lib/manager-control-plane/core.mjs"],
+              verificationCommands: ["node --test tests/manager-control-plane.test.mjs"],
+              verificationStatus: "passed",
+            },
+          },
+        },
         tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
         tmuxContext: {
           tmuxResult: { ok: true, panes: [], error: "" },
@@ -13632,7 +13652,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
       },
     );
 
-    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "recoveryDrillReplayProof", "qualityDeliveryEvidenceBoundaryProof", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
+    for (const key of ["run", "usage", "resources", "dispatcher", "queue", "lease", "workers", "runway", "delivery", "operationalActions", "operationalSummary", "blockedPathOperationalProof", "recoveryDrillReplayProof", "qualityDeliveryEvidenceBoundaryProof", "overnightRunRecoveryHousekeeping", "cleanup", "checkpoints", "questions", "blockers", "recommendedActions", "signalGaps", "observations"]) {
       assert.ok(Object.hasOwn(cycle.summary, key), `missing cycle key ${key}`);
     }
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
@@ -13754,6 +13774,28 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.qualityGates.deliverySubagentAudit, "not_evaluated");
     assert.equal(cycle.summary.qualityDeliveryEvidenceBoundaryProof.qualityGates.cleanupDeliverySubagentAudit, "not_evaluated");
     assert.ok(cycle.summary.qualityDeliveryEvidenceBoundaryProof.evidenceRefs.includes("delivery:not_requested"));
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.schemaVersion, "manager-control-plane.overnight-run-recovery-housekeeping/v0");
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.status, "blocked");
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.dogfoodable, true);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.metadataOnly, true);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.rawPayloadRetained, false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.recoveryState.resumeStatus, "blocked");
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.recoveryState.schemaGapCount, 0);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.housekeepingState.cleanupStatus, "blocked");
+    assert.deepEqual(cycle.summary.overnightRunRecoveryHousekeeping.housekeepingState.changedFiles, []);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.housekeepingState.verification.status, "not_reported");
+    assert.deepEqual(cycle.summary.overnightRunRecoveryHousekeeping.housekeepingState.verification.commands, []);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.recoveryState.reconciliationKnownSafe, true);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.continuationObservation.observedCanContinue, false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.continuationObservation.authorizesMutation, false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.preservedSafetyGates.workerMutationAllowed, false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.preservedSafetyGates.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.preservedSafetyGates.cleanupApplyAllowed, false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.preservedSafetyGates.providerUsageAllowed, false);
+    assert.ok(cycle.summary.overnightRunRecoveryHousekeeping.stopLines.includes("no assignment takeover"));
+    assert.ok(cycle.summary.overnightRunRecoveryHousekeeping.evidenceRefs.includes("resume:blocked"));
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.evidenceRefs.some((ref) => ref.startsWith("changed-file:")), false);
+    assert.equal(cycle.summary.overnightRunRecoveryHousekeeping.evidenceRefs.some((ref) => ref.startsWith("verification:")), false);
     assert.equal(cycle.summary.recommendedActions.some((action) => action.code === "dispatch-preview-ready"), false);
     assert.ok(cycle.summary.recommendedActions.some((action) => action.code === "takeover-inspection-required"));
     assert.ok(cycle.summary.recommendedActions.some((action) => action.nextAction === "node ./scripts/manager-stale-owner-inspection.mjs --summary-json"));
@@ -13767,6 +13809,80 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.equal(cycle.summary.dispatcher.recoveryPath, "remove manager-owned assignment/workspace evidence and rerun dispatch preview");
     const serialized = JSON.stringify(cycle);
     assert.doesNotMatch(serialized, /completion|reasoning trace|provider payload|capture-pane/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("overnight recovery and housekeeping keeps its local BMAD artifact ignored", () => {
+  const storyPath = `_bmad-output/implementation-artifacts/fixture-overnight-recovery-housekeeping-${process.pid}-${Date.now()}.md`;
+  const storyContent = [
+    "# Story 23-6-overnight-run-recovery-and-housekeeping: Overnight Run Recovery And Housekeeping",
+    "",
+    "## Status",
+    "in-progress",
+    "",
+    "## Acceptance Criteria",
+    "1. Recovery and housekeeping evidence remains metadata-only.",
+    "",
+    "## Dev Agent Record",
+    "- Changed files: `scripts/lib/manager-control-plane/core.mjs`, `tests/manager-control-plane.test.mjs`.",
+    "- Verification: `node --test tests/manager-control-plane.test.mjs`.",
+    "- Next manager action: inspect the bounded recovery and cleanup evidence.",
+    "",
+  ].join("\n");
+  const storyAbsolutePath = join(process.cwd(), storyPath);
+  try {
+    ensureIgnoredBmadFixture(storyPath, storyContent);
+    assertExistingLocalBmadStoryArtifact(storyPath);
+  } finally {
+    rmSync(storyAbsolutePath, { force: true });
+  }
+});
+
+test("overnight recovery and housekeeping accepts only manager-owned per-run evidence records", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-recovery-housekeeping-evidence-"));
+  try {
+    const initialized = ledgerCommand({ command: "init", runId: "manager-evidence-test", stateRoot });
+    assert.equal(initialized.status, "ready");
+    const producer = buildRecoveryHousekeepingEvidenceRecord({
+      runId: "manager-evidence-test",
+      stateRoot,
+      apply: true,
+      evidenceId: "recovery-proof-1",
+      sourceRefs: ["manager-cycle:manager-evidence-test"],
+      changedFiles: ["scripts/lib/manager-control-plane/core.mjs", "tests/manager-control-plane.test.mjs"],
+      verificationStatus: "passed",
+      verificationCommands: ["node --test tests/manager-control-plane.test.mjs"],
+    });
+    assert.equal(producer.status, "ready");
+    assert.equal(producer.summary.applied, true);
+
+    const cycle = buildCyclePacket(
+      { runId: "manager-evidence-test", stateRoot },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-evidence", branch: "codex/lane-evidence" }),
+        cleanupPlan: {
+          status: "ready",
+          summary: {
+            cleanupScopes: ["manager-run-state"],
+            // This forged caller object must not be read by the proof.
+            recoveryHousekeepingEvidence: {
+              sourceRefs: ["manager-cycle:manager-evidence-test"],
+              changedFiles: ["docs/forged.md"],
+              verificationStatus: "passed",
+              verificationCommands: ["forged command"],
+            },
+          },
+        },
+      },
+    );
+    const proof = cycle.summary.overnightRunRecoveryHousekeeping;
+    assert.deepEqual(proof.housekeepingState.changedFiles, ["scripts/lib/manager-control-plane/core.mjs", "tests/manager-control-plane.test.mjs"]);
+    assert.equal(proof.housekeepingState.verification.status, "passed");
+    assert.ok(proof.evidenceRefs.includes("recovery-housekeeping-evidence:recovery-proof-1"));
+    assert.equal(JSON.stringify(proof).includes("docs/forged.md"), false);
+    assert.equal(JSON.stringify(proof).includes("forged command"), false);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -17155,6 +17271,52 @@ test("manager run loop preserves worker retirement reassignment proof in dogfood
     assert.equal(packets[0].summary.selectedAction.workerRetirementReassignment.rawPayloadRetained, false);
     assert.equal(packets[0].summary.applySelectedAction, null);
     assert.doesNotMatch(JSON.stringify(packets[0].summary.selectedAction.workerRetirementReassignment), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager run loop once records and rebuilds from manager-owned recovery housekeeping evidence", async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-run-loop-recovery-evidence-"));
+  try {
+    assert.equal(ledgerCommand({ command: "init", runId: "manager-loop-evidence", stateRoot }).status, "ready");
+    const packets = [];
+    let planCalls = 0;
+    await runManagerRunLoop(
+      { runId: "manager-loop-evidence", stateRoot, maxIterations: 1, summaryJson: true, runtimeMode: "continuous_dry_run" },
+      {
+        buildPreflight: () => ({ ok: true, status: "ready", summary: {}, blockers: [], warnings: [] }),
+        buildContinuousRunPlan: () => {
+          planCalls += 1;
+          if (planCalls === 2) {
+            const record = JSON.parse(readFileSync(join(stateRoot, "manager-runs", "manager-loop-evidence", "recovery-housekeeping-evidence.json"), "utf8"));
+            assert.equal(record.recordType, "manager_owned_recovery_housekeeping_evidence");
+            assert.equal(record.sourceRefs[0], "manager-cycle:manager-loop-evidence");
+          }
+          return {
+            ok: true,
+            status: "ready",
+            summary: {
+              runId: "manager-loop-evidence",
+              workerCounts: { active: 0, warm: 0, paused: 0 },
+              usageState: "normal",
+              resourceState: "normal",
+              selectedAction: null,
+              applySelectedAction: null,
+              runtimeReadiness: { allowedExecutionMode: "continuous_dry_run" },
+            },
+            blockers: [], warnings: [], nextActions: [],
+          };
+        },
+        writePacket: (packet) => packets.push(packet),
+        sleep: async () => {},
+      },
+    );
+    assert.equal(planCalls, 2);
+    assert.equal(packets[0].summary.recoveryHousekeepingEvidence.applied, true);
+    assert.equal(packets[0].summary.recoveryHousekeepingEvidence.status, "ready");
+    assert.equal(packets[0].summary.recoveryHousekeepingEvidence.evidenceId, "continuous-loop-1");
+    assert.equal(packets[0].summary.recoveryHousekeepingEvidence.rawPayloadRetained, false);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
