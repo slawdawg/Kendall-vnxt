@@ -1375,6 +1375,8 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
     (blocker.code === "resource-not-normal" && !criticalResourceBlocked);
   const paused = !proofBlocked && blockers.length > 0 && blockers.every(pauseOnlyBlocker);
   const status = blockers.length === 0 ? "ready" : paused ? "paused" : "blocked";
+  const observerStateRootArg = paths.proof.state.root ? ` --state-root ${shellSingleQuote(paths.proof.state.root)}` : "";
+  const nextStabilityObserverCommand = `node ./scripts/manager-worker-clean-cycle-observer.mjs --run-id ${shellSingleQuote(runId)}${observerStateRootArg} --required-cycles 10 --summary-json`;
   return packet({
     ok: blockers.length === 0,
     status,
@@ -1414,7 +1416,41 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
         failureRoute: "manager-worker-submit-pending or pointer receipt repair before more text is sent",
       },
       nextLiveDogfoodCommand: `node ./scripts/manager-run-loop.mjs --run-id ${shellSingleQuote(runId)} --interval-ms 60000 --max-iterations 10 --summary-json`,
-      nextStabilityObserverCommand: `node ./scripts/manager-worker-clean-cycle-observer.mjs --run-id ${shellSingleQuote(runId)} --required-cycles 10 --summary-json`,
+      nextStabilityObserverCommand,
+      tenCycleStabilityObserverEvidence: {
+        schemaVersion: "ten_cycle_stability_observer.v1",
+        implementationChangedFiles: [
+          "scripts/lib/manager-control-plane/core.mjs",
+          "tests/manager-control-plane.test.mjs",
+        ],
+        verificationCommands: [
+          "node --test tests/manager-control-plane.test.mjs",
+          "node ./scripts/check-manager-control-plane.mjs",
+          nextStabilityObserverCommand,
+        ],
+        nextManagerAction: nextStabilityObserverCommand,
+        localBmadArtifactBoundary: {
+          path: "_bmad-output/implementation-artifacts/20-5-ten-cycle-stability-observer.md",
+          expectedIgnored: true,
+          runtimeVerified: false,
+          verificationSource: "regression_test_git_check_ignore_and_ls_files",
+        },
+        metadataOnly: true,
+        rawPayloadRetained: false,
+        stopLines: [
+          "no worker mutation",
+          "no dispatch apply",
+          "no provider usage",
+          "no delivery mutation",
+          "no cleanup mutation",
+          "no assignment takeover",
+          "no merge mutation",
+          "no GitHub delivery mutation",
+          "no raw prompt retention",
+          "no provider payload retention",
+          "no reasoning trace retention",
+        ],
+      },
       stopLines: [
         "readiness only",
         "no live tmux mutation",

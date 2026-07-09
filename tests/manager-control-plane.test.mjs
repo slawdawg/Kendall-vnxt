@@ -28,6 +28,7 @@ import {
   buildProgressBeaconPlan,
   buildDispatcherRefillWatermarkPlan,
   buildLargeSliceContinuationPlan,
+  buildLiveWorkerProofReadiness,
   buildMatureToolEvaluationPlan,
   buildBmadCodeReviewRequestPlan,
   buildBmadRequestPacketPlan,
@@ -6431,6 +6432,98 @@ test("worker governor records dispatcher truth target decision and bounded count
     assert.equal(malformedTarget.summary.targets.allowedTarget, 0);
     assert.equal(malformedTarget.summary.targets.startTarget, 0);
     assert.ok(malformedTarget.blockers.some((blocker) => blocker.code === "worker-target-count-malformed"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("live worker readiness exposes ten-cycle stability observer evidence", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-ten-cycle-observer-"));
+  try {
+    const runId = "manager-test";
+    const now = "2026-07-09T00:00:00.000Z";
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    mkdirSync(runRoot, { recursive: true });
+    writeFileSync(join(runRoot, "throughput-proof.json"), JSON.stringify({
+      kind: "manager-throughput-proof",
+      status: "passed",
+      runId,
+      createdAt: now,
+      authorityStage: "backend_proof",
+      sourceCommand: "node ./scripts/manager-throughput-harness.mjs --workers 6 --cycles 10 --write-proof --summary-json",
+      twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10, source: "fixture" },
+      sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10, source: "fixture" },
+      dispatcher: { duplicateLeaseCount: 0, refillJobCount: 1, leaseCount: 60 },
+      stopLines: ["fake adapters only", "no live tmux inspection", "no provider usage", "metadata-only evidence"],
+      rawPayloadRetained: false,
+      sideEffects: [],
+    }));
+
+    const warmWorkers = Array.from({ length: 6 }, (_, index) => ({
+      workerId: `codex-${index + 1}`,
+      state: "warm",
+      owner: "manager-test/dispatcher",
+      ownerProof: true,
+      runId,
+      nextWork: "dispatcher_lease_pull",
+      heartbeat: { status: "recorded", lastHeartbeatAt: now },
+      lastPreflight: { status: "passed" },
+    }));
+    const readiness = buildLiveWorkerProofReadiness(
+      { runId, stateRoot, desiredWorkers: 6 },
+      {
+        now,
+        workerStatus: {
+          ok: true,
+          warnings: [],
+          summary: {
+            targets: { usageState: "normal", resourceState: "normal" },
+            warmPool: {
+              nextWorkPolicy: { primary: "dispatcher_lease_pull" },
+              workers: warmWorkers,
+            },
+          },
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+      },
+    );
+
+    assert.equal(readiness.status, "ready");
+    assert.match(readiness.summary.nextStabilityObserverCommand, /manager-worker-clean-cycle-observer\.mjs/);
+    assert.match(readiness.summary.nextStabilityObserverCommand, /--run-id 'manager-test'/);
+    assert(readiness.summary.nextStabilityObserverCommand.includes(`--state-root '${stateRoot}'`));
+    assert.match(readiness.summary.nextStabilityObserverCommand, /--required-cycles 10/);
+    assert.equal(readiness.summary.tenCycleStabilityObserverEvidence.schemaVersion, "ten_cycle_stability_observer.v1");
+    assert.deepEqual(readiness.summary.tenCycleStabilityObserverEvidence.implementationChangedFiles, [
+      "scripts/lib/manager-control-plane/core.mjs",
+      "tests/manager-control-plane.test.mjs",
+    ]);
+    assert.deepEqual(readiness.summary.tenCycleStabilityObserverEvidence.verificationCommands, [
+      "node --test tests/manager-control-plane.test.mjs",
+      "node ./scripts/check-manager-control-plane.mjs",
+      readiness.summary.nextStabilityObserverCommand,
+    ]);
+    assert.equal(readiness.summary.tenCycleStabilityObserverEvidence.nextManagerAction, readiness.summary.nextStabilityObserverCommand);
+    assert.deepEqual(readiness.summary.tenCycleStabilityObserverEvidence.localBmadArtifactBoundary, {
+      path: "_bmad-output/implementation-artifacts/20-5-ten-cycle-stability-observer.md",
+      expectedIgnored: true,
+      runtimeVerified: false,
+      verificationSource: "regression_test_git_check_ignore_and_ls_files",
+    });
+    assert.equal(readiness.summary.tenCycleStabilityObserverEvidence.metadataOnly, true);
+    assert.equal(readiness.summary.tenCycleStabilityObserverEvidence.rawPayloadRetained, false);
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no worker mutation"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no dispatch apply"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no provider usage"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no delivery mutation"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no cleanup mutation"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no assignment takeover"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no merge mutation"));
+    assert(readiness.summary.tenCycleStabilityObserverEvidence.stopLines.includes("no GitHub delivery mutation"));
+    assert.doesNotMatch(JSON.stringify(readiness.summary.tenCycleStabilityObserverEvidence), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
+    assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/20-5-ten-cycle-stability-observer.md");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
