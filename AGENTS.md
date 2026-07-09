@@ -235,6 +235,25 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   Record any model-tier escalation in the lane evidence. This default does not
   override platform availability, tenant policy, provider authentication,
   budget, or sandbox restrictions.
+- The manager/control-plane session must not implement review-thread fixes,
+  code-review patch findings, or retest loops for a lane itself. When GitHub
+  review threads, delegated code-review findings, CI failures, or delivery-gate
+  feedback require source edits or focused retesting, the manager must route
+  that work to the owning worker or a manager-owned worker feedback gate first.
+  If no suitable manager-owned `codex-*` worker is available, or the task is an
+  independent read-only audit, the manager may spawn a bounded worker subagent.
+  Prefer existing manager-owned workers over API subagents for implementation,
+  review-fix loops and focused retesting so work stays in the manager ledger
+  and does not exhaust the separate subagent pool. The manager may inspect
+  compact evidence, run dry-run/apply orchestration gates, record verification
+  and delivery evidence, and perform coordinator-owned delivery actions that
+  repo policy already authorizes, including low-risk merge and cleanup under
+  `standard-delivery` criteria. Manager-local patch/retest execution, or
+  delivery/cleanup execution outside those repo-authorized gates, is allowed
+  only after an explicit operator exception or when no worker/subagent
+  delegation mechanism is available and the manager records the exception,
+  reason, touched files or operations, verification, and why waiting would block
+  all safe progress.
 - Claude Code CLI read-only review is a durable approved review lane when all
   of these are true: the operator asks for Claude review or the active
   end-to-end lane explicitly calls for independent Claude critique; the command

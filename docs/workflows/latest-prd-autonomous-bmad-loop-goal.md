@@ -92,6 +92,24 @@ $bmad-retrospective after each completed epic.
 
 Code review is not complete when findings are merely recorded. For every review-ready lane, delegate $bmad-code-review to a manager-owned worker when one is available, write compact findings to the story/runtime evidence, apply or dispatch all unambiguous patch findings, rerun focused verification, rerun delegated code review, and repeat until the review is clean or only explicitly deferred/operator-gated items remain. The manager should orchestrate, validate compact evidence, route feedback, and enforce delivery gates. In autonomous mode, no available reviewer is a hold or warm-worker problem, not automatic permission for manager-local review; manager-local review requires an explicit manual decision or a stop-line investigation where delegation is unsafe.
 
+The manager must also delegate review-thread fixes, code-review patch findings,
+CI-failure fixes, and retest loops. If delivery discovers an unresolved GitHub
+review thread or another source-edit requirement, the manager routes the fix to
+the owning worker or an existing manager feedback gate first. If no suitable
+manager-owned `codex-*` worker is available, or the task is an independent
+read-only audit, the manager may spawn a bounded worker subagent. Prefer
+existing manager-owned workers over API subagents for implementation,
+review-fix loops, and focused retesting so work stays in the manager ledger and
+does not exhaust the separate subagent pool. The manager may inspect compact
+evidence, verify results, and run coordinator-owned delivery evidence gates,
+including low-risk merge and cleanup when `standard-delivery` repo policy
+criteria are proven. It must not patch or retest the lane locally, or execute
+delivery/cleanup outside those repo-authorized gates, unless the operator
+explicitly approves an exception or no worker/subagent delegation mechanism is
+available and all other safe progress is blocked. Any manager-local
+patch/retest or delivery/cleanup exception must record the exception, reason,
+touched files or operations, verification, and why waiting would block progress.
+
 Keep the queue full from the authoritative PRD while implementation backlog remains. If safe backlog gets low, create the next story or planning artifact from approved PRD/BMAD sources instead of letting workers idle. When no PRD backlog remains, do not create post-slice work just to keep workers busy; proceed only to review fixes, required retrospectives, final audit, or a separately approved next source-owned PRD.
 
 Split stories into parallel child lanes only when the split is technically safe, preserves BMAD acceptance criteria, reduces elapsed time, and has low merge conflict risk. Otherwise keep the story as one lane.

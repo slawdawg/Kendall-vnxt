@@ -641,7 +641,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   const executeContinuousSelectedActionFn = context.executeContinuousSelectedAction || executeContinuousSelectedAction;
   const writePacketFn = context.writePacket || writePacket;
   const sleepFn = context.sleep || sleep;
-  const preflight = buildPreflightFn(options);
+  const preflight = buildPreflightFn(options, { env: context.env || process.env });
   if (!preflight.ok) {
     const sandboxBoundary = firstSandboxBoundary(preflight);
     const runtimeReadiness = buildRuntimeReadinessPlan(
