@@ -226,15 +226,18 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   provider payload retention, paid-usage expansion, GitHub mutation, cleanup,
   worker launch, or any platform/tool policy that still requires explicit
   approval.
-- Default Codex model routing for governed manager work is: the manager/control
-  plane session should use `5.5 high`; spawned subagents, BMAD party-mode
-  reviewers, and worker helper agents should prefer `5.5 medium`. Escalate a
-  subagent above `5.5 medium` only when the lane has concrete higher-risk needs
+- Default Codex model routing for governed manager work is `5.6 Terra` at
+  `medium` effort for the manager/control-plane session, spawned subagents,
+  BMAD party-mode reviewers, and worker helper agents. Any platform-available
+  GPT-5.6 model variant, plus `gpt-5.3-codex-spark`, and every effort level
+  supported by the selected model are valid routing choices. Escalate above
+  `medium`, or choose a non-default model, only when the lane has concrete
+  higher-risk needs
   such as complex architecture, security-sensitive review, broad cross-module
   reasoning, unresolved failed verification, or a specific operator request.
-  Record any model-tier escalation in the lane evidence. This default does not
-  override platform availability, tenant policy, provider authentication,
-  budget, or sandbox restrictions.
+  Record the selected variant, effort, and rationale for any non-default route
+  in lane evidence. This default does not override platform availability,
+  tenant policy, provider authentication, budget, or sandbox restrictions.
 - The manager/control-plane session must not implement review-thread fixes,
   code-review patch findings, or retest loops for a lane itself. When GitHub
   review threads, delegated code-review findings, CI failures, or delivery-gate
@@ -427,9 +430,11 @@ through merge and cleanup", or "see this lane through end to end".
   approval. Record the party-mode run purpose, agents used, allowance basis,
   retained evidence, and result in the lane evidence packet instead of
   interrupting for approval.
-  For this repo, those configured defaults are `5.5 high` for the
-  manager/control-plane session and `5.5 medium` for spawned subagents and
-  BMAD party-mode reviewers unless concrete lane risk warrants escalation.
+  For this repo, the configured default is `5.6 Terra` at `medium` effort for
+  the manager/control-plane session, spawned subagents, and BMAD party-mode
+  reviewers. Any platform-available GPT-5.6 variant and its supported effort
+  levels, plus `gpt-5.3-codex-spark` at its supported effort levels, remain
+  selectable when concrete lane risk warrants a non-default route.
   The default allowance is one party-mode or subagent round per lane phase,
   normally two to four BMAD agents per round, with local artifact retention
   limited to summaries, paths, findings, and verification evidence rather than

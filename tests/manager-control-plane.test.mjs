@@ -22448,6 +22448,128 @@ test("worker friction model routing records bounded policy metadata for routing 
   assert.doesNotMatch(JSON.stringify(malformed.summary.modelRouting), /provider payload/i);
 });
 
+test("worker friction model routing recommends concrete models only from bounded evidence", () => {
+  const routine = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    { taskRisk: { taskType: "implementation", ambiguity: "low", blastRadius: "low" }, usageState: "normal" },
+  );
+  assert.equal(routine.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(routine.summary.modelRouting.recommendedEffort, "medium");
+  assert.equal(routine.summary.modelRouting.tokenUseGuard, "compact_packet_no_duplicate_retry");
+
+  const spark = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    {
+      taskRisk: {
+        taskType: "triage",
+        ambiguity: "low",
+        blastRadius: "low",
+        expectedReworkCost: "low",
+        verificationDifficulty: "low",
+        requestedModel: "gpt-5.3-codex-spark",
+        sparkAdvantage: "latency",
+        sparkEvidenceRef: "local-eval:triage-latency-fixture",
+      },
+      usageState: "normal",
+    },
+  );
+  assert.equal(spark.summary.modelRouting.recommendedModel, "gpt-5.3-codex-spark");
+  assert.equal(spark.summary.modelRouting.recommendedEffort, "medium");
+  assert.ok(spark.summary.modelRouting.selectionRationale.includes("spark_advantage_latency"));
+  assert.equal(spark.summary.modelRouting.riskSignals.includes("task-type-high-reasoning"), false);
+  assert.deepEqual(spark.summary.modelRouting.sparkEvidenceRefs, ["local-eval:triage-latency-fixture"]);
+
+  const unevidencedTriage = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    {
+      taskRisk: {
+        taskType: "triage",
+        ambiguity: "low",
+        blastRadius: "low",
+        expectedReworkCost: "low",
+        verificationDifficulty: "low",
+        requestedModel: "gpt-5.3-codex-spark",
+      },
+      usageState: "normal",
+    },
+  );
+  assert.equal(unevidencedTriage.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(unevidencedTriage.summary.modelRouting.recommendedEffort, "high");
+  assert.ok(unevidencedTriage.summary.modelRouting.riskSignals.includes("task-type-high-reasoning"));
+
+  const triageWithVerificationRisk = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    {
+      taskRisk: {
+        taskType: "triage",
+        ambiguity: "low",
+        blastRadius: "low",
+        expectedReworkCost: "low",
+        verificationDifficulty: "high",
+        requestedModel: "gpt-5.3-codex-spark",
+        sparkAdvantage: "latency",
+        sparkEvidenceRef: "provider:spark-latency-eval",
+      },
+      usageState: "normal",
+    },
+  );
+  assert.equal(triageWithVerificationRisk.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(triageWithVerificationRisk.summary.modelRouting.recommendedEffort, "high");
+  assert.ok(triageWithVerificationRisk.summary.modelRouting.riskSignals.includes("high-verification-difficulty"));
+
+  const highRisk = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    { taskRisk: { taskType: "security", requestedModel: "gpt-5.3-codex-spark", sparkAdvantage: "cost" }, usageState: "normal" },
+  );
+  assert.equal(highRisk.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(highRisk.summary.modelRouting.recommendedEffort, "high");
+  assert.equal(highRisk.summary.modelRouting.providerInvocation, false);
+  assert.equal(highRisk.summary.modelRouting.executionAuthorityChanged, false);
+
+  const availableNonTerra = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    {
+      taskRisk: {
+        taskType: "implementation",
+        requestedModel: "gpt-5.6-fast",
+        requestedEffort: "low",
+        modelAdvantage: "cost",
+        platformAvailability: { models: [{ model: "gpt-5.6-fast", efforts: ["low", "medium"] }] },
+      },
+      usageState: "normal",
+    },
+  );
+  assert.equal(availableNonTerra.summary.modelRouting.recommendedModel, "gpt-5.6-fast");
+  assert.equal(availableNonTerra.summary.modelRouting.recommendedEffort, "low");
+  assert.equal(availableNonTerra.summary.modelRouting.modelAvailability, "bounded_allowlist");
+
+  const unsupportedPair = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    {
+      taskRisk: {
+        taskType: "implementation",
+        requestedModel: "gpt-5.6-fast",
+        requestedEffort: "high",
+        modelAdvantage: "cost",
+        platformAvailability: { models: [{ model: "gpt-5.6-fast", efforts: ["medium"] }] },
+      },
+      usageState: "normal",
+    },
+  );
+  assert.equal(unsupportedPair.summary.modelRouting.recommendationStatus, "deferred");
+  assert.equal(unsupportedPair.summary.modelRouting.recommendedModel, null);
+  assert.equal(unsupportedPair.summary.modelRouting.deferralReason, "selected_model_effort_not_platform_supported");
+
+  const malformed = buildWorkerFrictionPlan(
+    { runId: "manager-test" },
+    { taskRisk: { requestedModel: "unknown-provider", requestedEffort: "maximum", sparkAdvantage: "raw prompt" }, usageState: "normal" },
+  );
+  assert.equal(malformed.summary.modelRouting.recommendedModel, "GPT-5.6 Terra");
+  assert.equal(malformed.summary.modelRouting.recommendedEffort, "medium");
+  assert.deepEqual(malformed.summary.modelRouting.invalidInputSignals, ["invalid_requestedModel", "invalid_requestedEffort", "invalid_sparkAdvantage"]);
+  assert.doesNotMatch(JSON.stringify(malformed.summary.modelRouting), /unknown-provider|maximum|raw prompt/i);
+});
+
 test("worker friction model routing preserves task-fit quality under low usage", () => {
   for (const usageState of ["conserve", "drain", "manager_only"]) {
     const plan = buildWorkerFrictionPlan(
