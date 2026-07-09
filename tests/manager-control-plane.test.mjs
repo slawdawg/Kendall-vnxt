@@ -1328,6 +1328,76 @@ test("course-correction backlog rebase de-dupes duplicate candidate and proposed
   }
 });
 
+test("course-correction backlog rebase advances after the current story artifact materializes", () => {
+  const storyStatuses = {};
+  for (const epic of [6, 22, 23]) {
+    for (const item of COURSE_CORRECTION_TEMPLATE_ITEMS) {
+      storyStatuses[item.id.replace(/^6-/, `${epic}-`)] = "done";
+    }
+  }
+  const artifactDirRelative = `_bmad-output/test-fixtures/course-correction-24-2-${process.pid}-${Date.now()}`;
+  const storyPath = `${artifactDirRelative}/24-2-correct-course-backlog-materialization.md`;
+  const artifactDir = join(process.cwd(), artifactDirRelative);
+  const storyContent = [
+    "# Story 24.2: Correct-Course Backlog Materialization",
+    "",
+    "## Status",
+    "review",
+    "",
+    "## Acceptance Criteria",
+    "- Fixture-backed story artifact preserves bounded correct-course evidence.",
+    "",
+    "## Dev Agent Record",
+    "- Changed files: `tests/manager-control-plane.test.mjs`.",
+    "- Verification: passed: `node --test tests/manager-control-plane.test.mjs` and `node ./scripts/check-manager-control-plane.mjs`.",
+    "- Next manager action: delegate compact code review for `bmad-24-2-correct-course-backlog-materialization`.",
+    "",
+  ].join("\n");
+  const storyAbsolutePath = join(artifactDir, "24-2-correct-course-backlog-materialization.md");
+
+  try {
+    ensureIgnoredBmadFixture(storyPath, storyContent);
+    const ignored = spawnSync("git", ["check-ignore", "-q", "--", storyPath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.equal(ignored.status, 0, `${storyPath} must remain ignored local BMAD output`);
+    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", storyPath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.equal(tracked.status, 1, `${storyPath} must not be tracked source`);
+
+    const items = courseCorrectionBacklogItemsForStatus(
+      {
+        candidateBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
+        proposedBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
+      },
+      storyStatuses,
+      { artifactDir },
+    );
+
+    assert.deepEqual(items.map((item) => item.id), [
+      "25-1-planning-only-bmad-refill-continuation",
+      "25-2-correct-course-backlog-materialization",
+      "25-3-stale-owner-takeover-inspection-packet",
+      "25-4-one-lane-dispatch-dogfood-harness",
+      "25-5-worker-ramp-readiness-gate",
+      "25-6-overnight-run-recovery-and-housekeeping",
+    ]);
+    assert.equal(new Set(items.map((item) => item.id)).size, items.length);
+    const persistedStoryContent = readFileSync(storyAbsolutePath, "utf8");
+    assert.match(persistedStoryContent, /^# Story 24\.2: Correct-Course Backlog Materialization$/m);
+    assert.match(persistedStoryContent, /^## Acceptance Criteria$/m);
+    assert.match(persistedStoryContent, /^## Dev Agent Record$/m);
+    assert.match(persistedStoryContent, /Changed files: `tests\/manager-control-plane\.test\.mjs`/);
+    assert.match(persistedStoryContent, /Verification: passed: `node --test tests\/manager-control-plane\.test\.mjs`/);
+    assert.match(persistedStoryContent, /Next manager action: delegate compact code review/);
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
+});
+
 test("course-correction backlog rebase blocks while legacy generated backlog is active", () => {
   const storyStatuses = {};
   for (const item of COURSE_CORRECTION_TEMPLATE_ITEMS) {
