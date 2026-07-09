@@ -7242,7 +7242,29 @@ test("worker governor records dispatcher truth target decision and bounded count
 });
 
 test("worker ramp readiness gate keeps local BMAD artifact ignored", () => {
-  assertExistingLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/23-5-worker-ramp-readiness-gate.md");
+  const storyPath = `_bmad-output/implementation-artifacts/fixture-worker-ramp-readiness-gate-${process.pid}-${Date.now()}.md`;
+  const storyContent = [
+    "# Story 23-5-worker-ramp-readiness-gate: Worker Ramp Readiness Gate",
+    "",
+    "## Status",
+    "review",
+    "",
+    "## Acceptance Criteria",
+    "1. Worker ramp readiness evidence remains bounded and metadata-only.",
+    "",
+    "## Dev Agent Record",
+    "- Changed behavior: `worker_ramp_readiness_gate`.",
+    "- Verification: focused manager-control-plane checks.",
+    "- Next manager action: request BMAD code review for `23-5-worker-ramp-readiness-gate`.",
+    "",
+  ].join("\n");
+  const storyAbsolutePath = join(process.cwd(), storyPath);
+  try {
+    ensureIgnoredBmadFixture(storyPath, storyContent);
+    assertExistingLocalBmadStoryArtifact(storyPath);
+  } finally {
+    rmSync(storyAbsolutePath, { force: true });
+  }
 });
 
 test("live worker readiness exposes ten-cycle stability observer evidence", () => {
