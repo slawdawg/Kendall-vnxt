@@ -7236,6 +7236,69 @@ test("worker governor records dispatcher truth target decision and bounded count
     assert.equal(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.nextAllowedWorkerCount, 0);
     assert.ok(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.warningClasses.includes("usage-target-unknown"));
     assert.ok(unknownUsageWithNumericStart.summary.targets.workerRampReadinessGate.readinessBlockingClasses.includes("usage-target-unknown"));
+
+    const conserveReducedRamp = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 6 },
+      {
+        assignmentSummary: {
+          summary: {
+            backlogStatusCounts: { assignable: 6 },
+            laneAssignmentStatusCounts: {},
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 6, active: 0 },
+            candidateStateCounts: { assignable: 6 },
+          },
+        },
+        usageContext: { status: "conserve" },
+        resourceContext: { status: "normal" },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        fakeWorkerHarness: passedFakeWorkerHarness,
+      },
+    );
+    assert.equal(conserveReducedRamp.summary.targets.targetDecision, "drain_or_reduce_workers");
+    assert.equal(conserveReducedRamp.summary.targets.startTarget, 3);
+    assert.equal(conserveReducedRamp.summary.targets.workerRampReadinessGate.status, "ready");
+    assert.equal(conserveReducedRamp.summary.targets.workerRampReadinessGate.nextAllowedWorkerCount, 3);
+    assert.ok(conserveReducedRamp.summary.targets.workerRampReadinessGate.reasonClasses.includes("usage-conserve"));
+    assert.equal(conserveReducedRamp.summary.targets.workerRampReadinessGate.readinessBlockingClasses.includes("target-decision-drain-or-reduce-workers"), false);
+
+    const warmWorkerRecords = Array.from({ length: 2 }, (_, index) => ({
+      workerId: `codex-${index + 1}`,
+      owner: `manager-test/codex-${index + 1}`,
+      runId: "manager-test",
+      sessionName: `codex-${index + 1}`,
+      state: "warm",
+      assignmentState: "warm",
+      lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+    }));
+    const warmWorkersWithoutLeases = buildWorkerStatus(
+      { runId: "manager-test", stateRoot, desiredWorkers: 2 },
+      {
+        workerRecords: warmWorkerRecords,
+        assignmentSummary: {
+          summary: {
+            backlogStatusCounts: { assignable: 2 },
+            laneAssignmentStatusCounts: {},
+          },
+        },
+        dispatchPreview: {
+          summary: {
+            counts: { dispatchable: 2, active: 0 },
+            candidateStateCounts: { assignable: 2 },
+          },
+        },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        tmuxSummary: { unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        fakeWorkerHarness: passedFakeWorkerHarness,
+      },
+    );
+    assert.equal(warmWorkersWithoutLeases.summary.targets.activeLeaseCount, 0);
+    assert.equal(warmWorkersWithoutLeases.summary.targets.liveManagerWorkerCount, 2);
+    assert.equal(warmWorkersWithoutLeases.summary.targets.workerRampReadinessGate.currentWorkerCount, 2);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -15430,6 +15493,48 @@ test("cycle continuation permits manager-owned warm starts when healthy capacity
     assert.ok(cycle.summary.workers.targets.workerRampReadinessGate.stopLines.includes("no_worker_mutation"));
     assert.doesNotMatch(JSON.stringify(cycle.summary.workers.targets.workerRampReadinessGate), /dispatch-next --apply|provider payload|reasoning trace|raw prompt|capture-pane/i);
     assert.equal(cycle.summary.recommendedActions[0].code, "manager-owned-worker-warm-ready");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("cycle ramp readiness honors tmux takeover blockers before warm starts", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-warm-continuation-tmux-blocked-"));
+  try {
+    seedManagerLedgerForPreflight(stateRoot);
+    const passedFakeWorkerHarness = {
+      twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+      sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+    };
+    const cycle = buildCyclePacket(
+      { stateRoot, desiredWorkers: 2, runId: "manager-test" },
+      {
+        stateSignals: readyReconciliationSignals({ laneId: "lane-1", branch: "codex/lane-1" }),
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        assignmentSummary: {
+          summary: {
+            backlogStatusCounts: { assignable: 2, closed: 0 },
+            laneAssignmentStatusCounts: {},
+          },
+        },
+        dispatchPreview: { summary: { counts: { dispatchable: 2, active: 0 }, candidateStateCounts: { assignable: 2 } } },
+        refillPlan: { summary: { safeWorkSupply: 2, candidateLanes: [] } },
+        tmuxSummary: { available: true, paneCount: 1, managerOwnedPanes: 0, managerOwnedPaneEvidence: [], unmanagedPanes: 0, takeoverRequiredPanes: 1 },
+        tmuxContext: {
+          tmuxResult: { ok: true, panes: [], error: "" },
+          workspaceResult: { stateRoot, manifests: [], manifestErrors: [] },
+        },
+        fakeWorkerHarness: passedFakeWorkerHarness,
+      },
+    );
+
+    assert.equal(cycle.summary.workers.targets.startTarget, 2);
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.status, "blocked");
+    assert.equal(cycle.summary.workers.targets.workerRampReadinessGate.nextAllowedWorkerCount, 0);
+    assert.ok(cycle.summary.workers.targets.workerRampReadinessGate.blockerClasses.includes("tmux-takeover-required"));
+    assert.equal(cycle.summary.workers.lifecyclePlan.startWarmCandidates.length, 0);
+    assert.notEqual(cycle.summary.continuation.workerStartAllowed, true);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }

@@ -1180,9 +1180,17 @@ export function buildWorkerStatus(options = {}, context = {}) {
   const tmux = context.tmuxSummary ? { summary: context.tmuxSummary, warnings: [], blockers: [] } : buildTmuxOrientationStatus({ ...options, runId }, context.tmuxContext || {});
   const tmuxSummary = tmux.summary || {};
   const tmuxBlockers = buildWorkerTmuxBlockers(tmuxSummary);
+  const targetSummary = {
+    ...target.summary,
+    workerRampReadinessGate: buildWorkerRampReadinessGate(target.summary, {
+      blockers: [...target.blockers, ...tmuxBlockers],
+      reasons: target.reasons,
+      warnings: target.warnings,
+    }),
+  };
   const lifecycle = buildWorkerLifecyclePlan({ ...options, runId }, {
     workers,
-    targets: target.summary,
+    targets: targetSummary,
     usageState: usage,
     resourceState: resource,
     resourceSummary: resourcePacket.summary || {},
@@ -1205,7 +1213,7 @@ export function buildWorkerStatus(options = {}, context = {}) {
   const warmPool = buildWarmWorkerPoolSummary({
     runId,
     workers,
-    targets: target.summary,
+    targets: targetSummary,
     lifecyclePlan: lifecycle.summary,
     usageState: usage,
     resourceState: resource,
@@ -1224,7 +1232,7 @@ export function buildWorkerStatus(options = {}, context = {}) {
       unknownSessions: Number.isInteger(tmuxSummary.unmanagedPanes) ? tmuxSummary.unmanagedPanes : null,
       unknownSessionStatus: Number.isInteger(tmuxSummary.unmanagedPanes) ? "metadata-only" : tmux.status === "unavailable" ? "unavailable" : "not-inspected",
       activeAssignments: target.activeAssignments,
-      targets: target.summary,
+      targets: targetSummary,
       targetReasons: target.reasons,
       lifecyclePlan: lifecycle.summary,
       warmPool,
@@ -2115,6 +2123,7 @@ function buildWorkerTargetStatus(options = {}, context = {}) {
     usageState: usage,
     weeklyUsage,
     resourceState: resource,
+    liveManagerWorkerCount,
     fakeWorkerHarness,
     rawPayloadRetained: false,
   };
@@ -2137,6 +2146,7 @@ function buildWorkerRampReadinessGate(targets = {}, context = {}) {
   const startTarget = nonNegativeInteger(targets.startTarget) ?? 0;
   const allowedTarget = nonNegativeInteger(targets.allowedTarget) ?? 0;
   const activeAssignments = nonNegativeInteger(targets.activeAssignments) ?? 0;
+  const liveManagerWorkerCount = nonNegativeInteger(targets.liveManagerWorkerCount) ?? activeAssignments;
   const blockerClasses = uniqueRampClassCodes(blockers, "worker-ramp-blocked");
   const reasonClasses = uniqueRampClassCodes(reasons, "worker-ramp-reason");
   const warningClasses = uniqueRampClassCodes(warnings, "worker-ramp-warning");
@@ -2155,7 +2165,6 @@ function buildWorkerRampReadinessGate(targets = {}, context = {}) {
     ].includes(code)),
   ];
   const targetDecision = sanitizeLedgerField(targets.targetDecision || "", "", 120) || null;
-  if (targetDecision === "drain_or_reduce_workers") readinessBlockingClasses.push("target-decision-drain-or-reduce-workers");
   const status = blockers.length > 0 || readinessBlockingClasses.length > 0 || startTarget === 0 ? "blocked" : "ready";
   const nextAllowedWorkerCount = status === "ready" ? startTarget : 0;
   const rampStage =
@@ -2173,7 +2182,7 @@ function buildWorkerRampReadinessGate(targets = {}, context = {}) {
     schemaVersion: "manager-control-plane.worker-ramp-readiness-gate.v0",
     status,
     rampStage,
-    currentWorkerCount: activeAssignments,
+    currentWorkerCount: liveManagerWorkerCount,
     nextAllowedWorkerCount,
     startTarget,
     allowedTarget,
