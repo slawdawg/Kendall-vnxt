@@ -5998,6 +5998,32 @@ test("builds dispatch preview from dry-run evidence without mutation", () => {
   assert.equal(preview.summary.recoveryPath, "remove manager-owned assignment/workspace evidence and rerun dispatch preview");
   assert.equal(preview.summary.mutation, "none; dry-run summary only");
   assert.ok(preview.nextActions.some((action) => action.code === "dispatch-preview-ready"));
+  assert.equal(preview.summary.oneLaneDispatchDogfood.status, "ready");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.selectedLane, "setup-churn-handoff-hardening");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.baseBranch, "dev");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.recoveryPath, "remove manager-owned assignment/workspace evidence and rerun dispatch preview");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.mutation, "none; dry-run dispatch preview only");
+  assert.deepEqual(preview.summary.oneLaneDispatchDogfood.stopLines, [
+    "no_dispatch_apply",
+    "no_worker_mutation",
+    "no_worker_launch_or_kill",
+    "no_takeover",
+    "no_provider_calls",
+    "no_git_or_github_mutation",
+    "no_merge_or_cleanup",
+    "no_raw_pane_or_provider_payload_retention",
+  ]);
+  assert.equal(preview.summary.oneLaneDispatchDogfood.compactEvidence.selectedLane, "setup-churn-handoff-hardening");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.compactEvidence.changedBehavior, "one_lane_dispatch_dogfood_preview");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.compactEvidence.baseBranch, "dev");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.compactEvidence.recoveryPath, "remove manager-owned assignment/workspace evidence and rerun dispatch preview");
+  assert.equal(preview.summary.oneLaneDispatchDogfood.compactEvidence.verification, "not_reported_by_runtime_preview");
+  assert.equal(Object.hasOwn(preview.summary.oneLaneDispatchDogfood.compactEvidence, "changedFiles"), false);
+  assert.equal(
+    preview.summary.oneLaneDispatchDogfood.compactEvidence.nextManagerAction,
+    "Review one-lane dispatch dry-run evidence, then request explicit dispatch apply approval only through existing gates.",
+  );
+  assert.doesNotMatch(JSON.stringify(preview.summary.oneLaneDispatchDogfood), /dispatch-next --apply|provider payload|reasoning trace|raw prompt|capture-pane/i);
 
   const unavailable = buildDispatchPreview({}, { dispatchPreview: { ok: false, error: "spawnSync node EPERM" } });
   assert.equal(unavailable.status, "unknown");
@@ -6020,6 +6046,171 @@ test("builds dispatch preview from dry-run evidence without mutation", () => {
   assert.equal(runnerUnavailable.summary.sandboxBoundary, true);
   assert.equal(runnerUnavailable.warnings[0].sandboxSignatureClass, "node-spawnsync-eperm");
   assert.doesNotMatch(runnerUnavailable.warnings[0].message, /spawnSync|EPERM|raw stderr|raw stdout/);
+});
+
+test("one-lane dispatch dogfood harness blocks unsafe or unready dispatch evidence", () => {
+  const withBlockers = buildDispatchPreview({}, {
+    dispatchPreview: readyDispatchPreviewFixture({
+      dispatch: {
+        ...readyDispatchPreviewFixture().dispatch,
+        blockers: [{ code: "operator-approval-required", message: "approval required" }],
+      },
+    }),
+  });
+  assert.equal(withBlockers.summary.oneLaneDispatchDogfood.status, "blocked");
+  assert.equal(withBlockers.summary.oneLaneDispatchDogfood.compactEvidence.blockerCount, 1);
+  assert.doesNotMatch(withBlockers.summary.oneLaneDispatchDogfood.compactEvidence.nextManagerAction, /request explicit dispatch apply approval/i);
+
+  const nestedBlockersCycle = buildFastCyclePacket(
+    { runId: "manager-test" },
+    {
+      dispatchPreview: {
+        allowed: true,
+        selectedLane: "lane-ready",
+        baseBranch: "dev",
+        recoveryPath: "rerun dispatch preview",
+        blockers: [],
+        dispatch: {
+          allowed: true,
+          blockers: [{ code: "operator-approval-required", message: "approval required" }],
+        },
+      },
+    },
+  );
+  assert.equal(nestedBlockersCycle.summary.dispatchPreview.oneLaneDispatchDogfood.status, "blocked");
+  assert.equal(nestedBlockersCycle.summary.dispatchPreview.oneLaneDispatchDogfood.compactEvidence.blockerCount, 1);
+  assert.equal(nestedBlockersCycle.summary.dispatchPreview.blockers[0].code, "operator-approval-required");
+  assert.equal(nestedBlockersCycle.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
+
+  const blockedCycle = buildFastCyclePacket(
+    { runId: "manager-test" },
+    {
+      dispatchPreview: {
+        status: "blocked",
+        allowed: true,
+        selectedLane: "lane-ready",
+        baseBranch: "dev",
+        recoveryPath: "rerun dispatch preview",
+      },
+    },
+  );
+  assert.equal(blockedCycle.summary.dispatchPreview.oneLaneDispatchDogfood.status, "blocked");
+  assert.equal(blockedCycle.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
+
+  const unknownCycle = buildFastCyclePacket(
+    { runId: "manager-test" },
+    {
+      dispatchPreview: {
+        status: "unknown",
+        allowed: true,
+        selectedLane: "lane-ready",
+        baseBranch: "dev",
+        recoveryPath: "rerun dispatch preview",
+      },
+    },
+  );
+  assert.equal(unknownCycle.summary.dispatchPreview.oneLaneDispatchDogfood.status, "blocked");
+  assert.equal(unknownCycle.nextActions.some((action) => action.code === "dispatch-preview-ready"), false);
+});
+
+test("one-lane dispatch dogfood harness normalizes caller-supplied evidence", () => {
+  const unsafeMarker = "provider payload raw prompt capture-pane dispatch-next --apply";
+  const cycle = buildFastCyclePacket(
+    { runId: "manager-test" },
+    {
+      dispatchPreview: {
+        allowed: true,
+        selectedLane: "lane-ready",
+        selectedBranch: "codex/lane-ready",
+        baseBranch: "dev",
+        claimMutation: "assignment_write",
+        recoveryPath: "remove assignment evidence and rerun preview",
+        oneLaneDispatchDogfood: {
+          status: "ready",
+          compactEvidence: {
+            changedFiles: ["secrets.txt"],
+            verification: unsafeMarker,
+          },
+          stopLines: ["allow_dispatch_apply"],
+          rawPayloadRetained: true,
+        },
+      },
+    },
+  );
+  const dogfood = cycle.summary.dispatchPreview.oneLaneDispatchDogfood;
+  assert.equal(dogfood.status, "ready");
+  assert.equal(dogfood.rawPayloadRetained, false);
+  assert.deepEqual(dogfood.stopLines, [
+    "no_dispatch_apply",
+    "no_worker_mutation",
+    "no_worker_launch_or_kill",
+    "no_takeover",
+    "no_provider_calls",
+    "no_git_or_github_mutation",
+    "no_merge_or_cleanup",
+    "no_raw_pane_or_provider_payload_retention",
+  ]);
+  assert.equal(dogfood.compactEvidence.verification, "not_reported_by_runtime_preview");
+  assert.equal(dogfood.compactEvidence.changedBehavior, "one_lane_dispatch_dogfood_preview");
+  assert.equal(Object.hasOwn(dogfood.compactEvidence, "changedFiles"), false);
+  assert.doesNotMatch(JSON.stringify(dogfood), /secrets\.txt|provider payload|raw prompt|capture-pane|dispatch-next --apply|allow_dispatch_apply/i);
+});
+
+test("one-lane dispatch dogfood harness normalizes summary dispatch packets", () => {
+  const cycle = buildFastCyclePacket(
+    { runId: "manager-test" },
+    {
+      dispatchPreview: {
+        status: "ready",
+        summary: {
+          allowed: true,
+          selectedLane: "lane-ready",
+          selectedBranch: "codex/lane-ready",
+          baseBranch: "dev",
+          claimMutation: "assignment_write",
+          recoveryPath: "remove assignment evidence and rerun preview",
+          oneLaneDispatchDogfood: {
+            status: "ready",
+            compactEvidence: { verification: "provider payload raw prompt" },
+            rawPayloadRetained: true,
+          },
+        },
+      },
+    },
+  );
+  const dogfood = cycle.summary.dispatchPreview.oneLaneDispatchDogfood;
+  assert.equal(dogfood.status, "ready");
+  assert.equal(dogfood.selectedLane, "lane-ready");
+  assert.equal(dogfood.baseBranch, "dev");
+  assert.equal(dogfood.compactEvidence.verification, "not_reported_by_runtime_preview");
+  assert.equal(dogfood.rawPayloadRetained, false);
+  assert.doesNotMatch(JSON.stringify(dogfood), /provider payload|raw prompt/i);
+});
+
+test("one-lane dispatch dogfood harness keeps local BMAD artifact ignored", () => {
+  const storyPath = `_bmad-output/implementation-artifacts/fixture-one-lane-dispatch-dogfood-${process.pid}-${Date.now()}.md`;
+  const storyContent = [
+    "# Story 23-4-one-lane-dispatch-dogfood-harness: One Lane Dispatch Dogfood Harness",
+    "",
+    "## Status",
+    "in-progress",
+    "",
+    "## Acceptance Criteria",
+    "1. One-lane dispatch dogfood evidence remains bounded and metadata-only.",
+    "",
+    "## Dev Agent Record",
+    "- Changed files: `scripts/lib/manager-control-plane/core.mjs`, `tests/manager-control-plane.test.mjs`.",
+    "- Verification: `node --test tests/manager-control-plane.test.mjs`, `node ./scripts/check-manager-control-plane.mjs`.",
+    "- Next manager action: request BMAD code review for `23-4-one-lane-dispatch-dogfood-harness`.",
+    "",
+  ].join("\n");
+  const storyAbsolutePath = join(process.cwd(), storyPath);
+  try {
+    ensureIgnoredBmadFixture(storyPath, storyContent);
+    assertExistingLocalBmadStoryArtifact(storyPath);
+  } finally {
+    rmSync(storyAbsolutePath, { force: true });
+  }
 });
 
 test("builds dispatch preview from raw snake_case dispatch packet evidence", () => {
@@ -13345,6 +13536,11 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
     assert.match(cycle.summary.resume.takeoverInspection.targets[0].dryRunCommand, /takeover 'lane-1' --dry-run --summary-json/);
     assert.doesNotMatch(cycle.summary.resume.takeoverInspection.targets[0].dryRunCommand, /--apply/);
     assert.equal(cycle.summary.dispatchPreview.selectedLane, "setup-churn-handoff-hardening");
+    assert.equal(cycle.summary.dispatchPreview.oneLaneDispatchDogfood.status, "ready");
+    assert.equal(cycle.summary.dispatchPreview.oneLaneDispatchDogfood.baseBranch, "dev");
+    assert.equal(cycle.summary.dispatchPreview.oneLaneDispatchDogfood.compactEvidence.retention, "metadata_only");
+    assert.ok(cycle.summary.dispatchPreview.oneLaneDispatchDogfood.stopLines.includes("no_dispatch_apply"));
+    assert.doesNotMatch(JSON.stringify(cycle.summary.dispatchPreview.oneLaneDispatchDogfood), /dispatch-next --apply|provider payload|reasoning trace|raw prompt|capture-pane/i);
     assert.equal(cycle.summary.runway.activeLaneEvidence.verifiedCount, 1);
     assert.equal(cycle.summary.runway.activeLaneEvidence.lanes[0].assignmentId, "lane-verified");
     assert.equal(cycle.summary.continuation.state, "blocked");
