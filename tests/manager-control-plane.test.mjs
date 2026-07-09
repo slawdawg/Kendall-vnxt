@@ -23196,11 +23196,11 @@ test("cleanup plan includes stale owner cleanup and dirty preservation summary",
   assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no assignment takeover"));
   assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no merge mutation"));
   assert.ok(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.stopLines.includes("no cleanup apply outside existing cleanup gates"));
-  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.localBmadStoryArtifact.path, "_bmad-output/implementation-artifacts/20-6-cleanup-and-handoff-closeout.md");
+  assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.localBmadStoryArtifact.path, "_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md");
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.localBmadStoryArtifact.expectedIgnored, true);
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.metadataOnly, true);
   assert.equal(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence.rawPayloadRetained, false);
-  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/20-6-cleanup-and-handoff-closeout.md");
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-6-cleanup-and-handoff-closeout.md");
   assert.doesNotMatch(JSON.stringify(cleanup.summary.staleOwnerCleanup.cleanupHandoffCloseoutEvidence), /capture-pane|provider payload retained|reasoning trace retained|raw prompt retained/i);
   assert.equal(cleanup.nextActions[1].code, "dirty-workspace-preservation-complete");
   assert.match(cleanup.nextActions[1].nextAction, /Review preservation packet/);
