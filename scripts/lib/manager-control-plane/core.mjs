@@ -21485,6 +21485,7 @@ function buildStoryCreationApplyGateEvidence(action = {}, gate = {}) {
     applyMutationMode: "local_bmad_story_file_only",
     storyCreationGate: "manager-refill-plan-bmad-create-story-existing-gates",
     deliveryCleanupAllowed: false,
+    recoveryPath: "Rerun manager-refill-plan without --apply to preview current source-owned refill posture; remove local _bmad-output story artifacts and restore sprint-status if apply produced the wrong scoped story.",
     safetyStopLines: safetyStopLines.slice(0, 16),
     localBmadArtifactsIgnored: true,
     metadataOnly: true,
