@@ -17805,6 +17805,13 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
       nextAction: inspection.nextAction || "Refresh manager resume state and rerun stale-owner inspection.",
     })),
   ];
+  const nextActions = blockers.length > 0
+    ? blockers.map((blocker) => ({
+        code: blocker.code,
+        summary: blocker.message,
+        nextAction: blocker.nextAction,
+      }))
+    : staleOwnerInspectionNextActions({ cleanupCandidates, canonicalEvidenceNeeded, dirtyWorkspaces, approvalCandidates, inspections });
   return packet({
     ok: blockers.length === 0,
     status: blockers.length > 0 ? "blocked" : inspections.length > 0 ? "attention" : "ready",
@@ -17819,6 +17826,8 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
       inspections,
       mutation: "none; dry-run takeover evidence only",
       retention: "metadata_only_stale_owner_inspection",
+      stopLines: staleOwnerInspectionStopLines(),
+      compactEvidence: staleOwnerInspectionCompactEvidence(runOptions, context, nextActions),
       sandboxBoundary: Boolean(sandboxBoundary),
       sandboxBoundaryPacket: sandboxBoundary || null,
     },
@@ -17828,14 +17837,76 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
       ...(canonicalEvidenceNeeded.length > 0 ? [{ code: "stale-owner-canonical-closeout-evidence-needed", message: `${canonicalEvidenceNeeded.length} stale owner target(s) need canonical closeout evidence before stale-record cleanup.` }] : []),
       ...(dirtyWorkspaces.length > 0 ? [{ code: "dirty-stale-owner-workspaces", message: `${dirtyWorkspaces.length} stale owner workspace(s) have dirty worktree evidence that must be preserved before apply or cleanup.` }] : []),
     ],
-    nextActions: blockers.length > 0
-      ? blockers.map((blocker) => ({
-          code: blocker.code,
-          summary: blocker.message,
-          nextAction: blocker.nextAction,
-        }))
-      : staleOwnerInspectionNextActions({ cleanupCandidates, dirtyWorkspaces, approvalCandidates, inspections }),
+    nextActions,
   });
+}
+
+function staleOwnerInspectionStopLines() {
+  return [
+    "do_not_mutate_workers",
+    "do_not_apply_dispatch",
+    "do_not_call_providers",
+    "do_not_mutate_github_delivery",
+    "do_not_apply_takeover_without_explicit_operator_approval",
+    "do_not_merge_or_cleanup",
+  ];
+}
+
+function staleOwnerInspectionCompactEvidence(options = {}, context = {}, nextActions = []) {
+  const optionEvidence = options.compactEvidence || {};
+  const contextEvidence = context.compactEvidence || {};
+  const evidence = {
+    changedFiles: compactStaleOwnerEvidenceList([optionEvidence.changedFiles, contextEvidence.changedFiles], { maxLength: 180, limit: 12 }),
+    verification: compactStaleOwnerEvidenceList([optionEvidence.verification, contextEvidence.verification], { maxLength: 220, limit: 8 }),
+    nextManagerActions: nextActions
+      .map((action) => compactStaleOwnerNextAction(action))
+      .filter(Boolean)
+      .slice(0, 8),
+    retention: "metadata_only",
+  };
+  const storyArtifact = compactStaleOwnerStoryArtifact([contextEvidence.storyArtifact, optionEvidence.storyArtifact]);
+  if (storyArtifact && !retentionBannedCompactEvidence(storyArtifact)) evidence.storyArtifact = storyArtifact;
+  if (evidence.nextManagerActions[0]) evidence.nextManagerAction = evidence.nextManagerActions[0].nextAction;
+  return evidence;
+}
+
+function compactStaleOwnerStoryArtifact(values = []) {
+  for (const value of values) {
+    if (!value || retentionBannedCompactEvidence(value)) continue;
+    const sanitized = sanitizeLedgerField(value, "", 220);
+    if (sanitized && !retentionBannedCompactEvidence(sanitized)) return sanitized;
+  }
+  return "";
+}
+
+function compactStaleOwnerNextAction(action = {}) {
+  const rawValues = [action.code, action.summary, action.nextAction];
+  if (rawValues.some((value) => retentionBannedCompactEvidence(value))) return null;
+  const next = {
+    code: sanitizeLedgerField(action.code || "", "", 100),
+    summary: sanitizeLedgerField(action.summary || "", "", 220),
+    nextAction: sanitizeLedgerField(action.nextAction || "", "", 220),
+  };
+  if ([next.code, next.summary, next.nextAction].some((value) => retentionBannedCompactEvidence(value))) return null;
+  return next.code && next.nextAction ? next : null;
+}
+
+function compactStaleOwnerEvidenceList(value, { maxLength, limit }) {
+  const seen = new Set();
+  return sourceRefList(value)
+    .filter((item) => !retentionBannedCompactEvidence(item))
+    .map((item) => sanitizeLedgerField(item, "", maxLength))
+    .filter((item) => item && !retentionBannedCompactEvidence(item))
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function retentionBannedCompactEvidence(value = "") {
+  return /\b(provider payload|reasoning trace|raw prompt|raw completion|capture-pane|tmux scrollback|scrollback history|session history|secret|credential|token)\b/i.test(String(value || ""));
 }
 
 function staleOwnerTargetEvidenceBlockers(resume = {}, targets = []) {
@@ -18014,28 +18085,37 @@ function staleOwnerTargetNextAction(classification, id) {
   return `Keep ${id} blocked until missing approval or evidence is resolved.`;
 }
 
-function staleOwnerInspectionNextActions({ cleanupCandidates = [], dirtyWorkspaces = [], approvalCandidates = [], inspections = [] } = {}) {
+function staleOwnerInspectionNextActions({ cleanupCandidates = [], canonicalEvidenceNeeded = [], dirtyWorkspaces = [], approvalCandidates = [], inspections = [] } = {}) {
+  const actions = [];
+  if (canonicalEvidenceNeeded.length > 0) {
+    actions.push({
+      code: "stale-owner-canonical-closeout-evidence-needed",
+      summary: `${canonicalEvidenceNeeded.length} stale owner target(s) need canonical closeout evidence before cleanup or takeover decisions.`,
+      nextAction: "Resolve canonical closeout evidence for the exact stale assignment ids before cleanup or takeover apply.",
+    });
+  }
   if (cleanupCandidates.length > 0) {
-    return [{
+    actions.push({
       code: "stale-owner-cleanup-inspection",
       summary: `${cleanupCandidates.length} stale owner target(s) appear to be cleanup candidates, not takeover candidates.`,
       nextAction: "node ./scripts/manager-cleanup-plan.mjs --summary-json",
-    }];
+    });
   }
   if (dirtyWorkspaces.length > 0) {
-    return [{
+    actions.push({
       code: "stale-owner-dirty-workspace-inspection",
       summary: `${dirtyWorkspaces.length} stale owner workspace(s) need dirty-worktree preservation before apply.`,
       nextAction: "Preserve bounded dirty-worktree evidence, then rerun node ./scripts/manager-stale-owner-inspection.mjs --summary-json.",
-    }];
+    });
   }
   if (approvalCandidates.length > 0) {
-    return [{
+    actions.push({
       code: "stale-owner-takeover-approval-needed",
       summary: `${approvalCandidates.length} stale owner target(s) passed dry-run takeover gates but still need explicit operator approval.`,
       nextAction: "Ask operator for explicit takeover apply approval for the exact target ids.",
-    }];
+    });
   }
+  if (actions.length > 0) return actions;
   return [{
     code: inspections.length > 0 ? "stale-owner-inspection-complete" : "stale-owner-inspection-not-needed",
     summary: inspections.length > 0 ? "Stale owner inspection found no cleanup, dirty workspace, or apply-ready target." : "No stale owner target requires inspection.",
