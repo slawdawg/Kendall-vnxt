@@ -14,6 +14,6 @@ options.compactEvidence = {
     "node --test tests/manager-control-plane.test.mjs",
     "node ./scripts/check-manager-control-plane.mjs",
   ],
-  storyArtifact: "_bmad-output/implementation-artifacts/23-3-stale-owner-takeover-inspection-packet.md",
+  storyArtifact: "_bmad-output/implementation-artifacts/24-3-stale-owner-takeover-inspection-packet.md",
 };
 printPacket(buildStaleOwnerInspection(options), options);

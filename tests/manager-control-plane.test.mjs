@@ -28035,7 +28035,7 @@ test("stale owner inspection aggregates dry-run takeover evidence into cleanup a
 test("stale owner inspection packet records stop lines and compact story evidence", () => {
   const storyPath = `_bmad-output/implementation-artifacts/fixture-stale-owner-inspection-packet-${process.pid}-${Date.now()}.md`;
   const storyContent = [
-    "# Story 23-3-stale-owner-takeover-inspection-packet: Stale Owner Takeover Inspection Packet",
+    "# Story 24-3-stale-owner-takeover-inspection-packet: Stale Owner Takeover Inspection Packet",
     "",
     "## Status",
     "in-progress",
@@ -28046,7 +28046,7 @@ test("stale owner inspection packet records stop lines and compact story evidenc
     "## Dev Agent Record",
     "- Changed files: `scripts/lib/manager-control-plane/core.mjs`, `tests/manager-control-plane.test.mjs`.",
     "- Verification: `node --test tests/manager-control-plane.test.mjs`, `node ./scripts/check-manager-control-plane.mjs`.",
-    "- Next manager action: rerun BMAD code review for `23-3-stale-owner-takeover-inspection-packet`.",
+    "- Next manager action: rerun BMAD code review for `24-3-stale-owner-takeover-inspection-packet`.",
     "",
   ].join("\n");
   const storyAbsolutePath = join(process.cwd(), storyPath);
@@ -28211,14 +28211,14 @@ test("stale owner inspection CLI supplies default compact evidence metadata", ()
     if (!result.stdout.trim()) {
       assert.ok(result.error || /EPERM|permission|sandbox/i.test(result.stderr || ""), "empty CLI stdout must be a sandbox/process boundary");
       const script = readFileSync(join(process.cwd(), "scripts/manager-stale-owner-inspection.mjs"), "utf8");
-      assert.match(script, /storyArtifact: "_bmad-output\/implementation-artifacts\/23-3-stale-owner-takeover-inspection-packet\.md"/);
+      assert.match(script, /storyArtifact: "_bmad-output\/implementation-artifacts\/24-3-stale-owner-takeover-inspection-packet\.md"/);
       assert.match(script, /tests\/manager-control-plane\.test\.mjs/);
       return;
     }
     assert.equal(result.status, 0);
     assert.equal(result.signal, null);
     const packet = JSON.parse(result.stdout);
-    assert.equal(packet.summary.compactEvidence.storyArtifact, "_bmad-output/implementation-artifacts/23-3-stale-owner-takeover-inspection-packet.md");
+    assert.equal(packet.summary.compactEvidence.storyArtifact, "_bmad-output/implementation-artifacts/24-3-stale-owner-takeover-inspection-packet.md");
     assert.deepEqual(packet.summary.compactEvidence.changedFiles, [
       "scripts/manager-stale-owner-inspection.mjs",
       "scripts/lib/manager-control-plane/core.mjs",
