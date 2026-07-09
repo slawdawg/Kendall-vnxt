@@ -74,6 +74,11 @@
     Codex sandbox before invoking Turbopack. Treat that skip as boundary
     evidence, not a failed build. Run the exact same command outside the
     sandbox only when full dashboard build coverage is required.
+  - `pnpm run check:manager-control-plane` from a managed worktree may fail
+    before invoking the check script with `[ERR_SQLITE_ERROR] unable to open
+    database file` while pnpm prepares managed store state. Treat that as the
+    known managed-worktree pnpm filesystem boundary; request approval to rerun
+    the exact same read-only verification command outside the sandbox.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying

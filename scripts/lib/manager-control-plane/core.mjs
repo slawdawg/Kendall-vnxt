@@ -21051,6 +21051,15 @@ function buildReviewDeliveryQueueEvidence(action = {}, cycle = {}) {
     : laneAdvanceAssignments.length > 0
       ? laneAdvanceAssignments
       : progressAssignments;
+  const localBmadStoryArtifacts = queuedAssignments
+    .map((assignmentId) => normalizeBmadStoryAssignmentId(assignmentId))
+    .map((storyKey) => storyKey.toLowerCase())
+    .filter((storyKey) => /^\d+-\d+-[a-z0-9-]+$/.test(storyKey))
+    .map((storyKey) => `_bmad-output/implementation-artifacts/${storyKey}.md`)
+    .map((path) => sanitizeBmadStoryArtifactPath(path))
+    .filter(Boolean)
+    .filter((path, index, paths) => paths.indexOf(path) === index)
+    .slice(0, queueLimit);
   const nextManagerAction = sanitizeLedgerField(
     action.applyCommand || action.nextAction || "Review the manager review/delivery queue gate before advancing lane metadata.",
     "Review the manager review/delivery queue gate before advancing lane metadata.",
@@ -21058,6 +21067,7 @@ function buildReviewDeliveryQueueEvidence(action = {}, cycle = {}) {
   );
   return {
     implementationChangedFiles: [
+      "AGENTS.md",
       "scripts/lib/manager-control-plane/core.mjs",
       "tests/manager-control-plane.test.mjs",
     ],
@@ -21068,6 +21078,7 @@ function buildReviewDeliveryQueueEvidence(action = {}, cycle = {}) {
     verificationStatus: "recommended_not_executed_by_loop",
     nextManagerAction,
     queuedAssignments,
+    localBmadStoryArtifacts,
     localBmadArtifactsIgnored: true,
     metadataOnly: true,
     rawPayloadRetained: false,

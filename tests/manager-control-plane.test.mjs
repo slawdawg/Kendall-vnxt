@@ -210,6 +210,14 @@ for (const [relativePath, content] of [
     "# Story 7.2: Report Daily Use Checkpoints\n\n## Status\nready-for-dev\n",
   ],
   [
+    "_bmad-output/implementation-artifacts/20-3-manager-review-delivery-queue.md",
+    "# Story 20.3: Manager Review Delivery Queue\n\n## Status\nreview\n",
+  ],
+  [
+    "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md",
+    "# Story 97.2: Manager Continuous Review Gate\n\n## Status\nreview\n",
+  ],
+  [
     "_bmad-output/implementation-artifacts/2-2-just-in-time-bmad-work-creation.md",
     "# Story 2.2: Just In Time BMAD Work Creation\n\n## Status\nready-for-dev\n",
   ],
@@ -18357,6 +18365,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
 
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.code, "continuous-lane-advance-apply");
   assert.deepEqual(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.implementationChangedFiles, [
+    "AGENTS.md",
     "scripts/lib/manager-control-plane/core.mjs",
     "tests/manager-control-plane.test.mjs",
   ]);
@@ -18367,12 +18376,56 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.verificationStatus, "recommended_not_executed_by_loop");
   assert.match(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.nextManagerAction, /manager-lane-advance\.mjs --summary-json --limit 1 --apply/);
   assert.deepEqual(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, ["bmad-97-2-manager-continuous-review-gate"]);
+  assert.deepEqual(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.localBmadStoryArtifacts, [
+    "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md",
+  ]);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.localBmadArtifactsIgnored, true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.metadataOnly, true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.rawPayloadRetained, false);
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md");
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-3-manager-review-delivery-queue.md");
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "reviewDelegation"), true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("reviewDelegation"), true);
+
+  const canonicalStoryArtifactEvidencePlan = continuousRunPlan(
+    {},
+    {
+      cyclePacket: {
+        ok: true,
+        status: "attention",
+        summary: {
+          run: { runId: "manager-test" },
+          usage: { state: "normal", remainingPercent: 62, sampledAt: "now" },
+          resources: { state: "normal", loadRatio: 0.2, usedMemoryRatio: 0.45, sampledAt: "now" },
+          workers: { workerCounts: { active: 2, warm: 0, paused: 0 } },
+        },
+        warnings: [],
+        nextActions: [
+          {
+            code: "manager-lane-advance-ready",
+            summary: "Advance review-ready lane metadata.",
+            nextAction: "node ./scripts/manager-lane-advance.mjs --summary-json --limit 3",
+            targetComponents: [
+              "assignment:BMAD-20-3-MANAGER-REVIEW-DELIVERY-QUEUE",
+              "assignment:bmad-20-3-manager-review-delivery-queue",
+              "assignment:bmad-97-2-manager-continuous-review-gate",
+            ],
+          },
+        ],
+      },
+    },
+  );
+
+  assert.deepEqual(canonicalStoryArtifactEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, [
+    "BMAD-20-3-MANAGER-REVIEW-DELIVERY-QUEUE",
+    "bmad-20-3-manager-review-delivery-queue",
+    "bmad-97-2-manager-continuous-review-gate",
+  ]);
+  assert.deepEqual(canonicalStoryArtifactEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.localBmadStoryArtifacts, [
+    "_bmad-output/implementation-artifacts/20-3-manager-review-delivery-queue.md",
+    "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md",
+  ]);
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/20-3-manager-review-delivery-queue.md");
 
   const targetedLaneAdvanceEvidencePlan = continuousRunPlan(
     {},
@@ -18413,6 +18466,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.deepEqual(targetedLaneAdvanceEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, ["explicit-a"]);
+  assert.deepEqual(targetedLaneAdvanceEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.localBmadStoryArtifacts, []);
 
   const laneReadyFallbackEvidencePlan = continuousRunPlan(
     {},
@@ -18452,6 +18506,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   );
 
   assert.deepEqual(laneReadyFallbackEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.queuedAssignments, ["lane-ready-a"]);
+  assert.deepEqual(laneReadyFallbackEvidencePlan.summary.selectedAction.reviewDeliveryQueueEvidence.localBmadStoryArtifacts, []);
 
   const fullCapacityDispatchPlan = continuousRunPlan(
     {},
