@@ -215,6 +215,10 @@ for (const [relativePath, content] of [
     "# Story 20.3: Manager Review Delivery Queue\n\n## Status\nreview\n",
   ],
   [
+    "_bmad-output/implementation-artifacts/21-3-manager-review-delivery-queue.md",
+    "# Story 21.3: Manager Review Delivery Queue\n\n## Status\nreview\n",
+  ],
+  [
     "_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md",
     "# Story 97.2: Manager Continuous Review Gate\n\n## Status\nreview\n",
   ],
@@ -18592,6 +18596,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.selectedAction.reviewDeliveryQueueEvidence.rawPayloadRetained, false);
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/97-2-manager-continuous-review-gate.md");
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-3-manager-review-delivery-queue.md");
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/21-3-manager-review-delivery-queue.md");
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.capabilityHolds.heldActions.some((action) => action.managerCapability === "reviewDelegation"), true);
   assert.equal(parkedReviewDelegationStillAdvancesPlan.summary.managerCapabilityPosture.parkedCapabilities.includes("reviewDelegation"), true);
 
