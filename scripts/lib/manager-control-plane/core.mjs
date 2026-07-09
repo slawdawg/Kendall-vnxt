@@ -1180,9 +1180,17 @@ export function buildWorkerStatus(options = {}, context = {}) {
   const tmux = context.tmuxSummary ? { summary: context.tmuxSummary, warnings: [], blockers: [] } : buildTmuxOrientationStatus({ ...options, runId }, context.tmuxContext || {});
   const tmuxSummary = tmux.summary || {};
   const tmuxBlockers = buildWorkerTmuxBlockers(tmuxSummary);
+  const targetSummary = {
+    ...target.summary,
+    workerRampReadinessGate: buildWorkerRampReadinessGate(target.summary, {
+      blockers: [...target.blockers, ...tmuxBlockers],
+      reasons: target.reasons,
+      warnings: target.warnings,
+    }),
+  };
   const lifecycle = buildWorkerLifecyclePlan({ ...options, runId }, {
     workers,
-    targets: target.summary,
+    targets: targetSummary,
     usageState: usage,
     resourceState: resource,
     resourceSummary: resourcePacket.summary || {},
@@ -1205,7 +1213,7 @@ export function buildWorkerStatus(options = {}, context = {}) {
   const warmPool = buildWarmWorkerPoolSummary({
     runId,
     workers,
-    targets: target.summary,
+    targets: targetSummary,
     lifecyclePlan: lifecycle.summary,
     usageState: usage,
     resourceState: resource,
@@ -1224,7 +1232,7 @@ export function buildWorkerStatus(options = {}, context = {}) {
       unknownSessions: Number.isInteger(tmuxSummary.unmanagedPanes) ? tmuxSummary.unmanagedPanes : null,
       unknownSessionStatus: Number.isInteger(tmuxSummary.unmanagedPanes) ? "metadata-only" : tmux.status === "unavailable" ? "unavailable" : "not-inspected",
       activeAssignments: target.activeAssignments,
-      targets: target.summary,
+      targets: targetSummary,
       targetReasons: target.reasons,
       lifecyclePlan: lifecycle.summary,
       warmPool,
@@ -2096,34 +2104,121 @@ function buildWorkerTargetStatus(options = {}, context = {}) {
   }
   const startTarget = startExpansionBlocked ? 0 : Math.max(0, Math.min(maxTarget, desiredTarget, allowedTarget));
   const targetDecision = classifyWorkerTargetDecision({ dispatcherState, allowedTarget, desiredTarget, activeAssignments });
+  const baseSummary = {
+    maxTarget,
+    configuredDesired,
+    dispatcherState,
+    dispatchableCount: dispatchable ?? null,
+    activeLeaseCount: activeAssignments,
+    refillableWorkCount,
+    sourceEligibleCount,
+    sourceBlockedCount,
+    sourceExhausted,
+    safeWorkSupply,
+    activeAssignments,
+    desiredTarget,
+    allowedTarget,
+    startTarget,
+    targetDecision,
+    usageState: usage,
+    weeklyUsage,
+    resourceState: resource,
+    liveManagerWorkerCount,
+    fakeWorkerHarness,
+    rawPayloadRetained: false,
+  };
   return {
     summary: {
-      maxTarget,
-      configuredDesired,
-      dispatcherState,
-      dispatchableCount: dispatchable ?? null,
-      activeLeaseCount: activeAssignments,
-      refillableWorkCount,
-      sourceEligibleCount,
-      sourceBlockedCount,
-      sourceExhausted,
-      safeWorkSupply,
-      activeAssignments,
-      desiredTarget,
-      allowedTarget,
-      startTarget,
-      targetDecision,
-      usageState: usage,
-      weeklyUsage,
-      resourceState: resource,
-      fakeWorkerHarness,
-      rawPayloadRetained: false,
+      ...baseSummary,
+      workerRampReadinessGate: buildWorkerRampReadinessGate(baseSummary, { blockers, reasons, warnings }),
     },
     activeAssignments,
     reasons,
     blockers,
     warnings,
   };
+}
+
+function buildWorkerRampReadinessGate(targets = {}, context = {}) {
+  const blockers = Array.isArray(context.blockers) ? context.blockers : [];
+  const reasons = Array.isArray(context.reasons) ? context.reasons : [];
+  const warnings = Array.isArray(context.warnings) ? context.warnings : [];
+  const startTarget = nonNegativeInteger(targets.startTarget) ?? 0;
+  const allowedTarget = nonNegativeInteger(targets.allowedTarget) ?? 0;
+  const activeAssignments = nonNegativeInteger(targets.activeAssignments) ?? 0;
+  const liveManagerWorkerCount = nonNegativeInteger(targets.liveManagerWorkerCount) ?? activeAssignments;
+  const blockerClasses = uniqueRampClassCodes(blockers, "worker-ramp-blocked");
+  const reasonClasses = uniqueRampClassCodes(reasons, "worker-ramp-reason");
+  const warningClasses = uniqueRampClassCodes(warnings, "worker-ramp-warning");
+  const readinessBlockingClasses = [
+    ...reasonClasses.filter((code) => [
+      "usage-drain",
+      "weekly-usage-pressure",
+      "resource-pressured",
+      "fake-worker-harness-gate",
+      "source-exhausted",
+      "failure-pressure",
+    ].includes(code)),
+    ...warningClasses.filter((code) => [
+      "usage-target-unknown",
+      "resource-target-unknown",
+    ].includes(code)),
+  ];
+  const targetDecision = sanitizeLedgerField(targets.targetDecision || "", "", 120) || null;
+  const status = blockers.length > 0 || readinessBlockingClasses.length > 0 || startTarget === 0 ? "blocked" : "ready";
+  const nextAllowedWorkerCount = status === "ready" ? startTarget : 0;
+  const rampStage =
+    status !== "ready"
+      ? "hold"
+      : startTarget >= 6
+        ? "six_worker_ready"
+        : startTarget >= 2
+          ? "two_worker_ready"
+          : "one_worker_ready";
+  const nextManagerAction = status === "ready"
+    ? `Readiness evidence supports requesting up to ${startTarget} manager-owned worker(s) through the separate worker warm gate; stop before mutation authority.`
+    : "Resolve worker ramp blockers and rerun manager cycle before warming or starting workers.";
+  return {
+    schemaVersion: "manager-control-plane.worker-ramp-readiness-gate.v0",
+    status,
+    rampStage,
+    currentWorkerCount: liveManagerWorkerCount,
+    nextAllowedWorkerCount,
+    startTarget,
+    allowedTarget,
+    targetDecision,
+    blockerClasses,
+    reasonClasses,
+    warningClasses,
+    readinessBlockingClasses: [...new Set(readinessBlockingClasses)].slice(0, 12),
+    compactEvidence: {
+      changedBehavior: "worker_ramp_readiness_gate",
+      verification: "not_reported_by_runtime_preview",
+      nextManagerAction,
+      retention: "metadata_only",
+    },
+    stopLines: [
+      "readiness_only",
+      "no_worker_mutation",
+      "no_dispatch_apply",
+      "no_provider_calls",
+      "no_git_or_github_mutation",
+      "no_takeover",
+      "no_merge_or_cleanup",
+      "no_raw_pane_or_provider_payload_retention",
+    ],
+    rawPayloadRetained: false,
+  };
+}
+
+function uniqueRampClassCodes(items = [], fallback = "worker-ramp-signal") {
+  return [
+    ...new Set(
+      items
+        .map((item) => sanitizeLedgerField(item?.code || fallback, fallback, 120))
+        .filter(Boolean),
+    ),
+  ].slice(0, 12);
 }
 
 function classifyWorkerDispatcherState({
