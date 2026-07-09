@@ -1253,25 +1253,69 @@ test("course-correction backlog rebase de-dupes duplicate candidate and proposed
       storyStatuses[item.id.replace(/^6-/, `${epic}-`)] = "done";
     }
   }
+  const artifactDirRelative = `_bmad-output/test-fixtures/course-correction-artifacts-${process.pid}-${Date.now()}`;
+  const storyPath = `${artifactDirRelative}/23-2-correct-course-backlog-materialization.md`;
+  const artifactDir = join(process.cwd(), artifactDirRelative);
+  const storyContent = [
+    "# Story 23.2: Correct-Course Backlog Materialization",
+    "",
+    "## Status",
+    "ready-for-dev",
+    "",
+    "## Acceptance Criteria",
+    "- Fixture-backed story artifact exists for course-correction backlog assertions.",
+    "",
+    "## Dev Agent Record",
+    "- Changed files: `tests/manager-control-plane.test.mjs`.",
+    "- Verification: passed: `node --test tests/manager-control-plane.test.mjs` and `node ./scripts/check-manager-control-plane.mjs`.",
+    "- Next manager action: delegate compact code review for `bmad-23-2-correct-course-backlog-materialization`.",
+    "",
+  ].join("\n");
+  const storyAbsolutePath = join(artifactDir, "23-2-correct-course-backlog-materialization.md");
 
-  const items = courseCorrectionBacklogItemsForStatus(
-    {
-      candidateBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
-      proposedBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
-    },
-    storyStatuses,
-  );
+  try {
+    ensureIgnoredBmadFixture(storyPath, storyContent);
+    const ignored = spawnSync("git", ["check-ignore", "-q", "--", storyPath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.equal(ignored.status, 0, `${storyPath} must remain ignored local BMAD output`);
+    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", storyPath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.equal(tracked.status, 1, `${storyPath} must not be tracked source`);
 
-  assert.equal(items.length, 6);
-  assert.deepEqual(items.map((item) => item.id), [
-    "23-1-planning-only-bmad-refill-continuation",
-    "23-2-correct-course-backlog-materialization",
-    "23-3-stale-owner-takeover-inspection-packet",
-    "23-4-one-lane-dispatch-dogfood-harness",
-    "23-5-worker-ramp-readiness-gate",
-    "23-6-overnight-run-recovery-and-housekeeping",
-  ]);
-  assert.equal(new Set(items.map((item) => item.id)).size, items.length);
+    const items = courseCorrectionBacklogItemsForStatus(
+      {
+        candidateBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
+        proposedBacklogItems: COURSE_CORRECTION_TEMPLATE_ITEMS,
+      },
+      storyStatuses,
+      { artifactDir },
+    );
+
+    assert.equal(items.length, 6);
+    assert.deepEqual(items.map((item) => item.id), [
+      "24-1-planning-only-bmad-refill-continuation",
+      "24-2-correct-course-backlog-materialization",
+      "24-3-stale-owner-takeover-inspection-packet",
+      "24-4-one-lane-dispatch-dogfood-harness",
+      "24-5-worker-ramp-readiness-gate",
+      "24-6-overnight-run-recovery-and-housekeeping",
+    ]);
+    assert.equal(new Set(items.map((item) => item.id)).size, items.length);
+    assert.equal(items.some((item) => item.id === "23-2-correct-course-backlog-materialization"), false);
+    const persistedStoryContent = readFileSync(storyAbsolutePath, "utf8");
+    assert.match(persistedStoryContent, /^# Story 23\.2: Correct-Course Backlog Materialization$/m);
+    assert.match(persistedStoryContent, /^## Acceptance Criteria$/m);
+    assert.match(persistedStoryContent, /^## Dev Agent Record$/m);
+    assert.match(persistedStoryContent, /Changed files: `tests\/manager-control-plane\.test\.mjs`/);
+    assert.match(persistedStoryContent, /Verification: passed: `node --test tests\/manager-control-plane\.test\.mjs`/);
+    assert.match(persistedStoryContent, /Next manager action: delegate compact code review/);
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
 });
 
 test("course-correction backlog rebase blocks while legacy generated backlog is active", () => {
