@@ -16989,6 +16989,7 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.equal(trailingTokenRetireCommandPlan.summary.selectedAction, null);
   assert.equal(trailingTokenRetireCommandPlan.summary.selectedActionCount, 0);
   assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/7-4-worker-retirement-and-reassignment.md");
+  assertLocalBmadStoryArtifact("_bmad-output/implementation-artifacts/20-4-worker-retirement-and-reassignment.md");
 
   const laneAdvancePlan = continuousRunPlan(
     {},
