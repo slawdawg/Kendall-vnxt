@@ -17700,6 +17700,8 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
               dryRunCommand: "node ./scripts/manager-refill-plan.mjs --summary-json",
               applyCommand: "node ./scripts/manager-refill-plan.mjs --summary-json --apply --source-ref 'prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md'",
               mutationMode: "dry_run_required",
+              applyMutationMode: "unsafe_git_delivery_and_cleanup",
+              stopLines: Array.from({ length: 24 }, (_item, index) => `caller_stop_line_${index + 1}`),
             },
           },
         ],
@@ -17739,6 +17741,13 @@ test("continuous run plan selects only manager-owned worker auto actions", () =>
   assert.deepEqual(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadStoryArtifacts, [
     "_bmad-output/implementation-artifacts/1-2-approved-source-intake.md",
   ]);
+  assertLocalBmadStoryArtifact(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadStoryArtifacts[0]);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.applyMutationMode, "local_bmad_story_file_only");
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_worker_mutation"), true);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_dispatch_apply"), true);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_provider_calls"), true);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_git_or_github_mutation"), true);
+  assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.safetyStopLines.includes("no_delivery_or_cleanup_apply"), true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.localBmadArtifactsIgnored, true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.metadataOnly, true);
   assert.equal(refillPlan.summary.selectedAction.storyCreationApplyGateEvidence.rawPayloadRetained, false);
