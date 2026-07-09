@@ -1430,7 +1430,7 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
         ],
         nextManagerAction: nextStabilityObserverCommand,
         localBmadArtifactBoundary: {
-          path: "_bmad-output/implementation-artifacts/20-5-ten-cycle-stability-observer.md",
+          path: "_bmad-output/implementation-artifacts/21-5-ten-cycle-stability-observer.md",
           expectedIgnored: true,
           runtimeVerified: false,
           verificationSource: "regression_test_git_check_ignore_and_ls_files",
