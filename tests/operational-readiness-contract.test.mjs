@@ -5,12 +5,14 @@ import {
   buildLiveCapacityRampEvidence,
   buildOneWorkerLiveCanaryEvidence,
   buildOperationalReadinessContract,
+  buildOperationalHardeningRunbookEvidence,
   buildRuntimeReadinessPlan,
   buildResilienceRecoveryEvidence,
   operationalReadinessPredecessorGate,
   validateLiveCapacityRampEvidence,
   validateOneWorkerLiveCanaryEvidence,
   validateOperationalReadinessContract,
+  validateOperationalHardeningRunbookEvidence,
   validateResilienceRecoveryEvidence,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
@@ -379,4 +381,76 @@ test("continuous runtime readiness projects recovery evidence with rollout block
   assert.equal(runtime.summary.resilienceRecovery.outcome, "hold");
   assert.equal(runtime.summary.resilienceRecovery.rolloutAllowed, false);
   assert.equal(runtime.summary.resilienceRecovery.rawPayloadRetained, false);
+});
+
+function passingRecoveryEvidence() {
+  return buildResilienceRecoveryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    rampEvidence: passingRampEvidence(),
+    drills: ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"].map(passingRecoveryDrill),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:recovery-validation"],
+    recovery: passingContext().recovery,
+  });
+}
+
+function passingHardeningDomain(domain, index) {
+  return {
+    domain,
+    owner: "manager-20260710",
+    trigger: `trigger-${index + 1}`,
+    evidenceGate: `gate-${index + 1}`,
+    recoveryAction: "hold-inspect-and-remediate",
+    riskTier: "low",
+    status: "pass",
+    evidenceRefs: [`evidence:runbook-${index + 1}`],
+  };
+}
+
+test("operational hardening records all runbook domains and hands off without rollout", () => {
+  const domains = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"]
+    .map(passingHardeningDomain);
+  const hardening = buildOperationalHardeningRunbookEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    recoveryEvidence: passingRecoveryEvidence(),
+    domains,
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:hardening-handoff"],
+    recovery: passingContext().recovery,
+  });
+  assert.equal(hardening.outcome, "pass");
+  assert.equal(hardening.readinessHandoffReady, true);
+  assert.equal(hardening.rolloutAllowed, false);
+  assert.equal(hardening.domains.length, 10);
+  assert.deepEqual(validateOperationalHardeningRunbookEvidence(hardening), []);
+});
+
+test("operational hardening stops on an unresolved high-risk gap", () => {
+  const domains = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"]
+    .map(passingHardeningDomain);
+  domains[3] = { ...domains[3], riskTier: "high", status: "hold", unresolvedHighRiskGap: true };
+  const hardening = buildOperationalHardeningRunbookEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    recoveryEvidence: passingRecoveryEvidence(),
+    domains,
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:hardening-gap"],
+    recovery: passingContext().recovery,
+  });
+  assert.equal(hardening.outcome, "stop");
+  assert.equal(hardening.readinessHandoffReady, false);
+  assert.equal(hardening.recovery.required, true);
+  assert.ok(hardening.typedBlockers.some((blocker) => blocker.reason === "high_risk_gap"));
+  assert.deepEqual(validateOperationalHardeningRunbookEvidence(hardening), []);
+});
+
+test("continuous runtime readiness projects hardening evidence with rollout blocked", () => {
+  const runtime = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_dry_run" },
+    { cycleStatus: "ready", cycleOk: true, usage: { status: "normal" }, resources: { status: "normal" }, preflight: { status: "ready", blockerCount: 0 } },
+  );
+  assert.equal(runtime.summary.operationalHardening.outcome, "stop");
+  assert.equal(runtime.summary.operationalHardening.rolloutAllowed, false);
+  assert.equal(runtime.summary.operationalHardening.recovery.required, true);
+  assert.equal(runtime.summary.operationalHardening.rawPayloadRetained, false);
 });
