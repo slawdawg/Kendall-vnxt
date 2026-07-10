@@ -48,6 +48,7 @@ const result = spawnSync(
   process.execPath,
   [
     "--test",
+    "--experimental-test-isolation=none",
     "--test-reporter",
     "spec",
     "--test-name-pattern",

@@ -274,6 +274,7 @@ function runShardChunk(shardId, names, { chunkIndex = 1, chunkCount = 1 } = {}) 
   const started = Date.now();
   const child = spawn(process.execPath, [
     "--test",
+    "--experimental-test-isolation=none",
     "--test-reporter",
     "spec",
     "--test-name-pattern",
