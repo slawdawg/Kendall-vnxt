@@ -6,6 +6,7 @@ import {
   buildOneWorkerLiveCanaryEvidence,
   buildOperationalReadinessContract,
   buildOperationalHardeningRunbookEvidence,
+  buildProductionReadinessDecisionEvidence,
   buildRuntimeReadinessPlan,
   buildResilienceRecoveryEvidence,
   operationalReadinessPredecessorGate,
@@ -13,6 +14,7 @@ import {
   validateOneWorkerLiveCanaryEvidence,
   validateOperationalReadinessContract,
   validateOperationalHardeningRunbookEvidence,
+  validateProductionReadinessDecisionEvidence,
   validateResilienceRecoveryEvidence,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
@@ -453,4 +455,96 @@ test("continuous runtime readiness projects hardening evidence with rollout bloc
   assert.equal(runtime.summary.operationalHardening.rolloutAllowed, false);
   assert.equal(runtime.summary.operationalHardening.recovery.required, true);
   assert.equal(runtime.summary.operationalHardening.rawPayloadRetained, false);
+});
+
+test("continuous runtime readiness defaults the final production decision to a held metadata-only packet", () => {
+  const runtime = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_dry_run" },
+    { cycleStatus: "ready", cycleOk: true, usage: { status: "normal" }, resources: { status: "normal" }, preflight: { status: "ready", blockerCount: 0 } },
+  );
+  const decision = runtime.summary.productionReadinessDecision;
+  assert.equal(decision.decision, "hold");
+  assert.equal(decision.automaticDeploymentAllowed, false);
+  assert.equal(decision.providerCallsAllowed, false);
+  assert.equal(decision.secretAccessAllowed, false);
+  assert.equal(decision.mergeAllowed, false);
+  assert.equal(decision.cleanupAllowed, false);
+  assert.equal(decision.metadataOnly, true);
+  assert.equal(decision.rawPayloadRetained, false);
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
+});
+
+function passingHardeningEvidence() {
+  return buildOperationalHardeningRunbookEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    recoveryEvidence: passingRecoveryEvidence(),
+    domains: ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"]
+      .map(passingHardeningDomain),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:hardening-handoff"],
+    recovery: passingContext().recovery,
+  });
+}
+
+function passingDecisionPackets() {
+  return {
+    canaryEvidence: passingCanaryEvidence(),
+    rampEvidence: passingRampEvidence(),
+    recoveryEvidence: passingRecoveryEvidence(),
+    hardeningEvidence: passingHardeningEvidence(),
+  };
+}
+
+test("production readiness decision produces go only from fresh passing predecessors and explicit final authority", () => {
+  const decision = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...passingDecisionPackets(),
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:final-readiness-authority"] },
+    owner: "manager-20260710",
+    scope: { name: "bounded-production-readiness", boundaries: ["metadata-only-manager-scope"] },
+    fixtureEvidence: true,
+  });
+  assert.equal(decision.decision, "go");
+  assert.deepEqual(decision.typedBlockers, []);
+  assert.equal(decision.rolloutAllowed, false);
+  assert.equal(decision.automaticDeploymentAllowed, false);
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
+});
+
+test("production readiness decision holds on missing or simulated predecessor proof", () => {
+  const packets = passingDecisionPackets();
+  const missing = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    canaryEvidence: packets.canaryEvidence,
+    rampEvidence: packets.rampEvidence,
+    recoveryEvidence: packets.recoveryEvidence,
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:final-readiness-authority"] },
+  });
+  assert.equal(missing.decision, "hold");
+  assert.ok(missing.typedBlockers.some((blocker) => blocker.code === "decision_predecessor_missing"));
+
+  const simulated = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...packets,
+    canaryEvidence: { ...packets.canaryEvidence, backendTruth: "simulated", truthLabel: "simulated" },
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:final-readiness-authority"] },
+  });
+  assert.equal(simulated.decision, "hold");
+  assert.ok(simulated.typedBlockers.some((blocker) => blocker.code === "decision_simulated_evidence"));
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(simulated), []);
+});
+
+test("production readiness decision can record an explicitly bounded limited rollout without enabling mutation", () => {
+  const packets = passingDecisionPackets();
+  const limited = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...packets,
+    hardeningEvidence: { ...packets.hardeningEvidence, outcome: "hold", readinessHandoffReady: false },
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:limited-readiness-authority"] },
+    limitedRollout: { requested: true, boundaries: ["one-worker-only", "metadata-only-monitoring"] },
+  });
+  assert.equal(limited.decision, "limited_rollout");
+  assert.equal(limited.scope.limited, true);
+  assert.equal(limited.rolloutAllowed, false);
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(limited), []);
 });

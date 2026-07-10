@@ -20,12 +20,15 @@ import {
   validateResilienceRecoveryEvidence,
   buildOperationalHardeningRunbookEvidence,
   validateOperationalHardeningRunbookEvidence,
+  buildProductionReadinessDecisionEvidence,
+  validateProductionReadinessDecisionEvidence,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
   PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
+  PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION,
 } from "./operational-readiness.mjs";
 
 export {
@@ -39,6 +42,8 @@ export {
   validateResilienceRecoveryEvidence,
   buildOperationalHardeningRunbookEvidence,
   validateOperationalHardeningRunbookEvidence,
+  buildProductionReadinessDecisionEvidence,
+  validateProductionReadinessDecisionEvidence,
   operationalReadinessPredecessorGate,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
@@ -46,6 +51,7 @@ export {
   PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
   PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
+  PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION,
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -23375,6 +23381,23 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       recovery: hardeningInput.recovery || context.recovery,
     },
   );
+  const productionDecisionInput = isPlainObject(context.productionReadinessDecision)
+    ? context.productionReadinessDecision
+    : isPlainObject(context.productionReadiness)
+      ? context.productionReadiness
+      : {};
+  const productionReadinessDecision = buildProductionReadinessDecisionEvidence(
+    { now: context.now || options.now },
+    {
+      ...productionDecisionInput,
+      canaryEvidence: productionDecisionInput.canaryEvidence || context.canaryEvidence || oneWorkerLiveCanary,
+      rampEvidence: productionDecisionInput.rampEvidence || context.rampEvidence || liveCapacityRamp,
+      recoveryEvidence: productionDecisionInput.recoveryEvidence || context.recoveryEvidence || resilienceRecovery,
+      hardeningEvidence: productionDecisionInput.hardeningEvidence || context.hardeningEvidence || operationalHardening,
+      sourceRefs: productionDecisionInput.sourceRefs || context.sourceRefs,
+      owner: productionDecisionInput.owner || context.owner,
+    },
+  );
 
   return packet({
     ok: status !== "blocked",
@@ -23419,6 +23442,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       liveCapacityRamp,
       resilienceRecovery,
       operationalHardening,
+      productionReadinessDecision,
     },
     blockers: dedupedBlockers,
     warnings,

@@ -3,6 +3,7 @@ const CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0";
 const RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0";
 const RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0";
 const HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0";
+const PRODUCTION_DECISION_SCHEMA_VERSION = "pipeline-production-readiness-decision/v0";
 const GATE_STATES = new Set(["pass", "fail", "blocked", "not_applicable"]);
 const BACKEND_TRUTHS = new Set(["live", "simulated", "dry_run"]);
 const OUTCOMES = new Set(["go", "no_go"]);
@@ -10,6 +11,7 @@ const CANARY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const RAMP_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const RECOVERY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const HARDENING_OUTCOMES = new Set(["pass", "hold", "stop"]);
+const PRODUCTION_DECISIONS = new Set(["go", "hold", "limited_rollout"]);
 const DEFAULT_RAMP_WORKER_COUNTS = [1, 2, 4, 6];
 const RECOVERY_DRILL_KINDS = ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"];
 const HARDENING_DOMAINS = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"];
@@ -808,6 +810,250 @@ export function validateOperationalHardeningRunbookEvidence(evidence = {}) {
   return blockers;
 }
 
+function decisionTextList(value, fallback = [], max = 12) {
+  if (!Array.isArray(value)) return fallback;
+  return value.map((entry) => safeText(entry) ? text(entry, "", 220) : "").filter(Boolean).slice(0, max);
+}
+
+function decisionRefs(...values) {
+  const candidates = values.flatMap((value) => Array.isArray(value) ? value : []);
+  return refs(candidates.slice(0, 24));
+}
+
+function decisionPacketSources(packet = {}) {
+  return decisionRefs(packet.sourceRefs, packet.target?.sourceRefs);
+}
+
+function decisionPacketEvidence(packet = {}) {
+  return decisionRefs(packet.evidenceRefs, packet.target?.evidenceRefs);
+}
+
+function decisionPacketFresh(packet = {}, checkedAtMs) {
+  const packetCheckedAtMs = Date.parse(packet.checkedAt || "");
+  const packetExpiresAtMs = Date.parse(packet.expiresAt || "");
+  return Number.isFinite(packetCheckedAtMs) && Number.isFinite(packetExpiresAtMs)
+    && packetCheckedAtMs <= checkedAtMs
+    && packetExpiresAtMs >= checkedAtMs
+    && packetExpiresAtMs > packetCheckedAtMs
+    && packetExpiresAtMs - packetCheckedAtMs <= FRESHNESS_TTL_MS;
+}
+
+function decisionPacketValidator(id) {
+  return {
+    canary: validateOneWorkerLiveCanaryEvidence,
+    ramp: validateLiveCapacityRampEvidence,
+    recovery: validateResilienceRecoveryEvidence,
+    hardening: validateOperationalHardeningRunbookEvidence,
+  }[id];
+}
+
+function decisionPacketOutcome(id, packet = {}) {
+  if (id === "canary") return packet.outcome === "pass";
+  if (id === "ramp") return packet.outcome === "pass";
+  if (id === "recovery") return packet.outcome === "pass";
+  if (id === "hardening") return packet.outcome === "pass";
+  return false;
+}
+
+function collectDecisionThresholds(context = {}, packets = []) {
+  const output = {};
+  const add = (name, value) => {
+    const normalized = threshold(value, name);
+    if (normalized) output[normalized.name || safeId(name)] = normalized;
+  };
+  for (const [name, value] of Object.entries(context.thresholds || context.readinessProfile?.thresholds || {})) add(name, value);
+  for (const packet of packets) {
+    for (const [name, value] of Object.entries(packet?.thresholds || {})) add(name, value);
+    for (const stage of Array.isArray(packet?.stages) ? packet.stages : []) {
+      for (const [name, value] of Object.entries(stage?.rollbackThresholds || {})) add(name, value);
+    }
+  }
+  return output;
+}
+
+function decisionBlocker(code, message, nextAction) {
+  return {
+    code: safeId(code) || "decision_blocked",
+    message: safeText(message) ? text(message, "", 220) : "Production readiness decision is blocked.",
+    nextAction: safeText(nextAction) ? text(nextAction, "", 220) : "Hold and inspect the latest readiness evidence.",
+  };
+}
+
+export function buildProductionReadinessDecisionEvidence(options = {}, context = {}) {
+  const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
+  const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const canaryEvidence = context.canaryEvidence || context.oneWorkerLiveCanary || context.canary || options.canaryEvidence || {};
+  const rampEvidence = context.rampEvidence || context.liveCapacityRamp || context.capacityRamp || options.rampEvidence || {};
+  const recoveryEvidence = context.recoveryEvidence || context.resilienceRecovery || context.recoveryValidation || options.recoveryEvidence || {};
+  const hardeningEvidence = context.hardeningEvidence || context.operationalHardening || context.hardeningRunbooks || options.hardeningEvidence || {};
+  const packetEntries = [
+    { id: "canary", packet: canaryEvidence },
+    { id: "ramp", packet: rampEvidence },
+    { id: "recovery", packet: recoveryEvidence },
+    { id: "hardening", packet: hardeningEvidence },
+  ];
+  const typedBlockers = [];
+  let structurallyReady = true;
+  let simulatedEvidence = false;
+  let staleEvidence = false;
+  for (const entry of packetEntries) {
+    const packet = entry.packet;
+    if (!packet || typeof packet !== "object" || !packet.schemaVersion) {
+      structurallyReady = false;
+      typedBlockers.push(decisionBlocker("decision_predecessor_missing", `Missing ${entry.id} readiness evidence.`, `Preserve authoritative ${entry.id} evidence before making the final decision.`));
+      continue;
+    }
+    const validator = decisionPacketValidator(entry.id);
+    const validation = typeof validator === "function" ? validator(packet) : [{ code: "invalid", message: "No predecessor validator is available." }];
+    const isSimulated = packet.backendTruth === "simulated" || packet.truthLabel === "simulated" || packet.sourceTruth === "simulated";
+    if (isSimulated) {
+      simulatedEvidence = true;
+      structurallyReady = false;
+      typedBlockers.push(decisionBlocker("decision_simulated_evidence", `${entry.id} evidence is simulated-only.`, "Hold the decision until authoritative evidence is captured."));
+    }
+    if (validation.length > 0) {
+      structurallyReady = false;
+      typedBlockers.push(decisionBlocker("decision_predecessor_invalid", `${entry.id} evidence failed its contract validator.`, "Repair the predecessor evidence and regenerate the decision packet."));
+    }
+    if (!decisionPacketFresh(packet, checkedAtMs)) {
+      staleEvidence = true;
+      structurallyReady = false;
+      typedBlockers.push(decisionBlocker("decision_predecessor_stale", `${entry.id} evidence is stale or outside the decision window.`, "Refresh the predecessor packet before deciding readiness."));
+    }
+    if (!decisionPacketOutcome(entry.id, packet)) {
+      typedBlockers.push(decisionBlocker("decision_predecessor_not_passed", `${entry.id} evidence did not pass.`, `Hold ${entry.id} promotion and follow its recovery or remediation action.`));
+    }
+  }
+  const finalAuthority = context.finalAuthority || context.decisionAuthority || options.finalAuthority || {};
+  const authorityRefs = decisionRefs(finalAuthority.evidenceRefs);
+  const authority = {
+    state: finalAuthority.state === "allowed" ? "allowed" : "blocked",
+    proven: finalAuthority.proven === true,
+    evidenceRefs: authorityRefs,
+  };
+  const authorityReady = authority.state === "allowed" && authority.proven && authorityRefs.length > 0;
+  if (!authorityReady) typedBlockers.push(decisionBlocker("decision_authority_missing", "Final production readiness authority is not explicitly proven.", "Hold the decision until separate final authority evidence is recorded."));
+
+  const limitedInput = context.limitedRollout || options.limitedRollout || {};
+  const limitedRequested = limitedInput.requested === true;
+  const limitedBoundaries = decisionTextList(limitedInput.boundaries, []);
+  if (limitedRequested && limitedBoundaries.length === 0) typedBlockers.push(decisionBlocker("decision_limited_scope_missing", "Limited rollout was requested without bounded scope.", "Provide explicit limited-rollout boundaries or hold the decision."));
+
+  const allPredecessorsPass = packetEntries.every((entry) => decisionPacketOutcome(entry.id, entry.packet));
+  const noStopPredecessor = packetEntries.every((entry) => !["stop"].includes(entry.packet?.outcome));
+  const limitedEligible = structurallyReady && noStopPredecessor && limitedRequested && limitedBoundaries.length > 0 && authorityReady;
+  const decision = limitedEligible ? "limited_rollout" : structurallyReady && allPredecessorsPass && authorityReady && !limitedRequested ? "go" : "hold";
+  const predecessorOutcomes = Object.fromEntries(packetEntries.map((entry) => [entry.id, safeId(entry.packet?.outcome || "missing") || "missing"]));
+  const scopeInput = context.scope || options.scope || {};
+  const scope = {
+    name: safeText(scopeInput.name) ? text(scopeInput.name, "", 180) : "bounded-production-readiness",
+    boundaries: limitedRequested ? limitedBoundaries : decisionTextList(scopeInput.boundaries, ["metadata-only-manager-scope", "no-automatic-deployment"]),
+    limited: decision === "limited_rollout",
+  };
+  const sourceRefs = decisionRefs(
+    context.sourceRefs,
+    canaryEvidence.sourceRefs,
+    rampEvidence.sourceRefs,
+    recoveryEvidence.sourceRefs,
+    hardeningEvidence.sourceRefs,
+  );
+  const evidenceRefs = decisionRefs(
+    context.evidenceRefs,
+    canaryEvidence.evidenceRefs,
+    rampEvidence.evidenceRefs,
+    recoveryEvidence.evidenceRefs,
+    hardeningEvidence.evidenceRefs,
+    authorityRefs,
+  );
+  const safeSourceRefs = sourceRefs.length > 0 ? sourceRefs : ["source:production-readiness-decision"];
+  const safeEvidenceRefs = evidenceRefs.length > 0 ? evidenceRefs : ["evidence:production-readiness-decision"];
+  const recoveryInput = context.rollback || context.recovery || hardeningEvidence.recovery || recoveryEvidence.recovery || {};
+  const rollback = {
+    owner: safeId(recoveryInput.owner) || "manager-control-plane",
+    path: safeText(recoveryInput.path || recoveryInput.rollbackPath) ? text(recoveryInput.path || recoveryInput.rollbackPath, "", 220) : "hold-inspect-and-recheck",
+    required: decision !== "go" || recoveryInput.required === true,
+    evidenceRefs: decisionRefs(recoveryInput.evidenceRefs, safeEvidenceRefs).slice(0, 24),
+  };
+  const owner = safeId(context.owner || options.owner || finalAuthority.owner) || "manager-control-plane";
+  const thresholds = collectDecisionThresholds(context, packetEntries.map((entry) => entry.packet));
+  const monitoring = decisionTextList(context.monitoring || options.monitoring, ["monitor-readiness-freshness", "monitor-thresholds-and-recovery", "preserve-stop-lines"]);
+  const stopLines = decisionTextList(context.stopLines || options.stopLines, ["no_automatic_deployment", "no_provider_calls", "no_secret_access", "no_merge_or_cleanup_authority"]);
+  const rationale = decision === "go"
+    ? "All fresh predecessor packets passed and final authority is explicitly proven; continue metadata-only monitoring through existing gates."
+    : decision === "limited_rollout"
+      ? "Predecessor evidence supports only the explicitly bounded limited scope; preserve stop-lines and keep mutation authority disabled."
+      : "Hold production readiness until predecessor evidence, freshness, scope, and final authority blockers are resolved.";
+  return {
+    schemaVersion: PRODUCTION_DECISION_SCHEMA_VERSION,
+    decision,
+    rationale,
+    scope,
+    thresholds,
+    authority,
+    rollback,
+    owner,
+    nextManagerAction: decision === "go"
+      ? "Continue metadata-only monitoring through existing manager-control-plane gates; do not auto-deploy."
+      : decision === "limited_rollout"
+        ? "Monitor only the bounded limited scope and stop on any threshold, freshness, or ownership breach."
+        : "Hold, repair the earliest readiness blocker, and regenerate this decision packet before promotion.",
+    predecessorOutcomes,
+    monitoring,
+    stopLines,
+    typedBlockers: typedBlockers.filter((entry, index, list) => list.findIndex((candidate) => candidate.code === entry.code && candidate.message === entry.message) === index),
+    sourceRefs: safeSourceRefs,
+    evidenceRefs: safeEvidenceRefs,
+    checkedAt,
+    expiresAt: new Date(checkedAtMs + FRESHNESS_TTL_MS).toISOString(),
+    rolloutAllowed: false,
+    automaticDeploymentAllowed: false,
+    providerCallsAllowed: false,
+    secretAccessAllowed: false,
+    mergeAllowed: false,
+    cleanupAllowed: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    decisionSignals: {
+      allPredecessorsPass,
+      authorityReady,
+      simulatedEvidence,
+      staleEvidence,
+      fixtureEvidence: context.fixtureEvidence === true,
+    },
+  };
+}
+
+export function validateProductionReadinessDecisionEvidence(evidence = {}) {
+  const blockers = [];
+  if (evidence?.schemaVersion !== PRODUCTION_DECISION_SCHEMA_VERSION) blockers.push({ code: "bad_schema_version", message: "Unsupported production readiness decision schema." });
+  if (!PRODUCTION_DECISIONS.has(evidence?.decision)) blockers.push({ code: "unknown", message: "Production readiness decision is missing or malformed." });
+  for (const field of ["rolloutAllowed", "automaticDeploymentAllowed", "providerCallsAllowed", "secretAccessAllowed", "mergeAllowed", "cleanupAllowed"]) {
+    if (evidence?.[field] !== false) blockers.push({ code: "safety_violation", message: `Production decision must keep ${field} disabled.` });
+  }
+  if (evidence?.metadataOnly !== true || evidence?.rawPayloadRetained !== false) blockers.push({ code: "safety_violation", message: "Production readiness decision must be metadata-only." });
+  for (const field of ["rationale", "owner", "nextManagerAction"]) if (!safeText(evidence?.[field])) blockers.push({ code: "evidence_missing", message: `Production decision requires safe ${field} metadata.` });
+  if (!evidence?.scope || !safeText(evidence.scope.name) || !Array.isArray(evidence.scope.boundaries) || evidence.scope.boundaries.length === 0 || evidence.scope.boundaries.some((entry) => !safeText(entry))) blockers.push({ code: "evidence_missing", message: "Production decision requires bounded scope metadata." });
+  if (!evidence?.thresholds || typeof evidence.thresholds !== "object" || Array.isArray(evidence.thresholds)) blockers.push({ code: "evidence_missing", message: "Production decision requires threshold metadata." });
+  if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Production decision requires safe source refs." });
+  if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Production decision requires safe evidence refs." });
+  if (!Array.isArray(evidence?.monitoring) || evidence.monitoring.length === 0 || evidence.monitoring.some((entry) => !safeText(entry))) blockers.push({ code: "evidence_missing", message: "Production decision requires monitoring metadata." });
+  if (!Array.isArray(evidence?.stopLines) || evidence.stopLines.length === 0 || evidence.stopLines.some((entry) => !safeText(entry))) blockers.push({ code: "evidence_missing", message: "Production decision requires explicit stop-lines." });
+  const authority = evidence?.authority;
+  if (!authority || !["allowed", "blocked"].includes(authority.state) || typeof authority.proven !== "boolean" || !Array.isArray(authority.evidenceRefs) || refs(authority.evidenceRefs).length !== authority.evidenceRefs.length) blockers.push({ code: "evidence_missing", message: "Production decision requires bounded authority metadata." });
+  if (["go", "limited_rollout"].includes(evidence?.decision) && (authority?.state !== "allowed" || authority?.proven !== true || !authority?.evidenceRefs?.length)) blockers.push({ code: "authority_violation", message: "Go or limited rollout requires explicit final authority evidence." });
+  const rollback = evidence?.rollback;
+  if (!rollback || !safeId(rollback.owner) || !safeText(rollback.path) || typeof rollback.required !== "boolean" || !Array.isArray(rollback.evidenceRefs) || refs(rollback.evidenceRefs).length !== rollback.evidenceRefs.length || rollback.evidenceRefs.length === 0) blockers.push({ code: "recovery_missing", message: "Production decision requires rollback owner, path, and evidence." });
+  const predecessorOutcomes = evidence?.predecessorOutcomes;
+  if (!predecessorOutcomes || typeof predecessorOutcomes !== "object" || Array.isArray(predecessorOutcomes) || !["canary", "ramp", "recovery", "hardening"].every((id) => safeId(predecessorOutcomes[id]))) blockers.push({ code: "evidence_missing", message: "Production decision requires all predecessor outcomes." });
+  if (evidence?.decision === "go" && (evidence.scope?.limited === true || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] !== "pass") || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Go requires all predecessor outcomes to pass with no blockers." });
+  if (evidence?.decision === "limited_rollout" && (evidence.scope?.limited !== true || !Array.isArray(evidence.scope.boundaries) || evidence.scope.boundaries.length === 0 || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] === "stop"))) blockers.push({ code: "inconsistent_result", message: "Limited rollout requires bounded scope and no stopped predecessor." });
+  const checkedAtMs = Date.parse(evidence?.checkedAt || "");
+  const expiresAtMs = Date.parse(evidence?.expiresAt || "");
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Production decision timestamps must be fresh and bounded." });
+  return blockers;
+}
+
 export {
   SCHEMA_VERSION as PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   REQUIRED_GATES as PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
@@ -815,4 +1061,5 @@ export {
   RAMP_SCHEMA_VERSION as PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
   RECOVERY_SCHEMA_VERSION as PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
   HARDENING_SCHEMA_VERSION as PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
+  PRODUCTION_DECISION_SCHEMA_VERSION as PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION,
 };
