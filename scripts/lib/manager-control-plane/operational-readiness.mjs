@@ -1,12 +1,15 @@
 const SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0";
 const CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0";
 const RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0";
+const RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0";
 const GATE_STATES = new Set(["pass", "fail", "blocked", "not_applicable"]);
 const BACKEND_TRUTHS = new Set(["live", "simulated", "dry_run"]);
 const OUTCOMES = new Set(["go", "no_go"]);
 const CANARY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const RAMP_OUTCOMES = new Set(["pass", "hold", "stop"]);
+const RECOVERY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const DEFAULT_RAMP_WORKER_COUNTS = [1, 2, 4, 6];
+const RECOVERY_DRILL_KINDS = ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"];
 const FRESHNESS_TTL_MS = 5 * 60 * 1000;
 const FUTURE_SKEW_MS = 60 * 1000;
 const SAFE_REF = /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact|readiness):[A-Za-z0-9._/@:-]{1,180}$/;
@@ -77,6 +80,7 @@ function reasonFor(code, fallback = "unknown") {
     "resource_threshold_exceeded", "cost_threshold_exceeded", "timeout", "recovery_boundary_breached", "unknown",
     "canary_not_passed", "stage_plan_invalid", "capacity_missing", "stage_threshold_exceeded",
     "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
+    "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed",
   ]);
   return known.has(code) ? code : fallback;
 }
@@ -600,9 +604,124 @@ export function validateLiveCapacityRampEvidence(evidence = {}) {
   return blockers;
 }
 
+function normalizeRecoveryDrill(input = {}, index = 0) {
+  const observed = input.observed || input.observations || {};
+  const authority = input.authority || {};
+  return {
+    drillId: safeId(input.drillId || input.drill_id || `drill-${index + 1}`),
+    kind: RECOVERY_DRILL_KINDS.includes(input.kind) ? input.kind : "recovery",
+    owner: safeId(input.owner),
+    authority: { state: authority.state === "allowed" ? "allowed" : "blocked", proven: authority.proven === true, evidenceRefs: refs(authority.evidenceRefs) },
+    expectedRecoveryAction: safeText(input.expectedRecoveryAction || input.expected_recovery_action) ? text(input.expectedRecoveryAction || input.expected_recovery_action, "", 220) : "",
+    observed: {
+      stateBefore: safeId(observed.stateBefore || observed.state_before),
+      stateAfter: safeId(observed.stateAfter || observed.state_after),
+      ownershipBefore: safeId(observed.ownershipBefore || observed.ownership_before),
+      ownershipAfter: safeId(observed.ownershipAfter || observed.ownership_after),
+      leaseState: safeId(observed.leaseState || observed.lease_state),
+      idempotencyState: ["proven", "preserved", "unknown", "ambiguous"].includes(observed.idempotencyState || observed.idempotency_state) ? (observed.idempotencyState || observed.idempotency_state) : "unknown",
+      rollbackState: safeId(observed.rollbackState || observed.rollback_state),
+      evidenceRetained: observed.evidenceRetained === true || observed.evidence_retained === true,
+      ambiguous: observed.ambiguous === true,
+      silentRetry: observed.silentRetry === true || observed.silent_retry === true,
+      retryCount: nonNegativeNumber(observed.retryCount ?? observed.retry_count),
+    },
+    evidenceRefs: refs(input.evidenceRefs),
+    nextAction: safeText(input.nextAction || input.next_action) ? text(input.nextAction || input.next_action, "", 220) : "",
+  };
+}
+
+export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
+  const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
+  const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const predecessor = context.rampEvidence || context.canaryEvidence || options.rampEvidence || options.canaryEvidence || {};
+  const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
+  const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
+  const predecessorReady = (predecessor.outcome === "pass" && (predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true)) || context.fixtureEvidence === true;
+  const requestedDrills = Array.isArray(context.drills || options.drills) ? (context.drills || options.drills) : RECOVERY_DRILL_KINDS.map((kind) => ({ kind }));
+  const drills = requestedDrills.map(normalizeRecoveryDrill);
+  const blockers = [];
+  if (!predecessorReady) blockers.push({ drillId: "predecessor", reason: reasonFor("evidence_missing"), nextAction: "Preserve canary or ramp evidence before running recovery validation." });
+  let priorPassed = true;
+  const results = [];
+  for (const [index, drill] of drills.entries()) {
+    const observed = drill.observed;
+    const identityReady = Boolean(observed.stateBefore && observed.stateAfter && observed.ownershipBefore && observed.ownershipAfter && observed.leaseState);
+    const safetyReady = drill.authority.state === "allowed" && drill.authority.proven === true && drill.evidenceRefs.length > 0 && drill.expectedRecoveryAction && drill.nextAction;
+    const recoveryReady = observed.evidenceRetained === true && ["proven", "preserved"].includes(observed.idempotencyState) && observed.ambiguous !== true && observed.silentRetry !== true && priorPassed;
+    const boundaryBreached = observed.ambiguous === true || observed.silentRetry === true || observed.idempotencyState === "ambiguous";
+    const outcome = boundaryBreached ? "stop" : predecessorReady && identityReady && safetyReady && recoveryReady ? "pass" : "hold";
+    const typedBlockers = [];
+    if (!identityReady) typedBlockers.push({ code: "drill_evidence_missing", message: "Drill state, ownership, or lease identity evidence is incomplete." });
+    if (!safetyReady) typedBlockers.push({ code: "stage_authority_missing", message: "Drill authority, expected recovery action, or evidence refs are incomplete." });
+    if (!observed.evidenceRetained) typedBlockers.push({ code: "drill_evidence_missing", message: "Recovery evidence retention is not proven." });
+    if (!['proven', 'preserved'].includes(observed.idempotencyState)) typedBlockers.push({ code: "idempotency_unproven", message: "Idempotency is not proven or preserved across the drill." });
+    if (observed.ambiguous) typedBlockers.push({ code: "recovery_ambiguity", message: "Recovery left state or ownership ambiguous." });
+    if (observed.silentRetry) typedBlockers.push({ code: "silent_retry", message: "Silent retry is forbidden for recovery drills." });
+    results.push({ ...drill, outcome, rampAllowed: false, typedBlockers });
+    if (outcome !== "pass") priorPassed = false;
+    if (outcome === "stop") blockers.push({ drillId: drill.drillId || `drill-${index + 1}`, reason: reasonFor(observed.silentRetry ? "silent_retry" : "recovery_ambiguity"), nextAction: "Hold the lane, preserve metadata-only evidence, and route the drill through rollback/recovery inspection." });
+    else if (outcome !== "pass") blockers.push({ drillId: drill.drillId || `drill-${index + 1}`, reason: reasonFor(typedBlockers[0]?.code || "drill_evidence_missing"), nextAction: "Repair the recovery drill evidence before validating the next drill." });
+  }
+  const uniqueBlockers = blockers.filter((entry, index, list) => list.findIndex((candidate) => candidate.drillId === entry.drillId && candidate.reason === entry.reason) === index);
+  const stop = uniqueBlockers.some((entry) => ["recovery_ambiguity", "silent_retry"].includes(entry.reason));
+  const outcome = stop ? "stop" : uniqueBlockers.length === 0 ? "pass" : "hold";
+  const recoveryInput = context.recovery || {};
+  const recovery = {
+    owner: safeId(recoveryInput.owner),
+    rollbackPath: safeText(recoveryInput.rollbackPath) ? text(recoveryInput.rollbackPath, "", 180) : "",
+    remediationAction: safeText(recoveryInput.remediationAction) ? text(recoveryInput.remediationAction, "", 220) : "",
+    required: stop,
+  };
+  return {
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
+    predecessorOutcome: predecessor.outcome || "unknown",
+    predecessorReady,
+    drillKinds: RECOVERY_DRILL_KINDS,
+    drills: results,
+    recovery,
+    outcome,
+    reliabilityEvidenceReady: outcome === "pass",
+    limitedRolloutBoundaries: outcome === "pass" ? ["bounded-scope-only", "monitor-and-stop-on-threshold", "no-automatic-rollout"] : [],
+    rolloutAllowed: false,
+    typedBlockers: uniqueBlockers,
+    sourceRefs,
+    evidenceRefs,
+    checkedAt,
+    expiresAt: new Date(checkedAtMs + FRESHNESS_TTL_MS).toISOString(),
+    nextManagerAction: outcome === "pass"
+      ? "Preserve recovery evidence for 25-6; keep rollout and provider authority disabled."
+      : stop
+        ? "Hold the lane, preserve metadata-only evidence, and route rollback/recovery inspection before promotion."
+        : "Repair predecessor, ownership, idempotency, evidence, or recovery blockers before rerunning drills.",
+    stopLines: ["no_silent_retry", "no_ambiguous_cleanup", "no_provider_calls", "no_automatic_rollout"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+export function validateResilienceRecoveryEvidence(evidence = {}) {
+  const blockers = [];
+  if (evidence?.schemaVersion !== RECOVERY_SCHEMA_VERSION) blockers.push({ code: "bad_schema_version", message: "Unsupported resilience/recovery evidence schema." });
+  if (!RECOVERY_OUTCOMES.has(evidence?.outcome)) blockers.push({ code: "unknown", message: "Recovery outcome is missing or malformed." });
+  if (evidence?.metadataOnly !== true || evidence?.rawPayloadRetained !== false || evidence?.rolloutAllowed !== false) blockers.push({ code: "safety_violation", message: "Recovery evidence must remain metadata-only with rollout disabled." });
+  if (!Array.isArray(evidence?.drills) || evidence.drills.length === 0) blockers.push({ code: "evidence_missing", message: "Recovery evidence requires drill records." });
+  if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Recovery evidence requires safe source refs." });
+  if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Recovery evidence requires safe evidence refs." });
+  if (!safeText(evidence?.nextManagerAction)) blockers.push({ code: "evidence_missing", message: "Recovery evidence requires a safe next manager action." });
+  const checkedAtMs = Date.parse(evidence?.checkedAt || "");
+  const expiresAtMs = Date.parse(evidence?.expiresAt || "");
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Recovery evidence timestamps must be fresh and bounded." });
+  if (evidence?.outcome === "pass" && (evidence.reliabilityEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing recovery evidence requires complete drills, no blockers, and rollout disabled." });
+  if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped recovery validation requires rollback metadata." });
+  return blockers;
+}
+
 export {
   SCHEMA_VERSION as PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   REQUIRED_GATES as PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   CANARY_SCHEMA_VERSION as PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   RAMP_SCHEMA_VERSION as PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
+  RECOVERY_SCHEMA_VERSION as PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
 };

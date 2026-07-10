@@ -16,10 +16,13 @@ import {
   validateOneWorkerLiveCanaryEvidence,
   buildLiveCapacityRampEvidence,
   validateLiveCapacityRampEvidence,
+  buildResilienceRecoveryEvidence,
+  validateResilienceRecoveryEvidence,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
+  PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
 } from "./operational-readiness.mjs";
 
 export {
@@ -29,11 +32,14 @@ export {
   validateOneWorkerLiveCanaryEvidence,
   buildLiveCapacityRampEvidence,
   validateLiveCapacityRampEvidence,
+  buildResilienceRecoveryEvidence,
+  validateResilienceRecoveryEvidence,
   operationalReadinessPredecessorGate,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
+  PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -23334,6 +23340,21 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       recovery: rampInput.recovery || context.recovery,
     },
   );
+  const recoveryInput = isPlainObject(context.resilienceRecovery)
+    ? context.resilienceRecovery
+    : isPlainObject(context.recoveryValidation)
+      ? context.recoveryValidation
+      : {};
+  const resilienceRecovery = buildResilienceRecoveryEvidence(
+    { now: context.now || options.now },
+    {
+      ...recoveryInput,
+      rampEvidence: recoveryInput.rampEvidence || context.rampEvidence || liveCapacityRamp,
+      canaryEvidence: recoveryInput.canaryEvidence || context.canaryEvidence || oneWorkerLiveCanary,
+      sourceRefs: recoveryInput.sourceRefs || context.sourceRefs,
+      recovery: recoveryInput.recovery || context.recovery,
+    },
+  );
 
   return packet({
     ok: status !== "blocked",
@@ -23376,6 +23397,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       operationalReadinessContract,
       oneWorkerLiveCanary,
       liveCapacityRamp,
+      resilienceRecovery,
     },
     blockers: dedupedBlockers,
     warnings,
