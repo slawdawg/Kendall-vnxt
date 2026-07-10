@@ -244,6 +244,7 @@ export const PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION = "pipeline-one-work
 export const PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0" as const;
 export const PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0" as const;
 export const PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0" as const;
+export const PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION = "pipeline-production-readiness-decision/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -669,6 +670,44 @@ export interface PipelineOperationalHardeningEvidenceV0 {
   stopLines: string[];
   metadataOnly: true;
   rawPayloadRetained: false;
+}
+
+export const PIPELINE_PRODUCTION_READINESS_DECISIONS = ["go", "hold", "limited_rollout"] as const;
+export type PipelineProductionReadinessDecisionV0 = (typeof PIPELINE_PRODUCTION_READINESS_DECISIONS)[number];
+
+export interface PipelineProductionReadinessDecisionEvidenceV0 {
+  schemaVersion: typeof PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION;
+  decision: PipelineProductionReadinessDecisionV0;
+  rationale: string;
+  scope: { name: string; boundaries: string[]; limited: boolean };
+  thresholds: Record<string, PipelineOperationalReadinessThresholdV0 | null>;
+  authority: { state: "allowed" | "blocked"; proven: boolean; evidenceRefs: string[] };
+  rollback: { owner: string; path: string; required: boolean; evidenceRefs: string[] };
+  owner: string;
+  nextManagerAction: string;
+  predecessorOutcomes: { canary: string; ramp: string; recovery: string; hardening: string };
+  monitoring: string[];
+  stopLines: string[];
+  typedBlockers: Array<{ code: string; message: string; nextAction: string }>;
+  sourceRefs: string[];
+  evidenceRefs: string[];
+  checkedAt: string;
+  expiresAt: string;
+  rolloutAllowed: false;
+  automaticDeploymentAllowed: false;
+  providerCallsAllowed: false;
+  secretAccessAllowed: false;
+  mergeAllowed: false;
+  cleanupAllowed: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  decisionSignals: {
+    allPredecessorsPass: boolean;
+    authorityReady: boolean;
+    simulatedEvidence: boolean;
+    staleEvidence: boolean;
+    fixtureEvidence: boolean;
+  };
 }
 
 export interface PipelineOperationalActionValidationIssueV0 {
@@ -1409,6 +1448,63 @@ export function validatePipelineOperationalHardeningEvidenceV0(evidence: unknown
   if (record.outcome === "pass" && (record.readinessHandoffReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing hardening evidence requires complete domains, no blockers, and rollout disabled." });
   const recovery = record.recovery as Record<string, unknown> | undefined;
   if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "Stopped hardening requires recovery metadata." });
+  return issues;
+}
+
+export function validatePipelineProductionReadinessDecisionEvidenceV0(evidence: unknown): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(evidence, issues);
+  const allowed = new Set([
+    "schemaVersion", "decision", "rationale", "scope", "thresholds", "authority", "rollback", "owner",
+    "nextManagerAction", "predecessorOutcomes", "monitoring", "stopLines", "typedBlockers", "sourceRefs",
+    "evidenceRefs", "checkedAt", "expiresAt", "rolloutAllowed", "automaticDeploymentAllowed", "providerCallsAllowed",
+    "secretAccessAllowed", "mergeAllowed", "cleanupAllowed", "metadataOnly", "rawPayloadRetained", "decisionSignals",
+  ]);
+  pushUnknownFieldIssues(issues, record, allowed);
+  if (record.schemaVersion !== PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION) issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Production readiness decision uses an unsupported schema version." });
+  pushEnumIssue(issues, "decision", record.decision, PIPELINE_PRODUCTION_READINESS_DECISIONS);
+  for (const field of ["rolloutAllowed", "automaticDeploymentAllowed", "providerCallsAllowed", "secretAccessAllowed", "mergeAllowed", "cleanupAllowed"] as const) {
+    if (record[field] !== false) issues.push({ field, code: "policy_violation", summary: "Production readiness decisions must not authorize mutation, provider, secret, merge, or cleanup operations." });
+  }
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false) issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Production readiness decisions must be metadata-only and retain no raw payloads." });
+  for (const field of ["rationale", "owner", "nextManagerAction"] as const) {
+    if (typeof record[field] !== "string" || !isSafeOperationalMetadataText(record[field])) issues.push({ field, code: "evidence_required", summary: "Production readiness decisions require safe bounded metadata." });
+  }
+  const scope = operationalActionRecord(record.scope, issues, "scope");
+  if (typeof scope.name !== "string" || !isSafeOperationalMetadataText(scope.name) || typeof scope.limited !== "boolean") issues.push({ field: "scope", code: "evidence_required", summary: "Production readiness decisions require a bounded scope." });
+  const boundaries = safeOperationalArrayValues(issues, scope.boundaries, "scope.boundaries");
+  if (!boundaries || boundaries.length === 0 || boundaries.some((entry) => typeof entry !== "string" || !isSafeOperationalMetadataText(entry))) issues.push({ field: "scope.boundaries", code: "evidence_required", summary: "Production readiness decisions require safe scope boundaries." });
+  const thresholds = operationalActionRecord(record.thresholds, issues, "thresholds");
+  for (const [name, value] of Object.entries(thresholds)) {
+    if (value === null) continue;
+    const threshold = operationalActionRecord(value, issues, `thresholds.${name}`);
+    if (typeof threshold.name !== "string" || !isSafeOperationalIdentifierText(threshold.name) || !["lt", "lte", "gt", "gte", "eq"].includes(String(threshold.operator)) || typeof threshold.value !== "number" || !Number.isFinite(threshold.value) || typeof threshold.unit !== "string" || !isSafeOperationalIdentifierText(threshold.unit) || threshold.explicit !== true) {
+      issues.push({ field: `thresholds.${name}`, code: "inconsistent_result", summary: "Production readiness thresholds must be explicit bounded metadata." });
+    }
+  }
+  for (const field of ["sourceRefs", "evidenceRefs"] as const) {
+    if (!isPipelineOperationalActionEvidenceRefsV0(record[field])) issues.push({ field, code: "evidence_required", summary: "Production readiness decisions require safe source and evidence refs." });
+  }
+  const monitoring = safeOperationalArrayValues(issues, record.monitoring, "monitoring");
+  const stopLines = safeOperationalArrayValues(issues, record.stopLines, "stopLines");
+  if (!monitoring || monitoring.length === 0 || monitoring.some((entry) => typeof entry !== "string" || !isSafeOperationalMetadataText(entry))) issues.push({ field: "monitoring", code: "evidence_required", summary: "Production readiness decisions require monitoring metadata." });
+  if (!stopLines || stopLines.length === 0 || stopLines.some((entry) => typeof entry !== "string" || !isSafeOperationalMetadataText(entry))) issues.push({ field: "stopLines", code: "evidence_required", summary: "Production readiness decisions require explicit stop-lines." });
+  const authority = operationalActionRecord(record.authority, issues, "authority");
+  if (!isOneOfString(authority.state, ["allowed", "blocked"]) || typeof authority.proven !== "boolean" || !Array.isArray(authority.evidenceRefs) || (authority.evidenceRefs.length > 0 && !isPipelineOperationalActionEvidenceRefsV0(authority.evidenceRefs))) issues.push({ field: "authority", code: "evidence_required", summary: "Production readiness decisions require bounded authority metadata." });
+  if (isOneOfString(record.decision, ["go", "limited_rollout"]) && (authority.state !== "allowed" || authority.proven !== true || !isPipelineOperationalActionEvidenceRefsV0(authority.evidenceRefs))) issues.push({ field: "authority", code: "policy_violation", summary: "Go or limited rollout requires explicit final authority evidence." });
+  const rollback = operationalActionRecord(record.rollback, issues, "rollback");
+  if (typeof rollback.owner !== "string" || !isSafeOperationalIdentifierText(rollback.owner) || typeof rollback.path !== "string" || !isSafeOperationalMetadataText(rollback.path) || typeof rollback.required !== "boolean" || !isPipelineOperationalActionEvidenceRefsV0(rollback.evidenceRefs)) issues.push({ field: "rollback", code: "policy_violation", summary: "Production readiness decisions require rollback owner, path, and evidence." });
+  const predecessorOutcomes = operationalActionRecord(record.predecessorOutcomes, issues, "predecessorOutcomes");
+  for (const id of ["canary", "ramp", "recovery", "hardening"] as const) if (typeof predecessorOutcomes[id] !== "string" || !isSafeOperationalIdentifierText(predecessorOutcomes[id])) issues.push({ field: `predecessorOutcomes.${id}`, code: "evidence_required", summary: "Production readiness decisions require every predecessor outcome." });
+  const typedBlockers = safeOperationalArrayValues(issues, record.typedBlockers, "typedBlockers");
+  if (!typedBlockers) issues.push({ field: "typedBlockers", code: "evidence_required", summary: "Production readiness decisions require a typed blocker array." });
+  if (record.decision === "go" && (scope.limited === true || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes[id] !== "pass") || (typedBlockers || []).length > 0)) issues.push({ field: "decision", code: "inconsistent_result", summary: "Go requires all predecessor outcomes to pass with no blockers." });
+  if (record.decision === "limited_rollout" && (scope.limited !== true || !boundaries || boundaries.length === 0 || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes[id] === "stop"))) issues.push({ field: "decision", code: "inconsistent_result", summary: "Limited rollout requires bounded scope and no stopped predecessor." });
+  const signals = operationalActionRecord(record.decisionSignals, issues, "decisionSignals");
+  for (const field of ["allPredecessorsPass", "authorityReady", "simulatedEvidence", "staleEvidence", "fixtureEvidence"] as const) if (typeof signals[field] !== "boolean") issues.push({ field: `decisionSignals.${field}`, code: "evidence_required", summary: "Production readiness decision signals must be explicit booleans." });
+  const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Production readiness decision timestamps must be fresh and bounded." });
   return issues;
 }
 
