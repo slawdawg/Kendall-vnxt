@@ -242,6 +242,7 @@ export const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-o
 export const PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0" as const;
 export const PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0" as const;
 export const PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0" as const;
+export const PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -376,6 +377,11 @@ export const PIPELINE_OPERATIONAL_READINESS_REASONS = [
   "stage_lifecycle_ambiguous",
   "stage_authority_missing",
   "stage_evidence_missing",
+  "drill_evidence_missing",
+  "recovery_ambiguity",
+  "idempotency_unproven",
+  "silent_retry",
+  "recovery_drill_failed",
   "unknown",
 ] as const;
 export type PipelineOperationalReadinessReasonV0 = (typeof PIPELINE_OPERATIONAL_READINESS_REASONS)[number];
@@ -562,6 +568,57 @@ export interface PipelineLiveCapacityRampEvidenceV0 {
   scaleEvidenceReady: boolean;
   rolloutAllowed: false;
   typedBlockers: Array<{ gateId: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
+  sourceRefs: string[];
+  evidenceRefs: string[];
+  checkedAt: string;
+  expiresAt: string;
+  nextManagerAction: string;
+  stopLines: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export const PIPELINE_RESILIENCE_RECOVERY_OUTCOMES = ["pass", "hold", "stop"] as const;
+export type PipelineResilienceRecoveryOutcomeV0 = (typeof PIPELINE_RESILIENCE_RECOVERY_OUTCOMES)[number];
+
+export interface PipelineResilienceRecoveryDrillV0 {
+  drillId: string;
+  kind: string;
+  owner: string;
+  authority: { state: "allowed" | "blocked"; proven: boolean; evidenceRefs: string[] };
+  expectedRecoveryAction: string;
+  observed: {
+    stateBefore: string;
+    stateAfter: string;
+    ownershipBefore: string;
+    ownershipAfter: string;
+    leaseState: string;
+    idempotencyState: "proven" | "preserved" | "unknown" | "ambiguous";
+    rollbackState: string;
+    evidenceRetained: boolean;
+    ambiguous: boolean;
+    silentRetry: boolean;
+    retryCount: number | null;
+  };
+  evidenceRefs: string[];
+  nextAction: string;
+  outcome: PipelineResilienceRecoveryOutcomeV0;
+  rampAllowed: false;
+  typedBlockers: Array<{ code: string; message: string }>;
+}
+
+export interface PipelineResilienceRecoveryEvidenceV0 {
+  schemaVersion: typeof PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION;
+  predecessorOutcome: PipelineLiveCapacityRampOutcomeV0 | PipelineOneWorkerLiveCanaryOutcomeV0 | "unknown";
+  predecessorReady: boolean;
+  drillKinds: string[];
+  drills: PipelineResilienceRecoveryDrillV0[];
+  recovery: { owner: string; rollbackPath: string; remediationAction: string; required: boolean };
+  outcome: PipelineResilienceRecoveryOutcomeV0;
+  reliabilityEvidenceReady: boolean;
+  limitedRolloutBoundaries: string[];
+  rolloutAllowed: false;
+  typedBlockers: Array<{ drillId: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
   sourceRefs: string[];
   evidenceRefs: string[];
   checkedAt: string;
@@ -1255,6 +1312,33 @@ export function validatePipelineLiveCapacityRampEvidenceV0(evidence: unknown): P
   if (record.outcome === "pass" && (record.canaryOutcome !== "pass" || record.scaleEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "A passing ramp requires a passing canary, complete stage evidence, no blockers, and rollout disabled." });
   const recovery = record.recovery as Record<string, unknown> | undefined;
   if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "A stopped ramp requires rollback metadata." });
+  return issues;
+}
+
+export function validatePipelineResilienceRecoveryEvidenceV0(evidence: unknown): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(evidence, issues);
+  if (record.schemaVersion !== PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION) issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Resilience/recovery evidence uses an unsupported schema version." });
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false || record.rolloutAllowed !== false) issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Recovery evidence must remain metadata-only with rollout disabled." });
+  pushEnumIssue(issues, "outcome", record.outcome, PIPELINE_RESILIENCE_RECOVERY_OUTCOMES);
+  const drills = safeOperationalArrayValues(issues, record.drills, "drills");
+  if (!drills || drills.length === 0) issues.push({ field: "drills", code: "evidence_required", summary: "Recovery evidence requires drill records." });
+  for (const [index, drillValue] of (drills || []).entries()) {
+    const drill = operationalActionRecord(drillValue, issues, `drills.${index}`);
+    if (typeof drill.drillId !== "string" || !isSafeOperationalIdentifierText(drill.drillId)) issues.push({ field: `drills.${index}.drillId`, code: "blank_identifier", summary: "Recovery drill ids must be safe metadata." });
+    if (typeof drill.owner !== "string" || !isSafeOperationalIdentifierText(drill.owner)) issues.push({ field: `drills.${index}.owner`, code: "blank_identifier", summary: "Recovery drills require an owner." });
+    if (!Array.isArray(drill.evidenceRefs) || !isPipelineOperationalActionEvidenceRefsV0(drill.evidenceRefs)) issues.push({ field: `drills.${index}.evidenceRefs`, code: "evidence_required", summary: "Recovery drills require safe evidence refs." });
+  }
+  for (const field of ["sourceRefs", "evidenceRefs"] as const) {
+    if (!Array.isArray(record[field]) || record[field].length === 0 || !isPipelineOperationalActionEvidenceRefsV0(record[field])) issues.push({ field, code: "evidence_required", summary: "Recovery evidence requires safe source/evidence refs." });
+  }
+  if (typeof record.nextManagerAction !== "string" || !isSafeOperationalMetadataText(record.nextManagerAction)) issues.push({ field: "nextManagerAction", code: "unsafe_metadata_retention", summary: "Recovery evidence requires a safe next manager action." });
+  const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Recovery evidence timestamps must be fresh and bounded." });
+  if (record.outcome === "pass" && (record.reliabilityEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing recovery evidence requires complete drills, no blockers, and rollout disabled." });
+  const recovery = record.recovery as Record<string, unknown> | undefined;
+  if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "A stopped recovery validation requires rollback metadata." });
   return issues;
 }
 

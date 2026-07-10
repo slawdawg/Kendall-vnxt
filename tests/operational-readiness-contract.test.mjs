@@ -6,10 +6,12 @@ import {
   buildOneWorkerLiveCanaryEvidence,
   buildOperationalReadinessContract,
   buildRuntimeReadinessPlan,
+  buildResilienceRecoveryEvidence,
   operationalReadinessPredecessorGate,
   validateLiveCapacityRampEvidence,
   validateOneWorkerLiveCanaryEvidence,
   validateOperationalReadinessContract,
+  validateResilienceRecoveryEvidence,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
 const target = {
@@ -297,4 +299,84 @@ test("continuous runtime readiness projects ramp evidence with rollout blocked",
   assert.equal(runtime.summary.liveCapacityRamp.outcome, "hold");
   assert.equal(runtime.summary.liveCapacityRamp.rolloutAllowed, false);
   assert.equal(runtime.summary.liveCapacityRamp.rawPayloadRetained, false);
+});
+
+function passingRampEvidence() {
+  return buildLiveCapacityRampEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    canaryEvidence: passingCanaryEvidence(),
+    stages: [1, 2, 4, 6].map(passingRampStage),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:ramp-observation"],
+    recovery: passingContext().recovery,
+  });
+}
+
+function passingRecoveryDrill(kind, index) {
+  return {
+    drillId: `drill-${index + 1}`,
+    kind,
+    owner: "manager-20260710",
+    authority: { state: "allowed", proven: true, evidenceRefs: [`evidence:drill-${index + 1}-authority`] },
+    expectedRecoveryAction: "inspect-reconcile-and-resume",
+    observed: {
+      stateBefore: "active",
+      stateAfter: "recovered",
+      ownershipBefore: "manager",
+      ownershipAfter: "manager",
+      leaseState: "renewed",
+      idempotencyState: "proven",
+      rollbackState: "available",
+      evidenceRetained: true,
+      ambiguous: false,
+      silentRetry: false,
+      retryCount: 1,
+    },
+    evidenceRefs: [`evidence:drill-${index + 1}-observation`],
+    nextAction: "preserve-evidence-and-monitor",
+  };
+}
+
+test("resilience validation records ordered recovery drills without enabling rollout", () => {
+  const recovery = buildResilienceRecoveryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    rampEvidence: passingRampEvidence(),
+    drills: ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"].map(passingRecoveryDrill),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:recovery-validation"],
+    recovery: passingContext().recovery,
+  });
+  assert.equal(recovery.outcome, "pass");
+  assert.equal(recovery.reliabilityEvidenceReady, true);
+  assert.equal(recovery.rolloutAllowed, false);
+  assert.equal(recovery.drills.length, 8);
+  assert.deepEqual(validateResilienceRecoveryEvidence(recovery), []);
+});
+
+test("resilience validation stops on ambiguous ownership and blocks later drills", () => {
+  const drills = ["restart", "worker_death", "stale_lease", "timeout"].map(passingRecoveryDrill);
+  drills[1] = { ...drills[1], observed: { ...drills[1].observed, ambiguous: true, ownershipAfter: "unknown" } };
+  const recovery = buildResilienceRecoveryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    rampEvidence: passingRampEvidence(),
+    drills,
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:recovery-ambiguity"],
+    recovery: passingContext().recovery,
+  });
+  assert.equal(recovery.outcome, "stop");
+  assert.equal(recovery.recovery.required, true);
+  assert.deepEqual(recovery.drills.map((drill) => drill.outcome), ["pass", "stop", "hold", "hold"]);
+  assert.ok(recovery.typedBlockers.some((blocker) => blocker.reason === "recovery_ambiguity"));
+  assert.deepEqual(validateResilienceRecoveryEvidence(recovery), []);
+});
+
+test("continuous runtime readiness projects recovery evidence with rollout blocked", () => {
+  const runtime = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_dry_run" },
+    { cycleStatus: "ready", cycleOk: true, usage: { status: "normal" }, resources: { status: "normal" }, preflight: { status: "ready", blockerCount: 0 } },
+  );
+  assert.equal(runtime.summary.resilienceRecovery.outcome, "hold");
+  assert.equal(runtime.summary.resilienceRecovery.rolloutAllowed, false);
+  assert.equal(runtime.summary.resilienceRecovery.rawPayloadRetained, false);
 });
