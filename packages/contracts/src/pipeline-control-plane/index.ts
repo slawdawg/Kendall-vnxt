@@ -243,6 +243,7 @@ export const PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION = "pipeline-
 export const PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0" as const;
 export const PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0" as const;
 export const PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0" as const;
+export const PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -382,6 +383,12 @@ export const PIPELINE_OPERATIONAL_READINESS_REASONS = [
   "idempotency_unproven",
   "silent_retry",
   "recovery_drill_failed",
+  "runbook_gap",
+  "high_risk_gap",
+  "runbook_owner_missing",
+  "runbook_trigger_missing",
+  "runbook_gate_missing",
+  "runbook_recovery_missing",
   "unknown",
 ] as const;
 export type PipelineOperationalReadinessReasonV0 = (typeof PIPELINE_OPERATIONAL_READINESS_REASONS)[number];
@@ -619,6 +626,41 @@ export interface PipelineResilienceRecoveryEvidenceV0 {
   limitedRolloutBoundaries: string[];
   rolloutAllowed: false;
   typedBlockers: Array<{ drillId: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
+  sourceRefs: string[];
+  evidenceRefs: string[];
+  checkedAt: string;
+  expiresAt: string;
+  nextManagerAction: string;
+  stopLines: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export const PIPELINE_OPERATIONAL_HARDENING_OUTCOMES = ["pass", "hold", "stop"] as const;
+export type PipelineOperationalHardeningOutcomeV0 = (typeof PIPELINE_OPERATIONAL_HARDENING_OUTCOMES)[number];
+
+export interface PipelineOperationalHardeningDomainV0 {
+  domain: string;
+  owner: string;
+  trigger: string;
+  evidenceGate: string;
+  recoveryAction: string;
+  riskTier: PipelineOperationalActionRiskTierV0;
+  unresolvedHighRiskGap: boolean;
+  evidenceRefs: string[];
+  status: "pass" | "hold";
+}
+
+export interface PipelineOperationalHardeningEvidenceV0 {
+  schemaVersion: typeof PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION;
+  predecessorOutcome: PipelineResilienceRecoveryOutcomeV0 | PipelineLiveCapacityRampOutcomeV0 | "unknown";
+  predecessorReady: boolean;
+  domains: PipelineOperationalHardeningDomainV0[];
+  recovery: { owner: string; rollbackPath: string; remediationAction: string; required: boolean };
+  outcome: PipelineOperationalHardeningOutcomeV0;
+  readinessHandoffReady: boolean;
+  rolloutAllowed: false;
+  typedBlockers: Array<{ domain: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
   sourceRefs: string[];
   evidenceRefs: string[];
   checkedAt: string;
@@ -1339,6 +1381,34 @@ export function validatePipelineResilienceRecoveryEvidenceV0(evidence: unknown):
   if (record.outcome === "pass" && (record.reliabilityEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing recovery evidence requires complete drills, no blockers, and rollout disabled." });
   const recovery = record.recovery as Record<string, unknown> | undefined;
   if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "A stopped recovery validation requires rollback metadata." });
+  return issues;
+}
+
+export function validatePipelineOperationalHardeningEvidenceV0(evidence: unknown): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(evidence, issues);
+  if (record.schemaVersion !== PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION) issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Operational hardening evidence uses an unsupported schema version." });
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false || record.rolloutAllowed !== false) issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Hardening evidence must remain metadata-only with rollout disabled." });
+  pushEnumIssue(issues, "outcome", record.outcome, PIPELINE_OPERATIONAL_HARDENING_OUTCOMES);
+  const domains = safeOperationalArrayValues(issues, record.domains, "domains");
+  if (!domains || domains.length !== 10) issues.push({ field: "domains", code: "evidence_required", summary: "Hardening evidence requires all ten operational domains." });
+  for (const [index, domainValue] of (domains || []).entries()) {
+    const domain = operationalActionRecord(domainValue, issues, `domains.${index}`);
+    for (const field of ["domain", "owner", "trigger", "evidenceGate", "recoveryAction"] as const) {
+      if (typeof domain[field] !== "string" || !isSafeOperationalMetadataText(domain[field])) issues.push({ field: `domains.${index}.${field}`, code: "evidence_required", summary: "Hardening domains require safe owner, trigger, gate, and recovery metadata." });
+    }
+    if (!Array.isArray(domain.evidenceRefs) || !isPipelineOperationalActionEvidenceRefsV0(domain.evidenceRefs)) issues.push({ field: `domains.${index}.evidenceRefs`, code: "evidence_required", summary: "Hardening domains require safe evidence refs." });
+  }
+  for (const field of ["sourceRefs", "evidenceRefs"] as const) {
+    if (!Array.isArray(record[field]) || record[field].length === 0 || !isPipelineOperationalActionEvidenceRefsV0(record[field])) issues.push({ field, code: "evidence_required", summary: "Hardening evidence requires safe source/evidence refs." });
+  }
+  if (typeof record.nextManagerAction !== "string" || !isSafeOperationalMetadataText(record.nextManagerAction)) issues.push({ field: "nextManagerAction", code: "unsafe_metadata_retention", summary: "Hardening evidence requires a safe next manager action." });
+  const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Hardening evidence timestamps must be fresh and bounded." });
+  if (record.outcome === "pass" && (record.readinessHandoffReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing hardening evidence requires complete domains, no blockers, and rollout disabled." });
+  const recovery = record.recovery as Record<string, unknown> | undefined;
+  if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "Stopped hardening requires recovery metadata." });
   return issues;
 }
 

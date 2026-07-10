@@ -2,14 +2,17 @@ const SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0";
 const CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0";
 const RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0";
 const RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0";
+const HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0";
 const GATE_STATES = new Set(["pass", "fail", "blocked", "not_applicable"]);
 const BACKEND_TRUTHS = new Set(["live", "simulated", "dry_run"]);
 const OUTCOMES = new Set(["go", "no_go"]);
 const CANARY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const RAMP_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const RECOVERY_OUTCOMES = new Set(["pass", "hold", "stop"]);
+const HARDENING_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const DEFAULT_RAMP_WORKER_COUNTS = [1, 2, 4, 6];
 const RECOVERY_DRILL_KINDS = ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"];
+const HARDENING_DOMAINS = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"];
 const FRESHNESS_TTL_MS = 5 * 60 * 1000;
 const FUTURE_SKEW_MS = 60 * 1000;
 const SAFE_REF = /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact|readiness):[A-Za-z0-9._/@:-]{1,180}$/;
@@ -81,6 +84,7 @@ function reasonFor(code, fallback = "unknown") {
     "canary_not_passed", "stage_plan_invalid", "capacity_missing", "stage_threshold_exceeded",
     "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
     "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed",
+    "runbook_gap", "high_risk_gap", "runbook_owner_missing", "runbook_trigger_missing", "runbook_gate_missing", "runbook_recovery_missing",
   ]);
   return known.has(code) ? code : fallback;
 }
@@ -718,10 +722,97 @@ export function validateResilienceRecoveryEvidence(evidence = {}) {
   return blockers;
 }
 
+function normalizeHardeningDomain(input = {}, index = 0) {
+  const domain = HARDENING_DOMAINS.includes(input.domain) ? input.domain : HARDENING_DOMAINS[index] || `domain-${index + 1}`;
+  const riskTier = ["low", "medium", "high", "extreme"].includes(input.riskTier) ? input.riskTier : "high";
+  return {
+    domain,
+    owner: safeId(input.owner),
+    trigger: safeText(input.trigger) ? text(input.trigger, "", 220) : "",
+    evidenceGate: safeText(input.evidenceGate || input.evidence_gate) ? text(input.evidenceGate || input.evidence_gate, "", 220) : "",
+    recoveryAction: safeText(input.recoveryAction || input.recovery_action) ? text(input.recoveryAction || input.recovery_action, "", 220) : "",
+    riskTier,
+    unresolvedHighRiskGap: input.unresolvedHighRiskGap === true || input.unresolved_high_risk_gap === true,
+    evidenceRefs: refs(input.evidenceRefs),
+    status: input.status === "pass" ? "pass" : "hold",
+  };
+}
+
+export function buildOperationalHardeningRunbookEvidence(options = {}, context = {}) {
+  const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
+  const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const predecessor = context.recoveryEvidence || context.rampEvidence || context.canaryEvidence || options.recoveryEvidence || options.rampEvidence || {};
+  const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
+  const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
+  const predecessorReady = predecessor.outcome === "pass" && (predecessor.reliabilityEvidenceReady === true || predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true) || context.fixtureEvidence === true;
+  const requestedDomains = Array.isArray(context.domains || options.domains) ? (context.domains || options.domains) : HARDENING_DOMAINS.map((domain) => ({ domain }));
+  const domains = HARDENING_DOMAINS.map((domain, index) => normalizeHardeningDomain(requestedDomains.find((candidate) => candidate?.domain === domain) || {}, index));
+  const blockers = [];
+  if (!predecessorReady) blockers.push({ domain: "predecessor", reason: reasonFor("evidence_missing"), nextAction: "Preserve scale and resilience evidence before hardening handoff." });
+  for (const item of domains) {
+    const complete = Boolean(item.owner && item.trigger && item.evidenceGate && item.recoveryAction && item.evidenceRefs.length > 0);
+    const highRisk = item.unresolvedHighRiskGap || (item.riskTier === "high" || item.riskTier === "extreme") && item.status !== "pass";
+    if (!complete) blockers.push({ domain: item.domain, reason: reasonFor("runbook_gap"), nextAction: "Add the owner, trigger, exact evidence gate, recovery action, and evidence refs." });
+    if (highRisk) blockers.push({ domain: item.domain, reason: reasonFor("high_risk_gap"), nextAction: "Hold readiness and resolve the high-risk operational gap; do not waive it." });
+  }
+  const uniqueBlockers = blockers.filter((entry, index, list) => list.findIndex((candidate) => candidate.domain === entry.domain && candidate.reason === entry.reason) === index);
+  const stop = uniqueBlockers.some((entry) => entry.reason === "high_risk_gap");
+  const outcome = stop ? "stop" : uniqueBlockers.length === 0 ? "pass" : "hold";
+  const recoveryInput = context.recovery || {};
+  const recovery = {
+    owner: safeId(recoveryInput.owner),
+    rollbackPath: safeText(recoveryInput.rollbackPath) ? text(recoveryInput.rollbackPath, "", 180) : "",
+    remediationAction: safeText(recoveryInput.remediationAction) ? text(recoveryInput.remediationAction, "", 220) : "",
+    required: stop,
+  };
+  return {
+    schemaVersion: HARDENING_SCHEMA_VERSION,
+    predecessorOutcome: predecessor.outcome || "unknown",
+    predecessorReady,
+    domains,
+    recovery,
+    outcome,
+    readinessHandoffReady: outcome === "pass",
+    rolloutAllowed: false,
+    typedBlockers: uniqueBlockers,
+    sourceRefs,
+    evidenceRefs,
+    checkedAt,
+    expiresAt: new Date(checkedAtMs + FRESHNESS_TTL_MS).toISOString(),
+    nextManagerAction: outcome === "pass"
+      ? "Hand off exact hardening and runbook refs to 25-6; keep rollout, provider, merge, and cleanup authority disabled."
+      : stop
+        ? "Hold readiness, resolve every high-risk runbook gap, and preserve the blocker evidence."
+        : "Complete the missing operational owner, trigger, gate, recovery, or predecessor evidence before handoff.",
+    stopLines: ["no_high_risk_gap_waiver", "no_secret_value_retention", "no_provider_calls", "no_automatic_rollout"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+export function validateOperationalHardeningRunbookEvidence(evidence = {}) {
+  const blockers = [];
+  if (evidence?.schemaVersion !== HARDENING_SCHEMA_VERSION) blockers.push({ code: "bad_schema_version", message: "Unsupported operational hardening schema." });
+  if (!HARDENING_OUTCOMES.has(evidence?.outcome)) blockers.push({ code: "unknown", message: "Hardening outcome is missing or malformed." });
+  if (evidence?.metadataOnly !== true || evidence?.rawPayloadRetained !== false || evidence?.rolloutAllowed !== false) blockers.push({ code: "safety_violation", message: "Hardening evidence must remain metadata-only with rollout disabled." });
+  if (!Array.isArray(evidence?.domains) || evidence.domains.length !== HARDENING_DOMAINS.length) blockers.push({ code: "evidence_missing", message: "Hardening evidence requires every operational domain." });
+  if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Hardening evidence requires safe source refs." });
+  if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Hardening evidence requires safe evidence refs." });
+  if (!safeText(evidence?.nextManagerAction)) blockers.push({ code: "evidence_missing", message: "Hardening evidence requires a safe next manager action." });
+  const checkedAtMs = Date.parse(evidence?.checkedAt || "");
+  const expiresAtMs = Date.parse(evidence?.expiresAt || "");
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Hardening evidence timestamps must be fresh and bounded." });
+  if (evidence?.outcome === "pass" && (evidence.readinessHandoffReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing hardening evidence requires complete domains, no blockers, and rollout disabled." });
+  if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "Stopped hardening requires recovery metadata." });
+  return blockers;
+}
+
 export {
   SCHEMA_VERSION as PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   REQUIRED_GATES as PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   CANARY_SCHEMA_VERSION as PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   RAMP_SCHEMA_VERSION as PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
   RECOVERY_SCHEMA_VERSION as PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
+  HARDENING_SCHEMA_VERSION as PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
 };

@@ -18,11 +18,14 @@ import {
   validateLiveCapacityRampEvidence,
   buildResilienceRecoveryEvidence,
   validateResilienceRecoveryEvidence,
+  buildOperationalHardeningRunbookEvidence,
+  validateOperationalHardeningRunbookEvidence,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
   PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
+  PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
 } from "./operational-readiness.mjs";
 
 export {
@@ -34,12 +37,15 @@ export {
   validateLiveCapacityRampEvidence,
   buildResilienceRecoveryEvidence,
   validateResilienceRecoveryEvidence,
+  buildOperationalHardeningRunbookEvidence,
+  validateOperationalHardeningRunbookEvidence,
   operationalReadinessPredecessorGate,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
   PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
   PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
+  PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -23355,6 +23361,20 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       recovery: recoveryInput.recovery || context.recovery,
     },
   );
+  const hardeningInput = isPlainObject(context.operationalHardening)
+    ? context.operationalHardening
+    : isPlainObject(context.hardeningRunbooks)
+      ? context.hardeningRunbooks
+      : {};
+  const operationalHardening = buildOperationalHardeningRunbookEvidence(
+    { now: context.now || options.now },
+    {
+      ...hardeningInput,
+      recoveryEvidence: hardeningInput.recoveryEvidence || context.recoveryEvidence || resilienceRecovery,
+      sourceRefs: hardeningInput.sourceRefs || context.sourceRefs,
+      recovery: hardeningInput.recovery || context.recovery,
+    },
+  );
 
   return packet({
     ok: status !== "blocked",
@@ -23398,6 +23418,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       oneWorkerLiveCanary,
       liveCapacityRamp,
       resilienceRecovery,
+      operationalHardening,
     },
     blockers: dedupedBlockers,
     warnings,
