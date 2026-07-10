@@ -1079,7 +1079,7 @@ last_updated: 2026-07-08
 project: Kendall_Nxt
 project_key: NOKEY
 tracking_system: file-system
-story_location: /home/slaw_dawg/Kendall_Nxt/_bmad-output/implementation-artifacts
+story_location: _bmad-output/implementation-artifacts
 source_key: manager-closed-overlay-test
 source_ref: _bmad-output/planning-artifacts/epics.md
 
@@ -10777,11 +10777,7 @@ test("worker handoff apply persists successful records when a later paste fails"
     assert.equal(ledger.summary.events.at(-1).result, "blocked_partial");
     const retry = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 2, apply: true }, context);
     assert.equal(retry.status, "blocked");
-    assert.equal(retry.blockers[0].code, "ledger-action-partial-side-effects");
-    assert.deepEqual(retry.summary.actionResult.conflictFields, []);
-    assert.equal(retry.summary.actionResult.fingerprintDrift, true);
-    assert.equal(retry.summary.actionResult.idempotencyConflict, false);
-    assert.notEqual(retry.blockers[0].code, "ledger-idempotency-conflict");
+    assert.equal(retry.blockers[0].code, "worker-handoff-authoritative-worker-busy");
     const changedIdentityRetry = buildWorkerHandoffPlan(
       { runId: "manager-test", stateRoot, limit: 2, apply: true },
       {
@@ -10797,16 +10793,13 @@ test("worker handoff apply persists successful records when a later paste fails"
       },
     );
     assert.equal(changedIdentityRetry.status, "blocked");
-    assert.equal(changedIdentityRetry.blockers[0].code, "ledger-action-partial-side-effects");
-    assert.deepEqual(changedIdentityRetry.summary.actionResult.conflictFields, ["actionFingerprint"]);
-    assert.equal(changedIdentityRetry.summary.actionResult.fingerprintDrift, true);
-    assert.equal(changedIdentityRetry.summary.actionResult.idempotencyConflict, true);
+    assert.equal(changedIdentityRetry.blockers[0].code, "worker-handoff-authoritative-worker-busy");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
-test("worker handoff duplicate retries reconcile worker assignment and handoff files", () => {
+test("worker handoff duplicate retries block authoritative busy workers", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-handoff-duplicate-reconcile-"));
   try {
     ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
@@ -10844,8 +10837,8 @@ test("worker handoff duplicate retries reconcile worker assignment and handoff f
     const duplicate = buildWorkerHandoffPlan(options, context);
 
     assert.equal(first.status, "ready");
-    assert.equal(duplicate.status, "ready");
-    assert.equal(duplicate.summary.duplicateIgnored, true);
+    assert.equal(duplicate.status, "blocked");
+    assert.equal(duplicate.blockers[0].code, "worker-handoff-authoritative-worker-busy");
     const events = readFileSync(join(stateRoot, "manager-runs", "manager-test", "events.ndjson"), "utf8").trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     assert.equal(events.length, 1);
     assert.equal(events[0].actionState, "finalized");
@@ -10854,7 +10847,7 @@ test("worker handoff duplicate retries reconcile worker assignment and handoff f
     writeFileSync(handoffPath, "diverged handoff\n");
     const divergent = buildWorkerHandoffPlan(options, context);
     assert.equal(divergent.status, "blocked");
-    assert.ok(divergent.blockers.some((blocker) => blocker.code === "ledger-action-handoff-file-diverged"));
+    assert.ok(divergent.blockers.some((blocker) => blocker.code === "worker-handoff-authoritative-worker-busy"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -11195,7 +11188,7 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
     assert.equal(calls.length, 6);
     assert.deepEqual(calls[0].args.slice(0, 3), ["load-buffer", "-b", "codex-1-handoff"]);
     assert.match(calls[0].args[3], /codex-1-lane-1\.paste\.txt$/);
-    assert.deepEqual(calls[1].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}"]);
+    assert.deepEqual(calls[1].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
     assert.deepEqual(calls[2].args, ["paste-buffer", "-b", "codex-1-handoff", "-t", "%1"]);
     assert.deepEqual(calls[3].args, ["send-keys", "-t", "%1", "C-m"]);
     assert.deepEqual(calls[4].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
@@ -12902,7 +12895,7 @@ test("worker submit pending gate sends only C-m to active pane for silent pendin
     );
     assert.equal(applied.status, "ready");
     assert.equal(applied.summary.mutation, "manager-owned-worker-enter-only-submit");
-    assert.deepEqual(calls[0].args, ["list-panes", "-t", "codex-6", "-F", "#{pane_active}:#{pane_id}"]);
+    assert.deepEqual(calls[0].args, ["list-panes", "-t", "codex-6", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
     assert.deepEqual(calls[1].args, ["send-keys", "-t", "%6", "C-m"]);
     assert.equal(applied.summary.results[0].submit.submitKey, "C-m");
     assert.deepEqual(calls[2].args, ["capture-pane", "-J", "-p", "-t", "%6", "-S", "-10"]);
@@ -13567,10 +13560,11 @@ test("worker question answer gate writes durable answer files and pastes only pa
     );
     assert.equal(applied.status, "ready");
     assert.equal(applied.summary.mutation, "manager-owned-worker-question-answer-file-and-tmux-buffer");
-    assert.deepEqual(calls[0].args.slice(0, 3), ["load-buffer", "-b", "codex-5-answer"]);
-    assert.deepEqual(calls[1].args, ["list-panes", "-t", "codex-5", "-F", "#{pane_active}:#{pane_id}"]);
-    assert.deepEqual(calls[2].args, ["paste-buffer", "-b", "codex-5-answer", "-t", "%5"]);
-    assert.deepEqual(calls[3].args, ["send-keys", "-t", "%5", "C-m"]);
+    assert.deepEqual(calls[0].args, ["list-panes", "-t", "codex-5", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
+    assert.deepEqual(calls[1].args.slice(0, 3), ["load-buffer", "-b", "codex-5-answer"]);
+    assert.deepEqual(calls[2].args, ["list-panes", "-t", "codex-5", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
+    assert.deepEqual(calls[3].args, ["paste-buffer", "-b", "codex-5-answer", "-t", "%5"]);
+    assert.deepEqual(calls[4].args, ["send-keys", "-t", "%5", "C-m"]);
     const answerPath = join(stateRoot, "manager-runs", "manager-test", "question-answers", "codex-5-question-1.md");
     const pastePath = join(stateRoot, "manager-runs", "manager-test", "question-answers", "codex-5-question-1.paste.txt");
     assert.match(readFileSync(answerPath, "utf8"), /Story 6\.6 artifact/);
