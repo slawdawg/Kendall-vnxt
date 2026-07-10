@@ -530,8 +530,8 @@ test("contextual action strips are selection scoped and return metadata-only act
   assert.equal(readyStrip.actions[0].state, "available");
   assert.equal(readyStrip.actions[0].result, null);
   assert.equal(JSON.stringify(readyStrip.actions.slice(1).map((action) => action.actionId)), JSON.stringify([
-    "record_test_pass",
-    "record_test_fail",
+    "mark_tested",
+    "mark_tested",
     "request_rework",
   ]));
   assert.equal(readyStrip.actions.slice(1).every((action) => action.state === "gated"), true);

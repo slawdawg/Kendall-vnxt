@@ -92,6 +92,11 @@ class AuthoritativeWorkPacket(Base):
     status: Mapped[str] = mapped_column(String(32))
     truth_label: Mapped[str] = mapped_column(String(32), default="source_owned")
     source_ref_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    parent_packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    lineage_kind: Mapped[str] = mapped_column(String(32), default="root")
+    ready_to_test_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    operator_test_state: Mapped[str] = mapped_column(String(24), default="not_ready")
+    operator_test_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_event_id: Mapped[str] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -125,6 +130,37 @@ class AuthoritativeWorkPacketLifecycleEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     packet: Mapped[AuthoritativeWorkPacket] = relationship(back_populates="lifecycle_events")
+
+
+class OperationalActionRecord(Base):
+    __tablename__ = "pipeline_operational_action_records"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_pipeline_operational_action_idempotency"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    action_id: Mapped[str] = mapped_column(String(64))
+    target_type: Mapped[str] = mapped_column(String(32))
+    target_id: Mapped[str] = mapped_column(String(120))
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    correlation_id: Mapped[str] = mapped_column(String(120))
+    actor_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    requested_authority_state: Mapped[str] = mapped_column(String(40))
+    requested_risk_tier: Mapped[str] = mapped_column(String(16))
+    expected_current_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16))
+    resulting_stage: Mapped[str] = mapped_column(String(32))
+    resulting_status: Mapped[str] = mapped_column(String(32))
+    capability_state: Mapped[str] = mapped_column(String(16))
+    authority_state: Mapped[str] = mapped_column(String(40))
+    typed_reason: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    child_packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    operator_intent_summary: Mapped[str] = mapped_column(Text, default="")
+    test_result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    test_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ExecutionAttempt(Base):

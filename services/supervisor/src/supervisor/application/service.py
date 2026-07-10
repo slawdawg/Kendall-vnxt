@@ -140,6 +140,11 @@ from supervisor.api.schemas import (
     PipelineDashboardWorkPacketV0View,
     PipelineFixtureModeV0View,
     PipelineGatedControlV0View,
+    PipelineRuntimeReadinessV0View,
+    OperationalActionCapabilityView,
+    OperationalActionRequest,
+    OperationalActionResultView,
+    OperationalReadyToTestRequest,
     PipelineManagerSummaryV0View,
     PipelineQueueSummaryV0View,
     PipelineReliabilityProblemV0View,
@@ -300,6 +305,7 @@ from supervisor.infrastructure.db.models import (
     AuditEvent,
     AuthoritativeWorkPacket,
     AuthoritativeWorkPacketLifecycleEvent,
+    OperationalActionRecord,
     CandidateWork,
     ExecutionAttempt,
     MemoryProposal,
@@ -333,6 +339,10 @@ AUTHORITATIVE_PLANNING_SOURCE_PATH = (
     "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md"
 )
 AUTHORITATIVE_PLANNING_SOURCE_LABEL = "July 4 pipeline execution-loop reliability PRD"
+CURRENT_OPERATIONAL_ACTION_LOOP_PRD_PATH = (
+    "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md"
+)
+CURRENT_OPERATIONAL_ACTION_LOOP_PRD_LABEL = "July 4 operational pipeline action loop PRD"
 STALE_PLANNING_SOURCE_POLICY = (
     "hold or flag packets, stories, and architecture notes that reference superseded PRDs; "
     "do not silently derive downstream planning work from stale planning sources."
@@ -351,6 +361,27 @@ AUTHORITATIVE_PACKET_STAGE_SEQUENCE = [
     "learn",
 ]
 PIPELINE_DISPATCHABLE_STAGES = {"capture", "classify", "route", "shape", "execute", "review", "promote", "deliver"}
+
+OPERATIONAL_ACTION_POLICIES = {
+    "inspect": {"risk": "low", "authority": "not_required", "targets": {"work_packet", "projection"}, "summary": "Inspect current backend-owned packet state."},
+    "refresh_projection": {"risk": "low", "authority": "not_required", "targets": {"projection", "work_packet"}, "summary": "Refresh the backend projection."},
+    "mark_tested": {"risk": "medium", "authority": "needs_product_approval", "targets": {"work_packet"}, "summary": "Record the operator test decision and preserve packet context."},
+    "request_rework": {"risk": "medium", "authority": "needs_product_approval", "targets": {"work_packet"}, "summary": "Create a rework child packet without deleting the parent."},
+    "retry_verification": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Retry verification only after explicit authority approval."},
+    "requeue": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Return a blocked packet to its current queue stage."},
+    "pause": {"risk": "low", "authority": "needs_authority_approval", "targets": {"runtime", "manager_run"}, "summary": "Pause new operational work while preserving packet state."},
+    "drain": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"runtime", "manager_run"}, "summary": "Drain active work before entering paused mode."},
+    "reassign": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Reassign ownership after explicit authority approval."},
+    "reject": {"risk": "medium", "authority": "needs_product_approval", "targets": {"work_packet"}, "summary": "Reject the packet with an auditable operator decision."},
+}
+OPERATIONAL_ACTION_TRUTH_REASONS = {
+    "blocked_by_approval",
+    "runtime_unavailable",
+    "invalid_transition",
+    "test_not_ready",
+    "unsupported_action",
+    "unknown",
+}
 
 AUTHORITATIVE_PACKET_STAGE_LABELS = {
     "capture": "Capture",
@@ -582,6 +613,10 @@ class SupervisorService:
             status=payload.status,
             truth_label=payload.truthLabel,
             source_ref_json=source_ref,
+            parent_packet_id=payload.parentPacketId,
+            lineage_kind=payload.lineageKind,
+            ready_to_test_json=payload.readyToTest.model_dump() if payload.readyToTest else None,
+            operator_test_state="ready" if payload.readyToTest else "not_ready",
             current_event_id=event_id,
             created_at=now,
             updated_at=now,
@@ -673,6 +708,11 @@ class SupervisorService:
             raise ValueError("Authoritative WorkPacket transition rejected because current event changed.")
         self._validate_authoritative_stage_transition(packet.current_stage, payload.targetStage)
 
+        if payload.readyToTest is not None:
+            packet.ready_to_test_json = payload.readyToTest.model_dump()
+            packet.operator_test_state = "ready"
+            packet.operator_test_note = None
+
         now = datetime.now(timezone.utc)
         event_id = f"event-{uuid.uuid4()}"
         payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
@@ -748,6 +788,468 @@ class SupervisorService:
         if target_index != current_index + 1:
             raise ValueError("Authoritative WorkPacket transitions must advance to the next canonical stage.")
 
+    async def apply_pipeline_operational_action(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequest,
+    ) -> OperationalActionResultView:
+        existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+        if existing:
+            if not self._operational_action_matches(existing, payload):
+                raise ValueError("Operational action idempotency key already belongs to different action metadata.")
+            return self._operational_action_result_view(existing)
+
+        policy = OPERATIONAL_ACTION_POLICIES.get(payload.actionId)
+        if policy is None:
+            raise ValueError("Unsupported operational action.")
+        if payload.targetType not in policy["targets"]:
+            raise ValueError("Operational action target type is not allowed by policy.")
+        if payload.requestedRiskTier != policy["risk"]:
+            raise ValueError("Operational action risk tier does not match policy.")
+        if payload.requestedAuthorityState != policy["authority"]:
+            raise ValueError("Operational action authority family does not match policy.")
+
+        packet: AuthoritativeWorkPacket | None = None
+        if payload.targetType == "work_packet":
+            packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
+            if not packet:
+                raise ValueError("Authoritative WorkPacket not found.")
+            if payload.expectedCurrentEventId and packet.current_event_id != payload.expectedCurrentEventId:
+                raise ValueError("Operational action rejected because packet state changed.")
+
+        evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
+        action_evidence_ref = f"operational-action:{payload.actionId}:{payload.targetId}:{payload.idempotencyKey}"
+        if action_evidence_ref not in evidence_refs:
+            evidence_refs.append(action_evidence_ref)
+        approval_evidence_required = policy["authority"] != "not_required"
+        has_approval_evidence = any(
+            ref.startswith("evidence:product-test-approval")
+            or ref.startswith("evidence:authority-approval")
+            for ref in evidence_refs
+        )
+        if approval_evidence_required and not has_approval_evidence:
+            record = self._new_operational_action_record(
+                payload,
+                packet=packet,
+                outcome="blocked",
+                resulting_stage=packet.current_stage if packet else "unknown",
+                resulting_status=packet.status if packet else "unknown",
+                capability_state="gated",
+                authority_state=policy["authority"],
+                typed_reason="blocked_by_approval",
+                evidence_refs=evidence_refs,
+            )
+            session.add(record)
+            await session.commit()
+            return self._operational_action_result_view(record)
+
+        if approval_evidence_required:
+            evidence_refs.extend(
+                [
+                    f"evidence:approval-{policy['authority']}:{payload.actionId}:{payload.targetId}:{payload.correlationId}:{payload.idempotencyKey}",
+                    f"evidence:{payload.actionId}-context:{payload.targetId}:{payload.correlationId}:{payload.idempotencyKey}",
+                ]
+            )
+
+        child_packet_id: str | None = None
+        if payload.actionId == "inspect" or payload.actionId == "refresh_projection":
+            outcome = "succeeded"
+        elif payload.actionId == "mark_tested":
+            if not packet or not packet.ready_to_test_json or packet.operator_test_state != "ready":
+                record = self._new_operational_action_record(
+                    payload,
+                    packet=packet,
+                    outcome="blocked",
+                    resulting_stage=packet.current_stage if packet else "unknown",
+                    resulting_status=packet.status if packet else "unknown",
+                    capability_state="gated",
+                    authority_state=policy["authority"],
+                    typed_reason="test_not_ready",
+                    evidence_refs=evidence_refs,
+                )
+                session.add(record)
+                await session.commit()
+                return self._operational_action_result_view(record)
+            if payload.testResult is None:
+                raise ValueError("mark_tested requires testResult pass, fail, or notes.")
+            packet.operator_test_note = self._safe_lifecycle_summary(payload.testNotes or "") if payload.testNotes else None
+            if payload.testResult == "pass":
+                packet.operator_test_state = "passed"
+                packet.status = "waiting"
+                if packet.current_stage == "review":
+                    await self._append_operational_stage_event(
+                        session,
+                        packet,
+                        target_stage="promote",
+                        status="waiting",
+                        payload=payload,
+                        evidence_refs=evidence_refs,
+                    )
+            elif payload.testResult == "fail":
+                child_packet_id = await self._create_rework_child(
+                    session,
+                    packet,
+                    payload,
+                    evidence_refs,
+                    key_suffix="failed-test",
+                )
+                packet.operator_test_state = "rework"
+                packet.status = "deferred"
+            else:
+                packet.operator_test_state = "ready"
+                packet.status = "waiting"
+            packet.updated_at = datetime.now(timezone.utc)
+            outcome = "succeeded"
+        elif payload.actionId == "request_rework":
+            if not packet:
+                raise ValueError("Rework requires a WorkPacket target.")
+            child_packet_id = await self._create_rework_child(
+                session,
+                packet,
+                payload,
+                evidence_refs,
+                key_suffix="requested-rework",
+            )
+            packet.operator_test_state = "rework"
+            packet.status = "deferred"
+            packet.updated_at = datetime.now(timezone.utc)
+            outcome = "succeeded"
+        elif payload.actionId == "requeue":
+            if not packet:
+                raise ValueError("Requeue requires a WorkPacket target.")
+            packet.status = "waiting"
+            packet.operator_test_state = "not_ready"
+            packet.updated_at = datetime.now(timezone.utc)
+            outcome = "succeeded"
+        elif payload.actionId == "reject":
+            if not packet:
+                raise ValueError("Reject requires a WorkPacket target.")
+            packet.status = "deferred"
+            packet.updated_at = datetime.now(timezone.utc)
+            outcome = "succeeded"
+        elif payload.actionId in {"pause", "drain"}:
+            control = await self.ensure_control(session)
+            control.mode = RunMode.PAUSED.value if payload.actionId == "pause" else RunMode.DRAINING.value
+            outcome = "succeeded"
+        else:
+            record = self._new_operational_action_record(
+                payload,
+                packet=packet,
+                outcome="blocked",
+                resulting_stage=packet.current_stage if packet else "unknown",
+                resulting_status=packet.status if packet else "unknown",
+                capability_state="gated",
+                authority_state=policy["authority"],
+                typed_reason="unsupported_action",
+                evidence_refs=evidence_refs,
+            )
+            session.add(record)
+            await session.commit()
+            return self._operational_action_result_view(record)
+
+        record = self._new_operational_action_record(
+            payload,
+            packet=packet,
+            outcome=outcome,
+            resulting_stage=packet.current_stage if packet else "unknown",
+            resulting_status=packet.status if packet else "unknown",
+            capability_state="available",
+            authority_state="allowed" if approval_evidence_required else policy["authority"],
+            typed_reason=None,
+            evidence_refs=evidence_refs,
+            child_packet_id=child_packet_id,
+        )
+        session.add(record)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+            if replay and self._operational_action_matches(replay, payload):
+                return self._operational_action_result_view(replay)
+            raise
+        return self._operational_action_result_view(record)
+
+    async def _append_operational_stage_event(
+        self,
+        session: AsyncSession,
+        packet: AuthoritativeWorkPacket,
+        *,
+        target_stage: str,
+        status: str,
+        payload: OperationalActionRequest,
+        evidence_refs: list[str],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        event_id = f"event-{uuid.uuid4()}"
+        event = AuthoritativeWorkPacketLifecycleEvent(
+            id=event_id,
+            packet_id=packet.id,
+            schema_version=1,
+            event_type="packet.stage_transitioned",
+            previous_stage=packet.current_stage,
+            target_stage=target_stage,
+            status=status,
+            truth_label="source_owned",
+            source_ref_json=packet.source_ref_json,
+            actor_json=payload.requestedBy.model_dump(),
+            correlation_id=payload.correlationId,
+            causation_id=packet.current_event_id,
+            idempotency_key=f"{payload.idempotencyKey}:stage",
+            payload_summary="Accepted operator test pass and advanced packet.",
+            evidence_refs_json=evidence_refs,
+            occurred_at=now,
+        )
+        session.add(event)
+        packet.current_stage = target_stage
+        packet.current_event_id = event_id
+
+    async def _create_rework_child(
+        self,
+        session: AsyncSession,
+        packet: AuthoritativeWorkPacket,
+        payload: OperationalActionRequest,
+        evidence_refs: list[str],
+        *,
+        key_suffix: str,
+    ) -> str:
+        child_key = f"{packet.id}:{payload.idempotencyKey}:{key_suffix}"
+        child_packet_id = f"rework:{uuid.uuid5(uuid.NAMESPACE_URL, child_key).hex}"
+        existing_child = await session.get(AuthoritativeWorkPacket, child_packet_id)
+        if existing_child:
+            return child_packet_id
+        now = datetime.now(timezone.utc)
+        child_event_id = f"event-{uuid.uuid4()}"
+        child = AuthoritativeWorkPacket(
+            id=child_packet_id,
+            title=f"Rework: {packet.title}",
+            current_stage="shape",
+            status="waiting",
+            truth_label="source_owned",
+            source_ref_json=packet.source_ref_json,
+            parent_packet_id=packet.id,
+            lineage_kind="rework",
+            operator_test_state="not_ready",
+            current_event_id=child_event_id,
+            created_at=now,
+            updated_at=now,
+        )
+        child_event = AuthoritativeWorkPacketLifecycleEvent(
+            id=child_event_id,
+            packet_id=child_packet_id,
+            schema_version=1,
+            event_type="packet.created",
+            previous_stage=None,
+            target_stage="shape",
+            status="waiting",
+            truth_label="source_owned",
+            source_ref_json=packet.source_ref_json,
+            actor_json=payload.requestedBy.model_dump(),
+            correlation_id=payload.correlationId,
+            causation_id=packet.current_event_id,
+            idempotency_key=f"child:{uuid.uuid5(uuid.NAMESPACE_URL, child_key).hex}",
+            payload_summary="Created metadata-only rework child packet.",
+            evidence_refs_json=evidence_refs,
+            occurred_at=now,
+        )
+        session.add(child)
+        session.add(child_event)
+        return child_packet_id
+
+    async def _operational_action_by_idempotency(
+        self,
+        session: AsyncSession,
+        idempotency_key: str,
+    ) -> OperationalActionRecord | None:
+        result = await session.execute(
+            select(OperationalActionRecord).where(OperationalActionRecord.idempotency_key == idempotency_key)
+        )
+        return result.scalars().first()
+
+    def _operational_capability(
+        self,
+        action_id: str,
+        *,
+        target_id: str | None = None,
+        packet: AuthoritativeWorkPacket | None = None,
+    ) -> OperationalActionCapabilityView:
+        policy = OPERATIONAL_ACTION_POLICIES[action_id]
+        typed_reason = None
+        capability_state = "gated"
+        authority_state = policy["authority"]
+        if action_id in {"inspect", "refresh_projection"}:
+            capability_state = "available"
+            authority_state = "not_required"
+        elif action_id in {"mark_tested", "request_rework"} and packet and (
+            getattr(packet, "ready_to_test_json", None)
+            or getattr(packet, "readyToTest", None)
+        ) and (
+            getattr(packet, "operator_test_state", None) or getattr(packet, "operatorTestState", None)
+        ) == "ready":
+            typed_reason = "blocked_by_approval"
+            capability_state = "available"
+        elif action_id in {"mark_tested", "request_rework"}:
+            typed_reason = "test_not_ready"
+        else:
+            typed_reason = "blocked_by_approval"
+        return OperationalActionCapabilityView(
+            actionId=action_id,
+            targetType=(
+                "work_packet"
+                if packet or action_id in {"mark_tested", "request_rework", "requeue", "retry_verification", "reject"}
+                else "projection"
+                if action_id == "refresh_projection"
+                else "runtime"
+            ),
+            targetId=target_id,
+            capabilityState=capability_state,
+            authorityState=authority_state,
+            riskTier=policy["risk"],
+            typedReason=typed_reason,
+            expectedResultSummary=policy["summary"],
+            evidenceRefs=[f"capability:{action_id}"],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    def _packet_operational_capabilities(self, packet: AuthoritativeWorkPacket) -> list[OperationalActionCapabilityView]:
+        packet_id = getattr(packet, "id", None) or getattr(packet, "packetId")
+        return [
+            self._operational_capability("inspect", target_id=packet_id, packet=packet),
+            self._operational_capability("refresh_projection", target_id=packet_id, packet=packet),
+            self._operational_capability("mark_tested", target_id=packet_id, packet=packet),
+            self._operational_capability("request_rework", target_id=packet_id, packet=packet),
+            self._operational_capability("retry_verification", target_id=packet_id, packet=packet),
+            self._operational_capability("requeue", target_id=packet_id, packet=packet),
+            self._operational_capability("reassign", target_id=packet_id, packet=packet),
+            self._operational_capability("reject", target_id=packet_id, packet=packet),
+        ]
+
+    async def _pipeline_runtime_readiness(self, session: AsyncSession, generated_at: datetime) -> PipelineRuntimeReadinessV0View:
+        control = await self.ensure_control(session)
+        paused = control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}
+        disabled = control.mode == RunMode.DISABLED.value
+        mode = "read_only" if paused else "unavailable" if disabled else "local_proof"
+        readiness_state = "unavailable" if disabled else "ready"
+        capability_state = "unavailable" if disabled else "available"
+        typed_reason = "runtime_unavailable" if disabled else None
+        return PipelineRuntimeReadinessV0View(
+            readinessState=readiness_state,
+            operationalMode=mode,
+            freshnessState="live",
+            capabilityState=capability_state,
+            typedReason=typed_reason,
+            checkedAt=generated_at,
+            expiresAt=generated_at + timedelta(minutes=5),
+            summary=(
+                "Local proof runtime is ready; external provider and high-risk actions remain gated."
+                if not paused and not disabled
+                else "Runtime is paused/draining; inspection and projection refresh remain available."
+                if paused
+                else "Supervisor runtime is disabled."
+            ),
+            actionCapabilities=[
+                self._operational_capability("inspect"),
+                self._operational_capability("refresh_projection"),
+                self._operational_capability("mark_tested"),
+                self._operational_capability("request_rework"),
+                self._operational_capability("retry_verification"),
+                self._operational_capability("requeue"),
+                self._operational_capability("pause"),
+                self._operational_capability("drain"),
+                self._operational_capability("reassign"),
+                self._operational_capability("reject"),
+            ],
+            evidenceRefs=["runtime:database-reachable", "runtime:local-proof"],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    def _operational_action_matches(self, record: OperationalActionRecord, payload: OperationalActionRequest) -> bool:
+        return (
+            record.action_id == payload.actionId
+            and record.target_type == payload.targetType
+            and record.target_id == payload.targetId
+            and record.correlation_id == payload.correlationId
+            and record.actor_json == payload.requestedBy.model_dump()
+            and record.requested_authority_state == payload.requestedAuthorityState
+            and record.requested_risk_tier == payload.requestedRiskTier
+            and record.expected_current_event_id == payload.expectedCurrentEventId
+            and self._operational_requested_evidence_refs(record) == self._safe_lifecycle_refs(payload.evidenceRefs)
+            and record.operator_intent_summary == self._safe_lifecycle_summary(payload.operatorIntentSummary or "Metadata-only operational action.")
+            and record.test_result == payload.testResult
+            and record.test_notes == (self._safe_lifecycle_summary(payload.testNotes or "") if payload.testNotes else None)
+        )
+
+    def _operational_requested_evidence_refs(self, record: OperationalActionRecord) -> list[str]:
+        return [
+            ref
+            for ref in list(record.evidence_refs_json or [])
+            if not ref.startswith("operational-action:")
+            and not ref.startswith("evidence:approval-")
+            and not ref.startswith(f"evidence:{record.action_id}-context:")
+        ]
+
+    def _new_operational_action_record(
+        self,
+        payload: OperationalActionRequest,
+        *,
+        packet: AuthoritativeWorkPacket | None,
+        outcome: str,
+        resulting_stage: str,
+        resulting_status: str,
+        capability_state: str,
+        authority_state: str,
+        typed_reason: str | None,
+        evidence_refs: list[str],
+        child_packet_id: str | None = None,
+    ) -> OperationalActionRecord:
+        return OperationalActionRecord(
+            id=f"action-{uuid.uuid4()}",
+            packet_id=packet.id if packet else None,
+            action_id=payload.actionId,
+            target_type=payload.targetType,
+            target_id=payload.targetId,
+            idempotency_key=payload.idempotencyKey,
+            correlation_id=payload.correlationId,
+            actor_json=payload.requestedBy.model_dump(),
+            requested_authority_state=payload.requestedAuthorityState,
+            requested_risk_tier=payload.requestedRiskTier,
+            expected_current_event_id=payload.expectedCurrentEventId,
+            outcome=outcome,
+            resulting_stage=resulting_stage,
+            resulting_status=resulting_status,
+            capability_state=capability_state,
+            authority_state=authority_state,
+            typed_reason=typed_reason,
+            child_packet_id=child_packet_id,
+            evidence_refs_json=evidence_refs,
+            operator_intent_summary=self._safe_lifecycle_summary(payload.operatorIntentSummary or "Metadata-only operational action."),
+            test_result=payload.testResult,
+            test_notes=self._safe_lifecycle_summary(payload.testNotes or "") if payload.testNotes else None,
+        )
+
+    def _operational_action_result_view(self, record: OperationalActionRecord) -> OperationalActionResultView:
+        return OperationalActionResultView(
+            actionId=record.action_id,
+            targetType=record.target_type,
+            targetId=record.target_id,
+            outcome=record.outcome,
+            resultingStage=record.resulting_stage,
+            resultingStatus=record.resulting_status,
+            capabilityState=record.capability_state,
+            authorityState=record.authority_state,
+            riskTier=record.requested_risk_tier,
+            typedReason=record.typed_reason,
+            evidenceRefs=list(record.evidence_refs_json or []),
+            correlationId=record.correlation_id,
+            idempotencyKey=record.idempotency_key,
+            actionRecordId=record.id,
+            childPacketId=record.child_packet_id,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
     async def to_authoritative_work_packet_view(
         self,
         session: AsyncSession,
@@ -760,16 +1262,22 @@ class SupervisorService:
         )
         events = list(event_result.scalars())
         latest_event = events[-1] if events else None
+        current_event = next((event for event in events if event.id == packet.current_event_id), None)
         return AuthoritativeWorkPacketLifecycleView(
             packetId=packet.id,
             title=packet.title,
-            currentStage=latest_event.target_stage if latest_event else packet.current_stage,
-            status=latest_event.status if latest_event else packet.status,
-            truthLabel=latest_event.truth_label if latest_event else packet.truth_label,
+            currentStage=packet.current_stage if current_event else latest_event.target_stage if latest_event else packet.current_stage,
+            status=packet.status if current_event else latest_event.status if latest_event else packet.status,
+            truthLabel=packet.truth_label if current_event else latest_event.truth_label if latest_event else packet.truth_label,
             sourceRef=packet.source_ref_json,
             createdAt=packet.created_at,
             updatedAt=packet.updated_at,
             currentEventId=latest_event.id if latest_event else packet.current_event_id,
+            parentPacketId=packet.parent_packet_id,
+            lineageKind=packet.lineage_kind or "root",
+            readyToTest=WorkPacketReadyToTestV0View(**packet.ready_to_test_json) if packet.ready_to_test_json else None,
+            operatorTestState=packet.operator_test_state or "not_ready",
+            operatorTestNote=packet.operator_test_note,
             history=[self._authoritative_lifecycle_event_view(event) for event in events],
             metadataOnly=True,
         )
@@ -2058,6 +2566,14 @@ class SupervisorService:
             source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
             worker_summary_records = self._pipeline_projection_worker_summary_records(candidates)
             gated_controls = self._pipeline_projection_gated_controls(candidates)
+            runtime_readiness = await self._pipeline_runtime_readiness(session, generated_at)
+            action_result_rows = await session.execute(
+                select(OperationalActionRecord).order_by(OperationalActionRecord.created_at.asc())
+            )
+            action_results_by_packet: dict[str, list[OperationalActionRecord]] = {}
+            for action_record in action_result_rows.scalars():
+                if action_record.packet_id:
+                    action_results_by_packet.setdefault(action_record.packet_id, []).append(action_record)
         except SQLAlchemyError:
             return self._unavailable_pipeline_dashboard_projection(generated_at, stale_after_seconds)
 
@@ -2201,7 +2717,7 @@ class SupervisorService:
                     sourceRef=packet.sourceRef,
                     blocker=blocker,
                     nextAction=next_action,
-                    readyToTest=None,
+                    readyToTest=packet.readyToTest,
                     evidenceRefs=packet_evidence,
                     updatedAt=packet.updatedAt,
                     metadataOnly=True,
@@ -2217,11 +2733,17 @@ class SupervisorService:
                     truthLabel=packet_source_label,
                     blocker=blocker,
                     nextAction=next_action,
-                    readyToTest=None,
+                    readyToTest=packet.readyToTest,
                     latestTransitionEventRef=latest_transition_event_ref,
                     recentTransitionEventRefs=recent_transition_event_refs,
                     latestMovementSummary=latest_movement_summary,
                     canSatisfyLiveMovementProof=can_satisfy_live_movement_proof,
+                    parentPacketId=packet.parentPacketId,
+                    lineageKind=packet.lineageKind or "root",
+                    operatorTestState=packet.operatorTestState or "not_ready",
+                    operatorTestNote=packet.operatorTestNote,
+                    actionCapabilities=self._packet_operational_capabilities(packet),
+                    actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]],
                     metadataOnly=True,
                 )
             )
@@ -2501,6 +3023,8 @@ class SupervisorService:
             workerSummary=worker_summary,
             reliabilityProblems=reliability_problems,
             gatedControls=gated_controls,
+            runtimeReadiness=runtime_readiness,
+            actionCapabilities=runtime_readiness.actionCapabilities,
             queueSummary=PipelineQueueSummaryV0View(
                 activeCount=active_count,
                 dispatchableCount=dispatchable_count,
@@ -2611,6 +3135,21 @@ class SupervisorService:
             ),
             reliabilityProblems=[],
             gatedControls=[],
+            runtimeReadiness=PipelineRuntimeReadinessV0View(
+                readinessState="unavailable",
+                operationalMode="unavailable",
+                freshnessState="unavailable",
+                capabilityState="unavailable",
+                typedReason="runtime_unavailable",
+                checkedAt=generated_at,
+                expiresAt=generated_at,
+                summary="Operational runtime readiness is unavailable because the backend projection failed.",
+                actionCapabilities=[],
+                evidenceRefs=["runtime:backend-unavailable"],
+                metadataOnly=True,
+                rawPayloadRetained=False,
+            ),
+            actionCapabilities=[],
             queueSummary=PipelineQueueSummaryV0View(
                 activeCount=None,
                 dispatchableCount=None,
@@ -26097,6 +26636,13 @@ class SupervisorService:
 
     def _planning_source_authority(self, path_or_url: object) -> dict[str, object]:
         path = self._normalized_planning_source_path(path_or_url)
+        if path == CURRENT_OPERATIONAL_ACTION_LOOP_PRD_PATH:
+            return {
+                "status": "authoritative",
+                "superseded_by": None,
+                "downstream_use_allowed": True,
+                "operator_explanation": f"This is the {CURRENT_OPERATIONAL_ACTION_LOOP_PRD_LABEL} and is authoritative for operational pipeline action-loop planning.",
+            }
         if path == AUTHORITATIVE_PLANNING_SOURCE_PATH:
             return {
                 "status": "authoritative",

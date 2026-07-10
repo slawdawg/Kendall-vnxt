@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
-import type { PipelineDashboardProjectionV0, PipelineStage } from "@kendall/contracts";
+import type { PipelineDashboardProjectionV0, PipelineOperationalActionRequestV0, PipelineStage } from "@kendall/contracts";
 import type { PipelineFixturePacket } from "../../lib/pipeline-fixtures";
 import {
   projectionDisplayLabels,
@@ -28,7 +28,8 @@ import type {
       PipelineManagerFeedbackRouteRow,
       PipelineManagerLanePanel,
       PipelineManagerLaneRow,
-    } from "../../lib/pipeline/manager-execution-lane-summary";
+} from "../../lib/pipeline/manager-execution-lane-summary";
+import { applyPipelineOperationalAction } from "../../lib/pipeline-packet-loader";
 
 const pipelineStages: PipelineStage[] = [
   "capture",
@@ -106,6 +107,7 @@ export function PipelineCockpit({
   const [staleHistoryOpen, setStaleHistoryOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [usageVisibility, setUsageVisibility] = useState({ claude: true, codex: true });
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const currentProjection = projection ?? null;
   const currentProjectionError = projectionError ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +208,41 @@ export function PipelineCockpit({
         : { type: "packet", id: packetId }
     );
   }, []);
+  const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
+    if (action.state !== "available" || !["mark_tested", "request_rework"].includes(action.actionId)) {
+      return;
+    }
+    const testResult = action.actionInstanceId.endsWith(":pass")
+      ? "pass"
+      : action.actionInstanceId.endsWith(":fail")
+        ? "fail"
+        : undefined;
+    const detail = currentProjection?.selectedPacketDetails.find((item) => item.packetId === packetId) ?? null;
+    const request: PipelineOperationalActionRequestV0 = {
+      schemaVersion: "pipeline-operational-action/v0",
+      actionId: action.actionId as PipelineOperationalActionRequestV0["actionId"],
+      targetType: "work_packet",
+      targetId: packetId,
+      idempotencyKey: `pipeline-ui:${packetId}:${action.actionId}:${Date.now()}`,
+      correlationId: `pipeline-ui:${packetId}:${Date.now()}`,
+      requestedBy: { actorType: "operator", actorId: "pipeline-operator", actorLabel: "Pipeline operator" },
+      requestedAuthorityState: action.actionId === "mark_tested" || action.actionId === "request_rework" ? "needs_product_approval" : "not_required",
+      requestedRiskTier: action.riskTier,
+      expectedCurrentEventId: detail?.latestTransitionEventRef?.replace(/^event:/, "") ?? undefined,
+      operatorIntentSummary: `${action.label} from /pipeline packet detail.`,
+      evidenceRefs: ["evidence:product-test-approval"],
+      testResult,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+    try {
+      const result = await applyPipelineOperationalAction(request);
+      setActionFeedback(`${result.actionId}: ${result.outcome}; ${result.typedReason ?? "state updated"}; correlation ${result.correlationId}`);
+      window.setTimeout(() => window.location.reload(), 250);
+    } catch (error) {
+      setActionFeedback(error instanceof Error ? error.message : "Operational action failed.");
+    }
+  }, [currentProjection]);
   const registerPacketButton = useCallback((packetId: string, node: HTMLButtonElement | null) => {
     if (node) {
       packetButtonRefs.current.set(packetId, node);
@@ -632,6 +669,8 @@ export function PipelineCockpit({
               ) : selectedMapPacket ? (
                 <PacketInspection
                   onClose={closeSelectedItem}
+                  onOperationalAction={handleOperationalAction}
+                  actionFeedback={actionFeedback}
                   contextualActionStrip={selectedContextualActionStrip}
                   packet={selectedMapPacket}
                   packetDetailWhyDiagnostics={selectedPacketDetailWhyDiagnostics}
@@ -641,6 +680,8 @@ export function PipelineCockpit({
               ) : selectedDetailOnlyPacket ? (
                 <PacketInspection
                   onClose={closeSelectedItem}
+                  onOperationalAction={handleOperationalAction}
+                  actionFeedback={actionFeedback}
                   contextualActionStrip={selectedContextualActionStrip}
                   packet={selectedDetailOnlyPacket}
                   packetDetailWhyDiagnostics={selectedPacketDetailWhyDiagnostics}
@@ -2332,14 +2373,18 @@ function DiagnosticCopyButton({ label, value }: { label: string; value: string }
 }
 
 function PacketInspection({
+  actionFeedback,
   contextualActionStrip,
+  onOperationalAction,
   onClose,
   packet,
   packetDetailWhyDiagnostics,
   projectionDetail,
   projectionError,
 }: {
+  actionFeedback: string | null;
   contextualActionStrip: PipelineContextualActionStrip | null;
+  onOperationalAction: (action: PipelineContextualActionStrip["actions"][number], packetId: string) => void;
   onClose: () => void;
   packet: ActiveBoardCockpitPacket;
   packetDetailWhyDiagnostics: PipelinePacketDetailWhyDiagnostics | null;
@@ -2412,7 +2457,8 @@ function PacketInspection({
         <span className="pipeline-packet-summary-state">{detailState}</span>
         <span>{packet.summary}</span>
       </div>
-      <ContextualActionStripPanel strip={contextualActionStrip} />
+      <ContextualActionStripPanel onAction={(action) => onOperationalAction(action, packet.packetId)} strip={contextualActionStrip} />
+      {actionFeedback ? <p aria-live="polite" className="mt-2 rounded-[0.375rem] border border-[var(--line)] px-3 py-1.5 text-xs text-[var(--muted)]">{actionFeedback}</p> : null}
       <PacketWhyDiagnosticsPanel detail={packetDetailWhyDiagnostics} />
       <dl className="mt-3 grid gap-2 text-sm">
         <InspectionRow label="Where" value={detailStage} />
@@ -2540,7 +2586,10 @@ function PacketWhyDiagnosticsPanel({ detail }: { detail: PipelinePacketDetailWhy
   );
 }
 
-function ContextualActionStripPanel({ strip }: { strip: PipelineContextualActionStrip | null }) {
+function ContextualActionStripPanel({ onAction, strip }: {
+  onAction: (action: PipelineContextualActionStrip["actions"][number]) => void;
+  strip: PipelineContextualActionStrip | null;
+}) {
   if (!strip?.visible || strip.actions.length === 0) {
     return null;
   }
@@ -2560,13 +2609,14 @@ function ContextualActionStripPanel({ strip }: { strip: PipelineContextualAction
             key={action.actionInstanceId}
           >
             {action.state === "available" ? (
-              <a
+              <button
                 className="inline-flex h-8 items-center justify-center rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-                href="#pipeline-selected-packet-detail"
+                onClick={() => onAction(action)}
                 title={`${action.reason} ${action.expectedResult}`}
+                type="button"
               >
                 {action.label}
-              </a>
+              </button>
             ) : (
               <button
                 aria-disabled="true"

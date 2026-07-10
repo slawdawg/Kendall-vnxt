@@ -200,6 +200,11 @@ export interface AuthoritativeWorkPacketLifecycleView {
   createdAt: string;
   updatedAt: string;
   currentEventId: string;
+  parentPacketId?: string | null;
+  lineageKind?: string;
+  readyToTest?: PipelineReadyToTestV0 | null;
+  operatorTestState?: "not_ready" | "ready" | "passed" | "failed" | "rework";
+  operatorTestNote?: string | null;
   history: AuthoritativePacketLifecycleEvent[];
   metadataOnly: true;
 }
@@ -213,6 +218,9 @@ export interface CreateAuthoritativeWorkPacketRequest {
   sourceRef: AuthoritativePacketSourceRef;
   actor: AuthoritativePacketActor;
   idempotencyKey?: string | null;
+  parentPacketId?: string | null;
+  lineageKind?: string;
+  readyToTest?: PipelineReadyToTestV0 | null;
   payloadSummary?: string;
   evidenceRefs?: string[];
 }
@@ -224,6 +232,7 @@ export interface TransitionAuthoritativeWorkPacketRequest {
   truthLabel?: AuthoritativePacketTruthLabel;
   actor: AuthoritativePacketActor;
   idempotencyKey?: string | null;
+  readyToTest?: PipelineReadyToTestV0 | null;
   payloadSummary?: string;
   evidenceRefs?: string[];
 }
@@ -261,6 +270,9 @@ export const PIPELINE_OPERATIONAL_ACTION_TYPED_REASONS = [
   "delivery_blocked",
   "evidence_invalid",
   "projection_stale",
+  "invalid_transition",
+  "test_not_ready",
+  "unsupported_action",
   "unknown",
 ] as const;
 export type PipelineOperationalActionTypedReasonV0 = (typeof PIPELINE_OPERATIONAL_ACTION_TYPED_REASONS)[number];
@@ -273,6 +285,11 @@ export const PIPELINE_OPERATIONAL_ACTION_IDS = [
   "retry_verification",
   "requeue",
   "mark_tested",
+  "request_rework",
+  "pause",
+  "drain",
+  "reassign",
+  "reject",
   "kill_worker",
   "mutate_source",
   "push_branch",
@@ -340,6 +357,9 @@ export interface PipelineOperationalActionRequestV0 {
   requestedRiskTier: PipelineOperationalActionRiskTierV0;
   operatorIntentSummary?: string | null;
   evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  expectedCurrentEventId?: string | null;
+  testResult?: "pass" | "fail" | "notes" | null;
+  testNotes?: string | null;
   metadataOnly: true;
   rawPayloadRetained: false;
 }
@@ -359,6 +379,8 @@ export interface PipelineOperationalActionResultV0 {
   evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
   correlationId: string;
   idempotencyKey: string;
+  actionRecordId: string;
+  childPacketId?: string | null;
   metadataOnly: true;
   rawPayloadRetained: false;
 }
@@ -490,6 +512,11 @@ const PIPELINE_OPERATIONAL_ACTION_POLICY: Record<
   retry_verification: { targetTypes: ["execution_attempt", "work_item"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   requeue: { targetTypes: ["work_item"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   mark_tested: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_product_approval"] },
+  request_rework: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_product_approval"] },
+  pause: { targetTypes: ["runtime", "manager_run"], minimumRiskTier: "low", allowedAuthorityAllowed: true, requiredAuthorityStates: [] },
+  drain: { targetTypes: ["runtime", "manager_run"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
+  reassign: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
+  reject: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_product_approval"] },
   kill_worker: { targetTypes: ["worker"], minimumRiskTier: "high", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   mutate_source: { targetTypes: ["work_packet"], minimumRiskTier: "high", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   push_branch: { targetTypes: ["branch"], minimumRiskTier: "high", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
@@ -1331,6 +1358,9 @@ const OPERATIONAL_ACTION_REQUEST_KEYS = new Set([
   "requestedAuthorityState",
   "requestedRiskTier",
   "operatorIntentSummary",
+  "expectedCurrentEventId",
+  "testResult",
+  "testNotes",
   "evidenceRefs",
   "metadataOnly",
   "rawPayloadRetained",
@@ -1351,6 +1381,8 @@ const OPERATIONAL_ACTION_RESULT_KEYS = new Set([
   "evidenceRefs",
   "correlationId",
   "idempotencyKey",
+  "actionRecordId",
+  "childPacketId",
   "metadataOnly",
   "rawPayloadRetained",
 ]);
@@ -1737,6 +1769,12 @@ export interface PipelineSelectedPacketDetailV0 {
   recentTransitionEventRefs?: string[];
   latestMovementSummary?: string | null;
   canSatisfyLiveMovementProof?: boolean;
+  parentPacketId?: string | null;
+  lineageKind?: string;
+  operatorTestState?: "not_ready" | "ready" | "passed" | "failed" | "rework";
+  operatorTestNote?: string | null;
+  actionCapabilities?: PipelineOperationalActionCapabilityV0[];
+  actionResults?: PipelineOperationalActionResultV0[];
   metadataOnly: true;
 }
 
@@ -1871,6 +1909,8 @@ export interface PipelineDashboardProjectionV0 {
   workerSummary: PipelineWorkerSummaryV0;
   reliabilityProblems: PipelineReliabilityProblemV0[];
   gatedControls: PipelineGatedControlV0[];
+  runtimeReadiness?: PipelineOperationalRuntimeReadinessV0;
+  actionCapabilities?: PipelineOperationalActionCapabilityV0[];
   queueSummary: PipelineQueueSummaryV0;
   evidenceRefs: string[];
 }

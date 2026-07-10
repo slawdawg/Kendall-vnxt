@@ -1201,6 +1201,9 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
     idempotencyKey: str | None = Field(default=None, max_length=120)
     correlationId: str | None = Field(default=None, max_length=80)
     causationId: str | None = Field(default=None, max_length=80)
+    parentPacketId: str | None = Field(default=None, max_length=80)
+    lineageKind: Literal["root", "split", "rework", "remediation", "recombination", "delivery_failure"] = "root"
+    readyToTest: "OperationalReadyToTestRequest | None" = None
     payloadSummary: str = Field(default="Metadata-only lifecycle creation.", min_length=1, max_length=500)
     evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
 
@@ -1224,6 +1227,7 @@ class AuthoritativeWorkPacketTransitionRequest(BaseModel):
     idempotencyKey: str | None = Field(default=None, max_length=120)
     correlationId: str | None = Field(default=None, max_length=80)
     causationId: str | None = Field(default=None, max_length=80)
+    readyToTest: "OperationalReadyToTestRequest | None" = None
     payloadSummary: str = Field(default="Metadata-only lifecycle transition.", min_length=1, max_length=500)
     evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
 
@@ -1268,8 +1272,184 @@ class AuthoritativeWorkPacketLifecycleView(BaseModel):
     createdAt: datetime
     updatedAt: datetime
     currentEventId: str
+    parentPacketId: str | None = None
+    lineageKind: str = "root"
+    readyToTest: WorkPacketReadyToTestV0View | None = None
+    operatorTestState: Literal["not_ready", "ready", "passed", "failed", "rework"] = "not_ready"
+    operatorTestNote: str | None = None
     history: list[AuthoritativeWorkPacketLifecycleEventView] = Field(default_factory=list)
     metadataOnly: Literal[True] = True
+
+
+OperationalActionId = Literal[
+    "inspect",
+    "refresh_projection",
+    "mark_tested",
+    "request_rework",
+    "retry_verification",
+    "requeue",
+    "pause",
+    "drain",
+    "reassign",
+    "reject",
+]
+OperationalActionTargetType = Literal["work_packet", "projection", "runtime", "worker", "manager_run"]
+OperationalActionRiskTier = Literal["low", "medium", "high", "extreme"]
+OperationalActionCapabilityState = Literal["available", "unavailable", "gated", "simulated"]
+OperationalActionAuthorityState = Literal[
+    "not_required",
+    "allowed",
+    "needs_product_approval",
+    "needs_authority_approval",
+    "needs_resource_approval",
+    "needs_destination_approval",
+    "needs_safety_approval",
+    "blocked",
+]
+OperationalActionOutcome = Literal["succeeded", "rejected", "blocked", "failed", "simulated"]
+OperationalActionTypedReason = Literal[
+    "no_eligible_work",
+    "blocked_by_policy",
+    "blocked_by_approval",
+    "blocked_by_resources",
+    "runtime_unavailable",
+    "worker_failed",
+    "verification_failed",
+    "delivery_blocked",
+    "evidence_invalid",
+    "projection_stale",
+    "invalid_transition",
+    "test_not_ready",
+    "unsupported_action",
+    "unknown",
+]
+
+
+class OperationalReadyToTestRequest(BaseModel):
+    readyId: str = Field(min_length=1, max_length=160)
+    userFacingSummary: str = Field(min_length=1, max_length=500)
+    testableSurface: str = Field(min_length=1, max_length=500)
+    verificationRefs: list[str] = Field(default_factory=list, max_length=24)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator("readyId", "userFacingSummary", "testableSurface")
+    @classmethod
+    def safe_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value or not _is_safe_pipeline_control_text(value):
+            raise ValueError("Ready-to-test metadata must be safe, bounded text.")
+        return value
+
+    @field_validator("verificationRefs", "evidenceRefs")
+    @classmethod
+    def safe_refs(cls, refs: list[str]) -> list[str]:
+        normalized = []
+        for ref in refs:
+            if not isinstance(ref, str) or not _is_safe_pipeline_evidence_ref(ref):
+                raise ValueError("Operational evidence refs must be safe metadata refs.")
+            if ref not in normalized:
+                normalized.append(ref)
+        return normalized
+
+
+class OperationalActionRequest(BaseModel):
+    schemaVersion: Literal["pipeline-operational-action/v0"] = "pipeline-operational-action/v0"
+    actionId: OperationalActionId
+    targetType: OperationalActionTargetType = "work_packet"
+    targetId: str = Field(min_length=1, max_length=120)
+    idempotencyKey: str = Field(min_length=1, max_length=160)
+    correlationId: str = Field(min_length=1, max_length=120)
+    requestedBy: AuthoritativePacketActorView
+    requestedAuthorityState: OperationalActionAuthorityState
+    requestedRiskTier: OperationalActionRiskTier
+    expectedCurrentEventId: str | None = Field(default=None, max_length=80)
+    operatorIntentSummary: str | None = Field(default=None, max_length=500)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+    testResult: Literal["pass", "fail", "notes"] | None = None
+    testNotes: str | None = Field(default=None, max_length=1000)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @field_validator("targetId", "idempotencyKey", "correlationId", "expectedCurrentEventId", "operatorIntentSummary", "testNotes")
+    @classmethod
+    def bounded_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Operational action metadata must not be blank.")
+        if not _is_safe_pipeline_control_text(value):
+            raise ValueError("Operational action metadata must be safe metadata text.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def action_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        normalized = []
+        for ref in refs:
+            if not isinstance(ref, str) or not _is_safe_pipeline_evidence_ref(ref):
+                raise ValueError("Operational action evidence refs must be safe metadata refs.")
+            if ref not in normalized:
+                normalized.append(ref)
+        return normalized
+
+
+class OperationalActionCapabilityView(BaseModel):
+    actionId: OperationalActionId
+    targetType: OperationalActionTargetType
+    targetId: str | None = None
+    capabilityState: OperationalActionCapabilityState
+    authorityState: OperationalActionAuthorityState
+    riskTier: OperationalActionRiskTier
+    typedReason: OperationalActionTypedReason | None = None
+    expectedResultSummary: str
+    correlationRequired: Literal[True] = True
+    idempotencyRequired: Literal[True] = True
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class OperationalActionResultView(BaseModel):
+    schemaVersion: Literal["pipeline-operational-action/v0"] = "pipeline-operational-action/v0"
+    actionId: OperationalActionId
+    targetType: OperationalActionTargetType
+    targetId: str
+    outcome: OperationalActionOutcome
+    resultingStage: AuthoritativePacketStage | Literal["terminal", "deferred", "unknown"]
+    resultingStatus: AuthoritativePacketStatus | Literal["unknown"]
+    capabilityState: OperationalActionCapabilityState
+    authorityState: OperationalActionAuthorityState
+    riskTier: OperationalActionRiskTier
+    typedReason: OperationalActionTypedReason | None = None
+    evidenceRefs: list[str] = Field(default_factory=list)
+    correlationId: str
+    idempotencyKey: str
+    actionRecordId: str
+    childPacketId: str | None = None
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class PipelineRuntimeReadinessV0View(BaseModel):
+    schemaVersion: Literal["pipeline-operational-runtime-readiness/v0"] = "pipeline-operational-runtime-readiness/v0"
+    actionSchemaVersion: Literal["pipeline-operational-action/v0"] = "pipeline-operational-action/v0"
+    readinessState: Literal["ready", "degraded", "blocked", "unavailable", "unknown"]
+    operationalMode: Literal["disabled", "local_proof", "read_only", "bounded_write", "unavailable", "unknown"]
+    freshnessState: Literal["live", "stale", "unavailable", "unknown"]
+    capabilityState: OperationalActionCapabilityState
+    typedReason: OperationalActionTypedReason | None = None
+    checkedAt: datetime
+    expiresAt: datetime
+    summary: str
+    actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+AuthoritativeWorkPacketCreateRequest.model_rebuild()
+AuthoritativeWorkPacketTransitionRequest.model_rebuild()
 
 
 PipelineProjectionSourceLabelV0 = Literal["live", "stale", "fixture", "simulated", "dry_run", "unavailable", "unknown"]
@@ -1383,6 +1563,12 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     recentTransitionEventRefs: list[str] = Field(default_factory=list)
     latestMovementSummary: str | None = None
     canSatisfyLiveMovementProof: bool = False
+    parentPacketId: str | None = None
+    lineageKind: str = "root"
+    operatorTestState: Literal["not_ready", "ready", "passed", "failed", "rework"] = "not_ready"
+    operatorTestNote: str | None = None
+    actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    actionResults: list[OperationalActionResultView] = Field(default_factory=list)
     metadataOnly: Literal[True] = True
 
 
@@ -1562,6 +1748,8 @@ class PipelineDashboardProjectionV0View(BaseModel):
     workerSummary: PipelineWorkerSummaryV0View
     reliabilityProblems: list[PipelineReliabilityProblemV0View] = Field(default_factory=list)
     gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)
+    runtimeReadiness: PipelineRuntimeReadinessV0View
+    actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
     queueSummary: PipelineQueueSummaryV0View
     evidenceRefs: list[str] = Field(default_factory=list)
 

@@ -179,6 +179,13 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS workspace_isolation_plan_json JSON"))
             await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN IF NOT EXISTS sort_order INTEGER"))
             await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN IF NOT EXISTS import_metadata_json JSON"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS parent_packet_id VARCHAR(80)"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS lineage_kind VARCHAR(32) DEFAULT 'root'"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS ready_to_test_json JSON"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS operator_test_state VARCHAR(24) DEFAULT 'not_ready'"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS operator_test_note TEXT"))
+            await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN IF NOT EXISTS child_packet_id VARCHAR(80)"))
+            await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN IF NOT EXISTS expected_current_event_id VARCHAR(80)"))
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
             result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
@@ -209,6 +216,24 @@ async def init_db() -> None:
                 await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN sort_order INTEGER DEFAULT 0"))
             if "import_metadata_json" not in candidate_columns:
                 await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN import_metadata_json JSON DEFAULT '{}'"))
+            result = await connection.execute(text("PRAGMA table_info(authoritative_work_packets)"))
+            authoritative_columns = {row[1] for row in result.fetchall()}
+            if "parent_packet_id" not in authoritative_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN parent_packet_id VARCHAR(80)"))
+            if "lineage_kind" not in authoritative_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN lineage_kind VARCHAR(32) DEFAULT 'root'"))
+            if "ready_to_test_json" not in authoritative_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN ready_to_test_json JSON"))
+            if "operator_test_state" not in authoritative_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN operator_test_state VARCHAR(24) DEFAULT 'not_ready'"))
+            if "operator_test_note" not in authoritative_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN operator_test_note TEXT"))
+            result = await connection.execute(text("PRAGMA table_info(pipeline_operational_action_records)"))
+            action_columns = {row[1] for row in result.fetchall()}
+            if "child_packet_id" not in action_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN child_packet_id VARCHAR(80)"))
+            if "expected_current_event_id" not in action_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN expected_current_event_id VARCHAR(80)"))
             await _ensure_sqlite_memory_proposals_schema(connection)
 
 
