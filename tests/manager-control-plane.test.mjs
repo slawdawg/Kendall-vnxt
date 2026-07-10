@@ -6270,7 +6270,7 @@ test("one-lane dispatch dogfood harness normalizes summary dispatch packets", ()
 test("one-lane dispatch dogfood harness keeps local BMAD artifact ignored", () => {
   const storyPath = `_bmad-output/implementation-artifacts/fixture-one-lane-dispatch-dogfood-${process.pid}-${Date.now()}.md`;
   const storyContent = [
-    "# Story 23-4-one-lane-dispatch-dogfood-harness: One Lane Dispatch Dogfood Harness",
+    "# Story 24-4-one-lane-dispatch-dogfood-harness: One Lane Dispatch Dogfood Harness",
     "",
     "## Status",
     "in-progress",
@@ -6279,15 +6279,16 @@ test("one-lane dispatch dogfood harness keeps local BMAD artifact ignored", () =
     "1. One-lane dispatch dogfood evidence remains bounded and metadata-only.",
     "",
     "## Dev Agent Record",
-    "- Changed files: `scripts/lib/manager-control-plane/core.mjs`, `tests/manager-control-plane.test.mjs`.",
+    "- Changed files: `tests/manager-control-plane.test.mjs`.",
     "- Verification: `node --test tests/manager-control-plane.test.mjs`, `node ./scripts/check-manager-control-plane.mjs`.",
-    "- Next manager action: request BMAD code review for `23-4-one-lane-dispatch-dogfood-harness`.",
+    "- Next manager action: request BMAD code review for `24-4-one-lane-dispatch-dogfood-harness`.",
     "",
   ].join("\n");
   const storyAbsolutePath = join(process.cwd(), storyPath);
   try {
     ensureIgnoredBmadFixture(storyPath, storyContent);
     assertExistingLocalBmadStoryArtifact(storyPath);
+    assert.match(readFileSync(storyAbsolutePath, "utf8"), /24-4-one-lane-dispatch-dogfood-harness/);
   } finally {
     rmSync(storyAbsolutePath, { force: true });
   }
