@@ -61,7 +61,7 @@ export function classifyManagerVerificationOutput({
   if (Number(testCount[1]) < 1) {
     return { status: "inconclusive", reason: "zero-tests", output };
   }
-  if (!/(?:^|\n)\s*(?:✔|ok\b)/m.test(output)) {
+  if (!/(?:^|\n)\s*# Subtest:/m.test(output) && !/(?:^|\n)\s*✔\s+/m.test(output)) {
     return { status: "inconclusive", reason: "missing-test-evidence", output };
   }
   return { status: "passed", reason: "test-summary-present", output };

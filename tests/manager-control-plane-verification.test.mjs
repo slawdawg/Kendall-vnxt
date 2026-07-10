@@ -48,8 +48,18 @@ test("serial shard routing fails closed for inconclusive results", () => {
 
 test("test summary is required for a pass", () => {
   assert.equal(
-    classifyManagerVerificationOutput({ status: 0, stdout: "✔ one\nℹ tests 1\nℹ pass 1\n" }).status,
+    classifyManagerVerificationOutput({ status: 0, stdout: "# Subtest: one\nok 1 - one\nℹ tests 1\nℹ pass 1\n" }).status,
     "passed",
+  );
+});
+
+test("file-level no-match summaries are inconclusive", () => {
+  assert.equal(
+    classifyManagerVerificationOutput({
+      status: 0,
+      stdout: "TAP version 13\nok 1 - tests/manager-control-plane.test.mjs\n1..1\n# tests 1\n# pass 1\n",
+    }).reason,
+    "missing-test-evidence",
   );
 });
 
