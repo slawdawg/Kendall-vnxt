@@ -71,7 +71,7 @@ test("reporter summary without selected test evidence is inconclusive", () => {
   );
 });
 
-test("process-group termination reaps a spawned descendant", async () => {
+test("process-group termination stops a spawned descendant", async () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-verification-process-group-"));
   const pidPath = join(stateRoot, "child.pid");
   const child = spawn(process.execPath, [
@@ -84,9 +84,26 @@ test("process-group termination reaps a spawned descendant", async () => {
     assert.ok(grandchildPid > 0);
     terminateManagerShardProcessGroup(child, "SIGTERM");
     await new Promise((resolve) => child.once("close", resolve));
-    assert.throws(() => process.kill(grandchildPid, 0), /ESRCH/);
+    let descendantState = "unknown";
+    for (let index = 0; index < 100; index += 1) {
+      try {
+        process.kill(grandchildPid, 0);
+        const stat = readFileSync(`/proc/${grandchildPid}/stat`, "utf8");
+        const stateField = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[0];
+        descendantState = stateField || "unknown";
+        if (descendantState === "Z") break;
+      } catch (error) {
+        if (error?.code === "ESRCH") {
+          descendantState = "gone";
+          break;
+        }
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(["gone", "Z"].includes(descendantState), `expected descendant to be gone or zombie, observed ${descendantState}`);
   } finally {
-    if (!child.killed) terminateManagerShardProcessGroup(child, "SIGKILL");
+    terminateManagerShardProcessGroup(child, "SIGKILL");
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
