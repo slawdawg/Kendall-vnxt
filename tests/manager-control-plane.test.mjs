@@ -64,6 +64,7 @@ import {
   buildWorkerWarmPlan,
   buildWorkerStatus,
   classifyAutoApply,
+  continuousWorkerCodeReviewAction,
   courseCorrectionBacklogItemsForStatus,
   countSprintStories,
   ledgerCommand,
@@ -2187,10 +2188,1032 @@ test("worker code review gate delegates BMAD review to a manager-owned worker", 
       },
     );
     assert.equal(exhaustedRequested.status, "blocked");
-    assert.equal(exhaustedRequested.blockers[0].code, "worker-code-review-no-reviewer");
+    assert.equal(exhaustedRequested.blockers[0].code, "worker-code-review-reviewer-retries-exhausted");
+
+    const exhaustedUnrequested = buildWorkerCodeReviewPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath, assignmentId: "bmad-8-8-worker-code-review-target", reviewRequestResendStaleSeconds: 0 },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [progressStatus.summary.workerProgress[1]],
+            warmReviewerEligibility: {
+              warmCapacity: 1,
+              eligibleCount: 0,
+              unreadyCount: 1,
+              candidates: [{ workerId: "codex-2", reasonCode: "warm_reviewer_heartbeat_stale" }],
+            },
+          },
+        },
+        events: [
+          { eventType: "worker_code_review_request_apply", sourceRefs: ["assignment:bmad-8-8-worker-code-review-target", "worker:codex-2"], timestamp: "2026-07-05T00:00:00.000Z" },
+          { eventType: "worker_code_review_request_apply", sourceRefs: ["assignment:bmad-8-8-worker-code-review-target", "worker:codex-2"], timestamp: "2026-07-05T00:01:00.000Z" },
+        ],
+      },
+    );
+    assert.equal(exhaustedUnrequested.status, "blocked");
+    assert.equal(exhaustedUnrequested.blockers[0].code, "worker-code-review-reviewer-retries-exhausted");
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm apply and bounded prompt probe compose into real review eligibility", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-warm-reviewer-integrated-"));
+  const liveSessions = new Set();
+  const tmuxCalls = [];
+  let reviewPointerPasted = false;
+  const tmuxRunner = (_command, args) => {
+    tmuxCalls.push(args[0]);
+    if (args[0] === "has-session") return { status: liveSessions.has(args[2]) ? 0 : 1, stdout: "", stderr: "" };
+    if (args[0] === "new-session") {
+      liveSessions.add(args[3]);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+    if (args[0] === "paste-buffer") reviewPointerPasted = true;
+    if (args[0] === "capture-pane") return { status: 0, stdout: reviewPointerPasted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  const reviewPlan = {
+    ok: true,
+    status: "ready",
+    summary: {
+      selectedStory: {
+        storyKey: "8-8-worker-code-review-target",
+        storyPath: "_bmad-output/implementation-artifacts/8-8-worker-code-review-target.md",
+        sprintStatusPath: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+      },
+    },
+  };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(
+      join(stateRoot, "manager-runs", runId, "workers.json"),
+      `${JSON.stringify([{
+        workerId: "codex-2",
+        owner: `${runId}/codex-2`,
+        runId,
+        sessionName: "codex-2",
+        state: "active",
+        assignmentState: "closed",
+        assignmentId: "bmad-1-1-prior-completed-lane",
+        taskId: "task-prior",
+        previousAssignmentId: "bmad-0-9-legacy-implemented-lane",
+        previousTaskId: "task-legacy",
+        lastHeartbeatAt: "2026-07-09T23:00:00.000Z",
+      }], null, 2)}\n`,
+    );
+    const cyclePacket = {
+      summary: {
+        continuation: { workerStartAllowed: true },
+        workers: {
+          lifecyclePlan: {
+            startWarmCandidates: [{
+              action: "recover_missing_manager_owned_worker",
+              workerId: "codex-2",
+              sessionName: "codex-2",
+              owner: `${runId}/codex-2`,
+              runId,
+              previousAssignmentId: "bmad-1-1-prior-completed-lane",
+              previousTaskId: "task-prior",
+            }],
+          },
+        },
+      },
+    };
+    const warmed = buildWorkerWarmPlan(
+      { runId, stateRoot, apply: true, limit: 1, workerCommand: "bash -lc 'echo warm'" },
+      { cyclePacket, tmuxRunner },
+    );
+    assert.equal(warmed.status, "ready");
+    const workers = JSON.parse(readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8"));
+    assert.equal(workers[0].recoveryState, "restarted_booting");
+    assert.equal(workers[0].previousAssignmentId, "bmad-1-1-prior-completed-lane");
+    assert.deepEqual(workers[0].assignmentHistory.map((entry) => entry.assignmentId), ["bmad-0-9-legacy-implemented-lane", "bmad-1-1-prior-completed-lane"]);
+    const now = workers[0].lastHeartbeatAt;
+    const tmuxSummary = {
+      available: true,
+      paneCount: 1,
+      managerOwnedPanes: 1,
+      managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }],
+      unmanagedPanes: 0,
+      takeoverRequiredPanes: 0,
+    };
+    const bootingPlan = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", now },
+      {
+        workerRecords: workers,
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+        tmuxSummary,
+        tmuxRunner,
+        reviewRequestPlan: reviewPlan,
+        now,
+      },
+    );
+    assert.equal(bootingPlan.status, "blocked");
+    assert.equal(bootingPlan.blockers[0].code, "worker-code-review-warm-readiness-held");
+    workers[0].recoveryState = "recovered_warm";
+    workers[0].recoveryAction = "await_dispatcher_lease_pull";
+    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify(workers, null, 2)}\n`);
+    const plan = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", now },
+      {
+        workerRecords: workers,
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {
+          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
+          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
+        },
+        tmuxSummary,
+        tmuxRunner,
+        reviewRequestPlan: reviewPlan,
+        now,
+      },
+    );
+    assert.equal(plan.status, "ready");
+    assert.equal(plan.summary.requests[0].workerId, "codex-2");
+    assert.equal(plan.summary.requests[0].reviewerProgressState, "manager_review_ready");
+    const applyProgress = buildWorkerProgressStatus(
+      { runId, stateRoot, warmReviewerProbe: true },
+      { workerRecords: workers, assignmentSummary: { summary: { laneAssignments: [] } }, usageContext: { status: "normal" }, resourceContext: { status: "normal" }, fakeWorkerHarness: {}, tmuxSummary, tmuxRunner },
+    );
+    assert.equal(applyProgress.summary.reviewerEligibleWorkers.length, 1, JSON.stringify(applyProgress.summary.warmReviewerEligibility));
+    const applied = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      {
+        workerRecords: workers,
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {},
+        tmuxSummary,
+        tmuxRunner,
+        progressStatus: applyProgress,
+        reviewRequestPlan: reviewPlan,
+      },
+    );
+    assert.equal(applied.status, "ready", JSON.stringify(applied));
+    assert.equal(applied.summary.results[0].reservationId, "review:manager-test:codex-2:bmad-8-8-worker-code-review-target");
+    assert.equal(tmuxCalls.includes("paste-buffer"), true);
+    const reservedWorkers = JSON.parse(readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8"));
+    assert.equal(reservedWorkers[0].reviewReservation.targetAssignmentId, "bmad-8-8-worker-code-review-target");
+    writeFileSync(applied.summary.results[0].resultPath, "Status: PASS\n\nEvidence retention: metadata_only\n");
+    const terminal = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      { progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1 } } }, reviewRequestPlan: reviewPlan },
+    );
+    assert.equal(terminal.status, "ready");
+    const releasedWorkers = JSON.parse(readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8"));
+    assert.equal(releasedWorkers[0].reviewReservation, undefined);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review warm readiness rejects unsafe lifecycle live-session pane lease time and observation evidence", () => {
+  const runId = "manager-test";
+  const now = "2026-07-10T00:00:00.000Z";
+  const observedAt = "2026-07-09T23:59:00.000Z";
+  const baseWorker = {
+    workerId: "codex-2",
+    owner: `${runId}/codex-2`,
+    runId,
+    sessionName: "codex-2",
+    resolvedSessionName: "codex-2",
+    paneTarget: "%92",
+    paneId: "%92",
+    paneCount: 1,
+    singlePane: true,
+    currentCommand: "codex",
+    state: "warm",
+    lifecycleState: "warm_available",
+    assignmentState: "warm",
+    assignmentId: null,
+    taskId: null,
+    currentLease: null,
+    recoveryState: "recovered_warm",
+    lastHeartbeatAt: observedAt,
+  };
+  const observation = {
+    schemaVersion: "warm-reviewer-readiness.v1",
+    source: "manager-worker-prompt-region-readiness.v1",
+    workerId: "codex-2",
+    observedAt,
+    promptIdleAt: observedAt,
+    emptyInputAt: observedAt,
+    owner: `${runId}/codex-2`,
+    runId,
+    sessionName: "codex-2",
+    resolvedSessionName: "codex-2",
+    paneTarget: "%92",
+    paneId: "%92",
+    paneCount: 1,
+    singlePane: true,
+    currentCommand: "codex",
+    captureOk: true,
+    promptIdle: true,
+    emptyInput: true,
+    inputPending: false,
+    rawPayloadRetained: false,
+  };
+  const progressFor = ({ worker = baseWorker, probe = observation, missingLive = false, maxAgeMs } = {}) => buildWorkerProgressStatus(
+    { runId, warmReviewerProbe: true, warmReviewerReadinessMaxAgeMs: maxAgeMs },
+    {
+      now,
+      workerStatus: {
+        summary: {
+          workers: [worker],
+          lifecyclePlan: {
+            workerEligibility: {
+              liveSessionEvidenceEnforced: true,
+              liveWorkerIds: missingLive ? [] : [worker.workerId],
+            },
+            terminationPlan: {
+              excludedSessions: missingLive ? [{ workerId: worker.workerId, reason: "missing-live-tmux-session" }] : [],
+            },
+          },
+        },
+      },
+      promptProbe: { summary: { probes: [probe] } },
+      assignmentSummary: { summary: { laneAssignments: [] } },
+      checkpoints: [],
+      questions: [],
+      events: [],
+    },
+  );
+
+  const eligible = progressFor();
+  assert.equal(eligible.summary.reviewerEligibleWorkers.length, 1, JSON.stringify(eligible.summary.warmReviewerEligibility));
+  assert.equal(eligible.summary.reviewerEligibleWorkers[0].reviewerEligibility.eligible, true);
+
+  const exactExpiry = progressFor({
+    worker: { ...baseWorker, lastHeartbeatAt: "2026-07-09T23:58:00.000Z" },
+    probe: { ...observation, observedAt: "2026-07-09T23:58:00.000Z", promptIdleAt: "2026-07-09T23:58:00.000Z", emptyInputAt: "2026-07-09T23:58:00.000Z" },
+  });
+  assert.equal(exactExpiry.summary.reviewerEligibleWorkers.length, 1);
+
+  const rejectedCases = [
+    ["missing-live-session", { missingLive: true }],
+    ["booting", { worker: { ...baseWorker, lifecycleState: "booting" } }],
+    ["busy", { worker: { ...baseWorker, state: "busy", assignmentState: "warm" } }],
+    ["active", { worker: { ...baseWorker, state: "active", assignmentState: "warm" } }],
+    ["failed", { worker: { ...baseWorker, state: "failed", assignmentState: "warm" } }],
+    ["stale-state", { worker: { ...baseWorker, lifecycleState: "stale" } }],
+    ["recovery-incomplete", { worker: { ...baseWorker, recoveryState: "missing_session_restarted_needs_handoff" } }],
+    ["source-mismatch", { probe: { ...observation, source: "legacy-readiness" } }],
+    ["owner-mismatch", { probe: { ...observation, owner: `${runId}/codex-3` } }],
+    ["session-mismatch", { probe: { ...observation, sessionName: "codex-3" } }],
+    ["mixed-observation", { probe: { ...observation, emptyInputAt: "2026-07-09T23:59:01.000Z" } }],
+    ["not-explicit", { probe: { ...observation, captureOk: false } }],
+    ["future", { probe: { ...observation, observedAt: "2026-07-10T00:00:01.000Z", promptIdleAt: "2026-07-10T00:00:01.000Z", emptyInputAt: "2026-07-10T00:00:01.000Z" } }],
+    ["future-heartbeat", { worker: { ...baseWorker, lastHeartbeatAt: "2026-07-10T00:00:01.000Z" } }],
+    ["over-hard-cap", { worker: { ...baseWorker, lastHeartbeatAt: "2026-07-09T23:57:59.999Z" }, probe: { ...observation, observedAt: "2026-07-09T23:57:59.999Z", promptIdleAt: "2026-07-09T23:57:59.999Z", emptyInputAt: "2026-07-09T23:57:59.999Z" }, maxAgeMs: 999_999 }],
+    ["state-only-active-lease", { worker: { ...baseWorker, leaseState: "active" } }],
+    ["state-only-unknown-lease", { worker: { ...baseWorker, currentLease: { state: "unknown" } } }],
+    ["pane-mismatch", { probe: { ...observation, paneTarget: "%93", paneId: "%93" } }],
+    ["multi-pane", { probe: { ...observation, paneCount: 2, singlePane: false } }],
+    ["process-mismatch", { probe: { ...observation, currentCommand: "bash" } }],
+  ];
+  for (const [label, inputs] of rejectedCases) {
+    const progress = progressFor(inputs);
+    assert.equal(progress.summary.reviewerEligibleWorkers.length, 0, `${label} must remain ineligible`);
+    const expectedWarmCapacity = ["busy", "active", "failed"].includes(label) ? 0 : 1;
+    assert.equal(progress.summary.warmReviewerEligibility.unreadyCount, expectedWarmCapacity, `${label} warm-capacity classification must preserve state=warm semantics`);
+  }
+
+  const ownerConflict = progressFor({ worker: { ...baseWorker, owner: "other-run/codex-2" } });
+  assert.equal(ownerConflict.summary.reviewerEligibleWorkers.length, 0);
+  assert.equal(ownerConflict.summary.warmReviewerEligibility.warmCapacity, 0);
+  const managerIdentity = progressFor({
+    worker: { ...baseWorker, workerId: "manager", sessionName: "manager", owner: `${runId}/manager` },
+    probe: { ...observation, workerId: "manager", sessionName: "manager", owner: `${runId}/manager` },
+  });
+  assert.equal(managerIdentity.summary.reviewerEligibleWorkers.length, 0);
+  assert.equal(managerIdentity.summary.warmReviewerEligibility.warmCapacity, 0);
+  assert.equal(eligible.summary.warmWorkers, 1);
+});
+
+test("worker code review durable target history and authoritative apply revalidation prevent self-review and lease races", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-warm-reviewer-revalidate-"));
+  const targetAssignmentId = "bmad-8-8-worker-code-review-target";
+  const reviewPlan = {
+    ok: true,
+    status: "ready",
+    summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } },
+  };
+  const positiveWarmRow = {
+    workerId: "codex-2",
+    sessionName: "codex-2",
+    owner: `${runId}/codex-2`,
+    runId,
+    assignmentId: null,
+    previousAssignmentId: "bmad-1-1-completed-lane",
+    assignmentHistory: [{ assignmentId: "bmad-1-1-completed-lane", taskId: "task-prior" }],
+    progressState: "manager_review_ready",
+    reviewerEligibility: {
+      eligible: true,
+      proofState: "eligible",
+      observedAt: "2026-07-10T00:00:00.000Z",
+      rawPayloadRetained: false,
+    },
+  };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([{
+      workerId: "codex-2",
+      owner: `${runId}/codex-2`,
+      runId,
+      sessionName: "codex-2",
+      state: "warm",
+      assignmentState: "warm",
+      assignmentHistory: [{ assignmentId: targetAssignmentId, taskId: "task-old-target" }],
+    }], null, 2)}\n`);
+    const selfReview = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [],
+            reviewerEligibleWorkers: [{
+              ...positiveWarmRow,
+              previousAssignmentId: "bmad-7-7-most-recent",
+              assignmentHistory: [
+                { assignmentId: targetAssignmentId, taskId: "task-old-target" },
+                { assignmentId: "bmad-7-7-most-recent", taskId: "task-recent" },
+              ],
+            }],
+            warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1, candidates: [{ workerId: "codex-2", reasonCode: "warm_reviewer_heartbeat_stale" }] },
+          },
+        },
+        reviewRequestPlan: reviewPlan,
+      },
+    );
+    assert.equal(selfReview.status, "blocked");
+    assert.equal(selfReview.blockers[0].code, "worker-code-review-self-review-excluded");
+
+    const mixedWorkers = [
+      {
+        workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm",
+        assignmentHistory: [{ assignmentId: targetAssignmentId, taskId: "task-old-target" }],
+      },
+      { workerId: "codex-3", owner: `${runId}/codex-3`, runId, sessionName: "codex-3", state: "warm", assignmentState: "warm" },
+    ];
+    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify(mixedWorkers, null, 2)}\n`);
+    const mixedCandidateProgress = {
+      summary: {
+        workerProgress: [],
+        reviewerEligibleWorkers: [{
+          ...positiveWarmRow,
+          assignmentHistory: [{ assignmentId: targetAssignmentId, taskId: "task-old-target" }],
+        }],
+        warmReviewerEligibility: {
+          warmCapacity: 2,
+          eligibleCount: 0,
+          unreadyCount: 2,
+          candidates: [
+            { workerId: "codex-2", reasonCode: "warm_reviewer_heartbeat_stale" },
+            { workerId: "codex-3", reasonCode: "warm_reviewer_heartbeat_stale" },
+          ],
+        },
+      },
+    };
+    const mixedCandidate = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId },
+      { progressStatus: mixedCandidateProgress, reviewRequestPlan: reviewPlan },
+    );
+    assert.equal(mixedCandidate.status, "blocked");
+    assert.equal(mixedCandidate.blockers[0].code, "worker-code-review-warm-heartbeat-stale");
+    const requestedMixedCandidate = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2" },
+      { progressStatus: mixedCandidateProgress, reviewRequestPlan: reviewPlan },
+    );
+    assert.equal(requestedMixedCandidate.blockers[0].code, "worker-code-review-self-review-excluded");
+
+    const observedAt = new Date(Date.now() - 1_000).toISOString();
+    const authoritativeWarm = {
+      workerId: "codex-2",
+      owner: `${runId}/codex-2`,
+      runId,
+      sessionName: "codex-2",
+      state: "warm",
+      lifecycleState: "warm_available",
+      assignmentState: "warm",
+      recoveryState: "recovered_warm",
+      lastHeartbeatAt: observedAt,
+      assignmentHistory: positiveWarmRow.assignmentHistory,
+    };
+    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([authoritativeWarm], null, 2)}\n`);
+    const tmuxCalls = [];
+    let raced = false;
+    const leaseRace = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true, now: "2099-01-01T00:00:00.000Z" },
+      {
+        progressStatus: {
+          summary: {
+            workerProgress: [],
+            reviewerEligibleWorkers: [positiveWarmRow],
+            warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 1, unreadyCount: 0 },
+          },
+        },
+        tmuxSummary: {
+          available: true,
+          paneCount: 1,
+          managerOwnedPanes: 1,
+          managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }],
+          unmanagedPanes: 0,
+          takeoverRequiredPanes: 0,
+        },
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        usageContext: { status: "normal" },
+        resourceContext: { status: "normal" },
+        fakeWorkerHarness: {},
+        reviewRequestPlan: reviewPlan,
+        tmuxRunner(_command, args) {
+          tmuxCalls.push(args[0]);
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") {
+            if (!raced) {
+              const currentRecords = JSON.parse(readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8"));
+              if (currentRecords[0].reviewReservation) {
+                raced = true;
+                writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([{ ...currentRecords[0], owner: `${runId}/codex-2-takeover`, leaseState: "active" }], null, 2)}\n`);
+              }
+            }
+            return { status: 0, stdout: "› \n", stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(leaseRace.status, "blocked");
+    assert.equal(leaseRace.blockers[0].code, "worker-code-review-reviewer-readiness-changed");
+    assert.equal(tmuxCalls.includes("load-buffer"), false);
+    assert.equal(tmuxCalls.includes("paste-buffer"), false);
+    assert.equal(existsSync(join(stateRoot, "manager-runs", runId, "review-requests", `codex-2-${targetAssignmentId}.md`)), false);
+
+    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([authoritativeWarm], null, 2)}\n`);
+    const switchedCalls = [];
+    let bufferLoaded = false;
+    const paneSwitch = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true },
+      {
+        progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [positiveWarmRow], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 1, unreadyCount: 0 } } },
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        reviewRequestPlan: reviewPlan,
+        tmuxRunner(_command, args) {
+          switchedCalls.push(args[0]);
+          if (args[0] === "list-panes") {
+            return { status: 0, stdout: bufferLoaded ? "1:%92:bash:codex-2\n" : "1:%92:codex:codex-2\n", stderr: "" };
+          }
+          if (args[0] === "load-buffer") bufferLoaded = true;
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(paneSwitch.status, "blocked");
+    assert.equal(paneSwitch.blockers[0].code, "worker-code-review-paste-failed");
+    assert.equal(switchedCalls.includes("load-buffer"), true);
+    assert.equal(switchedCalls.includes("paste-buffer"), false);
+
+    for (const mutation of ["owner", "run", "reservation", "cancel", "release", "target"]) {
+      writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([authoritativeWarm], null, 2)}\n`);
+      let loaded = false;
+      let pasted = false;
+      const authoritativeRace = buildWorkerCodeReviewPlan(
+        { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true },
+        {
+          progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [positiveWarmRow], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 1, unreadyCount: 0 } } },
+          assignmentSummary: { summary: { laneAssignments: [] } },
+          reviewRequestPlan: reviewPlan,
+          tmuxRunner(_command, args) {
+            if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+            if (args[0] === "load-buffer") {
+              loaded = true;
+              const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+              const records = JSON.parse(readFileSync(workerPath, "utf8"));
+              if (mutation === "owner") {
+                records[0].owner = `${runId}/codex-2-takeover`;
+                records[0].reviewReservation.owner = records[0].owner;
+              } else if (mutation === "run") {
+                records[0].runId = "manager-takeover";
+                records[0].reviewReservation.runId = records[0].runId;
+              } else if (mutation === "cancel") {
+                records[0].reviewReservation.state = "cancelled";
+              } else if (mutation === "release") {
+                records[0].reviewReservation.state = "released";
+              } else if (mutation === "target") {
+                records[0].reviewReservation.targetAssignmentId = "bmad-raced-target";
+              } else {
+                records[0].reviewReservation.reservationId = "review-raced";
+              }
+              writeFileSync(workerPath, `${JSON.stringify(records, null, 2)}\n`);
+            }
+            if (args[0] === "paste-buffer") pasted = true;
+            if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+      assert.equal(loaded, true, `${mutation} race must occur after buffer load`);
+      assert.equal(authoritativeRace.status, "blocked", `${mutation} mutation must block review dispatch`);
+      assert.equal(pasted, false, `${mutation} mutation must be rejected before paste-buffer`);
+    }
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm reviewer prompt probe apply is read-only and rejects ambiguous panes", () => {
+  const runId = "manager-test";
+  const calls = [];
+  const plan = buildWorkerPromptProbePlan(
+    { runId, includeWarmReviewers: true, apply: true },
+    {
+      workerStatus: {
+        summary: {
+          workers: [{
+            workerId: "codex-2",
+            owner: `${runId}/codex-2`,
+            runId,
+            sessionName: "codex-2",
+            state: "warm",
+            assignmentState: "warm",
+            recoveryState: "recovered_warm",
+            lastHeartbeatAt: new Date().toISOString(),
+          }],
+          lifecyclePlan: {
+            workerEligibility: { liveSessionEvidenceEnforced: true, liveWorkerIds: ["codex-2"] },
+            terminationPlan: { excludedSessions: [] },
+          },
+        },
+      },
+      tmuxRunner(_command, args) {
+        calls.push(args[0]);
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n0:%93:codex:codex-2\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "› Please read and follow this manager review-requests pointer\n", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    },
+  );
+  assert.equal(plan.summary.mutation, "none; warm reviewer readiness probe is read-only");
+  assert.equal(plan.summary.probes[0].captureOk, false);
+  assert.equal(plan.summary.probes[0].singlePane, false);
+  assert.equal(calls.includes("send-keys"), false);
+  assert.equal(calls.includes("load-buffer"), false);
+  assert.equal(calls.includes("paste-buffer"), false);
+});
+
+test("worker code review reservation blocks worker handoff and the shared assignment lock", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-reservation-handoff-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const reservedWorker = {
+    workerId: "codex-2",
+    owner: `${runId}/codex-2`,
+    runId,
+    sessionName: "codex-2",
+    state: "warm",
+    assignmentState: "warm",
+    recoveryState: "recovered_warm",
+    lastHeartbeatAt: new Date().toISOString(),
+    reviewReservation: {
+      reservationId: "review:manager-test:codex-2:bmad-review-target",
+      targetAssignmentId: "bmad-review-target",
+      state: "dispatched",
+      reservedAt: new Date().toISOString(),
+    },
+  };
+  const assignmentSummary = { summary: { laneAssignments: [{ assignmentId: "lane-next", taskId: "task-next", status: "claimed", branch: "codex/lane-next", owner: "manager-runner", phase: "handoff" }] } };
+  const workerStatus = { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [reservedWorker] } };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([reservedWorker], null, 2)}\n`);
+    const preview = buildWorkerHandoffPlan({ runId, stateRoot, limit: 1 }, { workerStatus, assignmentSummary });
+    assert.equal(preview.status, "blocked");
+    assert.equal(preview.summary.pairings.length, 0);
+    assert.equal(preview.blockers[0].code, "worker-handoff-no-fallback-workers");
+
+    const lockDir = join(stateRoot, "manager-runs", runId, ".worker-assignment.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify({ runId, pid: process.pid, token: "held", createdAt: new Date().toISOString() })}\n`);
+    const unlockedWorker = { ...reservedWorker, reviewReservation: undefined };
+    writeFileSync(workerPath, `${JSON.stringify([unlockedWorker], null, 2)}\n`);
+    const lockedApply = buildWorkerHandoffPlan(
+      { runId, stateRoot, limit: 1, apply: true },
+      { workerStatus: { ...workerStatus, summary: { ...workerStatus.summary, workers: [unlockedWorker] } }, assignmentSummary, workerAssignmentLockTimeoutMs: 0, receiptCheck: false, tmuxRunner: () => ({ status: 0, stdout: "1:%92\n", stderr: "" }) },
+    );
+    assert.equal(lockedApply.status, "blocked");
+    assert.equal(lockedApply.blockers[0].code, "worker-assignment-lock-timeout");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review reservation rollback fails closed when authoritative persistence is lost", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-reservation-rollback-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const targetAssignmentId = "bmad-8-8-worker-code-review-target";
+  const now = new Date(Date.now() - 500).toISOString();
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: now };
+  const positiveRow = {
+    ...worker,
+    assignmentId: null,
+    progressState: "manager_review_ready",
+    reviewerEligibility: { eligible: true, proofState: "eligible", paneTarget: "%92", observedAt: now, rawPayloadRetained: false },
+  };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const plan = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true },
+      {
+        progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [positiveRow], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 1, unreadyCount: 0 } } },
+        reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          if (args[0] === "paste-buffer") {
+            rmSync(workerPath, { force: true });
+            mkdirSync(workerPath);
+            return { status: 1, stdout: "", stderr: "paste failed" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(plan.status, "blocked");
+    assert.equal(plan.blockers[0].code, "worker-code-review-reservation-rollback-failed");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review request-write failure rolls back the reservation", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-write-rollback-"));
+  const runRoot = join(stateRoot, "manager-runs", runId);
+  const workerPath = join(runRoot, "workers.json");
+  const observedAt = new Date(Date.now() - 500).toISOString();
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: observedAt };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    writeFileSync(join(runRoot, "review-requests"), "blocks directory creation\n");
+    const applied = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      {
+        progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [{ ...worker, assignmentId: null, progressState: "manager_review_ready", reviewerEligibility: { eligible: true, proofState: "eligible", paneTarget: "%92", observedAt, rawPayloadRetained: false } }], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 1, unreadyCount: 0 } } },
+        reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-code-review-request-write-failed");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation, undefined);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm readiness rejects prefix-resolved sessions", () => {
+  const runId = "manager-test";
+  const plan = buildWorkerPromptProbePlan(
+    { runId, includeWarmReviewers: true },
+    {
+      workerStatus: { summary: { workers: [{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", recoveryState: "recovered_warm" }], lifecyclePlan: { workerEligibility: { liveSessionEvidenceEnforced: true, liveWorkerIds: ["codex-2"] }, terminationPlan: { excludedSessions: [] } } } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-20\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    },
+  );
+  assert.equal(plan.summary.probes[0].captureOk, false);
+  assert.match(plan.summary.probes[0].error, /session identity mismatch/i);
+});
+
+test("worker code review implementer history survives normal reusable handoff without truncation", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-history-handoff-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const history = Array.from({ length: 101 }, (_, index) => ({ assignmentId: `historic-${index}`, taskId: `historic-task-${index}` }));
+  const worker = {
+    workerId: "codex-2",
+    owner: `${runId}/codex-2`,
+    runId,
+    sessionName: "codex-2",
+    state: "active",
+    assignmentState: "closed",
+    assignmentId: "bmad-old-implemented-lane",
+    taskId: "task-old-implemented-lane",
+    recoveryState: "handoff_sent",
+    assignmentHistory: history,
+    lastHeartbeatAt: new Date().toISOString(),
+  };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const applied = buildWorkerHandoffPlan(
+      { runId, stateRoot, limit: 1, apply: true },
+      {
+        storyStatuses: { "old-implemented-lane": "done", "new-lane": "ready-for-dev" },
+        receiptCheck: false,
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92\n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
+        assignmentSummary: { summary: { laneAssignments: [
+          { assignmentId: "bmad-old-implemented-lane", taskId: "task-old-implemented-lane", status: "claimed", branch: "codex/old-implemented-lane", owner: "manager-runner", phase: "handoff" },
+          { assignmentId: "bmad-new-lane", taskId: "task-new-lane", status: "claimed", branch: "codex/new-lane", owner: "manager-runner", phase: "handoff" },
+        ] } },
+      },
+    );
+    assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
+    const records = JSON.parse(readFileSync(workerPath, "utf8"));
+    assert.equal(records[0].assignmentHistory.length, 102);
+    assert.equal(records[0].assignmentHistory[0].assignmentId, "historic-0");
+    assert.equal(records[0].assignmentHistory.at(-1).assignmentId, "bmad-old-implemented-lane");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review recovers expired reservations before apply", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-expired-reservation-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const targetAssignmentId = "bmad-8-8-worker-code-review-target";
+  const observedAt = new Date(Date.now() - 500).toISOString();
+  const worker = {
+    workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2",
+    state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: observedAt,
+    reviewReservation: { reservationId: "crashed-review", targetAssignmentId: "bmad-old-review", workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", paneTarget: "%92", state: "reserved", reservedAt: "2026-07-09T00:00:00.000Z", expiresAt: "2026-07-09T00:30:00.000Z", recoveryMetadata: { reservationId: "crashed-review", workerId: "codex-2", owner: `${runId}/codex-2`, sessionName: "codex-2", runId, paneTarget: "%92", inactiveConfirmedAt: new Date().toISOString() } },
+  };
+  let pasted = false;
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const applied = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true },
+      {
+        progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [{ ...worker, reviewReservation: null, assignmentId: null, progressState: "manager_review_ready", reviewerEligibility: { eligible: true, proofState: "eligible", paneTarget: "%92", observedAt, rawPayloadRetained: false } }], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 1, unreadyCount: 0 } } },
+        reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "paste-buffer") pasted = true;
+          if (args[0] === "capture-pane") return { status: 0, stdout: pasted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
+    const records = JSON.parse(readFileSync(workerPath, "utf8"));
+    assert.notEqual(records[0].reviewReservation.reservationId, "crashed-review");
+    assert.equal(records[0].reviewReservation.targetAssignmentId, targetAssignmentId);
+    records[0].reviewReservation.state = "cancelled";
+    writeFileSync(workerPath, `${JSON.stringify(records, null, 2)}\n`);
+    const cancelled = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true },
+      { progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1 } } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } } },
+    );
+    assert.equal(cancelled.status, "blocked");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation, undefined);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review blocker distinguishes missing invalid and stale readiness", () => {
+  const runId = "manager-test";
+  const reviewRequestPlan = { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } };
+  const planFor = (reasonCode) => buildWorkerCodeReviewPlan(
+    { runId, assignmentId: "bmad-8-8-worker-code-review-target" },
+    { progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1, candidates: [{ workerId: "codex-2", reasonCode }] } } }, reviewRequestPlan },
+  );
+  assert.equal(planFor("warm_reviewer_readiness_not_positive").blockers[0].code, "worker-code-review-warm-readiness-missing");
+  assert.equal(planFor("warm_reviewer_readiness_source_invalid").blockers[0].code, "worker-code-review-warm-readiness-invalid");
+  assert.equal(planFor("warm_reviewer_heartbeat_stale").blockers[0].code, "worker-code-review-warm-heartbeat-stale");
+});
+
+test("worker code review apply promotes booting reviewer only from fresh bounded proof", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-booting-promotion-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const observedAt = new Date(Date.now() - 500).toISOString();
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: observedAt };
+  let pasted = false;
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const applied = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      {
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        tmuxSummary: { available: true, paneCount: 1, managerOwnedPanes: 1, managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }], unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "paste-buffer") pasted = true;
+          if (args[0] === "capture-pane") return { status: 0, stdout: pasted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
+    const promoted = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+    assert.equal(promoted.recoveryState, "recovered_warm");
+    assert.equal(promoted.reviewerPromotionEvidence.source, "manager-worker-prompt-region-readiness.v1");
+    assert.equal(promoted.reviewReservation.state, "dispatched");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review reservation projection preserves the complete coordination contract", () => {
+  const reservation = { reservationId: "review-full", targetAssignmentId: "bmad-target", workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", state: "dispatched", reservedAt: "2026-07-10T00:00:00.000Z", expiresAt: "2026-07-10T01:00:00.000Z", requestPath: "/tmp/request.md", resultPath: "/tmp/result.md", dispatchedAt: "2026-07-10T00:01:00.000Z", paneTarget: "%92", sessionName: "codex-2", recoveryMetadata: { reason: "crash-recovery" } };
+  const status = buildWorkerStatus(
+    { runId: "manager-test" },
+    { workerRecords: [{ workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", reviewReservation: reservation }], assignmentSummary: { summary: { laneAssignments: [] } }, usageContext: { status: "normal" }, resourceContext: { status: "normal" }, tmuxSummary: { available: true, paneCount: 1, managerOwnedPanes: 1, managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }], unmanagedPanes: 0, takeoverRequiredPanes: 0 } },
+  );
+  assert.deepEqual(status.summary.workers[0].reviewReservation, reservation);
+});
+
+test("worker warm apply obeys the shared assignment lock and preserves a concurrent reservation", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-warm-shared-lock-"));
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const lockDir = join(stateRoot, "manager-runs", runId, ".worker-assignment.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify({ runId, pid: process.pid, process: { startTime: "current" }, token: "held", createdAt: new Date().toISOString() })}\n`);
+    const warmed = buildWorkerWarmPlan(
+      { runId, stateRoot, apply: true, limit: 1 },
+      { workerAssignmentLockTimeoutMs: 0, cyclePacket: { summary: { continuation: { workerStartAllowed: true }, workers: { lifecyclePlan: { startWarmCandidates: [{ action: "start_manager_owned_worker", workerId: "codex-2", sessionName: "codex-2", owner: `${runId}/codex-2`, runId }] } } } }, tmuxRunner: () => ({ status: 0, stdout: "", stderr: "" }) },
+    );
+    assert.equal(warmed.status, "blocked");
+    assert.equal(warmed.blockers[0].code, "worker-assignment-lock-timeout");
+    rmSync(lockDir, { recursive: true, force: true });
+    const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+    writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "active", assignmentState: "closed", reviewReservation: { reservationId: "review-live", targetAssignmentId: "bmad-target", state: "dispatched", reservedAt: new Date().toISOString() } }], null, 2)}\n`);
+    const stalePreview = buildWorkerWarmPlan(
+      { runId, stateRoot, apply: true, limit: 1 },
+      { cyclePacket: { summary: { continuation: { workerStartAllowed: true }, workers: { lifecyclePlan: { startWarmCandidates: [{ action: "recover_missing_manager_owned_worker", workerId: "codex-2", sessionName: "codex-2", owner: `${runId}/codex-2`, runId }] } } } }, tmuxRunner(_command, args) { return args[0] === "has-session" ? { status: 1, stdout: "", stderr: "" } : { status: 0, stdout: "", stderr: "" }; } },
+    );
+    assert.equal(stalePreview.status, "blocked");
+    assert.equal(stalePreview.blockers[0].code, "worker-warm-review-reserved");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation.reservationId, "review-live");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review handoff revalidates authoritative lease freedom under lock", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-handoff-authoritative-lease-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const previewWorker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm" };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([{ ...previewWorker, state: "active", assignmentState: "active", assignmentId: "race-lane", currentLease: { assignmentId: "race-lane", state: "active" } }], null, 2)}\n`);
+    const applied = buildWorkerHandoffPlan(
+      { runId, stateRoot, limit: 1, apply: true },
+      { receiptCheck: false, workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [previewWorker] } }, assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-next", taskId: "task-next", status: "claimed", branch: "codex/lane-next", owner: "manager-runner", phase: "handoff" }] } }, tmuxRunner: () => ({ status: 0, stdout: "1:%92\n", stderr: "" }) },
+    );
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-handoff-authoritative-worker-busy");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].assignmentId, "race-lane");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review keeps long active reservations and ignores stale terminal results", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-stale-result-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const resultPath = join(stateRoot, "manager-runs", runId, "review-results", "bmad-current.md");
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    mkdirSync(dirname(resultPath), { recursive: true });
+    writeFileSync(resultPath, "Status: PASS\n");
+    utimesSync(resultPath, new Date("2026-07-09T00:00:00.000Z"), new Date("2026-07-09T00:00:00.000Z"));
+    const reservation = { reservationId: "current-review", targetAssignmentId: "bmad-current", state: "dispatched", reservedAt: "2026-07-10T00:00:00.000Z", expiresAt: "2026-07-10T00:30:00.000Z", requestPath: join(dirname(resultPath), "request.md"), resultPath };
+    writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", reviewReservation: reservation }], null, 2)}\n`);
+    buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-other", apply: true }, { progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1 } } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "other" } } } });
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation.reservationId, "current-review");
+    const futureInactive = { ...reservation, resultPath: null, recoveryMetadata: { inactiveConfirmedAt: "2099-01-01T00:00:00.000Z" } };
+    writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", reviewReservation: futureInactive }], null, 2)}\n`);
+    buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-other", apply: true }, { progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1 } } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "other" } } } });
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation.reservationId, "current-review");
+    const reservedAt = new Date(Date.now() - 1_000).toISOString();
+    const boundReservation = {
+      ...reservation,
+      resultPath: null,
+      workerId: "codex-2",
+      owner: `${runId}/codex-2`,
+      runId,
+      sessionName: "codex-2",
+      paneTarget: "%92",
+      reservedAt,
+    };
+    for (const recoveryMetadata of [
+      { reservationId: "current-review", workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", paneTarget: "%92", inactiveConfirmedAt: new Date(Date.parse(reservedAt) - 1).toISOString() },
+      { reservationId: "current-review", workerId: "codex-2", owner: `${runId}/codex-2-before-takeover`, runId, sessionName: "codex-2", paneTarget: "%92", inactiveConfirmedAt: new Date().toISOString() },
+    ]) {
+      writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", reviewReservation: { ...boundReservation, recoveryMetadata } }], null, 2)}\n`);
+      buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-other", apply: true }, { progressStatus: { summary: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1 } } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "other" } } } });
+      assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation.reservationId, "current-review");
+    }
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker warm prompt probe excludes unsafe candidates before tmux capture", () => {
+  const calls = [];
+  const plan = buildWorkerPromptProbePlan(
+    { runId: "manager-test", includeWarmReviewers: true },
+    { workerStatus: { summary: { workers: [{ workerId: "codex-2", owner: "manager-test/codex-2", runId: "manager-test", sessionName: "codex-2", state: "warm", assignmentState: "active", leaseState: "unknown", recoveryState: "restarted_booting", takeoverRequired: true }], lifecyclePlan: { workerEligibility: { liveSessionEvidenceEnforced: true, liveWorkerIds: ["codex-2"] }, terminationPlan: { excludedSessions: [] } } } }, tmuxRunner(_command, args) { calls.push(args[0]); return { status: 0, stdout: "", stderr: "" }; } },
+  );
+  assert.equal(calls.includes("list-panes"), false);
+  assert.equal(calls.includes("capture-pane"), false);
+  assert.equal(plan.summary.excludedCandidates[0].reasonCode, "warm_reviewer_takeover_required");
+});
+
+test("worker code review continuous PASS and FAIL routes release fresh reservations", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-continuous-release-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const resultPath = join(stateRoot, "manager-runs", runId, "review-results", "bmad-lane-review.md");
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    mkdirSync(dirname(resultPath), { recursive: true });
+    writeFileSync(resultPath, "Status: FAIL\n\nFinding: fix it\nEvidence retention: metadata_only\n");
+    const now = new Date(Date.now() - 1000).toISOString();
+    const reservation = { reservationId: "review-live", targetAssignmentId: "bmad-lane-review", state: "dispatched", reservedAt: now, requestPath: join(dirname(resultPath), "request.md"), resultPath };
+    writeFileSync(reservation.requestPath, "request\n");
+    writeFileSync(resultPath, "Status: FAIL\n\nFinding: fix it\nEvidence retention: metadata_only\n");
+    writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", reviewReservation: reservation }], null, 2)}\n`);
+    const feedback = buildWorkerReviewFeedbackPlan(
+      { runId, stateRoot, reviewFindingsFile: resultPath, apply: true },
+      { progressStatus: { summary: { workerProgress: [] } } },
+    );
+    assert.equal(feedback.status, "ready");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation, undefined);
+
+    writeFileSync(resultPath, "Status: PASS\nEvidence retention: metadata_only\n");
+    const passReservation = { ...reservation, reservationId: "review-pass", reservedAt: new Date(Date.now() - 1000).toISOString() };
+    writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", reviewReservation: passReservation }], null, 2)}\n`);
+    const continuousPass = continuousWorkerCodeReviewAction(
+      {},
+      { summary: { run: { runId, stateRoot }, workerProgress: { workerProgress: [], reviewerEligibleWorkers: [], warmReviewerEligibility: { warmCapacity: 1, eligibleCount: 0, unreadyCount: 1 } } } },
+      { ok: true, status: "ready", summary: { selectedStory: { storyKey: "lane-review" } } },
+    );
+    assert.equal(continuousPass.code, "continuous-worker-code-review-release");
+    assert.match(continuousPass.applyCommand, /manager-worker-code-review\.mjs.*--apply/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review shared lock recovers a reused pid only when process identity diverges", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-pid-reuse-lock-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm" }], null, 2)}\n`);
+    const lockDir = join(stateRoot, "manager-runs", runId, ".worker-assignment.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify({ runId, pid: process.pid, process: { startTime: "reused-pid-old-start", commandLineDigest: "old-command" }, token: "stale", createdAt: "2026-07-09T00:00:00.000Z" })}\n`);
+    const applied = buildWorkerHandoffPlan(
+      { runId, stateRoot, apply: true, limit: 1 },
+      { workerAssignmentLockTimeoutMs: 0, receiptCheck: false, workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm" }] } }, assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-next", taskId: "task-next", status: "claimed", branch: "codex/lane-next", owner: "manager-runner", phase: "handoff" }] } }, tmuxRunner: () => ({ status: 0, stdout: "1:%92\n", stderr: "" }) },
+    );
+    assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
+  } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
@@ -2402,7 +3425,7 @@ test("worker code review gate does not select the target lane when assignment id
     );
 
     assert.equal(preview.status, "blocked");
-    assert.equal(preview.blockers[0].code, "worker-code-review-no-reviewer");
+    assert.equal(preview.blockers[0].code, "worker-code-review-self-review-excluded");
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
@@ -9040,7 +10063,9 @@ test("worker warm gate apply revives missing manager-owned sessions instead of s
     assert.equal(workers[0].state, "warm");
     assert.equal(workers[0].assignmentId, null);
     assert.equal(workers[0].previousAssignmentId, "lane-stale");
-    assert.equal(workers[0].recoveryState, "missing_session_restarted_needs_handoff");
+    assert.equal(workers[0].recoveryState, "restarted_booting");
+    assert.equal(workers[0].recoveryAction, "prove_bounded_worker_ready_before_capacity");
+    assert.deepEqual(workers[0].assignmentHistory.map((entry) => entry.assignmentId), ["lane-stale"]);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -11225,11 +12250,12 @@ test("worker progress signal gate writes durable request files and pastes only p
     );
     assert.equal(applied.status, "ready");
     assert.equal(applied.summary.mutation, "manager-owned-worker-progress-request-file-and-tmux-buffer");
-    assert.deepEqual(calls[0].args.slice(0, 3), ["load-buffer", "-b", "codex-1-progress"]);
-    assert.deepEqual(calls[1].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}"]);
-    assert.deepEqual(calls[2].args, ["paste-buffer", "-b", "codex-1-progress", "-t", "%1"]);
-    assert.deepEqual(calls[3].args, ["send-keys", "-t", "%1", "C-m"]);
-    assert.deepEqual(calls[4].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
+    assert.deepEqual(calls[0].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
+    assert.deepEqual(calls[1].args.slice(0, 3), ["load-buffer", "-b", "codex-1-progress"]);
+    assert.deepEqual(calls[2].args, calls[0].args);
+    assert.deepEqual(calls[3].args, ["paste-buffer", "-b", "codex-1-progress", "-t", "%1"]);
+    assert.deepEqual(calls[4].args, ["send-keys", "-t", "%1", "C-m"]);
+    assert.deepEqual(calls[5].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
     assert.equal(applied.summary.results[0].paste.receipt.verified, true);
     const requestPath = join(stateRoot, "manager-runs", "manager-test", "progress-requests", "codex-1-lane-1.md");
     const pastePath = join(stateRoot, "manager-runs", "manager-test", "progress-requests", "codex-1-lane-1.paste.txt");
@@ -11993,8 +13019,8 @@ test("worker prompt probe submits only manager pointers visible in Codex input r
   const calls = [];
   const tmuxRunner = (cmd, args) => {
     calls.push({ cmd, args });
-    if (args[0] === "list-panes" && args[2] === "codex-2") return { status: 0, stdout: "1:%2\n", stderr: "" };
-    if (args[0] === "list-panes" && args[2] === "codex-3") return { status: 0, stdout: "1:%3\n", stderr: "" };
+    if (args[0] === "list-panes" && args[2] === "=codex-2") return { status: 0, stdout: "1:%2:codex:codex-2\n", stderr: "" };
+    if (args[0] === "list-panes" && args[2] === "=codex-3") return { status: 0, stdout: "1:%3:codex:codex-3\n", stderr: "" };
     if (args[0] === "capture-pane" && args[4] === "%2") return { status: 0, stdout: "› Please read and follow this manager progress request file: /tmp/manager-runs/test/progress-requests/codex-2.md\n", stderr: "" };
     if (args[0] === "capture-pane" && args[4] === "%3") return { status: 0, stdout: "Please read and follow this manager progress request file: /tmp/manager-runs/test/progress-requests/codex-3.md\n\n› Use /skills to list available skills\n", stderr: "" };
     return { status: 0, stdout: "", stderr: "" };
@@ -12016,8 +13042,8 @@ test("worker prompt probe submits only manager pointers visible in Codex input r
       workerStatus,
       tmuxRunner: (cmd, args) => {
         calls.push({ cmd, args });
-        if (args[0] === "list-panes" && args[2] === "codex-2") return { status: 0, stdout: "1:%2\n", stderr: "" };
-        if (args[0] === "list-panes" && args[2] === "codex-3") return { status: 0, stdout: "1:%3\n", stderr: "" };
+        if (args[0] === "list-panes" && args[2] === "=codex-2") return { status: 0, stdout: "1:%2:codex:codex-2\n", stderr: "" };
+        if (args[0] === "list-panes" && args[2] === "=codex-3") return { status: 0, stdout: "1:%3:codex:codex-3\n", stderr: "" };
         if (args[0] === "capture-pane" && args[4] === "%2") {
           codex2CaptureCount += 1;
           return { status: 0, stdout: codex2CaptureCount === 1 ? "› Please read and follow this manager progress request file: /tmp/manager-runs/test/progress-requests/codex-2.md\n" : "› Use /skills to list available skills\n", stderr: "" };
@@ -13140,10 +14166,11 @@ test("worker owner delegation gate sends delegated owner override without takeov
     );
     assert.equal(applied.status, "ready");
     assert.equal(applied.summary.mutation, "manager-owned-worker-owner-delegation-file-and-tmux-buffer");
-    assert.deepEqual(calls[0].args.slice(0, 3), ["load-buffer", "-b", "codex-1-owner"]);
-    assert.deepEqual(calls[1].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}"]);
-    assert.deepEqual(calls[2].args, ["paste-buffer", "-b", "codex-1-owner", "-t", "%1"]);
-    assert.deepEqual(calls[3].args, ["send-keys", "-t", "%1", "C-m"]);
+    assert.deepEqual(calls[0].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
+    assert.deepEqual(calls[1].args.slice(0, 3), ["load-buffer", "-b", "codex-1-owner"]);
+    assert.deepEqual(calls[2].args, calls[0].args);
+    assert.deepEqual(calls[3].args, ["paste-buffer", "-b", "codex-1-owner", "-t", "%1"]);
+    assert.deepEqual(calls[4].args, ["send-keys", "-t", "%1", "C-m"]);
     const requestPath = join(stateRoot, "manager-runs", "manager-test", "owner-delegations", "codex-1-lane-1.md");
     const pastePath = join(stateRoot, "manager-runs", "manager-test", "owner-delegations", "codex-1-lane-1.paste.txt");
     const requestText = readFileSync(requestPath, "utf8");

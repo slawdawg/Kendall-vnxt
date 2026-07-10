@@ -19,6 +19,10 @@ const WORKER_CODE_REVIEW_REQUEST_VERSION = "worker_code_review_request.v2";
 const RECOVERY_HOUSEKEEPING_EVIDENCE_VERSION = "manager-recovery-housekeeping-evidence.v1";
 const PROMPT_IDLE_CHECKPOINT_STALE_SECONDS = 180;
 const WORKER_CODE_REVIEW_RESEND_STALE_SECONDS = 300;
+const WARM_REVIEWER_READINESS_MAX_AGE_MS = 2 * 60 * 1000;
+const WARM_REVIEWER_READINESS_SOURCE = "manager-worker-prompt-region-readiness.v1";
+const WARM_REVIEWER_READINESS_SCHEMA = "warm-reviewer-readiness.v1";
+const WORKER_REVIEW_RESERVATION_MAX_AGE_MS = 30 * 60 * 1000;
 const DEFAULT_MODEL_ROUTING_MODEL = "gpt-5.6-luna";
 const DEFAULT_MODEL_ROUTING_EFFORT = "high";
 
@@ -211,6 +215,7 @@ export function parseCommonArgs(argv = []) {
     workerCommand: "",
     progressStaleMinutes: null,
     promptIdle: false,
+    includeWarmReviewers: false,
     retireBlockedQuestion: false,
     answer: "",
     operatorVisiblePrompt: false,
@@ -405,6 +410,8 @@ export function parseCommonArgs(argv = []) {
       options.progressStaleMinutes = nonNegativeInteger(arg.slice("--progress-stale-minutes=".length));
     } else if (arg === "--prompt-idle") {
       options.promptIdle = true;
+    } else if (arg === "--include-warm-reviewers") {
+      options.includeWarmReviewers = true;
     } else if (arg === "--retire-blocked-question") {
       options.retireBlockedQuestion = true;
     } else if (arg === "--answer") {
@@ -1340,7 +1347,8 @@ export function buildLiveWorkerProofReadiness(options = {}, context = {}) {
       worker.ownerProof &&
       worker.runId === runId &&
       workerHeartbeatReady(worker, { now: workerHeartbeatNow, maxAgeMs: maxWorkerHeartbeatAgeMs }) &&
-      workerPreflightReady(worker);
+      workerPreflightReady(worker) &&
+      !isPlainObject(worker.reviewReservation);
   });
   const tmuxSummary = context.tmuxSummary || workerStatus.summary?.tmuxSummary || {};
   const blockers = [...proofValidation.blockers];
@@ -1931,6 +1939,14 @@ function projectWarmPoolWorker(worker = {}, context = {}) {
 }
 
 function classifyWarmWorkerNextWork(worker = {}, context = {}) {
+  if (isPlainObject(worker.reviewReservation)) {
+    return {
+      posture: "review_reserved",
+      primary: "complete_or_release_delegated_review",
+      fallback: "none",
+      reason: "worker_has_active_review_reservation",
+    };
+  }
   if (hasActiveWorkerLease(worker)) {
     return {
       posture: "lease_active",
@@ -1973,10 +1989,23 @@ function classifyWarmWorkerNextWork(worker = {}, context = {}) {
 
 function hasActiveWorkerLease(worker = {}) {
   if (isPlainObject(worker.currentLease) && worker.currentLease.assignmentId) return true;
+  const leaseState = normalizeWorkerLifecycleToken(
+    worker.currentLease?.state || worker.leaseState || worker.lease_state || "",
+  );
+  if (leaseState && !["none", "released", "completed", "closed", "done", "expired", "cancelled", "canceled"].includes(leaseState)) return true;
   if (!worker.assignmentId) return false;
   const assignmentState = String(worker.assignmentState || worker.state || "").trim().toLowerCase();
   if (!assignmentState) return false;
   return !["warm", "idle", "paused", "reassignable", "released", "completed", "closed", "done", "merged", "failed", "stale", "retired", "terminated", "none"].includes(assignmentState);
+}
+
+function reviewReservationBlocksWorker(worker = {}) {
+  const reservation = worker.reviewReservation;
+  if (!isPlainObject(reservation)) return false;
+  if (["cancelled", "canceled", "released"].includes(normalizeWorkerLifecycleToken(reservation.state))) return false;
+  if (reservationHasPositiveInactivity(reservation)) return false;
+  if (reservationHasFreshTerminalResult(reservation)) return false;
+  return true;
 }
 
 function recoveryActionForWorker(worker = {}, nextWork = {}) {
@@ -2361,6 +2390,7 @@ export function buildWorkerLifecyclePlan(options = {}, context = {}) {
   const tmuxBlockers = buildWorkerTmuxBlockers(tmuxSummary);
   const tmuxWarnings = buildWorkerTmuxWarnings(tmuxSummary);
   const workerEligibility = classifyLifecycleWorkers(workers, runId, tmuxSummary);
+  const liveTmux = liveManagerTmuxSessions(tmuxSummary);
   const managerOwned = workerEligibility.eligible;
   const lifecycleBlocksAction = tmuxBlockers.length > 0 ||
     usageState === "manager_only" ||
@@ -2428,6 +2458,8 @@ export function buildWorkerLifecyclePlan(options = {}, context = {}) {
         eligibleCount: managerOwned.length,
         excludedCount: workerEligibility.excluded.length,
         missingLiveSessionCount: workerEligibility.excluded.filter((worker) => worker.reason === "missing-live-tmux-session").length,
+        liveSessionEvidenceEnforced: liveTmux.enforced,
+        liveWorkerIds: liveTmux.enforced ? managerOwned.map((worker) => worker.workerId).filter(Boolean) : [],
       },
       terminationPlan,
     },
@@ -2512,6 +2544,7 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
     });
   }
 
+  return withWorkerAssignmentLock(paths, context, () => {
   mkdirSync(paths.root, { recursive: true });
   writeJsonIfMissing(paths.workers, []);
   const workerRead = readJsonArray(paths.workers);
@@ -2524,6 +2557,10 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
     });
   }
   const existingWorkers = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const reservedRecovery = planned.find((action) => existingWorkers.some((worker) => (worker.workerId === action.workerId || worker.sessionName === action.sessionName) && reviewReservationBlocksWorker(worker)));
+  if (reservedRecovery) {
+    return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none", results: [] }, blockers: [{ code: "worker-warm-review-reserved", message: `${reservedRecovery.workerId} is reserved for delegated review and cannot be replaced by warm recovery.`, nextAction: "Complete or authoritatively release the review reservation before recovery." }] });
+  }
   const existingIds = new Set(existingWorkers.map((worker) => worker.workerId));
   const existingSessions = new Set(existingWorkers.map((worker) => worker.sessionName).filter(Boolean));
   const warmActionMaterial = warmWorkerActionMaterial(planned);
@@ -2606,11 +2643,24 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
       heartbeat: { status: "recorded", source: "manager-worker-warm", lastHeartbeatAt: new Date().toISOString() },
       lastPreflight: { status: "passed", source: "manager-cycle-packet" },
       failureCount: existingRecord?.failureCount || 0,
-      recoveryState: recoverExisting ? "missing_session_restarted_needs_handoff" : "none",
-      recoveryAction: recoverExisting ? "repair_missing_session_then_pull_dispatcher_lease" : "await_dispatcher_lease_pull",
+      recoveryState: recoverExisting ? "restarted_booting" : "none",
+      recoveryAction: recoverExisting ? "prove_bounded_worker_ready_before_capacity" : "await_dispatcher_lease_pull",
+      reviewerReadiness: null,
       rawPayloadRetained: false,
       previousAssignmentId: recoverExisting ? action.previousAssignmentId || existingRecord.assignmentId || null : null,
       previousTaskId: recoverExisting ? action.previousTaskId || existingRecord.taskId || null : null,
+      assignmentHistory: recoverExisting
+        ? appendWorkerAssignmentHistory(
+            appendWorkerAssignmentHistory(existingRecord.assignmentHistory, {
+              assignmentId: existingRecord.previousAssignmentId,
+              taskId: existingRecord.previousTaskId,
+            }),
+            {
+              assignmentId: action.previousAssignmentId || existingRecord.assignmentId || null,
+              taskId: action.previousTaskId || existingRecord.taskId || null,
+            },
+          )
+        : [],
     };
     if (recoverExisting) {
       existingWorkers[existingIndex] = nextWorkerRecord;
@@ -2660,6 +2710,7 @@ export function buildWorkerWarmPlan(options = {}, context = {}) {
       workerRecordPath: paths.workers,
     },
   });
+  });
 }
 
 export function buildWorkerHandoffPlan(options = {}, context = {}) {
@@ -2685,14 +2736,14 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
   const lanesByAssignment = new Map(laneAssignments.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
   const idleWarmWorkers = workers
     .filter((worker) => {
-      if (worker.state !== "warm" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || missingLiveWorkerIds.has(worker.workerId)) return false;
+      if (worker.state !== "warm" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || missingLiveWorkerIds.has(worker.workerId) || reviewReservationBlocksWorker(worker)) return false;
       if (!worker.assignmentId) return true;
       if (String(worker.assignmentState || "").toLowerCase() === "closed") return true;
       return isDoneSprintStory(worker.assignmentId, storyStatuses);
     });
   const reusableCompletedWorkers = workers
     .filter((worker) => {
-      if (worker.state !== "active" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || !worker.assignmentId || missingLiveWorkerIds.has(worker.workerId)) return false;
+      if (worker.state !== "active" || !isManagerOwnedWorker(worker, runId) || !worker.sessionName || !worker.assignmentId || missingLiveWorkerIds.has(worker.workerId) || reviewReservationBlocksWorker(worker)) return false;
       if (buildOpenStoryReviewFeedbackSummary(worker.assignmentId, context).openCount > 0) return false;
       const lane = lanesByAssignment.get(String(worker.assignmentId)) || {};
       if (isDoneSprintStory(worker.assignmentId, storyStatuses)) return true;
@@ -2799,6 +2850,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     });
   }
 
+  return withWorkerAssignmentLock(paths, context, () => {
   mkdirSync(join(paths.root, "handoffs"), { recursive: true });
   writeJsonIfMissing(paths.workers, []);
   const workerRead = readJsonArray(paths.workers);
@@ -2811,6 +2863,25 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     });
   }
   const workerRecords = workerRead.value.filter(isPlainObject).map(projectWorker);
+  const reservedPairing = pairings.find((pairing) => workerRecords.some((worker) => worker.workerId === pairing.workerId && reviewReservationBlocksWorker(worker)));
+  if (reservedPairing) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "none", pairings: [] },
+      blockers: [{ code: "worker-handoff-review-reserved", message: `${reservedPairing.workerId} is reserved for delegated review and cannot receive lane work.`, nextAction: "Wait for terminal review release or recover the stale reservation before handoff." }],
+    });
+  }
+  const busyPairing = pairings.find((pairing) => {
+    const worker = workerRecords.find((record) => record.workerId === pairing.workerId && record.owner === pairing.owner);
+    if (!worker) return true;
+    if (reviewReservationBlocksWorker(worker)) return true;
+    if (!hasActiveWorkerLease(worker)) return false;
+    return !isDoneSprintStory(worker.assignmentId, storyStatuses);
+  });
+  if (busyPairing) {
+    return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none", pairings: [] }, blockers: [{ code: "worker-handoff-authoritative-worker-busy", message: `${busyPairing.workerId} gained an authoritative assignment or lease before handoff.`, nextAction: "Refresh worker status and choose an assignment-free reusable worker." }] });
+  }
   const handoffActionMaterial = handoffPairingActionMaterial(pairings);
   const handoffReserveArgs = {
     idPrefix: "evt",
@@ -2873,6 +2944,11 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
     const target = workerRecords.find((worker) => worker.workerId === pairing.workerId && worker.owner === pairing.owner);
     if (target) {
       const timestamp = new Date().toISOString();
+      if (isPlainObject(target.reviewReservation) && !reviewReservationBlocksWorker(target)) delete target.reviewReservation;
+      target.assignmentHistory = appendWorkerAssignmentHistory(target.assignmentHistory, {
+        assignmentId: target.assignmentId,
+        taskId: target.taskId,
+      });
       target.state = "active";
       target.assignmentState = "active";
       target.assignmentId = pairing.assignmentId;
@@ -2931,6 +3007,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       }),
       workerRecordPath: paths.workers,
     },
+  });
   });
 }
 
@@ -3645,6 +3722,7 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
   const promptIdleGraceMs = Math.max(15_000, nonNegativeInteger(options.promptIdleGraceMs ?? context.promptIdleGraceMs) ?? 15_000);
   const workers = Array.isArray(workerPacket.summary?.workers) ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker) : [];
   const missingLiveWorkerIds = missingLiveWorkerIdsFromWorkerStatus(workerPacket);
+  const liveWorkerEvidence = liveWorkerEvidenceFromWorkerStatus(workerPacket);
   const activeWorkers = workers.filter((worker) => worker.state === "active" && isManagerOwnedWorker(worker, runId) && !missingLiveWorkerIds.has(worker.workerId));
   const reportedLaneAssignments = Array.isArray(assignmentSummary.laneAssignments) ? assignmentSummary.laneAssignments : [];
   const fallbackLaneAssignments = readAssignmentFileLaneEvidence(runOptions.stateRoot || paths.proof.state?.root || "", assignmentSummary.currentOwner);
@@ -3652,12 +3730,24 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
     ? mergeLaneEvidence(reportedLaneAssignments, fallbackLaneAssignments)
     : reportedLaneAssignments;
   const lanesByAssignment = new Map(laneAssignments.map((lane) => [String(lane.assignmentId || lane.assignment_id || ""), lane]));
-  const promptProbe = options.promptIdle || context.promptProbe ? (context.promptProbe || buildWorkerPromptProbePlan({ ...runOptions, limit: 6 }, context)) : null;
+  const promptProbe = options.promptIdle || options.warmReviewerProbe || context.promptProbe
+    ? (context.promptProbe || buildWorkerPromptProbePlan(
+        { ...runOptions, limit: 6, includeWarmReviewers: options.warmReviewerProbe === true },
+        { ...context, workerStatus: workerPacket, includeWarmReviewers: options.warmReviewerProbe === true, now: context.now || runOptions.now || new Date(nowMs).toISOString() },
+      ))
+    : null;
+  const promptProbes = Array.isArray(promptProbe?.summary?.probes) ? promptProbe.summary.probes : [];
   const promptIdleWorkerIds = new Set(
-    (Array.isArray(promptProbe?.summary?.probes) ? promptProbe.summary.probes : [])
-      .filter((probe) => probe.promptDetected === true && probe.inputHasManagerPointer !== true)
+    promptProbes
+      .filter((probe) => (probe.promptIdle === true || probe.promptDetected === true) && probe.inputHasManagerPointer !== true)
       .map((probe) => String(probe.workerId || ""))
       .filter(Boolean),
+  );
+  const reviewerReadinessByWorkerId = new Map(
+    promptProbes
+      .filter(isPlainObject)
+      .map((probe) => [sanitizeLedgerField(probe.workerId || "", "", 80), projectReviewerReadiness({ reviewerReadiness: probe })])
+      .filter(([workerId]) => Boolean(workerId)),
   );
   const workerProgress = activeWorkers.map((worker) => buildWorkerProgressRecord(worker, {
     lane: lanesByAssignment.get(worker.assignmentId || "") || null,
@@ -3670,6 +3760,39 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
     promptIdleGraceMs,
     promptIdle: promptIdleWorkerIds.has(worker.workerId),
   }));
+  const warmStateWorkers = workers.filter((worker) => isManagerOwnedWorker(worker, runId) && worker.state === "warm");
+  const warmReviewerWorkers = warmStateWorkers.filter((worker) => !isManagerControlPlaneWorker(worker, runId) && isWarmReviewerCapacityRecord(worker));
+  const warmReviewerEvaluations = warmReviewerWorkers.map((worker) => {
+    const observation = reviewerReadinessByWorkerId.get(worker.workerId);
+    const observedWorker = observation ? { ...worker, reviewerReadiness: observation } : worker;
+    return {
+      worker: observedWorker,
+      eligibility: buildWarmReviewerEligibility(observedWorker, {
+        runId,
+        nowMs,
+        maxAgeMs: Math.min(
+          WARM_REVIEWER_READINESS_MAX_AGE_MS,
+          Math.max(15_000, nonNegativeInteger(options.warmReviewerReadinessMaxAgeMs ?? context.warmReviewerReadinessMaxAgeMs) ?? WARM_REVIEWER_READINESS_MAX_AGE_MS),
+        ),
+        liveSession: liveWorkerEvidence.enforced && liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId),
+      }),
+    };
+  });
+  const warmReviewerRows = warmReviewerEvaluations
+    .filter(({ eligibility }) => eligibility.eligible)
+    .map(({ worker, eligibility }) => buildWarmReviewerProgressRow(worker, eligibility));
+  const warmReviewerEligibility = {
+    warmCapacity: warmReviewerWorkers.length,
+    eligibleCount: warmReviewerRows.length,
+    unreadyCount: warmReviewerEvaluations.filter(({ eligibility }) => !eligibility.eligible).length,
+    readinessMissingCount: warmReviewerEvaluations.filter(({ eligibility }) => !eligibility.positiveObservation).length,
+    candidates: warmReviewerEvaluations.map(({ worker, eligibility }) => ({
+      workerId: worker.workerId,
+      ...eligibility,
+    })),
+    retention: "metadata_only_warm_reviewer_eligibility",
+    rawPayloadRetained: false,
+  };
   const attentionWorkers = workerProgress.filter((worker) => (
     ["prompt_idle_handoff", "needs_progress_signal", "checkpoint_stale", "question_answer_stale", "review_feedback_stale", "blocked_question", "checkpoint_blocked", "final_checkpoint_blocked", "owner_delegation_stale", "progress_signal_unanswered", "recovery_submit_unanswered", "pointer_receipt_unverified"].includes(worker.progressState)
     || (worker.progressState === "recovery_inspected" && worker.submitPendingAfterRecoveryInspection !== true)
@@ -3680,8 +3803,10 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
     summary: {
       runId,
       activeWorkers: activeWorkers.length,
-      warmWorkers: workers.filter((worker) => worker.state === "warm" && isManagerOwnedWorker(worker, runId)).length,
+      warmWorkers: warmStateWorkers.length,
       workerProgress,
+      reviewerEligibleWorkers: warmReviewerRows,
+      warmReviewerEligibility,
       finalCheckpointCounts: countWorkerFinalCheckpointStatuses(workerProgress),
       retention: "metadata_only_worker_progress",
       source: "manager-workers-checkpoints-questions-assignment-heartbeats",
@@ -4613,6 +4738,12 @@ export function buildWorkerReviewFeedbackPlan(options = {}, context = {}) {
       blockers: [retentionBlocker],
     });
   }
+  if (runOptions.apply) {
+    const release = releaseTerminalWorkerReviewReservation(paths, assignmentIdForStoryKey(findingsAssignmentId), context);
+    if (!release.ok) {
+      return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; failed-review reservation release failed" }, blockers: [{ code: "worker-code-review-reservation-release-failed", message: release.error || "Failed-review reservation could not be released.", nextAction: "Repair authoritative workers.json before feedback routing." }] });
+    }
+  }
   const selected = candidates.slice(0, Math.max(0, runOptions.limit ?? 1)).map((worker) => buildWorkerReviewFeedbackRequest(worker, paths, findingsPath));
   if (selected.length === 0) {
     return packet({
@@ -4704,13 +4835,283 @@ export function buildWorkerReviewFeedbackPlan(options = {}, context = {}) {
   });
 }
 
+function revalidateWarmReviewerBeforeApply(reviewer = {}, targetAssignmentId = "", runOptions = {}, context = {}) {
+  if (reviewer?.reviewerEligibility?.eligible !== true || reviewer?.reviewerEligibility?.proofState !== "eligible") {
+    return { ok: true, skipped: true, reviewer };
+  }
+  const paths = managerRunPaths(runOptions.runId, runOptions, context);
+  const workerRead = readJsonArray(paths.workers);
+  const authoritative = workerRead.value.filter(isPlainObject).map(projectWorker)
+    .find((worker) => worker.workerId === reviewer.workerId && worker.sessionName === reviewer.sessionName && worker.owner === reviewer.owner);
+  const allowedReservationId = sanitizeLedgerField(context.allowedReviewReservationId || "", "", 140);
+  const reservationMatches = allowedReservationId && authoritative?.reviewReservation?.reservationId === allowedReservationId;
+  const sampledAt = new Date().toISOString();
+  const sampledNowMs = Date.parse(sampledAt);
+  const probe = authoritative
+    ? probeWorkerInputRegion(authoritative, context.tmuxRunner || spawnSync, { ...context, now: sampledAt })
+    : null;
+  const latestAuthoritative = readJsonArray(paths.workers).value.filter(isPlainObject).map(projectWorker)
+    .find((worker) => worker.workerId === reviewer.workerId && worker.sessionName === reviewer.sessionName);
+  const authoritativeChangedDuringProbe = workerReviewCoordinationFingerprint(authoritative) !== workerReviewCoordinationFingerprint(latestAuthoritative);
+  const eligibilityWorker = authoritative && reservationMatches ? { ...authoritative, reviewReservation: null } : authoritative;
+  const eligibility = eligibilityWorker && probe
+    ? buildWarmReviewerEligibility({ ...eligibilityWorker, reviewerReadiness: projectReviewerReadiness({ reviewerReadiness: probe }) }, {
+        runId: runOptions.runId,
+        nowMs: sampledNowMs,
+        maxAgeMs: WARM_REVIEWER_READINESS_MAX_AGE_MS,
+        liveSession: probe.captureOk === true,
+      })
+    : null;
+  const refreshed = authoritative && !authoritativeChangedDuringProbe && eligibility?.eligible
+    ? buildWarmReviewerProgressRow({ ...authoritative, reviewReservation: reservationMatches ? authoritative.reviewReservation : null }, eligibility)
+    : null;
+  const target = normalizeBmadStoryAssignmentId(targetAssignmentId || "") || sanitizeLedgerField(targetAssignmentId || "", "", 140);
+  const assignmentHistory = appendWorkerAssignmentHistory(
+    appendWorkerAssignmentHistory(refreshed?.assignmentHistory || [], { assignmentId: authoritative?.previousAssignmentId, taskId: authoritative?.previousTaskId }),
+    { assignmentId: authoritative?.assignmentId, taskId: authoritative?.taskId },
+  )
+    .map((entry) => normalizeBmadStoryAssignmentId(entry.assignmentId || "") || sanitizeLedgerField(entry.assignmentId || "", "", 140));
+  const originalPaneTarget = sanitizeLedgerField(reviewer.reviewerEligibility?.paneTarget || "", "", 40);
+  if (
+    !refreshed ||
+    refreshed.reviewerEligibility?.eligible !== true ||
+    refreshed.reviewerEligibility?.proofState !== "eligible" ||
+    (target && assignmentHistory.includes(target)) ||
+    (originalPaneTarget && refreshed.reviewerEligibility?.paneTarget !== originalPaneTarget)
+  ) {
+    return {
+      ok: false,
+      skipped: false,
+      blocker: {
+        code: "worker-code-review-reviewer-readiness-changed",
+        message: "Warm reviewer readiness, live-session ownership, assignment, or lease evidence changed before review-pointer apply.",
+        nextAction: "Refresh bounded warm reviewer readiness and delegated review planning; do not paste the review pointer or warm more capacity.",
+      },
+      progress: { summary: { sampledAt, source: "authoritative_workers_json_and_live_pane_probe", workerPath: paths.workers } },
+    };
+  }
+  return { ok: true, skipped: false, reviewer: refreshed, sampledAt };
+}
+
+function workerReviewCoordinationFingerprint(worker = {}) {
+  if (!worker) return "missing";
+  return JSON.stringify({
+    workerId: worker.workerId || null,
+    owner: worker.owner || null,
+    runId: worker.runId || null,
+    sessionName: worker.sessionName || null,
+    state: worker.state || null,
+    lifecycleState: worker.lifecycleState || null,
+    assignmentState: worker.assignmentState || null,
+    assignmentId: worker.assignmentId || null,
+    taskId: worker.taskId || null,
+    previousAssignmentId: worker.previousAssignmentId || null,
+    previousTaskId: worker.previousTaskId || null,
+    assignmentHistory: appendWorkerAssignmentHistory(worker.assignmentHistory || [], {}),
+    leaseId: worker.leaseId || null,
+    leaseState: worker.leaseState || null,
+    currentLease: worker.currentLease || null,
+    reviewReservation: worker.reviewReservation || null,
+    takeoverRequired: worker.takeoverRequired === true,
+    busy: worker.busy === true,
+    booting: worker.booting === true,
+  });
+}
+
+function reserveWorkerCodeReviewer(paths, runId, reviewer = {}, request = {}, context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    const index = records.findIndex((worker) => worker.workerId === reviewer.workerId && worker.sessionName === reviewer.sessionName && worker.owner === reviewer.owner);
+    if (index < 0) return { ok: false, error: "Reviewer disappeared from authoritative workers.json before reservation." };
+    const now = new Date();
+    const existingReservation = records[index].reviewReservation;
+    const existingInactive = reservationHasPositiveInactivity(existingReservation);
+    const existingTerminal = reservationHasFreshTerminalResult(existingReservation);
+    const existingCancelled = ["cancelled", "canceled", "released", "expired"].includes(normalizeWorkerLifecycleToken(existingReservation?.state));
+    if (existingReservation && (existingInactive || existingTerminal || existingCancelled)) delete records[index].reviewReservation;
+    const projected = projectWorker(records[index]);
+    if (projected.reviewReservation || hasActiveWorkerLease(projected) || projected.assignmentId || projected.taskId) {
+      return { ok: false, error: "Reviewer gained an assignment, lease, or review reservation before paste." };
+    }
+    const targetAssignmentId = sanitizeLedgerField(request.targetAssignmentId || "", "", 140);
+    const reservationId = `review:${runId}:${reviewer.workerId}:${targetAssignmentId}`;
+    records[index] = {
+      ...records[index],
+      reviewReservation: {
+        reservationId,
+        targetAssignmentId,
+        workerId: reviewer.workerId,
+        owner: reviewer.owner,
+        runId,
+        sessionName: reviewer.sessionName,
+        paneTarget: reviewer.reviewerEligibility?.paneTarget || null,
+        state: "reserved",
+        reservedAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + WORKER_REVIEW_RESERVATION_MAX_AGE_MS).toISOString(),
+        requestPath: sanitizeLedgerField(request.requestPath || "", "", 320) || null,
+        resultPath: sanitizeLedgerField(request.resultPath || "", "", 320) || null,
+      },
+    };
+    writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
+    const persisted = readJsonArray(paths.workers).value.find((worker) => worker?.workerId === reviewer.workerId)?.reviewReservation;
+    if (persisted?.reservationId !== reservationId) return { ok: false, error: "Reviewer reservation was not authoritatively persisted." };
+    return { ok: true, reservationId };
+  });
+}
+
+function reservationHasFreshTerminalResult(reservation = {}) {
+  if (!reservation.resultPath || !reviewResultHasTerminalStatus(reservation.resultPath)) return false;
+  const resultMs = safeMtimeMs(reservation.resultPath);
+  const requestMs = reservation.requestPath ? safeMtimeMs(reservation.requestPath) : 0;
+  const reservedMs = parseTimeMs(reservation.reservedAt) || 0;
+  const nowMs = Date.now();
+  return resultMs > 0 && resultMs >= Math.max(requestMs, reservedMs) && resultMs <= nowMs;
+}
+
+function reservationHasPositiveInactivity(reservation = {}) {
+  const metadata = reservation.recoveryMetadata || {};
+  const confirmedMs = parseTimeMs(metadata.inactiveConfirmedAt || reservation.inactiveConfirmedAt);
+  const reservedMs = parseTimeMs(reservation.reservedAt);
+  const nowMs = Date.now();
+  return confirmedMs > 0 && reservedMs > 0 && confirmedMs >= reservedMs && confirmedMs <= nowMs && nowMs - confirmedMs <= WARM_REVIEWER_READINESS_MAX_AGE_MS &&
+    metadata.reservationId === reservation.reservationId && metadata.workerId === reservation.workerId && metadata.owner === reservation.owner &&
+    metadata.sessionName === reservation.sessionName && metadata.runId === reservation.runId &&
+    metadata.paneTarget === reservation.paneTarget;
+}
+
+function rollbackWorkerCodeReviewReservation(paths, reviewer = {}, reservationId = "", context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    const index = records.findIndex((worker) => worker.workerId === reviewer.workerId && worker.reviewReservation?.reservationId === reservationId);
+    if (index < 0) return { ok: false, error: "Authoritative reviewer reservation was missing during rollback." };
+    const { reviewReservation: _removed, ...rest } = records[index];
+    records[index] = rest;
+    writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
+    const persisted = readJsonArray(paths.workers).value.find((worker) => worker?.workerId === reviewer.workerId)?.reviewReservation;
+    return persisted ? { ok: false, error: "Reviewer reservation rollback did not persist." } : { ok: true };
+  });
+}
+
+function releaseTerminalWorkerReviewReservation(paths, targetAssignmentId = "", context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    let released = 0;
+    for (const record of records) {
+      const reservation = record.reviewReservation;
+      if (!reservation || reservation.targetAssignmentId !== targetAssignmentId) continue;
+      if (!reservationHasFreshTerminalResult(reservation)) continue;
+      delete record.reviewReservation;
+      released += 1;
+    }
+    if (released > 0) writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
+    return { ok: true, released };
+  });
+}
+
+function recoverInactiveWorkerReviewReservations(paths, context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    const nowMs = Date.now();
+    let released = 0;
+    for (const record of records) {
+      const reservation = record.reviewReservation;
+      if (!reservation) continue;
+      const terminal = reservationHasFreshTerminalResult(reservation);
+      const inactive = reservationHasPositiveInactivity(reservation);
+      const cancelled = ["cancelled", "canceled", "released", "expired"].includes(normalizeWorkerLifecycleToken(reservation.state));
+      if (!terminal && !inactive && !cancelled) continue;
+      delete record.reviewReservation;
+      released += 1;
+    }
+    if (released > 0) writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
+    return { ok: true, released };
+  });
+}
+
+function promoteReadyBootingWarmReviewers(paths, runId = "", context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    let promoted = 0;
+    for (let index = 0; index < records.length; index += 1) {
+      const projected = projectWorker(records[index]);
+      if (projected.recoveryState !== "restarted_booting" || projected.state !== "warm" || isPlainObject(projected.reviewReservation)) continue;
+      const sampledAt = new Date().toISOString();
+      const probe = probeWorkerInputRegion(projected, context.tmuxRunner || spawnSync, { ...context, now: sampledAt });
+      const eligibility = buildWarmReviewerEligibility({
+        ...projected,
+        recoveryState: "recovered_warm",
+        booting: false,
+        reviewerReadiness: projectReviewerReadiness({ reviewerReadiness: probe }),
+      }, { runId, nowMs: Date.parse(sampledAt), liveSession: probe.captureOk === true });
+      if (!eligibility.eligible) continue;
+      records[index] = {
+        ...records[index],
+        recoveryState: "recovered_warm",
+        recoveryAction: "await_dispatcher_lease_pull",
+        lifecycleState: "warm_available",
+        booting: false,
+        reviewerPromotionEvidence: {
+          source: WARM_REVIEWER_READINESS_SOURCE,
+          observedAt: sampledAt,
+          sessionName: projected.sessionName,
+          paneTarget: probe.paneTarget,
+          currentCommand: probe.currentCommand,
+          rawPayloadRetained: false,
+        },
+      };
+      promoted += 1;
+    }
+    if (promoted > 0) writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
+    return { ok: true, promoted };
+  });
+}
+
+function markWorkerReviewReservationDispatched(paths, reviewer = {}, reservationId = "", proof = {}, context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    const index = records.findIndex((worker) => worker.workerId === reviewer.workerId && worker.reviewReservation?.reservationId === reservationId);
+    if (index < 0) return { ok: false, error: "Reviewer reservation disappeared after paste." };
+    records[index].reviewReservation = {
+      ...records[index].reviewReservation,
+      state: "dispatched",
+      dispatchedAt: new Date().toISOString(),
+      paneTarget: sanitizeLedgerField(proof.paneTarget || "", "", 40) || null,
+      sessionName: sanitizeLedgerField(proof.sessionName || reviewer.sessionName || "", "", 80) || null,
+    };
+    writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
+    return { ok: true };
+  });
+}
+
 export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const runId = safeRunId(runOptions.runId || defaultRunId());
   const paths = managerRunPaths(runId, runOptions, context);
+  if (runOptions.apply) {
+    const recovery = recoverInactiveWorkerReviewReservations(paths, context);
+    if (!recovery.ok) {
+      return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; reviewer reservation recovery failed" }, blockers: recovery.blockers?.length ? recovery.blockers : [{ code: "worker-code-review-reservation-recovery-failed", message: recovery.error || "Inactive reviewer reservations could not be recovered.", nextAction: "Repair authoritative workers.json before review apply." }] });
+    }
+    const promotion = promoteReadyBootingWarmReviewers(paths, runId, context);
+    if (!promotion.ok) {
+      return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; booting reviewer promotion failed" }, blockers: promotion.blockers?.length ? promotion.blockers : [{ code: "worker-code-review-reviewer-promotion-failed", message: promotion.error || "Booting reviewer promotion could not be persisted.", nextAction: "Repair authoritative workers.json before review apply." }] });
+    }
+  }
   const requestedStoryKey = normalizeBmadStoryAssignmentId(runOptions.assignmentId || "") || sanitizeLedgerField(runOptions.storyKey || "", "", 140);
   const reviewOptions = requestedStoryKey ? { ...runOptions, storyKey: requestedStoryKey, allowExplicitReviewReadyAssignment: true } : runOptions;
-  const progress = context.progressStatus || buildWorkerProgressStatus(runOptions, context);
+  const progress = context.progressStatus || buildWorkerProgressStatus({ ...runOptions, warmReviewerProbe: true }, context);
   const reviewPlan = context.reviewRequestPlan || buildBmadCodeReviewRequestPlan(reviewOptions, { ...context, progressStatus: progress });
   if (reviewPlan.ok === false || reviewPlan.status === "blocked" || !reviewPlan.summary?.selectedStory?.storyKey) {
     return packet({
@@ -4723,7 +5124,15 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
     });
   }
 
-  const rows = Array.isArray(progress.summary?.workerProgress) ? progress.summary.workerProgress : [];
+  const rows = [
+    ...(Array.isArray(progress.summary?.workerProgress) ? progress.summary.workerProgress : []),
+    ...(Array.isArray(progress.summary?.reviewerEligibleWorkers)
+      ? progress.summary.reviewerEligibleWorkers.filter((worker) => (
+          worker?.reviewerEligibility?.eligible === true &&
+          worker?.reviewerEligibility?.proofState === "eligible"
+        ))
+      : []),
+  ];
   const targetStoryKey = sanitizeLedgerField(reviewPlan.summary.selectedStory.storyKey, "", 140);
   const targetAssignmentId = assignmentIdForStoryKey(targetStoryKey);
   const target = rows.find((worker) => normalizeBmadStoryAssignmentId(worker.assignmentId || "") === targetStoryKey) || {
@@ -4739,6 +5148,12 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   const freshResultFailed = freshness.resultFresh === true ? reviewResultIsFail(freshResultPath) : false;
   const freshResultRetentionBlocker = freshResultFailed ? reviewFindingsRetentionBlocker(freshResultPath) : null;
   if (freshness.resultFresh === true && !freshResultRetentionBlocker) {
+    if (runOptions.apply) {
+      const release = releaseTerminalWorkerReviewReservation(paths, targetAssignmentId, context);
+      if (!release.ok) {
+        return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; terminal reservation release failed" }, blockers: [{ code: "worker-code-review-reservation-release-failed", message: release.error || "Terminal reviewer reservation could not be released.", nextAction: "Repair authoritative workers.json before assigning more work to the reviewer." }] });
+      }
+    }
     const scopedStateRoot = runOptions.stateRoot ? ` --state-root ${shellSingleQuote(runOptions.stateRoot)}` : "";
     return packet({
       status: "ready",
@@ -4773,8 +5188,87 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
       }],
     });
   }
-  const reviewer = selectWorkerCodeReviewer(rows, targetAssignmentId, runOptions.workerId, reviewAttemptSummary, runId);
+  const reviewer = selectWorkerCodeReviewer(rows, targetAssignmentId, runOptions.workerId, reviewAttemptSummary, runId, target.workerId);
   if (!reviewer) {
+    const warmReviewerEligibility = isPlainObject(progress.summary?.warmReviewerEligibility)
+      ? progress.summary.warmReviewerEligibility
+      : null;
+    const warmReadinessHeld = Boolean(
+      warmReviewerEligibility &&
+      warmReviewerEligibility.warmCapacity > 0 &&
+      warmReviewerEligibility.unreadyCount > 0,
+    );
+    const requestedWorkerId = sanitizeLedgerField(runOptions.workerId || "", "", 80);
+    const requestedRow = requestedWorkerId ? rows.find((worker) => worker.workerId === requestedWorkerId) : null;
+    const authoritativeWorkers = readJsonArray(paths.workers).value.filter(isPlainObject).map(projectWorker);
+    const authoritativeRequested = requestedWorkerId ? authoritativeWorkers.find((worker) => worker.workerId === requestedWorkerId) : null;
+    const exhaustedWorkers = new Set(sourceRefList(reviewAttemptSummary.exhaustedWorkers || []));
+    const history = appendWorkerAssignmentHistory(
+      appendWorkerAssignmentHistory(authoritativeRequested?.assignmentHistory || requestedRow?.assignmentHistory || [], { assignmentId: authoritativeRequested?.previousAssignmentId, taskId: authoritativeRequested?.previousTaskId }),
+      { assignmentId: authoritativeRequested?.assignmentId, taskId: authoritativeRequested?.taskId },
+    )
+      .map((entry) => normalizeBmadStoryAssignmentId(entry.assignmentId || "") || sanitizeLedgerField(entry.assignmentId || "", "", 140));
+    const selfReviewRow = authoritativeRequested || requestedRow;
+    const requestedSelfReview = Boolean(selfReviewRow && (
+      selfReviewRow.workerId === target.workerId ||
+      normalizeBmadStoryAssignmentId(selfReviewRow.assignmentId || "") === targetStoryKey ||
+      normalizeBmadStoryAssignmentId(selfReviewRow.previousAssignmentId || "") === targetStoryKey ||
+      history.includes(targetStoryKey)
+    ));
+    const candidateIds = [...new Set([
+      ...rows.map((worker) => sanitizeLedgerField(worker?.workerId || "", "", 80)),
+      ...(Array.isArray(warmReviewerEligibility?.candidates) ? warmReviewerEligibility.candidates : [])
+        .map((candidate) => sanitizeLedgerField(candidate?.workerId || "", "", 80)),
+      requestedWorkerId,
+    ].filter(Boolean))];
+    const candidateRows = candidateIds.map((workerId) => (
+      authoritativeWorkers.find((worker) => worker.workerId === workerId) || rows.find((worker) => worker.workerId === workerId)
+    )).filter(Boolean);
+    const selfReviewCandidates = candidateRows.filter((worker) => {
+      const candidateHistory = appendWorkerAssignmentHistory(
+        appendWorkerAssignmentHistory(worker.assignmentHistory || [], { assignmentId: worker.previousAssignmentId, taskId: worker.previousTaskId }),
+        { assignmentId: worker.assignmentId, taskId: worker.taskId },
+      ).map((entry) => normalizeBmadStoryAssignmentId(entry.assignmentId || "") || sanitizeLedgerField(entry.assignmentId || "", "", 140));
+      return worker.workerId === target.workerId || candidateHistory.includes(targetStoryKey);
+    });
+    const exhaustedCandidates = candidateIds.filter((workerId) => exhaustedWorkers.has(workerId));
+    const permanentCandidateIds = new Set([...selfReviewCandidates.map((worker) => worker.workerId), ...exhaustedCandidates]);
+    const allCandidatesPermanentlyExcluded = candidateIds.length > 0 && candidateIds.every((workerId) => permanentCandidateIds.has(workerId));
+    const readinessCandidates = (Array.isArray(warmReviewerEligibility?.candidates) ? warmReviewerEligibility.candidates : [])
+      .filter((candidate) => !permanentCandidateIds.has(sanitizeLedgerField(candidate?.workerId || "", "", 80)));
+    const heartbeatStale = readinessCandidates.some((candidate) => candidate.reasonCode === "warm_reviewer_heartbeat_stale");
+    const readinessMissing = readinessCandidates.some((candidate) => ["warm_reviewer_readiness_not_positive", "warm_reviewer_readiness_stale"].includes(candidate.reasonCode));
+    const readinessInvalid = readinessCandidates.some((candidate) => [
+      "warm_reviewer_readiness_source_invalid", "warm_reviewer_readiness_mixed_observation", "warm_reviewer_readiness_future",
+      "warm_reviewer_pane_ambiguous", "warm_reviewer_process_identity_mismatch", "warm_reviewer_pane_identity_mismatch",
+      "warm_reviewer_session_mismatch", "warm_reviewer_owner_mismatch", "warm_reviewer_run_mismatch",
+    ].includes(candidate.reasonCode));
+    const scopedStateRoot = runOptions.stateRoot ? ` --state-root ${shellSingleQuote(runOptions.stateRoot)}` : "";
+    const blocker = requestedSelfReview
+      ? { code: "worker-code-review-self-review-excluded", message: `Requested reviewer ${requestedWorkerId} has implemented the target assignment and cannot self-review.`, nextAction: "Choose a different manager-owned reviewer." }
+      : requestedWorkerId && exhaustedWorkers.has(requestedWorkerId)
+        ? { code: "worker-code-review-reviewer-retries-exhausted", message: `Requested reviewer ${requestedWorkerId} exhausted the bounded delegated review retry limit.`, nextAction: "Choose a different reviewer or resolve the retained review result before retrying." }
+        : requestedWorkerId && !requestedRow
+          ? { code: "worker-code-review-requested-worker-unavailable", message: `Requested reviewer ${requestedWorkerId} is not eligible for this review.`, nextAction: `Refresh node ./scripts/manager-worker-progress.mjs --summary-json --run-id ${shellSingleQuote(runId)}${scopedStateRoot} before choosing another reviewer.` }
+          : !requestedWorkerId && allCandidatesPermanentlyExcluded && selfReviewCandidates.length > 0
+            ? { code: "worker-code-review-self-review-excluded", message: `Reviewer candidate${selfReviewCandidates.length === 1 ? "" : "s"} ${selfReviewCandidates.map((worker) => worker.workerId).join(", ")} implemented the target assignment and cannot self-review.`, nextAction: "Choose a different manager-owned reviewer." }
+            : !requestedWorkerId && allCandidatesPermanentlyExcluded && exhaustedCandidates.length > 0
+              ? { code: "worker-code-review-reviewer-retries-exhausted", message: `Reviewer candidate${exhaustedCandidates.length === 1 ? "" : "s"} ${exhaustedCandidates.join(", ")} exhausted the bounded delegated review retry limit.`, nextAction: "Choose a different reviewer or resolve the retained review result before retrying." }
+          : heartbeatStale
+            ? { code: "worker-code-review-warm-heartbeat-stale", message: "Warm reviewer pane readiness is positive, but its authoritative heartbeat is stale.", nextAction: `Refresh the manager-owned worker heartbeat under ${runOptions.stateRoot || paths.proof.state?.root || paths.root}, then rerun the read-only warm reviewer probe.` }
+            : readinessInvalid
+              ? { code: "worker-code-review-warm-readiness-invalid", message: "Warm reviewer readiness evidence is invalid or identity-ambiguous.", nextAction: `Repair ownership/session identity and rerun the read-only warm reviewer probe under ${runOptions.stateRoot || paths.proof.state?.root || paths.root}.` }
+              : readinessMissing
+                ? { code: "worker-code-review-warm-readiness-missing", message: "Warm reviewer readiness proof is absent, non-positive, or expired.", nextAction: `Run the read-only warm reviewer probe under ${runOptions.stateRoot || paths.proof.state?.root || paths.root}.` }
+            : {
+                code: warmReadinessHeld ? "worker-code-review-warm-readiness-held" : exhaustedWorkers.size > 0 ? "worker-code-review-reviewer-retries-exhausted" : "worker-code-review-no-reviewer",
+                message: warmReadinessHeld
+                  ? "Warm manager-owned worker capacity exists, but at least one reviewer readiness gate is missing, stale, or unsafe."
+                  : "No manager-owned worker is available to run delegated BMAD code review without exceeding retry limits.",
+                nextAction: warmReadinessHeld
+                  ? `Run node ./scripts/manager-worker-prompt-probe.mjs --summary-json --run-id ${shellSingleQuote(runId)}${scopedStateRoot} --include-warm-reviewers, then rerun delegated review planning; do not warm more capacity.`
+                  : "Wait for another prompt-idle manager-owned worker, warm a reviewer, or run review manually.",
+              };
     return packet({
       status: "blocked",
       summary: {
@@ -4785,11 +5279,7 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
         reviewAttemptSummary: sanitizeCyclePacketValue(reviewAttemptSummary),
         requests: [],
       },
-      blockers: [{
-        code: "worker-code-review-no-reviewer",
-        message: "No manager-owned worker is available to run delegated BMAD code review without exceeding retry limits.",
-        nextAction: "Wait for another prompt-idle manager-owned worker, warm a reviewer, or run review manually.",
-      }],
+      blockers: [blocker],
     });
   }
 
@@ -4916,21 +5406,122 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
     });
   }
 
-  mkdirSync(join(paths.root, "review-requests"), { recursive: true });
-  mkdirSync(join(paths.root, "review-results"), { recursive: true });
-  writeFileSync(request.requestPath, renderWorkerCodeReviewFile(request));
-  writeFileSync(request.pastePath, `${request.pasteText}\n`);
-  const paste = pasteWorkerPointer(request, `${request.workerId}-code-review`, context);
-  const result = { ...request, status: paste.ok ? (requestExists ? "code_review_request_resent" : "code_review_request_sent") : "failed", paste };
+  const reviewerRevalidation = revalidateWarmReviewerBeforeApply(reviewer, targetAssignmentId, runOptions, context);
+  if (!reviewerRevalidation.ok) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        apply: true,
+        mutation: "none; warm reviewer revalidation failed before request write or paste",
+        target: sanitizeCyclePacketValue({ assignmentId: targetAssignmentId, storyKey: targetStoryKey }),
+        reviewer: sanitizeCyclePacketValue({ workerId: reviewer.workerId, sessionName: reviewer.sessionName, owner: reviewer.owner }),
+        requests: [],
+      },
+      blockers: [reviewerRevalidation.blocker],
+    });
+  }
+
+  let reviewReservation = null;
+  let applyReviewer = reviewerRevalidation.reviewer;
+  if (!reviewerRevalidation.skipped) {
+    reviewReservation = reserveWorkerCodeReviewer(paths, runId, reviewerRevalidation.reviewer, request, context);
+    if (!reviewReservation.ok) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "none; reviewer reservation failed before request write or paste", requests: [] },
+        blockers: [{
+          code: "worker-code-review-reviewer-readiness-changed",
+          message: reviewReservation.error || "Warm reviewer could not be reserved immediately before paste.",
+          nextAction: "Refresh authoritative worker lease and readiness evidence before retrying delegated review.",
+        }],
+      });
+    }
+    const postReservation = revalidateWarmReviewerBeforeApply(
+      reviewerRevalidation.reviewer,
+      targetAssignmentId,
+      runOptions,
+      { ...context, allowedReviewReservationId: reviewReservation.reservationId },
+    );
+    if (!postReservation.ok) {
+      const rollback = rollbackWorkerCodeReviewReservation(paths, reviewerRevalidation.reviewer, reviewReservation.reservationId, context);
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "none; post-reservation readiness recheck failed before request write or paste", requests: [] },
+        blockers: rollback.ok ? [postReservation.blocker] : [{ code: "worker-code-review-reservation-rollback-failed", message: rollback.error || "Reviewer reservation rollback failed after readiness changed.", nextAction: "Repair authoritative workers.json; do not dispatch review or lane work to this worker." }],
+      });
+    }
+    applyReviewer = postReservation.reviewer;
+  }
+
+  try {
+    mkdirSync(join(paths.root, "review-requests"), { recursive: true });
+    mkdirSync(join(paths.root, "review-results"), { recursive: true });
+    writeFileSync(request.requestPath, renderWorkerCodeReviewFile(request));
+    writeFileSync(request.pastePath, `${request.pasteText}\n`);
+  } catch (error) {
+    const rollback = reviewReservation?.ok ? rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, context) : { ok: true };
+    cleanupReviewRequestArtifacts(request);
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: { runId, apply: true, mutation: "none; review request write rolled back", requests: [] },
+      blockers: [rollback.ok
+        ? { code: "worker-code-review-request-write-failed", message: error?.message || "Review request write failed.", nextAction: "Repair manager state-root write access before retrying." }
+        : { code: "worker-code-review-reservation-rollback-failed", message: rollback.error || "Reviewer reservation rollback failed after request write failure.", nextAction: "Repair authoritative workers.json; do not dispatch review or lane work to this worker." }],
+    });
+  }
+  if (reviewReservation?.ok) {
+    const finalRevalidation = revalidateWarmReviewerBeforeApply(applyReviewer, targetAssignmentId, runOptions, { ...context, allowedReviewReservationId: reviewReservation.reservationId });
+    if (!finalRevalidation.ok) {
+      const rollback = rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, context);
+      cleanupReviewRequestArtifacts(request);
+      return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; final reviewer identity recheck failed before buffer load", requests: [] }, blockers: rollback.ok ? [finalRevalidation.blocker] : [{ code: "worker-code-review-reservation-rollback-failed", message: rollback.error || "Reviewer reservation rollback failed after final identity recheck.", nextAction: "Repair authoritative workers.json; do not dispatch work to this worker." }] });
+    }
+    applyReviewer = finalRevalidation.reviewer;
+  }
+  const pasteRequest = {
+    ...request,
+    expectedPaneTarget: applyReviewer?.reviewerEligibility?.paneTarget || null,
+    expectedCurrentCommand: applyReviewer?.reviewerEligibility?.currentCommand || null,
+    ...(reviewReservation?.ok ? {
+      authoritativeWorkerGuard: {
+        workersPath: paths.workers,
+        workerId: applyReviewer.workerId,
+        owner: applyReviewer.owner,
+        runId,
+        sessionName: applyReviewer.sessionName,
+        reservationId: reviewReservation.reservationId,
+        reservationState: "reserved",
+        targetAssignmentId: request.targetAssignmentId,
+        paneTarget: applyReviewer?.reviewerEligibility?.paneTarget || null,
+      },
+    } : {}),
+  };
+  const paste = pasteWorkerPointer(pasteRequest, `${request.workerId}-code-review`, { ...context, requireExactSession: true });
+  const result = { ...request, reservationId: reviewReservation?.reservationId || null, status: paste.ok ? (requestExists ? "code_review_request_resent" : "code_review_request_sent") : "failed", paste };
   if (!paste.ok) {
+    const rollback = reviewReservation?.ok ? rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, context) : { ok: true };
     cleanupReviewRequestArtifacts(request);
     recordPointerReceiptFailure(runOptions, result, context, "code-review");
     return packet({
       ok: false,
       status: "blocked",
       summary: { runId, apply: true, mutation: "partial", results: [result] },
-      blockers: [{ code: "worker-code-review-paste-failed", message: paste.error || `Failed to paste code review request to ${request.sessionName}.`, nextAction: "Inspect manager review request files and tmux paste result before retrying." }],
+      blockers: [rollback.ok
+        ? { code: "worker-code-review-paste-failed", message: paste.error || `Failed to paste code review request to ${request.sessionName}.`, nextAction: "Inspect manager review request files and tmux paste result before retrying." }
+        : { code: "worker-code-review-reservation-rollback-failed", message: rollback.error || "Reviewer reservation rollback failed after paste failure.", nextAction: "Repair authoritative workers.json; do not dispatch review or lane work to this worker." }],
     });
+  }
+
+  if (reviewReservation?.ok) {
+    const dispatched = markWorkerReviewReservationDispatched(paths, reviewer, reviewReservation.reservationId, paste, context);
+    if (!dispatched.ok) {
+      return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "partial; review pointer sent but reservation persistence failed", results: [result] }, blockers: [{ code: "worker-code-review-reservation-persistence-failed", message: dispatched.error || "Reviewer reservation could not be marked dispatched after paste.", nextAction: "Hold the worker from lane dispatch and repair authoritative reservation state before recovery." }] });
+    }
   }
 
   ledgerCommand({
@@ -5086,14 +5677,52 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
     ? workerPacket.summary.workers.filter(isPlainObject).map(projectWorker)
     : [];
   const missingLiveWorkerIds = missingLiveWorkerIdsFromWorkerStatus(workerPacket);
-  const activeWorkers = workers
-    .filter((worker) => worker.state === "active" && isManagerOwnedWorker(worker, runId) && !missingLiveWorkerIds.has(worker.workerId))
+  const includeWarmReviewers = runOptions.includeWarmReviewers === true || context.includeWarmReviewers === true;
+  const candidateProbeWorkers = workers
+    .filter((worker) => (
+      isManagerOwnedWorker(worker, runId) &&
+      !isManagerControlPlaneWorker(worker, runId) &&
+      !missingLiveWorkerIds.has(worker.workerId) &&
+      (worker.state === "active" || (includeWarmReviewers && isWarmReviewerCapacityRecord(worker)))
+    ))
     .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId);
+  const excludedCandidates = includeWarmReviewers
+    ? candidateProbeWorkers
+        .map((worker) => ({ worker, reasonCode: warmReviewerPreCaptureExclusionReason(worker) }))
+        .filter((row) => row.reasonCode)
+        .map((row) => ({ workerId: row.worker.workerId, sessionName: row.worker.sessionName, reasonCode: row.reasonCode, rawPayloadRetained: false }))
+    : [];
+  const excludedWorkerIds = new Set(excludedCandidates.map((row) => row.workerId));
+  const probeWorkers = candidateProbeWorkers.filter((worker) => !excludedWorkerIds.has(worker.workerId));
   const runner = context.tmuxRunner || spawnSync;
-  const probes = activeWorkers.map((worker) => probeWorkerInputRegion(worker, runner, { ...context, receiptScanLines: 10 }));
+  const probes = probeWorkers.map((worker) => probeWorkerInputRegion(worker, runner, { ...context, receiptScanLines: 10, now: context.now || runOptions.now }));
   const stuck = probes.filter((probe) => probe.inputHasManagerPointer);
   const limit = runOptions.limit === null || runOptions.limit === undefined ? stuck.length : Math.max(0, Number(runOptions.limit) || 0);
   const selected = stuck.slice(0, limit);
+  if (includeWarmReviewers && runOptions.apply) {
+    return packet({
+      status: stuck.length > 0 ? "attention" : "ready",
+      summary: {
+        runId,
+        apply: true,
+        mutation: "none; warm reviewer readiness probe is read-only",
+        probedWorkers: probes.length,
+        warmReviewerProbe: true,
+        promptPointerWorkers: stuck.length,
+        probes,
+        excludedCandidates,
+        retention: "metadata_only_prompt_region_probe",
+      },
+      warnings: stuck.length > 0
+        ? [{ code: "worker-warm-reviewer-pointer-visible", message: `${stuck.length} warm reviewer probe(s) show pending input; readiness remains held and no pane input was sent.` }]
+        : [],
+      nextActions: [{
+        code: stuck.length > 0 ? "worker-warm-reviewer-readiness-held" : "worker-warm-reviewer-probe-clear",
+        summary: stuck.length > 0 ? "Warm reviewer readiness is held without mutating the pane." : "Warm reviewer readiness probe completed without mutation.",
+        nextAction: stuck.length > 0 ? "Use the separate bounded worker repair gate before probing reviewer readiness again." : "Continue metadata-only monitoring.",
+      }],
+    });
+  }
   if (selected.length === 0) {
     return packet({
       status: "ready",
@@ -5102,8 +5731,10 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
         apply: Boolean(runOptions.apply),
         mutation: "none",
         probedWorkers: probes.length,
+        warmReviewerProbe: includeWarmReviewers,
         promptPointerWorkers: 0,
         probes,
+        excludedCandidates,
         retention: "metadata_only_prompt_region_probe",
       },
       nextActions: [{ code: "worker-prompt-probe-clear", summary: "No manager pointer text is visible in worker input regions.", nextAction: "Continue metadata-only monitoring." }],
@@ -5117,9 +5748,11 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
         apply: false,
         mutation: "none; dry-run summary only",
         probedWorkers: probes.length,
+        warmReviewerProbe: includeWarmReviewers,
         promptPointerWorkers: stuck.length,
         planned: selected.length,
         probes,
+        excludedCandidates,
         requests: selected.map(promptProbeRequestSummary),
         continuousSelection: buildContinuousSelectionProof({
           code: "continuous-worker-prompt-probe",
@@ -5131,7 +5764,7 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
         retention: "metadata_only_prompt_region_probe",
       },
       warnings: [{ code: "worker-prompt-pointer-visible", message: `${stuck.length} manager-owned worker input region(s) contain manager pointer text.` }],
-      nextActions: [{ code: "worker-prompt-probe-submit-ready", summary: `Submit visible manager pointers for ${selected.length} worker input region(s).`, nextAction: `node ./scripts/manager-worker-prompt-probe.mjs --summary-json${workerExactTargetFlags(selected[0]) || ` --limit ${selected.length}`} --apply` }],
+      nextActions: [{ code: "worker-prompt-probe-submit-ready", summary: `Submit visible manager pointers for ${selected.length} worker input region(s).`, nextAction: `node ./scripts/manager-worker-prompt-probe.mjs --summary-json${includeWarmReviewers ? " --include-warm-reviewers" : ""}${workerExactTargetFlags(selected[0]) || ` --limit ${selected.length}`} --apply` }],
     });
   }
   const results = selected.map((probe) => {
@@ -5170,6 +5803,7 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
       apply: true,
       mutation: "manager-owned-worker-enter-only-submit",
       probedWorkers: probes.length,
+      warmReviewerProbe: includeWarmReviewers,
       promptPointerWorkers: stuck.length,
       results,
       continuousSelection: buildContinuousSelectionProof({
@@ -5289,6 +5923,7 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       }],
     });
   }
+  return withWorkerAssignmentLock(paths, context, () => {
   writeJsonIfMissing(paths.workers, []);
   const workerRead = readJsonArray(paths.workers);
   if (workerRead.warning) {
@@ -5380,6 +6015,7 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       }),
       retention: "retire_session_and_summary",
     },
+  });
   });
 }
 
@@ -6152,20 +6788,27 @@ function workerProgressRowConflictsManagerOwner(worker = {}, runId = "") {
   return Boolean(owner && runId && !owner.startsWith(`${runId}/`));
 }
 
-function selectWorkerCodeReviewer(workers = [], targetAssignmentId = "", requestedWorkerId = "", attemptSummary = {}, runId = "") {
+function selectWorkerCodeReviewer(workers = [], targetAssignmentId = "", requestedWorkerId = "", attemptSummary = {}, runId = "", targetWorkerId = "") {
   const allowedStates = new Set(["manager_review_ready", "delivery_gate_ready"]);
   const requested = sanitizeLedgerField(requestedWorkerId || "", "", 80);
+  const targetWorker = sanitizeLedgerField(targetWorkerId || "", "", 80);
   const target = normalizeBmadStoryAssignmentId(targetAssignmentId || "") || sanitizeLedgerField(targetAssignmentId || "", "", 140);
   const exhausted = new Set(sourceRefList(attemptSummary.exhaustedWorkers || []).map((workerId) => sanitizeLedgerField(workerId, "", 80)).filter(Boolean));
   const candidates = workers
     .filter((worker) => worker?.workerId && worker?.sessionName)
     .filter((worker) => allowedStates.has(String(worker.progressState || "")))
     .filter((worker) => !workerProgressRowConflictsManagerOwner(worker, runId))
+    .filter((worker) => !isManagerControlPlaneWorker(worker, runId))
+    .filter((worker) => !isPlainObject(worker.reviewReservation))
     .filter((worker) => !requested || worker.workerId === requested)
+    .filter((worker) => !targetWorker || worker.workerId !== targetWorker)
     .filter((worker) => !exhausted.has(sanitizeLedgerField(worker.workerId || "", "", 80)));
   return candidates.find((worker) => {
     const workerAssignment = normalizeBmadStoryAssignmentId(worker.assignmentId || "") || sanitizeLedgerField(worker.assignmentId || "", "", 140);
-    return workerAssignment !== target;
+    const previousAssignment = normalizeBmadStoryAssignmentId(worker.previousAssignmentId || "") || sanitizeLedgerField(worker.previousAssignmentId || "", "", 140);
+    const historyAssignments = appendWorkerAssignmentHistory(worker.assignmentHistory || [], {})
+      .map((entry) => normalizeBmadStoryAssignmentId(entry.assignmentId || "") || sanitizeLedgerField(entry.assignmentId || "", "", 140));
+    return workerAssignment !== target && previousAssignment !== target && !historyAssignments.includes(target);
   }) || null;
 }
 
@@ -6387,14 +7030,48 @@ function pasteWorkerProgressSignal(request = {}, context = {}) {
   return pasteWorkerPointer(request, `${request.workerId}-progress`, context);
 }
 
+function authoritativeWorkerGuardMatches(request = {}) {
+  const guard = request.authoritativeWorkerGuard;
+  if (!isPlainObject(guard)) return { ok: true };
+  const workerRead = readJsonArray(guard.workersPath);
+  if (workerRead.warning) return { ok: false, error: workerRead.warning.message || "Authoritative worker state could not be read before paste." };
+  const worker = workerRead.value.filter(isPlainObject).map(projectWorker).find((record) => record.workerId === guard.workerId);
+  const reservation = worker?.reviewReservation;
+  const matches = Boolean(
+    worker && reservation &&
+    worker.owner === guard.owner && worker.runId === guard.runId && worker.sessionName === guard.sessionName &&
+    reservation.reservationId === guard.reservationId && reservation.workerId === guard.workerId &&
+    reservation.owner === guard.owner && reservation.runId === guard.runId && reservation.sessionName === guard.sessionName &&
+    reservation.state === guard.reservationState && reservation.targetAssignmentId === guard.targetAssignmentId &&
+    reservation.paneTarget === guard.paneTarget
+  );
+  return matches
+    ? { ok: true }
+    : { ok: false, error: "Authoritative worker owner, run, reservation state/target, session, or pane changed after buffer load and before paste." };
+}
+
 function pasteWorkerPointer(request = {}, bufferName = "manager-pointer", context = {}) {
   const runner = context.tmuxRunner || spawnSync;
+  const target = resolveTmuxPaneTarget(request.sessionName, runner, { ...context, requireSinglePane: true, requireExactSession: context.requireExactSession === true });
+  if (!target.ok) return target;
+  if (request.expectedPaneTarget && target.target !== request.expectedPaneTarget) {
+    return { ok: false, error: `Tmux pane identity changed before paste: expected ${request.expectedPaneTarget}, resolved ${target.target}`, sessionName: request.sessionName, paneTarget: target.target };
+  }
+  if (request.expectedCurrentCommand && target.currentCommand !== request.expectedCurrentCommand) {
+    return { ok: false, error: `Tmux pane process changed before paste: expected ${request.expectedCurrentCommand}, resolved ${target.currentCommand || "unknown"}`, sessionName: request.sessionName, paneTarget: target.target };
+  }
   const load = runner("tmux", ["load-buffer", "-b", bufferName, request.pastePath], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
   if (load?.error) return { ok: false, error: load.error.message || "tmux load-buffer failed" };
   if ((load?.status ?? 0) !== 0) return { ok: false, error: String(load?.stderr || load?.stdout || "tmux load-buffer failed").trim(), status: load?.status };
-  const target = resolveTmuxPaneTarget(request.sessionName, runner, context);
-  if (!target.ok) return target;
-  const paste = runner("tmux", ["paste-buffer", "-b", bufferName, "-t", target.target], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  const postLoadTarget = resolveTmuxPaneTarget(request.sessionName, runner, { ...context, requireSinglePane: true, requireExactSession: context.requireExactSession === true });
+  if (!postLoadTarget.ok || postLoadTarget.target !== target.target || (request.expectedCurrentCommand && postLoadTarget.currentCommand !== request.expectedCurrentCommand)) {
+    return { ok: false, error: postLoadTarget.error || "Tmux pane or process identity changed after buffer load and before paste.", sessionName: request.sessionName, paneTarget: postLoadTarget.target || null };
+  }
+  const authoritativeGuard = authoritativeWorkerGuardMatches(request);
+  if (!authoritativeGuard.ok) {
+    return { ...authoritativeGuard, sessionName: request.sessionName, paneTarget: postLoadTarget.target || null };
+  }
+  const paste = runner("tmux", ["paste-buffer", "-b", bufferName, "-t", postLoadTarget.target], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
   if (paste?.error) return { ok: false, error: paste.error.message || "tmux paste-buffer failed" };
   if ((paste?.status ?? 0) !== 0) return { ok: false, error: String(paste?.stderr || paste?.stdout || "tmux paste-buffer failed").trim(), status: paste?.status };
   const enter = sendTmuxEnterToTarget(target.target, runner, context);
@@ -6519,30 +7196,71 @@ function paneInputRegion(visibleTail = "") {
 
 function probeWorkerInputRegion(worker = {}, runner = spawnSync, context = {}) {
   const target = worker.paneTarget
-    ? { ok: true, target: worker.paneTarget }
-    : resolveTmuxPaneTarget(worker.sessionName, runner, context);
+    ? {
+        ok: true,
+        target: worker.paneTarget,
+        paneId: worker.paneId || worker.paneTarget,
+        paneCount: worker.paneCount || 1,
+        singlePane: worker.singlePane !== false,
+        currentCommand: worker.currentCommand || "",
+      }
+    : resolveTmuxPaneTarget(worker.sessionName, runner, { ...context, requireSinglePane: true, requireExactSession: true });
   const base = {
+    schemaVersion: WARM_REVIEWER_READINESS_SCHEMA,
+    source: WARM_REVIEWER_READINESS_SOURCE,
     workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
     sessionName: sanitizeLedgerField(worker.sessionName || worker.workerId || "", "", 80),
+    resolvedSessionName: sanitizeLedgerField(target.sessionName || "", "", 80),
+    owner: sanitizeLedgerField(worker.owner || "", "", 120),
+    runId: sanitizeLedgerField(worker.runId || "", "", 80),
     assignmentId: sanitizeLedgerField(worker.assignmentId || "", "", 140),
     taskId: sanitizeLedgerField(worker.taskId || "", "", 140),
     paneTarget: target.target || "",
+    paneId: target.paneId || target.target || "",
+    paneCount: target.paneCount ?? 0,
+    singlePane: target.singlePane === true,
+    currentCommand: sanitizeLedgerField(target.currentCommand || "", "", 80),
     promptDetected: false,
+    promptIdle: false,
+    emptyInput: false,
+    inputPending: false,
     inputHasManagerPointer: false,
     captureOk: false,
+    observedAt: sanitizeLedgerField(context.now || new Date().toISOString(), "", 80),
+    promptIdleAt: null,
+    emptyInputAt: null,
+    rawPayloadRetained: false,
   };
   if (!target.ok) return { ...base, error: target.error || "tmux pane target unavailable" };
   const capture = captureTmuxBottomPane(target.target, runner, context);
   if (!capture.ok) return { ...base, captureOk: false, error: capture.error || "tmux prompt-region capture failed" };
   const inputRegion = paneInputRegion(capture.visibleTail);
   const promptDetected = inputRegion !== capture.visibleTail || /^\s*›/.test(inputRegion);
+  const emptyInput = promptDetected && inputRegion.replace(/^\s*›\s?/, "").trim() === "";
+  const promptIdle = promptDetected && emptyInput;
   return {
     ...base,
     paneTarget: target.target,
     captureOk: true,
     promptDetected,
+    promptIdle,
+    emptyInput,
+    inputPending: promptDetected && !emptyInput,
+    promptIdleAt: promptIdle ? base.observedAt : null,
+    emptyInputAt: emptyInput ? base.observedAt : null,
     inputHasManagerPointer: promptDetected && managerPointerPattern().test(sanitizeReceiptNeedle(inputRegion)),
   };
+}
+
+function warmReviewerPreCaptureExclusionReason(worker = {}) {
+  if (worker.takeoverRequired === true) return "warm_reviewer_takeover_required";
+  if (reviewReservationBlocksWorker(worker)) return "warm_reviewer_review_reserved";
+  if (hasActiveWorkerLease(worker)) return "warm_reviewer_assignment_or_lease_active";
+  if (worker.assignmentId || worker.taskId) return "warm_reviewer_assignment_or_lease_active";
+  if (worker.busy === true) return "warm_reviewer_busy";
+  if (worker.booting === true || worker.recoveryState === "restarted_booting") return "warm_reviewer_booting";
+  const lifecycle = classifyWarmReviewerLifecycle(worker);
+  return lifecycle.eligible ? "" : lifecycle.reasonCode;
 }
 
 function managerPointerPattern() {
@@ -6551,15 +7269,31 @@ function managerPointerPattern() {
 
 function promptProbeRequestSummary(probe = {}) {
   return {
+    schemaVersion: sanitizeLedgerField(probe.schemaVersion || "", "", 80) || null,
+    source: sanitizeLedgerField(probe.source || "", "", 100) || null,
     workerId: sanitizeLedgerField(probe.workerId || "", "", 80),
     sessionName: sanitizeLedgerField(probe.sessionName || probe.workerId || "", "", 80),
+    owner: sanitizeLedgerField(probe.owner || "", "", 120) || null,
+    runId: sanitizeLedgerField(probe.runId || "", "", 80) || null,
     assignmentId: sanitizeLedgerField(probe.assignmentId || "", "", 140),
     taskId: sanitizeLedgerField(probe.taskId || "", "", 140),
     paneTarget: sanitizeLedgerField(probe.paneTarget || "", "", 40),
+    paneId: sanitizeLedgerField(probe.paneId || "", "", 40) || null,
+    paneCount: nonNegativeInteger(probe.paneCount),
+    singlePane: probe.singlePane === true,
+    currentCommand: sanitizeLedgerField(probe.currentCommand || "", "", 80) || null,
     promptDetected: probe.promptDetected === true,
+    promptIdle: probe.promptIdle === true,
+    emptyInput: probe.emptyInput === true,
+    inputPending: probe.inputPending === true,
     inputHasManagerPointer: probe.inputHasManagerPointer === true,
+    captureOk: probe.captureOk === true,
+    observedAt: sanitizeLedgerField(probe.observedAt || "", "", 80) || null,
+    promptIdleAt: sanitizeLedgerField(probe.promptIdleAt || "", "", 80) || null,
+    emptyInputAt: sanitizeLedgerField(probe.emptyInputAt || "", "", 80) || null,
     action: "send_enter_only_to_active_tmux_pane",
     basis: "bounded_prompt_region_probe",
+    rawPayloadRetained: false,
   };
 }
 
@@ -6646,7 +7380,8 @@ function buildOpenStoryReviewFeedbackSummary(assignmentId = "", context = {}) {
 }
 
 function resolveTmuxPaneTarget(sessionName = "", runner = spawnSync, context = {}) {
-  const list = runner("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_active}:#{pane_id}"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  const exactSessionTarget = context.requireExactSession === true ? `=${sessionName}` : sessionName;
+  const list = runner("tmux", ["list-panes", "-t", exactSessionTarget, "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
   if (list?.error) return { ok: false, error: list.error.message || "tmux list-panes failed" };
   if ((list?.status ?? 0) !== 0) return { ok: false, error: String(list?.stderr || list?.stdout || "tmux list-panes failed").trim(), status: list?.status };
   const panes = String(list?.stdout || "")
@@ -6654,13 +7389,28 @@ function resolveTmuxPaneTarget(sessionName = "", runner = spawnSync, context = {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [active, ...targetParts] = line.split(":");
-      return { active: active === "1", target: targetParts.join(":") };
+      const [active, target, currentCommand = "", resolvedSessionName = ""] = line.split(":");
+      return { active: active === "1", target, currentCommand, sessionName: resolvedSessionName };
     })
     .filter((pane) => pane.target);
   const paneTarget = (panes.find((pane) => pane.active) || panes[0])?.target;
   if (!paneTarget) return { ok: false, error: `No tmux pane resolved for ${sessionName}` };
-  return { ok: true, target: paneTarget };
+  if (context.requireSinglePane === true && panes.length !== 1) {
+    return { ok: false, error: `Expected exactly one tmux pane for ${sessionName}; found ${panes.length}`, paneCount: panes.length, singlePane: false };
+  }
+  const pane = panes.find((row) => row.target === paneTarget) || panes[0];
+  if (context.requireExactSession === true && pane.sessionName && pane.sessionName !== sessionName) {
+    return { ok: false, error: `Tmux session identity mismatch: requested ${sessionName}, resolved ${pane.sessionName}`, paneCount: panes.length, singlePane: panes.length === 1 };
+  }
+  return {
+    ok: true,
+    target: paneTarget,
+    paneId: paneTarget,
+    paneCount: panes.length,
+    singlePane: panes.length === 1,
+    currentCommand: sanitizeLedgerField(pane.currentCommand || "", "", 80),
+    sessionName: sanitizeLedgerField(pane.sessionName || sessionName, "", 80),
+  };
 }
 
 function buildWorkerProgressRecord(worker = {}, context = {}) {
@@ -6870,6 +7620,157 @@ function buildWorkerProgressRecord(worker = {}, context = {}) {
     progressSignalCount,
     finalCheckpoint,
     nextAction,
+  };
+}
+
+function classifyWarmReviewerLifecycle(worker = {}) {
+  const state = normalizeWorkerLifecycleToken(worker.state);
+  const lifecycle = normalizeWorkerLifecycleToken(worker.lifecycleState);
+  const assignment = normalizeWorkerLifecycleToken(worker.assignmentState);
+  const recovery = normalizeWorkerLifecycleToken(worker.recoveryState);
+  const capacity = state === "warm";
+  const allowedState = new Set(["warm"]);
+  const allowedLifecycle = new Set(["", "warm", "warm_available", "recovered", "recovered_warm"]);
+  const allowedAssignment = new Set(["warm", "reassignable", "closed", "done", "merged", "released", "completed", "none"]);
+  const allowedRecovery = new Set(["none", "recovered", "recovered_warm", "released", "completed_lane_reusable"]);
+  const deniedTokens = new Set([
+    "active", "running", "busy", "booting", "starting", "failed", "dead", "stale", "unknown",
+    "takeover_required", "ambiguous", "conflict", "pointer_receipt_unverified", "handoff_sent",
+    "recovery_required", "recovery_incomplete", "retiring", "retired", "terminated",
+  ]);
+  const denied = [state, lifecycle, assignment, recovery].find((value) => deniedTokens.has(value));
+  let reasonCode = "warm_reviewer_lifecycle_ready";
+  if (!capacity) reasonCode = "warm_reviewer_capacity_absent";
+  else if (denied) reasonCode = `warm_reviewer_lifecycle_denied:${denied}`;
+  else if (!allowedState.has(state)) reasonCode = `warm_reviewer_state_not_allowed:${state || "missing"}`;
+  else if (!allowedLifecycle.has(lifecycle)) reasonCode = `warm_reviewer_lifecycle_not_allowed:${lifecycle}`;
+  else if (!allowedAssignment.has(assignment)) reasonCode = `warm_reviewer_assignment_state_not_allowed:${assignment || "missing"}`;
+  else if (!allowedRecovery.has(recovery)) reasonCode = `warm_reviewer_recovery_state_not_allowed:${recovery || "missing"}`;
+  return {
+    capacity,
+    eligible: reasonCode === "warm_reviewer_lifecycle_ready",
+    reasonCode,
+    state,
+    lifecycle,
+    assignment,
+    recovery,
+  };
+}
+
+function isWarmReviewerCapacityRecord(worker = {}) {
+  return classifyWarmReviewerLifecycle(worker).capacity;
+}
+
+function buildWarmReviewerEligibility(worker = {}, { runId = "", nowMs = Date.now(), maxAgeMs = WARM_REVIEWER_READINESS_MAX_AGE_MS, liveSession = true } = {}) {
+  const readiness = isPlainObject(worker.reviewerReadiness) ? worker.reviewerReadiness : {};
+  const lifecycle = classifyWarmReviewerLifecycle(worker);
+  const boundedMaxAgeMs = Math.max(15_000, Math.min(WARM_REVIEWER_READINESS_MAX_AGE_MS, nonNegativeInteger(maxAgeMs) ?? WARM_REVIEWER_READINESS_MAX_AGE_MS));
+  const heartbeatAt = worker.lastHeartbeatAt || worker.heartbeat?.lastHeartbeatAt || "";
+  const heartbeatMs = parseTimeMs(heartbeatAt);
+  const observedMs = parseTimeMs(readiness.observedAt);
+  const promptIdleMs = parseTimeMs(readiness.promptIdleAt);
+  const emptyInputMs = parseTimeMs(readiness.emptyInputAt);
+  const heartbeatAgeMs = Number.isFinite(heartbeatMs) && Number.isFinite(nowMs) ? nowMs - heartbeatMs : null;
+  const observationAgeMs = Number.isFinite(observedMs) && Number.isFinite(nowMs) ? nowMs - observedMs : null;
+  const coherentObservation = Boolean(
+    readiness.observedAt &&
+    readiness.promptIdleAt === readiness.observedAt &&
+    readiness.emptyInputAt === readiness.observedAt &&
+    observedMs === promptIdleMs &&
+    observedMs === emptyInputMs,
+  );
+  const managerOwned = isManagerOwnedWorker(worker, runId);
+  const managerControlPlane = isManagerControlPlaneWorker(worker, runId);
+  const sessionReady = Boolean(worker.sessionName) && readiness.sessionName === worker.sessionName && readiness.resolvedSessionName === worker.sessionName;
+  const ownerReady = readiness.owner === worker.owner;
+  const runReady = readiness.runId === runId && worker.runId === runId;
+  const sourceReady = readiness.schemaVersion === WARM_REVIEWER_READINESS_SCHEMA && readiness.source === WARM_REVIEWER_READINESS_SOURCE;
+  const paneReady = Boolean(
+    readiness.singlePane === true && readiness.paneCount === 1 && readiness.paneTarget &&
+    readiness.paneId === readiness.paneTarget && readiness.currentCommand === "codex" &&
+    (!worker.paneTarget || worker.paneTarget === readiness.paneTarget),
+  );
+  const hasAssignmentOrLease = Boolean(
+    worker.assignmentId || worker.taskId || worker.leaseId ||
+    (isPlainObject(worker.currentLease) && (worker.currentLease.assignmentId || worker.currentLease.taskId || worker.currentLease.leaseId)) ||
+    hasActiveWorkerLease(worker) || isPlainObject(worker.reviewReservation),
+  );
+  const assignmentFree = !hasAssignmentOrLease;
+  const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs >= 0 && heartbeatAgeMs <= boundedMaxAgeMs && (!worker.heartbeat || worker.heartbeat.status === "recorded");
+  const readinessFresh = observationAgeMs !== null && observationAgeMs >= 0 && observationAgeMs <= boundedMaxAgeMs;
+  const positiveObservation = readiness.captureOk === true && readiness.promptIdle === true && readiness.emptyInput === true && readiness.inputPending !== true && readiness.rawPayloadRetained === false;
+  let reasonCode = "eligible";
+  if (!managerOwned) reasonCode = "warm_reviewer_not_manager_owned";
+  else if (managerControlPlane) reasonCode = "warm_reviewer_manager_control_plane_excluded";
+  else if (!lifecycle.capacity) reasonCode = lifecycle.reasonCode;
+  else if (!liveSession) reasonCode = "warm_reviewer_live_session_missing";
+  else if (!lifecycle.eligible || worker.busy === true || worker.booting === true || worker.takeoverRequired === true) reasonCode = lifecycle.eligible ? "warm_reviewer_lifecycle_flag_denied" : lifecycle.reasonCode;
+  else if (!sessionReady) reasonCode = "warm_reviewer_session_mismatch";
+  else if (!ownerReady) reasonCode = "warm_reviewer_owner_mismatch";
+  else if (!runReady) reasonCode = "warm_reviewer_run_mismatch";
+  else if (!assignmentFree) reasonCode = "warm_reviewer_assignment_or_lease_active";
+  else if (!heartbeatFresh) reasonCode = heartbeatAgeMs !== null && heartbeatAgeMs < 0 ? "warm_reviewer_heartbeat_future" : "warm_reviewer_heartbeat_stale";
+  else if (!sourceReady) reasonCode = "warm_reviewer_readiness_source_invalid";
+  else if (!paneReady) reasonCode = readiness.singlePane !== true || readiness.paneCount !== 1
+    ? "warm_reviewer_pane_ambiguous"
+    : readiness.currentCommand !== "codex"
+      ? "warm_reviewer_process_identity_mismatch"
+      : "warm_reviewer_pane_identity_mismatch";
+  else if (!coherentObservation) reasonCode = "warm_reviewer_readiness_mixed_observation";
+  else if (!positiveObservation) reasonCode = "warm_reviewer_readiness_not_positive";
+  else if (!readinessFresh) reasonCode = observationAgeMs !== null && observationAgeMs < 0 ? "warm_reviewer_readiness_future" : "warm_reviewer_readiness_stale";
+  const eligible = reasonCode === "eligible";
+  return {
+    eligible,
+    proofState: eligible ? "eligible" : "readiness_held",
+    reasonCode,
+    managerOwned,
+    liveSession,
+    lifecycleReady: lifecycle.eligible,
+    sessionReady,
+    ownerReady,
+    runReady,
+    paneReady,
+    assignmentFree,
+    heartbeatFresh,
+    promptIdle: readiness.promptIdle === true,
+    emptyInput: readiness.emptyInput === true,
+    coherentObservation,
+    positiveObservation,
+    readinessFresh,
+    lastHeartbeatAt: sanitizeLedgerField(heartbeatAt, "", 80) || null,
+    observedAt: sanitizeLedgerField(readiness.observedAt || "", "", 80) || null,
+    promptIdleAt: sanitizeLedgerField(readiness.promptIdleAt || "", "", 80) || null,
+    emptyInputAt: sanitizeLedgerField(readiness.emptyInputAt || "", "", 80) || null,
+    paneTarget: sanitizeLedgerField(readiness.paneTarget || "", "", 40) || null,
+    paneId: sanitizeLedgerField(readiness.paneId || "", "", 40) || null,
+    paneCount: nonNegativeInteger(readiness.paneCount),
+    currentCommand: sanitizeLedgerField(readiness.currentCommand || "", "", 80) || null,
+    source: sourceReady ? WARM_REVIEWER_READINESS_SOURCE : sanitizeLedgerField(readiness.source || "", "", 100) || null,
+    maxAgeMs: boundedMaxAgeMs,
+    rawPayloadRetained: false,
+  };
+}
+
+function buildWarmReviewerProgressRow(worker = {}, eligibility = {}) {
+  return {
+    workerId: worker.workerId,
+    sessionName: worker.sessionName,
+    owner: worker.owner,
+    runId: worker.runId,
+    assignmentId: null,
+    taskId: null,
+    previousAssignmentId: worker.previousAssignmentId || null,
+    previousTaskId: worker.previousTaskId || null,
+    assignmentHistory: appendWorkerAssignmentHistory(worker.assignmentHistory || [], {}),
+    worktreePath: worker.worktreePath || null,
+    progressState: "manager_review_ready",
+    progressReason: "fresh_warm_reviewer_readiness",
+    reviewerEligibility: {
+      ...eligibility,
+      rawPayloadRetained: false,
+    },
+    rawPayloadRetained: false,
   };
 }
 
@@ -9605,6 +10506,17 @@ function missingLiveWorkerIdsFromWorkerStatus(workerPacket = {}) {
   );
 }
 
+function liveWorkerEvidenceFromWorkerStatus(workerPacket = {}) {
+  const eligibility = workerPacket.summary?.lifecyclePlan?.workerEligibility;
+  const enforced = eligibility?.liveSessionEvidenceEnforced === true;
+  const workerIds = new Set(
+    (Array.isArray(eligibility?.liveWorkerIds) ? eligibility.liveWorkerIds : [])
+      .map((workerId) => sanitizeLedgerField(workerId || "", "", 80))
+      .filter(Boolean),
+  );
+  return { enforced, workerIds };
+}
+
 function fallbackHandoffWorkerIdsFromWorkerStatus(workerPacket = {}) {
   const warmPoolWorkers = workerPacket.summary?.warmPool?.workers;
   if (!Array.isArray(warmPoolWorkers)) return new Set();
@@ -9780,6 +10692,14 @@ function isManagerOwnedWorker(worker, runId) {
   if (!worker?.owner || !runId) return false;
   if (worker.runId && worker.runId !== runId) return false;
   return String(worker.owner).startsWith(`${runId}/`);
+}
+
+function isManagerControlPlaneWorker(worker = {}, runId = "") {
+  const workerId = normalizeWorkerLifecycleToken(worker.workerId || worker.id || "");
+  const sessionName = normalizeWorkerLifecycleToken(worker.sessionName || worker.session || "");
+  const ownerLeaf = normalizeWorkerLifecycleToken(String(worker.owner || "").split("/").at(-1) || "");
+  const managerTokens = new Set(["manager", "control_plane", "manager_control_plane", normalizeWorkerLifecycleToken(runId)]);
+  return managerTokens.has(workerId) || managerTokens.has(sessionName) || managerTokens.has(ownerLeaf);
 }
 
 function nextWorkerId(runId, workers = [], offset = 0) {
@@ -22205,7 +23125,7 @@ function percentMetric(percentValue, ratioValue) {
   return Number.isFinite(ratio) ? Number((ratio * 100).toFixed(2)) : null;
 }
 
-function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = {}) {
+export function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = {}) {
   const runId = sanitizeLedgerField(cycle.summary?.run?.runId || "", "", 120);
   const stateRoot = sanitizeLedgerField(cycle.summary?.run?.stateRoot || "", "", 260);
   const selectedStory = reviewPlan.summary?.selectedStory || {};
@@ -22265,6 +23185,19 @@ function continuousWorkerCodeReviewAction(action = {}, cycle = {}, reviewPlan = 
         reviewResultFailed: true,
         blockerCode: feedbackPlan.warnings?.[0]?.code || feedbackPlan.blockers?.[0]?.code || undefined,
         nextAction: feedbackPlan.warnings?.[0]?.nextAction || feedbackPlan.blockers?.[0]?.nextAction || feedbackAction?.nextAction,
+      };
+    }
+    if (resultFresh && !resultFailed) {
+      return {
+        code: "continuous-worker-code-review-release",
+        summary: `Release the completed delegated reviewer reservation for ${assignmentId}.`,
+        dryRunCommand,
+        applyCommand: `${dryRunCommand} --apply`,
+        authority: "manager-owned-worker-code-review-delegation-existing-gates",
+        mutationClass: "manager_owned_worker_code_review_delegation",
+        readOnly: false,
+        reviewResultFresh: true,
+        reviewResultFailed: false,
       };
     }
     const resendStaleSeconds = Number.isFinite(Number(cycle.summary?.reviewRequestResendStaleSeconds))
@@ -24399,12 +25332,55 @@ function safeArrayValues(value) {
   }
 }
 
+function projectReviewerReadiness(worker = {}) {
+  const source = isPlainObject(worker.reviewerReadiness || worker.reviewer_readiness)
+    ? (worker.reviewerReadiness || worker.reviewer_readiness)
+    : {};
+  return {
+    schemaVersion: sanitizeLedgerField(source.schemaVersion || source.schema_version || "", "", 80) || null,
+    source: sanitizeLedgerField(source.source || "", "", 100) || null,
+    observedAt: sanitizeLedgerField(source.observedAt || source.observed_at || "", "", 80) || null,
+    promptIdleAt: sanitizeLedgerField(source.promptIdleAt || source.prompt_idle_at || "", "", 80) || null,
+    emptyInputAt: sanitizeLedgerField(source.emptyInputAt || source.empty_input_at || "", "", 80) || null,
+    promptIdle: source.promptIdle === true || source.prompt_idle === true,
+    emptyInput: source.emptyInput === true || source.empty_input === true,
+    inputPending: source.inputPending === true || source.input_pending === true,
+    captureOk: source.captureOk === true || source.capture_ok === true,
+    sessionName: sanitizeLedgerField(source.sessionName || source.session_name || "", "", 80) || null,
+    resolvedSessionName: sanitizeLedgerField(source.resolvedSessionName || source.resolved_session_name || "", "", 80) || null,
+    paneTarget: sanitizeLedgerField(source.paneTarget || source.pane_target || "", "", 40) || null,
+    paneId: sanitizeLedgerField(source.paneId || source.pane_id || source.paneTarget || source.pane_target || "", "", 40) || null,
+    paneCount: nonNegativeInteger(source.paneCount ?? source.pane_count),
+    singlePane: source.singlePane === true || source.single_pane === true,
+    currentCommand: sanitizeLedgerField(source.currentCommand || source.current_command || "", "", 80) || null,
+    owner: sanitizeLedgerField(source.owner || "", "", 120) || null,
+    runId: sanitizeLedgerField(source.runId || source.run_id || "", "", 80) || null,
+    rawPayloadRetained: source.rawPayloadRetained === false ? false : null,
+  };
+}
+
+function appendWorkerAssignmentHistory(history = [], entry = {}) {
+  const rows = Array.isArray(history) ? history.filter(isPlainObject) : [];
+  const next = {
+    assignmentId: sanitizeLedgerField(entry.assignmentId || entry.assignment_id || "", "", 140) || null,
+    taskId: sanitizeLedgerField(entry.taskId || entry.task_id || "", "", 140) || null,
+  };
+  const projected = rows.map((row) => ({
+    assignmentId: sanitizeLedgerField(row.assignmentId || row.assignment_id || "", "", 140) || null,
+    taskId: sanitizeLedgerField(row.taskId || row.task_id || "", "", 140) || null,
+  })).filter((row) => row.assignmentId || row.taskId);
+  if ((next.assignmentId || next.taskId) && !projected.some((row) => row.assignmentId === next.assignmentId && row.taskId === next.taskId)) projected.push(next);
+  return projected;
+}
+
 function projectWorker(worker) {
   return {
     workerId: sanitizeLedgerField(worker.workerId || worker.id || "unknown-worker", "unknown-worker", 80),
     owner: sanitizeLedgerField(worker.owner || "unknown", "unknown", 120),
     runId: sanitizeLedgerField(worker.runId || worker.run_id || "", "", 80),
     sessionName: sanitizeLedgerField(worker.sessionName || worker.session || "", "", 80),
+    paneTarget: sanitizeLedgerField(worker.paneTarget || worker.pane_target || "", "", 40) || null,
+    paneId: sanitizeLedgerField(worker.paneId || worker.pane_id || worker.paneTarget || worker.pane_target || "", "", 40) || null,
     provider: sanitizeLedgerField(worker.provider || "unknown", "unknown", 40),
     modelPolicy: sanitizeLedgerField(worker.modelPolicy || "unknown", "unknown", 80),
     modelRoute: isPlainObject(worker.modelRoute) ? {
@@ -24420,6 +25396,9 @@ function projectWorker(worker) {
     retirementRequest: sanitizeLedgerField(worker.retirementRequest || worker.retirement_request || "", "", 80) || null,
     assignmentId: worker.assignmentId || worker.assignment_id || null,
     taskId: worker.taskId || worker.task_id || null,
+    previousAssignmentId: worker.previousAssignmentId || worker.previous_assignment_id || null,
+    previousTaskId: worker.previousTaskId || worker.previous_task_id || null,
+    assignmentHistory: appendWorkerAssignmentHistory(worker.assignmentHistory || worker.assignment_history || [], {}),
     leaseId: sanitizeLedgerField(worker.leaseId || worker.lease_id || "", "", 140) || null,
     leaseState: sanitizeLedgerField(worker.leaseState || worker.lease_state || "", "", 80) || null,
     currentLease: isPlainObject(worker.currentLease || worker.current_lease) ? {
@@ -24428,6 +25407,22 @@ function projectWorker(worker) {
       leaseId: sanitizeIdentifierField((worker.currentLease || worker.current_lease).leaseId || (worker.currentLease || worker.current_lease).lease_id || worker.leaseId || worker.lease_id || "", "", 140) || null,
       state: sanitizeLedgerField((worker.currentLease || worker.current_lease).state || worker.leaseState || worker.lease_state || "", "", 80) || null,
       source: sanitizeLedgerField((worker.currentLease || worker.current_lease).source || "dispatcher_lease_state", "dispatcher_lease_state", 80),
+    } : null,
+    reviewReservation: isPlainObject(worker.reviewReservation || worker.review_reservation) ? {
+      reservationId: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).reservationId || (worker.reviewReservation || worker.review_reservation).reservation_id || "", "", 140) || null,
+      targetAssignmentId: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).targetAssignmentId || (worker.reviewReservation || worker.review_reservation).target_assignment_id || "", "", 140) || null,
+      workerId: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).workerId || (worker.reviewReservation || worker.review_reservation).worker_id || "", "", 80) || null,
+      owner: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).owner || "", "", 120) || null,
+      runId: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).runId || (worker.reviewReservation || worker.review_reservation).run_id || "", "", 80) || null,
+      state: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).state || "reserved", "reserved", 40),
+      reservedAt: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).reservedAt || (worker.reviewReservation || worker.review_reservation).reserved_at || "", "", 80) || null,
+      expiresAt: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).expiresAt || (worker.reviewReservation || worker.review_reservation).expires_at || "", "", 80) || null,
+      requestPath: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).requestPath || (worker.reviewReservation || worker.review_reservation).request_path || "", "", 320) || null,
+      resultPath: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).resultPath || (worker.reviewReservation || worker.review_reservation).result_path || "", "", 320) || null,
+      dispatchedAt: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).dispatchedAt || (worker.reviewReservation || worker.review_reservation).dispatched_at || "", "", 80) || null,
+      paneTarget: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).paneTarget || (worker.reviewReservation || worker.review_reservation).pane_target || "", "", 40) || null,
+      sessionName: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).sessionName || (worker.reviewReservation || worker.review_reservation).session_name || "", "", 80) || null,
+      ...((worker.reviewReservation || worker.review_reservation).recoveryMetadata ? { recoveryMetadata: safeLedgerStructuredMetadata((worker.reviewReservation || worker.review_reservation).recoveryMetadata) } : {}),
     } : null,
     laneOwner: sanitizeLedgerField(worker.laneOwner || worker.lane_owner || "", "", 160),
     worktreePath: worker.worktreePath || worker.worktree_path || null,
@@ -24444,6 +25439,10 @@ function projectWorker(worker) {
     failureCount: Number.isFinite(Number(worker.failureCount)) ? Number(worker.failureCount) : 0,
     recoveryState: sanitizeLedgerField(worker.recoveryState || "none", "none", 40),
     recoveryAction: sanitizeLedgerField(worker.recoveryAction || worker.recovery_action || "", "", 120),
+    reviewerReadiness: projectReviewerReadiness(worker),
+    busy: worker.busy === true,
+    booting: worker.booting === true,
+    takeoverRequired: worker.takeoverRequired === true || worker.takeover_required === true,
     rawPayloadRetained: false,
   };
 }
@@ -24781,6 +25780,51 @@ function withLedgerAppendLock(paths, fn) {
             ],
           }),
         };
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    const currentOwner = readJson(ownerPath, null);
+    if (currentOwner?.token === owner.token && currentOwner?.pid === owner.pid && currentOwner?.runId === owner.runId) {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  }
+}
+
+function withWorkerAssignmentLock(paths, context = {}, fn) {
+  const lockDir = join(paths.root, ".worker-assignment.lock");
+  const ownerPath = join(lockDir, "owner.json");
+  const owner = {
+    runId: paths.runId,
+    pid: process.pid,
+    process: currentLedgerLockProcessMetadata(),
+    token: `${paths.runId}:worker-assignment:${process.pid}:${Date.now()}:${process.hrtime.bigint().toString(36)}`,
+    createdAt: new Date().toISOString(),
+  };
+  const timeoutMs = Math.max(0, nonNegativeInteger(context.workerAssignmentLockTimeoutMs) ?? 5000);
+  const started = Date.now();
+  while (true) {
+    try {
+      mkdirSync(lockDir);
+      writeFileSync(ownerPath, `${JSON.stringify(owner, null, 2)}\n`);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (recoverStaleLedgerAppendLock(lockDir, ownerPath)) continue;
+      if (Date.now() - started >= timeoutMs) {
+        return packet({
+          ok: false,
+          status: "blocked",
+          summary: { runId: paths.runId, lock: lockDir, owner: readJson(ownerPath, null) },
+          blockers: [{
+            code: "worker-assignment-lock-timeout",
+            message: "Timed out waiting for the authoritative worker assignment lock.",
+            nextAction: "Inspect the worker assignment lock before retrying reviewer reservation or handoff apply.",
+          }],
+        });
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
