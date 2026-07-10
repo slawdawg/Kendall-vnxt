@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildOneWorkerLiveCanaryEvidence,
   buildOperationalReadinessContract,
+  buildRuntimeReadinessPlan,
   operationalReadinessPredecessorGate,
+  validateOneWorkerLiveCanaryEvidence,
   validateOperationalReadinessContract,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 
@@ -122,4 +125,78 @@ test("Epic 25 predecessor gate blocks later stories until 25-1 readiness passes"
     { requestedStoryCount: 6, storyKey: "25-2-one-worker-live-canary", readinessEvidenceRefs: ["readiness:25-1-pass:fixture"] },
   );
   assert.equal(passed.state, "pass");
+});
+
+test("one-worker canary evidence passes only with live proof and bounded measurements", () => {
+  const readinessContract = buildOperationalReadinessContract({}, passingContext());
+  const evidence = buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    target,
+    readinessContract,
+    backendTruth: "live",
+    backendTruthProven: true,
+    canaryAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:canary-authority"] },
+    telemetry: passingContext().telemetry,
+    lease: { state: "pass", proofRef: "evidence:lease-proof" },
+    checkpoint: { state: "pass", proofRef: "evidence:checkpoint-proof" },
+    measurements: {
+      observedAt: "2026-07-10T01:00:00.000Z",
+      latencyMs: 1,
+      errorCount: 0,
+      cpuPercent: 1,
+      memoryPercent: 1,
+      diskPercent: 1,
+      costCents: 1,
+      timedOut: false,
+    },
+    recovery: passingContext().recovery,
+    evidenceRefs: ["evidence:canary-observation"],
+  });
+  assert.equal(evidence.outcome, "pass");
+  assert.equal(evidence.truthLabel, "live");
+  assert.equal(evidence.rampAllowed, true);
+  assert.deepEqual(evidence.typedBlockers, []);
+  assert.deepEqual(validateOneWorkerLiveCanaryEvidence(evidence), []);
+  assert.equal(evidence.metadataOnly, true);
+  assert.equal(evidence.rawPayloadRetained, false);
+});
+
+test("one-worker canary stops and requires rollback on timeout", () => {
+  const readinessContract = buildOperationalReadinessContract({}, passingContext());
+  const evidence = buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    target,
+    readinessContract,
+    backendTruth: "live",
+    backendTruthProven: true,
+    canaryAuthority: { state: "allowed", proven: true },
+    telemetry: passingContext().telemetry,
+    lease: { state: "pass", proofRef: "evidence:lease-proof" },
+    checkpoint: { state: "pass", proofRef: "evidence:checkpoint-proof" },
+    measurements: { latencyMs: 1, errorCount: 0, cpuPercent: 1, memoryPercent: 1, diskPercent: 1, costCents: 1, timedOut: true },
+    recovery: passingContext().recovery,
+    evidenceRefs: ["evidence:canary-timeout"],
+  });
+  assert.equal(evidence.outcome, "stop");
+  assert.equal(evidence.rampAllowed, false);
+  assert.equal(evidence.recovery.required, true);
+  assert.ok(evidence.typedBlockers.some((blocker) => blocker.reason === "timeout"));
+  assert.deepEqual(validateOneWorkerLiveCanaryEvidence(evidence), []);
+});
+
+test("continuous runtime readiness projects canary evidence without enabling live mutation", () => {
+  const runtime = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_dry_run" },
+    {
+      cycleStatus: "ready",
+      cycleOk: true,
+      usage: { status: "normal" },
+      resources: { status: "normal" },
+      preflight: { status: "ready", blockerCount: 0 },
+    },
+  );
+  assert.equal(runtime.summary.oneWorkerLiveCanary.outcome, "hold");
+  assert.equal(runtime.summary.oneWorkerLiveCanary.rampAllowed, false);
+  assert.equal(runtime.summary.oneWorkerLiveCanary.rawPayloadRetained, false);
+  assert.equal(runtime.summary.gates.externalServiceCalls, "blocked");
 });

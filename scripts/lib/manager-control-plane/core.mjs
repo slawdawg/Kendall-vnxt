@@ -12,16 +12,22 @@ import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mj
 import {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
+  buildOneWorkerLiveCanaryEvidence,
+  validateOneWorkerLiveCanaryEvidence,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
+  PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
 } from "./operational-readiness.mjs";
 
 export {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
+  buildOneWorkerLiveCanaryEvidence,
+  validateOneWorkerLiveCanaryEvidence,
   operationalReadinessPredecessorGate,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
+  PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -23289,6 +23295,25 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       gates: context.readinessGates,
     },
   );
+  const canaryInput = isPlainObject(context.oneWorkerLiveCanary)
+    ? context.oneWorkerLiveCanary
+    : isPlainObject(context.canary)
+      ? context.canary
+      : {};
+  const oneWorkerLiveCanary = buildOneWorkerLiveCanaryEvidence(
+    { now: context.now || options.now },
+    {
+      ...canaryInput,
+      target: canaryInput.target || context.readinessTarget || context.target,
+      readinessContract: canaryInput.readinessContract || operationalReadinessContract,
+      backendTruth: canaryInput.backendTruth || context.backendTruth || "dry_run",
+      backendTruthProven: canaryInput.backendTruthProven === true || context.backendTruthProven === true,
+      authorityState: canaryInput.authorityState || context.authorityState,
+      authorityProven: canaryInput.authorityProven === true || context.authorityProven === true,
+      telemetry: canaryInput.telemetry || context.telemetry,
+      recovery: canaryInput.recovery || context.recovery,
+    },
+  );
 
   return packet({
     ok: status !== "blocked",
@@ -23329,6 +23354,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       ],
       rawPayloadRetained: false,
       operationalReadinessContract,
+      oneWorkerLiveCanary,
     },
     blockers: dedupedBlockers,
     warnings,
