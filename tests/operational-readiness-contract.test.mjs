@@ -1,0 +1,125 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  buildOperationalReadinessContract,
+  operationalReadinessPredecessorGate,
+  validateOperationalReadinessContract,
+} from "../scripts/lib/manager-control-plane/core.mjs";
+
+const target = {
+  workerId: "codex-1",
+  assignmentId: "bmad-25-2-one-worker-live-canary",
+  owner: "manager-20260710/codex-1",
+  runId: "manager-20260710",
+  sourceRefs: ["prd:epic-25-production-hardening"],
+  evidenceRefs: ["evidence:25-1-readiness-fixture"],
+};
+
+const thresholds = Object.fromEntries([
+  ["lease_checkpoint_receipt_proof", "seconds"],
+  ["preflight", "seconds"],
+  ["usage", "percent"],
+  ["resources", "percent"],
+  ["telemetry", "seconds"],
+  ["errors", "count"],
+  ["latency", "milliseconds"],
+  ["cost", "cents"],
+].map(([name, unit]) => [name, { name, operator: "lte", value: 1, unit }]));
+
+function passingContext(overrides = {}) {
+  return {
+    target,
+    backendTruth: "live",
+    backendTruthProven: true,
+    authorityState: "allowed",
+    authorityProven: true,
+    freshnessState: "live",
+    readinessProfile: { thresholds },
+    telemetry: {
+      source: "local-proof-telemetry",
+      coverage: "one-worker-canary",
+      observationWindowSeconds: 60,
+      alertThresholdIds: ["alert-heartbeat"],
+      alertReady: true,
+    },
+    configuration: { names: ["provider-mode"], validationState: "pass", noValueRetention: true },
+    recovery: {
+      owner: "manager-20260710",
+      rollbackPath: "observe-only",
+      remediationAction: "stop-canary-and-recheck",
+      recheckAt: "2026-07-10T01:00:00.000Z",
+      expiryAt: "2026-07-10T01:05:00.000Z",
+    },
+    preflight: { status: "ready", blockers: [] },
+    usage: { status: "normal" },
+    resources: { status: "normal" },
+    heartbeat: { fresh: true },
+    dispatcherLease: { proven: true },
+    receipt: { proven: true },
+    gates: Object.fromEntries([
+      "exact_ownership", "source_evidence", "backend_truth", "authority_risk", "recovery_rollback",
+      "resource_cost", "configuration_secrets", "telemetry_alerts", "preflight", "usage", "resources",
+      "heartbeat", "dispatcher_lease", "receipt_evidence",
+    ].map((gateId) => [gateId, { state: "pass", evidenceRefs: ["evidence:25-1-readiness-fixture"] }])),
+    now: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+test("readiness contract fails closed when thresholds and live evidence are absent", () => {
+  const contract = buildOperationalReadinessContract({ now: new Date().toISOString() }, { target });
+  assert.equal(contract.outcome, "no_go");
+  assert.ok(contract.typedBlockers.some((blocker) => blocker.reason === "threshold_missing"));
+  assert.ok(contract.typedBlockers.some((blocker) => blocker.reason === "telemetry_missing" || blocker.reason === "threshold_missing"));
+  assert.equal(contract.rawPayloadRetained, false);
+  assert.deepEqual(validateOperationalReadinessContract(contract), []);
+});
+
+test("readiness contract produces go only for explicit live one-worker proof", () => {
+  const contract = buildOperationalReadinessContract({}, passingContext());
+  assert.equal(contract.outcome, "go");
+  assert.equal(contract.backendTruth, "live");
+  assert.equal(contract.target.workerId, "codex-1");
+  assert.deepEqual(contract.typedBlockers, []);
+  assert.deepEqual(validateOperationalReadinessContract(contract), []);
+});
+
+test("readiness contract rejects secret-like and contradictory telemetry metadata", () => {
+  const secret = buildOperationalReadinessContract({}, passingContext({
+    configuration: { names: ["api-key=sk-secretvalue"], validationState: "pass", noValueRetention: true },
+    telemetry: { source: "telemetry", coverage: "unknown", observationWindowSeconds: 0, alertThresholdIds: [], alertReady: false },
+  }));
+  assert.equal(secret.outcome, "no_go");
+  assert.ok(secret.typedBlockers.some((blocker) => blocker.reason === "configuration_invalid"));
+  assert.ok(secret.typedBlockers.some((blocker) => blocker.reason === "telemetry_missing"));
+  assert.deepEqual(validateOperationalReadinessContract(secret), []);
+  assert.ok(validateOperationalReadinessContract({ ...secret, rawPayloadRetained: true }).length > 0);
+});
+
+test("Epic 25 predecessor gate blocks later stories until 25-1 readiness passes", () => {
+  const legacyTemplate = operationalReadinessPredecessorGate(
+    { "25-1-operational-readiness-contract": "backlog" },
+    { requestedStoryCount: 6, storyKey: "25-1-planning-only-bmad-refill-continuation" },
+  );
+  assert.equal(legacyTemplate.state, "not_applicable");
+
+  const blocked = operationalReadinessPredecessorGate(
+    { "25-1-operational-readiness-contract": "review" },
+    { requestedStoryCount: 6, storyKey: "25-2-one-worker-live-canary" },
+  );
+  assert.equal(blocked.state, "blocked");
+  assert.equal(blocked.blocker.code, "predecessor_gate_not_passed");
+
+  const firstOnly = operationalReadinessPredecessorGate(
+    { "25-1-operational-readiness-contract": "backlog" },
+    { requestedStoryCount: 6, storyKey: "25-1-operational-readiness-contract" },
+  );
+  assert.equal(firstOnly.state, "awaiting_predecessor");
+
+  const passed = operationalReadinessPredecessorGate(
+    { "25-1-operational-readiness-contract": "done" },
+    { requestedStoryCount: 6, storyKey: "25-2-one-worker-live-canary", readinessEvidenceRefs: ["readiness:25-1-pass:fixture"] },
+  );
+  assert.equal(passed.state, "pass");
+});
