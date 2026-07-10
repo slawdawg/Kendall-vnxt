@@ -110,6 +110,18 @@ share one boundary classifier.
 - Do not broaden standing authority. The durable fix should improve detection,
   evidence, and routing only.
 
+## Fast Verification Path
+
+Run `pnpm run check:sandbox-fast` before any long static, workspace, manager, or
+full-repo verification gate when a change touches sandbox-boundary
+classification, anti-churn signature detection, verification routing, or
+apply-safe gating. This command is a normal workflow check, not a substitute for
+broader delivery verification.
+
+`pnpm run check:fast` includes the sandbox fast suite plus the related CI,
+workspace, and dashboard contract checks so boundary-routing regressions fail
+before long serial gates.
+
 ## Proposed Fix Slices
 
 ### Slice 1: Shared Sandbox Boundary Classifier
