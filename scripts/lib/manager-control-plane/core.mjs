@@ -3792,7 +3792,10 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
         WARM_REVIEWER_READINESS_MAX_AGE_MS,
         Math.max(15_000, nonNegativeInteger(options.warmReviewerReadinessMaxAgeMs ?? context.warmReviewerReadinessMaxAgeMs) ?? WARM_REVIEWER_READINESS_MAX_AGE_MS),
       ),
-      liveSession: liveWorkerEvidence.enforced && liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId),
+      liveSession: (observation?.captureOk === true &&
+        observation.sessionName === worker.sessionName &&
+        observation.resolvedSessionName === worker.sessionName) ||
+        (liveWorkerEvidence.enforced && liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId)),
     });
     return {
       worker: eligibilityWorker,
@@ -5844,7 +5847,7 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
     .filter((worker) => (
       isManagerOwnedWorker(worker, runId) &&
       !isManagerControlPlaneWorker(worker, runId) &&
-      !missingLiveWorkerIds.has(worker.workerId) &&
+      (!missingLiveWorkerIds.has(worker.workerId) || (includeWarmReviewers && typeof context.tmuxRunner === "function")) &&
       (worker.state === "active" || (includeWarmReviewers && isWarmReviewerCapacityRecord(worker)))
     ))
     .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId);
