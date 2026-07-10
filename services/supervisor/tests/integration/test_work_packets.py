@@ -4318,3 +4318,194 @@ def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(t
         )
         assert dashboard_packet["readyToTest"] == projection["readyToTest"]
         assert dashboard_detail["readyToTest"] == projection["readyToTest"]
+
+
+def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(tmp_path, monkeypatch) -> None:
+    db_name = "operational-actions.db"
+    source_ref = {
+        "refId": "workflow:operational-pipeline-action-loop",
+        "sourceType": "workflow",
+        "pathOrUrl": "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md",
+        "title": "Operational pipeline action loop",
+    }
+    ready_to_test = {
+        "readyId": "ready:operational-action-loop",
+        "userFacingSummary": "Operator action controls are ready to test.",
+        "testableSurface": "/pipeline packet detail actions",
+        "verificationRefs": ["test:operational-action-loop"],
+        "evidenceRefs": ["evidence:operational-action-loop"],
+    }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-operational-action-loop",
+                "title": "Operational action loop packet",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager", "actorId": "test-manager", "actorLabel": "Test manager"},
+                "idempotencyKey": "create-operational-action-loop",
+                "correlationId": "corr-create-operational-action-loop",
+                "evidenceRefs": ["test:operational-action-loop"],
+                "readyToTest": ready_to_test,
+            },
+        )
+        assert create_response.status_code == 200
+        packet = create_response.json()["data"]
+
+        projection_response = client.get("/pipeline-control-plane/projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["runtimeReadiness"]["operationalMode"] == "local_proof"
+        detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet["packetId"])
+        assert detail["readyToTest"]["readyId"] == ready_to_test["readyId"]
+        assert any(capability["actionId"] == "mark_tested" and capability["capabilityState"] == "available" for capability in detail["actionCapabilities"])
+
+        action_payload = {
+            "actionId": "mark_tested",
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "idempotencyKey": "test-action-operational-pass",
+            "correlationId": "corr-operational-pass",
+            "requestedBy": {"actorType": "operator", "actorId": "operator-test", "actorLabel": "Operator test"},
+            "requestedAuthorityState": "needs_product_approval",
+            "requestedRiskTier": "medium",
+            "expectedCurrentEventId": packet["currentEventId"],
+            "operatorIntentSummary": "Record the operator pass decision.",
+            "evidenceRefs": ["evidence:product-test-approval"],
+            "testResult": "pass",
+        }
+        action_response = client.post("/pipeline-control-plane/actions", json=action_payload)
+        assert action_response.status_code == 200
+        action_result = action_response.json()["data"]
+        assert action_result["outcome"] == "succeeded"
+        assert action_result["resultingStage"] == "promote"
+        assert action_result["resultingStatus"] == "waiting"
+
+        duplicate_response = client.post("/pipeline-control-plane/actions", json=action_payload)
+        assert duplicate_response.status_code == 200
+        assert duplicate_response.json()["data"]["actionRecordId"] == action_result["actionRecordId"]
+
+        conflicting_replay_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={**action_payload, "testNotes": "Different metadata must not hijack the idempotency key."},
+        )
+        assert conflicting_replay_response.status_code == 400
+        assert "idempotency key already belongs to different action metadata" in conflicting_replay_response.text
+
+        blocked_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={
+                **action_payload,
+                "actionId": "requeue",
+                "idempotencyKey": "test-action-requeue-blocked",
+                "correlationId": "corr-requeue-blocked",
+                "requestedAuthorityState": "needs_authority_approval",
+                "testResult": None,
+                "expectedCurrentEventId": None,
+                "evidenceRefs": ["evidence:operator-requested-requeue"],
+            },
+        )
+        assert blocked_response.status_code == 200
+        assert blocked_response.json()["data"]["outcome"] == "blocked"
+        assert blocked_response.json()["data"]["typedReason"] == "blocked_by_approval"
+
+        rework_create = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-operational-rework-parent",
+                "title": "Operational rework parent",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "actor": {"actorType": "manager"},
+                "idempotencyKey": "create-operational-rework-parent",
+                "readyToTest": ready_to_test,
+            },
+        )
+        assert rework_create.status_code == 200
+        rework_parent = rework_create.json()["data"]
+        rework_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={
+                "actionId": "request_rework",
+                "targetType": "work_packet",
+                "targetId": rework_parent["packetId"],
+                "idempotencyKey": "test-action-rework",
+                "correlationId": "corr-operational-rework",
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+                "expectedCurrentEventId": rework_parent["currentEventId"],
+                "operatorIntentSummary": "Route failed testing to rework.",
+                "evidenceRefs": ["evidence:product-test-approval"],
+            },
+        )
+        assert rework_response.status_code == 200
+        rework_result = rework_response.json()["data"]
+        assert rework_result["outcome"] == "succeeded"
+        assert rework_result["childPacketId"]
+        child_response = client.get(f"/pipeline-control-plane/work-packets/{rework_result['childPacketId']}")
+        assert child_response.status_code == 200
+        child = child_response.json()["data"]
+        assert child["parentPacketId"] == rework_parent["packetId"]
+        assert child["lineageKind"] == "rework"
+        assert child["currentStage"] == "shape"
+        assert child["status"] == "waiting"
+
+
+def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "operational-action-failed-test.db") as client:
+        source_ref = {
+            "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+            "sourceType": "prd",
+            "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+            "title": "Operational pipeline action loop",
+        }
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-operational-failed-test",
+                "title": "Operational failed-test packet",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "idempotencyKey": "create-operational-failed-test",
+                "readyToTest": {
+                    "readyId": "ready:failed-test",
+                    "userFacingSummary": "Failed-test routing is ready to test.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:failed-test"],
+                },
+            },
+        )
+        assert create_response.status_code == 200
+        packet = create_response.json()["data"]
+        action_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={
+                "actionId": "mark_tested",
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "idempotencyKey": "failed-test-routes-rework",
+                "correlationId": "corr-failed-test-routes-rework",
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+                "expectedCurrentEventId": packet["currentEventId"],
+                "evidenceRefs": ["evidence:product-test-approval"],
+                "testResult": "fail",
+                "testNotes": "The operator test found a bounded failure.",
+            },
+        )
+        assert action_response.status_code == 200
+        result = action_response.json()["data"]
+        assert result["outcome"] == "succeeded"
+        assert result["resultingStatus"] == "deferred"
+        assert result["childPacketId"]
+        parent_response = client.get(f"/pipeline-control-plane/work-packets/{packet['packetId']}")
+        assert parent_response.json()["data"]["operatorTestState"] == "rework"
+        child_response = client.get(f"/pipeline-control-plane/work-packets/{result['childPacketId']}")
+        assert child_response.json()["data"]["parentPacketId"] == packet["packetId"]

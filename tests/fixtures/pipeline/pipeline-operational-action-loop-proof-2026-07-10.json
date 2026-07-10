@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "pipeline-operational-action-loop-proof/v0",
+  "slice": "operational-pipeline-action-loop",
+  "prd": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+  "verifiedAt": "2026-07-10",
+  "backendEndpoint": "/pipeline-control-plane/projection",
+  "actionEndpoint": "/pipeline-control-plane/actions",
+  "smokeCommand": "pnpm run test:pipeline-operational-smoke",
+  "truthLabel": "live_backend_local_proof",
+  "runtimeMode": "local_proof",
+  "proofStates": {
+    "readyToTestProjection": true,
+    "passAdvancesReviewToPromote": true,
+    "idempotentReplayReturnsSameActionRecord": true,
+    "missingApprovalReturnsTypedBlockedResult": true,
+    "reworkCreatesParentLinkedChild": true
+  },
+  "representativePacket": {
+    "packetId": "packet-pipeline-operational-smoke",
+    "stagesTraversed": ["review", "promote"],
+    "lineage": "root plus rework child supported"
+  },
+  "evidenceRefs": [
+    "test:pipeline-operational-smoke",
+    "evidence:pipeline-operational-smoke",
+    "evidence:product-test-approval"
+  ],
+  "artifactPaths": [
+    "services/supervisor/scripts/pipeline_operational_smoke.py",
+    "services/supervisor/src/supervisor/application/service.py",
+    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
+    "apps/dashboard/src/lib/pipeline/active-board-view-model.ts",
+    "tests/fixtures/pipeline/pipeline-operational-action-loop-proof-2026-07-10.json"
+  ],
+  "verificationResults": [
+    {
+      "command": "pnpm run test:pipeline-operational-smoke",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "provenance": "Current operational pipeline action loop smoke",
+      "currentStoryRun": true
+    },
+    {
+      "command": "pnpm --filter @kendall/dashboard exec tsc --noEmit",
+      "status": "passed",
+      "sandbox": "workspace",
+      "provenance": "Current operational pipeline action loop verification",
+      "currentStoryRun": true
+    }
+  ],
+  "retention": {
+    "metadataOnly": true,
+    "rawProviderPayloadsRetained": false,
+    "rawPromptsRetained": false,
+    "rawCompletionsRetained": false,
+    "reasoningTracesRetained": false,
+    "secretsRetained": false,
+    "credentialsRetained": false,
+    "terminalScrollbackRetained": false,
+    "rawTranscriptsRetained": false
+  },
+  "liveProofCannotUseFixtures": true
+}

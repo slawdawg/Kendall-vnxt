@@ -33,6 +33,8 @@ import type {
   MaintenanceReadinessReportView,
   MvpProofTrialReportView,
   PipelineDashboardProjectionV0,
+  PipelineOperationalActionRequestV0,
+  PipelineOperationalActionResultV0,
   RuntimeEvidenceReviewReportView,
   ReviewResourcePolicyReportView,
   RunnerAssignmentStatusReportView,
@@ -200,6 +202,23 @@ export async function getPipelineDashboardProjection(): Promise<PipelineDashboar
     throw new Error("Invalid projection payload");
   }
   return projection;
+}
+
+export async function applyPipelineOperationalAction(
+  payload: PipelineOperationalActionRequestV0,
+): Promise<PipelineOperationalActionResultV0> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/actions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionResultV0>;
+  if (!response.ok || !envelope.data) {
+    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
+    throw new Error(detail.detail?.error?.message ?? `Operational action failed: ${response.status}`);
+  }
+  return envelope.data;
 }
 
 function normalizePipelineDashboardProjection(projection: Partial<PipelineDashboardProjectionV0>): Partial<PipelineDashboardProjectionV0> {

@@ -165,6 +165,7 @@
     "test:work-packet-stage-map": "node --test tests/work-packet-stage-map.test.mjs",
     "test:work-packet-fixtures": "node --test tests/work-packet-fixtures.test.mjs",
     "test:pipeline-state-matrix": "node --test tests/pipeline-state-fixture-matrix.test.mjs",
+    "test:pipeline-operational-smoke": "uv run --directory services/supervisor python scripts/pipeline_operational_smoke.py",
     "test:dashboard-pipeline-fixtures": "node --test tests/dashboard-pipeline-fixtures.test.mjs",
     "test:dashboard-memory-proposals": "node --test tests/dashboard-memory-proposal-review-panel.test.mjs",
     "test:pipeline-implementation-readiness": "node --test tests/pipeline-implementation-readiness.test.mjs",

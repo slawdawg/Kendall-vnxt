@@ -3,6 +3,7 @@ import type {
   PipelineDashboardProjectionV0,
   PipelineDashboardWorkPacketV0,
   PipelineGatedControlV0,
+  PipelineOperationalActionCapabilityV0,
   PipelineManagerSummaryV0,
   PipelineProjectionSourceLabelV0,
   PipelineQueueSummaryV0,
@@ -542,10 +543,12 @@ function readyToTestResultControls(
   const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId) ?? null;
   const readyToTest = detail?.readyToTest ?? packet.readyToTest ?? null;
   const correlationLabel = safeCompactActionLabel(readyToTest?.readyId ?? null) ?? packet.packetId;
+  const markTestedCapability = detail?.actionCapabilities?.find((capability) => capability.actionId === "mark_tested") ?? null;
+  const reworkCapability = detail?.actionCapabilities?.find((capability) => capability.actionId === "request_rework") ?? null;
   return [
-    readyToTestResultControl(packet.packetId, "record_test_pass", "Pass", "Record pass result", correlationLabel),
-    readyToTestResultControl(packet.packetId, "record_test_fail", "Fail", "Record fail result", correlationLabel),
-    readyToTestResultControl(packet.packetId, "request_rework", "Rework", "Send packet back for rework", correlationLabel),
+    readyToTestResultControl(packet.packetId, "mark_tested", "Pass", "Record pass result", correlationLabel, markTestedCapability, "pass"),
+    readyToTestResultControl(packet.packetId, "mark_tested", "Fail", "Record fail result", correlationLabel, markTestedCapability, "fail"),
+    readyToTestResultControl(packet.packetId, "request_rework", "Rework", "Send packet back for rework", correlationLabel, reworkCapability, "rework"),
   ];
 }
 
@@ -554,20 +557,28 @@ function readyToTestResultControl(
   actionId: string,
   label: string,
   expectedResult: string,
-  correlationLabel: string
+  correlationLabel: string,
+  capability: PipelineOperationalActionCapabilityV0 | null,
+  actionSuffix: string,
 ): PipelineContextualActionStripItem {
+  const capabilityState = capability?.capabilityState === "available" ? "available" : "gated";
+  const reason = capability?.typedReason === "test_not_ready"
+    ? "Packet is not currently Ready To Test."
+    : capability?.typedReason === "blocked_by_approval"
+      ? "Operator product-test approval evidence is required."
+      : "Backend action capability is not available.";
   return {
-    actionInstanceId: `${packetId}:${actionId}`,
+    actionInstanceId: `${packetId}:${actionId}:${actionSuffix}`,
     actionId,
     label,
-    state: "gated",
+    state: capabilityState,
     riskTier: "medium",
-    reason: "Ready-to-test result recording needs backend action ownership.",
+    reason,
     expectedResult,
-    result: {
+    result: capabilityState === "available" ? null : {
       status: "blocked",
       label: "Gated",
-      detail: "Result recording is visible for operator workflow but blocked until backend action ownership exists.",
+      detail: reason,
       correlationLabel,
       metadataOnly: true,
       rawPayloadRetained: false,

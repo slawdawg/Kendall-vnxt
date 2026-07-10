@@ -28,6 +28,7 @@ const pipelinePacketLoaderPath = new URL("../apps/dashboard/src/lib/pipeline-pac
 const managerExecutionLaneSummaryPath = new URL("../apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts", import.meta.url);
 const realWorkPacketProofPath = new URL("../tests/fixtures/pipeline/pipeline-real-workpacket-proof-2026-07-02.json", import.meta.url);
 const executionLoopReliabilityProofPath = new URL("../tests/fixtures/pipeline/pipeline-execution-loop-reliability-proof-2026-07-04.json", import.meta.url);
+const operationalActionLoopProofPath = new URL("../tests/fixtures/pipeline/pipeline-operational-action-loop-proof-2026-07-10.json", import.meta.url);
 const globalsPath = new URL("../apps/dashboard/src/app/globals.css", import.meta.url);
 const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.meta.url);
 const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
@@ -125,6 +126,13 @@ function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardVie
         return {
           getPipelineDashboardProjection: async () => {
             throw new Error("server-render test does not refresh projection");
+          },
+        };
+      }
+      if (specifier === "../../lib/pipeline-packet-loader") {
+        return {
+          applyPipelineOperationalAction: async () => {
+            throw new Error("server-render test does not apply operational actions");
           },
         };
       }
@@ -526,6 +534,33 @@ test("execution-loop reliability proof artifact is current metadata-only evidenc
   assert.doesNotMatch(proofSource, /"(password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|credential|credentials)"\s*:/i);
   assert.doesNotMatch(proofSource, /sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9]|authorization:\s*[^",}\]]/i);
   assert.doesNotMatch(proofSource, /raw prompt|raw completion|provider payload|reasoning trace|terminal scrollback|tmux scrollback|pane scrollback|raw transcript/i);
+});
+
+test("operational action loop proof artifact records current backend action truth", async () => {
+  const proofSource = await readFile(operationalActionLoopProofPath, "utf8");
+  const proof = JSON.parse(proofSource);
+
+  assert.equal(proof.schemaVersion, "pipeline-operational-action-loop-proof/v0");
+  assert.equal(proof.prd, "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md");
+  assert.equal(proof.backendEndpoint, "/pipeline-control-plane/projection");
+  assert.equal(proof.actionEndpoint, "/pipeline-control-plane/actions");
+  assert.equal(proof.truthLabel, "live_backend_local_proof");
+  assert.equal(proof.runtimeMode, "local_proof");
+  assert.deepEqual(proof.proofStates, {
+    readyToTestProjection: true,
+    passAdvancesReviewToPromote: true,
+    idempotentReplayReturnsSameActionRecord: true,
+    missingApprovalReturnsTypedBlockedResult: true,
+    reworkCreatesParentLinkedChild: true,
+  });
+  assert.ok(proof.verificationResults.every((result) => result.status === "passed"));
+  assert.equal(proof.retention.metadataOnly, true);
+  assert.equal(proof.retention.rawProviderPayloadsRetained, false);
+  assert.equal(proof.retention.rawPromptsRetained, false);
+  assert.equal(proof.retention.rawCompletionsRetained, false);
+  assert.equal(proof.liveProofCannotUseFixtures, true);
+  assert.doesNotMatch(proofSource, /"(rawPrompt|rawCompletion|reasoningTrace|providerPayload|rawProviderPayload|sourceContent)"\s*:/i);
+  assert.doesNotMatch(proofSource, /sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9]|authorization:\s*[^",}\]]|password\s*[:=]|secret\s*[:=]/i);
 });
 
 test("fixture-as-live regressions are blocked by explicit projection truth predicates", async () => {
@@ -1009,10 +1044,10 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(activeBoardViewModelSource, /buildPacketDetailWhyDiagnosticsForPacket/);
   assert.match(activeBoardViewModelSource, /packetPlacementReason/);
   assert.match(activeBoardViewModelSource, /readyToTestResultControls/);
-  assert.match(activeBoardViewModelSource, /record_test_pass/);
-  assert.match(activeBoardViewModelSource, /record_test_fail/);
+  assert.match(activeBoardViewModelSource, /mark_tested/);
   assert.match(activeBoardViewModelSource, /request_rework/);
-  assert.match(activeBoardViewModelSource, /Ready-to-test result recording needs backend action ownership/);
+  assert.match(activeBoardViewModelSource, /request_rework/);
+  assert.match(activeBoardViewModelSource, /Backend action capability is not available/);
   assert.match(cockpitSource, /activeBoardViewModel\?\.packetDetails\?\.byPacketId\?\./);
   assert.match(cockpitSource, /activeBoardViewModel\?\.summary\.backpressure/);
   assert.match(cockpitSource, /aria-label="Backpressure state"/);

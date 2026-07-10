@@ -17,6 +17,7 @@ from supervisor.api.schemas import (
     CandidateWorkCreate,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
+    OperationalActionRequest,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     WorkItemActionRequest,
@@ -214,6 +215,18 @@ async def transition_authoritative_work_packet(
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
     return ApiEnvelope(data=packet)
+
+
+@app.post("/pipeline-control-plane/actions", response_model=ApiEnvelope)
+async def apply_pipeline_operational_action(
+    payload: OperationalActionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await service.apply_pipeline_operational_action(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_action", payload.correlationId).model_dump()) from exc
+    return ApiEnvelope(data=result)
 
 
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)

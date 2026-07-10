@@ -1,4 +1,8 @@
-import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type {
+  PipelineDashboardProjectionV0,
+  PipelineOperationalActionRequestV0,
+  PipelineOperationalActionResultV0,
+} from "@kendall/contracts";
 
 import {
   pipelineCockpitPackets,
@@ -7,6 +11,13 @@ import {
   type PipelineFixturePacket,
 } from "./pipeline-fixtures";
 import { getPipelineDashboardProjection, getWorkPackets } from "./supervisor";
+import { applyPipelineOperationalAction as applySupervisorPipelineOperationalAction } from "./supervisor";
+
+export async function applyPipelineOperationalAction(
+  payload: PipelineOperationalActionRequestV0,
+): Promise<PipelineOperationalActionResultV0> {
+  return applySupervisorPipelineOperationalAction(payload);
+}
 
 export type PipelineCockpitPacketLoad = {
   fixtureMode: typeof pipelineFixtureMode;
