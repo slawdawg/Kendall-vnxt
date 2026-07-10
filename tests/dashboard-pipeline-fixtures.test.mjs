@@ -129,6 +129,13 @@ function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardVie
           },
         };
       }
+      if (specifier === "../../lib/pipeline-packet-loader") {
+        return {
+          applyPipelineOperationalAction: async () => {
+            throw new Error("server-render test does not apply operational actions");
+          },
+        };
+      }
       throw new Error(`Unexpected PipelineCockpit test import: ${specifier}`);
     },
   };

@@ -22,12 +22,12 @@ import {
   type PipelineStaleHistoryItem,
 } from "../../lib/pipeline/active-board-view-model";
 import type {
-      PipelineManagerAuthorityOperationRow,
-      PipelineManagerDeliveryControlRow,
-      PipelineManagerExecutionLaneState,
-      PipelineManagerFeedbackRouteRow,
-      PipelineManagerLanePanel,
-      PipelineManagerLaneRow,
+  PipelineManagerAuthorityOperationRow,
+  PipelineManagerDeliveryControlRow,
+  PipelineManagerExecutionLaneState,
+  PipelineManagerFeedbackRouteRow,
+  PipelineManagerLanePanel,
+  PipelineManagerLaneRow,
 } from "../../lib/pipeline/manager-execution-lane-summary";
 import { applyPipelineOperationalAction } from "../../lib/pipeline-packet-loader";
 
