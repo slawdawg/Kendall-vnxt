@@ -240,6 +240,7 @@ export interface TransitionAuthoritativeWorkPacketRequest {
 export const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0" as const;
 export const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0" as const;
 export const PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0" as const;
+export const PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -357,6 +358,15 @@ export const PIPELINE_OPERATIONAL_READINESS_REASONS = [
   "predecessor_gate_not_passed",
   "safety_violation",
   "authority_violation",
+  "canary_authority_missing",
+  "lease_missing",
+  "checkpoint_missing",
+  "latency_threshold_exceeded",
+  "error_threshold_exceeded",
+  "resource_threshold_exceeded",
+  "cost_threshold_exceeded",
+  "timeout",
+  "recovery_boundary_breached",
   "unknown",
 ] as const;
 export type PipelineOperationalReadinessReasonV0 = (typeof PIPELINE_OPERATIONAL_READINESS_REASONS)[number];
@@ -431,6 +441,64 @@ export interface PipelineOperationalReadinessContractV0 {
   typedBlockers: Array<{ gateId: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
   checkedAt: string;
   expiresAt: string;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export const PIPELINE_ONE_WORKER_LIVE_CANARY_OUTCOMES = ["pass", "hold", "stop"] as const;
+export type PipelineOneWorkerLiveCanaryOutcomeV0 = (typeof PIPELINE_ONE_WORKER_LIVE_CANARY_OUTCOMES)[number];
+
+export interface PipelineOneWorkerLiveCanaryLeaseV0 {
+  state: "pass" | "fail" | "blocked";
+  proofRef: string;
+}
+
+export interface PipelineOneWorkerLiveCanaryCheckpointV0 {
+  state: "pass" | "fail" | "blocked";
+  proofRef: string;
+}
+
+export interface PipelineOneWorkerLiveCanaryTelemetryV0 {
+  source: string;
+  coverage: string;
+  observationWindowSeconds: number | null;
+  alertThresholdIds: string[];
+  alertReady: boolean;
+}
+
+export interface PipelineOneWorkerLiveCanaryMeasurementsV0 {
+  observedAt: string;
+  latencyMs: number | null;
+  errorCount: number | null;
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  diskPercent: number | null;
+  costCents: number | null;
+  timedOut: boolean;
+}
+
+export interface PipelineOneWorkerLiveCanaryEvidenceV0 {
+  schemaVersion: typeof PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION;
+  target: PipelineOperationalReadinessTargetV0;
+  workerCount: 1;
+  backendTruth: PipelineOperationalReadinessBackendTruthV0;
+  truthLabel: PipelineOperationalReadinessBackendTruthV0;
+  canaryAuthority: { state: "allowed" | "blocked"; proven: boolean; evidenceRefs: PipelineOperationalActionEvidenceRefsV0 | string[] };
+  telemetry: PipelineOneWorkerLiveCanaryTelemetryV0;
+  lease: PipelineOneWorkerLiveCanaryLeaseV0;
+  checkpoint: PipelineOneWorkerLiveCanaryCheckpointV0;
+  measurements: PipelineOneWorkerLiveCanaryMeasurementsV0;
+  thresholds: Record<string, PipelineOperationalReadinessThresholdV0 | null>;
+  recovery: { owner: string; rollbackPath: string; remediationAction: string; required: boolean };
+  gates: PipelineOperationalReadinessGateV0[];
+  outcome: PipelineOneWorkerLiveCanaryOutcomeV0;
+  rampAllowed: boolean;
+  typedBlockers: Array<{ gateId: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
+  sourceRefs: PipelineOperationalActionEvidenceRefsV0 | string[];
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0 | string[];
+  checkedAt: string;
+  expiresAt: string;
+  nextManagerAction: string;
   metadataOnly: true;
   rawPayloadRetained: false;
 }
@@ -1040,6 +1108,52 @@ export function validatePipelineOperationalReadinessContractV0(contract: unknown
   }
   if (record.outcome === "go" && record.backendTruth !== "live") {
     issues.push({ field: "backendTruth", code: "inconsistent_result", summary: "Go requires proven live backend truth." });
+  }
+  return issues;
+}
+
+export function validatePipelineOneWorkerLiveCanaryEvidenceV0(evidence: unknown): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(evidence, issues);
+  if (record.schemaVersion !== PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION) {
+    issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "One-worker canary evidence uses an unsupported schema version." });
+  }
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false) {
+    issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "One-worker canary evidence must be metadata-only and retain no raw payloads." });
+  }
+  pushEnumIssue(issues, "backendTruth", record.backendTruth, PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS);
+  pushEnumIssue(issues, "outcome", record.outcome, PIPELINE_ONE_WORKER_LIVE_CANARY_OUTCOMES);
+  if (record.workerCount !== 1) issues.push({ field: "workerCount", code: "invalid_enum", summary: "Canary evidence must cover exactly one worker." });
+  const target = operationalActionRecord(record.target, issues, "target");
+  for (const field of ["workerId", "assignmentId", "owner", "runId"] as const) {
+    if (typeof target[field] !== "string" || !isSafeOperationalIdentifierText(target[field])) {
+      issues.push({ field: `target.${field}`, code: "blank_identifier", summary: "Canary target identity must be exact safe metadata." });
+    }
+  }
+  for (const field of ["sourceRefs", "evidenceRefs"] as const) {
+    if (!isPipelineOperationalActionEvidenceRefsV0(target[field])) {
+      issues.push({ field: `target.${field}`, code: "evidence_required", summary: "Canary target requires safe source/evidence refs." });
+    }
+  }
+  const measurements = operationalActionRecord(record.measurements, issues, "measurements");
+  for (const field of ["latencyMs", "errorCount", "cpuPercent", "memoryPercent", "diskPercent", "costCents"] as const) {
+    if (measurements[field] !== null && (typeof measurements[field] !== "number" || measurements[field] < 0)) {
+      issues.push({ field: `measurements.${field}`, code: "invalid_enum", summary: "Canary measurements must be non-negative numeric metadata." });
+    }
+  }
+  const gates = safeOperationalArrayValues(issues, record.gates, "gates");
+  if (!gates || gates.length < 10) issues.push({ field: "gates", code: "evidence_required", summary: "Canary evidence requires its bounded gate set." });
+  const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
+    issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Canary evidence timestamps must be fresh and bounded." });
+  }
+  if (record.outcome === "pass" && (record.backendTruth !== "live" || record.rampAllowed !== true || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) {
+    issues.push({ field: "outcome", code: "inconsistent_result", summary: "A passing canary requires live truth, ramp permission, and no blockers." });
+  }
+  const recovery = record.recovery as Record<string, unknown> | undefined;
+  if (record.outcome === "stop" && recovery?.required !== true) {
+    issues.push({ field: "recovery", code: "policy_violation", summary: "A stopped canary requires rollback metadata." });
   }
   return issues;
 }

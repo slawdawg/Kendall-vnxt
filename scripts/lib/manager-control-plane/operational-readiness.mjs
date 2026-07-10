@@ -1,7 +1,9 @@
 const SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0";
+const CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0";
 const GATE_STATES = new Set(["pass", "fail", "blocked", "not_applicable"]);
 const BACKEND_TRUTHS = new Set(["live", "simulated", "dry_run"]);
 const OUTCOMES = new Set(["go", "no_go"]);
+const CANARY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const FRESHNESS_TTL_MS = 5 * 60 * 1000;
 const FUTURE_SKEW_MS = 60 * 1000;
 const SAFE_REF = /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact|readiness):[A-Za-z0-9._/@:-]{1,180}$/;
@@ -67,7 +69,9 @@ function reasonFor(code, fallback = "unknown") {
     "alert_coverage_missing", "rollback_missing", "recovery_missing", "ownership_ambiguous", "target_not_exact",
     "evidence_missing", "evidence_stale", "backend_truth_unproven", "configuration_invalid", "secret_like_metadata",
     "resource_pressure", "usage_pressure", "preflight_blocked", "dispatcher_lease_unproven", "receipt_unproven",
-    "predecessor_gate_not_passed", "safety_violation", "authority_violation", "unknown",
+    "predecessor_gate_not_passed", "safety_violation", "authority_violation", "canary_authority_missing",
+    "lease_missing", "checkpoint_missing", "latency_threshold_exceeded", "error_threshold_exceeded",
+    "resource_threshold_exceeded", "cost_threshold_exceeded", "timeout", "recovery_boundary_breached", "unknown",
   ]);
   return known.has(code) ? code : fallback;
 }
@@ -222,4 +226,207 @@ export function validateOperationalReadinessContract(contract = {}) {
   return blockers;
 }
 
-export { SCHEMA_VERSION as PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION, REQUIRED_GATES as PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES };
+function finiteNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function nonNegativeNumber(value) {
+  const result = finiteNumber(value);
+  return result !== null && result >= 0 ? result : null;
+}
+
+function canaryThreshold(readinessContract, thresholds, indicator, fallbackUnit) {
+  const supplied = thresholds?.[indicator] || thresholds?.[indicator.replace(/([A-Z])/g, "_$1").toLowerCase()];
+  if (supplied && typeof supplied === "object") return threshold(supplied, indicator);
+  const fromReadiness = Array.isArray(readinessContract?.sliSlo)
+    ? readinessContract.sliSlo.find((entry) => entry?.indicator === indicator)?.target
+    : null;
+  return threshold(fromReadiness, indicator) || null;
+}
+
+function thresholdPasses(value, target) {
+  if (value === null || !target) return false;
+  if (target.operator === "lt") return value < target.value;
+  if (target.operator === "lte") return value <= target.value;
+  if (target.operator === "gt") return value > target.value;
+  if (target.operator === "gte") return value >= target.value;
+  if (target.operator === "eq") return value === target.value;
+  return false;
+}
+
+function canaryGate(gateId, state, reason, nextAction, evidenceRefs) {
+  const normalizedState = GATE_STATES.has(state) ? state : "blocked";
+  return {
+    gateId,
+    state: normalizedState,
+    typedReason: normalizedState === "pass" || normalizedState === "not_applicable" ? null : reasonFor(reason),
+    nextAction: safeText(nextAction, "Inspect canary evidence before continuing.", 220)
+      ? text(nextAction, "Inspect canary evidence before continuing.", 220)
+      : "Inspect canary evidence before continuing.",
+    evidenceRefs: refs(evidenceRefs),
+  };
+}
+
+function canaryBlocker(code, gateId, nextAction) {
+  return { gateId, reason: reasonFor(code), nextAction: text(nextAction, "Inspect canary evidence before continuing.", 220) };
+}
+
+export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
+  const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
+  const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const targetInput = context.target || options.target || {};
+  const target = {
+    workerId: safeId(targetInput.workerId),
+    assignmentId: safeId(targetInput.assignmentId),
+    owner: safeId(targetInput.owner),
+    runId: safeId(targetInput.runId),
+    sourceRefs: refs(targetInput.sourceRefs),
+    evidenceRefs: refs(targetInput.evidenceRefs),
+  };
+  const readinessContract = context.readinessContract || options.readinessContract || {};
+  const backendTruth = BACKEND_TRUTHS.has(context.backendTruth || options.backendTruth) ? (context.backendTruth || options.backendTruth) : "dry_run";
+  const authority = context.canaryAuthority || context.authority || {};
+  const authorityAllowed = (authority.state || context.authorityState || options.authorityState) === "allowed" &&
+    (authority.proven === true || context.authorityProven === true || options.authorityProven === true);
+  const evidenceRefs = refs([...target.evidenceRefs, ...(context.evidenceRefs || [])]);
+  const sourceRefs = refs(target.sourceRefs);
+  const telemetryInput = context.telemetry || {};
+  const telemetry = {
+    source: safeId(telemetryInput.source),
+    coverage: safeId(telemetryInput.coverage),
+    observationWindowSeconds: nonNegativeNumber(telemetryInput.observationWindowSeconds),
+    alertThresholdIds: Array.isArray(telemetryInput.alertThresholdIds) ? telemetryInput.alertThresholdIds.map(safeId).filter(Boolean).slice(0, 12) : [],
+    alertReady: telemetryInput.alertReady === true,
+  };
+  const leaseInput = context.lease || context.dispatcherLease || {};
+  const checkpointInput = context.checkpoint || context.receipt || {};
+  const lease = {
+    state: ["pass", "fail", "blocked"].includes(leaseInput.state) ? leaseInput.state : "blocked",
+    proofRef: safeId(leaseInput.proofRef || leaseInput.evidenceRef),
+  };
+  const checkpoint = {
+    state: ["pass", "fail", "blocked"].includes(checkpointInput.state) ? checkpointInput.state : "blocked",
+    proofRef: safeId(checkpointInput.proofRef || checkpointInput.evidenceRef),
+  };
+  const measurementsInput = context.measurements || {};
+  const measurements = {
+    observedAt: safeText(measurementsInput.observedAt) ? text(measurementsInput.observedAt, "", 80) : checkedAt,
+    latencyMs: nonNegativeNumber(measurementsInput.latencyMs),
+    errorCount: nonNegativeNumber(measurementsInput.errorCount),
+    cpuPercent: nonNegativeNumber(measurementsInput.cpuPercent),
+    memoryPercent: nonNegativeNumber(measurementsInput.memoryPercent),
+    diskPercent: nonNegativeNumber(measurementsInput.diskPercent),
+    costCents: nonNegativeNumber(measurementsInput.costCents),
+    timedOut: measurementsInput.timedOut === true,
+  };
+  const thresholds = {
+    latency: canaryThreshold(readinessContract, context.thresholds, "latency", "milliseconds"),
+    errors: canaryThreshold(readinessContract, context.thresholds, "errors", "count"),
+    resources: canaryThreshold(readinessContract, context.thresholds, "resources", "percent"),
+    cost: canaryThreshold(readinessContract, context.thresholds, "cost", "cents"),
+  };
+  const recoveryInput = context.recovery || {};
+  const recovery = {
+    owner: safeId(recoveryInput.owner),
+    rollbackPath: safeText(recoveryInput.rollbackPath) ? text(recoveryInput.rollbackPath, "", 180) : "",
+    remediationAction: safeText(recoveryInput.remediationAction) ? text(recoveryInput.remediationAction, "", 220) : "",
+    required: false,
+  };
+  const blockers = [];
+  const gates = [];
+  const exactTarget = [target.workerId, target.assignmentId, target.owner, target.runId].every(Boolean);
+  const oneWorker = context.workerCount === undefined || Number(context.workerCount) === 1;
+  const telemetryReady = Boolean(telemetry.source && telemetry.coverage && telemetry.alertReady && telemetry.alertThresholdIds.length > 0);
+  const leaseReady = lease.state === "pass" && Boolean(lease.proofRef);
+  const checkpointReady = checkpoint.state === "pass" && Boolean(checkpoint.proofRef);
+  const readinessReady = readinessContract?.outcome === "go" && validateOperationalReadinessContract(readinessContract).length === 0;
+  const recoveryReady = Boolean(recovery.owner && recovery.rollbackPath && recovery.remediationAction);
+  const latencyPass = thresholdPasses(measurements.latencyMs, thresholds.latency);
+  const errorsPass = thresholdPasses(measurements.errorCount, thresholds.errors);
+  const resourceValue = Math.max(measurements.cpuPercent ?? -1, measurements.memoryPercent ?? -1, measurements.diskPercent ?? -1);
+  const resourcesPass = thresholdPasses(resourceValue >= 0 ? resourceValue : null, thresholds.resources);
+  const costPass = thresholdPasses(measurements.costCents, thresholds.cost);
+  const boundaryBreached = context.boundaryBreached === true || measurements.timedOut ||
+    (thresholds.errors && measurements.errorCount !== null && !errorsPass) ||
+    (thresholds.resources && resourceValue >= 0 && !resourcesPass) ||
+    (thresholds.cost && measurements.costCents !== null && !costPass) ||
+    (thresholds.latency && measurements.latencyMs !== null && !latencyPass);
+
+  const addGate = (gateId, pass, reason, action, refsForGate = evidenceRefs) => {
+    gates.push(canaryGate(gateId, pass ? "pass" : "blocked", reason, action, refsForGate));
+    if (!pass) blockers.push(canaryBlocker(reason, gateId, action));
+  };
+  addGate("exact_canary_scope", exactTarget && oneWorker, "target_not_exact", "Provide exactly one worker, assignment, owner, and run identity.");
+  addGate("predecessor_readiness", readinessReady, "predecessor_gate_not_passed", "Verify the passing 25-1 readiness contract before running the canary.");
+  addGate("canary_authority", authorityAllowed, "canary_authority_missing", "Record explicit bounded canary authority before live execution.");
+  addGate("live_truth", backendTruth === "live" && context.backendTruthProven === true, "backend_truth_unproven", "Hold the canary until live backend truth is explicitly proven.");
+  addGate("telemetry", telemetryReady, "telemetry_missing", "Provide fresh telemetry coverage and alert threshold metadata.");
+  addGate("lease", leaseReady, "lease_missing", "Provide exact dispatcher lease proof for the canary worker.", refs([...evidenceRefs, lease.proofRef].filter(Boolean)));
+  addGate("checkpoint", checkpointReady, "checkpoint_missing", "Provide a checkpoint or receipt proof for the canary worker.", refs([...evidenceRefs, checkpoint.proofRef].filter(Boolean)));
+  addGate("latency", latencyPass, measurements.latencyMs === null ? "threshold_missing" : "latency_threshold_exceeded", "Provide latency evidence within the explicit canary threshold.");
+  addGate("errors", errorsPass, measurements.errorCount === null ? "threshold_missing" : "error_threshold_exceeded", "Stop and inspect errors before allowing ramp.");
+  addGate("resources", resourcesPass, resourceValue < 0 ? "threshold_missing" : "resource_threshold_exceeded", "Stop and restore resource headroom before allowing ramp.");
+  addGate("cost", costPass, measurements.costCents === null ? "threshold_missing" : "cost_threshold_exceeded", "Stop and inspect cost evidence before allowing ramp.");
+  addGate("recovery", recoveryReady, "recovery_missing", "Provide an owner, rollback path, and remediation action before the canary.");
+  if (measurements.timedOut) blockers.push(canaryBlocker("timeout", "timeout_recovery", "Stop the canary, preserve metadata-only evidence, and execute the bounded rollback path."));
+  gates.push(canaryGate("timeout_recovery", measurements.timedOut ? "blocked" : "pass", measurements.timedOut ? "timeout" : null, measurements.timedOut ? "Stop the canary, preserve evidence, and rollback before retrying." : "Continue observing the bounded canary timeout window.", evidenceRefs));
+  const uniqueBlockers = blockers.filter((entry, index, list) => list.findIndex((candidate) => candidate.gateId === entry.gateId && candidate.reason === entry.reason) === index);
+  const outcome = boundaryBreached ? "stop" : uniqueBlockers.length === 0 ? "pass" : "hold";
+  recovery.required = outcome === "stop";
+  const nextManagerAction = outcome === "pass"
+    ? "Preserve the passing canary evidence and create 25-3 JIT only; do not launch rollout automatically."
+    : outcome === "stop"
+      ? "Stop the canary, preserve metadata-only evidence, execute the bounded rollback path, and block ramp."
+      : "Repair the typed canary blockers and rerun the bounded readiness/canary evidence gate.";
+  return {
+    schemaVersion: CANARY_SCHEMA_VERSION,
+    target,
+    workerCount: oneWorker ? 1 : Number(context.workerCount),
+    backendTruth,
+    truthLabel: backendTruth,
+    canaryAuthority: { state: authority.state === "allowed" ? "allowed" : "blocked", proven: authorityAllowed, evidenceRefs: refs(authority.evidenceRefs) },
+    telemetry,
+    lease,
+    checkpoint,
+    measurements,
+    thresholds,
+    recovery,
+    gates,
+    outcome,
+    rampAllowed: outcome === "pass",
+    typedBlockers: uniqueBlockers,
+    sourceRefs,
+    evidenceRefs,
+    checkedAt,
+    expiresAt: new Date(checkedAtMs + FRESHNESS_TTL_MS).toISOString(),
+    nextManagerAction,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+export function validateOneWorkerLiveCanaryEvidence(evidence = {}) {
+  const blockers = [];
+  if (evidence?.schemaVersion !== CANARY_SCHEMA_VERSION) blockers.push({ code: "bad_schema_version", message: "Unsupported one-worker canary evidence schema." });
+  if (evidence?.metadataOnly !== true || evidence?.rawPayloadRetained !== false) blockers.push({ code: "safety_violation", message: "Canary evidence must be metadata-only." });
+  if (!CANARY_OUTCOMES.has(evidence?.outcome)) blockers.push({ code: "unknown", message: "Canary outcome is missing or malformed." });
+  if (evidence?.workerCount !== 1) blockers.push({ code: "target_not_exact", message: "Canary evidence must cover exactly one worker." });
+  if (BACKEND_TRUTHS.has(evidence?.backendTruth) === false) blockers.push({ code: "backend_truth_unproven", message: "Canary truth label is missing or malformed." });
+  if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Canary evidence requires safe source refs." });
+  if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Canary evidence requires safe evidence refs." });
+  if (!Array.isArray(evidence?.gates) || evidence.gates.length < 10) blockers.push({ code: "evidence_missing", message: "Canary evidence requires the bounded gate set." });
+  if (!safeText(evidence?.nextManagerAction)) blockers.push({ code: "evidence_missing", message: "Canary evidence requires a safe next manager action." });
+  const checkedAtMs = Date.parse(evidence?.checkedAt || "");
+  const expiresAtMs = Date.parse(evidence?.expiresAt || "");
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Canary evidence timestamps must be fresh and bounded." });
+  if (evidence?.outcome === "pass" && (evidence.backendTruth !== "live" || evidence.rampAllowed !== true || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "A passing canary requires live truth, ramp permission, and no blockers." });
+  if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped canary requires rollback metadata." });
+  return blockers;
+}
+
+export {
+  SCHEMA_VERSION as PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
+  REQUIRED_GATES as PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
+  CANARY_SCHEMA_VERSION as PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
+};
