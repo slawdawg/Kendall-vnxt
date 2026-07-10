@@ -13999,7 +13999,7 @@ test("builds cycle packet with bounded sections and heartbeat report", () => {
 test("overnight recovery and housekeeping keeps its local BMAD artifact ignored", () => {
   const storyPath = `_bmad-output/implementation-artifacts/fixture-overnight-recovery-housekeeping-${process.pid}-${Date.now()}.md`;
   const storyContent = [
-    "# Story 23-6-overnight-run-recovery-and-housekeeping: Overnight Run Recovery And Housekeeping",
+    "# Story 24-6-overnight-run-recovery-and-housekeeping: Overnight Run Recovery And Housekeeping",
     "",
     "## Status",
     "in-progress",
@@ -14017,6 +14017,7 @@ test("overnight recovery and housekeeping keeps its local BMAD artifact ignored"
   try {
     ensureIgnoredBmadFixture(storyPath, storyContent);
     assertExistingLocalBmadStoryArtifact(storyPath);
+    assert.match(readFileSync(storyAbsolutePath, "utf8"), /24-6-overnight-run-recovery-and-housekeeping/);
   } finally {
     rmSync(storyAbsolutePath, { force: true });
   }
