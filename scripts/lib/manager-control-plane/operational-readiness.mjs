@@ -1,9 +1,12 @@
 const SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0";
 const CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0";
+const RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0";
 const GATE_STATES = new Set(["pass", "fail", "blocked", "not_applicable"]);
 const BACKEND_TRUTHS = new Set(["live", "simulated", "dry_run"]);
 const OUTCOMES = new Set(["go", "no_go"]);
 const CANARY_OUTCOMES = new Set(["pass", "hold", "stop"]);
+const RAMP_OUTCOMES = new Set(["pass", "hold", "stop"]);
+const DEFAULT_RAMP_WORKER_COUNTS = [1, 2, 4, 6];
 const FRESHNESS_TTL_MS = 5 * 60 * 1000;
 const FUTURE_SKEW_MS = 60 * 1000;
 const SAFE_REF = /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact|readiness):[A-Za-z0-9._/@:-]{1,180}$/;
@@ -72,6 +75,8 @@ function reasonFor(code, fallback = "unknown") {
     "predecessor_gate_not_passed", "safety_violation", "authority_violation", "canary_authority_missing",
     "lease_missing", "checkpoint_missing", "latency_threshold_exceeded", "error_threshold_exceeded",
     "resource_threshold_exceeded", "cost_threshold_exceeded", "timeout", "recovery_boundary_breached", "unknown",
+    "canary_not_passed", "stage_plan_invalid", "capacity_missing", "stage_threshold_exceeded",
+    "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
   ]);
   return known.has(code) ? code : fallback;
 }
@@ -425,8 +430,179 @@ export function validateOneWorkerLiveCanaryEvidence(evidence = {}) {
   return blockers;
 }
 
+function rampThreshold(value, name) {
+  return threshold(value, name);
+}
+
+function normalizeRampStage(input = {}, index = 0, expectedWorkerCount = null) {
+  const workerCount = Number(input.workerCount ?? input.workers ?? expectedWorkerCount);
+  const rollbackInput = input.rollbackThresholds || input.rollback_thresholds || {};
+  const observedInput = input.observed || input.observations || {};
+  const rollbackThresholds = {
+    latency: rampThreshold(rollbackInput.latency, "latency"),
+    errors: rampThreshold(rollbackInput.errors, "errors"),
+    resources: rampThreshold(rollbackInput.resources, "resources"),
+    cost: rampThreshold(rollbackInput.cost, "cost"),
+  };
+  const observed = {
+    queueDepth: nonNegativeNumber(observedInput.queueDepth),
+    leaseHealthy: observedInput.leaseHealthy === true,
+    latencyMs: nonNegativeNumber(observedInput.latencyMs),
+    errorCount: nonNegativeNumber(observedInput.errorCount),
+    cpuPercent: nonNegativeNumber(observedInput.cpuPercent),
+    memoryPercent: nonNegativeNumber(observedInput.memoryPercent),
+    diskPercent: nonNegativeNumber(observedInput.diskPercent),
+    processCount: nonNegativeNumber(observedInput.processCount),
+    usageState: ["normal", "ready", "drain", "manager_only", "unknown"].includes(observedInput.usageState) ? observedInput.usageState : "unknown",
+    costCents: nonNegativeNumber(observedInput.costCents),
+  };
+  const changed = input.changed === true || input.skipped === true || Number(input.workerCount ?? input.workers ?? expectedWorkerCount) !== expectedWorkerCount;
+  const rationale = safeText(input.rationale) ? text(input.rationale, "", 220) : "";
+  const authority = input.authority || {};
+  return {
+    stageId: safeId(input.stageId || input.stage_id || `stage-${index + 1}`),
+    workerCount: Number.isFinite(workerCount) ? workerCount : null,
+    capacityReady: input.capacityReady === true || input.capacity_ready === true,
+    durationSeconds: nonNegativeNumber(input.durationSeconds ?? input.duration_seconds),
+    owner: safeId(input.owner),
+    budgetCents: nonNegativeNumber(input.budgetCents ?? input.budget_cents),
+    rollbackThresholds,
+    authority: {
+      state: authority.state === "allowed" ? "allowed" : "blocked",
+      proven: authority.proven === true,
+      evidenceRefs: refs(authority.evidenceRefs),
+    },
+    observed,
+    changed,
+    skipped: input.skipped === true,
+    rationale,
+    replacementThresholds: changed && input.replacementThresholds && typeof input.replacementThresholds === "object"
+      ? Object.fromEntries(Object.entries(input.replacementThresholds).slice(0, 8).map(([name, value]) => [safeId(name), rampThreshold(value, name)]).filter(([name, value]) => name && value))
+      : {},
+    evidenceRefs: refs(input.evidenceRefs),
+    lifecycleAmbiguous: input.lifecycleAmbiguous === true || input.lifecycle_ambiguous === true,
+  };
+}
+
+function rampMetricPasses(value, target) {
+  return thresholdPasses(value, target);
+}
+
+export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
+  const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
+  const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const canaryEvidence = context.canaryEvidence || options.canaryEvidence || {};
+  const sourceRefs = refs([...(canaryEvidence.sourceRefs || []), ...(context.sourceRefs || [])]);
+  const evidenceRefs = refs([...(canaryEvidence.evidenceRefs || []), ...(context.evidenceRefs || [])]);
+  const requestedStages = Array.isArray(context.stages || options.stages) ? (context.stages || options.stages) : DEFAULT_RAMP_WORKER_COUNTS.map((workerCount) => ({ workerCount }));
+  const expectedWorkerCounts = Array.isArray(context.stageWorkerCounts || options.stageWorkerCounts)
+    ? (context.stageWorkerCounts || options.stageWorkerCounts).map(Number).filter((value) => Number.isInteger(value) && value > 0).slice(0, 8)
+    : DEFAULT_RAMP_WORKER_COUNTS;
+  const changedPlan = expectedWorkerCounts.length !== DEFAULT_RAMP_WORKER_COUNTS.length || expectedWorkerCounts.some((value, index) => value !== DEFAULT_RAMP_WORKER_COUNTS[index]);
+  const planRationale = safeText(context.planRationale || options.planRationale) ? text(context.planRationale || options.planRationale, "", 220) : "";
+  const planAuthority = context.planAuthority || options.planAuthority || {};
+  const planAuthorityProven = planAuthority.state === "allowed" && planAuthority.proven === true;
+  const stages = expectedWorkerCounts.map((workerCount, index) => normalizeRampStage(requestedStages[index] || {}, index, workerCount));
+  const blockers = [];
+  const stageResults = [];
+  const canaryPass = canaryEvidence?.schemaVersion === CANARY_SCHEMA_VERSION &&
+    canaryEvidence.outcome === "pass" && canaryEvidence.backendTruth === "live" && canaryEvidence.rampAllowed === true &&
+    validateOneWorkerLiveCanaryEvidence(canaryEvidence).length === 0;
+  if (!canaryPass) blockers.push({ gateId: "canary_predecessor", reason: reasonFor("canary_not_passed"), nextAction: "Complete and preserve a passing live 25-2 canary evidence packet before ramp." });
+  const planValid = expectedWorkerCounts.length > 0 && (expectedWorkerCounts.every((value, index) => index === 0 || value > expectedWorkerCounts[index - 1])) &&
+    (!changedPlan || Boolean(planRationale && planAuthorityProven));
+  if (!planValid) blockers.push({ gateId: "stage_plan", reason: reasonFor("stage_plan_invalid"), nextAction: "Use the default 1, 2, 4, 6 stage sequence or provide rationale, authority, and replacement thresholds." });
+  let priorPassed = true;
+  for (const [index, stage] of stages.entries()) {
+    const expectedWorkerCount = expectedWorkerCounts[index];
+    const thresholdReady = Object.values(stage.rollbackThresholds).every(Boolean);
+    const resourceValue = Math.max(stage.observed.cpuPercent ?? -1, stage.observed.memoryPercent ?? -1, stage.observed.diskPercent ?? -1);
+    const measurementsPass = thresholdReady &&
+      rampMetricPasses(stage.observed.latencyMs, stage.rollbackThresholds.latency) &&
+      rampMetricPasses(stage.observed.errorCount, stage.rollbackThresholds.errors) &&
+      rampMetricPasses(resourceValue >= 0 ? resourceValue : null, stage.rollbackThresholds.resources) &&
+      rampMetricPasses(stage.observed.costCents, stage.rollbackThresholds.cost) &&
+      stage.observed.leaseHealthy === true && ["normal", "ready"].includes(stage.observed.usageState);
+    const lifecycleReady = stage.lifecycleAmbiguous !== true && stage.skipped !== true && priorPassed;
+    const stageReady = stage.workerCount === expectedWorkerCount && stage.capacityReady && (stage.durationSeconds || 0) > 0 && Boolean(stage.owner) && (stage.budgetCents || 0) > 0 &&
+      thresholdReady && stage.authority.state === "allowed" && stage.authority.proven === true && stage.evidenceRefs.length > 0 && measurementsPass && lifecycleReady;
+    const thresholdBreached = stage.lifecycleAmbiguous === true || !measurementsPass && stage.observed.queueDepth !== null;
+    const stageOutcome = thresholdBreached ? "stop" : stageReady && canaryPass && planValid ? "pass" : "hold";
+    const stageBlockers = [];
+    if (stage.workerCount !== expectedWorkerCount || !stage.capacityReady || !stage.owner || !stage.durationSeconds || !stage.budgetCents) stageBlockers.push({ code: "capacity_missing", message: "Stage capacity, duration, owner, or budget metadata is incomplete." });
+    if (!thresholdReady) stageBlockers.push({ code: "stage_threshold_missing", message: "Stage rollback thresholds are incomplete." });
+    if (stage.authority.state !== "allowed" || stage.authority.proven !== true) stageBlockers.push({ code: "stage_authority_missing", message: "Stage authority is not explicitly proven." });
+    if (stage.evidenceRefs.length === 0) stageBlockers.push({ code: "stage_evidence_missing", message: "Stage evidence refs are missing." });
+    if (stage.lifecycleAmbiguous || stage.skipped || !priorPassed) stageBlockers.push({ code: "stage_lifecycle_ambiguous", message: "Stage lifecycle is skipped, ambiguous, or follows a failed stage." });
+    if (!measurementsPass) stageBlockers.push({ code: "stage_threshold_exceeded", message: "Stage observations do not satisfy rollback thresholds." });
+    stageResults.push({ ...stage, outcome: stageOutcome, typedBlockers: stageBlockers, rampAllowed: stageOutcome === "pass" });
+    if (stageOutcome !== "pass") priorPassed = false;
+    if (stageOutcome === "stop") blockers.push({ gateId: stage.stageId || `stage-${index + 1}`, reason: reasonFor(stage.lifecycleAmbiguous ? "stage_lifecycle_ambiguous" : "stage_threshold_exceeded"), nextAction: "Stop the stage, preserve metadata-only evidence, execute rollback, and block the next stage." });
+    else if (stageOutcome !== "pass") blockers.push({ gateId: stage.stageId || `stage-${index + 1}`, reason: reasonFor(stageBlockers[0]?.code || "stage_evidence_missing"), nextAction: "Repair the stage evidence and rerun the ramp gate before continuing." });
+  }
+  const uniqueBlockers = blockers.filter((entry, index, list) => list.findIndex((candidate) => candidate.gateId === entry.gateId && candidate.reason === entry.reason) === index);
+  const stop = uniqueBlockers.some((entry) => ["stage_threshold_exceeded", "stage_lifecycle_ambiguous"].includes(entry.reason));
+  const outcome = stop ? "stop" : uniqueBlockers.length === 0 ? "pass" : "hold";
+  const recoveryInput = context.recovery || {};
+  const recovery = {
+    owner: safeId(recoveryInput.owner),
+    rollbackPath: safeText(recoveryInput.rollbackPath) ? text(recoveryInput.rollbackPath, "", 180) : "",
+    remediationAction: safeText(recoveryInput.remediationAction) ? text(recoveryInput.remediationAction, "", 220) : "",
+    required: stop,
+  };
+  const scaleEvidenceReady = outcome === "pass";
+  const nextManagerAction = outcome === "pass"
+    ? "Preserve per-stage scale evidence for 25-6; do not auto-rollout, merge, cleanup, or call providers."
+    : stop
+      ? "Stop the current ramp stage, preserve metadata-only evidence, execute rollback, and block the next stage."
+      : "Repair the canary, stage plan, authority, threshold, or lifecycle blockers before any ramp attempt.";
+  return {
+    schemaVersion: RAMP_SCHEMA_VERSION,
+    canaryEvidenceRef: evidenceRefs.find((ref) => ref.startsWith("evidence:")) || null,
+    canaryOutcome: canaryEvidence.outcome || "unknown",
+    defaultStageWorkerCounts: DEFAULT_RAMP_WORKER_COUNTS,
+    stageWorkerCounts: expectedWorkerCounts,
+    changedPlan,
+    planRationale,
+    planAuthority: { state: planAuthority.state === "allowed" ? "allowed" : "blocked", proven: planAuthorityProven, evidenceRefs: refs(planAuthority.evidenceRefs) },
+    stages: stageResults,
+    recovery,
+    outcome,
+    scaleEvidenceReady,
+    rolloutAllowed: false,
+    typedBlockers: uniqueBlockers,
+    sourceRefs,
+    evidenceRefs,
+    checkedAt,
+    expiresAt: new Date(checkedAtMs + FRESHNESS_TTL_MS).toISOString(),
+    nextManagerAction,
+    stopLines: ["no_automatic_rollout", "no_provider_calls", "no_secret_access", "no_merge_or_cleanup"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+export function validateLiveCapacityRampEvidence(evidence = {}) {
+  const blockers = [];
+  if (evidence?.schemaVersion !== RAMP_SCHEMA_VERSION) blockers.push({ code: "bad_schema_version", message: "Unsupported live capacity ramp evidence schema." });
+  if (!RAMP_OUTCOMES.has(evidence?.outcome)) blockers.push({ code: "unknown", message: "Ramp outcome is missing or malformed." });
+  if (evidence?.metadataOnly !== true || evidence?.rawPayloadRetained !== false || evidence?.rolloutAllowed !== false) blockers.push({ code: "safety_violation", message: "Ramp evidence must remain metadata-only and rollout-disabled." });
+  if (!Array.isArray(evidence?.stages) || evidence.stages.length === 0) blockers.push({ code: "evidence_missing", message: "Ramp evidence requires ordered stage records." });
+  if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Ramp evidence requires safe source refs." });
+  if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Ramp evidence requires safe evidence refs." });
+  if (!safeText(evidence?.nextManagerAction)) blockers.push({ code: "evidence_missing", message: "Ramp evidence requires a safe next manager action." });
+  const checkedAtMs = Date.parse(evidence?.checkedAt || "");
+  const expiresAtMs = Date.parse(evidence?.expiresAt || "");
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Ramp evidence timestamps must be fresh and bounded." });
+  if (evidence?.outcome === "pass" && (evidence.scaleEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0 || evidence.canaryOutcome !== "pass")) blockers.push({ code: "inconsistent_result", message: "A passing ramp requires a passing canary, complete stage evidence, and rollout disabled." });
+  if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped ramp requires rollback metadata." });
+  return blockers;
+}
+
 export {
   SCHEMA_VERSION as PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   REQUIRED_GATES as PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   CANARY_SCHEMA_VERSION as PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
+  RAMP_SCHEMA_VERSION as PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
 };

@@ -14,9 +14,12 @@ import {
   validateOperationalReadinessContract,
   buildOneWorkerLiveCanaryEvidence,
   validateOneWorkerLiveCanaryEvidence,
+  buildLiveCapacityRampEvidence,
+  validateLiveCapacityRampEvidence,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
+  PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
 } from "./operational-readiness.mjs";
 
 export {
@@ -24,10 +27,13 @@ export {
   validateOperationalReadinessContract,
   buildOneWorkerLiveCanaryEvidence,
   validateOneWorkerLiveCanaryEvidence,
+  buildLiveCapacityRampEvidence,
+  validateLiveCapacityRampEvidence,
   operationalReadinessPredecessorGate,
   PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
   PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
   PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
+  PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -23314,6 +23320,20 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       recovery: canaryInput.recovery || context.recovery,
     },
   );
+  const rampInput = isPlainObject(context.liveCapacityRamp)
+    ? context.liveCapacityRamp
+    : isPlainObject(context.capacityRamp)
+      ? context.capacityRamp
+      : {};
+  const liveCapacityRamp = buildLiveCapacityRampEvidence(
+    { now: context.now || options.now },
+    {
+      ...rampInput,
+      canaryEvidence: rampInput.canaryEvidence || context.canaryEvidence || oneWorkerLiveCanary,
+      sourceRefs: rampInput.sourceRefs || context.sourceRefs,
+      recovery: rampInput.recovery || context.recovery,
+    },
+  );
 
   return packet({
     ok: status !== "blocked",
@@ -23355,6 +23375,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
       rawPayloadRetained: false,
       operationalReadinessContract,
       oneWorkerLiveCanary,
+      liveCapacityRamp,
     },
     blockers: dedupedBlockers,
     warnings,

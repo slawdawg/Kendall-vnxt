@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildLiveCapacityRampEvidence,
   buildOneWorkerLiveCanaryEvidence,
   buildOperationalReadinessContract,
   buildRuntimeReadinessPlan,
   operationalReadinessPredecessorGate,
+  validateLiveCapacityRampEvidence,
   validateOneWorkerLiveCanaryEvidence,
   validateOperationalReadinessContract,
 } from "../scripts/lib/manager-control-plane/core.mjs";
@@ -199,4 +201,100 @@ test("continuous runtime readiness projects canary evidence without enabling liv
   assert.equal(runtime.summary.oneWorkerLiveCanary.rampAllowed, false);
   assert.equal(runtime.summary.oneWorkerLiveCanary.rawPayloadRetained, false);
   assert.equal(runtime.summary.gates.externalServiceCalls, "blocked");
+});
+
+function passingCanaryEvidence() {
+  const context = passingContext();
+  const readinessContract = buildOperationalReadinessContract({}, context);
+  return buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    target,
+    readinessContract,
+    backendTruth: "live",
+    backendTruthProven: true,
+    canaryAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:canary-authority"] },
+    telemetry: context.telemetry,
+    lease: { state: "pass", proofRef: "evidence:lease-proof" },
+    checkpoint: { state: "pass", proofRef: "evidence:checkpoint-proof" },
+    measurements: { latencyMs: 1, errorCount: 0, cpuPercent: 1, memoryPercent: 1, diskPercent: 1, costCents: 1, timedOut: false },
+    recovery: context.recovery,
+    evidenceRefs: ["evidence:canary-observation"],
+  });
+}
+
+function passingRampStage(workerCount, index) {
+  return {
+    stageId: `stage-${index + 1}`,
+    workerCount,
+    capacityReady: true,
+    durationSeconds: 60,
+    owner: "manager-20260710",
+    budgetCents: 100,
+    rollbackThresholds: {
+      latency: { name: "latency", operator: "lte", value: 100, unit: "milliseconds" },
+      errors: { name: "errors", operator: "lte", value: 0, unit: "count" },
+      resources: { name: "resources", operator: "lte", value: 80, unit: "percent" },
+      cost: { name: "cost", operator: "lte", value: 100, unit: "cents" },
+    },
+    authority: { state: "allowed", proven: true, evidenceRefs: [`evidence:stage-${index + 1}-authority`] },
+    observed: {
+      queueDepth: 0,
+      leaseHealthy: true,
+      latencyMs: 20,
+      errorCount: 0,
+      cpuPercent: 20,
+      memoryPercent: 30,
+      diskPercent: 40,
+      processCount: workerCount,
+      usageState: "normal",
+      costCents: 10,
+    },
+    evidenceRefs: [`evidence:stage-${index + 1}-observation`],
+  };
+}
+
+test("capacity ramp records ordered per-stage evidence and never enables rollout", () => {
+  const ramp = buildLiveCapacityRampEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    canaryEvidence: passingCanaryEvidence(),
+    stages: [1, 2, 4, 6].map(passingRampStage),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:ramp-observation"],
+    recovery: passingContext().recovery,
+  });
+  assert.equal(ramp.outcome, "pass");
+  assert.deepEqual(ramp.stageWorkerCounts, [1, 2, 4, 6]);
+  assert.equal(ramp.scaleEvidenceReady, true);
+  assert.equal(ramp.rolloutAllowed, false);
+  assert.deepEqual(ramp.stages.map((stage) => stage.outcome), ["pass", "pass", "pass", "pass"]);
+  assert.deepEqual(validateLiveCapacityRampEvidence(ramp), []);
+});
+
+test("capacity ramp stops on a stage threshold breach and blocks later stages", () => {
+  const stages = [1, 2, 4, 6].map(passingRampStage);
+  stages[1] = { ...stages[1], observed: { ...stages[1].observed, cpuPercent: 99 } };
+  const ramp = buildLiveCapacityRampEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    canaryEvidence: passingCanaryEvidence(),
+    stages,
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:ramp-breach"],
+    recovery: passingContext().recovery,
+  });
+  assert.equal(ramp.outcome, "stop");
+  assert.equal(ramp.scaleEvidenceReady, false);
+  assert.equal(ramp.recovery.required, true);
+  assert.deepEqual(ramp.stages.map((stage) => stage.outcome), ["pass", "stop", "hold", "hold"]);
+  assert.ok(ramp.typedBlockers.some((blocker) => blocker.reason === "stage_threshold_exceeded"));
+  assert.deepEqual(validateLiveCapacityRampEvidence(ramp), []);
+});
+
+test("continuous runtime readiness projects ramp evidence with rollout blocked", () => {
+  const runtime = buildRuntimeReadinessPlan(
+    { runtimeMode: "continuous_dry_run" },
+    { cycleStatus: "ready", cycleOk: true, usage: { status: "normal" }, resources: { status: "normal" }, preflight: { status: "ready", blockerCount: 0 } },
+  );
+  assert.equal(runtime.summary.liveCapacityRamp.outcome, "hold");
+  assert.equal(runtime.summary.liveCapacityRamp.rolloutAllowed, false);
+  assert.equal(runtime.summary.liveCapacityRamp.rawPayloadRetained, false);
 });
