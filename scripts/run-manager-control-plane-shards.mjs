@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { availableParallelism } from "node:os";
 import { readFileSync } from "node:fs";
+
+import {
+  classifyManagerVerificationOutput,
+  parseManagerShardTimeout,
+  resolveManagerVerificationRoute,
+  resolveManagerShardJobs,
+  terminateManagerShardProcessGroup,
+} from "./lib/manager-control-plane-verification.mjs";
 
 const TEST_FILE = "tests/manager-control-plane.test.mjs";
 const MAX_TEST_NAMES_PER_INVOCATION = 24;
+const SHARD_TIMEOUT_MS = parseManagerShardTimeout(
+  process.env.MANAGER_TEST_SHARD_TIMEOUT_MS === undefined ? "120000" : process.env.MANAGER_TEST_SHARD_TIMEOUT_MS,
+);
 
 const shardDefinitions = [
   {
@@ -97,7 +107,7 @@ const shardDefinitions = [
 
 const args = [...process.argv.slice(2)];
 let requested = "all";
-let jobs = defaultJobCount();
+let jobs = resolveManagerShardJobs();
 
 while (args.length > 0) {
   const arg = args.shift();
@@ -139,9 +149,10 @@ for (const shardId of requestedShards) {
 const results = await runShards(requestedShards, { jobs, allowEmptyShards });
 
 let failed = false;
+const verificationResults = [];
 for (const result of results) {
   const names = shardMap.get(result.shardId) || [];
-  const outcome = result.skipped ? "skipped" : result.status === 0 ? "passed" : "failed";
+  const outcome = result.skipped ? "skipped" : result.status === 0 ? "passed" : result.outcome || "failed";
   const header = `[manager:${result.shardId}] ${names.length} tests ${outcome} in ${result.durationMs}ms`;
   console.log(header);
   const output = `${result.stdout}${result.stderr}`;
@@ -151,8 +162,18 @@ for (const result of results) {
   } else {
     failed = true;
     if (output.trim()) console.error(output.trimEnd());
+    if (result.reason) console.error(`[manager:${result.shardId}] verification ${result.outcome}: ${result.reason}`);
     if (result.error) console.error(result.error.message);
   }
+  if (!result.skipped) {
+    verificationResults.push({ status: result.outcome || (result.status === 0 ? "passed" : "failed"), reason: result.reason });
+  }
+}
+
+const route = resolveManagerVerificationRoute(verificationResults);
+if (route.failClosed) {
+  failed = true;
+  console.error(`Manager verification route ${route.route} is ${route.status}; failing closed.`);
 }
 
 process.exit(failed ? 1 : 0);
@@ -210,10 +231,15 @@ async function runShards(shardIds, { jobs: jobCount, allowEmptyShards = false })
 function runShard(shardId, { allowEmpty = false } = {}) {
   const names = shardMap.get(shardId) || [];
   if (names.length === 0) {
-    if (allowEmpty) {
-      return Promise.resolve({ shardId, status: 0, stdout: "", stderr: "", durationMs: 0, skipped: true });
-    }
-    return Promise.resolve({ shardId, status: 1, stdout: "", stderr: `Shard ${shardId} has no tests\n`, durationMs: 0 });
+    return Promise.resolve({
+      shardId,
+      status: 1,
+      outcome: "inconclusive",
+      reason: "missing-tests",
+      stdout: "",
+      stderr: `Shard ${shardId} has no tests\n`,
+      durationMs: 0,
+    });
   }
   const chunks = chunkArray(names, MAX_TEST_NAMES_PER_INVOCATION);
   if (chunks.length > 1) return runShardChunks(shardId, chunks);
@@ -230,6 +256,12 @@ async function runShardChunks(shardId, chunks) {
   return {
     shardId,
     status: results.every((result) => result.status === 0) ? 0 : 1,
+    outcome: results.every((result) => result.status === 0)
+      ? "passed"
+      : results.some((result) => result.outcome === "failed")
+        ? "failed"
+        : "inconclusive",
+    reason: results.find((result) => result.status !== 0)?.reason || null,
     stdout: results.map((result) => result.stdout).filter(Boolean).join("\n"),
     stderr: results.map((result) => result.stderr).filter(Boolean).join("\n"),
     error: results.find((result) => result.error)?.error,
@@ -249,11 +281,19 @@ function runShardChunk(shardId, names, { chunkIndex = 1, chunkCount = 1 } = {}) 
     TEST_FILE,
   ], {
     cwd: process.cwd(),
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   let stdout = "";
   let stderr = "";
+  let timedOut = false;
+  let killTimer = null;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    terminateManagerShardProcessGroup(child, "SIGTERM");
+    killTimer = setTimeout(() => terminateManagerShardProcessGroup(child, "SIGKILL"), 1000);
+  }, SHARD_TIMEOUT_MS);
   child.stdout.on("data", (chunk) => {
     stdout += chunk;
   });
@@ -263,12 +303,20 @@ function runShardChunk(shardId, names, { chunkIndex = 1, chunkCount = 1 } = {}) 
 
   return new Promise((resolve) => {
     child.on("error", (error) => {
-      resolve({ shardId, status: 1, stdout, stderr: annotateChunk(stderr, chunkIndex, chunkCount), error, durationMs: Date.now() - started });
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      const classification = classifyManagerVerificationOutput({ status: 1, stdout, stderr, timedOut });
+      resolve({ shardId, status: 1, outcome: classification.status, reason: classification.reason, stdout, stderr: annotateChunk(stderr, chunkIndex, chunkCount), error, durationMs: Date.now() - started });
     });
     child.on("close", (status) => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      const classification = classifyManagerVerificationOutput({ status, stdout, stderr, timedOut });
       resolve({
         shardId,
-        status: typeof status === "number" ? status : 1,
+        status: classification.status === "passed" ? 0 : 1,
+        outcome: classification.status,
+        reason: classification.reason,
         stdout: annotateChunk(stdout, chunkIndex, chunkCount),
         stderr: annotateChunk(stderr, chunkIndex, chunkCount),
         durationMs: Date.now() - started,
@@ -288,17 +336,11 @@ function summarizePassingOutput(output) {
 }
 
 function parseJobCount(value) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    failUsage(`Invalid --jobs value: ${value}`);
+  try {
+    return resolveManagerShardJobs(value);
+  } catch (error) {
+    failUsage(error.message);
   }
-  return parsed;
-}
-
-function defaultJobCount() {
-  const fromEnv = Number.parseInt(process.env.MANAGER_TEST_SHARD_JOBS || "", 10);
-  if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv;
-  return Math.max(1, Math.min(4, availableParallelism()));
 }
 
 function failUsage(message) {
