@@ -2225,6 +2225,7 @@ test("worker warm apply and bounded prompt probe compose into real review eligib
   const liveSessions = new Set();
   const tmuxCalls = [];
   let reviewPointerPasted = false;
+  let reviewPointerSubmitted = false;
   const tmuxRunner = (_command, args) => {
     tmuxCalls.push(args[0]);
     if (args[0] === "has-session") return { status: liveSessions.has(args[2]) ? 0 : 1, stdout: "", stderr: "" };
@@ -2234,7 +2235,8 @@ test("worker warm apply and bounded prompt probe compose into real review eligib
     }
     if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
     if (args[0] === "paste-buffer") reviewPointerPasted = true;
-    if (args[0] === "capture-pane") return { status: 0, stdout: reviewPointerPasted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
+    if (args[0] === "send-keys" && reviewPointerPasted) reviewPointerSubmitted = true;
+    if (args[0] === "capture-pane") return { status: 0, stdout: reviewPointerPasted && !reviewPointerSubmitted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
     return { status: 0, stdout: "", stderr: "" };
   };
   const reviewPlan = {
@@ -2302,6 +2304,7 @@ test("worker warm apply and bounded prompt probe compose into real review eligib
       unmanagedPanes: 0,
       takeoverRequiredPanes: 0,
     };
+    const beforeDryRun = readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8");
     const bootingPlan = buildWorkerCodeReviewPlan(
       { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", now },
       {
@@ -2319,31 +2322,13 @@ test("worker warm apply and bounded prompt probe compose into real review eligib
         now,
       },
     );
-    assert.equal(bootingPlan.status, "blocked");
-    assert.equal(bootingPlan.blockers[0].code, "worker-code-review-warm-readiness-held");
-    workers[0].recoveryState = "recovered_warm";
-    workers[0].recoveryAction = "await_dispatcher_lease_pull";
-    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify(workers, null, 2)}\n`);
-    const plan = buildWorkerCodeReviewPlan(
-      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", now },
-      {
-        workerRecords: workers,
-        assignmentSummary: { summary: { laneAssignments: [] } },
-        usageContext: { status: "normal" },
-        resourceContext: { status: "normal" },
-        fakeWorkerHarness: {
-          twoWorkerProof: { status: "passed", workerCount: 2, cleanCyclesPerWorker: 10 },
-          sixWorkerProof: { status: "passed", workerCount: 6, cleanCyclesPerWorker: 10 },
-        },
-        tmuxSummary,
-        tmuxRunner,
-        reviewRequestPlan: reviewPlan,
-        now,
-      },
-    );
-    assert.equal(plan.status, "ready");
-    assert.equal(plan.summary.requests[0].workerId, "codex-2");
-    assert.equal(plan.summary.requests[0].reviewerProgressState, "manager_review_ready");
+    assert.equal(bootingPlan.status, "ready", JSON.stringify(bootingPlan.blockers || []));
+    assert.equal(bootingPlan.summary.requests[0].workerId, "codex-2");
+    assert.equal(bootingPlan.summary.requests[0].reviewerProgressState, "manager_review_ready");
+    assert.equal(bootingPlan.summary.requests[0].promotionRequired, true);
+    assert.equal(bootingPlan.summary.requests[0].promotionEvidence.source, "manager-worker-prompt-region-readiness.v1");
+    assert.equal(readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8"), beforeDryRun);
+    assert.equal(tmuxCalls.includes("paste-buffer"), false);
     const applyProgress = buildWorkerProgressStatus(
       { runId, stateRoot, warmReviewerProbe: true },
       { workerRecords: workers, assignmentSummary: { summary: { laneAssignments: [] } }, usageContext: { status: "normal" }, resourceContext: { status: "normal" }, fakeWorkerHarness: {}, tmuxSummary, tmuxRunner },
@@ -2376,6 +2361,689 @@ test("worker warm apply and bounded prompt probe compose into real review eligib
     assert.equal(terminal.status, "ready");
     const releasedWorkers = JSON.parse(readFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), "utf8"));
     assert.equal(releasedWorkers[0].reviewReservation, undefined);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire exact-target gate previews and applies only a safe unassigned booting warm worker", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-booting-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = {
+    workerId: "codex-4",
+    owner: `${runId}/codex-4`,
+    runId,
+    sessionName: "codex-4",
+    state: "warm",
+    assignmentState: "warm",
+    recoveryState: "restarted_booting",
+    assignmentId: null,
+    taskId: null,
+    currentLease: null,
+    reviewReservation: null,
+    takeoverRequired: false,
+    lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString(),
+  };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const workerStatus = { summary: { workers: [worker] } };
+    const progressStatus = { summary: { workerProgress: [] } };
+    const target = { runId, stateRoot, workerId: "codex-4", sessionName: "codex-4" };
+    const beforePreview = readFileSync(workerPath, "utf8");
+    const calls = [];
+    const tmuxRunner = (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+      if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const preview = buildWorkerRetirePlan(target, { workerStatus, progressStatus, tmuxRunner });
+    assert.equal(preview.status, "ready", JSON.stringify(preview.blockers || []));
+    assert.equal(preview.summary.planned, 1);
+    assert.equal(preview.summary.requests[0].basis, "booting_warm_reviewer_recovery");
+    assert.equal(readFileSync(workerPath, "utf8"), beforePreview);
+
+    const applied = buildWorkerRetirePlan(
+      { ...target, apply: true },
+      { workerStatus, progressStatus, tmuxRunner },
+    );
+    assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
+    assert.deepEqual(calls.find((call) => call.args[0] === "kill-session").args, ["kill-session", "-t", "=codex-4"]);
+    const retired = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+    assert.equal(retired.state, "retired");
+    assert.equal(retired.recoveryState, "retired_after_booting_warm_reviewer_recovery");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review apply rolls booting promotion back when readiness changes after reservation", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-booting-race-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const observedAt = new Date(Date.now() - 500).toISOString();
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: observedAt };
+  const reviewRequestPlan = { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } };
+  let pasted = false;
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const applied = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      {
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        reviewRequestPlan,
+        tmuxSummary: { available: true, paneCount: 1, managerOwnedPanes: 1, managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }], unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "paste-buffer") pasted = true;
+          if (args[0] === "capture-pane") {
+            const reserved = JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation;
+            return { status: 0, stdout: reserved ? "› readiness changed\n" : "› \n", stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-code-review-reviewer-readiness-changed");
+    assert.equal(pasted, false);
+    const restored = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+    assert.equal(restored.recoveryState, "restarted_booting");
+    assert.equal(restored.recoveryAction, undefined);
+    assert.equal(restored.lifecycleState, undefined);
+    assert.equal(restored.reviewerPromotionEvidence, undefined);
+    assert.equal(restored.reviewReservation, undefined);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire exact-target booting recovery excludes unsafe state and apply-time races", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-booting-unsafe-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const baseWorker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", assignmentId: null, taskId: null, currentLease: null, takeoverRequired: false, lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  const progressStatus = { summary: { workerProgress: [] } };
+  const target = { runId, stateRoot, workerId: "codex-4", sessionName: "codex-4" };
+  const unsafeCases = [
+    { busy: true },
+    { assignmentId: "bmad-1-1-busy" },
+    { taskId: "task-busy" },
+    { currentLease: { leaseId: "lease-1", state: "active" } },
+    { leaseState: "active" },
+    { reviewReservation: { reservationId: "review-1", state: "reserved" } },
+    { reviewRequest: { requestId: "request-1" } },
+    { outstandingRequest: true },
+    { takeoverRequired: true },
+    { takeoverAmbiguous: true },
+    { takeoverState: "required" },
+    { owner: "other-run/codex-4", runId: "other-run" },
+  ];
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    for (const override of unsafeCases) {
+      const unsafe = { ...baseWorker, ...override };
+      const preview = buildWorkerRetirePlan(target, { workerStatus: { summary: { workers: [unsafe] } }, progressStatus });
+      assert.equal(preview.status, "blocked", JSON.stringify(override));
+      assert.equal(preview.blockers[0].code, "worker-retire-no-candidates");
+    }
+
+    writeFileSync(workerPath, `${JSON.stringify([baseWorker], null, 2)}\n`);
+    const staleWorkerStatus = { summary: { workers: [baseWorker] } };
+    const exactNegativeRunner = (_command, args) => {
+      if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+      if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const preview = buildWorkerRetirePlan(target, { workerStatus: staleWorkerStatus, progressStatus, tmuxRunner: exactNegativeRunner });
+    assert.equal(preview.status, "ready");
+    writeFileSync(workerPath, `${JSON.stringify([{ ...baseWorker, currentLease: { leaseId: "lease-race", state: "active" } }], null, 2)}\n`);
+    let killed = false;
+    const applied = buildWorkerRetirePlan(
+      { ...target, apply: true },
+      { workerStatus: staleWorkerStatus, progressStatus, tmuxRunner(_command, args) { if (args[0] === "kill-session") killed = true; return exactNegativeRunner(_command, args); } },
+    );
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-retire-booting-target-changed");
+    assert.equal(killed, false);
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].state, "warm");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review booting promotion rejects takeover and request ambiguity before capture", () => {
+  const runId = "manager-test";
+  const now = new Date().toISOString();
+  const baseWorker = {
+    workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2",
+    state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: now,
+  };
+  for (const [label, override] of [
+    ["direct-takeover-ambiguity", { takeoverAmbiguous: true }],
+    ["owner-ambiguity", { ownerAmbiguous: true }],
+    ["takeover-state-required", { takeoverState: "required" }],
+    ["pending-request", { pendingRequest: true }],
+    ["outstanding-request", { outstandingRequest: true }],
+  ]) {
+    let tmuxCalls = 0;
+    const progress = buildWorkerProgressStatus(
+      { runId, warmReviewerProbe: true },
+      {
+        workerRecords: [{ ...baseWorker, ...override }],
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        usageContext: { status: "normal" }, resourceContext: { status: "normal" }, fakeWorkerHarness: {},
+        tmuxSummary: { available: true, paneCount: 1, managerOwnedPanes: 1, managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }], unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+        tmuxRunner(_command, args) {
+          tmuxCalls += 1;
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(progress.summary.reviewerEligibleWorkers.length, 0, `${label} must remain ineligible`);
+    assert.equal(tmuxCalls, 0, `${label} must be excluded before capture`);
+  }
+});
+
+test("worker code review booting apply rejects authoritative request and takeover races", () => {
+  const runId = "manager-test";
+  const targetAssignmentId = "bmad-8-8-worker-code-review-target";
+  const reviewRequestPlan = { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } };
+  for (const [label, race] of [
+    ["pending-request", { pendingRequest: true }],
+    ["outstanding-request", { outstandingRequest: true }],
+    ["takeover-direct", { takeoverAmbiguous: true }],
+    ["takeover-owner", { ownerAmbiguous: true }],
+    ["takeover-state", { takeoverState: "required" }],
+  ]) {
+    const stateRoot = mkdtempSync(join(tmpdir(), `manager-review-${label}-race-`));
+    const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+    const observedAt = new Date(Date.now() - 500).toISOString();
+    const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: observedAt };
+    let captureCount = 0;
+    let pasted = false;
+    try {
+      ledgerCommand({ command: "init", runId, stateRoot });
+      writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+      const applied = buildWorkerCodeReviewPlan(
+        { runId, stateRoot, assignmentId: targetAssignmentId, workerId: "codex-2", apply: true },
+        {
+          assignmentSummary: { summary: { laneAssignments: [] } }, reviewRequestPlan,
+          tmuxSummary: { available: true, paneCount: 1, managerOwnedPanes: 1, managerOwnedPaneEvidence: [{ sessionName: "codex-2", classification: "manager-worker-owned" }], unmanagedPanes: 0, takeoverRequiredPanes: 0 },
+          tmuxRunner(_command, args) {
+            if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+            if (args[0] === "capture-pane") {
+              captureCount += 1;
+              if (captureCount === 2) writeFileSync(workerPath, `${JSON.stringify([{ ...worker, ...race }], null, 2)}\n`);
+              return { status: 0, stdout: "› \n", stderr: "" };
+            }
+            if (args[0] === "paste-buffer") pasted = true;
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+      assert.equal(applied.status, "blocked", label);
+      assert.equal(pasted, false, label);
+      assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation, undefined, label);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("worker retire booting target requires exact negative readiness and exact-session identity", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-exact-readiness-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  const target = { runId, stateRoot, workerId: "codex-4", sessionName: "codex-4" };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const positive = buildWorkerRetirePlan(target, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") { assert.equal(args[2], "=codex-4"); return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" }; }
+        if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(positive.status, "blocked");
+    assert.equal(positive.blockers[0].code, "worker-retire-booting-target-promotable");
+
+    const recentWorker = { ...worker, lastHeartbeatAt: new Date().toISOString() };
+    const grace = buildWorkerRetirePlan(target, { workerStatus: { summary: { workers: [recentWorker] } }, progressStatus: { summary: { workerProgress: [] } }, tmuxRunner() { throw new Error("boot grace must block before tmux capture"); } });
+    assert.equal(grace.status, "blocked");
+    assert.equal(grace.blockers[0].code, "worker-retire-booting-grace-active");
+
+    const calls = [];
+    const applied = buildWorkerRetirePlan({ ...target, apply: true }, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      tmuxRunner(_command, args) {
+        calls.push(args);
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
+    assert.ok(calls.filter((args) => args[0] === "list-panes").length >= 2);
+    assert.deepEqual(calls.find((args) => args[0] === "kill-session"), ["kill-session", "-t", "=codex-4"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire booting target fails closed on exact-pane and process ambiguity races", () => {
+  const runId = "manager-test";
+  const baseWorker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  const targetBase = { runId, workerId: "codex-4", sessionName: "codex-4" };
+  for (const [label, listResult] of [
+    ["disappeared", { status: 1, stdout: "", stderr: "missing" }],
+    ["prefix", { status: 0, stdout: "1:%94:codex:codex-40\n", stderr: "" }],
+    ["multipane", { status: 0, stdout: "1:%94:codex:codex-4\n0:%95:codex:codex-4\n", stderr: "" }],
+    ["non-codex", { status: 0, stdout: "1:%94:bash:codex-4\n", stderr: "" }],
+  ]) {
+    const stateRoot = mkdtempSync(join(tmpdir(), `manager-retire-${label}-`));
+    try {
+      ledgerCommand({ command: "init", runId, stateRoot });
+      const preview = buildWorkerRetirePlan({ ...targetBase, stateRoot }, {
+        workerStatus: { summary: { workers: [baseWorker] } }, progressStatus: { summary: { workerProgress: [] } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return listResult;
+          if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+          throw new Error("ambiguous target must not be mutated");
+        },
+      });
+      assert.equal(preview.status, "blocked", label);
+      assert.equal(preview.blockers[0].code, "worker-retire-booting-readiness-ambiguous", label);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-retire-final-pane-race-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  let listCount = 0;
+  let killed = false;
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([baseWorker], null, 2)}\n`);
+    const applied = buildWorkerRetirePlan({ ...targetBase, stateRoot, apply: true }, {
+      workerStatus: { summary: { workers: [baseWorker] } }, progressStatus: { summary: { workerProgress: [] } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") {
+          listCount += 1;
+          return listCount >= 3 ? { status: 1, stdout: "", stderr: "gone" } : { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+        }
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        if (args[0] === "kill-session") killed = true;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-retire-booting-target-changed");
+    assert.equal(killed, false);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review ambiguous post-paste submit preserves recovery-required reservation", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-ambiguous-submit-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const observedAt = new Date(Date.now() - 500).toISOString();
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: observedAt };
+  let pasted = false;
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const applied = buildWorkerCodeReviewPlan(
+      { runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: "codex-2", apply: true },
+      {
+        assignmentSummary: { summary: { laneAssignments: [] } },
+        reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          if (args[0] === "paste-buffer") pasted = true;
+          if (args[0] === "send-keys" && pasted) return { status: 1, stdout: "", stderr: "submit uncertain" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(applied.status, "blocked");
+    assert.equal(applied.blockers[0].code, "worker-code-review-delivery-ambiguous");
+    const held = JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation;
+    assert.equal(held.state, "delivery_recovery_required");
+    assert.equal(held.recoveryMetadata.deliveryState, "ambiguous");
+    assert.ok(existsSync(held.requestPath));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire booting target rejects pending pane input and visible manager pointers", () => {
+  const runId = "manager-test";
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  for (const [label, visibleTail] of [["pending-input", "› unfinished input\n"], ["manager-pointer", "› Please read and follow this manager review-requests/request.md\n"]]) {
+    const stateRoot = mkdtempSync(join(tmpdir(), `manager-retire-${label}-`));
+    try {
+      ledgerCommand({ command: "init", runId, stateRoot });
+      writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([worker], null, 2)}\n`);
+      const result = buildWorkerRetirePlan({ runId, stateRoot, workerId: worker.workerId, sessionName: worker.sessionName }, {
+        workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: visibleTail, stderr: "" };
+          throw new Error("pending input must not reach mutation");
+        },
+      });
+      assert.equal(result.status, "blocked", label);
+      assert.equal(result.blockers[0].code, "worker-retire-booting-input-pending", label);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("worker code review final authoritative guard rejects coordination races after buffer load", () => {
+  const runId = "manager-test";
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: new Date(Date.now() - 500).toISOString() };
+  for (const [label, race] of [
+    ["busy", { busy: true }],
+    ["assignment", { assignmentId: "bmad-race" }],
+    ["task", { taskId: "task-race" }],
+    ["lease", { leaseId: "lease-race" }],
+    ["request", { pendingRequest: true }],
+    ["takeover", { takeoverState: "required" }],
+  ]) {
+    const stateRoot = mkdtempSync(join(tmpdir(), `manager-review-final-guard-${label}-`));
+    const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+    let pasted = false;
+    try {
+      ledgerCommand({ command: "init", runId, stateRoot });
+      writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+      const result = buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: worker.workerId, apply: true }, {
+        assignmentSummary: { summary: { laneAssignments: [] } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          if (args[0] === "load-buffer") {
+            const current = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+            writeFileSync(workerPath, `${JSON.stringify([{ ...current, ...race }], null, 2)}\n`);
+          }
+          if (args[0] === "paste-buffer") pasted = true;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      });
+      assert.equal(result.status, "blocked", label);
+      assert.equal(pasted, false, label);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("worker code review paste-buffer error preserves ambiguous-delivery recovery state", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-ambiguous-paste-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: new Date(Date.now() - 500).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: worker.workerId, apply: true }, {
+      assignmentSummary: { summary: { laneAssignments: [] } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+        if (args[0] === "paste-buffer") return { status: null, error: Object.assign(new Error("paste timed out"), { code: "ETIMEDOUT" }), stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-code-review-delivery-ambiguous");
+    const held = JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation;
+    assert.equal(held.state, "delivery_recovery_required");
+    assert.ok(existsSync(held.requestPath));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire persists retiring marker and reconciles ambiguous kill outcome", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-retire-kill-reconcile-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerRetirePlan({ runId, stateRoot, workerId: worker.workerId, sessionName: worker.sessionName, apply: true }, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        if (args[0] === "kill-session") return { status: null, error: Object.assign(new Error("kill timed out"), { code: "ETIMEDOUT" }), stdout: "", stderr: "" };
+        if (args[0] === "has-session") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-retire-kill-recovery-required");
+    const held = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+    assert.equal(held.lifecycleState, "retirement_blocked");
+    assert.equal(held.recoveryState, "retire_kill_recovery_required");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire leaves durable retiring marker when final persistence fails", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-retire-final-write-failure-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerRetirePlan({ runId, stateRoot, workerId: worker.workerId, sessionName: worker.sessionName, apply: true }, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      workerRecordsWriter({ phase, writeDefault }) {
+        if (phase === "retire_finalize") throw new Error("final write denied");
+        return writeDefault();
+      },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-retire-finalize-persistence-failed");
+    const durable = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+    assert.equal(durable.lifecycleState, "retiring_physical");
+    assert.equal(durable.recoveryState, "retiring_physical");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous review delivery persists fallback when recovery metadata write fails", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-recovery-fallback-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: new Date(Date.now() - 500).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: worker.workerId, apply: true }, {
+      assignmentSummary: { summary: { laneAssignments: [] } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+      workerRecordsWriter({ phase, writeDefault }) {
+        if (phase === "review_delivery_recovery_required") throw new Error("workers write denied");
+        return writeDefault();
+      },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+        if (args[0] === "paste-buffer") return { status: null, error: new Error("paste timed out"), stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-code-review-delivery-recovery-persistence-failed");
+    assert.equal(result.summary.deliveryRecovery.fallbackPersisted, true);
+    assert.equal(existsSync(result.summary.deliveryRecovery.fallbackPath), true);
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation.state, "reserved");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire revalidates exact Codex identity after pre-kill marker persistence", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-retire-post-marker-identity-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  let markerPersisted = false;
+  let killed = false;
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerRetirePlan({ runId, stateRoot, workerId: worker.workerId, sessionName: worker.sessionName, apply: true }, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      workerRecordsWriter({ phase, writeDefault }) {
+        const written = writeDefault();
+        if (phase === "retire_pre_kill") markerPersisted = true;
+        return written;
+      },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: markerPersisted ? "1:%94:bash:codex-4\n" : "1:%94:codex:codex-4\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        if (args[0] === "kill-session") killed = true;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-retire-pre-kill-identity-changed");
+    assert.equal(killed, false);
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].recoveryState, "retire_pre_kill_recovery_required");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker retire counts exact missing-session reconciliation as retired", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-retire-missing-reconciled-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerRetirePlan({ runId, stateRoot, workerId: worker.workerId, sessionName: worker.sessionName, apply: true }, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        if (args[0] === "kill-session") return { status: null, error: new Error("kill timed out"), stdout: "", stderr: "" };
+        if (args[0] === "has-session") return { status: 1, stdout: "", stderr: "can't find session: codex-4" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "ready");
+    assert.equal(result.summary.results[0].status, "retired_reconciled");
+    const events = readFileSync(join(stateRoot, "manager-runs", runId, "events.ndjson"), "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.match(events.at(-1).summary, /Retired 1 exact-target booting warm reviewer/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review treats statusless paste termination as ambiguous delivery", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-review-statusless-paste-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: new Date(Date.now() - 500).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: worker.workerId, apply: true }, {
+      assignmentSummary: { summary: { laneAssignments: [] } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+        if (args[0] === "paste-buffer") return { status: null, signal: "SIGTERM", stdout: "", stderr: "terminated" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-code-review-delivery-ambiguous");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].reviewReservation.state, "delivery_recovery_required");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker code review final guard rejects unsafe lifecycle state races", () => {
+  const runId = "manager-test";
+  const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", lifecycleState: "warm_available", assignmentState: "warm", recoveryState: "recovered_warm", lastHeartbeatAt: new Date(Date.now() - 500).toISOString() };
+  for (const [label, race] of [["retired", { state: "retired" }], ["assignment-active", { assignmentState: "active" }], ["retirement-blocked", { lifecycleState: "retirement_blocked" }], ["unsafe-recovery", { recoveryState: "retire_kill_recovery_required" }]]) {
+    const stateRoot = mkdtempSync(join(tmpdir(), `manager-review-final-state-${label}-`));
+    const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+    let pasted = false;
+    try {
+      ledgerCommand({ command: "init", runId, stateRoot });
+      writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+      const result = buildWorkerCodeReviewPlan({ runId, stateRoot, assignmentId: "bmad-8-8-worker-code-review-target", workerId: worker.workerId, apply: true }, {
+        assignmentSummary: { summary: { laneAssignments: [] } }, reviewRequestPlan: { ok: true, status: "ready", summary: { selectedStory: { storyKey: "8-8-worker-code-review-target" } } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
+          if (args[0] === "capture-pane") return { status: 0, stdout: "› \n", stderr: "" };
+          if (args[0] === "load-buffer") {
+            const current = JSON.parse(readFileSync(workerPath, "utf8"))[0];
+            writeFileSync(workerPath, `${JSON.stringify([{ ...current, ...race }], null, 2)}\n`);
+          }
+          if (args[0] === "paste-buffer") pasted = true;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      });
+      assert.equal(result.status, "blocked", label);
+      assert.equal(pasted, false, label);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("worker retire keeps socket-denied has-session result ambiguous", () => {
+  const runId = "manager-test";
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-retire-has-session-denied-"));
+  const workerPath = join(stateRoot, "manager-runs", runId, "workers.json");
+  const worker = { workerId: "codex-4", owner: `${runId}/codex-4`, runId, sessionName: "codex-4", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: new Date(Date.now() - 60_000).toISOString() };
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerRetirePlan({ runId, stateRoot, workerId: worker.workerId, sessionName: worker.sessionName, apply: true }, {
+      workerStatus: { summary: { workers: [worker] } }, progressStatus: { summary: { workerProgress: [] } },
+      tmuxRunner(_command, args) {
+        if (args[0] === "list-panes") return { status: 0, stdout: "1:%94:codex:codex-4\n", stderr: "" };
+        if (args[0] === "capture-pane") return { status: 0, stdout: "booting...\n", stderr: "" };
+        if (args[0] === "kill-session") return { status: null, error: new Error("kill timed out"), stdout: "", stderr: "" };
+        if (args[0] === "has-session") return { status: 1, stdout: "", stderr: "error connecting to /tmp/tmux (Permission denied)" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-retire-kill-recovery-required");
+    assert.equal(JSON.parse(readFileSync(workerPath, "utf8"))[0].recoveryState, "retire_kill_recovery_required");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -2971,6 +3639,7 @@ test("worker code review recovers expired reservations before apply", () => {
     reviewReservation: { reservationId: "crashed-review", targetAssignmentId: "bmad-old-review", workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", paneTarget: "%92", state: "reserved", reservedAt: "2026-07-09T00:00:00.000Z", expiresAt: "2026-07-09T00:30:00.000Z", recoveryMetadata: { reservationId: "crashed-review", workerId: "codex-2", owner: `${runId}/codex-2`, sessionName: "codex-2", runId, paneTarget: "%92", inactiveConfirmedAt: new Date().toISOString() } },
   };
   let pasted = false;
+  let submitted = false;
   try {
     ledgerCommand({ command: "init", runId, stateRoot });
     writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
@@ -2983,7 +3652,8 @@ test("worker code review recovers expired reservations before apply", () => {
         tmuxRunner(_command, args) {
           if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
           if (args[0] === "paste-buffer") pasted = true;
-          if (args[0] === "capture-pane") return { status: 0, stdout: pasted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
+          if (args[0] === "send-keys" && pasted) submitted = true;
+          if (args[0] === "capture-pane") return { status: 0, stdout: pasted && !submitted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
           return { status: 0, stdout: "", stderr: "" };
         },
       },
@@ -3024,6 +3694,7 @@ test("worker code review apply promotes booting reviewer only from fresh bounded
   const observedAt = new Date(Date.now() - 500).toISOString();
   const worker = { workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm", assignmentState: "warm", recoveryState: "restarted_booting", lastHeartbeatAt: observedAt };
   let pasted = false;
+  let submitted = false;
   try {
     ledgerCommand({ command: "init", runId, stateRoot });
     writeFileSync(workerPath, `${JSON.stringify([worker], null, 2)}\n`);
@@ -3036,7 +3707,8 @@ test("worker code review apply promotes booting reviewer only from fresh bounded
         tmuxRunner(_command, args) {
           if (args[0] === "list-panes") return { status: 0, stdout: "1:%92:codex:codex-2\n", stderr: "" };
           if (args[0] === "paste-buffer") pasted = true;
-          if (args[0] === "capture-pane") return { status: 0, stdout: pasted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
+          if (args[0] === "send-keys" && pasted) submitted = true;
+          if (args[0] === "capture-pane") return { status: 0, stdout: pasted && !submitted ? "› review-requests/codex-2-bmad-8-8-worker-code-review-target.md\n" : "› \n", stderr: "" };
           return { status: 0, stdout: "", stderr: "" };
         },
       },

@@ -23,6 +23,7 @@ const WARM_REVIEWER_READINESS_MAX_AGE_MS = 2 * 60 * 1000;
 const WARM_REVIEWER_READINESS_SOURCE = "manager-worker-prompt-region-readiness.v1";
 const WARM_REVIEWER_READINESS_SCHEMA = "warm-reviewer-readiness.v1";
 const WORKER_REVIEW_RESERVATION_MAX_AGE_MS = 30 * 60 * 1000;
+const BOOTING_WARM_REVIEWER_RETIRE_GRACE_MS = 30 * 1000;
 const DEFAULT_MODEL_ROUTING_MODEL = "gpt-5.6-luna";
 const DEFAULT_MODEL_ROUTING_EFFORT = "high";
 
@@ -2008,6 +2009,23 @@ function reviewReservationBlocksWorker(worker = {}) {
   return true;
 }
 
+function workerHasTakeoverAmbiguity(worker = {}) {
+  const takeoverState = normalizeWorkerLifecycleToken(worker.takeoverState || worker.takeover_state || "");
+  return worker.takeoverRequired === true || worker.takeover_required === true ||
+    worker.takeoverAmbiguous === true || worker.takeover_ambiguous === true ||
+    worker.ownerAmbiguous === true || worker.owner_ambiguous === true ||
+    Boolean(takeoverState && !["none", "cleared", "not_required"].includes(takeoverState));
+}
+
+function workerHasPendingRequest(worker = {}) {
+  const requestState = normalizeWorkerLifecycleToken(worker.requestState || worker.request_state || "");
+  return worker.pendingRequest === true || worker.pending_request === true ||
+    worker.outstandingRequest === true || worker.outstanding_request === true ||
+    (Array.isArray(worker.outstandingRequests || worker.outstanding_requests) && (worker.outstandingRequests || worker.outstanding_requests).length > 0) ||
+    isPlainObject(worker.reviewRequest || worker.review_request) || Boolean(worker.requestId || worker.request_id || worker.requestPath || worker.request_path) ||
+    Boolean(requestState && !["none", "closed", "completed", "done", "cancelled", "canceled", "released"].includes(requestState));
+}
+
 function recoveryActionForWorker(worker = {}, nextWork = {}) {
   if (worker.recoveryAction) return worker.recoveryAction;
   if (nextWork.posture === "lease_pull_ready") return "await_dispatcher_lease_pull";
@@ -3765,17 +3783,22 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
   const warmReviewerEvaluations = warmReviewerWorkers.map((worker) => {
     const observation = reviewerReadinessByWorkerId.get(worker.workerId);
     const observedWorker = observation ? { ...worker, reviewerReadiness: observation } : worker;
+    const promotionProjection = observation ? projectBootingWarmReviewerPromotion(observedWorker) : null;
+    const eligibilityWorker = promotionProjection?.worker || observedWorker;
+    const eligibility = buildWarmReviewerEligibility(eligibilityWorker, {
+      runId,
+      nowMs,
+      maxAgeMs: Math.min(
+        WARM_REVIEWER_READINESS_MAX_AGE_MS,
+        Math.max(15_000, nonNegativeInteger(options.warmReviewerReadinessMaxAgeMs ?? context.warmReviewerReadinessMaxAgeMs) ?? WARM_REVIEWER_READINESS_MAX_AGE_MS),
+      ),
+      liveSession: liveWorkerEvidence.enforced && liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId),
+    });
     return {
-      worker: observedWorker,
-      eligibility: buildWarmReviewerEligibility(observedWorker, {
-        runId,
-        nowMs,
-        maxAgeMs: Math.min(
-          WARM_REVIEWER_READINESS_MAX_AGE_MS,
-          Math.max(15_000, nonNegativeInteger(options.warmReviewerReadinessMaxAgeMs ?? context.warmReviewerReadinessMaxAgeMs) ?? WARM_REVIEWER_READINESS_MAX_AGE_MS),
-        ),
-        liveSession: liveWorkerEvidence.enforced && liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId),
-      }),
+      worker: eligibilityWorker,
+      eligibility: promotionProjection && eligibility.eligible
+        ? { ...eligibility, promotionRequired: true, promotionEvidence: promotionProjection.evidence }
+        : eligibility,
     };
   });
   const warmReviewerRows = warmReviewerEvaluations
@@ -4854,8 +4877,15 @@ function revalidateWarmReviewerBeforeApply(reviewer = {}, targetAssignmentId = "
     .find((worker) => worker.workerId === reviewer.workerId && worker.sessionName === reviewer.sessionName);
   const authoritativeChangedDuringProbe = workerReviewCoordinationFingerprint(authoritative) !== workerReviewCoordinationFingerprint(latestAuthoritative);
   const eligibilityWorker = authoritative && reservationMatches ? { ...authoritative, reviewReservation: null } : authoritative;
-  const eligibility = eligibilityWorker && probe
-    ? buildWarmReviewerEligibility({ ...eligibilityWorker, reviewerReadiness: projectReviewerReadiness({ reviewerReadiness: probe }) }, {
+  const observedWorker = eligibilityWorker && probe
+    ? { ...eligibilityWorker, reviewerReadiness: projectReviewerReadiness({ reviewerReadiness: probe }) }
+    : null;
+  const promotionProjection = reviewer?.reviewerEligibility?.promotionRequired === true
+    ? projectBootingWarmReviewerPromotion(observedWorker)
+    : null;
+  const projectedEligibilityWorker = promotionProjection?.worker || observedWorker;
+  const eligibility = projectedEligibilityWorker
+    ? buildWarmReviewerEligibility(projectedEligibilityWorker, {
         runId: runOptions.runId,
         nowMs: sampledNowMs,
         maxAgeMs: WARM_REVIEWER_READINESS_MAX_AGE_MS,
@@ -4863,7 +4893,10 @@ function revalidateWarmReviewerBeforeApply(reviewer = {}, targetAssignmentId = "
       })
     : null;
   const refreshed = authoritative && !authoritativeChangedDuringProbe && eligibility?.eligible
-    ? buildWarmReviewerProgressRow({ ...authoritative, reviewReservation: reservationMatches ? authoritative.reviewReservation : null }, eligibility)
+    ? buildWarmReviewerProgressRow(
+        { ...projectedEligibilityWorker, reviewReservation: reservationMatches ? authoritative.reviewReservation : null },
+        promotionProjection ? { ...eligibility, promotionRequired: true, promotionEvidence: promotionProjection.evidence } : eligibility,
+      )
     : null;
   const target = normalizeBmadStoryAssignmentId(targetAssignmentId || "") || sanitizeLedgerField(targetAssignmentId || "", "", 140);
   const assignmentHistory = appendWorkerAssignmentHistory(
@@ -4913,6 +4946,10 @@ function workerReviewCoordinationFingerprint(worker = {}) {
     currentLease: worker.currentLease || null,
     reviewReservation: worker.reviewReservation || null,
     takeoverRequired: worker.takeoverRequired === true,
+    takeoverAmbiguous: worker.takeoverAmbiguous === true,
+    takeoverState: worker.takeoverState || null,
+    pendingRequest: worker.pendingRequest === true,
+    requestState: worker.requestState || null,
     busy: worker.busy === true,
     booting: worker.booting === true,
   });
@@ -4931,9 +4968,53 @@ function reserveWorkerCodeReviewer(paths, runId, reviewer = {}, request = {}, co
     const existingTerminal = reservationHasFreshTerminalResult(existingReservation);
     const existingCancelled = ["cancelled", "canceled", "released", "expired"].includes(normalizeWorkerLifecycleToken(existingReservation?.state));
     if (existingReservation && (existingInactive || existingTerminal || existingCancelled)) delete records[index].reviewReservation;
+    let reservationReviewer = reviewer;
+    let promotionRollback = null;
+    if (reviewer?.reviewerEligibility?.promotionRequired === true) {
+      const beforePromotion = projectWorker(records[index]);
+      const sampledAt = new Date().toISOString();
+      const probe = probeWorkerInputRegion(beforePromotion, context.tmuxRunner || spawnSync, { ...context, now: sampledAt });
+      const latest = readJsonArray(paths.workers).value.filter(isPlainObject).map(projectWorker)
+        .find((worker) => worker.workerId === beforePromotion.workerId && worker.sessionName === beforePromotion.sessionName);
+      const observed = { ...beforePromotion, reviewerReadiness: projectReviewerReadiness({ reviewerReadiness: probe }) };
+      const promotionProjection = projectBootingWarmReviewerPromotion(observed);
+      const eligibility = promotionProjection
+        ? buildWarmReviewerEligibility(promotionProjection.worker, {
+            runId,
+            nowMs: Date.parse(sampledAt),
+            maxAgeMs: WARM_REVIEWER_READINESS_MAX_AGE_MS,
+            liveSession: probe.captureOk === true,
+          })
+        : null;
+      if (
+        workerReviewCoordinationFingerprint(beforePromotion) !== workerReviewCoordinationFingerprint(latest) ||
+        !promotionProjection || !eligibility?.eligible
+      ) {
+        return { ok: false, error: "Booting reviewer readiness or coordination state changed before atomic promotion and reservation." };
+      }
+      promotionRollback = {
+        recoveryState: { present: Object.hasOwn(records[index], "recoveryState"), value: records[index].recoveryState },
+        recoveryAction: { present: Object.hasOwn(records[index], "recoveryAction"), value: records[index].recoveryAction },
+        lifecycleState: { present: Object.hasOwn(records[index], "lifecycleState"), value: records[index].lifecycleState },
+        booting: { present: Object.hasOwn(records[index], "booting"), value: records[index].booting },
+        reviewerPromotionEvidence: { present: Object.hasOwn(records[index], "reviewerPromotionEvidence"), value: records[index].reviewerPromotionEvidence },
+      };
+      records[index] = {
+        ...records[index],
+        recoveryState: "recovered_warm",
+        recoveryAction: "await_dispatcher_lease_pull",
+        lifecycleState: "warm_available",
+        booting: false,
+        reviewerPromotionEvidence: promotionProjection.evidence,
+      };
+      reservationReviewer = buildWarmReviewerProgressRow(
+        { ...promotionProjection.worker, reviewerPromotionEvidence: promotionProjection.evidence },
+        { ...eligibility, promotionRequired: false, promotionEvidence: promotionProjection.evidence },
+      );
+    }
     const projected = projectWorker(records[index]);
-    if (projected.reviewReservation || hasActiveWorkerLease(projected) || projected.assignmentId || projected.taskId) {
-      return { ok: false, error: "Reviewer gained an assignment, lease, or review reservation before paste." };
+    if (projected.reviewReservation || hasActiveWorkerLease(projected) || projected.assignmentId || projected.taskId || workerHasPendingRequest(projected) || workerHasTakeoverAmbiguity(projected) || projected.busy === true) {
+      return { ok: false, error: "Reviewer gained an assignment, lease, reservation, request, busy state, or takeover ambiguity before paste." };
     }
     const targetAssignmentId = sanitizeLedgerField(request.targetAssignmentId || "", "", 140);
     const reservationId = `review:${runId}:${reviewer.workerId}:${targetAssignmentId}`;
@@ -4942,11 +5023,11 @@ function reserveWorkerCodeReviewer(paths, runId, reviewer = {}, request = {}, co
       reviewReservation: {
         reservationId,
         targetAssignmentId,
-        workerId: reviewer.workerId,
-        owner: reviewer.owner,
+        workerId: reservationReviewer.workerId,
+        owner: reservationReviewer.owner,
         runId,
-        sessionName: reviewer.sessionName,
-        paneTarget: reviewer.reviewerEligibility?.paneTarget || null,
+        sessionName: reservationReviewer.sessionName,
+        paneTarget: reservationReviewer.reviewerEligibility?.paneTarget || null,
         state: "reserved",
         reservedAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + WORKER_REVIEW_RESERVATION_MAX_AGE_MS).toISOString(),
@@ -4957,7 +5038,7 @@ function reserveWorkerCodeReviewer(paths, runId, reviewer = {}, request = {}, co
     writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
     const persisted = readJsonArray(paths.workers).value.find((worker) => worker?.workerId === reviewer.workerId)?.reviewReservation;
     if (persisted?.reservationId !== reservationId) return { ok: false, error: "Reviewer reservation was not authoritatively persisted." };
-    return { ok: true, reservationId };
+    return { ok: true, reservationId, reviewer: reservationReviewer, promotionPersisted: Boolean(promotionRollback), promotionRollback };
   });
 }
 
@@ -4990,6 +5071,15 @@ function rollbackWorkerCodeReviewReservation(paths, reviewer = {}, reservationId
     if (index < 0) return { ok: false, error: "Authoritative reviewer reservation was missing during rollback." };
     const { reviewReservation: _removed, ...rest } = records[index];
     records[index] = rest;
+    const promotionRollback = context.promotionRollback;
+    if (isPlainObject(promotionRollback)) {
+      for (const field of ["recoveryState", "recoveryAction", "lifecycleState", "booting", "reviewerPromotionEvidence"]) {
+        const snapshot = promotionRollback[field];
+        if (!isPlainObject(snapshot)) continue;
+        if (snapshot.present === true) records[index][field] = snapshot.value;
+        else delete records[index][field];
+      }
+    }
     writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
     const persisted = readJsonArray(paths.workers).value.find((worker) => worker?.workerId === reviewer.workerId)?.reviewReservation;
     return persisted ? { ok: false, error: "Reviewer reservation rollback did not persist." } : { ok: true };
@@ -5036,44 +5126,31 @@ function recoverInactiveWorkerReviewReservations(paths, context = {}) {
   });
 }
 
-function promoteReadyBootingWarmReviewers(paths, runId = "", context = {}) {
-  return withWorkerAssignmentLock(paths, context, () => {
-    const workerRead = readJsonArray(paths.workers);
-    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
-    const records = workerRead.value.filter(isPlainObject);
-    let promoted = 0;
-    for (let index = 0; index < records.length; index += 1) {
-      const projected = projectWorker(records[index]);
-      if (projected.recoveryState !== "restarted_booting" || projected.state !== "warm" || isPlainObject(projected.reviewReservation)) continue;
-      const sampledAt = new Date().toISOString();
-      const probe = probeWorkerInputRegion(projected, context.tmuxRunner || spawnSync, { ...context, now: sampledAt });
-      const eligibility = buildWarmReviewerEligibility({
-        ...projected,
-        recoveryState: "recovered_warm",
-        booting: false,
-        reviewerReadiness: projectReviewerReadiness({ reviewerReadiness: probe }),
-      }, { runId, nowMs: Date.parse(sampledAt), liveSession: probe.captureOk === true });
-      if (!eligibility.eligible) continue;
-      records[index] = {
-        ...records[index],
-        recoveryState: "recovered_warm",
-        recoveryAction: "await_dispatcher_lease_pull",
-        lifecycleState: "warm_available",
-        booting: false,
-        reviewerPromotionEvidence: {
-          source: WARM_REVIEWER_READINESS_SOURCE,
-          observedAt: sampledAt,
-          sessionName: projected.sessionName,
-          paneTarget: probe.paneTarget,
-          currentCommand: probe.currentCommand,
-          rawPayloadRetained: false,
-        },
-      };
-      promoted += 1;
-    }
-    if (promoted > 0) writeFileSync(paths.workers, `${JSON.stringify(records, null, 2)}\n`);
-    return { ok: true, promoted };
-  });
+function projectBootingWarmReviewerPromotion(worker = {}) {
+  if (worker.state !== "warm" || worker.recoveryState !== "restarted_booting") return null;
+  if (workerHasTakeoverAmbiguity(worker) || workerHasPendingRequest(worker) || worker.busy === true || worker.assignmentId || worker.taskId || hasActiveWorkerLease(worker) || reviewReservationBlocksWorker(worker)) return null;
+  const lifecycleState = normalizeWorkerLifecycleToken(worker.lifecycleState || "");
+  if (lifecycleState && !["warm", "warm_available"].includes(lifecycleState)) return null;
+  const projected = {
+    ...worker,
+    recoveryState: "recovered_warm",
+    recoveryAction: "await_dispatcher_lease_pull",
+    lifecycleState: "warm_available",
+    booting: false,
+  };
+  if (!classifyWarmReviewerLifecycle(projected).eligible) return null;
+  const readiness = isPlainObject(projected.reviewerReadiness) ? projected.reviewerReadiness : {};
+  return {
+    worker: projected,
+    evidence: {
+      source: sanitizeLedgerField(readiness.source || WARM_REVIEWER_READINESS_SOURCE, WARM_REVIEWER_READINESS_SOURCE, 100),
+      observedAt: sanitizeLedgerField(readiness.observedAt || "", "", 80) || null,
+      sessionName: sanitizeLedgerField(projected.sessionName || "", "", 80) || null,
+      paneTarget: sanitizeLedgerField(readiness.paneTarget || "", "", 40) || null,
+      currentCommand: sanitizeLedgerField(readiness.currentCommand || "", "", 80) || null,
+      rawPayloadRetained: false,
+    },
+  };
 }
 
 function markWorkerReviewReservationDispatched(paths, reviewer = {}, reservationId = "", proof = {}, context = {}) {
@@ -5095,6 +5172,87 @@ function markWorkerReviewReservationDispatched(paths, reviewer = {}, reservation
   });
 }
 
+function writeJsonAtomically(pathValue, value) {
+  const temporaryPath = `${pathValue}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`);
+    renameSync(temporaryPath, pathValue);
+  } finally {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Best effort only; the authoritative target was never replaced by this cleanup.
+    }
+  }
+}
+
+function writeWorkerRecordsAtomically(paths, records = [], context = {}, phase = "worker_state") {
+  const writeDefault = () => writeJsonAtomically(paths.workers, records);
+  if (typeof context.workerRecordsWriter === "function") {
+    return context.workerRecordsWriter({ path: paths.workers, records, phase, writeDefault });
+  }
+  writeDefault();
+  return { ok: true };
+}
+
+function markWorkerReviewDeliveryRecoveryRequired(paths, reviewer = {}, reservationId = "", proof = {}, context = {}) {
+  return withWorkerAssignmentLock(paths, context, () => {
+    const workerRead = readJsonArray(paths.workers);
+    if (workerRead.warning) return { ok: false, error: workerRead.warning.message };
+    const records = workerRead.value.filter(isPlainObject);
+    const index = records.findIndex((worker) => worker.workerId === reviewer.workerId && worker.reviewReservation?.reservationId === reservationId);
+    if (index < 0) return { ok: false, error: "Authoritative reviewer reservation disappeared after ambiguous delivery." };
+    const reservation = records[index].reviewReservation;
+    records[index].reviewReservation = {
+      ...reservation,
+      state: "delivery_recovery_required",
+      recoveryMetadata: {
+        reservationId,
+        workerId: reviewer.workerId,
+        owner: reviewer.owner,
+        runId: reservation.runId,
+        sessionName: reservation.sessionName,
+        paneTarget: sanitizeLedgerField(proof.paneTarget || reservation.paneTarget || "", "", 40) || null,
+        deliveryState: "ambiguous",
+        recoveryAction: "inspect_review_delivery_before_retry",
+        recordedAt: new Date().toISOString(),
+      },
+    };
+    try {
+      writeWorkerRecordsAtomically(paths, records, context, "review_delivery_recovery_required");
+      return { ok: true };
+    } catch (error) {
+      const fallback = persistReviewDeliveryRecoveryFallback(paths, records[index], proof, error);
+      return { ok: false, error: error?.message || "Ambiguous delivery recovery state could not be persisted.", ...fallback };
+    }
+  });
+}
+
+function persistReviewDeliveryRecoveryFallback(paths, worker = {}, proof = {}, persistenceError = null) {
+  const reservation = worker.reviewReservation || {};
+  const fallbackPath = join(paths.root, "review-delivery-recovery", `${sanitizeIdentifierField(reservation.reservationId || worker.workerId || "unknown", "unknown", 140)}.json`);
+  try {
+    mkdirSync(dirname(fallbackPath), { recursive: true });
+    writeJsonAtomically(fallbackPath, {
+      schemaVersion: "worker-review-delivery-recovery.v1",
+      reservationId: reservation.reservationId || null,
+      workerId: worker.workerId || null,
+      owner: worker.owner || null,
+      runId: worker.runId || null,
+      sessionName: reservation.sessionName || worker.sessionName || null,
+      paneTarget: sanitizeLedgerField(proof.paneTarget || reservation.paneTarget || "", "", 40) || null,
+      deliveryState: "ambiguous",
+      recoveryAction: "repair_workers_json_and_inspect_exact_reviewer_pane",
+      persistenceError: sanitizeLedgerField(persistenceError?.message || String(persistenceError || "unknown"), "unknown", 240),
+      recordedAt: new Date().toISOString(),
+      rawPayloadRetained: false,
+    });
+    return { fallbackPersisted: true, fallbackPath };
+  } catch (fallbackError) {
+    return { fallbackPersisted: false, fallbackPath, fallbackError: fallbackError?.message || String(fallbackError || "fallback persistence failed") };
+  }
+}
+
 export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const runId = safeRunId(runOptions.runId || defaultRunId());
@@ -5103,10 +5261,6 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
     const recovery = recoverInactiveWorkerReviewReservations(paths, context);
     if (!recovery.ok) {
       return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; reviewer reservation recovery failed" }, blockers: recovery.blockers?.length ? recovery.blockers : [{ code: "worker-code-review-reservation-recovery-failed", message: recovery.error || "Inactive reviewer reservations could not be recovered.", nextAction: "Repair authoritative workers.json before review apply." }] });
-    }
-    const promotion = promoteReadyBootingWarmReviewers(paths, runId, context);
-    if (!promotion.ok) {
-      return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; booting reviewer promotion failed" }, blockers: promotion.blockers?.length ? promotion.blockers : [{ code: "worker-code-review-reviewer-promotion-failed", message: promotion.error || "Booting reviewer promotion could not be persisted.", nextAction: "Repair authoritative workers.json before review apply." }] });
     }
   }
   const requestedStoryKey = normalizeBmadStoryAssignmentId(runOptions.assignmentId || "") || sanitizeLedgerField(runOptions.storyKey || "", "", 140);
@@ -5446,7 +5600,7 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
       { ...context, allowedReviewReservationId: reviewReservation.reservationId },
     );
     if (!postReservation.ok) {
-      const rollback = rollbackWorkerCodeReviewReservation(paths, reviewerRevalidation.reviewer, reviewReservation.reservationId, context);
+      const rollback = rollbackWorkerCodeReviewReservation(paths, reviewerRevalidation.reviewer, reviewReservation.reservationId, { ...context, promotionRollback: reviewReservation.promotionRollback });
       return packet({
         ok: false,
         status: "blocked",
@@ -5463,7 +5617,7 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
     writeFileSync(request.requestPath, renderWorkerCodeReviewFile(request));
     writeFileSync(request.pastePath, `${request.pasteText}\n`);
   } catch (error) {
-    const rollback = reviewReservation?.ok ? rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, context) : { ok: true };
+    const rollback = reviewReservation?.ok ? rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, { ...context, promotionRollback: reviewReservation.promotionRollback }) : { ok: true };
     cleanupReviewRequestArtifacts(request);
     return packet({
       ok: false,
@@ -5477,7 +5631,7 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   if (reviewReservation?.ok) {
     const finalRevalidation = revalidateWarmReviewerBeforeApply(applyReviewer, targetAssignmentId, runOptions, { ...context, allowedReviewReservationId: reviewReservation.reservationId });
     if (!finalRevalidation.ok) {
-      const rollback = rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, context);
+      const rollback = rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, { ...context, promotionRollback: reviewReservation.promotionRollback });
       cleanupReviewRequestArtifacts(request);
       return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; final reviewer identity recheck failed before buffer load", requests: [] }, blockers: rollback.ok ? [finalRevalidation.blocker] : [{ code: "worker-code-review-reservation-rollback-failed", message: rollback.error || "Reviewer reservation rollback failed after final identity recheck.", nextAction: "Repair authoritative workers.json; do not dispatch work to this worker." }] });
     }
@@ -5504,14 +5658,22 @@ export function buildWorkerCodeReviewPlan(options = {}, context = {}) {
   const paste = pasteWorkerPointer(pasteRequest, `${request.workerId}-code-review`, { ...context, requireExactSession: true });
   const result = { ...request, reservationId: reviewReservation?.reservationId || null, status: paste.ok ? (requestExists ? "code_review_request_resent" : "code_review_request_sent") : "failed", paste };
   if (!paste.ok) {
-    const rollback = reviewReservation?.ok ? rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, context) : { ok: true };
-    cleanupReviewRequestArtifacts(request);
+    const ambiguousDelivery = paste.deliveryMayHaveOccurred === true && reviewReservation?.ok;
+    const recovery = ambiguousDelivery
+      ? markWorkerReviewDeliveryRecoveryRequired(paths, reviewer, reviewReservation.reservationId, paste, context)
+      : null;
+    const rollback = !ambiguousDelivery && reviewReservation?.ok ? rollbackWorkerCodeReviewReservation(paths, reviewer, reviewReservation.reservationId, { ...context, promotionRollback: reviewReservation.promotionRollback }) : { ok: true };
+    if (!ambiguousDelivery) cleanupReviewRequestArtifacts(request);
     recordPointerReceiptFailure(runOptions, result, context, "code-review");
     return packet({
       ok: false,
       status: "blocked",
-      summary: { runId, apply: true, mutation: "partial", results: [result] },
-      blockers: [rollback.ok
+      summary: { runId, apply: true, mutation: "partial", results: [result], deliveryRecovery: recovery ? sanitizeCyclePacketValue(recovery) : null },
+      blockers: [ambiguousDelivery && recovery?.ok
+        ? { code: "worker-code-review-delivery-ambiguous", message: paste.error || `Review pointer delivery to ${request.sessionName} may have occurred but submit/receipt proof is incomplete.`, nextAction: "Inspect the exact reviewer pane and preserved request before retrying; do not release the recovery-required reservation automatically." }
+        : ambiguousDelivery
+          ? { code: "worker-code-review-delivery-recovery-persistence-failed", message: recovery?.fallbackPersisted ? `Primary recovery state persistence failed; durable fallback evidence is at ${recovery.fallbackPath}.` : recovery?.error || "Ambiguous review delivery could not be persisted safely.", nextAction: recovery?.fallbackPersisted ? "Repair authoritative workers.json from the fallback evidence and inspect the exact reviewer pane before any retry." : "Repair authoritative workers.json and inspect the reviewer pane before any retry." }
+          : rollback.ok
         ? { code: "worker-code-review-paste-failed", message: paste.error || `Failed to paste code review request to ${request.sessionName}.`, nextAction: "Inspect manager review request files and tmux paste result before retrying." }
         : { code: "worker-code-review-reservation-rollback-failed", message: rollback.error || "Reviewer reservation rollback failed after paste failure.", nextAction: "Repair authoritative workers.json; do not dispatch review or lane work to this worker." }],
     });
@@ -5688,7 +5850,7 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
     .filter((worker) => !runOptions.workerId || worker.workerId === runOptions.workerId);
   const excludedCandidates = includeWarmReviewers
     ? candidateProbeWorkers
-        .map((worker) => ({ worker, reasonCode: warmReviewerPreCaptureExclusionReason(worker) }))
+        .map((worker) => ({ worker, reasonCode: warmReviewerPreCaptureExclusionReason(worker, { allowBootingRecoveryProbe: true }) }))
         .filter((row) => row.reasonCode)
         .map((row) => ({ workerId: row.worker.workerId, sessionName: row.worker.sessionName, reasonCode: row.reasonCode, rawPayloadRetained: false }))
     : [];
@@ -5820,6 +5982,68 @@ export function buildWorkerPromptProbePlan(options = {}, context = {}) {
   });
 }
 
+function bootingWarmReviewerRetireExclusionReason(worker = {}, runId = "", exactTarget = {}) {
+  if (!worker || !worker.workerId) return "worker_missing";
+  if (!isManagerOwnedWorker(worker, runId)) return "owner_or_run_mismatch";
+  if (isManagerControlPlaneWorker(worker, runId)) return "manager_control_plane_excluded";
+  if (!worker.sessionName) return "session_missing";
+  if (exactTarget.workerId && worker.workerId !== exactTarget.workerId) return "worker_mismatch";
+  if (exactTarget.sessionName && worker.sessionName !== exactTarget.sessionName) return "session_mismatch";
+  if (worker.state !== "warm" || worker.recoveryState !== "restarted_booting") return "not_booting_warm_reviewer";
+  if (workerHasTakeoverAmbiguity(worker)) return "takeover_or_owner_ambiguous";
+  if (worker.busy === true) return "worker_busy";
+  if (worker.assignmentId || worker.taskId || worker.leaseId || worker.currentLease?.assignmentId || worker.currentLease?.taskId || worker.currentLease?.leaseId || hasActiveWorkerLease(worker)) return "assignment_task_or_lease_present";
+  if (isPlainObject(worker.reviewReservation) || workerHasPendingRequest(worker)) return "reservation_or_request_present";
+  return "";
+}
+
+function inspectBootingWarmReviewerRetireCandidate(worker = {}, runId = "", exactTarget = {}, context = {}) {
+  const exclusion = bootingWarmReviewerRetireExclusionReason(worker, runId, exactTarget);
+  if (exclusion) return { eligible: false, code: "worker-retire-no-candidates", reason: exclusion };
+  const sampledAt = new Date().toISOString();
+  const sampledNowMs = Date.parse(sampledAt);
+  const bootedMs = parseTimeMs(worker.bootStartedAt || worker.lastHeartbeatAt || "");
+  if (!bootedMs || sampledNowMs - bootedMs < BOOTING_WARM_REVIEWER_RETIRE_GRACE_MS) {
+    return { eligible: false, code: "worker-retire-booting-grace-active", reason: "boot_grace_not_elapsed", sampledAt };
+  }
+  const probe = probeWorkerInputRegion(
+    { ...worker, paneTarget: null, paneId: null },
+    context.tmuxRunner || spawnSync,
+    { ...context, now: sampledAt, requireExactSession: true, requireSinglePane: true },
+  );
+  const identityReady = probe.captureOk === true && probe.singlePane === true && probe.paneCount === 1 &&
+    probe.sessionName === worker.sessionName && probe.resolvedSessionName === worker.sessionName &&
+    probe.owner === worker.owner && probe.runId === runId && probe.currentCommand === "codex" && probe.paneTarget && probe.paneId === probe.paneTarget;
+  if (!identityReady) {
+    return { eligible: false, code: "worker-retire-booting-readiness-ambiguous", reason: probe.error || "exact owner/run/session/pane Codex identity or capture proof missing", sampledAt, probe: promptProbeRequestSummary(probe) };
+  }
+  if (probe.promptIdle === true && probe.emptyInput === true && probe.inputPending !== true) {
+    return { eligible: false, code: "worker-retire-booting-target-promotable", reason: "positive readiness proof requires promotion/review routing", sampledAt, probe: promptProbeRequestSummary(probe) };
+  }
+  if (probe.inputPending === true || probe.inputHasManagerPointer === true || probe.promptDetected === true) {
+    return { eligible: false, code: "worker-retire-booting-input-pending", reason: "prompt input or manager pointer remains visible", sampledAt, probe: promptProbeRequestSummary(probe) };
+  }
+  return { eligible: true, code: "worker-retire-booting-negative-readiness", reason: "fresh exact identity-bound non-ready observation after boot grace", sampledAt, paneTarget: probe.paneTarget, probe: promptProbeRequestSummary(probe) };
+}
+
+function reconcileExactSessionAfterKill(sessionName = "", runner = spawnSync, context = {}) {
+  const target = `=${sessionName}`;
+  const result = runner("tmux", ["has-session", "-t", target], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (result?.error || result?.status === null || result?.status === undefined) {
+    return { status: "ambiguous", target, error: result?.error?.message || "exact session reconciliation did not return a status" };
+  }
+  if (result.status === 0) return { status: "live", target };
+  const detail = String(result.stderr || result.stdout || "").trim();
+  if (result.status === 1 && /(?:can't find|cannot find|no such|not found).*session|session.*(?:can't find|cannot find|no such|not found)/i.test(detail)) {
+    return { status: "missing", target, evidence: sanitizeLedgerField(detail, "exact session missing", 240) };
+  }
+  return { status: "ambiguous", target, error: String(result.stderr || result.stdout || `tmux has-session exited ${result.status}`).trim(), exitStatus: result.status };
+}
+
+function workerRetireResultIsFinal(result = {}) {
+  return ["retired", "retired_reconciled"].includes(result.status);
+}
+
 export function buildWorkerRetirePlan(options = {}, context = {}) {
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const runId = safeRunId(runOptions.runId || defaultRunId());
@@ -5842,6 +6066,22 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
     .filter((worker) => workerMatchesExactTarget(worker, runOptions))
     .map((worker) => ({ ...worker, retireBasis: "recovery_submit_unanswered", record: workersById.get(worker.workerId) || null }))
     .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.state === "active" && worker.record.sessionName);
+  const exactBootingRecoveryRequested = Boolean(runOptions.workerId && runOptions.sessionName && !runOptions.assignmentId && !runOptions.taskId);
+  const exactBootingWorker = exactBootingRecoveryRequested ? workers.find((worker) => workerMatchesExactTarget(worker, runOptions)) : null;
+  const bootingRetireInspection = exactBootingWorker
+    ? inspectBootingWarmReviewerRetireCandidate(exactBootingWorker, runId, runOptions, context)
+    : null;
+  const bootingRecoveryCandidates = exactBootingRecoveryRequested
+    ? workers
+        .filter((worker) => workerMatchesExactTarget(worker, runOptions))
+        .filter(() => bootingRetireInspection?.eligible === true)
+        .map((worker) => ({
+          ...worker,
+          progressState: "restarted_booting",
+          retireBasis: "booting_warm_reviewer_recovery",
+          record: worker,
+        }))
+    : [];
   const blockedQuestionCandidates = runOptions.retireBlockedQuestion
     ? buildBlockedQuestionRetireCandidates({ progressWorkers, questionAnswer, workersById, runOptions, runId })
     : [];
@@ -5852,7 +6092,9 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.sessionName)
     : runOptions.retireBlockedQuestion
       ? blockedQuestionCandidates
-      : recoverySubmitCandidates;
+      : exactBootingRecoveryRequested
+        ? bootingRecoveryCandidates
+        : recoverySubmitCandidates;
   const limit = exactTargetLimit(runOptions, runOptions.limit === null || runOptions.limit === undefined ? candidates.length : Math.max(0, Number(runOptions.limit) || 0));
   const selected = candidates.slice(0, Math.max(0, Math.min(6, limit))).map((worker) => ({
     workerId: sanitizeLedgerField(worker.workerId || "", "", 80),
@@ -5870,6 +6112,8 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       ? "mark_lease_recovery_required_before_work_resumes"
       : worker.retireBasis === "unsafe_question_policy_blocked"
         ? "park_policy_blocked_lane_and_free_worker_capacity"
+        : worker.retireBasis === "booting_warm_reviewer_recovery"
+          ? "retire_unready_booting_warm_reviewer"
         : "retire_recovery_stuck_worker",
     retireMarker: worker.retireBasis === "unsafe_question_policy_blocked" ? RETIRE_BLOCKED_QUESTION_BASIS : null,
     blockedQuestion: worker.blockedQuestion || null,
@@ -5880,13 +6124,19 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
   }
   if (selected.length === 0) {
     blockers.push({
-      code: resourceState === "critical" ? "worker-retire-no-critical-resource-candidates" : "worker-retire-no-candidates",
+      code: resourceState === "critical" ? "worker-retire-no-critical-resource-candidates" : bootingRetireInspection?.code || "worker-retire-no-candidates",
       message: resourceState === "critical"
         ? "No manager-owned worker is eligible for critical resource termination."
         : runOptions.retireBlockedQuestion
           ? "No manager-owned unsafe-question-blocked worker is eligible for retire."
-          : "No manager-owned recovery-submit-unanswered worker is eligible for retire.",
-      nextAction: resourceState === "critical" ? "Refresh manager-resource-status and worker-status before retrying critical resource termination." : "Refresh manager-worker-progress before retrying retire.",
+          : exactBootingRecoveryRequested
+            ? "No exact-target manager-owned booting warm reviewer is safely eligible for retire."
+            : "No manager-owned recovery-submit-unanswered worker is eligible for retire.",
+      nextAction: resourceState === "critical"
+        ? "Refresh manager-resource-status and worker-status before retrying critical resource termination."
+        : bootingRetireInspection?.code === "worker-retire-booting-target-promotable"
+          ? "Run the bounded warm-reviewer readiness/review dry-run and promote through the existing review apply gate; do not retire this worker."
+          : "Refresh manager-worker-progress and exact booting readiness evidence before retrying retire.",
     });
   }
   if (blockers.length > 0) {
@@ -5939,27 +6189,94 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
   const results = [];
   for (const request of selected) {
     const record = workerRecords.find((worker) => worker.workerId === request.workerId && isManagerOwnedWorker(worker, runId));
-    if (!record || !record.sessionName || (resourceState !== "critical" && record.state !== "active")) {
+    const bootingRecoveryExclusion = request.basis === "booting_warm_reviewer_recovery"
+      ? bootingWarmReviewerRetireExclusionReason(record, runId, request)
+      : "";
+    if (bootingRecoveryExclusion) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "none", results },
+        blockers: [{ code: "worker-retire-booting-target-changed", message: `Exact-target booting worker is no longer safe to retire: ${bootingRecoveryExclusion}.`, nextAction: "Refresh worker status and rerun exact-target retirement preview; do not kill the session." }],
+      });
+    }
+    const expectedState = request.basis === "booting_warm_reviewer_recovery" ? "warm" : "active";
+    if (!record || !record.sessionName || (resourceState !== "critical" && record.state !== expectedState)) {
       results.push({ ...request, status: "skipped_not_active_manager_owned" });
       continue;
     }
+    if (request.basis === "booting_warm_reviewer_recovery") {
+      const reinspection = inspectBootingWarmReviewerRetireCandidate(record, runId, request, { ...context, tmuxRunner: runner });
+      if (!reinspection.eligible) {
+        return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none", results }, blockers: [{ code: reinspection.code, message: `Exact-target booting worker cannot be retired: ${reinspection.reason}.`, nextAction: reinspection.code === "worker-retire-booting-target-promotable" ? "Promote through bounded review apply; do not kill the session." : "Refresh exact live pane readiness and retry only after an identity-bound negative observation." }] });
+      }
+      const finalInspection = inspectBootingWarmReviewerRetireCandidate(record, runId, request, { ...context, tmuxRunner: runner });
+      if (!finalInspection.eligible || finalInspection.paneTarget !== reinspection.paneTarget) {
+        return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none", results }, blockers: [{ code: "worker-retire-booting-target-changed", message: "Exact booting session/pane/readiness changed immediately before kill.", nextAction: "Refresh exact live pane readiness; do not kill the session." }] });
+      }
+      record.lifecycleState = "retiring_physical";
+      record.recoveryState = "retiring_physical";
+      record.recoveryAction = "reconcile_exact_session_retirement_before_retry";
+      record.retirementRequest = `exact_session:${record.sessionName}`;
+      try {
+        writeWorkerRecordsAtomically(paths, workerRecords, context, "retire_pre_kill");
+      } catch (error) {
+        return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none", results }, blockers: [{ code: "worker-retire-pre-kill-persistence-failed", message: error?.message || "Could not persist retiring_physical before kill.", nextAction: "Repair workers.json persistence; the exact session was not killed." }] });
+      }
+      const preKillIdentity = resolveTmuxPaneTarget(record.sessionName, runner, { ...context, requireExactSession: true, requireSinglePane: true });
+      const preKillIdentityReady = preKillIdentity.ok === true && preKillIdentity.sessionName === record.sessionName &&
+        preKillIdentity.currentCommand === "codex" && preKillIdentity.target === finalInspection.paneTarget;
+      if (!preKillIdentityReady) {
+        record.lifecycleState = "retirement_blocked";
+        record.recoveryState = "retire_pre_kill_recovery_required";
+        record.recoveryAction = "refresh_exact_session_identity_before_retirement";
+        try {
+          writeWorkerRecordsAtomically(paths, workerRecords, context, "retire_pre_kill_identity_changed");
+        } catch (error) {
+          return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; durable retiring_physical marker preserved", results }, blockers: [{ code: "worker-retire-pre-kill-identity-persistence-failed", message: error?.message || "Pre-kill identity change could not be persisted.", nextAction: "Use the durable retiring_physical marker to inspect the exact session; do not kill it." }] });
+        }
+        return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "none; durable pre-kill recovery marker", results }, blockers: [{ code: "worker-retire-pre-kill-identity-changed", message: preKillIdentity.error || "Exact session, single-pane Codex process, or pane identity changed after retiring_physical persistence.", nextAction: record.recoveryAction }] });
+      }
+    }
     const retiredAt = new Date().toISOString();
-    const kill = runner("tmux", ["kill-session", "-t", record.sessionName], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
-    const killOk = !kill?.error && (kill?.status ?? 0) === 0;
-    results.push({ ...request, status: killOk ? "retired" : "failed", sessionName: record.sessionName, kill: killOk ? { ok: true, sessionName: record.sessionName } : { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status } });
+    const killTarget = request.basis === "booting_warm_reviewer_recovery" ? `=${record.sessionName}` : record.sessionName;
+    const kill = runner("tmux", ["kill-session", "-t", killTarget], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+    let killOk = !kill?.error && (kill?.status ?? 0) === 0;
+    let killReconciliation = null;
+    if (!killOk && request.basis === "booting_warm_reviewer_recovery") {
+      killReconciliation = reconcileExactSessionAfterKill(record.sessionName, runner, context);
+      if (killReconciliation.status === "missing") {
+        killOk = true;
+      } else {
+        record.lifecycleState = "retirement_blocked";
+        record.recoveryState = "retire_kill_recovery_required";
+        record.recoveryAction = killReconciliation.status === "live"
+          ? "inspect_exact_live_session_before_retrying_retirement"
+          : "reconcile_ambiguous_exact_session_kill_outcome";
+        try {
+          writeWorkerRecordsAtomically(paths, workerRecords, context, "retire_kill_recovery_required");
+        } catch (error) {
+          return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "partial; durable retiring_physical marker preserved", results }, blockers: [{ code: "worker-retire-kill-recovery-persistence-failed", message: error?.message || "Could not persist reconciled kill recovery state.", nextAction: "Use the durable retiring_physical marker to inspect the exact session before any retry." }] });
+        }
+        results.push({ ...request, status: "retirement_recovery_required", sessionName: record.sessionName, kill: { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status }, reconciliation: killReconciliation });
+        return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "partial; durable retirement recovery marker", results }, blockers: [{ code: "worker-retire-kill-recovery-required", message: `Exact session kill outcome requires recovery: ${killReconciliation.status}.`, nextAction: record.recoveryAction }] });
+      }
+    }
+    results.push({ ...request, status: killOk ? (killReconciliation?.status === "missing" ? "retired_reconciled" : "retired") : "failed", sessionName: record.sessionName, kill: killOk ? { ok: true, sessionName: record.sessionName, reconciled: killReconciliation?.status === "missing" } : { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status }, ...(killReconciliation ? { reconciliation: killReconciliation } : {}) });
     if (!killOk) {
-      const retiredCount = results.filter((result) => result.status === "retired").length;
+      const retiredCount = results.filter(workerRetireResultIsFinal).length;
       if (retiredCount > 0) {
         writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+        const finalRetiredResults = results.filter(workerRetireResultIsFinal);
         ledgerCommand({
           command: "append-event",
           runId,
           stateRoot: runOptions.stateRoot,
           eventType: "worker_retire_apply",
           authorityBasis: workerRetireAuthorityBasis(resourceState, results),
-          summary: `Partially ${lowercaseFirst(workerRetirePastTenseSummary(resourceState, results.filter((result) => result.status === "retired")))} before a later failure.`,
-          sourceRefs: results.filter((result) => result.status === "retired").map((result) => `assignment:${result.assignmentId}`),
-          evidenceRefs: results.filter((result) => result.status === "retired").map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
+          summary: `Partially ${lowercaseFirst(workerRetirePastTenseSummary(resourceState, finalRetiredResults))} before a later failure.`,
+          sourceRefs: finalRetiredResults.map((result) => `assignment:${result.assignmentId}`),
+          evidenceRefs: finalRetiredResults.map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
           recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the next source-owned lane through existing gates",
           recordPolicy: resourceState === "critical" ? "metadata_only_critical_resource_worker_retire_partial" : "metadata_only_worker_retire_partial",
         }, context);
@@ -5984,16 +6301,33 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       ? "retired_for_critical_resource_pressure"
       : request.basis === "unsafe_question_policy_blocked"
         ? "retired_after_policy_blocked_question"
+        : request.basis === "booting_warm_reviewer_recovery"
+          ? "retired_after_booting_warm_reviewer_recovery"
         : "retired_after_recovery_submit_unanswered";
+    if (request.basis === "booting_warm_reviewer_recovery") {
+      record.lifecycleState = "retired";
+      record.recoveryAction = "retirement_complete";
+      record.retirementRequest = null;
+    }
   }
-  writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+  try {
+    if (selected.some((request) => request.basis === "booting_warm_reviewer_recovery")) {
+      writeWorkerRecordsAtomically(paths, workerRecords, context, "retire_finalize");
+    } else {
+      writeFileSync(paths.workers, `${JSON.stringify(workerRecords, null, 2)}\n`);
+    }
+  } catch (error) {
+    const failedResult = results.at(-1);
+    if (failedResult) failedResult.status = "retired_persistence_recovery_required";
+    return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "partial; exact session retired with durable retiring_physical marker", results }, blockers: [{ code: "worker-retire-finalize-persistence-failed", message: error?.message || "Final retired state could not be persisted after kill.", nextAction: "Reconcile the exact missing session from the durable retiring_physical marker, then finalize the worker record." }] });
+  }
   ledgerCommand({
     command: "append-event",
     runId,
     stateRoot: runOptions.stateRoot,
     eventType: "worker_retire_apply",
     authorityBasis: workerRetireAuthorityBasis(resourceState, results),
-    summary: `${workerRetirePastTenseSummary(resourceState, results.filter((result) => result.status === "retired"))}.`,
+    summary: `${workerRetirePastTenseSummary(resourceState, results.filter(workerRetireResultIsFinal))}.`,
     sourceRefs: results.map((result) => `assignment:${result.assignmentId}`),
     evidenceRefs: results.map((result) => `worker-retire:${result.workerId || result.assignmentId}`),
     recoveryPath: resourceState === "critical" ? "refresh worker status and reconcile recovery-required leases before resuming work" : "warm a replacement manager-owned worker and hand off the next source-owned lane through existing gates",
@@ -6064,6 +6398,9 @@ function workerRetireAuthorityBasis(resourceState = "unknown", results = []) {
   if (bases.size === 1 && bases.has("unsafe_question_policy_blocked")) {
     return "manager-owned-worker-retire-after-policy-blocked-question-existing-gates";
   }
+  if (bases.size === 1 && bases.has("booting_warm_reviewer_recovery")) {
+    return "manager-owned-worker-exact-target-booting-reviewer-retire-existing-gates";
+  }
   if (bases.has("unsafe_question_policy_blocked")) {
     return "manager-owned-worker-retire-mixed-existing-gates";
   }
@@ -6072,6 +6409,8 @@ function workerRetireAuthorityBasis(resourceState = "unknown", results = []) {
 
 function workerRetireSummary(resourceState = "unknown", selected = []) {
   if (resourceState === "critical") return `Terminate ${selected.length} manager-owned worker(s) for critical resource pressure.`;
+  const bootingRecoveryCount = selected.filter((request) => request.basis === "booting_warm_reviewer_recovery").length;
+  if (bootingRecoveryCount > 0) return `Retire ${bootingRecoveryCount} exact-target booting warm reviewer(s) after readiness recovery could not complete.`;
   const blockedQuestionCount = selected.filter((request) => request.basis === "unsafe_question_policy_blocked").length;
   const recoveryCount = selected.length - blockedQuestionCount;
   if (blockedQuestionCount > 0 && recoveryCount > 0) return `Retire ${selected.length} manager-owned worker(s): ${recoveryCount} recovery-stuck and ${blockedQuestionCount} policy-blocked.`;
@@ -6082,6 +6421,8 @@ function workerRetireSummary(resourceState = "unknown", selected = []) {
 function workerRetirePastTenseSummary(resourceState = "unknown", results = []) {
   const count = Array.isArray(results) ? results.length : 0;
   if (resourceState === "critical") return `Terminated ${count} manager-owned worker(s) for critical resource pressure`;
+  const bootingRecoveryCount = results.filter((result) => result.basis === "booting_warm_reviewer_recovery").length;
+  if (bootingRecoveryCount > 0) return `Retired ${bootingRecoveryCount} exact-target booting warm reviewer(s) after readiness recovery could not complete`;
   const blockedQuestionCount = results.filter((result) => result.basis === "unsafe_question_policy_blocked").length;
   const recoveryCount = count - blockedQuestionCount;
   if (blockedQuestionCount > 0 && recoveryCount > 0) return `Retired ${count} manager-owned worker(s): ${recoveryCount} recovery-stuck and ${blockedQuestionCount} policy-blocked`;
@@ -6826,6 +7167,10 @@ function buildWorkerCodeReviewRequest({ reviewer = {}, target = {}, reviewPlan =
     runId: paths.runId,
     reviewerAssignmentId: sanitizeLedgerField(reviewer.assignmentId || "", "", 140),
     reviewerProgressState: sanitizeLedgerField(reviewer.progressState || "", "", 80),
+    promotionRequired: reviewer.reviewerEligibility?.promotionRequired === true,
+    promotionEvidence: reviewer.reviewerEligibility?.promotionRequired === true
+      ? sanitizeCyclePacketValue(reviewer.reviewerEligibility?.promotionEvidence || null)
+      : null,
     targetAssignmentId,
     targetTaskId: sanitizeLedgerField(target.taskId || "", "", 140),
     targetWorkerId: sanitizeLedgerField(target.workerId || "", "", 80),
@@ -7037,8 +7382,17 @@ function authoritativeWorkerGuardMatches(request = {}) {
   if (workerRead.warning) return { ok: false, error: workerRead.warning.message || "Authoritative worker state could not be read before paste." };
   const worker = workerRead.value.filter(isPlainObject).map(projectWorker).find((record) => record.workerId === guard.workerId);
   const reservation = worker?.reviewReservation;
+  const leaseClear = Boolean(
+    worker && !worker.leaseId && !worker.currentLease?.assignmentId &&
+    !worker.currentLease?.taskId && !worker.currentLease?.leaseId && !hasActiveWorkerLease(worker)
+  );
+  const lifecycleClear = Boolean(worker && classifyWarmReviewerLifecycle(worker).eligible);
+  const coordinationClear = Boolean(
+    worker && worker.busy !== true && !worker.assignmentId && !worker.taskId &&
+    leaseClear && lifecycleClear && !workerHasPendingRequest(worker) && !workerHasTakeoverAmbiguity(worker)
+  );
   const matches = Boolean(
-    worker && reservation &&
+    worker && reservation && coordinationClear &&
     worker.owner === guard.owner && worker.runId === guard.runId && worker.sessionName === guard.sessionName &&
     reservation.reservationId === guard.reservationId && reservation.workerId === guard.workerId &&
     reservation.owner === guard.owner && reservation.runId === guard.runId && reservation.sessionName === guard.sessionName &&
@@ -7047,7 +7401,7 @@ function authoritativeWorkerGuardMatches(request = {}) {
   );
   return matches
     ? { ok: true }
-    : { ok: false, error: "Authoritative worker owner, run, reservation state/target, session, or pane changed after buffer load and before paste." };
+    : { ok: false, error: "Authoritative worker owner, run, reservation, coordination state, session, or pane changed after buffer load and before paste." };
 }
 
 function pasteWorkerPointer(request = {}, bufferName = "manager-pointer", context = {}) {
@@ -7072,12 +7426,13 @@ function pasteWorkerPointer(request = {}, bufferName = "manager-pointer", contex
     return { ...authoritativeGuard, sessionName: request.sessionName, paneTarget: postLoadTarget.target || null };
   }
   const paste = runner("tmux", ["paste-buffer", "-b", bufferName, "-t", postLoadTarget.target], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
-  if (paste?.error) return { ok: false, error: paste.error.message || "tmux paste-buffer failed" };
+  if (paste?.error) return { ok: false, error: paste.error.message || "tmux paste-buffer outcome is ambiguous", sessionName: request.sessionName, paneTarget: postLoadTarget.target, bufferName, pasteInvoked: true, deliveryMayHaveOccurred: true };
+  if (paste?.status === null || paste?.status === undefined || paste?.signal) return { ok: false, error: String(paste?.stderr || paste?.stdout || paste?.signal || "tmux paste-buffer outcome is ambiguous").trim(), status: paste?.status, signal: paste?.signal || null, sessionName: request.sessionName, paneTarget: postLoadTarget.target, bufferName, pasteInvoked: true, deliveryMayHaveOccurred: true };
   if ((paste?.status ?? 0) !== 0) return { ok: false, error: String(paste?.stderr || paste?.stdout || "tmux paste-buffer failed").trim(), status: paste?.status };
   const enter = sendTmuxEnterToTarget(target.target, runner, context);
-  if (!enter.ok) return enter;
+  if (!enter.ok) return { ...enter, sessionName: request.sessionName, paneTarget: target.target, bufferName, pasteCompleted: true, deliveryMayHaveOccurred: true };
   const receipt = verifyTmuxPointerSubmitted(request, target.target, runner, context);
-  if (!receipt.ok) return { ...receipt, sessionName: request.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName, receipt };
+  if (!receipt.ok || receipt.verified === false) return { ...receipt, ok: false, sessionName: request.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName, pasteCompleted: true, deliveryMayHaveOccurred: true, receipt };
   return { ok: true, sessionName: request.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName, receipt };
 }
 
@@ -7252,13 +7607,18 @@ function probeWorkerInputRegion(worker = {}, runner = spawnSync, context = {}) {
   };
 }
 
-function warmReviewerPreCaptureExclusionReason(worker = {}) {
-  if (worker.takeoverRequired === true) return "warm_reviewer_takeover_required";
+function warmReviewerPreCaptureExclusionReason(worker = {}, { allowBootingRecoveryProbe = false } = {}) {
+  if (workerHasTakeoverAmbiguity(worker)) return "warm_reviewer_takeover_required";
+  if (workerHasPendingRequest(worker)) return "warm_reviewer_request_pending";
   if (reviewReservationBlocksWorker(worker)) return "warm_reviewer_review_reserved";
   if (hasActiveWorkerLease(worker)) return "warm_reviewer_assignment_or_lease_active";
   if (worker.assignmentId || worker.taskId) return "warm_reviewer_assignment_or_lease_active";
   if (worker.busy === true) return "warm_reviewer_busy";
-  if (worker.booting === true || worker.recoveryState === "restarted_booting") return "warm_reviewer_booting";
+  if (worker.recoveryState === "restarted_booting") {
+    if (!allowBootingRecoveryProbe) return "warm_reviewer_booting";
+    return projectBootingWarmReviewerPromotion(worker) ? "" : "warm_reviewer_booting";
+  }
+  if (worker.booting === true) return "warm_reviewer_booting";
   const lifecycle = classifyWarmReviewerLifecycle(worker);
   return lifecycle.eligible ? "" : lifecycle.reasonCode;
 }
@@ -7693,7 +8053,7 @@ function buildWarmReviewerEligibility(worker = {}, { runId = "", nowMs = Date.no
   const hasAssignmentOrLease = Boolean(
     worker.assignmentId || worker.taskId || worker.leaseId ||
     (isPlainObject(worker.currentLease) && (worker.currentLease.assignmentId || worker.currentLease.taskId || worker.currentLease.leaseId)) ||
-    hasActiveWorkerLease(worker) || isPlainObject(worker.reviewReservation),
+    hasActiveWorkerLease(worker) || isPlainObject(worker.reviewReservation) || workerHasPendingRequest(worker),
   );
   const assignmentFree = !hasAssignmentOrLease;
   const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs >= 0 && heartbeatAgeMs <= boundedMaxAgeMs && (!worker.heartbeat || worker.heartbeat.status === "recorded");
@@ -7704,7 +8064,7 @@ function buildWarmReviewerEligibility(worker = {}, { runId = "", nowMs = Date.no
   else if (managerControlPlane) reasonCode = "warm_reviewer_manager_control_plane_excluded";
   else if (!lifecycle.capacity) reasonCode = lifecycle.reasonCode;
   else if (!liveSession) reasonCode = "warm_reviewer_live_session_missing";
-  else if (!lifecycle.eligible || worker.busy === true || worker.booting === true || worker.takeoverRequired === true) reasonCode = lifecycle.eligible ? "warm_reviewer_lifecycle_flag_denied" : lifecycle.reasonCode;
+  else if (!lifecycle.eligible || worker.busy === true || worker.booting === true || workerHasTakeoverAmbiguity(worker)) reasonCode = lifecycle.eligible ? "warm_reviewer_lifecycle_flag_denied" : lifecycle.reasonCode;
   else if (!sessionReady) reasonCode = "warm_reviewer_session_mismatch";
   else if (!ownerReady) reasonCode = "warm_reviewer_owner_mismatch";
   else if (!runReady) reasonCode = "warm_reviewer_run_mismatch";
@@ -25424,6 +25784,8 @@ function projectWorker(worker) {
       sessionName: sanitizeLedgerField((worker.reviewReservation || worker.review_reservation).sessionName || (worker.reviewReservation || worker.review_reservation).session_name || "", "", 80) || null,
       ...((worker.reviewReservation || worker.review_reservation).recoveryMetadata ? { recoveryMetadata: safeLedgerStructuredMetadata((worker.reviewReservation || worker.review_reservation).recoveryMetadata) } : {}),
     } : null,
+    pendingRequest: workerHasPendingRequest(worker),
+    requestState: sanitizeLedgerField(worker.requestState || worker.request_state || "", "", 80) || null,
     laneOwner: sanitizeLedgerField(worker.laneOwner || worker.lane_owner || "", "", 160),
     worktreePath: worker.worktreePath || worker.worktree_path || null,
     lastHeartbeatAt: worker.lastHeartbeatAt || worker.last_heartbeat_at || null,
@@ -25443,6 +25805,8 @@ function projectWorker(worker) {
     busy: worker.busy === true,
     booting: worker.booting === true,
     takeoverRequired: worker.takeoverRequired === true || worker.takeover_required === true,
+    takeoverState: sanitizeLedgerField(worker.takeoverState || worker.takeover_state || "", "", 80) || null,
+    takeoverAmbiguous: workerHasTakeoverAmbiguity(worker),
     rawPayloadRetained: false,
   };
 }
