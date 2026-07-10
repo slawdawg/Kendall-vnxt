@@ -9,6 +9,20 @@ import { assertWorkspaceStateStorage, workspaceState } from "../codex-workspace-
 import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-routing.mjs";
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
 import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
+import {
+  buildOperationalReadinessContract,
+  validateOperationalReadinessContract,
+  PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
+  PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
+} from "./operational-readiness.mjs";
+
+export {
+  buildOperationalReadinessContract,
+  validateOperationalReadinessContract,
+  operationalReadinessPredecessorGate,
+  PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
+  PIPELINE_OPERATIONAL_READINESS_REQUIRED_GATES,
+};
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const LEDGER_ACTION_FINGERPRINT_VERSION = "manager-ledger-action-fingerprint.v2";
@@ -3792,10 +3806,14 @@ export function buildWorkerProgressStatus(options = {}, context = {}) {
         WARM_REVIEWER_READINESS_MAX_AGE_MS,
         Math.max(15_000, nonNegativeInteger(options.warmReviewerReadinessMaxAgeMs ?? context.warmReviewerReadinessMaxAgeMs) ?? WARM_REVIEWER_READINESS_MAX_AGE_MS),
       ),
-      liveSession: (observation?.captureOk === true &&
-        observation.sessionName === worker.sessionName &&
-        observation.resolvedSessionName === worker.sessionName) ||
-        (liveWorkerEvidence.enforced && liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId)),
+      liveSession: liveWorkerEvidence.enforced
+        ? (liveWorkerEvidence.workerIds.has(worker.workerId) && !missingLiveWorkerIds.has(worker.workerId)) ||
+          (typeof context.tmuxRunner === "function" && observation?.captureOk === true &&
+            observation.sessionName === worker.sessionName &&
+            observation.resolvedSessionName === worker.sessionName)
+        : observation?.captureOk === true &&
+          observation.sessionName === worker.sessionName &&
+          observation.resolvedSessionName === worker.sessionName,
     });
     return {
       worker: eligibilityWorker,
@@ -4679,11 +4697,17 @@ export function buildWorkerProgressSignalPlan(options = {}, context = {}) {
     writeFileSync(request.requestPath, renderWorkerProgressSignalFile(request));
     writeFileSync(request.pastePath, `${request.pasteText}\n`);
     const paste = pasteWorkerProgressSignal(request, context);
-    results.push({ ...request, status: paste.ok ? "progress_signal_sent" : "failed", paste });
+    const recoverableUnverifiedReceipt = paste.ok !== true &&
+      paste.receipt?.checked === true &&
+      paste.receipt.verified === false &&
+      paste.receipt.repaired === true;
+    results.push({ ...request, status: paste.ok || recoverableUnverifiedReceipt ? "progress_signal_sent" : "failed", paste });
+  }
+  for (const result of results.filter((candidate) => candidate.paste?.receipt?.checked === true && candidate.paste.receipt.verified === false)) {
+    recordPointerReceiptFailure(runOptions, result, context, "progress-signal");
   }
   const failed = results.find((result) => result.status === "failed");
   if (failed) {
-    recordPointerReceiptFailure(runOptions, failed, context, "progress-signal");
     return packet({
       ok: false,
       status: "blocked",
@@ -13868,7 +13892,12 @@ function applyCourseCorrectionRefill(step = {}, context = {}) {
     countSprintStories(source, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {},
     context.closedStoryStatuses,
   );
-  const items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir: dirname(sprintAbsolute) });
+  let items = courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir: dirname(sprintAbsolute) });
+  const predecessorGate = epic25CourseCorrectionPredecessorGate(items, storyStatuses, draft?.readinessEvidenceRefs || []);
+  if (predecessorGate.state === "blocked") {
+    return { ok: false, blockers: [predecessorGate.blocker], summary: { predecessorGate } };
+  }
+  if (predecessorGate.state === "awaiting_predecessor") items = items.slice(0, 1);
   if (items.length === 0) {
     return {
       ok: true,
@@ -13933,6 +13962,20 @@ function applyStoryCreationRefill(step = {}, context = {}) {
   }
   const sprintSource = readFileSync(sprintAbsolute, "utf8");
   const backlogStoryKeys = backlogStoryKeysFromSprintStatus(sprintSource);
+  const sprintStoryStatuses = countSprintStories(sprintSource, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {};
+  const requestedTargetCount = Math.max(1, Math.min(6, nonNegativeInteger(context.refillNeeded) ?? nonNegativeInteger(step.workCreationPacket?.backlogTarget) ?? 1));
+  const predecessorGate = operationalReadinessPredecessorGate(sprintStoryStatuses, {
+    requestedStoryCount: requestedTargetCount,
+    storyKey: inputs.storyKey,
+    readinessEvidenceRefs: context.readinessEvidenceRefs || step.workCreationPacket?.readinessEvidenceRefs || [],
+  });
+  if (predecessorGate.state === "blocked") {
+    return {
+      ok: false,
+      blockers: [predecessorGate.blocker],
+      summary: { predecessorGate },
+    };
+  }
   const startIndex = backlogStoryKeys.indexOf(inputs.storyKey);
   if (startIndex < 0) {
     return {
@@ -13940,7 +13983,7 @@ function applyStoryCreationRefill(step = {}, context = {}) {
       blockers: [{ code: "story-creation-status-not-backlog", message: `${inputs.storyKey} is not in backlog status.`, nextAction: "Refresh manager-refill-plan before applying story creation." }],
     };
   }
-  const targetCount = Math.max(1, Math.min(6, nonNegativeInteger(context.refillNeeded) ?? nonNegativeInteger(step.workCreationPacket?.backlogTarget) ?? 1));
+  const targetCount = predecessorGate.state === "awaiting_predecessor" ? 1 : requestedTargetCount;
   const selectedStoryKeys = backlogStoryKeys.slice(startIndex, startIndex + targetCount);
   const selectedStoryPaths = selectedStoryKeys.map((storyKey) => (
     storyKey === inputs.storyKey ? storyPath : `_bmad-output/implementation-artifacts/${storyKey}.md`
@@ -16050,7 +16093,7 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   if (!workCreationStep?.workflow || !packet) return null;
   const workflow = sanitizeLedgerField(workCreationStep.workflow, "", 80);
   if (workflow === "bmad-create-story") {
-    return buildStoryCreationMaterializationGate(workCreationStep, sourceSlice, sourcePlanning, requestPacketValidation);
+    return buildStoryCreationMaterializationGate(workCreationStep, sourceSlice, sourcePlanning, requestPacketValidation, options);
   }
   if (workflow !== "bmad-correct-course") return null;
   const draft = packet.courseCorrectionDraft || null;
@@ -16062,8 +16105,11 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   );
   const safeSprintPath = sanitizeRelativeBmadOutputPath(sprintStatusPath);
   const artifactDir = safeSprintPath ? dirname(resolve(repoRoot, safeSprintPath)) : "";
+  const candidateItems = courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir });
+  const predecessorGate = epic25CourseCorrectionPredecessorGate(candidateItems, storyStatuses, draft?.readinessEvidenceRefs || []);
+  const scopedCandidateItems = predecessorGate.state === "awaiting_predecessor" ? candidateItems.slice(0, 1) : candidateItems;
   const selectedCandidate =
-    firstBacklogCandidate(courseCorrectionBacklogItemsForStatus(draft, storyStatuses, { artifactDir })) ||
+    firstBacklogCandidate(scopedCandidateItems) ||
     (storyInputs?.storyKey ? { id: storyInputs.storyKey, title: titleFromStoryKey(storyInputs.storyKey) } : null);
   const proposalOutputPath = sanitizeLedgerField(draft?.outputPath || "", "", 220) || null;
   const sourceRef = sanitizeLedgerField(sourceSlice?.ref || workCreationStep.sourceRef || packet.sourceRefs?.[0] || "", "", 220);
@@ -16077,7 +16123,7 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   if (!selectedCandidate?.id) missingRequiredFields.push("selectedCandidateStory");
   const requestPacketStatus = sanitizeLedgerField(requestPacketValidation?.status || "", "", 80) || "unknown";
   const contextComplete = missingRequiredFields.length === 0;
-  const ready = contextComplete && requestPacketStatus === "ready";
+  const ready = contextComplete && requestPacketStatus === "ready" && predecessorGate.state !== "blocked";
   const needsReview = contextComplete && requestPacketStatus !== "ready";
   return {
     state: ready ? "ready" : needsReview ? "needs_review" : "blocked",
@@ -16087,21 +16133,25 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
     sprintStatusPath,
     proposalOutputPath,
     selectedCandidateStory: selectedCandidate,
+    predecessorGate,
+    requestedStoryCount: candidateItems.length,
     nextWorkflow: "bmad-create-story",
     dryRunCommand,
     applyCommand,
     applyRequiresExistingGate: true,
-    nextAction: ready
+    nextAction: predecessorGate.state === "blocked"
+      ? predecessorGate.nextAction
+      : ready
       ? `Review materialization gate, then run ${applyCommand} only through the existing approved local BMAD output gate.`
       : needsReview
         ? `Review or authorize the bmad-correct-course request packet before applying local BMAD output mutation: ${requestPacketStatus}.`
       : `Repair correct-course materialization packet before apply: missing ${missingRequiredFields.join(", ")}.`,
-    mutationMode: ready ? "dry_run_required" : needsReview ? "blocked_until_request_packet_ready" : "blocked_until_materialization_context_complete",
+    mutationMode: predecessorGate.state === "blocked" ? "blocked_until_predecessor_readiness" : ready ? "dry_run_required" : needsReview ? "blocked_until_request_packet_ready" : "blocked_until_materialization_context_complete",
     applyMutationMode: "local_bmad_course_correction_backlog_only",
     authority: "source-owned-refill-planning-existing-gates",
     missingRequiredFields,
     requestPacketValidation: requestPacketValidation || null,
-    blockers: ready ? [] : needsReview ? [{
+    blockers: predecessorGate.state === "blocked" ? [predecessorGate.blocker] : ready ? [] : needsReview ? [{
       code: "refill-materialization-request-packet-not-ready",
       message: `Correct-course request packet is ${requestPacketStatus}; apply requires the existing approved local BMAD output gate.`,
       nextAction: "Review or authorize the request packet before applying local BMAD output mutation.",
@@ -16136,7 +16186,7 @@ function courseCorrectionStoryStatusesForGate(sourcePlanning = null, sprintStatu
   return countSprintStories(readFileSync(absolutePath, "utf8"), { artifactDir: dirname(absolutePath) }).storyStatuses;
 }
 
-function buildStoryCreationMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null) {
+function buildStoryCreationMaterializationGate(workCreationStep = null, sourceSlice = null, sourcePlanning = null, requestPacketValidation = null, options = {}) {
   const packet = workCreationStep?.workCreationPacket || {};
   const storyInputs = packet.storyCreationInputs || {};
   const sourceRef = sanitizeLedgerField(sourceSlice?.ref || workCreationStep?.sourceRef || packet.sourceRefs?.[0] || "", "", 220);
@@ -16145,6 +16195,13 @@ function buildStoryCreationMaterializationGate(workCreationStep = null, sourceSl
   const selectedCandidate = storyInputs.storyKey
     ? { id: sanitizeLedgerField(storyInputs.storyKey, "", 140), title: titleFromStoryKey(storyInputs.storyKey) }
     : null;
+  const requestedStoryCount = Math.max(1, Math.min(6, nonNegativeInteger(packet.backlogTarget) ?? 1));
+  const storyStatuses = courseCorrectionStoryStatusesForGate(sourcePlanning, sprintStatusPath);
+  const predecessorGate = operationalReadinessPredecessorGate(storyStatuses, {
+    requestedStoryCount,
+    storyKey: selectedCandidate?.id,
+    readinessEvidenceRefs: options.readinessEvidenceRefs || packet.readinessEvidenceRefs || sourcePlanning?.readinessEvidenceRefs || [],
+  });
   const dryRunCommand = "node ./scripts/manager-refill-plan.mjs --summary-json";
   const sourceRefArg = sourceRef ? ` --source-ref ${shellSingleQuote(sourceRef)}` : "";
   const applyCommand = `node ./scripts/manager-refill-plan.mjs --summary-json --apply${sourceRefArg}`;
@@ -16157,29 +16214,34 @@ function buildStoryCreationMaterializationGate(workCreationStep = null, sourceSl
   const contextComplete = missingRequiredFields.length === 0;
   const ready = contextComplete && requestPacketStatus === "ready";
   const needsReview = contextComplete && requestPacketStatus !== "ready";
+  const predecessorBlocked = predecessorGate.state === "blocked";
   return {
-    state: ready ? "ready" : needsReview ? "needs_review" : "blocked",
+    state: predecessorBlocked ? "blocked" : ready ? "ready" : needsReview ? "needs_review" : "blocked",
     workflow: "bmad-create-story",
     sourceRef,
     sourceType: sanitizeLedgerField(sourceSlice?.type || workCreationStep?.sourceType || "", "", 40),
     sprintStatusPath,
     storyOutputPath,
     selectedCandidateStory: selectedCandidate,
+    predecessorGate,
+    requestedStoryCount,
     nextWorkflow: "dispatch-preview",
     dryRunCommand,
     applyCommand,
     applyRequiresExistingGate: true,
-    nextAction: ready
-      ? `Review materialization gate, then run ${applyCommand} only through the existing approved local BMAD story output gate.`
+    nextAction: predecessorBlocked
+      ? predecessorGate.nextAction
+      : ready
+        ? `Review materialization gate, then run ${applyCommand} only through the existing approved local BMAD story output gate.`
       : needsReview
         ? `Review or authorize the bmad-create-story request packet before applying local BMAD story output mutation: ${requestPacketStatus}.`
         : `Repair story-creation materialization packet before apply: missing ${missingRequiredFields.join(", ")}.`,
-    mutationMode: ready ? "dry_run_required" : needsReview ? "blocked_until_request_packet_ready" : "blocked_until_materialization_context_complete",
+    mutationMode: predecessorBlocked ? "blocked_until_predecessor_readiness" : ready ? "dry_run_required" : needsReview ? "blocked_until_request_packet_ready" : "blocked_until_materialization_context_complete",
     applyMutationMode: "local_bmad_story_file_only",
     authority: "source-owned-refill-planning-existing-gates",
     missingRequiredFields,
     requestPacketValidation: requestPacketValidation || null,
-    blockers: ready ? [] : needsReview ? [{
+    blockers: predecessorBlocked ? [predecessorGate.blocker] : ready ? [] : needsReview ? [{
       code: "refill-materialization-request-packet-not-ready",
       message: `Story-creation request packet is ${requestPacketStatus}; apply requires the existing approved local BMAD story output gate.`,
       nextAction: "Review or authorize the request packet before applying local BMAD story output mutation.",
@@ -16216,6 +16278,60 @@ function firstBacklogCandidate(items = []) {
   };
 }
 
+const EPIC_25_STORY_KEYS = new Set([
+  "25-1-operational-readiness-contract",
+  "25-2-one-worker-live-canary",
+  "25-3-live-capacity-ramp",
+  "25-4-resilience-and-recovery-validation",
+  "25-5-operational-hardening-and-runbooks",
+  "25-6-production-readiness-decision",
+]);
+
+function epic25CourseCorrectionPredecessorGate(items = [], storyStatuses = {}, readinessEvidenceRefs = []) {
+  const epic25Items = Array.isArray(items) ? items.filter((item) => EPIC_25_STORY_KEYS.has(String(item?.id || ""))) : [];
+  if (epic25Items.length === 0) {
+    return { state: "not_applicable", predecessor: "25-1-operational-readiness-contract", readinessEvidenceRefs: [], nextAction: "No Epic 25 predecessor sequencing is required for this backlog packet.", blocker: null };
+  }
+  return operationalReadinessPredecessorGate(storyStatuses, {
+    requestedStoryCount: epic25Items.length,
+    storyKey: epic25Items[0].id,
+    readinessEvidenceRefs,
+  });
+}
+
+function operationalReadinessPredecessorGate(storyStatuses = {}, { requestedStoryCount = 1, storyKey = "", readinessEvidenceRefs = [] } = {}) {
+  const isEpic25 = EPIC_25_STORY_KEYS.has(String(storyKey || ""));
+  if (!isEpic25 || requestedStoryCount <= 1) {
+    return { state: "not_applicable", predecessor: "25-1-operational-readiness-contract", readinessEvidenceRefs: [], nextAction: "No Epic 25 predecessor sequencing is required for this story count.", blocker: null };
+  }
+  const predecessor = "25-1-operational-readiness-contract";
+  const status = String(storyStatuses?.[predecessor] || "").toLowerCase();
+  const safeEvidence = Array.isArray(readinessEvidenceRefs)
+    ? readinessEvidenceRefs.filter((ref) => /^readiness:25-1-(?:pass|passed)(?::[a-z0-9._/@:-]+)?$/i.test(String(ref || ""))).slice(0, 8)
+    : [];
+  const passed = status === "done" && safeEvidence.length > 0;
+  if (passed) {
+    return { state: "pass", predecessor, readinessEvidenceRefs: safeEvidence, nextAction: "Predecessor readiness evidence is present; preserve Epic 25 ordering.", blocker: null };
+  }
+  const candidateIsPredecessor = String(storyKey || "") === predecessor;
+  const blocker = {
+    code: "predecessor_gate_not_passed",
+    message: candidateIsPredecessor
+      ? "Epic 25 refill is limited to Story 25-1 until its readiness evidence passes."
+      : "Epic 25 stories 25-2 through 25-6 are blocked until Story 25-1 has passing readiness evidence.",
+    nextAction: candidateIsPredecessor
+      ? "Materialize or verify only Story 25-1, then record a readiness:25-1-pass evidence ref before selecting later stories."
+      : "Keep 25-2 through 25-6 out of materialization and complete Story 25-1 readiness first.",
+  };
+  return {
+    state: candidateIsPredecessor && (!status || status === "backlog") ? "awaiting_predecessor" : "blocked",
+    predecessor,
+    readinessEvidenceRefs: safeEvidence,
+    nextAction: blocker.nextAction,
+    blocker,
+  };
+}
+
 function compactRefillMaterializationGateAction(gate = {}) {
   return {
     state: gate.state || null,
@@ -16225,6 +16341,8 @@ function compactRefillMaterializationGateAction(gate = {}) {
     proposalOutputPath: gate.proposalOutputPath || null,
     storyOutputPath: gate.storyOutputPath || null,
     selectedCandidateStory: gate.selectedCandidateStory || null,
+    predecessorGate: gate.predecessorGate || null,
+    requestedStoryCount: gate.requestedStoryCount || null,
     dryRunCommand: gate.dryRunCommand || null,
     applyCommand: gate.applyCommand || null,
     applyRequiresExistingGate: gate.applyRequiresExistingGate === true,
@@ -23149,6 +23267,28 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
   const continuousApplyReady = requestedMode === "continuous_apply" && status === "ready" && Boolean(selectedAction) && !selectedDryRunOnly;
   const continuousApplyMonitoring = requestedMode === "continuous_apply" && status === "ready" && !selectedAction;
   const continuousApplyDryRunOnly = requestedMode === "continuous_apply" && status === "ready" && Boolean(selectedAction) && selectedDryRunOnly;
+  const operationalReadinessContract = buildOperationalReadinessContract(
+    { now: context.now || options.now, readinessProfile: context.readinessProfile || options.readinessProfile },
+    {
+      target: context.readinessTarget || context.target,
+      backendTruth: context.backendTruth || "dry_run",
+      backendTruthProven: context.backendTruthProven === true,
+      authorityState: context.authorityState || "blocked",
+      authorityProven: context.authorityProven === true,
+      freshnessState: status === "ready" ? "live" : "stale",
+      readinessProfile: context.readinessProfile || options.readinessProfile,
+      telemetry: context.telemetry,
+      configuration: context.configuration,
+      recovery: context.recovery,
+      preflight,
+      usage: context.usage,
+      resources: context.resources,
+      heartbeat: context.heartbeat,
+      dispatcherLease: context.dispatcherLease,
+      receipt: context.receipt,
+      gates: context.readinessGates,
+    },
+  );
 
   return packet({
     ok: status !== "blocked",
@@ -23188,6 +23328,7 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
         "do_not_bypass_worker_dispatch_delivery_or_cleanup_gates",
       ],
       rawPayloadRetained: false,
+      operationalReadinessContract,
     },
     blockers: dedupedBlockers,
     warnings,

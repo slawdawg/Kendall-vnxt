@@ -239,6 +239,7 @@ export interface TransitionAuthoritativeWorkPacketRequest {
 
 export const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0" as const;
 export const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0" as const;
+export const PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -325,6 +326,114 @@ export type PipelineOperationalRuntimeModeV0 = (typeof PIPELINE_OPERATIONAL_RUNT
 export const PIPELINE_OPERATIONAL_RUNTIME_READINESS_STATES = ["ready", "degraded", "blocked", "unavailable", "unknown"] as const;
 export type PipelineOperationalRuntimeReadinessStateV0 = (typeof PIPELINE_OPERATIONAL_RUNTIME_READINESS_STATES)[number];
 export type PipelineOperationalActionEvidenceRefsV0 = [string, ...string[]];
+
+export const PIPELINE_OPERATIONAL_READINESS_GATE_STATES = ["pass", "fail", "blocked", "not_applicable"] as const;
+export type PipelineOperationalReadinessGateStateV0 = (typeof PIPELINE_OPERATIONAL_READINESS_GATE_STATES)[number];
+export const PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS = ["live", "simulated", "dry_run"] as const;
+export type PipelineOperationalReadinessBackendTruthV0 = (typeof PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS)[number];
+export const PIPELINE_OPERATIONAL_READINESS_OUTCOMES = ["go", "no_go"] as const;
+export type PipelineOperationalReadinessOutcomeV0 = (typeof PIPELINE_OPERATIONAL_READINESS_OUTCOMES)[number];
+export const PIPELINE_OPERATIONAL_READINESS_REASONS = [
+  "threshold_missing",
+  "threshold_malformed",
+  "telemetry_missing",
+  "telemetry_stale",
+  "telemetry_contradictory",
+  "alert_coverage_missing",
+  "rollback_missing",
+  "recovery_missing",
+  "ownership_ambiguous",
+  "target_not_exact",
+  "evidence_missing",
+  "evidence_stale",
+  "backend_truth_unproven",
+  "configuration_invalid",
+  "secret_like_metadata",
+  "resource_pressure",
+  "usage_pressure",
+  "preflight_blocked",
+  "dispatcher_lease_unproven",
+  "receipt_unproven",
+  "predecessor_gate_not_passed",
+  "safety_violation",
+  "authority_violation",
+  "unknown",
+] as const;
+export type PipelineOperationalReadinessReasonV0 = (typeof PIPELINE_OPERATIONAL_READINESS_REASONS)[number];
+
+export interface PipelineOperationalReadinessTargetV0 {
+  workerId: string;
+  assignmentId: string;
+  owner: string;
+  runId: string;
+  sourceRefs: PipelineOperationalActionEvidenceRefsV0;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+}
+
+export interface PipelineOperationalReadinessGateV0 {
+  gateId: string;
+  state: PipelineOperationalReadinessGateStateV0;
+  typedReason: PipelineOperationalReadinessReasonV0 | null;
+  nextAction: string;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+}
+
+export interface PipelineOperationalReadinessThresholdV0 {
+  name: string;
+  operator: "lt" | "lte" | "gt" | "gte" | "eq";
+  value: number;
+  unit: string;
+  explicit: true;
+}
+
+export interface PipelineOperationalReadinessSliSloV0 {
+  indicator: string;
+  target: PipelineOperationalReadinessThresholdV0;
+  windowSeconds: number;
+  errorBudget: number;
+  zeroTolerance?: true;
+}
+
+export interface PipelineOperationalReadinessTelemetryV0 {
+  source: string;
+  coverage: string;
+  observationWindowSeconds: number;
+  alertThresholdIds: string[];
+  alertReady: boolean;
+}
+
+export interface PipelineOperationalReadinessConfigurationV0 {
+  names: string[];
+  validationState: "pass" | "fail" | "unknown";
+  noValueRetention: true;
+}
+
+export interface PipelineOperationalReadinessRecoveryV0 {
+  owner: string;
+  rollbackPath: string;
+  remediationAction: string;
+  recheckAt: string;
+  expiryAt: string;
+}
+
+export interface PipelineOperationalReadinessContractV0 {
+  schemaVersion: typeof PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION;
+  target: PipelineOperationalReadinessTargetV0;
+  backendTruth: PipelineOperationalReadinessBackendTruthV0;
+  authorityState: PipelineOperationalActionAuthorityStateV0;
+  riskTier: PipelineOperationalActionRiskTierV0;
+  sliSlo: PipelineOperationalReadinessSliSloV0[];
+  telemetry: PipelineOperationalReadinessTelemetryV0;
+  configuration: PipelineOperationalReadinessConfigurationV0;
+  recovery: PipelineOperationalReadinessRecoveryV0;
+  gates: PipelineOperationalReadinessGateV0[];
+  outcome: PipelineOperationalReadinessOutcomeV0;
+  typedBlockers: Array<{ gateId: string; reason: PipelineOperationalReadinessReasonV0; nextAction: string }>;
+  checkedAt: string;
+  expiresAt: string;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
 
 export interface PipelineOperationalActionValidationIssueV0 {
   field: string;
@@ -846,6 +955,91 @@ export function validatePipelineOperationalRuntimeReadinessV0(readiness: unknown
     pushReadinessCapabilityCoverageIssues(issues, actionCapabilities);
     pushReadinessAvailableCapabilityIssues(issues, record, actionCapabilities);
     pushReadinessOperationalModeCapabilityIssues(issues, record, actionCapabilities);
+  }
+  return issues;
+}
+
+export function validatePipelineOperationalReadinessContractV0(contract: unknown): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(contract, issues);
+  const allowed = new Set([
+    "schemaVersion", "target", "backendTruth", "authorityState", "riskTier", "sliSlo", "telemetry",
+    "configuration", "recovery", "gates", "outcome", "typedBlockers", "checkedAt", "expiresAt",
+    "metadataOnly", "rawPayloadRetained",
+  ]);
+  pushUnknownFieldIssues(issues, record, allowed);
+  if (record.schemaVersion !== PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION) {
+    issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Readiness contract uses an unsupported schema version." });
+  }
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false) {
+    issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Readiness contract must be metadata-only and retain no raw payloads." });
+  }
+  pushEnumIssue(issues, "backendTruth", record.backendTruth, PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS);
+  pushEnumIssue(issues, "authorityState", record.authorityState, PIPELINE_OPERATIONAL_ACTION_AUTHORITY_STATES);
+  pushEnumIssue(issues, "riskTier", record.riskTier, PIPELINE_OPERATIONAL_ACTION_RISK_TIERS);
+  pushEnumIssue(issues, "outcome", record.outcome, PIPELINE_OPERATIONAL_READINESS_OUTCOMES);
+  const target = operationalActionRecord(record.target, issues, "target");
+  for (const field of ["workerId", "assignmentId", "owner", "runId"] as const) {
+    if (typeof target[field] !== "string" || !isSafeOperationalIdentifierText(target[field])) {
+      issues.push({ field: `target.${field}`, code: "blank_identifier", summary: "Readiness target identity must be exact safe metadata." });
+    }
+  }
+  for (const field of ["sourceRefs", "evidenceRefs"] as const) {
+    if (!isPipelineOperationalActionEvidenceRefsV0(target[field])) {
+      issues.push({ field: `target.${field}`, code: "evidence_required", summary: "Readiness target requires safe source/evidence refs." });
+    }
+  }
+  const gates = safeOperationalArrayValues(issues, record.gates, "gates");
+  if (!gates) {
+    issues.push({ field: "gates", code: "invalid_enum", summary: "Readiness contract requires a gate array." });
+  } else {
+    const seen = new Set<string>();
+    for (const [index, gateValue] of gates.entries()) {
+      const gate = operationalActionRecord(gateValue, issues, `gates.${index}`);
+      if (typeof gate.gateId !== "string" || !isSafeOperationalIdentifierText(gate.gateId) || seen.has(gate.gateId)) {
+        issues.push({ field: `gates.${index}.gateId`, code: "invalid_enum", summary: "Readiness gates require unique safe ids." });
+      }
+      if (typeof gate.gateId === "string") seen.add(gate.gateId);
+      pushEnumIssue(issues, `gates.${index}.state`, gate.state, PIPELINE_OPERATIONAL_READINESS_GATE_STATES);
+      if (gate.typedReason !== null && !isOneOfString(gate.typedReason, PIPELINE_OPERATIONAL_READINESS_REASONS)) {
+        issues.push({ field: `gates.${index}.typedReason`, code: "invalid_enum", summary: "Readiness gate reason is not recognized." });
+      }
+      if (typeof gate.nextAction !== "string" || !isSafeOperationalMetadataText(gate.nextAction)) {
+        issues.push({ field: `gates.${index}.nextAction`, code: "unsafe_metadata_retention", summary: "Readiness gate next action must be safe metadata." });
+      }
+      if (!isPipelineOperationalActionEvidenceRefsV0(gate.evidenceRefs)) {
+        issues.push({ field: `gates.${index}.evidenceRefs`, code: "evidence_required", summary: "Readiness gate requires safe evidence refs." });
+      }
+    }
+  }
+  const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS || checkedAtMs > Date.now() + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS) {
+    issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Readiness contract timestamps must be fresh and within the five-minute TTL." });
+  }
+  if (!Array.isArray(record.sliSlo) || record.sliSlo.length === 0) {
+    issues.push({ field: "sliSlo", code: "evidence_required", summary: "Readiness contract requires explicit SLI/SLO thresholds." });
+  }
+  const telemetry = operationalActionRecord(record.telemetry, issues, "telemetry");
+  if (typeof telemetry.source !== "string" || !isSafeOperationalIdentifierText(telemetry.source) || telemetry.alertReady !== true) {
+    issues.push({ field: "telemetry", code: "inconsistent_result", summary: "Readiness telemetry and alert coverage must be explicit and ready." });
+  }
+  const configuration = operationalActionRecord(record.configuration, issues, "configuration");
+  if (configuration.noValueRetention !== true || !Array.isArray(configuration.names) || configuration.validationState !== "pass") {
+    issues.push({ field: "configuration", code: "policy_violation", summary: "Configuration readiness must pass with allowlisted names and no value retention." });
+  }
+  const recovery = operationalActionRecord(record.recovery, issues, "recovery");
+  for (const field of ["owner", "rollbackPath", "remediationAction", "recheckAt", "expiryAt"] as const) {
+    if (typeof recovery[field] !== "string" || !isSafeOperationalMetadataText(recovery[field])) {
+      issues.push({ field: `recovery.${field}`, code: "policy_violation", summary: "Recovery and rollback metadata is required." });
+    }
+  }
+  const blockers = Array.isArray(record.typedBlockers) ? record.typedBlockers : [];
+  if (record.outcome === "go" && blockers.length > 0) {
+    issues.push({ field: "typedBlockers", code: "inconsistent_result", summary: "A go readiness outcome cannot contain blockers." });
+  }
+  if (record.outcome === "go" && record.backendTruth !== "live") {
+    issues.push({ field: "backendTruth", code: "inconsistent_result", summary: "Go requires proven live backend truth." });
   }
   return issues;
 }
