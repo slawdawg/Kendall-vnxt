@@ -3753,6 +3753,47 @@ function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
           : `approved stale record cleanup; assignment owner ${assignment.owner} does not match ${currentOwner}; worktree, branch, and PR evidence absent`,
       };
     }
+
+    const staleMergedPrCleanupEvidence = staleMergedPrRecordCleanupEvidence(assignment, manifest);
+    if (staleMergedPrCleanupEvidence.eligible) {
+      const staleBase = {
+        ...base,
+        closeoutMode: "stale_merged_pr_record_cleanup",
+        staleRecordCleanupEligible: true,
+        staleRecordCleanupEvidence: staleMergedPrCleanupEvidence,
+      };
+      if (!options.allowStaleRecordCleanup) {
+        return {
+          ...staleBase,
+          reason: `assignment owner ${assignment.owner} does not match ${currentOwner}; pass --allow-stale-record-cleanup with explicit approval after inspecting merged PR closeout evidence`,
+        };
+      }
+      if (!validTakeoverReason(options.approval)) {
+        return {
+          ...staleBase,
+          reason: "stale merged PR record cleanup requires --approval evidence in at least 10 non-whitespace characters",
+        };
+      }
+      if (managerStaleCleanupDelegationRequired(assignment.owner, currentOwner) && !delegatedCleanup?.valid) {
+        return {
+          ...staleBase,
+          reason: delegatedCleanup?.reason || `manager-owned worker ${currentOwner} requires delegated cleanup owner evidence for assignment owner ${assignment.owner}`,
+        };
+      }
+      if (options.delegatedCleanupOwner && !delegatedCleanup.valid) {
+        return {
+          ...staleBase,
+          reason: delegatedCleanup.reason,
+        };
+      }
+      return {
+        ...staleBase,
+        closeable: true,
+        reason: delegatedCleanup?.valid
+          ? `approved stale merged PR record cleanup delegated from ${delegatedCleanup.owner} to ${currentOwner}; merged PR evidence retained and worktree/branches absent`
+          : `approved stale merged PR record cleanup; assignment owner ${assignment.owner} does not match ${currentOwner}; merged PR evidence retained and worktree/branches absent`,
+      };
+    }
     return { ...base, reason: `assignment owner ${assignment.owner} does not match ${currentOwner}` };
   }
 
@@ -3837,6 +3878,53 @@ function staleRecordCleanupCloseoutEvidence(assignment, manifest) {
     prStatus: prEvidence ? "present" : githubPr.status,
     githubPrRefs: githubPr.refs || [],
     githubPrError: githubPr.error || null,
+  };
+}
+
+function staleMergedPrRecordCleanupEvidence(assignment, manifest) {
+  const branch = assignment.branch || assignment.source_backlog_item?.branch_name || manifest.branch || "";
+  const worktreePaths = [
+    manifest.worktree_path || "",
+    assignment.worktree_path || "",
+  ].filter(Boolean);
+  const uniqueWorktreePaths = [...new Set(worktreePaths.map((path) => resolve(path)))];
+  const existingWorktreePaths = uniqueWorktreePaths.filter((path) => existsSync(path));
+  const worktreeMissing = uniqueWorktreePaths.length > 0 && existingWorktreePaths.length === 0;
+  const localBranchSha = branch ? branchSha(branch) || null : null;
+  const remoteBranch = branch ? staleRecordRemoteBranchEvidence(branch) : { status: "missing", sha: null };
+  const githubPr = branch ? staleRecordGithubPrEvidence(branch) : { status: "missing", refs: [] };
+  const mergedAt = assignment.merged_at || manifest.merged_at || assignment.cleanup_merged_at || manifest.cleanup_merged_at || null;
+  const prNumber = assignment.pr_number || manifest.pr_number || assignment.cleanup_pr_number || manifest.cleanup_pr_number || null;
+  const prUrl = assignment.pr_url || manifest.pr_url || assignment.cleanup_pr_url || manifest.cleanup_pr_url || null;
+  const openGithubPrRefs = (githubPr.refs || []).filter((pr) => String(pr.state || "").toUpperCase() === "OPEN");
+  const eligible = Boolean(
+    manifest.status === "closed" &&
+      branch &&
+      worktreeMissing &&
+      !localBranchSha &&
+      remoteBranch.status === "absent" &&
+      mergedAt &&
+      (prNumber || prUrl) &&
+      openGithubPrRefs.length === 0,
+  );
+  return {
+    eligible,
+    branch: branch || null,
+    worktreePath: uniqueWorktreePaths[0] || null,
+    worktreePaths: uniqueWorktreePaths,
+    existingWorktreePaths,
+    worktreeStatus: worktreeMissing ? "missing" : uniqueWorktreePaths.length > 0 ? "present" : "missing_path",
+    localBranchSha,
+    remoteBranchSha: remoteBranch.sha,
+    remoteBranchStatus: remoteBranch.status,
+    remoteBranchError: remoteBranch.error || null,
+    prStatus: "merged",
+    prNumber,
+    prUrl,
+    mergedAt,
+    githubPrRefs: githubPr.refs || [],
+    githubPrError: githubPr.error || null,
+    openGithubPrRefs,
   };
 }
 
@@ -3928,7 +4016,9 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner, options = {}
     assignment.last_result =
       plan.closeoutMode === "stale_record_cleanup"
         ? `operator-approved stale record cleanup from closed workspace ${plan.manifest.task_id}`
-        : `closed from completed workspace ${plan.manifest.task_id}`;
+        : plan.closeoutMode === "stale_merged_pr_record_cleanup"
+          ? `operator-approved stale merged PR record cleanup from closed workspace ${plan.manifest.task_id}`
+          : `closed from completed workspace ${plan.manifest.task_id}`;
     assignment.closeout_mode = plan.closeoutMode;
     assignment.closeout_handoff_evidence = closeAssignmentsEvidenceSummary({
       currentOwner,
@@ -3937,7 +4027,7 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner, options = {}
       mode: "apply",
       closedAt,
     });
-    if (plan.closeoutMode === "stale_record_cleanup") {
+    if (["stale_record_cleanup", "stale_merged_pr_record_cleanup"].includes(plan.closeoutMode)) {
       assignment.closeout_approval_evidence = String(options.approval || "").trim();
       assignment.closeout_abandonment_evidence = plan.staleRecordCleanupEvidence;
       if (plan.delegatedCleanup?.valid) {
@@ -4165,6 +4255,7 @@ function applyCleanupIntegrated(state, plan, options) {
       manifest.cleanup_completed_at = manifest.closed_at;
       manifest.cleanup_error = null;
       const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest, {
+        ...options,
         lastResult: `closed after integrated cleanup of ${manifest.task_id}`,
         eventMessage: `cleaned integrated workspace ${manifest.task_id}`,
       });
