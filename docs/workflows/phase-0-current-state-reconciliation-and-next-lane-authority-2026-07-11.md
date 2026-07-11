@@ -191,6 +191,14 @@ corrections; its verification suite passes 10/10 and the full manager suite
 passes 463/463. This stale staged lane is therefore superseded, not an
 unmerged implementation. No takeover or dirty-worktree mutation was applied.
 
+The exact stale lane `20260705-bmad-3-1-source-backed-packet-seed-and-eligibility`
+was then inspected read-only. It has five dirty changed paths, no PR, and a
+stale owner heartbeat; the governed takeover preview remains blocked by dirty
+worktree preservation and missing apply approval. Current `dev` already
+contains the source-backed packet-seed planner and CLI at commit `fe43110c`.
+This lane is therefore superseded rather than an unmerged source-seed feature;
+its dirty changes remain preserved and were not cleaned or taken over.
+
 ## Primary branch lineage reconciliation
 
 The primary branch `agent/operational-pipeline-action-loop` was audited without
