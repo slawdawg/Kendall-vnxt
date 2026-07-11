@@ -502,12 +502,25 @@ test("production readiness decision produces go only from fresh passing predeces
     finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:final-readiness-authority"] },
     owner: "manager-20260710",
     scope: { name: "bounded-production-readiness", boundaries: ["metadata-only-manager-scope"] },
-    fixtureEvidence: true,
   });
   assert.equal(decision.decision, "go");
+  assert.equal(decision.evidenceClass, "live_observed");
   assert.deepEqual(decision.typedBlockers, []);
   assert.equal(decision.rolloutAllowed, false);
   assert.equal(decision.automaticDeploymentAllowed, false);
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
+});
+
+test("production readiness decision holds when fixture evidence is presented as live", () => {
+  const decision = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...passingDecisionPackets(),
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:fixture-authority"] },
+    fixtureEvidence: true,
+  });
+  assert.equal(decision.decision, "hold");
+  assert.equal(decision.evidenceClass, "fixture");
+  assert.ok(decision.typedBlockers.some((blocker) => blocker.code === "decision_fixture_evidence"));
   assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
 });
 
@@ -539,7 +552,6 @@ test("production readiness decision can record an explicitly bounded limited rol
   const limited = buildProductionReadinessDecisionEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     ...packets,
-    hardeningEvidence: { ...packets.hardeningEvidence, outcome: "hold", readinessHandoffReady: false },
     finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:limited-readiness-authority"] },
     limitedRollout: { requested: true, boundaries: ["one-worker-only", "metadata-only-monitoring"] },
   });
@@ -547,4 +559,31 @@ test("production readiness decision can record an explicitly bounded limited rol
   assert.equal(limited.scope.limited, true);
   assert.equal(limited.rolloutAllowed, false);
   assert.deepEqual(validateProductionReadinessDecisionEvidence(limited), []);
+});
+
+test("production readiness decision refuses limited rollout when a predecessor is not passing", () => {
+  const packets = passingDecisionPackets();
+  const limited = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...packets,
+    hardeningEvidence: { ...packets.hardeningEvidence, outcome: "hold", readinessHandoffReady: false },
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:limited-readiness-authority"] },
+    limitedRollout: { requested: true, boundaries: ["one-worker-only", "metadata-only-monitoring"] },
+  });
+  assert.equal(limited.decision, "hold");
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(limited), []);
+});
+
+test("production readiness decision refuses missing provenance even when predecessor packets say pass", () => {
+  const packets = passingDecisionPackets();
+  const decision = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...packets,
+    rampEvidence: { ...packets.rampEvidence, evidenceClass: undefined },
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:provenance-authority"] },
+  });
+  assert.equal(decision.decision, "hold");
+  assert.equal(decision.evidenceClass, "unknown");
+  assert.ok(decision.typedBlockers.some((blocker) => blocker.code === "decision_evidence_provenance_missing"));
+  assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
 });

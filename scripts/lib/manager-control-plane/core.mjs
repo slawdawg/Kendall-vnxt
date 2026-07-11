@@ -13439,6 +13439,13 @@ export function buildRefillPlan(options = {}, context = {}) {
   const sourceEvidence = normalizeSourceEvidence(explicitSourceRefs.length > 0 ? explicitSourceRefs : defaultSourceRefs(context));
   const sourceSlice = sourceEvidence.valid[0] || null;
   const closedEvidence = { count: closed, preservation: "preserve_do_not_requeue" };
+  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
+  const sourcePlanning = sourceSlice
+    ? applyClosedStoryStatusOverlayToSourcePlanning(
+      context.sourcePlanning || context.sourcePlanningState || discoverSourcePlanningState(sourceSlice, context),
+      closedStoryStatuses,
+    )
+    : null;
   const sourceWarnings =
     sourceEvidence.rejected.length > 0
       ? [
@@ -13507,6 +13514,21 @@ export function buildRefillPlan(options = {}, context = {}) {
       disposition: exhaustionEvaluation.disposition,
     });
   }
+  if (shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, context })) {
+    return buildSourceOwnedBacklogExhaustionAuditPacket({
+      desiredWorkers,
+      dispatchable,
+      active,
+      closed,
+      sourceSlice,
+      sourcePlanning,
+      sourceArtifactDiscovery,
+      sourceWorkEligibility,
+      sourceBackedPacketSeed,
+      closedEvidence,
+      context,
+    });
+  }
   if (starvation && !sourceSlice) {
     const ambiguous = sourceEvidence.rejected.length > 0;
     return packet({
@@ -13544,10 +13566,6 @@ export function buildRefillPlan(options = {}, context = {}) {
       warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings, ...sourceBackedPacketSeedWarnings],
     });
   }
-  const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
-  const sourcePlanning = sourceSlice
-    ? applyClosedStoryStatusOverlayToSourcePlanning(discoverSourcePlanningState(sourceSlice, context), closedStoryStatuses)
-    : null;
   const sourceWorkEligibilityForPlanning = sourceWorkEligibility || (eligibleSeedPackets.length > 0 ? { summary: { eligibleCount: eligibleSeedPackets.length } } : null);
   const bmadPlanningGap = starvation && sourceSlice
     ? buildBmadPlanningGapPlan(options, { ...context, sourceRefs: [sourceSlice.ref], sourceSlice, sourcePlanning, sourceWorkEligibility: sourceWorkEligibilityForPlanning })
@@ -14034,6 +14052,12 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     resumeRequirement: disposition.resumeRequirement,
     idempotencyKey: disposition.idempotencyKey,
   };
+  const terminalAuditRoutes = buildTerminalBacklogAuditRoutes({
+    sourceIdentity: disposition.sourceIdentity,
+    sourceRevision: disposition.sourceRevision,
+    runId: disposition.runId,
+  });
+  const nextActions = [nextAction, ...terminalAuditRoutes];
   const refillJob = refillJobSummary({
     runId: resolveManagerRunId(options, context),
     sourceRefs,
@@ -14050,7 +14074,7 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     blockedCount: 0,
     evidenceRefs: disposition.evidenceRefs,
     terminalDisposition: disposition,
-    nextActions: [nextAction],
+    nextActions,
   });
   const summary = {
     apply: options.apply === true,
@@ -14084,6 +14108,9 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
       rawPayloadRetained: false,
     },
     terminalDisposition: disposition,
+    terminalAuditRoutes,
+    noNewEpic: true,
+    noPostSliceWork: true,
     mutationMode: "none; metadata-only terminal disposition",
     supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
     stopLines: REFILL_STOP_LINES,
@@ -14099,7 +14126,110 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     warnings: unresolvedCount > 0
       ? [{ code: "authoritative-backlog-approval-gated", message: `${unresolvedCount} approval-gated item(s) remain visible and were not converted into safe backlog.` }]
       : [],
-    nextActions: [nextAction],
+    nextActions,
+  });
+}
+
+function shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, context = {} } = {}) {
+  const sourceRef = canonicalSourceWorkRef(sourceSlice?.ref || "");
+  const sourceOwnedTerminal = context.authoritativeBacklogExhaustion === true ||
+    sourceRef === "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md";
+  const sprintStatus = sourcePlanning?.sprintStatus || {};
+  return sourceOwnedTerminal &&
+    sprintStatus.exists === true &&
+    (nonNegativeInteger(sprintStatus.backlogStories) ?? null) === 0 &&
+    dispatchable === 0 &&
+    active === 0;
+}
+
+function buildTerminalBacklogAuditRoutes({ sourceIdentity = "", sourceRevision = "", runId = "" } = {}) {
+  const source = sanitizeLedgerField(sourceIdentity, "source-owned-goal", 240);
+  const revision = sanitizeLedgerField(sourceRevision, "unresolved", 160);
+  const run = sanitizeLedgerField(runId, "manager-run", 120);
+  return [
+    {
+      code: "final-source-audit",
+      workflow: "final-source-audit",
+      nextAction: `Run the final source audit for ${source} at revision ${revision}; reconcile all tracked work before any new planning.`.slice(0, 320),
+      evidenceRefs: [`manager-cycle:${run}`, `source-audit:${source}`],
+    },
+    {
+      code: "authoritative-reconciliation",
+      workflow: "authoritative-reconciliation",
+      nextAction: "Record an exact source-bound reconciliation bundle with counts, remaining candidates, approval-gated work, and evidence refs.",
+      evidenceRefs: [`manager-cycle:${run}`, "reconciliation:required"],
+    },
+    {
+      code: "bmad-retrospective",
+      workflow: "bmad-retrospective",
+      nextAction: "Run the required BMAD retrospective for the completed epic or correction group and preserve only durable lessons.",
+      evidenceRefs: [`manager-cycle:${run}`, "retrospective:required"],
+    },
+    {
+      code: "manager-housekeeping",
+      workflow: "manager-housekeeping",
+      nextAction: "Perform metadata-only manager housekeeping and preserve recovery evidence; do not create post-slice filler work.",
+      evidenceRefs: [`manager-cycle:${run}`, "housekeeping:required"],
+    },
+  ];
+}
+
+function buildSourceOwnedBacklogExhaustionAuditPacket({
+  desiredWorkers,
+  dispatchable,
+  active,
+  closed,
+  sourceSlice,
+  sourcePlanning,
+  sourceArtifactDiscovery,
+  sourceWorkEligibility,
+  sourceBackedPacketSeed,
+  closedEvidence,
+  context = {},
+} = {}) {
+  const sourceIdentity = sanitizeLedgerField(sourceSlice?.ref, "source-owned-goal", 240);
+  const sourceRevision = sanitizeLedgerField(
+    context.activeSource?.sourceRevision || context.active_source?.sourceRevision || context.sourceRevision || "",
+    "",
+    160,
+  );
+  const runId = resolveManagerRunId({}, context);
+  const terminalAuditRoutes = buildTerminalBacklogAuditRoutes({ sourceIdentity, sourceRevision, runId });
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: {
+      desiredWorkers,
+      dispatchableLanes: dispatchable,
+      activeLanes: active,
+      safeWorkSupply: 0,
+      refillNeeded: false,
+      closedLanes: closed,
+      source: sourceSlice?.label || sourceIdentity,
+      sourceSlice,
+      sourcePlanning,
+      sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
+      sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+      sourceBackedPacketSeed: sourceBackedPacketSeed?.summary || null,
+      candidateLanes: [],
+      workCreationStep: null,
+      bmadPlanningGap: null,
+      bmadRequestPacket: null,
+      materializationGate: null,
+      terminalDisposition: null,
+      terminalAuditRoutes,
+      noNewEpic: true,
+      noPostSliceWork: true,
+      closedEvidence,
+      mutationMode: "blocked; authoritative terminal reconciliation required",
+      stopLines: REFILL_STOP_LINES,
+    },
+    blockers: [{
+      code: "authoritative-backlog-exhaustion-evidence-required",
+      message: "The source-owned sprint is exhausted, but no independently reconciled terminal source bundle was supplied.",
+      nextAction: terminalAuditRoutes[0].nextAction,
+    }],
+    nextActions: terminalAuditRoutes,
   });
 }
 

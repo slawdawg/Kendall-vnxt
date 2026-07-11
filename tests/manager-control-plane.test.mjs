@@ -5213,7 +5213,94 @@ test("Gate 2 emits an idempotent authoritative exhaustion disposition and ignore
   assert.equal(first.summary.materializationGate, null);
   assert.equal(first.summary.terminalDisposition.idempotencyKey, second.summary.terminalDisposition.idempotencyKey);
   assert.equal(first.summary.refillJob.refillJobId, second.summary.refillJob.refillJobId);
+  assert.deepEqual(first.summary.terminalAuditRoutes.map((route) => route.code), [
+    "final-source-audit",
+    "authoritative-reconciliation",
+    "bmad-retrospective",
+    "manager-housekeeping",
+  ]);
+  assert.equal(first.summary.noNewEpic, true);
+  assert.equal(first.summary.noPostSliceWork, true);
   assert.doesNotMatch(JSON.stringify(first), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*|successor/i);
+});
+
+test("Gate 5 fail-closes source-owned exhausted sprint without inventing Epic 26", () => {
+  const plan = buildRefillPlan(
+    {
+      runId: "run-gate5-terminal-audit",
+      desiredWorkers: 6,
+      sourceRefs: ["doc:docs/workflows/latest-prd-autonomous-bmad-loop-goal.md"],
+    },
+    {
+      authoritativeBacklogExhaustion: true,
+      sourcePlanningState: {
+        sprintStatus: {
+          exists: true,
+          path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+          backlogStories: 0,
+          storyStatuses: { "25-6-production-readiness-decision": "done" },
+        },
+      },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 6 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    },
+  );
+
+  assert.equal(plan.ok, false);
+  assert.equal(plan.status, "blocked");
+  assert.equal(plan.blockers[0].code, "authoritative-backlog-exhaustion-evidence-required");
+  assert.equal(plan.summary.workCreationStep, null);
+  assert.equal(plan.summary.materializationGate, null);
+  assert.equal(plan.summary.noNewEpic, true);
+  assert.equal(plan.summary.noPostSliceWork, true);
+  assert.deepEqual(plan.summary.terminalAuditRoutes.map((route) => route.code), [
+    "final-source-audit",
+    "authoritative-reconciliation",
+    "bmad-retrospective",
+    "manager-housekeeping",
+  ]);
+  assert.deepEqual(plan.nextActions.map((action) => action.code), plan.summary.terminalAuditRoutes.map((route) => route.code));
+  assert.doesNotMatch(JSON.stringify(plan), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*|successor/i);
+});
+
+test("Gate 5 applies closed assignment evidence before routing a stale source backlog", () => {
+  const plan = buildRefillPlan(
+    {
+      runId: "run-gate5-stale-backlog",
+      desiredWorkers: 6,
+      sourceRefs: ["doc:docs/workflows/latest-prd-autonomous-bmad-loop-goal.md"],
+    },
+    {
+      authoritativeBacklogExhaustion: true,
+      sourcePlanningState: {
+        sprintStatus: {
+          exists: true,
+          path: "_bmad-output/implementation-artifacts/sprint-status-gate5-stale.yaml",
+          backlogStories: 1,
+          storyStatuses: { "25-6-production-readiness-decision": "backlog" },
+        },
+      },
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 6 },
+          laneAssignments: [{ assignmentId: "bmad-25-6-production-readiness-decision", status: "closed" }],
+        },
+      },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    },
+  );
+
+  assert.equal(plan.status, "blocked");
+  assert.equal(plan.blockers[0].code, "authoritative-backlog-exhaustion-evidence-required");
+  assert.equal(plan.summary.sourcePlanning.sprintStatus.backlogStories, 0);
+  assert.equal(plan.summary.sourcePlanning.sprintStatus.doneStories, 1);
+  assert.equal(plan.summary.workCreationStep, null);
+  assert.deepEqual(plan.nextActions.map((action) => action.code), [
+    "final-source-audit",
+    "authoritative-reconciliation",
+    "bmad-retrospective",
+    "manager-housekeeping",
+  ]);
 });
 
 test("Gate 2 stays open for incomplete source reconciliation with eligible work remaining", () => {
