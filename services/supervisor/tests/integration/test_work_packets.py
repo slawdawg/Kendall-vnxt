@@ -1,7 +1,12 @@
 import json
+import os
 import sqlite3
 import sys
+from pathlib import Path
+from asyncio import run as asyncio_run
+from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -4374,9 +4379,23 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
             "requestedRiskTier": "medium",
             "expectedCurrentEventId": packet["currentEventId"],
             "operatorIntentSummary": "Record the operator pass decision.",
-            "evidenceRefs": ["evidence:product-test-approval"],
+            "evidenceRefs": ["evidence:operator-test-context"],
             "testResult": "pass",
         }
+        approval_response = client.post(
+            "/pipeline-control-plane/approvals",
+            json={
+                "actionId": "mark_tested",
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "requestedBy": action_payload["requestedBy"],
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+            },
+        )
+        assert approval_response.status_code == 200
+        action_payload["approvalId"] = approval_response.json()["data"]["approvalId"]
+        action_payload["expectedCurrentEventId"] = approval_response.json()["data"]["expectedCurrentEventId"]
         action_response = client.post("/pipeline-control-plane/actions", json=action_payload)
         assert action_response.status_code == 200
         action_result = action_response.json()["data"]
@@ -4404,13 +4423,13 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
                 "correlationId": "corr-requeue-blocked",
                 "requestedAuthorityState": "needs_authority_approval",
                 "testResult": None,
+                "approvalId": None,
                 "expectedCurrentEventId": None,
                 "evidenceRefs": ["evidence:operator-requested-requeue"],
             },
         )
-        assert blocked_response.status_code == 200
-        assert blocked_response.json()["data"]["outcome"] == "blocked"
-        assert blocked_response.json()["data"]["typedReason"] == "blocked_by_approval"
+        assert blocked_response.status_code == 400
+        assert "server-issued approval" in blocked_response.text
 
         rework_create = client.post(
             "/pipeline-control-plane/work-packets",
@@ -4427,6 +4446,19 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
         )
         assert rework_create.status_code == 200
         rework_parent = rework_create.json()["data"]
+        rework_approval_response = client.post(
+            "/pipeline-control-plane/approvals",
+            json={
+                "actionId": "request_rework",
+                "targetType": "work_packet",
+                "targetId": rework_parent["packetId"],
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+            },
+        )
+        assert rework_approval_response.status_code == 200
+        rework_approval = rework_approval_response.json()["data"]
         rework_response = client.post(
             "/pipeline-control-plane/actions",
             json={
@@ -4438,9 +4470,10 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
                 "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
-                "expectedCurrentEventId": rework_parent["currentEventId"],
+                "approvalId": rework_approval["approvalId"],
+                "expectedCurrentEventId": rework_approval["expectedCurrentEventId"],
                 "operatorIntentSummary": "Route failed testing to rework.",
-                "evidenceRefs": ["evidence:product-test-approval"],
+                "evidenceRefs": ["evidence:operator-rework-context"],
             },
         )
         assert rework_response.status_code == 200
@@ -4483,6 +4516,19 @@ def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -
         )
         assert create_response.status_code == 200
         packet = create_response.json()["data"]
+        approval_response = client.post(
+            "/pipeline-control-plane/approvals",
+            json={
+                "actionId": "mark_tested",
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+            },
+        )
+        assert approval_response.status_code == 200
+        approval = approval_response.json()["data"]
         action_response = client.post(
             "/pipeline-control-plane/actions",
             json={
@@ -4494,8 +4540,9 @@ def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -
                 "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
-                "expectedCurrentEventId": packet["currentEventId"],
-                "evidenceRefs": ["evidence:product-test-approval"],
+                "approvalId": approval["approvalId"],
+                "expectedCurrentEventId": approval["expectedCurrentEventId"],
+                "evidenceRefs": ["evidence:operator-test-context"],
                 "testResult": "fail",
                 "testNotes": "The operator test found a bounded failure.",
             },
@@ -4509,3 +4556,493 @@ def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -
         assert parent_response.json()["data"]["operatorTestState"] == "rework"
         child_response = client.get(f"/pipeline-control-plane/work-packets/{result['childPacketId']}")
         assert child_response.json()["data"]["parentPacketId"] == packet["packetId"]
+
+
+def test_server_bound_approval_requires_exact_fresh_unconsumed_binding(tmp_path, monkeypatch) -> None:
+    db_name = "server-bound-approval.db"
+    source_ref = {
+        "refId": "workflow:server-bound-approval",
+        "sourceType": "workflow",
+        "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+        "title": "Server-bound approval",
+    }
+
+    def create_packet(client, packet_id: str) -> dict:
+        response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": packet_id,
+                "title": packet_id,
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "readyToTest": {
+                    "readyId": f"ready:{packet_id}",
+                    "userFacingSummary": "Approval binding is ready to test.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:approval-binding"],
+                },
+            },
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def approval_payload(packet: dict, *, action_id: str = "mark_tested", actor_id: str = "operator-test") -> dict:
+        return {
+            "actionId": action_id,
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Operator test"},
+            "requestedAuthorityState": "needs_product_approval",
+            "requestedRiskTier": "medium",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+
+    def apply_payload(packet: dict, approval: dict, *, idempotency_key: str = "apply-approval") -> dict:
+        return {
+            "actionId": "mark_tested",
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "idempotencyKey": idempotency_key,
+            "correlationId": f"corr:{idempotency_key}",
+            "requestedBy": {"actorType": "operator", "actorId": "operator-test", "actorLabel": "Operator test"},
+            "requestedAuthorityState": "needs_product_approval",
+            "requestedRiskTier": "medium",
+            "expectedCurrentEventId": approval["expectedCurrentEventId"],
+            "operatorIntentSummary": "Record the operator test decision.",
+            "evidenceRefs": ["evidence:operator-test-context"],
+            "testResult": "pass",
+            "approvalId": approval["approvalId"],
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        packet = create_packet(client, "packet-server-bound-approval")
+        approval_response = client.post("/pipeline-control-plane/approvals", json=approval_payload(packet))
+        assert approval_response.status_code == 200
+        approval = approval_response.json()["data"]
+        assert approval["expectedCurrentEventId"] == packet["currentEventId"]
+        assert approval["consumed"] is False
+        assert approval["metadataOnly"] is True
+        assert approval["rawPayloadRetained"] is False
+
+        forged_prefix = apply_payload(packet, approval, idempotency_key="forged-prefix")
+        forged_prefix.pop("approvalId")
+        forged_prefix["evidenceRefs"] = ["evidence:product-test-approval"]
+        forged_response = client.post("/pipeline-control-plane/actions", json=forged_prefix)
+        assert forged_response.status_code == 400
+        assert "approval evidence prefixes" in forged_response.text
+
+        wrong_target = apply_payload(packet, approval, idempotency_key="wrong-target")
+        wrong_target["targetId"] = "different-packet"
+        assert client.post("/pipeline-control-plane/actions", json=wrong_target).status_code == 400
+
+        wrong_actor = apply_payload(packet, approval, idempotency_key="wrong-actor")
+        wrong_actor["requestedBy"]["actorId"] = "different-operator"
+        assert client.post("/pipeline-control-plane/actions", json=wrong_actor).status_code == 400
+
+        wrong_action = apply_payload(packet, approval, idempotency_key="wrong-action")
+        wrong_action["actionId"] = "request_rework"
+        assert client.post("/pipeline-control-plane/actions", json=wrong_action).status_code == 400
+
+        wrong_risk = apply_payload(packet, approval, idempotency_key="wrong-risk")
+        wrong_risk["requestedRiskTier"] = "high"
+        assert client.post("/pipeline-control-plane/actions", json=wrong_risk).status_code == 400
+
+        result_response = client.post("/pipeline-control-plane/actions", json=apply_payload(packet, approval))
+        assert result_response.status_code == 200
+        result = result_response.json()["data"]
+        assert result["outcome"] == "succeeded"
+
+        idempotent_response = client.post("/pipeline-control-plane/actions", json=apply_payload(packet, approval))
+        assert idempotent_response.status_code == 200
+        assert idempotent_response.json()["data"]["actionRecordId"] == result["actionRecordId"]
+
+        replay_response = client.post(
+            "/pipeline-control-plane/actions",
+            json=apply_payload(packet, approval, idempotency_key="replay-after-consume"),
+        )
+        assert replay_response.status_code == 400
+        assert "consumed" in replay_response.text
+
+        stale_packet = create_packet(client, "packet-stale-approval")
+        stale_approval = client.post("/pipeline-control-plane/approvals", json=approval_payload(stale_packet)).json()["data"]
+        transition_response = client.post(
+            f"/pipeline-control-plane/work-packets/{stale_packet['packetId']}/transitions",
+            json={
+                "targetStage": "promote",
+                "expectedCurrentEventId": stale_packet["currentEventId"],
+                "status": "waiting",
+                "actor": {"actorType": "manager", "actorId": "manager-test"},
+                "idempotencyKey": "advance-stale-approval-packet",
+            },
+        )
+        assert transition_response.status_code == 200
+        stale_apply = apply_payload(stale_packet, stale_approval, idempotency_key="stale-event")
+        assert client.post("/pipeline-control-plane/actions", json=stale_apply).status_code == 400
+
+        expired_packet = create_packet(client, "packet-expired-approval")
+        expired_approval = client.post("/pipeline-control-plane/approvals", json=approval_payload(expired_packet)).json()["data"]
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute("update pipeline_operational_approvals set expires_at = '2000-01-01 00:00:00' where approval_id = ?", (expired_approval["approvalId"],))
+            conn.commit()
+        expired_apply = apply_payload(expired_packet, expired_approval, idempotency_key="expired-approval")
+        expired_response = client.post("/pipeline-control-plane/actions", json=expired_apply)
+        assert expired_response.status_code == 400
+        assert "expired" in expired_response.text
+
+
+def test_server_bound_approval_rejects_ineligible_actions_and_preserves_read_only_actions(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "server-bound-approval-eligibility.db") as client:
+        source_ref = {
+            "refId": "workflow:server-bound-read-only",
+            "sourceType": "workflow",
+            "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+            "title": "Server-bound read-only actions",
+        }
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-read-only-actions",
+                "title": "Read-only action packet",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "readyToTest": {
+                    "readyId": "ready:read-only-actions",
+                    "userFacingSummary": "Read-only actions are ready.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:read-only-actions"],
+                },
+            },
+        )
+        assert create_response.status_code == 200
+        packet = create_response.json()["data"]
+        initial_event_id = packet["currentEventId"]
+        inspect_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={
+                "actionId": "inspect",
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "idempotencyKey": "inspect-read-only",
+                "correlationId": "corr-inspect-read-only",
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "not_required",
+                "requestedRiskTier": "low",
+                "expectedCurrentEventId": initial_event_id,
+                "evidenceRefs": ["evidence:read-only-inspect"],
+            },
+        )
+        assert inspect_response.status_code == 200
+        refresh_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={
+                "actionId": "refresh_projection",
+                "targetType": "projection",
+                "targetId": "projection",
+                "idempotencyKey": "refresh-read-only",
+                "correlationId": "corr-refresh-read-only",
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "not_required",
+                "requestedRiskTier": "low",
+                "evidenceRefs": ["evidence:read-only-refresh"],
+            },
+        )
+        assert refresh_response.status_code == 200
+        unchanged_packet = client.get(f"/pipeline-control-plane/work-packets/{packet['packetId']}").json()["data"]
+        assert unchanged_packet["currentEventId"] == initial_event_id
+        assert unchanged_packet["status"] == "waiting"
+
+        response = client.post(
+            "/pipeline-control-plane/approvals",
+            json={
+                "actionId": "inspect",
+                "targetType": "projection",
+                "targetId": "projection",
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "not_required",
+                "requestedRiskTier": "low",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+        )
+        assert response.status_code == 422
+        assert "mark_tested" in response.text or "request_rework" in response.text
+
+
+def test_gated_actions_record_same_stage_events_and_reject_second_approval_for_old_event(tmp_path, monkeypatch) -> None:
+    db_name = "server-bound-action-events.db"
+    source_ref = {
+        "refId": "workflow:server-bound-action-events",
+        "sourceType": "workflow",
+        "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+        "title": "Server-bound action events",
+    }
+
+    def create_packet(client, packet_id: str, initial_stage: str = "review") -> dict:
+        response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": packet_id,
+                "title": packet_id,
+                "initialStage": initial_stage,
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "readyToTest": {
+                    "readyId": f"ready:{packet_id}",
+                    "userFacingSummary": "Gated action event testing is ready.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:action-event-testing"],
+                },
+            },
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def issue(client, packet: dict, action_id: str = "mark_tested") -> dict:
+        response = client.post(
+            "/pipeline-control-plane/approvals",
+            json={
+                "actionId": action_id,
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+            },
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def apply(client, packet: dict, approval: dict, *, action_id: str = "mark_tested", result: str | None = "notes", key: str = "action"):
+        return client.post(
+            "/pipeline-control-plane/actions",
+            json={
+                "actionId": action_id,
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "idempotencyKey": key,
+                "correlationId": f"corr:{key}",
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+                "approvalId": approval["approvalId"],
+                "expectedCurrentEventId": approval["expectedCurrentEventId"],
+                "operatorIntentSummary": "Record a bounded operator action.",
+                "evidenceRefs": ["evidence:operator-action-event"],
+                "testResult": result,
+            },
+        )
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        for packet_id, initial_stage, result, expected_event_type in [
+            ("packet-pass-outside-review", "execute", "pass", "packet.operational_action_applied"),
+            ("packet-failed-test-event", "review", "fail", "packet.operational_action_applied"),
+            ("packet-notes-test-event", "review", "notes", "packet.operational_action_applied"),
+        ]:
+            packet = create_packet(client, packet_id, initial_stage)
+            approval = issue(client, packet)
+            response = apply(client, packet, approval, result=result, key=f"{packet_id}:apply")
+            assert response.status_code == 200
+            refreshed = client.get(f"/pipeline-control-plane/work-packets/{packet_id}").json()["data"]
+            assert refreshed["currentEventId"] != packet["currentEventId"]
+            assert refreshed["history"][-1]["eventType"] == expected_event_type
+
+        packet = create_packet(client, "packet-two-approvals-one-event")
+        first_approval = issue(client, packet)
+        second_approval = issue(client, packet)
+        first_response = apply(client, packet, first_approval, result="notes", key="two-approvals-first")
+        assert first_response.status_code == 200
+        second_response = apply(client, packet, second_approval, result="notes", key="two-approvals-second")
+        assert second_response.status_code == 400
+        assert "stale" in second_response.text
+
+
+def test_concurrent_distinct_approvals_allow_one_packet_mutation(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "server-bound-concurrency.db") as client:
+        source_ref = {
+            "refId": "workflow:server-bound-concurrency",
+            "sourceType": "workflow",
+            "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+            "title": "Server-bound concurrency",
+        }
+        packet = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-concurrent-distinct-approvals",
+                "title": "Concurrent approval packet",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "readyToTest": {
+                    "readyId": "ready:concurrent-distinct-approvals",
+                    "userFacingSummary": "Concurrent approval testing is ready.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:concurrent-approvals"],
+                },
+            },
+        ).json()["data"]
+
+        def approval() -> dict:
+            return client.post(
+                "/pipeline-control-plane/approvals",
+                json={
+                    "actionId": "mark_tested",
+                    "targetType": "work_packet",
+                    "targetId": packet["packetId"],
+                    "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                    "requestedAuthorityState": "needs_product_approval",
+                    "requestedRiskTier": "medium",
+                },
+            ).json()["data"]
+
+        approvals = [approval(), approval()]
+
+        def apply(approval_record: dict, key: str):
+            return client.post(
+                "/pipeline-control-plane/actions",
+                json={
+                    "actionId": "mark_tested",
+                    "targetType": "work_packet",
+                    "targetId": packet["packetId"],
+                    "idempotencyKey": key,
+                    "correlationId": f"corr:{key}",
+                    "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                    "requestedAuthorityState": "needs_product_approval",
+                    "requestedRiskTier": "medium",
+                    "approvalId": approval_record["approvalId"],
+                    "expectedCurrentEventId": approval_record["expectedCurrentEventId"],
+                    "operatorIntentSummary": "Concurrent bounded action.",
+                    "evidenceRefs": ["evidence:concurrent-action"],
+                    "testResult": "notes",
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda item: apply(*item), [(approvals[0], "concurrent-one"), (approvals[1], "concurrent-two")]))
+        assert sorted(response.status_code for response in responses) == [200, 400]
+        refreshed = client.get(f"/pipeline-control-plane/work-packets/{packet['packetId']}").json()["data"]
+        assert sum(event["eventType"] == "packet.operational_action_applied" for event in refreshed["history"]) == 1
+
+
+def test_concurrent_duplicate_approval_and_idempotency_returns_original_result(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "server-bound-duplicate-concurrency.db") as client:
+        source_ref = {
+            "refId": "workflow:server-bound-duplicate-concurrency",
+            "sourceType": "workflow",
+            "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+            "title": "Server-bound duplicate concurrency",
+        }
+        packet = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-concurrent-duplicate-approval",
+                "title": "Concurrent duplicate approval packet",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "readyToTest": {
+                    "readyId": "ready:concurrent-duplicate-approval",
+                    "userFacingSummary": "Concurrent duplicate testing is ready.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:concurrent-duplicate"],
+                },
+            },
+        ).json()["data"]
+        approval = client.post(
+            "/pipeline-control-plane/approvals",
+            json={
+                "actionId": "mark_tested",
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedAuthorityState": "needs_product_approval",
+                "requestedRiskTier": "medium",
+            },
+        ).json()["data"]
+        payload = {
+            "actionId": "mark_tested",
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "idempotencyKey": "concurrent-duplicate-key",
+            "correlationId": "corr:concurrent-duplicate-key",
+            "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+            "requestedAuthorityState": "needs_product_approval",
+            "requestedRiskTier": "medium",
+            "approvalId": approval["approvalId"],
+            "expectedCurrentEventId": approval["expectedCurrentEventId"],
+            "operatorIntentSummary": "Concurrent duplicate action.",
+            "evidenceRefs": ["evidence:concurrent-duplicate-action"],
+            "testResult": "notes",
+        }
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _: client.post("/pipeline-control-plane/actions", json=payload), range(2)))
+        assert [response.status_code for response in responses] == [200, 200]
+        assert len({response.json()["data"]["actionRecordId"] for response in responses}) == 1
+
+
+def test_existing_sqlite_action_schema_gets_approval_migration_and_ledger_table(tmp_path, monkeypatch) -> None:
+    db_name = "server-bound-existing-schema.db"
+    db_path = _db_path(tmp_path, db_name)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("create table pipeline_operational_action_records (id varchar(80) primary key)")
+        conn.commit()
+    with _client(tmp_path, monkeypatch, db_name):
+        assert "approval_id" in _sqlite_table_columns(db_path, "pipeline_operational_action_records")
+        assert "pipeline_operational_approvals" in _sqlite_tables(db_path)
+
+
+def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_coverage(tmp_path, monkeypatch) -> None:
+    """Prove the Postgres Gate 3 migration contract; run live only with an explicit isolated test DB."""
+    database_source = Path(__file__).parents[2] / "src/supervisor/infrastructure/db/database.py"
+    source_text = database_source.read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS {column_name} {column_type}" in source_text
+
+    from supervisor.infrastructure.db.database import POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS
+
+    assert POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS == (
+        ("child_packet_id", "VARCHAR(80)"),
+        ("expected_current_event_id", "VARCHAR(80)"),
+        ("approval_id", "VARCHAR(120)"),
+    )
+
+    database_url = os.getenv("SUPERVISOR_POSTGRES_TEST_DATABASE_URL")
+    if not database_url or os.getenv("SUPERVISOR_POSTGRES_TEST_DATABASE_ISOLATED") != "1":
+        pytest.skip(
+            "PostgreSQL service unavailable or no explicitly isolated test database was supplied; "
+            "verified source-owned IF NOT EXISTS migration contract, live pre-patch-schema startup coverage was not run."
+        )
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async def prepare_pre_patch_schema() -> None:
+        test_engine = create_async_engine(database_url, future=True)
+        try:
+            async with test_engine.begin() as connection:
+                await connection.execute(text("DROP TABLE IF EXISTS pipeline_operational_action_records CASCADE"))
+                await connection.execute(text("CREATE TABLE pipeline_operational_action_records (id VARCHAR(80) PRIMARY KEY)"))
+        finally:
+            await test_engine.dispose()
+
+    asyncio_run(prepare_pre_patch_schema())
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", database_url)
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+    from supervisor.infrastructure.db.database import engine as live_engine
+    from supervisor.infrastructure.db.database import init_db
+
+    async def initialize_and_check() -> None:
+        await init_db()
+        async with live_engine.connect() as connection:
+            result = await connection.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'pipeline_operational_action_records'"))
+            columns = {row[0] for row in result.fetchall()}
+            assert {column for column, _ in POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS}.issubset(columns)
+
+    try:
+        asyncio_run(initialize_and_check())
+    finally:
+        asyncio_run(live_engine.dispose())

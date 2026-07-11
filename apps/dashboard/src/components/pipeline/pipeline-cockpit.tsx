@@ -3,7 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
-import type { PipelineDashboardProjectionV0, PipelineOperationalActionRequestV0, PipelineStage } from "@kendall/contracts";
+import type {
+  PipelineDashboardProjectionV0,
+  PipelineGatedOperationalActionIdV0,
+  PipelineOperationalActionApprovalRequestV0,
+  PipelineOperationalActionRequestV0,
+  PipelineStage,
+} from "@kendall/contracts";
 import type { PipelineFixturePacket } from "../../lib/pipeline-fixtures";
 import {
   projectionDisplayLabels,
@@ -29,7 +35,10 @@ import type {
   PipelineManagerLanePanel,
   PipelineManagerLaneRow,
 } from "../../lib/pipeline/manager-execution-lane-summary";
-import { applyPipelineOperationalAction } from "../../lib/pipeline-packet-loader";
+import {
+  applyPipelineOperationalAction,
+  requestPipelineOperationalApproval,
+} from "../../lib/pipeline-packet-loader";
 
 const pipelineStages: PipelineStage[] = [
   "capture",
@@ -209,33 +218,47 @@ export function PipelineCockpit({
     );
   }, []);
   const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
-    if (action.state !== "available" || !["mark_tested", "request_rework"].includes(action.actionId)) {
+    const gatedActionIds = ["mark_tested", "request_rework"] as const satisfies readonly PipelineGatedOperationalActionIdV0[];
+    if (action.state !== "available" || !gatedActionIds.includes(action.actionId as PipelineGatedOperationalActionIdV0)) {
       return;
     }
+    const gatedActionId = action.actionId as PipelineGatedOperationalActionIdV0;
     const testResult = action.actionInstanceId.endsWith(":pass")
       ? "pass"
       : action.actionInstanceId.endsWith(":fail")
         ? "fail"
         : undefined;
-    const detail = currentProjection?.selectedPacketDetails.find((item) => item.packetId === packetId) ?? null;
-    const request: PipelineOperationalActionRequestV0 = {
-      schemaVersion: "pipeline-operational-action/v0",
-      actionId: action.actionId as PipelineOperationalActionRequestV0["actionId"],
+    const requestedBy = { actorType: "operator", actorId: "pipeline-operator", actorLabel: "Pipeline operator" } as const;
+    const approvalRequest: PipelineOperationalActionApprovalRequestV0 = {
+      actionId: gatedActionId,
       targetType: "work_packet",
       targetId: packetId,
-      idempotencyKey: `pipeline-ui:${packetId}:${action.actionId}:${Date.now()}`,
-      correlationId: `pipeline-ui:${packetId}:${Date.now()}`,
-      requestedBy: { actorType: "operator", actorId: "pipeline-operator", actorLabel: "Pipeline operator" },
-      requestedAuthorityState: action.actionId === "mark_tested" || action.actionId === "request_rework" ? "needs_product_approval" : "not_required",
-      requestedRiskTier: action.riskTier,
-      expectedCurrentEventId: detail?.latestTransitionEventRef?.replace(/^event:/, "") ?? undefined,
-      operatorIntentSummary: `${action.label} from /pipeline packet detail.`,
-      evidenceRefs: ["evidence:product-test-approval"],
-      testResult,
+      requestedBy,
+      requestedAuthorityState: "needs_product_approval",
+      requestedRiskTier: "medium",
       metadataOnly: true,
       rawPayloadRetained: false,
     };
     try {
+      const approval = await requestPipelineOperationalApproval(approvalRequest);
+      const request: PipelineOperationalActionRequestV0 = {
+        schemaVersion: "pipeline-operational-action/v0",
+        actionId: approval.actionId,
+        targetType: approval.targetType,
+        targetId: approval.targetId,
+        idempotencyKey: `pipeline-ui:${packetId}:${action.actionId}:${Date.now()}`,
+        correlationId: `pipeline-ui:${packetId}:${action.actionId}:${Date.now()}`,
+        requestedBy,
+        requestedAuthorityState: approval.requestedAuthorityState,
+        requestedRiskTier: approval.requestedRiskTier,
+        approvalId: approval.approvalId,
+        expectedCurrentEventId: approval.expectedCurrentEventId,
+        operatorIntentSummary: `${action.label} from /pipeline packet detail.`,
+        evidenceRefs: ["evidence:dashboard-action-request"],
+        testResult,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      };
       const result = await applyPipelineOperationalAction(request);
       setActionFeedback(`${result.actionId}: ${result.outcome}; ${result.typedReason ?? "state updated"}; correlation ${result.correlationId}`);
       window.setTimeout(() => window.location.reload(), 250);

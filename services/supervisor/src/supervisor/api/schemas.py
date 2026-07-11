@@ -1246,7 +1246,7 @@ class AuthoritativeWorkPacketLifecycleEventView(BaseModel):
     eventId: str
     packetId: str
     schemaVersion: Literal[1] = 1
-    eventType: Literal["packet.created", "packet.stage_transitioned"]
+    eventType: Literal["packet.created", "packet.stage_transitioned", "packet.operational_action_applied"]
     previousStage: AuthoritativePacketStage | None = None
     targetStage: AuthoritativePacketStage
     status: AuthoritativePacketStatus
@@ -1293,6 +1293,7 @@ OperationalActionId = Literal[
     "reassign",
     "reject",
 ]
+OperationalGatedActionId = Literal["mark_tested", "request_rework"]
 OperationalActionTargetType = Literal["work_packet", "projection", "runtime", "worker", "manager_run"]
 OperationalActionRiskTier = Literal["low", "medium", "high", "extreme"]
 OperationalActionCapabilityState = Literal["available", "unavailable", "gated", "simulated"]
@@ -1362,6 +1363,7 @@ class OperationalActionRequest(BaseModel):
     requestedBy: AuthoritativePacketActorView
     requestedAuthorityState: OperationalActionAuthorityState
     requestedRiskTier: OperationalActionRiskTier
+    approvalId: str | None = Field(default=None, max_length=120)
     expectedCurrentEventId: str | None = Field(default=None, max_length=80)
     operatorIntentSummary: str | None = Field(default=None, max_length=500)
     evidenceRefs: list[str] = Field(min_length=1, max_length=24)
@@ -1370,7 +1372,7 @@ class OperationalActionRequest(BaseModel):
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
 
-    @field_validator("targetId", "idempotencyKey", "correlationId", "expectedCurrentEventId", "operatorIntentSummary", "testNotes")
+    @field_validator("targetId", "idempotencyKey", "correlationId", "approvalId", "expectedCurrentEventId", "operatorIntentSummary", "testNotes")
     @classmethod
     def bounded_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -1392,6 +1394,44 @@ class OperationalActionRequest(BaseModel):
             if ref not in normalized:
                 normalized.append(ref)
         return normalized
+
+
+class OperationalActionApprovalRequest(BaseModel):
+    actionId: OperationalGatedActionId
+    targetType: Literal["work_packet"] = "work_packet"
+    targetId: str = Field(min_length=1, max_length=120)
+    requestedBy: AuthoritativePacketActorView
+    requestedAuthorityState: Literal["needs_product_approval"]
+    requestedRiskTier: Literal["medium"]
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @field_validator("targetId")
+    @classmethod
+    def approval_target_must_be_bounded(cls, value: str) -> str:
+        value = value.strip()
+        if not value or not _is_safe_pipeline_control_text(value):
+            raise ValueError("Operational approval target must be safe metadata text.")
+        return value
+
+
+class OperationalActionApprovalView(BaseModel):
+    approvalId: str
+    actionId: OperationalGatedActionId
+    targetType: Literal["work_packet"]
+    targetId: str
+    requestedBy: AuthoritativePacketActorView
+    requestedAuthorityState: Literal["needs_product_approval"]
+    requestedRiskTier: Literal["medium"]
+    expectedCurrentEventId: str
+    issuedAt: datetime
+    expiresAt: datetime
+    consumed: bool = False
+    consumedAt: datetime | None = None
+    consumedActionIdempotencyKey: str | None = None
+    consumedActionRecordId: str | None = None
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
 
 
 class OperationalActionCapabilityView(BaseModel):
@@ -1426,6 +1466,7 @@ class OperationalActionResultView(BaseModel):
     correlationId: str
     idempotencyKey: str
     actionRecordId: str
+    approvalId: str | None = None
     childPacketId: str | None = None
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False

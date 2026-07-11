@@ -38,6 +38,12 @@ class LocalProviderApprovalValidation:
     approval_reference: str | None = None
 
 
+class OperationalActionReplay(Exception):
+    def __init__(self, record: object) -> None:
+        super().__init__("Operational action idempotency replay.")
+        self.record = record
+
+
 from supervisor.api.schemas import (
     AuthoritativePacketSourceRefView,
     AuthoritativeWorkPacketCreateRequest,
@@ -142,6 +148,8 @@ from supervisor.api.schemas import (
     PipelineGatedControlV0View,
     PipelineRuntimeReadinessV0View,
     OperationalActionCapabilityView,
+    OperationalActionApprovalRequest,
+    OperationalActionApprovalView,
     OperationalActionRequest,
     OperationalActionResultView,
     OperationalReadyToTestRequest,
@@ -306,6 +314,7 @@ from supervisor.infrastructure.db.models import (
     AuthoritativeWorkPacket,
     AuthoritativeWorkPacketLifecycleEvent,
     OperationalActionRecord,
+    OperationalActionApprovalRecord,
     CandidateWork,
     ExecutionAttempt,
     MemoryProposal,
@@ -788,6 +797,44 @@ class SupervisorService:
         if target_index != current_index + 1:
             raise ValueError("Authoritative WorkPacket transitions must advance to the next canonical stage.")
 
+    async def issue_pipeline_operational_approval(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionApprovalRequest,
+    ) -> OperationalActionApprovalView:
+        policy = OPERATIONAL_ACTION_POLICIES.get(payload.actionId)
+        if policy is None or policy["authority"] == "not_required" or payload.actionId not in {"mark_tested", "request_rework"}:
+            raise ValueError("Operational action is not eligible for a server-issued approval.")
+        if payload.targetType not in policy["targets"]:
+            raise ValueError("Operational action target type is not allowed by policy.")
+        if payload.requestedRiskTier != policy["risk"]:
+            raise ValueError("Operational action risk tier does not match policy.")
+        if payload.requestedAuthorityState != policy["authority"]:
+            raise ValueError("Operational action authority family does not match policy.")
+
+        packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
+        if not packet:
+            raise ValueError("Authoritative WorkPacket not found.")
+        if not packet.ready_to_test_json or packet.operator_test_state != "ready":
+            raise ValueError("Operational action is not eligible because the packet is not ready to test.")
+
+        now = datetime.now(timezone.utc)
+        approval = OperationalActionApprovalRecord(
+            approval_id=f"approval-{uuid.uuid4()}",
+            action_id=payload.actionId,
+            target_type=payload.targetType,
+            target_id=payload.targetId,
+            requested_actor_json=payload.requestedBy.model_dump(),
+            requested_authority_family=payload.requestedAuthorityState,
+            requested_risk_tier=payload.requestedRiskTier,
+            expected_current_event_id=packet.current_event_id,
+            issued_at=now,
+            expires_at=now + timedelta(minutes=5),
+        )
+        session.add(approval)
+        await session.commit()
+        return self._operational_approval_view(approval)
+
     async def apply_pipeline_operational_action(
         self,
         session: AsyncSession,
@@ -814,42 +861,22 @@ class SupervisorService:
             packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
             if not packet:
                 raise ValueError("Authoritative WorkPacket not found.")
-            if payload.expectedCurrentEventId and packet.current_event_id != payload.expectedCurrentEventId:
+            if policy["authority"] == "not_required" and payload.expectedCurrentEventId and packet.current_event_id != payload.expectedCurrentEventId:
                 raise ValueError("Operational action rejected because packet state changed.")
 
         evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
+        if any(ref.startswith(("evidence:product-test-approval", "evidence:authority-approval")) for ref in evidence_refs):
+            raise ValueError("Client approval evidence prefixes are not accepted as authority.")
         action_evidence_ref = f"operational-action:{payload.actionId}:{payload.targetId}:{payload.idempotencyKey}"
         if action_evidence_ref not in evidence_refs:
             evidence_refs.append(action_evidence_ref)
         approval_evidence_required = policy["authority"] != "not_required"
-        has_approval_evidence = any(
-            ref.startswith("evidence:product-test-approval")
-            or ref.startswith("evidence:authority-approval")
-            for ref in evidence_refs
-        )
-        if approval_evidence_required and not has_approval_evidence:
-            record = self._new_operational_action_record(
-                payload,
-                packet=packet,
-                outcome="blocked",
-                resulting_stage=packet.current_stage if packet else "unknown",
-                resulting_status=packet.status if packet else "unknown",
-                capability_state="gated",
-                authority_state=policy["authority"],
-                typed_reason="blocked_by_approval",
-                evidence_refs=evidence_refs,
-            )
-            session.add(record)
-            await session.commit()
-            return self._operational_action_result_view(record)
-
+        approval: OperationalActionApprovalRecord | None = None
         if approval_evidence_required:
-            evidence_refs.extend(
-                [
-                    f"evidence:approval-{policy['authority']}:{payload.actionId}:{payload.targetId}:{payload.correlationId}:{payload.idempotencyKey}",
-                    f"evidence:{payload.actionId}-context:{payload.targetId}:{payload.correlationId}:{payload.idempotencyKey}",
-                ]
-            )
+            try:
+                approval = await self._validate_and_consume_operational_approval(session, payload, packet)
+            except OperationalActionReplay as replay:
+                return self._operational_action_result_view(replay.record)  # type: ignore[arg-type]
 
         child_packet_id: str | None = None
         if payload.actionId == "inspect" or payload.actionId == "refresh_projection":
@@ -885,6 +912,15 @@ class SupervisorService:
                         payload=payload,
                         evidence_refs=evidence_refs,
                     )
+                else:
+                    await self._append_operational_stage_event(
+                        session,
+                        packet,
+                        target_stage=packet.current_stage,
+                        status=packet.status,
+                        payload=payload,
+                        evidence_refs=evidence_refs,
+                    )
             elif payload.testResult == "fail":
                 child_packet_id = await self._create_rework_child(
                     session,
@@ -895,9 +931,25 @@ class SupervisorService:
                 )
                 packet.operator_test_state = "rework"
                 packet.status = "deferred"
+                await self._append_operational_stage_event(
+                    session,
+                    packet,
+                    target_stage=packet.current_stage,
+                    status=packet.status,
+                    payload=payload,
+                    evidence_refs=evidence_refs,
+                )
             else:
                 packet.operator_test_state = "ready"
                 packet.status = "waiting"
+                await self._append_operational_stage_event(
+                    session,
+                    packet,
+                    target_stage=packet.current_stage,
+                    status=packet.status,
+                    payload=payload,
+                    evidence_refs=evidence_refs,
+                )
             packet.updated_at = datetime.now(timezone.utc)
             outcome = "succeeded"
         elif payload.actionId == "request_rework":
@@ -912,6 +964,14 @@ class SupervisorService:
             )
             packet.operator_test_state = "rework"
             packet.status = "deferred"
+            await self._append_operational_stage_event(
+                session,
+                packet,
+                target_stage=packet.current_stage,
+                status=packet.status,
+                payload=payload,
+                evidence_refs=evidence_refs,
+            )
             packet.updated_at = datetime.now(timezone.utc)
             outcome = "succeeded"
         elif payload.actionId == "requeue":
@@ -958,8 +1018,11 @@ class SupervisorService:
             typed_reason=None,
             evidence_refs=evidence_refs,
             child_packet_id=child_packet_id,
+            approval=approval,
         )
         session.add(record)
+        if approval:
+            approval.consumed_action_record_id = record.id
         try:
             await session.commit()
         except IntegrityError:
@@ -969,6 +1032,26 @@ class SupervisorService:
                 return self._operational_action_result_view(replay)
             raise
         return self._operational_action_result_view(record)
+
+    def _operational_approval_view(self, approval: OperationalActionApprovalRecord) -> OperationalActionApprovalView:
+        return OperationalActionApprovalView(
+            approvalId=approval.approval_id,
+            actionId=approval.action_id,
+            targetType=approval.target_type,
+            targetId=approval.target_id,
+            requestedBy=approval.requested_actor_json,
+            requestedAuthorityState=approval.requested_authority_family,
+            requestedRiskTier=approval.requested_risk_tier,
+            expectedCurrentEventId=approval.expected_current_event_id,
+            issuedAt=approval.issued_at,
+            expiresAt=approval.expires_at,
+            consumed=approval.consumed_at is not None,
+            consumedAt=approval.consumed_at,
+            consumedActionIdempotencyKey=approval.consumed_action_idempotency_key,
+            consumedActionRecordId=approval.consumed_action_record_id,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
 
     async def _append_operational_stage_event(
         self,
@@ -982,11 +1065,12 @@ class SupervisorService:
     ) -> None:
         now = datetime.now(timezone.utc)
         event_id = f"event-{uuid.uuid4()}"
+        event_type = "packet.stage_transitioned" if target_stage != packet.current_stage else "packet.operational_action_applied"
         event = AuthoritativeWorkPacketLifecycleEvent(
             id=event_id,
             packet_id=packet.id,
             schema_version=1,
-            event_type="packet.stage_transitioned",
+            event_type=event_type,
             previous_stage=packet.current_stage,
             target_stage=target_stage,
             status=status,
@@ -995,14 +1079,38 @@ class SupervisorService:
             actor_json=payload.requestedBy.model_dump(),
             correlation_id=payload.correlationId,
             causation_id=packet.current_event_id,
-            idempotency_key=f"{payload.idempotencyKey}:stage",
-            payload_summary="Accepted operator test pass and advanced packet.",
+            idempotency_key=f"{payload.idempotencyKey}:operational-event",
+            payload_summary=(
+                "Accepted operator test pass and advanced packet."
+                if event_type == "packet.stage_transitioned"
+                else "Accepted gated operator action and recorded packet state."
+            ),
             evidence_refs_json=evidence_refs,
             occurred_at=now,
         )
         session.add(event)
+        with session.no_autoflush:
+            update_result = await session.execute(
+                update(AuthoritativeWorkPacket)
+                .execution_options(synchronize_session=False)
+                .where(
+                    AuthoritativeWorkPacket.id == packet.id,
+                    AuthoritativeWorkPacket.current_event_id == packet.current_event_id,
+                )
+                .values(
+                    current_stage=target_stage,
+                    status=status,
+                    current_event_id=event_id,
+                    updated_at=now,
+                )
+            )
+        if update_result.rowcount != 1:
+            await session.rollback()
+            raise ValueError("Operational action rejected because packet state changed concurrently.")
         packet.current_stage = target_stage
+        packet.status = status
         packet.current_event_id = event_id
+        packet.updated_at = now
 
     async def _create_rework_child(
         self,
@@ -1055,6 +1163,69 @@ class SupervisorService:
         session.add(child)
         session.add(child_event)
         return child_packet_id
+
+    async def _validate_and_consume_operational_approval(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequest,
+        packet: AuthoritativeWorkPacket | None,
+    ) -> OperationalActionApprovalRecord:
+        if not payload.approvalId:
+            raise ValueError("Gated operational actions require a server-issued approval id.")
+        approval = await session.get(OperationalActionApprovalRecord, payload.approvalId)
+        if not approval:
+            raise ValueError("Operational action approval was not found.")
+        if approval.consumed_at is not None:
+            await self._raise_operational_action_replay_if_present(session, payload)
+            raise ValueError("Operational action approval has already been consumed.")
+        if approval.action_id != payload.actionId or approval.target_type != payload.targetType or approval.target_id != payload.targetId:
+            raise ValueError("Operational action approval does not match the requested action target.")
+        if approval.requested_actor_json != payload.requestedBy.model_dump():
+            raise ValueError("Operational action approval does not match the requested actor.")
+        if approval.requested_authority_family != payload.requestedAuthorityState:
+            raise ValueError("Operational action approval does not match the requested authority family.")
+        if approval.requested_risk_tier != payload.requestedRiskTier:
+            raise ValueError("Operational action approval does not match the requested risk tier.")
+        if not packet or not approval.expected_current_event_id:
+            raise ValueError("Gated operational action approval requires a canonical packet event.")
+        if payload.expectedCurrentEventId != approval.expected_current_event_id or packet.current_event_id != approval.expected_current_event_id:
+            raise ValueError("Operational action approval is stale because packet state changed.")
+        now = datetime.now(timezone.utc)
+        expires_at = approval.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= now:
+            raise ValueError("Operational action approval is expired.")
+        consumed_at = now
+        result = await session.execute(
+            update(OperationalActionApprovalRecord)
+            .execution_options(synchronize_session=False)
+            .where(
+                OperationalActionApprovalRecord.approval_id == approval.approval_id,
+                OperationalActionApprovalRecord.consumed_at.is_(None),
+                OperationalActionApprovalRecord.expires_at > consumed_at,
+            )
+            .values(consumed_at=consumed_at, consumed_action_idempotency_key=payload.idempotencyKey)
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            await self._raise_operational_action_replay_if_present(session, payload)
+            raise ValueError("Operational action approval has already been consumed or expired.")
+        approval.consumed_at = consumed_at
+        approval.consumed_action_idempotency_key = payload.idempotencyKey
+        return approval
+
+    async def _raise_operational_action_replay_if_present(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequest,
+    ) -> None:
+        replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+        if not replay:
+            return
+        if not self._operational_action_matches(replay, payload):
+            raise ValueError("Operational action idempotency key already belongs to different action metadata.")
+        raise OperationalActionReplay(replay)
 
     async def _operational_action_by_idempotency(
         self,
@@ -1174,6 +1345,7 @@ class SupervisorService:
             and record.actor_json == payload.requestedBy.model_dump()
             and record.requested_authority_state == payload.requestedAuthorityState
             and record.requested_risk_tier == payload.requestedRiskTier
+            and record.approval_id == payload.approvalId
             and record.expected_current_event_id == payload.expectedCurrentEventId
             and self._operational_requested_evidence_refs(record) == self._safe_lifecycle_refs(payload.evidenceRefs)
             and record.operator_intent_summary == self._safe_lifecycle_summary(payload.operatorIntentSummary or "Metadata-only operational action.")
@@ -1203,6 +1375,7 @@ class SupervisorService:
         typed_reason: str | None,
         evidence_refs: list[str],
         child_packet_id: str | None = None,
+        approval: OperationalActionApprovalRecord | None = None,
     ) -> OperationalActionRecord:
         return OperationalActionRecord(
             id=f"action-{uuid.uuid4()}",
@@ -1216,6 +1389,7 @@ class SupervisorService:
             requested_authority_state=payload.requestedAuthorityState,
             requested_risk_tier=payload.requestedRiskTier,
             expected_current_event_id=payload.expectedCurrentEventId,
+            approval_id=approval.approval_id if approval else payload.approvalId,
             outcome=outcome,
             resulting_stage=resulting_stage,
             resulting_status=resulting_status,
@@ -1245,6 +1419,7 @@ class SupervisorService:
             correlationId=record.correlation_id,
             idempotencyKey=record.idempotency_key,
             actionRecordId=record.id,
+            approvalId=record.approval_id,
             childPacketId=record.child_packet_id,
             metadataOnly=True,
             rawPayloadRetained=False,
@@ -2635,7 +2810,7 @@ class SupervisorService:
             lifecycle_events = [
                 event
                 for event in packet.history
-                if event.eventType in {"packet.created", "packet.stage_transitioned"}
+                if event.eventType in {"packet.created", "packet.stage_transitioned", "packet.operational_action_applied"}
             ]
             current_lifecycle_event = next(
                 (event for event in lifecycle_events if event.eventId == packet.currentEventId),

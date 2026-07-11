@@ -18,6 +18,7 @@ from supervisor.api.schemas import (
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
+    OperationalActionApprovalRequest,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     WorkItemActionRequest,
@@ -227,6 +228,18 @@ async def apply_pipeline_operational_action(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_action", payload.correlationId).model_dump()) from exc
     return ApiEnvelope(data=result)
+
+
+@app.post("/pipeline-control-plane/approvals", response_model=ApiEnvelope)
+async def issue_pipeline_operational_approval(
+    payload: OperationalActionApprovalRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        approval = await service.issue_pipeline_operational_approval(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_approval").model_dump()) from exc
+    return ApiEnvelope(data=approval)
 
 
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
