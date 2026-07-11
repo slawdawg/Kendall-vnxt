@@ -3435,6 +3435,41 @@ try {
     }
   });
 
+  test("claim-next suppresses local BMAD ready stories when authoritative planning is terminal", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const claimStateRoot = mkdtempSync(join(rootDir, ".codex-workspace-bmad-terminal-authority-state-"));
+    try {
+      seedFixtureSafeBacklogSource(fixture.root, []);
+      seedFixtureBmadSprintStatus(fixture.root);
+      const planningDir = join(fixture.root, "_bmad-output", "planning-artifacts");
+      const prdPath = "_bmad-output/planning-artifacts/prd.md";
+      mkdirSync(planningDir, { recursive: true });
+      writeFileSync(
+        join(planningDir, "epics.md"),
+        ["---", "status: complete", `authoritative_prd: ${prdPath}`, "---", ""].join("\n"),
+      );
+      writeFileSync(join(fixture.root, prdPath), ["---", "status: final", "---", ""].join("\n"));
+
+      const result = runFixtureScript(fixture, [
+        "claim-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.selected === null, result.stdout || result.stderr);
+      assert(packet.counts.total === 0, result.stdout || result.stderr);
+      assert(!result.stdout.includes("bmad-9-9-ready-story"), result.stdout || result.stderr);
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("dispatch-next apply seeds selected BMAD story artifacts into prepared worktree", () => {
     const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
     const dispatchStateRoot = mkdtempSync(join(rootDir, ".codex-workspace-bmad-seed-state-"));

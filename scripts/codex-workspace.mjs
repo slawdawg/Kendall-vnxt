@@ -6992,7 +6992,7 @@ function seedDispatchLocalBmadArtifacts(item = {}, worktreePath = "") {
     throw new Error(`BMAD artifact ignore setup failed: ${exclude.reason}`);
   }
   for (const entry of unique) {
-    const sourceAbsolute = join(repoRoot, entry.path);
+    const sourceAbsolute = join(mainWorktreePath(), entry.path);
     if (!existsSync(sourceAbsolute)) {
       throw new Error(`Selected BMAD artifact is missing: ${entry.path}`);
     }
@@ -7947,7 +7947,11 @@ function readSafeBacklogItems({ stateRootPath = null } = {}) {
 
 function readBmadReadyStoryBacklogItems() {
   const sourcePath = "_bmad-output/implementation-artifacts/sprint-status.yaml";
-  const sprintStatusPath = join(repoRoot, sourcePath);
+  const sourceRoot = mainWorktreePath();
+  if (authoritativePlanningIsTerminal(sourceRoot)) {
+    return [];
+  }
+  const sprintStatusPath = join(sourceRoot, sourcePath);
   if (!existsSync(sprintStatusPath)) {
     return [];
   }
@@ -7965,7 +7969,7 @@ function readBmadReadyStoryBacklogItems() {
     .filter(([storyKey, status]) => /^\d+-\d+-[a-z0-9-]+$/.test(storyKey) && normalizeYamlStatus(status) === "ready-for-dev")
     .map(([storyKey]) => {
       const storyPath = `_bmad-output/implementation-artifacts/${storyKey}.md`;
-      const absoluteStoryPath = join(repoRoot, storyPath);
+      const absoluteStoryPath = join(sourceRoot, storyPath);
       const itemSlug = `bmad-${storyKey}`;
       if (!existsSync(absoluteStoryPath)) {
         return null;
@@ -7997,6 +8001,31 @@ function readBmadReadyStoryBacklogItems() {
       };
     })
     .filter(Boolean);
+}
+
+function authoritativePlanningIsTerminal(sourceRoot = repoRoot) {
+  const epicsPath = join(sourceRoot, "_bmad-output", "planning-artifacts", "epics.md");
+  if (!existsSync(epicsPath)) return false;
+  let epicsContent = "";
+  try {
+    epicsContent = readFileSync(epicsPath, "utf8");
+  } catch {
+    return false;
+  }
+  if (normalizeYamlStatus(yamlScalar(epicsContent, "status")) !== "complete") return false;
+  const authoritativePrd = yamlScalar(epicsContent, "authoritative_prd").replaceAll("\\", "/");
+  if (!authoritativePrd || authoritativePrd.startsWith("/") || authoritativePrd.includes("..") || !authoritativePrd.startsWith("_bmad-output/")) {
+    return false;
+  }
+  const prdPath = join(sourceRoot, authoritativePrd);
+  if (!existsSync(prdPath)) return false;
+  let prdContent = "";
+  try {
+    prdContent = readFileSync(prdPath, "utf8");
+  } catch {
+    return false;
+  }
+  return normalizeYamlStatus(yamlScalar(prdContent, "status")) === "final";
 }
 
 function yamlScalar(content, key) {
