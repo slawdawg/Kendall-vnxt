@@ -5185,10 +5185,20 @@ function findManifest(state, query, options = {}) {
     throw new Error("Specify a task query; multiple active workspaces exist.");
   }
 
+  const searchableValues = (manifest) =>
+    [manifest.task_id, manifest.title, manifest.description, manifest.branch].filter(Boolean);
+  const exactMatches = manifests.filter(({ manifest }) =>
+    searchableValues(manifest).some((value) => String(value).toLowerCase() === normalized),
+  );
+  if (exactMatches.length === 1) {
+    return exactMatches[0];
+  }
+  if (exactMatches.length > 1) {
+    throw new Error(`Query matched multiple workspaces: ${exactMatches.map((m) => m.manifest.task_id).join(", ")}`);
+  }
+
   const matches = manifests.filter(({ manifest }) =>
-    [manifest.task_id, manifest.title, manifest.description, manifest.branch]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(normalized)),
+    searchableValues(manifest).some((value) => String(value).toLowerCase().includes(normalized)),
   );
 
   if (matches.length === 0) {

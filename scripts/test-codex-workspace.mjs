@@ -1443,6 +1443,39 @@ try {
     assert(result.stdout.includes("owner=runner-a"), result.stdout || result.stderr);
   });
 
+  test("resume prefers an exact workspace task query over a longer prefix match", () => {
+    const queryStateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-exact-query-"));
+    try {
+      const tasksDir = join(queryStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const exactTaskId = "20260710-fix-booting-promotion-second-review";
+      const longerTaskId = `${exactTaskId}-delivery-convergence`;
+      for (const taskId of [exactTaskId, longerTaskId]) {
+        writeFileSync(
+          join(tasksDir, `${taskId}.json`),
+          `${JSON.stringify({
+            task_id: taskId,
+            branch: `codex/${taskId}`,
+            worktree_path: rootDir,
+            base_branch: "dev",
+            base_ref: "origin/dev",
+            status: "active",
+            owner: "runner-a",
+          }, null, 2)}\n`,
+        );
+      }
+
+      const result = run(["resume", exactTaskId, "--json", "--state-root", queryStateRoot, "--owner", "runner-a"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.taskId === exactTaskId, result.stdout || result.stderr);
+      assert(packet.branch === `codex/${exactTaskId}`, result.stdout || result.stderr);
+    } finally {
+      rmSync(queryStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("list json emits structured workspace rows for automation", () => {
     const jsonStateRoot = mkdtempSync(join(tmpdir(), "codex-list-json-"));
     try {
