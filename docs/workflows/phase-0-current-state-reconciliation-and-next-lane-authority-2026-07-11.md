@@ -253,6 +253,32 @@ owner-provided or an explicitly approved takeover can inspect them without
 violating dirty-worktree preservation, all twelve stale targets remain
 preservation-gated.
 
+## Fresh runtime and source-supply evidence
+
+The exact read-only manager packets were rerun outside the sandbox on
+2026-07-11 after the previous delivery cleanup. Repository and workspace
+protocol checks passed, usage was normal at 78% remaining, and CPU/RAM posture
+was normal. The manager run remains `manager-20260706-001` in `starting` state
+with no reconstructed dispatcher summary. Tmux orientation still reports 8
+panes, 4 manager-owned panes, 2 unmanaged panes, and 2 missing-worktree
+references. No pane, worker, lease, or dispatcher state was mutated.
+
+The exact refill dry run confirms the authoritative operational-pipeline PRD
+has 201 done stories and zero backlog, ready, review-ready, or active source
+stories. Safe work supply is zero. The refill packet proposes the planning-only
+course-correction candidate `26-1-planning-only-bmad-refill-continuation`, but
+its `bmad-correct-course` request packet is `needs_review`; the materialization
+gate therefore remains `blocked_until_request_packet_ready`. No new Epic 26
+backlog, BMAD artifact, worker lane, or dispatch operation was created.
+
+The primary branch was also compared directly with current `origin/dev`. Its
+committed lineage is stale against current dev by 38 paths, with 350 additions
+and 13,635 deletions, including superseded historical source, test, and
+documentation surfaces. Separately, its uncommitted patch remains exactly four
+files with 157 additions and 2,327 deletions. The committed operational-loop
+intent is already represented in current dev; the remaining dirty source/test
+patch still removes safety invariants and is not a valid delivery candidate.
+
 ## Baseline interpretation
 
 The implementation gates are current and green, but the manager runtime
