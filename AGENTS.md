@@ -299,6 +299,23 @@ not as permission to skip BMAD quality gates.
 
 ## Long-Running Dev Goals
 
+### Operator Durable PR Delivery Authority
+
+The operator has explicitly and durably authorized owning workers or delegated
+subagents to commit intended lane files, push the lane branch, and open or
+update a PR targeting the repository's `dev` branch for any Kendall_Nxt lane.
+This authority is recorded at the repository-policy level and does not require
+repeated lane-specific approval prompts after the worker has proven the normal
+scope, verification, review, and delivery gates.
+
+The authority does not permit manager-local source or delivery mutations,
+force-pushes, bypassing failed checks or unresolved review threads, unrelated
+repositories or base branches, secret/provider/deployment changes, destructive
+history rewrites, or merge/cleanup actions unless separately covered by the
+active goal and its evidence gates. A platform, tenant, provider, or sandbox
+veto still takes precedence over this repository policy; workers must record
+the veto and stop rather than retrying through a workaround.
+
 When the operator starts or approves a long-running development goal, treat it as a
 durable, milestone-driven workflow rather than a single unbounded task.
 
