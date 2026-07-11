@@ -9,6 +9,7 @@ const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json",
 const supervisorPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
 const loaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
 const cockpitPath = new URL("../apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", import.meta.url);
+const operationalSmokePath = new URL("../services/supervisor/scripts/pipeline_operational_smoke.py", import.meta.url);
 
 test("dashboard obtains server-bound approval before gated pipeline apply", async () => {
   const [supervisor, loader, cockpit] = await Promise.all([
@@ -117,4 +118,21 @@ test("dashboard supervisor client performs approval then apply with server event
   assert.deepEqual(calls[1].body.evidenceRefs, ["evidence:dashboard-action-request"]);
   assert.equal(calls[1].body.metadataOnly, true);
   assert.equal(calls[1].body.rawPayloadRetained, false);
+});
+
+test("operational smoke uses server-bound approvals and stays integrated-local", async () => {
+  const smoke = await readFile(operationalSmokePath, "utf8");
+
+  assert.match(smoke, /\/pipeline-control-plane\/approvals/);
+  assert.match(smoke, /approval\["approvalId"\]/);
+  assert.match(smoke, /approval\["expectedCurrentEventId"\]/);
+  assert.match(smoke, /"evidenceLevel": "integrated_local"/);
+  assert.match(smoke, /"initialStage": "needs_approval"/);
+  assert.match(smoke, /"status": "blocked"/);
+  assert.match(smoke, /blocked_detail\["unblocker"\]/);
+  assert.match(smoke, /"initialStage": "execute"/);
+  assert.match(smoke, /non_approval_blocked_detail\["unblocker"\] == "operator"/);
+  assert.match(smoke, /broaderQueueLeaseWorkerRestartProof/);
+  assert.doesNotMatch(smoke, /evidence:product-test-approval|evidence:authority-approval/);
+  assert.doesNotMatch(smoke, /live_backend_local_proof|bounded_live|production_observed|full Gate 4 integrated MVP proof/);
 });

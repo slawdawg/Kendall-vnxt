@@ -1495,6 +1495,7 @@ AuthoritativeWorkPacketTransitionRequest.model_rebuild()
 
 PipelineProjectionSourceLabelV0 = Literal["live", "stale", "fixture", "simulated", "dry_run", "unavailable", "unknown"]
 PipelineProjectionFreshnessStateV0 = Literal["live", "stale", "unavailable", "unknown"]
+PipelinePacketUnblockerV0 = Literal["operator", "manager", "worker", "source", "system", "unknown"]
 PipelineProjectionEmptyReasonV0 = Literal[
     "healthy_empty",
     "source_exhausted",
@@ -1584,6 +1585,7 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
     sourceRef: AuthoritativePacketSourceRefView | None = None
     blocker: str | None = None
     nextAction: str | None = None
+    unblocker: PipelinePacketUnblockerV0 = "unknown"
     readyToTest: WorkPacketReadyToTestV0View | None = None
     evidenceRefs: list[str] = Field(default_factory=list)
     updatedAt: datetime
@@ -1599,6 +1601,7 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     truthLabel: PipelineProjectionSourceLabelV0
     blocker: str | None = None
     nextAction: str | None = None
+    unblocker: PipelinePacketUnblockerV0 = "unknown"
     readyToTest: WorkPacketReadyToTestV0View | None = None
     latestTransitionEventRef: str | None = None
     recentTransitionEventRefs: list[str] = Field(default_factory=list)

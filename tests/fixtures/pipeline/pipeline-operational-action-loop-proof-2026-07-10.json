@@ -1,50 +1,71 @@
 {
-  "schemaVersion": "pipeline-operational-action-loop-proof/v0",
+  "schemaVersion": "pipeline-operational-action-loop-proof/v1",
   "slice": "operational-pipeline-action-loop",
   "prd": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
-  "verifiedAt": "2026-07-10",
+  "verifiedAt": "2026-07-11",
   "backendEndpoint": "/pipeline-control-plane/projection",
   "actionEndpoint": "/pipeline-control-plane/actions",
   "smokeCommand": "pnpm run test:pipeline-operational-smoke",
-  "truthLabel": "live_backend_local_proof",
+  "truthLabel": "integrated_local",
+  "evidenceLevel": "integrated_local",
   "runtimeMode": "local_proof",
   "proofStates": {
     "readyToTestProjection": true,
+    "serverIssuedApprovalBindsCurrentEvent": true,
     "passAdvancesReviewToPromote": true,
     "idempotentReplayReturnsSameActionRecord": true,
-    "missingApprovalReturnsTypedBlockedResult": true,
-    "reworkCreatesParentLinkedChild": true
+    "staleSecondApprovalIsRejected": true,
+    "missingApprovalIsRejected": true,
+    "reworkCreatesParentLinkedChild": true,
+    "projectionReflectsBackendActionAndLineage": true,
+    "blockedPacketProjectionIsVisibleAndOwned": true,
+    "blockedPacketCapabilityIsGated": true,
+    "nonApprovalBlockedPacketNotLabeledOperator": true
   },
   "representativePacket": {
     "packetId": "packet-pipeline-operational-smoke",
     "stagesTraversed": ["review", "promote"],
-    "lineage": "root plus rework child supported"
+    "lineage": "root packet plus separately approved request_rework child"
   },
   "evidenceRefs": [
     "test:pipeline-operational-smoke",
     "evidence:pipeline-operational-smoke",
-    "evidence:product-test-approval"
+    "evidence:operator-test-decision",
+    "evidence:operator-rework-decision"
   ],
   "artifactPaths": [
     "services/supervisor/scripts/pipeline_operational_smoke.py",
+    "services/supervisor/src/supervisor/api/schemas.py",
     "services/supervisor/src/supervisor/application/service.py",
-    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
-    "apps/dashboard/src/lib/pipeline/active-board-view-model.ts",
-    "tests/fixtures/pipeline/pipeline-operational-action-loop-proof-2026-07-10.json"
+    "packages/contracts/src/pipeline-control-plane/index.ts",
+    "tests/pipeline-gate3-approval.test.mjs",
+    "tests/dashboard-pipeline-fixtures.test.mjs",
+    "tests/fixtures/pipeline/pipeline-operational-action-loop-proof-2026-07-10.json",
+    "docs/workflows/operational-pipeline-action-loop-closeout.md"
   ],
   "verificationResults": [
     {
       "command": "pnpm run test:pipeline-operational-smoke",
       "status": "passed",
-      "sandbox": "outside-sandbox",
-      "provenance": "Current operational pipeline action loop smoke",
+      "provenance": "Current server-bound operational action loop smoke",
+      "currentStoryRun": true
+    },
+    {
+      "command": "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q",
+      "status": "passed",
+      "provenance": "Supervisor integration coverage for server-issued approval binding and projection",
+      "currentStoryRun": true
+    },
+    {
+      "command": "node --test tests/pipeline-gate3-approval.test.mjs tests/dashboard-pipeline-fixtures.test.mjs tests/pipeline-control-plane-lifecycle.test.mjs",
+      "status": "passed",
+      "provenance": "Node contract and boundary coverage for server-bound approvals and truthful evidence",
       "currentStoryRun": true
     },
     {
       "command": "pnpm --filter @kendall/dashboard exec tsc --noEmit",
       "status": "passed",
-      "sandbox": "workspace",
-      "provenance": "Current operational pipeline action loop verification",
+      "provenance": "Current dashboard contract verification",
       "currentStoryRun": true
     }
   ],
@@ -59,5 +80,7 @@
     "terminalScrollbackRetained": false,
     "rawTranscriptsRetained": false
   },
-  "liveProofCannotUseFixtures": true
+  "fixtureCannotSatisfyIntegratedLocalEvidence": true,
+  "fr13Status": "Blocked/gated packet visibility, typed blocker, operator next action, computed unblocker, evidence refs, and gated capability are covered; defer/rework-from-blocked and restart/replay implications remain pending.",
+  "broaderProofPending": "Queue/lease execution, fake-worker/worker behavior, and restart/recovery proof remain pending; this smoke only covers the real supervisor/API/local SQLite path."
 }

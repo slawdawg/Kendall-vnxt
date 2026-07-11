@@ -2144,6 +2144,7 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
                 "sourceRef": None,
                 "blocker": None,
                 "nextAction": "Advance toward Classify.",
+                "unblocker": "unknown",
                 "readyToTest": None,
                 "evidenceRefs": [],
                 "updatedAt": create_response.json()["data"]["updatedAt"],

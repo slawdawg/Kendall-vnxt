@@ -540,25 +540,37 @@ test("operational action loop proof artifact records current backend action trut
   const proofSource = await readFile(operationalActionLoopProofPath, "utf8");
   const proof = JSON.parse(proofSource);
 
-  assert.equal(proof.schemaVersion, "pipeline-operational-action-loop-proof/v0");
+  assert.equal(proof.schemaVersion, "pipeline-operational-action-loop-proof/v1");
   assert.equal(proof.prd, "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md");
   assert.equal(proof.backendEndpoint, "/pipeline-control-plane/projection");
   assert.equal(proof.actionEndpoint, "/pipeline-control-plane/actions");
-  assert.equal(proof.truthLabel, "live_backend_local_proof");
+  assert.equal(proof.truthLabel, "integrated_local");
+  assert.equal(proof.evidenceLevel, "integrated_local");
   assert.equal(proof.runtimeMode, "local_proof");
   assert.deepEqual(proof.proofStates, {
     readyToTestProjection: true,
+    serverIssuedApprovalBindsCurrentEvent: true,
     passAdvancesReviewToPromote: true,
     idempotentReplayReturnsSameActionRecord: true,
-    missingApprovalReturnsTypedBlockedResult: true,
+    staleSecondApprovalIsRejected: true,
+    missingApprovalIsRejected: true,
     reworkCreatesParentLinkedChild: true,
+    projectionReflectsBackendActionAndLineage: true,
+    blockedPacketProjectionIsVisibleAndOwned: true,
+    blockedPacketCapabilityIsGated: true,
+    nonApprovalBlockedPacketNotLabeledOperator: true,
   });
   assert.ok(proof.verificationResults.every((result) => result.status === "passed"));
   assert.equal(proof.retention.metadataOnly, true);
   assert.equal(proof.retention.rawProviderPayloadsRetained, false);
   assert.equal(proof.retention.rawPromptsRetained, false);
   assert.equal(proof.retention.rawCompletionsRetained, false);
-  assert.equal(proof.liveProofCannotUseFixtures, true);
+  assert.equal(proof.fixtureCannotSatisfyIntegratedLocalEvidence, true);
+  assert.match(proof.fr13Status, /blocked.*visibility|visibility.*blocked/i);
+  assert.match(proof.fr13Status, /defer|rework|restart/i);
+  assert.match(proof.broaderProofPending, /queue|lease|worker|restart/i);
+  assert.doesNotMatch(proofSource, /live_backend_local_proof|bounded_live|production_observed|full Gate 4 integrated MVP proof/);
+  assert.doesNotMatch(proofSource, /evidence:product-test-approval|evidence:authority-approval/);
   assert.doesNotMatch(proofSource, /"(rawPrompt|rawCompletion|reasoningTrace|providerPayload|rawProviderPayload|sourceContent)"\s*:/i);
   assert.doesNotMatch(proofSource, /sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9]|authorization:\s*[^",}\]]|password\s*[:=]|secret\s*[:=]/i);
 });

@@ -2426,6 +2426,7 @@ function operationalActionRecord(
 
 export type PipelineProjectionSourceLabelV0 = "live" | "stale" | "fixture" | "simulated" | "dry_run" | "unavailable" | "unknown";
 export type PipelineProjectionFreshnessStateV0 = "live" | "stale" | "unavailable" | "unknown";
+export type PipelinePacketUnblockerV0 = "operator" | "manager" | "worker" | "source" | "system" | "unknown";
 export type PipelineProjectionEmptyReasonV0 =
   | "healthy_empty"
   | "source_exhausted"
@@ -2526,6 +2527,7 @@ export interface PipelineDashboardWorkPacketV0 {
   sourceRef: AuthoritativePacketSourceRef | null;
   blocker: string | null;
   nextAction: string | null;
+  unblocker: PipelinePacketUnblockerV0;
   readyToTest?: PipelineReadyToTestV0 | null;
   evidenceRefs: string[];
   updatedAt: string;
@@ -2541,6 +2543,7 @@ export interface PipelineSelectedPacketDetailV0 {
   truthLabel: PipelineProjectionSourceLabelV0;
   blocker: string | null;
   nextAction: string | null;
+  unblocker: PipelinePacketUnblockerV0;
   readyToTest?: PipelineReadyToTestV0 | null;
   latestTransitionEventRef?: string | null;
   recentTransitionEventRefs?: string[];
