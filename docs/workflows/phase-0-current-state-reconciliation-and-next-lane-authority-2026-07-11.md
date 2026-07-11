@@ -13,13 +13,13 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Reconciled baseline
 
-- `origin/dev` is at `c1cfe896ffedde7f3e0bc11c86fc12e1903d5493`, including the
-  merged Gate 5/6 terminal backlog and readiness gates plus the Phase 0
-  reconciliation artifact.
+- `origin/dev` is at `cc1a4e7ca0e0071e96dad01d40cd2aca68a12ba3`, including the
+  merged Gate 5/6 terminal backlog and readiness gates, the Phase 0
+  reconciliation artifacts, and the post-merge course-correction policy update.
 - PR inventory is empty: no open pull requests target `dev`.
 - Epic 25-1 (#473), Epic 25-2 (#474), the earlier 24-1 fixture stabilization
-  (#461), and the Phase 0 reconciliation (#485) are merged. There is no open
-  PR available for merge or review-fix work.
+  (#461), the Phase 0 reconciliation (#485), and the post-merge policy update
+  (#488) are merged. There is no open PR available for merge or review-fix work.
 - The primary checkout remains intentionally dirty in four user-owned paths:
   `AGENTS.md`,
   `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`,
@@ -30,10 +30,9 @@ provider operation, scoring operation, takeover, or cleanup authority.
   `starting` state with its last ledger update on 2026-07-06. Its dispatcher
   summary is unavailable/stale, so queue and lease truth cannot be inferred
   from that run.
-- Current read-only preflight reports 103 backlog candidates, 102 closed and 1
-  claimed; 0 dispatchable lanes; 0 active leases; and 103 blocked dispatcher
-  candidates. The authoritative PRD source is present and exhausted; dispatcher
-  state is unavailable/stale.
+- Current read-only preflight reports no safe work supply or dispatchable lanes;
+  the authoritative PRD source is present and exhausted, while dispatcher state
+  remains unavailable/stale.
 - Assignment inventory reports 252 lane assignments, including 236 closed and
   16 `blocked_stale_owner_needs_takeover`; and 415 workspace assignments,
   including 398 closed, 15 `blocked_stale_owner_needs_takeover`, 1
@@ -49,7 +48,7 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Runtime repair gate
 
-The exact outside-sandbox preflight at 2026-07-11T15:37Z confirmed that the
+The exact outside-sandbox preflight at 2026-07-11T16:42Z confirmed that the
 manager runtime is read-only and blocked: the stale run is
 `manager-20260706-001` in `starting` state, dispatcher freshness is unknown,
 safe work supply is zero and the authoritative PRD has no remaining backlog.
@@ -65,8 +64,26 @@ eligible for stale-record cleanup. Apply remains blocked pending explicit
 operator approval. Nine dirty stale workspaces have bounded preservation
 evidence, 2 clean stale lanes remain blocked on explicit takeover/evidence, and
 there are 0 other cleanup candidates and 0 takeover-approval candidates. No
-takeover, worker mutation, dispatch apply, provider call, GitHub delivery
-mutation, merge, or cleanup apply has been performed.
+takeover, worker mutation, dispatch apply, provider call, runtime cleanup
+apply, or runtime merge has been performed.
+
+## Post-merge delivery audit
+
+The scoped policy/documentation lane was delivered and closed after the prior
+runtime audit:
+
+- PR #488 changed only `AGENTS.md` and the latest PRD's course-correction
+  guidance. Its exact head was
+  `88f1a6781a09c952c352fbe139e9533afc45db14` and its merge commit was
+  `cc1a4e7ca0e0071e96dad01d40cd2aca68a12ba3`.
+- Required CI jobs `changes`, `fast`, and aggregate `check` passed; the
+  implementation jobs were correctly skipped for the docs-only change. Review
+  submissions and inline review threads were empty.
+- The managed lane worktree and local branch were removed only after exact-head
+  ancestry verification. The remote branch was already absent after merge, and
+  the lane manifest is closed with cleanup error `null`.
+- No source implementation, worker state, stale assignment, takeover, or
+  dispatcher state was changed by that delivery.
 
 ## Canonical stale-record cleanup approval packet
 
