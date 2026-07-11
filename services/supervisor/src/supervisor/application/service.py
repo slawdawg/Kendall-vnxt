@@ -19248,6 +19248,23 @@ class SupervisorService:
             raise ValueError("Local proof source authority digest does not match the Git index blob.")
         return digest
 
+    def _assert_server_owned_local_proof_work_item(
+        self,
+        item: WorkItem,
+        packet_id: str,
+        source_digest: str,
+    ) -> None:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        if (
+            item.authoritative_packet_id != packet_id
+            or metadata.get("authoritativePacketId") != packet_id
+            or metadata.get("localProofAuthority") != "integrated_local"
+            or metadata.get("sourceContentSha256") != source_digest
+        ):
+            raise ValueError(
+                "Authoritative local proof requires a server-owned local-proof attestation linked to the verified source digest."
+            )
+
     async def run_authoritative_local_proof(
         self,
         session: AsyncSession,
@@ -19276,6 +19293,8 @@ class SupervisorService:
         if len(linked_items) > 1:
             raise ValueError("Authoritative local proof requires exactly one server-created linked WorkItem.")
         item = linked_items[0] if linked_items else None
+        if item:
+            self._assert_server_owned_local_proof_work_item(item, packet_id, source_digest)
         if not item:
             item = await self.create_work_item(
                 session,
@@ -19299,11 +19318,7 @@ class SupervisorService:
                 ),
                 _internal_authoritative=True,
             )
-        elif item.authoritative_packet_id != packet_id:
-            item.authoritative_packet_id = packet_id
-            await session.flush()
-        if item.authoritative_packet_id != packet_id:
-            raise ValueError("Authoritative local proof WorkItem linkage is not server-owned.")
+        self._assert_server_owned_local_proof_work_item(item, packet_id, source_digest)
         existing_events = await self.list_work_item_events(session, item.id)
         if any(
             isinstance(event.payload, dict)
@@ -19312,7 +19327,7 @@ class SupervisorService:
             if event.event_type.startswith("local_proof.")
         ):
             raise ValueError(f"Local proof idempotency key {payload.idempotencyKey} has already been used.")
-        transition_prefix = f"local-proof:{packet_id}:{payload.idempotencyKey}"
+        transition_prefix = f"local-proof:{hashlib.sha256(f'{packet_id}:{payload.idempotencyKey}'.encode()).hexdigest()}"
         lifecycle_trace = [self._local_proof_lifecycle_trace(packet, item)]
         for index, (target_stage, status) in enumerate(
             (("classify", "active"), ("route", "active"), ("shape", "waiting"), ("needs_approval", "waiting"), ("execute", "active"))
@@ -19460,6 +19475,7 @@ class SupervisorService:
                 "authoritativePacketStage": latest_lifecycle.target_stage,
                 "authoritativePacketStatus": latest_lifecycle.status,
                 "sourceContentSha256": source_ref.get("contentSha256"),
+                "localProofAuthority": "integrated_local",
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             }
@@ -19617,7 +19633,8 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, item.metadata_json["authoritativePacketId"])
         if not packet:
             raise ValueError("Local proof requires an existing authoritative source-backed packet.")
-        self._assert_local_proof_source(packet)
+        source_digest = self._assert_local_proof_source(packet)
+        self._assert_server_owned_local_proof_work_item(item, packet.id, source_digest)
         events = await self.list_work_item_events(session, work_item_id)
         if any(
             isinstance(event.payload, dict)
@@ -19992,19 +20009,23 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             return None
-        self._assert_local_proof_source(packet)
+        source_digest = self._assert_local_proof_source(packet)
         items = await self.list_work_items(session)
         item = next(
             (
                 candidate
                 for candidate in items
-                if isinstance(candidate.metadata_json, dict)
-                and candidate.metadata_json.get("authoritativePacketId") == packet_id
+                if candidate.authoritative_packet_id == packet_id
+                or (
+                    isinstance(candidate.metadata_json, dict)
+                    and candidate.metadata_json.get("authoritativePacketId") == packet_id
+                )
             ),
             None,
         )
         if not item:
             raise ValueError("Queue lease action requires the canonical packet WorkItem.")
+        self._assert_server_owned_local_proof_work_item(item, packet_id, source_digest)
         return await self._operate_local_proof_lease(session, item.id, payload)
 
     async def _insert_queue_lease_action(
@@ -20665,6 +20686,7 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             raise ValueError("Local-proof verification evidence requires an existing authoritative packet.")
+        self._assert_server_owned_local_proof_work_item(item, packet_id, self._assert_local_proof_source(packet))
         lease = await session.get(QueueLease, attempt.queue_lease_id)
         if not lease or lease.work_item_id != attempt.work_item_id:
             raise ValueError("Local-proof verification evidence requires the server-created queue lease.")

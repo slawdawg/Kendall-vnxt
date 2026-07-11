@@ -509,7 +509,7 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
 class WorkItemLocalProofRequest(BaseModel):
     proofMode: Literal["integrated_local"]
     idempotencyKey: str = Field(min_length=1, max_length=160)
-    correlationId: str = Field(min_length=1, max_length=120)
+    correlationId: str = Field(min_length=1, max_length=80)
     scenario: Literal["happy", "worker_failure", "verification_failure", "completion_fencing_failure"] = "happy"
     actorId: str = "local-proof"
     actorLabel: str = "Integrated local proof"

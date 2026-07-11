@@ -1001,7 +1001,8 @@ function isProjectionSourceRef(value: unknown) {
     typeof sourceRef.refId === "string" &&
     projectionSourceTypes.has(sourceRef.sourceType) &&
     (sourceRef.pathOrUrl === null || sourceRef.pathOrUrl === undefined || typeof sourceRef.pathOrUrl === "string") &&
-    (sourceRef.title === null || sourceRef.title === undefined || typeof sourceRef.title === "string")
+    (sourceRef.title === null || sourceRef.title === undefined || typeof sourceRef.title === "string") &&
+    (sourceRef.contentSha256 === null || sourceRef.contentSha256 === undefined || (typeof sourceRef.contentSha256 === "string" && /^[0-9a-f]{64}$/i.test(sourceRef.contentSha256)))
   );
 }
 

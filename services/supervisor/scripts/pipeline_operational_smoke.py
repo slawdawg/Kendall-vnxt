@@ -908,6 +908,106 @@ def main() -> int:
             )
             if unsafe_actor.status_code != 422:
                 fail(f"unsafe local-proof actor metadata was not rejected before persistence: {unsafe_actor.text[:240]}")
+            oversized_correlation = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-oversized-correlation",
+                    "correlationId": "c" * 81,
+                    "scenario": "happy",
+                },
+            )
+            require_typed_422(oversized_correlation, "oversized local-proof correlation id")
+            long_idempotency_packet = seed_local_packet("long-idempotency")
+            long_idempotency_key = "i" * 160
+            long_idempotency_proof = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{long_idempotency_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": long_idempotency_key,
+                        "correlationId": "c" * 80,
+                        "scenario": "happy",
+                    },
+                ),
+                200,
+                "maximum-length local-proof idempotency key",
+            )
+            if long_idempotency_proof["attempt"]["status"] != "completed":
+                fail("maximum-length local-proof idempotency key did not complete the proof")
+            transition_keys = [
+                event["idempotencyKey"]
+                for event in long_idempotency_proof["authoritativePacket"]["history"]
+                if event["eventType"] == "packet.stage_transitioned"
+            ]
+            if not transition_keys or any(len(key) > 120 for key in transition_keys):
+                fail("local-proof lifecycle transition keys exceeded their downstream idempotency limit")
+            legacy_packet = seed_local_packet("legacy-metadata-link")
+            legacy_work_item = require(
+                client.post(
+                    "/work-items",
+                    json={
+                        "title": "Legacy packet-linked WorkItem",
+                        "requestedOutcome": "Must reject before a local-proof transition.",
+                        "source": source_path,
+                        "metadata": {"sourceArtifactPath": source_path},
+                    },
+                ),
+                200,
+                "legacy packet-linked WorkItem",
+            )
+            with sqlite3.connect(db_path) as legacy_db:
+                packet_event_count = legacy_db.execute(
+                    "SELECT COUNT(*) FROM authoritative_work_packet_lifecycle_events WHERE packet_id = ?",
+                    (legacy_packet["packetId"],),
+                ).fetchone()[0]
+                work_item_event_count = legacy_db.execute(
+                    "SELECT COUNT(*) FROM workflow_events WHERE work_item_id = ?",
+                    (legacy_work_item["id"],),
+                ).fetchone()[0]
+                attempt_count = legacy_db.execute(
+                    "SELECT COUNT(*) FROM execution_attempts WHERE work_item_id = ?",
+                    (legacy_work_item["id"],),
+                ).fetchone()[0]
+                legacy_db.execute(
+                    "UPDATE work_items SET metadata_json = ? WHERE id = ?",
+                    (json.dumps({"authoritativePacketId": legacy_packet["packetId"]}), legacy_work_item["id"]),
+                )
+                legacy_db.commit()
+            legacy_proof = client.post(
+                f"/pipeline-control-plane/work-packets/{legacy_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-legacy-metadata-link",
+                    "correlationId": "corr:gate-4b-legacy-metadata-link",
+                    "scenario": "happy",
+                },
+            )
+            require_local_rejected(legacy_proof, "legacy packet-linked WorkItem", "server-owned local-proof attestation")
+            with sqlite3.connect(db_path) as legacy_db:
+                after_packet_event_count = legacy_db.execute(
+                    "SELECT COUNT(*) FROM authoritative_work_packet_lifecycle_events WHERE packet_id = ?",
+                    (legacy_packet["packetId"],),
+                ).fetchone()[0]
+                after_work_item_event_count = legacy_db.execute(
+                    "SELECT COUNT(*) FROM workflow_events WHERE work_item_id = ?",
+                    (legacy_work_item["id"],),
+                ).fetchone()[0]
+                after_attempt_count = legacy_db.execute(
+                    "SELECT COUNT(*) FROM execution_attempts WHERE work_item_id = ?",
+                    (legacy_work_item["id"],),
+                ).fetchone()[0]
+                authoritative_packet_id = legacy_db.execute(
+                    "SELECT authoritative_packet_id FROM work_items WHERE id = ?",
+                    (legacy_work_item["id"],),
+                ).fetchone()[0]
+            if (
+                after_packet_event_count != packet_event_count
+                or after_work_item_event_count != work_item_event_count
+                or after_attempt_count != attempt_count
+                or authoritative_packet_id is not None
+            ):
+                fail("legacy packet-linked WorkItem was mutated before its server-owned attestation was rejected")
             happy_proof = require(
                 client.post(
                     f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
