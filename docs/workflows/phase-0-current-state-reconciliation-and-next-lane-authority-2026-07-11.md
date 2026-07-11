@@ -292,26 +292,30 @@ terminated.
 Post-cleanup orientation reports 7 panes, zero missing worktrees, zero dirty or
 unknown-dirty panes, and zero malformed pane records. The existing
 manager-worker warm gate then recovered `codex-5` into the repository root,
-updating its authoritative worker record. Worker status now reports 5 warm
-workers, 0 active workers, and one retirement-blocked record (`codex-6`) whose
-live session is absent; no source lane was dispatched and no lease was issued.
+updating its authoritative worker record. The merged exact-target
+`--retire-missing-session` gate then reconciled `codex-6` as a logically retired
+manager-owned record after verifying that its live session was absent. The gate
+issued no kill command. Worker status now reports 5 warm workers, 0 active
+workers, 0 retirement-blocked records, and 1 retired record; no source lane was
+dispatched and no lease was issued.
 
 The remaining runtime blocker is the stale
 `manager-20260706-001` dispatcher summary/run state: dispatcher truth remains
 unavailable or unknown, safe work supply remains zero, and the refill packet's
-`26-1` course-correction request remains `needs_review`. The stale `codex-6`
-record is preserved as bounded evidence rather than being force-retired outside
-the existing worker lifecycle gate.
+`26-1` course-correction request remains `needs_review`. The former stale
+`codex-6` record is now bounded retirement evidence through the existing worker
+lifecycle gate; no unknown or unmanaged session was mutated.
 
 ## Baseline interpretation
 
 The implementation gates are current and green, but the manager runtime
 control state is not ready for autonomous mutation. The immediate technical
-debt is stale run/dispatcher state, one retirement-blocked warm record, and 12
-dirty workspace preservation packets. The missing tmux/worktree references
-from closed 25-1 have been reconciled. The previously ambiguous PR-backed
-assignment records and clean orphaned stale lanes are reconciled. These are
-reconciliation debts, not permission to invent post-slice product work.
+debt is stale run/dispatcher state and 12 dirty workspace preservation packets;
+the missing-session retirement debt is closed. The missing tmux/worktree
+references from closed 25-1 have been reconciled. The previously ambiguous
+PR-backed assignment records and clean orphaned stale lanes are reconciled.
+These are reconciliation debts, not permission to invent post-slice product
+work.
 
 ## Required repair order
 
