@@ -178,6 +178,19 @@ cleaned. If the staged booting-reviewer safety work is still needed, it must
 be ported and re-reviewed as a fresh current-baseline change; the stale lane
 remains preservation-gated.
 
+The exact stale lane `20260710-harden-manager-full-verification-fail-closed-ser`
+was separately inspected read-only. Its five staged files add a fail-closed
+manager verification classifier, serial shard execution, bounded timeouts,
+process-group termination, and nine focused tests. The focused verification
+and manager preflight passed, but its full old-base shard run failed on six
+legacy worker-handoff, tmux-format, submit-pending, and question-answer
+fixtures. Current `origin/dev` already contains the equivalent hardening from
+the manager baseline repair at commit
+`6576898897110984e7c887078a358370754f933d`, with later verification fixture
+corrections; its verification suite passes 10/10 and the full manager suite
+passes 463/463. This stale staged lane is therefore superseded, not an
+unmerged implementation. No takeover or dirty-worktree mutation was applied.
+
 The current primary-checkout patch also remains held. Its manager-control-plane
 diff removes authoritative worker assignment locks, review reservation and
 lease identity checks, pane/session identity revalidation, and self-review or
