@@ -2847,6 +2847,8 @@ class SupervisorService:
                     f"Packet source PRD is superseded by {planning_authority['superseded_by']}; "
                     "hold downstream work until the source is inspected."
                 )
+            elif packet.currentStage == "needs_approval" and packet.status == "blocked":
+                blocker = "Operator approval is required before this packet can advance."
             self._upsert_pipeline_source_state(
                 source_states_by_id,
                 PipelineSourceStateV0View(
@@ -2892,6 +2894,7 @@ class SupervisorService:
                     sourceRef=packet.sourceRef,
                     blocker=blocker,
                     nextAction=next_action,
+                    unblocker=self._pipeline_projection_packet_unblocker(packet.currentStage, packet.status),
                     readyToTest=packet.readyToTest,
                     evidenceRefs=packet_evidence,
                     updatedAt=packet.updatedAt,
@@ -2908,6 +2911,7 @@ class SupervisorService:
                     truthLabel=packet_source_label,
                     blocker=blocker,
                     nextAction=next_action,
+                    unblocker=self._pipeline_projection_packet_unblocker(packet.currentStage, packet.status),
                     readyToTest=packet.readyToTest,
                     latestTransitionEventRef=latest_transition_event_ref,
                     recentTransitionEventRefs=recent_transition_event_refs,
@@ -3032,6 +3036,7 @@ class SupervisorService:
                     sourceRef=None,
                     blocker=blocker,
                     nextAction=next_action,
+                    unblocker="unknown",
                     readyToTest=ready_to_test,
                     evidenceRefs=packet_evidence,
                     updatedAt=updated_at,
@@ -3048,6 +3053,7 @@ class SupervisorService:
                     truthLabel=packet_source_label,
                     blocker=blocker,
                     nextAction=next_action,
+                    unblocker="unknown",
                     readyToTest=ready_to_test,
                     latestTransitionEventRef=None,
                     recentTransitionEventRefs=[],
@@ -3542,6 +3548,8 @@ class SupervisorService:
         return projection_freshness_state
 
     def _pipeline_projection_next_action(self, stage: str, status: str) -> str | None:
+        if status == "blocked" and stage == "needs_approval":
+            return "Request explicit operator approval before advancing this packet."
         if status == "blocked":
             return "Clear the packet blocker before advancing."
         if status in {"complete", "deferred", "failed"}:
@@ -3554,6 +3562,11 @@ class SupervisorService:
             return "Complete learn-stage handoff."
         next_stage = AUTHORITATIVE_PACKET_STAGE_LABELS[AUTHORITATIVE_PACKET_STAGE_SEQUENCE[index + 1]]
         return f"Advance toward {next_stage}."
+
+    def _pipeline_projection_packet_unblocker(self, stage: str, status: str) -> str:
+        if stage == "needs_approval" and status == "blocked":
+            return "operator"
+        return "unknown"
 
     def _pipeline_projection_inactivity_reason(
         self,
