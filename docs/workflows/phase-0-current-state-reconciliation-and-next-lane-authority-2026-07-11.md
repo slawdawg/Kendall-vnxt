@@ -30,9 +30,10 @@ provider operation, scoring operation, takeover, or cleanup authority.
   `starting` state with its last ledger update on 2026-07-06. Its dispatcher
   summary is unavailable/stale, so queue and lease truth cannot be inferred
   from that run.
-- Current read-only preflight reports 91 backlog candidates, 90 closed and 1
-  claimed; 0 dispatchable lanes; 0 active leases; and 91 blocked dispatcher
-  candidates. Dispatcher state is unavailable/stale.
+- Current read-only preflight reports 103 backlog candidates, 102 closed and 1
+  claimed; 0 dispatchable lanes; 0 active leases; and 103 blocked dispatcher
+  candidates. The authoritative PRD source is present and exhausted; dispatcher
+  state is unavailable/stale.
 - Assignment inventory reports 252 lane assignments, including 236 closed and
   16 `blocked_stale_owner_needs_takeover`; and 415 workspace assignments,
   including 398 closed, 15 `blocked_stale_owner_needs_takeover`, 1
@@ -51,17 +52,40 @@ provider operation, scoring operation, takeover, or cleanup authority.
 The exact outside-sandbox preflight at 2026-07-11T15:37Z confirmed that the
 manager runtime is read-only and blocked: the stale run is
 `manager-20260706-001` in `starting` state, dispatcher freshness is unknown,
-safe work supply is zero, and source-backed refill evidence is absent. Tmux
+safe work supply is zero and the authoritative PRD has no remaining backlog.
+Tmux
 orientation found 8 panes, 4 manager-owned panes, 2 unmanaged panes, and 2
 missing-worktree references. No pane was mutated.
 
-The exact stale-owner inspection covered 12 targets. One sanitized or legacy
-assignment still requires canonical closeout evidence; 9 dirty stale
-workspaces have bounded preservation evidence; 2 clean stale lanes remain
-blocked on explicit takeover/evidence; and there are 0 cleanup candidates and
-0 takeover-approval candidates. No takeover, assignment closeout, worker
-mutation, dispatch apply, provider call, GitHub mutation, merge, or cleanup
-apply is justified by these packets.
+The exact stale-owner inspection covered 12 targets. The sanitized target now
+resolves canonically to
+`3-3-execution-completion-and-failure-evidence`; its worktree, local branch,
+remote branch, and PR are all absent, so the close-assignments dry-run marks it
+eligible for stale-record cleanup. Apply remains blocked pending explicit
+operator approval. Nine dirty stale workspaces have bounded preservation
+evidence, 2 clean stale lanes remain blocked on explicit takeover/evidence, and
+there are 0 other cleanup candidates and 0 takeover-approval candidates. No
+takeover, worker mutation, dispatch apply, provider call, GitHub delivery
+mutation, merge, or cleanup apply has been performed.
+
+## Canonical stale-record cleanup approval packet
+
+Target: `3-3-execution-completion-and-failure-evidence`
+
+Evidence: the exact dry-run reported `worktreeStatus: missing`, absent local
+and remote branch heads, no PR references, and `staleRecordCleanupEligible:
+true`. No source files or active worktree are attached to this record.
+
+Required mutation gate: an operator must explicitly approve stale-record
+cleanup before the existing command may apply it. The target-specific command
+is:
+
+```text
+node ./scripts/codex-workspace.mjs close-assignments --ids 3-3-execution-completion-and-failure-evidence --allow-stale-record-cleanup --approval "<explicit operator approval>" --apply
+```
+
+This packet does not approve that command, and it does not authorize takeover
+or cleanup of the remaining dirty or ambiguous lanes.
 
 The current primary-checkout patch also remains held. Its manager-control-plane
 diff removes authoritative worker assignment locks, review reservation and
@@ -83,8 +107,8 @@ permission to invent post-slice product work.
 
 ## Required repair order
 
-1. Preserve all dirty stale-worktree evidence and resolve the one sanitized or
-   legacy assignment id to canonical closeout evidence.
+1. Preserve all dirty stale-worktree evidence and apply the canonical stale
+   record cleanup only after the explicit approval packet above is satisfied.
 2. Reconcile the two missing tmux/worktree references without mutating unknown
    panes or taking ownership of any lane implicitly.
 3. Refresh or retire the stale manager run and reconstruct dispatcher summary
