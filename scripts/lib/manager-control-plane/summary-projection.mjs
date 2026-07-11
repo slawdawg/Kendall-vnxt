@@ -40,7 +40,10 @@ export function buildManagerExecutionLaneSummary({
   const freshness = !lastMeaningfulProgress || timestampInvalid ? "unknown" : ageMs > staleAfterMs ? "stale" : "fresh";
   const stateCounts = countStates({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, refillJobs });
   const latestRefillJob = refillJobs.at(-1);
-  const currentPhase = derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refillJobs, stateCounts });
+  const terminalSelection = selectTerminalRefillJob(refillJobs, runId);
+  const currentPhase = derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refillJobs, stateCounts, terminalJob: terminalSelection.job, terminalHistoryConflict: terminalSelection.contradiction });
+  const terminalDisposition = terminalSelection.job?.terminalDisposition ?? null;
+  const supervisorIntegrationMissing = terminalDisposition !== null || refillJobs.some((job) => job?.terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract");
   const actualAuthorityBlockedCandidates = blockedCandidates.filter((candidate) => candidate.authorityClass && candidate.authorityClass !== "allowed_unattended");
   const blockedAuthorityClasses = unique(actualAuthorityBlockedCandidates.map((candidate) => candidate.authorityClass).filter(Boolean));
   const authorityBlockedReason = blockedAuthorityClasses[0] ?? null;
@@ -51,15 +54,26 @@ export function buildManagerExecutionLaneSummary({
   const phaseBlocker = ["failed", "expired", "blocked", "needs_review"].includes(currentPhase) ? `dispatcher_phase_${currentPhase}` : null;
   const staleBlocker = freshness === "stale" ? "dispatcher_summary_stale" : null;
   const unknownBlocker = timestampInvalid ? "dispatcher_progress_timestamp_invalid" : null;
-  const blockers = unique([phaseBlocker, staleBlocker, unknownBlocker, ...unsafeStateReasons].filter(Boolean));
+  const blockers = unique([
+    phaseBlocker,
+    staleBlocker,
+    unknownBlocker,
+    ...unsafeStateReasons,
+    terminalSelection.contradiction ? "terminal_refill_history_conflict" : null,
+    supervisorIntegrationMissing ? "missing_supervisor_contract" : null,
+  ].filter(Boolean));
   const warnings = [
     proofMode === "backend_proof" ? SIMULATED_WARNING : null,
     duplicateCandidates.length > 0 ? "duplicate_candidates_ignored" : null,
     actualAuthorityBlockedCandidates.length > 0 ? "authority_blocked_candidates_recorded" : null,
-    hasNeedsReview ? "needs_review_candidates_recorded" : null
+    hasNeedsReview ? "needs_review_candidates_recorded" : null,
+    terminalDisposition?.unresolvedApprovalGatedWork?.length > 0 ? "approval_gated_work_remains_visible" : null,
+    terminalSelection.contradiction ? "terminal_refill_history_conflict" : null
   ].filter(Boolean);
-  const operatorAttentionRequired = blockers.length > 0 || currentPhase === "blocked" || currentPhase === "needs_review";
-  const attentionReason = operatorAttentionRequired ? blockers[0] ?? "authority_blocked_candidates_recorded" : null;
+  const operatorAttentionRequired = blockers.length > 0 || currentPhase === "blocked" || currentPhase === "needs_review" || Boolean(terminalDisposition?.unresolvedApprovalGatedWork?.length);
+  const attentionReason = operatorAttentionRequired
+    ? (terminalDisposition?.unresolvedApprovalGatedWork?.length ? "approval_gated_work_remains_visible" : null) ?? blockers[0] ?? "authority_blocked_candidates_recorded"
+    : null;
   const evidenceRefs = unique([
     ...fallbackEvidenceRefs,
     ...workItems.flatMap((item) => item.evidenceRefs ?? []),
@@ -114,12 +128,13 @@ export function buildManagerExecutionLaneSummary({
     sourceCursor: String(events.length),
     authorityStage: "backend_proof",
     authorityClass: authorityClassForSummary({ stateCounts, hasNeedsReview, latestRefillJob }),
+    terminalDisposition,
     queuedWorkItemIds: workItems.filter((item) => item.status === "queued").map((item) => item.workItemId),
     activeWorkItemIds: workItems.filter((item) => item.status === "leased" || item.status === "running").map((item) => item.workItemId),
     evidenceRefs,
     evidenceLinks,
     stateCounts,
-    rawStateLabels: rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, stateCounts, freshness, currentPhase }),
+    rawStateLabels: rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, stateCounts, freshness, currentPhase, terminalDisposition, blockers }),
     blockers,
     warnings,
     feedbackRoutes: [],
@@ -189,13 +204,47 @@ function countRetainedWorkItemsForRefill(workItems, refillJob) {
   return retainedWorkItemIds.size;
 }
 
-function derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refillJobs, stateCounts }) {
+function selectTerminalRefillJob(refillJobs = [], runId = "") {
+  const terminalIndexes = refillJobs
+    .map((job, index) => (job?.result === "authoritative_backlog_exhausted" || job?.terminalDisposition?.disposition === "authoritative_backlog_exhausted" ? index : -1))
+    .filter((index) => index >= 0);
+  if (terminalIndexes.length === 0) return { job: null, contradiction: false };
+  const latestTerminalIndex = terminalIndexes.at(-1);
+  const candidate = refillJobs[latestTerminalIndex];
+  const laterHistory = refillJobs.slice(latestTerminalIndex + 1);
+  const validCandidate = isValidatedTerminalRefillJob(candidate, runId);
+  const allTerminalEntriesValid = terminalIndexes.every((index) => isValidatedTerminalRefillJob(refillJobs[index], runId));
+  const laterNonterminal = laterHistory.some((job) => job?.result !== "authoritative_backlog_exhausted" && job?.terminalDisposition?.disposition !== "authoritative_backlog_exhausted");
+  const terminalKeys = terminalIndexes.map((index) => {
+    const job = refillJobs[index];
+    return `${job?.refillJobId || ""}:${terminalDispositionFingerprint(job?.terminalDisposition)}`;
+  });
+  const distinctTerminalKeys = new Set(terminalKeys);
+  return {
+    job: validCandidate && allTerminalEntriesValid && !laterNonterminal && distinctTerminalKeys.size === 1 ? candidate : null,
+    contradiction: !validCandidate || !allTerminalEntriesValid || laterNonterminal || distinctTerminalKeys.size > 1,
+  };
+}
+
+function isValidatedTerminalRefillJob(job, runId) {
+  if (!job || job.result !== "authoritative_backlog_exhausted" || job.state !== "completed" || !isValidatedTerminalDisposition(job.terminalDisposition)) return false;
+  const disposition = job.terminalDisposition;
+  const sourceRefs = Array.isArray(job.sourceRefs) ? job.sourceRefs.map((ref) => String(ref)) : [];
+  return disposition.runId === String(runId) &&
+    job.sourceIdentity === disposition.sourceIdentity &&
+    job.sourceRevision === disposition.sourceRevision &&
+    sourceRefs.includes(disposition.sourceIdentity);
+}
+
+function derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refillJobs, stateCounts, terminalJob = null, terminalHistoryConflict = false }) {
   if (workItems.some((item) => item.status === "running")) return "running";
   if (workItems.some((item) => item.status === "leased")) return "leased";
   if (workItems.some((item) => item.status === "refilling") || refillJobs.some((job) => job.state === "running")) return "refilling";
   if (workItems.some((item) => item.status === "queued") || (stateCounts?.queued ?? 0) > 0) return "queued";
   if (workItems.some((item) => item.status === "failed")) return "failed";
   if (workItems.some((item) => item.status === "expired")) return "expired";
+  if (terminalHistoryConflict) return "blocked";
+  if (terminalJob) return "authoritative_backlog_exhausted";
   if (
     workItems.some((item) => item.status === "blocked" || item.status === "quarantined") ||
     blockedCandidates.length > 0 ||
@@ -232,6 +281,7 @@ function parseSummaryTimestamp(value) {
 
 function nextActionForSummary({ phase, freshness, blockers, stateCounts }) {
   if (freshness === "stale") return "inspect_stale_summary";
+  if (phase === "authoritative_backlog_exhausted") return "await_new_source_bound_manager_run";
   if (phase === "failed" || phase === "expired" || (stateCounts?.failed ?? 0) > 0 || (stateCounts?.expired ?? 0) > 0) return "run_recovery";
   if ((blockers ?? []).includes("dispatcher_has_blocked_candidates") || (stateCounts?.blockedCandidates ?? 0) > 0) return "resolve_authority_or_source_blocker";
   if ((blockers ?? []).includes("dispatcher_has_needs_review_candidates") || (stateCounts?.needsReviewCandidates ?? 0) > 0) return "review_refill_candidates";
@@ -340,7 +390,7 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, stateCounts, freshness, currentPhase }) {
+function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, stateCounts, freshness, currentPhase, terminalDisposition, blockers = [] }) {
   return unique([
     ...workItems.map((item) => `work:${item.status}`),
     stateCounts.queued > 0 ? "work:queued" : null,
@@ -351,8 +401,64 @@ function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsR
     needsReviewCandidates.length > 0 || stateCounts.needsReviewCandidates > 0 || currentPhase === "needs_review" ? "candidate:needs_review" : null,
     duplicateCandidates.length > 0 ? "candidate:duplicate" : null,
     currentPhase === "no_safe_work" ? "supply:no_safe_work" : null,
+    terminalDisposition?.disposition === "authoritative_backlog_exhausted" ? "terminal:authoritative_backlog_exhausted" : null,
+    blockers.includes("terminal_refill_history_conflict") ? "terminal:history_conflict" : null,
     `freshness:${freshness}`
   ].filter(Boolean));
+}
+
+function isValidatedTerminalDisposition(disposition) {
+  if (!disposition || disposition.disposition !== "authoritative_backlog_exhausted" || disposition.canonicalEventIntegration !== "missing_supervisor_contract" || disposition.rawPayloadRetained !== false) return false;
+  if (!String(disposition.runId || "").trim() || !String(disposition.sourceIdentity || "").trim() || !String(disposition.sourceRevision || "").trim() || !String(disposition.idempotencyKey || "").trim() || !String(disposition.resumeRequirement || "").trim() || !String(disposition.nextManagerAction || "").trim()) return false;
+  if (!Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0 || !Array.isArray(disposition.unresolvedApprovalGatedWork)) return false;
+  if (!disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord)) return false;
+  const counts = disposition.reconciliationCounts;
+  if (!counts || typeof counts !== "object") return false;
+  const keys = ["eligible", "queued", "leased", "running", "reviewFix", "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated"];
+  if (["totalItems", "reconciledItems", ...keys].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
+  if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== keys.reduce((total, key) => total + counts[key], 0)) return false;
+  if (["eligible", "queued", "leased", "running", "reviewFix", "requiredRetrospective", "otherwiseRequired"].some((key) => counts[key] !== 0)) return false;
+  return counts.approvalGated === disposition.unresolvedApprovalGatedWork.length;
+}
+
+function isValidUnresolvedApprovalGatedWorkRecord(record) {
+  return Boolean(record && typeof record === "object" &&
+    typeof record.workId === "string" && record.workId.trim() &&
+    typeof record.title === "string" && record.title.trim() &&
+    typeof record.reason === "string" && record.reason.trim() &&
+    Array.isArray(record.sourceRefs) && record.sourceRefs.length > 0 && record.sourceRefs.every((ref) => typeof ref === "string" && ref.trim()) &&
+    Array.isArray(record.evidenceRefs) && record.evidenceRefs.length > 0 && record.evidenceRefs.every((ref) => typeof ref === "string" && ref.trim()));
+}
+
+function terminalDispositionFingerprint(disposition) {
+  if (!disposition || typeof disposition !== "object") return "";
+  const counts = disposition.reconciliationCounts || {};
+  const canonicalCounts = Object.fromEntries([
+    "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix", "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
+  ].map((key) => [key, counts[key]]));
+  const canonicalWork = (Array.isArray(disposition.unresolvedApprovalGatedWork) ? disposition.unresolvedApprovalGatedWork : [])
+    .map((record) => ({
+      workId: record?.workId,
+      title: record?.title,
+      reason: record?.reason,
+      sourceRefs: [...(Array.isArray(record?.sourceRefs) ? record.sourceRefs : [])].sort(),
+      evidenceRefs: [...(Array.isArray(record?.evidenceRefs) ? record.evidenceRefs : [])].sort(),
+    }))
+    .sort((left, right) => String(left.workId || "").localeCompare(String(right.workId || "")));
+  return JSON.stringify({
+    disposition: disposition.disposition,
+    runId: disposition.runId,
+    sourceIdentity: disposition.sourceIdentity,
+    sourceRevision: disposition.sourceRevision,
+    reconciliationCounts: canonicalCounts,
+    unresolvedApprovalGatedWork: canonicalWork,
+    evidenceRefs: [...(Array.isArray(disposition.evidenceRefs) ? disposition.evidenceRefs : [])].sort(),
+    resumeRequirement: disposition.resumeRequirement,
+    nextManagerAction: disposition.nextManagerAction,
+    canonicalEventIntegration: disposition.canonicalEventIntegration,
+    rawPayloadRetained: disposition.rawPayloadRetained,
+    idempotencyKey: disposition.idempotencyKey,
+  });
 }
 
 function unique(values) {

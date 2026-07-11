@@ -27,6 +27,7 @@ import {
   buildPreflight,
   buildProgressBeaconPlan,
   buildDispatcherRefillWatermarkPlan,
+  buildAuthoritativeBacklogExhaustedDisposition,
   buildLargeSliceContinuationPlan,
   buildLiveWorkerProofReadiness,
   buildMatureToolEvaluationPlan,
@@ -5149,6 +5150,360 @@ test("dispatcher refill watermarks stop at high watermark without inventing work
   assert.equal(exhausted.summary.refillJob.result, "no_safe_work");
   assert.equal(exhausted.summary.sourceExhausted, true);
   assert.ok(exhausted.warnings.some((warning) => warning.code === "dispatcher-refill-source-exhausted"));
+});
+
+test("Gate 2 emits an idempotent authoritative exhaustion disposition and ignores stale generated epic history", () => {
+  const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
+  const authoritativeSourceBundle = {
+    sourceIdentity: sourceRef,
+    sourceRevision: "adr-2026-07-11",
+    fullyReconciled: true,
+    noSeparatelyApprovedSource: true,
+    reconciliationCounts: {
+      totalItems: 8,
+      reconciledItems: 8,
+      eligible: 0,
+      queued: 0,
+      leased: 0,
+      running: 0,
+      reviewFix: 0,
+      requiredRetrospective: 0,
+      otherwiseRequired: 0,
+      completed: 6,
+      closed: 2,
+      approvalGated: 0,
+    },
+    evidenceRefs: ["evidence:gate2-reconciliation"],
+    resumeRequirement: "Start a new source-bound manager run.",
+    nextManagerAction: "Stop dispatch and await a new source-bound manager run.",
+  };
+  const context = {
+    now: "2026-07-11T12:00:00.000Z",
+    authoritativeSourceBundle,
+    activeSource: { sourceIdentity: sourceRef, sourceRevision: "adr-2026-07-11", sourceRefs: [sourceRef] },
+    assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 2 } } },
+    dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    sourcePlanningState: {
+      sprintStatus: {
+        exists: true,
+        path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        storyStatuses: {
+          "25-1-generated-history": "done",
+          "25-2-generated-history": "done",
+        },
+        nextBacklogStoryKey: null,
+      },
+    },
+  };
+
+  const first = buildRefillPlan({ desiredWorkers: 6, sourceRefs: [sourceRef] }, context);
+  const second = buildRefillPlan({ desiredWorkers: 6, sourceRefs: [sourceRef] }, context);
+
+  assert.equal(first.ok, true);
+  assert.equal(first.status, "authoritative_backlog_exhausted");
+  assert.equal(first.summary.refillJob.result, "authoritative_backlog_exhausted");
+  assert.equal(first.summary.terminalDisposition.sourceIdentity, sourceRef);
+  assert.equal(first.summary.terminalDisposition.sourceRevision, "adr-2026-07-11");
+  assert.deepEqual(first.summary.terminalDisposition.reconciliationCounts, authoritativeSourceBundle.reconciliationCounts);
+  assert.equal(first.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract");
+  assert.equal(first.summary.supervisorPersistence, "not_claimed; canonical supervisor terminal event integration is missing");
+  assert.ok(first.blockers.some((blocker) => blocker.code === "missing_supervisor_contract"));
+  assert.equal(first.summary.candidateLanes.length, 0);
+  assert.equal(first.summary.workCreationStep, null);
+  assert.equal(first.summary.materializationGate, null);
+  assert.equal(first.summary.terminalDisposition.idempotencyKey, second.summary.terminalDisposition.idempotencyKey);
+  assert.equal(first.summary.refillJob.refillJobId, second.summary.refillJob.refillJobId);
+  assert.doesNotMatch(JSON.stringify(first), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*|successor/i);
+});
+
+test("Gate 2 stays open for incomplete source reconciliation with eligible work remaining", () => {
+  const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
+  const plan = buildRefillPlan(
+    { desiredWorkers: 1, sourceRefs: [sourceRef] },
+    {
+      authoritativeSourceBundle: {
+        sourceIdentity: sourceRef,
+        sourceRevision: "adr-2026-07-11",
+        fullyReconciled: false,
+        reconciliationCounts: {
+          totalItems: 2,
+          reconciledItems: 1,
+          eligible: 1,
+          queued: 0,
+          leased: 0,
+          running: 0,
+          reviewFix: 0,
+          requiredRetrospective: 0,
+          otherwiseRequired: 0,
+          completed: 1,
+          closed: 0,
+          approvalGated: 0,
+        },
+        evidenceRefs: ["evidence:gate2-incomplete-source"],
+      },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceWorkCandidates: [{
+        candidateId: "eligible-authoritative-item",
+        title: "Eligible authoritative item",
+        sourceRefs: [sourceRef],
+        acceptanceCriteria: ["source-owned item remains available"],
+        verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+        riskClass: "low",
+        dependencyHints: [],
+        touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+        authorityClass: "allowed_unattended",
+      }],
+    },
+  );
+
+  assert.notEqual(plan.status, "authoritative_backlog_exhausted");
+  assert.equal(plan.summary.refillJob.result, "queued_work");
+  assert.equal(plan.summary.refillJob.queuedCount, 1);
+  assert.equal(plan.summary.terminalDisposition, undefined);
+});
+
+test("Gate 2 preserves approval-gated remaining work without converting it to backlog", () => {
+  const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
+  const plan = buildRefillPlan(
+    { desiredWorkers: 1, sourceRefs: [sourceRef] },
+    {
+      authoritativeSourceBundle: {
+        sourceIdentity: sourceRef,
+        sourceRevision: "adr-2026-07-11",
+        fullyReconciled: true,
+        noSeparatelyApprovedSource: true,
+        reconciliationCounts: {
+          totalItems: 4,
+          reconciledItems: 4,
+          eligible: 0,
+          queued: 0,
+          leased: 0,
+          running: 0,
+          reviewFix: 0,
+          requiredRetrospective: 0,
+          otherwiseRequired: 0,
+          completed: 2,
+          closed: 1,
+          approvalGated: 1,
+        },
+        unresolvedApprovalGatedWork: [{
+          workId: "approval-gated-item",
+          title: "Needs operator approval",
+          reason: "exact target approval is missing",
+          sourceRefs: [sourceRef],
+          evidenceRefs: ["evidence:approval-gated-item"],
+        }],
+        evidenceRefs: ["evidence:gate2-approval-gated"],
+        resumeRequirement: "Start a new source-bound manager run.",
+        nextManagerAction: "Stop dispatch and await approval resolution or a new source-bound manager run.",
+      },
+      activeSource: { sourceIdentity: sourceRef, sourceRevision: "adr-2026-07-11", sourceRefs: [sourceRef] },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 1 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    },
+  );
+
+  assert.equal(plan.status, "authoritative_backlog_exhausted");
+  assert.equal(plan.summary.refillJob.queuedCount, 0);
+  assert.equal(plan.summary.terminalDisposition.unresolvedApprovalGatedWork[0].workId, "approval-gated-item");
+  assert.ok(plan.warnings.some((warning) => warning.code === "authoritative-backlog-approval-gated"));
+  assert.match(plan.summary.terminalDisposition.nextManagerAction, /Stop dispatch/);
+});
+
+test("authoritative exhaustion helper fails closed when reconciliation metadata is incomplete or a new source is approved", () => {
+  const base = {
+    sourceIdentity: "doc:docs/architecture/adr-current-product-slice-and-authority.md",
+    sourceRevision: "adr-2026-07-11",
+    fullyReconciled: true,
+    noSeparatelyApprovedSource: true,
+    reconciliationCounts: { eligible: 0, queued: 0, leased: 0, running: 0, reviewFix: 0, requiredRetrospective: 0, otherwiseRequired: 0 },
+    evidenceRefs: ["evidence:incomplete"],
+  };
+  assert.equal(buildAuthoritativeBacklogExhaustedDisposition({ authoritativeSourceBundle: base, activeSource: { sourceIdentity: base.sourceIdentity, sourceRevision: base.sourceRevision } }), null);
+  assert.equal(buildAuthoritativeBacklogExhaustedDisposition({
+    authoritativeSourceBundle: {
+      ...base,
+      separatelyApprovedSourceAvailable: true,
+      reconciliationCounts: {
+        ...base.reconciliationCounts,
+        totalItems: 0,
+        reconciledItems: 0,
+        completed: 0,
+        closed: 0,
+        approvalGated: 0,
+      },
+    },
+    activeSource: { sourceIdentity: base.sourceIdentity, sourceRevision: base.sourceRevision },
+  }), null);
+});
+
+test("Gate 2 rejects source binding, candidate, arithmetic, attestation, and gated-count contradictions", () => {
+  const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
+  const valid = {
+    runId: "run-gate2-negative",
+    sourceRefs: [sourceRef],
+    activeSource: { sourceIdentity: sourceRef, sourceRevision: "rev-1", sourceRefs: [sourceRef] },
+    authoritativeSourceBundle: {
+      sourceIdentity: sourceRef,
+      sourceRevision: "rev-1",
+      fullyReconciled: true,
+      noSeparatelyApprovedSource: true,
+      reconciliationCounts: {
+        totalItems: 4,
+        reconciledItems: 4,
+        eligible: 0,
+        queued: 0,
+        leased: 0,
+        running: 0,
+        reviewFix: 0,
+        requiredRetrospective: 0,
+        otherwiseRequired: 0,
+        completed: 2,
+        closed: 2,
+        approvalGated: 0,
+      },
+      evidenceRefs: ["evidence:b", "evidence:a"],
+      resumeRequirement: "Start a new source-bound manager run.",
+      nextManagerAction: "Stop dispatch and await a new source-bound manager run.",
+    },
+  };
+  const disposition = (overrides = {}) => buildAuthoritativeBacklogExhaustedDisposition({
+    ...valid,
+    ...overrides,
+    authoritativeSourceBundle: { ...valid.authoritativeSourceBundle, ...(overrides.authoritativeSourceBundle || {}) },
+  });
+
+  assert.equal(disposition({ authoritativeSourceBundle: { sourceIdentity: "doc:docs/workflows/current-session-runbook.md", sourceRevision: "rev-1", fullyReconciled: true, noSeparatelyApprovedSource: true, reconciliationCounts: valid.authoritativeSourceBundle.reconciliationCounts, evidenceRefs: ["evidence:a"] } }), null, "source identity mismatch");
+  assert.equal(disposition({ activeSource: { sourceIdentity: sourceRef, sourceRevision: "rev-2", sourceRefs: [sourceRef] } }), null, "source revision mismatch");
+  assert.equal(disposition({ authoritativeSourceBundle: { noSeparatelyApprovedSource: undefined } }), null, "missing no-source attestation");
+  assert.equal(disposition({ authoritativeSourceBundle: { reconciliationCounts: { ...valid.authoritativeSourceBundle.reconciliationCounts, totalItems: 5 } } }), null, "total arithmetic mismatch");
+  assert.equal(disposition({ authoritativeSourceBundle: { reconciliationCounts: { ...valid.authoritativeSourceBundle.reconciliationCounts, reconciledItems: 3 } } }), null, "reconciled arithmetic mismatch");
+  assert.equal(disposition({ authoritativeSourceBundle: { reconciliationCounts: { ...valid.authoritativeSourceBundle.reconciliationCounts, completed: 3 } } }), null, "completed/closed total mismatch");
+  assert.equal(disposition({ authoritativeSourceBundle: { reconciliationCounts: { ...valid.authoritativeSourceBundle.reconciliationCounts, approvalGated: 1 }, unresolvedApprovalGatedWork: [] } }), null, "approval-gated count mismatch");
+  assert.equal(disposition({ authoritativeSourceBundle: { resumeRequirement: "" } }), null, "resume requirement must be explicit");
+  assert.equal(disposition({ authoritativeSourceBundle: { nextManagerAction: "" } }), null, "next manager action must be explicit");
+  const gatedCounts = { ...valid.authoritativeSourceBundle.reconciliationCounts, totalItems: 5, reconciledItems: 5, completed: 2, closed: 2, approvalGated: 1 };
+  for (const field of ["workId", "title", "reason", "sourceRefs", "evidenceRefs"]) {
+    const record = {
+      workId: "approval-gated-item",
+      title: "Needs operator approval",
+      reason: "exact target approval is missing",
+      sourceRefs: [sourceRef],
+      evidenceRefs: ["evidence:approval-gated-item"],
+    };
+    delete record[field];
+    assert.equal(
+      disposition({ authoritativeSourceBundle: { reconciliationCounts: gatedCounts, unresolvedApprovalGatedWork: [record] } }),
+      null,
+      `invalid unresolved approval-gated record field: ${field}`,
+    );
+  }
+  for (const status of ["eligible", "needs_review", "blocked"]) {
+    assert.equal(disposition({ remainingCandidates: [{ candidateId: `candidate-${status}`, status }] }), null, `${status} candidate contradiction`);
+  }
+
+  const reordered = buildAuthoritativeBacklogExhaustedDisposition({
+    ...valid,
+    authoritativeSourceBundle: { ...valid.authoritativeSourceBundle, evidenceRefs: ["evidence:a", "evidence:b"] },
+  });
+  assert.equal(disposition().idempotencyKey, reordered.idempotencyKey, "evidence reference ordering must not change idempotency");
+  const runTwo = buildAuthoritativeBacklogExhaustedDisposition({ ...valid, runId: "run-gate2-other" });
+  assert.notEqual(disposition().idempotencyKey, runTwo.idempotencyKey, "run identity must bind idempotency");
+});
+
+test("terminal refill job identity includes run and source revision", () => {
+  const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
+  const makePlan = (runId, revision) => buildRefillPlan(
+    { runId, desiredWorkers: 1, sourceRefs: [sourceRef] },
+    {
+      activeSource: { sourceIdentity: sourceRef, sourceRevision: revision, sourceRefs: [sourceRef] },
+      authoritativeSourceBundle: {
+        sourceIdentity: sourceRef,
+        sourceRevision: revision,
+        fullyReconciled: true,
+        noSeparatelyApprovedSource: true,
+        reconciliationCounts: { totalItems: 1, reconciledItems: 1, eligible: 0, queued: 0, leased: 0, running: 0, reviewFix: 0, requiredRetrospective: 0, otherwiseRequired: 0, completed: 1, closed: 0, approvalGated: 0 },
+        evidenceRefs: ["evidence:identity"],
+        resumeRequirement: "Start a new source-bound manager run.",
+        nextManagerAction: "Stop dispatch and await a new source-bound manager run.",
+      },
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    },
+  );
+  const first = makePlan("run-gate2-one", "rev-one");
+  const second = makePlan("run-gate2-two", "rev-one");
+  const third = makePlan("run-gate2-one", "rev-two");
+  assert.notEqual(first.summary.refillJob.refillJobId, second.summary.refillJob.refillJobId);
+  assert.notEqual(first.summary.refillJob.refillJobId, third.summary.refillJob.refillJobId);
+});
+
+test("Gate 2 rejects candidate aggregate counts that are absent or disagree with normalized arrays", () => {
+  const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
+  const makePlan = (sourceWorkEligibility) => buildRefillPlan(
+    { runId: "run-candidate-aggregate", desiredWorkers: 1, sourceRefs: [sourceRef] },
+    {
+      activeSource: { sourceIdentity: sourceRef, sourceRevision: "rev-aggregate", sourceRefs: [sourceRef] },
+      authoritativeSourceBundle: {
+        sourceIdentity: sourceRef,
+        sourceRevision: "rev-aggregate",
+        fullyReconciled: true,
+        noSeparatelyApprovedSource: true,
+        reconciliationCounts: { totalItems: 1, reconciledItems: 1, eligible: 0, queued: 0, leased: 0, running: 0, reviewFix: 0, requiredRetrospective: 0, otherwiseRequired: 0, completed: 1, closed: 0, approvalGated: 0 },
+        evidenceRefs: ["evidence:candidate-aggregate"],
+        resumeRequirement: "Start a new source-bound manager run.",
+        nextManagerAction: "Stop dispatch and await a new source-bound manager run.",
+      },
+      sourceWorkEligibility,
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    },
+  );
+  for (const sourceWorkEligibility of [
+    { summary: { eligibleCount: 1, needsReviewCount: 0, blockedCount: 0, candidateWorkPackets: [] } },
+    { summary: { eligibleCount: 2, needsReviewCount: 0, blockedCount: 0, candidateWorkPackets: [{ candidateWorkPacketId: "one-candidate" }] } },
+    { summary: { eligibleCount: 0, needsReviewCount: 1, blockedCount: 0, needsReviewPackets: [] } },
+    { summary: { eligibleCount: 0, needsReviewCount: 2, blockedCount: 0, needsReviewPackets: [{ candidateWorkPacketId: "one-review-candidate" }] } },
+    { summary: { eligibleCount: 0, needsReviewCount: 0, blockedCount: 1, blockedPackets: [] } },
+    { summary: { eligibleCount: 0, needsReviewCount: 0, blockedCount: 2, blockedPackets: [{ candidateWorkPacketId: "one-blocked-candidate" }] } },
+  ]) {
+    const plan = makePlan(sourceWorkEligibility);
+    assert.equal(plan.status, "blocked");
+    assert.equal(plan.blockers[0].code, "authoritative-candidate-aggregate-mismatch");
+    assert.equal(plan.summary.terminalDisposition, null);
+  }
+});
+
+test("dispatcher contradiction packets preserve classified candidate metadata", () => {
+  const sourceRef = "story:_bmad-output/implementation-artifacts/3-1-implement-dispatcher-refill-watermarks.md";
+  const plan = buildDispatcherRefillWatermarkPlan(
+    { runId: "run-dispatcher-contradiction" },
+    {
+      activeSource: { sourceIdentity: sourceRef, sourceRevision: "rev-dispatcher", sourceRefs: [sourceRef] },
+      authoritativeSourceBundle: {
+        sourceIdentity: sourceRef,
+        sourceRevision: "rev-dispatcher",
+        fullyReconciled: true,
+        noSeparatelyApprovedSource: true,
+        reconciliationCounts: { totalItems: 0, reconciledItems: 0, eligible: 0, queued: 0, leased: 0, running: 0, reviewFix: 0, requiredRetrospective: 0, otherwiseRequired: 0, completed: 0, closed: 0, approvalGated: 0 },
+        evidenceRefs: ["evidence:dispatcher-contradiction"],
+        resumeRequirement: "Start a new source-bound manager run.",
+        nextManagerAction: "Stop dispatch and await a new source-bound manager run.",
+      },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceRefs: [sourceRef],
+      refillCandidates: [
+        { candidateId: "review-candidate", sourceRefs: [sourceRef], dedupeKey: "review-candidate", authorityClass: "requires_preauthorization", verificationTargets: ["node --test tests/manager-control-plane.test.mjs"], evidenceRefs: ["evidence:review-candidate"] },
+        { candidateId: "blocked-candidate", sourceRefs: [sourceRef], dedupeKey: "blocked-candidate", authorityClass: "forbidden", verificationTargets: ["node --test tests/manager-control-plane.test.mjs"], evidenceRefs: ["evidence:blocked-candidate"] },
+      ],
+    },
+  );
+  assert.equal(plan.status, "blocked");
+  assert.equal(plan.summary.terminalDisposition, null);
+  assert.equal(plan.summary.needsReviewCandidates[0].candidateId, "review-candidate");
+  assert.equal(plan.summary.blockedCandidates[0].candidateId, "blocked-candidate");
+  assert.equal(plan.summary.candidateCount, 2);
 });
 
 test("dispatcher refill eligibility keeps ambiguous and unsafe candidates out of automatic queue", () => {

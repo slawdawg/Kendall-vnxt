@@ -59,6 +59,7 @@ function pickManagerSummaryFields(summary) {
     sourceCursor: summary.sourceCursor,
     authorityStage: summary.authorityStage,
     authorityClass: summary.authorityClass,
+    terminalDisposition: summary.terminalDisposition ?? null,
     queuedWorkItemIds: summary.queuedWorkItemIds,
     activeWorkItemIds: summary.activeWorkItemIds,
     evidenceRefs: summary.evidenceRefs,

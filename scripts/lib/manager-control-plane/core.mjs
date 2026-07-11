@@ -11472,6 +11472,111 @@ export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
   const dedupeKeys = existingDedupeKeys(context);
   const classified = classifyRefillCandidates(normalizedCandidates, dedupeKeys, targetCandidateCount);
   const sourceExhausted = normalizedCandidates.length === 0;
+  const exhaustionEvaluation = evaluateAuthoritativeBacklogExhaustion({
+    ...context,
+    runId,
+    sourceRefs,
+    remainingCandidates: [
+      ...classified.eligibleCandidates.map((candidate) => ({ ...candidate, status: "eligible" })),
+      ...classified.needsReviewCandidates.map((candidate) => ({ ...candidate, status: "needs_review" })),
+      ...classified.blockedCandidates.map((candidate) => ({ ...candidate, status: "blocked" })),
+    ],
+    currentWorkCounts: {
+      ...(context.currentWorkCounts || context.current_work_counts || {}),
+      queued: currentEligibleQueueDepth,
+      leased: activeLeaseCount,
+    },
+  });
+  if (exhaustionEvaluation.blocker) {
+    const blocker = exhaustionEvaluation.blocker;
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        ...baseSummary,
+        sourceExhausted: false,
+        terminalDisposition: null,
+        refillJob: refillJobSummary({
+          runId,
+          sourceRefs,
+          triggerReason,
+          lowWatermark,
+          highWatermark,
+          lockId,
+          timestamp,
+          state: "blocked",
+          result: "blocked",
+          blockers: [blocker],
+          nextActions: [{ code: "authoritative-exhaustion-blocked", nextAction: blocker.nextAction }],
+        }),
+        candidateCount: normalizedCandidates.length,
+        queuedCount: classified.eligibleCandidates.length,
+        needsReviewCount: classified.needsReviewCandidates.length,
+        blockedCount: classified.blockedCandidates.length,
+        dedupe: refillDedupeSummary(classified.dedupeSkippedCandidates),
+        eligibleCandidates: classified.eligibleCandidates,
+        needsReviewCandidates: classified.needsReviewCandidates,
+        blockedCandidates: classified.blockedCandidates,
+        boundedSkip: refillBoundedSkipSummary(classified.boundedSkippedCandidates),
+        mutationMode: "blocked; authoritative exhaustion validation failed",
+      },
+      blockers: [blocker],
+    });
+  }
+  if (exhaustionEvaluation.disposition) {
+    const exhaustedDisposition = exhaustionEvaluation.disposition;
+    const nextAction = {
+      code: "authoritative-backlog-exhausted",
+      summary: "Authoritative source bundle is fully reconciled with no required executable work remaining.",
+      nextAction: exhaustedDisposition.nextManagerAction,
+      resumeRequirement: exhaustedDisposition.resumeRequirement,
+      idempotencyKey: exhaustedDisposition.idempotencyKey,
+    };
+    const refillJob = refillJobSummary({
+      runId,
+      sourceRefs,
+      triggerReason,
+      lowWatermark,
+      highWatermark,
+      lockId,
+      timestamp,
+      state: "completed",
+      result: "authoritative_backlog_exhausted",
+      candidateCount: exhaustedDisposition.reconciliationCounts.totalItems,
+      needsReviewCount: exhaustedDisposition.unresolvedApprovalGatedWork.length,
+      evidenceRefs: exhaustedDisposition.evidenceRefs,
+      terminalDisposition: exhaustedDisposition,
+      nextActions: [nextAction],
+    });
+    return packet({
+      status: "authoritative_backlog_exhausted",
+      summary: {
+        ...baseSummary,
+        sourceExhausted: true,
+        terminalDisposition: exhaustedDisposition,
+        refillJob,
+        candidateCount: 0,
+        queuedCount: 0,
+        needsReviewCount: exhaustedDisposition.unresolvedApprovalGatedWork.length,
+        blockedCount: 0,
+        dedupe: refillDedupeSummary([]),
+        eligibleCandidates: [],
+        needsReviewCandidates: [],
+        blockedCandidates: [],
+        mutationMode: "none; metadata-only terminal disposition",
+        supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
+      },
+      blockers: [{
+        code: "missing_supervisor_contract",
+        message: "Manager terminal disposition is not a persisted supervisor-owned canonical event in the current contract.",
+        nextAction: "Keep this manager packet metadata-only and implement/test the supervisor canonical event contract before claiming integrated persistence.",
+      }],
+      warnings: exhaustedDisposition.unresolvedApprovalGatedWork.length > 0
+        ? [{ code: "authoritative-backlog-approval-gated", message: `${exhaustedDisposition.unresolvedApprovalGatedWork.length} approval-gated item(s) remain visible and were not converted into safe backlog.` }]
+        : [],
+      nextActions: [nextAction],
+    });
+  }
   const hasGatedCandidates = classified.needsReviewCandidates.length > 0 || classified.blockedCandidates.length > 0;
   const result = classified.eligibleCandidates.length > 0
     ? hasGatedCandidates
@@ -13355,7 +13460,53 @@ export function buildRefillPlan(options = {}, context = {}) {
           eligibilityReason: blocker.reason || sourceBackedPacketSeed.summary?.seedPacket?.eligibilityReason || null,
         })),
       ]
-    : [];
+      : [];
+  const remainingCandidateResolution = authoritativeRemainingCandidatesFromEligibility(sourceWorkEligibility, sourceBackedPacketSeed, context);
+  const exhaustionEvaluation = evaluateAuthoritativeBacklogExhaustion({
+    ...context,
+    runId: resolveManagerRunId(options, context),
+    sourceRefs: sourceSlice ? [sourceSlice.ref] : explicitSourceRefs,
+    remainingCandidates: remainingCandidateResolution.candidates,
+    candidateAggregationBlocker: remainingCandidateResolution.blocker,
+    currentWorkCounts: {
+      ...(context.currentWorkCounts || context.current_work_counts || {}),
+      queued: dispatchable,
+      leased: active,
+    },
+  });
+  if (exhaustionEvaluation.blocker) {
+    return buildAuthoritativeBacklogExhaustionBlockedPacket({
+      desiredWorkers,
+      dispatchable,
+      active,
+      closed,
+      sourceSlice,
+      sourceArtifactDiscovery,
+      sourceWorkEligibility,
+      sourceBackedPacketSeed,
+      closedEvidence,
+      blocker: exhaustionEvaluation.blocker,
+      remainingCandidates: remainingCandidateResolution.candidates,
+      candidateAggregation: remainingCandidateResolution.aggregation,
+      warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings, ...sourceBackedPacketSeedWarnings],
+    });
+  }
+  if (exhaustionEvaluation.disposition) {
+    return buildAuthoritativeBacklogExhaustedRefillPacket({
+      options,
+      context,
+      desiredWorkers,
+      dispatchable,
+      active,
+      closed,
+      sourceSlice,
+      sourceArtifactDiscovery,
+      sourceWorkEligibility,
+      sourceBackedPacketSeed,
+      closedEvidence,
+      disposition: exhaustionEvaluation.disposition,
+    });
+  }
   if (starvation && !sourceSlice) {
     const ambiguous = sourceEvidence.rejected.length > 0;
     return packet({
@@ -13549,6 +13700,409 @@ function sourceBackedDispatcherRefillAction({ runId = "", sourceRefs = [], refil
   };
 }
 
+const AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS = Object.freeze([
+  "eligible",
+  "queued",
+  "leased",
+  "running",
+  "reviewFix",
+  "requiredRetrospective",
+  "otherwiseRequired",
+]);
+
+/**
+ * Resolve the only manager-owned input that can authorize the Gate 2 terminal
+ * disposition. This deliberately requires an explicit, fully reconciled
+ * bundle and an independently resolved active source binding.
+ */
+export function buildAuthoritativeBacklogExhaustedDisposition(input = {}) {
+  return evaluateAuthoritativeBacklogExhaustion(input).disposition;
+}
+
+function evaluateAuthoritativeBacklogExhaustion(input = {}) {
+  const bundle = input.authoritativeSourceBundle || input.authoritative_source_bundle || input.sourceBundle || input.source_bundle;
+  if (!isPlainObject(bundle)) return { disposition: null, blocker: null };
+  if (input.candidateAggregationBlocker) return { disposition: null, blocker: input.candidateAggregationBlocker };
+  if (bundle.fullyReconciled !== true && bundle.fully_reconciled !== true) return { disposition: null, blocker: null };
+  const blocker = (code, message, nextAction) => ({ code, message, nextAction });
+  const noSeparatelyApprovedSource = bundle.noSeparatelyApprovedSource === true || bundle.no_separately_approved_source === true || bundle.separatelyApprovedSourceAvailable === false || bundle.separately_approved_source_available === false;
+  if (!noSeparatelyApprovedSource || bundle.separatelyApprovedSourceAvailable === true || bundle.separately_approved_source_available === true) {
+    return { disposition: null, blocker: blocker("authoritative-source-attestation-missing", "Terminal exhaustion requires an explicit attestation that no separately approved authoritative source is available.", "Record noSeparatelyApprovedSource: true or resolve the separately approved source before continuing.") };
+  }
+
+  const sourceIdentity = sanitizeLedgerField(
+    bundle.sourceIdentity || bundle.source_identity || bundle.identity || bundle.sourceRef || bundle.source_ref || sourceRefList(bundle.sourceRefs || bundle.source_refs)[0] || "",
+    "",
+    240,
+  );
+  const sourceRevision = sanitizeLedgerField(bundle.sourceRevision || bundle.source_revision || bundle.revision || "", "", 160);
+  const activeSource = normalizeActiveAuthoritativeSource(input);
+  if (!sourceIdentity || !sourceRevision || !activeSource) {
+    return { disposition: null, blocker: blocker("authoritative-source-binding-missing", "Terminal exhaustion requires an active/resolved source identity and revision independent of the bundle claim.", "Resolve the active source identity and revision, then rerun reconciliation.") };
+  }
+  const resolvedRefs = normalizeSourceEvidence(sourceRefList(input.sourceRefs || input.source_refs)).valid.map((source) => source.ref);
+  if (sourceIdentity !== activeSource.identity || sourceRevision !== activeSource.revision || (activeSource.refs.length > 0 && !activeSource.refs.includes(sourceIdentity)) || (resolvedRefs.length > 0 && !resolvedRefs.includes(sourceIdentity))) {
+    return { disposition: null, blocker: blocker("authoritative-source-binding-mismatch", "Authoritative bundle identity or revision does not match the active/resolved source.", "Refresh the active source binding and reconcile the exact source identity and revision before continuing.") };
+  }
+
+  const rawCounts = bundle.reconciliationCounts || bundle.reconciliation_counts || bundle.counts;
+  const counts = normalizeAuthoritativeReconciliationCounts(rawCounts);
+  if (!counts) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-counts-missing", "Terminal exhaustion requires complete non-negative reconciliation counts.", "Reconcile every required work state and provide complete counts before terminal disposition.") };
+  }
+  const currentCounts = normalizeCurrentAuthoritativeWorkCounts(input.currentWorkCounts || input.current_work_counts || input.dispatcherReconciliation || input.dispatcher_reconciliation);
+  const effectiveCounts = {
+    ...counts,
+    eligible: Math.max(counts.eligible, currentCounts.eligible),
+    queued: Math.max(counts.queued, currentCounts.queued),
+    leased: Math.max(counts.leased, currentCounts.leased),
+    running: Math.max(counts.running, currentCounts.running),
+    reviewFix: Math.max(counts.reviewFix, currentCounts.reviewFix),
+    requiredRetrospective: Math.max(counts.requiredRetrospective, currentCounts.requiredRetrospective),
+    otherwiseRequired: Math.max(counts.otherwiseRequired, currentCounts.otherwiseRequired),
+  };
+  if (AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS.some((key) => effectiveCounts[key] > 0)) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-work-remains", "Reconciliation still reports eligible, queued, leased, running, review-fix, retrospective, or otherwise-required work.", "Keep the remaining work in its existing dispatcher or approval gate; do not emit terminal exhaustion.") };
+  }
+
+  const remainingCandidates = normalizeAuthoritativeRemainingCandidates(input.remainingCandidates || input.remaining_candidates || []);
+  const contradictoryCandidates = remainingCandidates.filter((candidate) => ["eligible", "needs_review", "blocked"].includes(candidate.status));
+  if (contradictoryCandidates.length > 0) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-candidates-remain", "Normalized eligible, review-needed, or blocked candidates contradict exhausted reconciliation.", "Preserve and route the contradictory candidate metadata through its existing gate; do not convert it into terminal exhaustion.") };
+  }
+
+  const rawUnresolvedApprovalGatedWork = bundle.unresolvedApprovalGatedWork || bundle.unresolved_approval_gated_work || bundle.approvalGatedWork || bundle.approval_gated_work;
+  if (rawUnresolvedApprovalGatedWork !== undefined && !Array.isArray(rawUnresolvedApprovalGatedWork)) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-approval-gated-records-invalid", "Unresolved approval-gated work metadata must be an array of source-bound records.", "Repair the unresolved approval-gated work records before terminal disposition.") };
+  }
+  if (Array.isArray(rawUnresolvedApprovalGatedWork) && !rawUnresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord)) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-approval-gated-records-invalid", "Every unresolved approval-gated work record must include non-empty workId, title, reason, sourceRefs, and evidenceRefs.", "Repair the unresolved approval-gated work records before terminal disposition.") };
+  }
+  const unresolvedApprovalGatedWork = normalizeUnresolvedApprovalGatedWork(rawUnresolvedApprovalGatedWork);
+  if (effectiveCounts.approvalGated !== unresolvedApprovalGatedWork.length) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-approval-gated-count-mismatch", "The approval-gated reconciliation count does not match unresolved approval-gated work metadata.", "Reconcile and surface every unresolved approval-gated item before terminal disposition.") };
+  }
+  const statusTotal = AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + effectiveCounts[key], 0);
+  if (effectiveCounts.totalItems !== effectiveCounts.reconciledItems || effectiveCounts.totalItems !== statusTotal) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-arithmetic-invalid", "Total, reconciled, completed, closed, gated, and remaining reconciliation counts do not agree.", "Repair reconciliation arithmetic and rerun the authoritative source reconciliation.") };
+  }
+  const evidenceRefs = canonicalStringRefs([
+    ...sourceRefList(bundle.evidenceRefs || bundle.evidence_refs),
+    ...sourceRefList(input.evidenceRefs || input.evidence_refs),
+  ]).slice(0, 12);
+  if (evidenceRefs.length === 0) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-evidence-missing", "Terminal exhaustion requires metadata evidence references.", "Attach reconciliation and source evidence references before terminal disposition.") };
+  }
+  const runId = sanitizeLedgerField(input.runId || input.run_id || "manager-run", "manager-run", 120);
+  const resumeRequirement = sanitizeLedgerField(bundle.resumeRequirement || bundle.resume_requirement, "", 360);
+  const nextManagerAction = sanitizeLedgerField(bundle.nextManagerAction || bundle.next_manager_action, "", 360);
+  if (!resumeRequirement || !nextManagerAction) {
+    return { disposition: null, blocker: blocker("authoritative-terminal-metadata-missing", "Terminal exhaustion requires non-empty resumeRequirement and nextManagerAction metadata.", "Provide the explicit resume requirement and next manager action before terminal disposition.") };
+  }
+  const canonicalUnresolvedWork = unresolvedApprovalGatedWork
+    .map((item) => ({ ...item, sourceRefs: canonicalStringRefs(item.sourceRefs), evidenceRefs: canonicalStringRefs(item.evidenceRefs) }))
+    .sort((left, right) => left.workId.localeCompare(right.workId));
+  const idempotencyKey = `authoritative-backlog-exhausted:${hashLedgerValue(JSON.stringify({ runId, sourceIdentity, sourceRevision, counts: effectiveCounts, unresolvedApprovalGatedWork: canonicalUnresolvedWork, evidenceRefs })).slice(0, 32)}`;
+  return {
+    disposition: {
+      disposition: "authoritative_backlog_exhausted",
+      runId,
+      sourceIdentity,
+      sourceRevision,
+      reconciliationCounts: effectiveCounts,
+      unresolvedApprovalGatedWork: canonicalUnresolvedWork,
+      evidenceRefs,
+      resumeRequirement,
+      nextManagerAction,
+      canonicalEventIntegration: "missing_supervisor_contract",
+      idempotencyKey,
+      rawPayloadRetained: false,
+    },
+    blocker: null,
+  };
+}
+
+function normalizeAuthoritativeReconciliationCounts(rawCounts) {
+  if (!isPlainObject(rawCounts)) return null;
+  const read = (...keys) => keys.map((key) => nonNegativeInteger(rawCounts[key])).find((value) => value !== null) ?? null;
+  const values = {
+    totalItems: read("totalItems", "total_items", "total"),
+    reconciledItems: read("reconciledItems", "reconciled_items", "reconciled"),
+    eligible: read("eligible"),
+    queued: read("queued"),
+    leased: read("leased"),
+    running: read("running"),
+    reviewFix: read("reviewFix", "review_fix", "reviewFixes", "review_fixes"),
+    requiredRetrospective: read("requiredRetrospective", "required_retrospective", "retrospective", "retrospectives"),
+    otherwiseRequired: read("otherwiseRequired", "otherwise_required", "otherRequired", "other_required"),
+    completed: read("completed"),
+    closed: read("closed"),
+    approvalGated: read("approvalGated", "approval_gated", "approvalGatedItems", "approval_gated_items") ?? 0,
+  };
+  return Object.values(values).every((value) => value !== null) ? values : null;
+}
+
+const AUTHORITATIVE_RECONCILIATION_STATUS_KEYS = Object.freeze([
+  "eligible",
+  "queued",
+  "leased",
+  "running",
+  "reviewFix",
+  "requiredRetrospective",
+  "otherwiseRequired",
+  "completed",
+  "closed",
+  "approvalGated",
+]);
+
+function normalizeActiveAuthoritativeSource(input = {}) {
+  const raw = input.activeSourceBinding || input.active_source_binding || input.activeSource || input.active_source || input.resolvedSource || input.resolved_source || input.resolvedSourceBundle || input.resolved_source_bundle || {};
+  const object = isPlainObject(raw) ? raw : {};
+  const identity = sanitizeLedgerField(object.sourceIdentity || object.source_identity || object.identity || object.sourceRef || object.source_ref || input.activeSourceIdentity || input.active_source_identity || input.resolvedSourceIdentity || input.resolved_source_identity || "", "", 240);
+  const revision = sanitizeLedgerField(object.sourceRevision || object.source_revision || object.revision || input.activeSourceRevision || input.active_source_revision || input.resolvedSourceRevision || input.resolved_source_revision || "", "", 160);
+  const refs = canonicalStringRefs(sourceRefList(object.sourceRefs || object.source_refs || input.activeSourceRefs || input.active_source_refs || input.resolvedSourceRefs || input.resolved_source_refs));
+  return identity && revision ? { identity, revision, refs } : null;
+}
+
+function normalizeAuthoritativeRemainingCandidates(candidates = []) {
+  if (!Array.isArray(candidates)) return [];
+  return candidates.map((candidate, index) => {
+    const object = isPlainObject(candidate) ? candidate : { candidateId: candidate };
+    const rawStatus = String(object.status || object.eligibilityDecision || object.eligibility_decision || object.state || "").toLowerCase();
+    const status = rawStatus === "needs-review" ? "needs_review" : rawStatus;
+    return {
+      candidateId: sanitizeLedgerField(object.candidateId || object.candidateWorkPacketId || object.candidate_work_packet_id || object.id || `candidate-${index + 1}`, `candidate-${index + 1}`, 140),
+      status,
+      rawPayloadRetained: false,
+    };
+  });
+}
+
+function canonicalStringRefs(values = []) {
+  return [...new Set((Array.isArray(values) ? values : sourceRefList(values)).map((value) => String(value || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeCurrentAuthoritativeWorkCounts(rawCounts) {
+  if (!isPlainObject(rawCounts)) return { eligible: 0, queued: 0, leased: 0, running: 0, reviewFix: 0, requiredRetrospective: 0, otherwiseRequired: 0 };
+  const read = (...keys) => keys.map((key) => nonNegativeInteger(rawCounts[key])).find((value) => value !== null) ?? 0;
+  return {
+    eligible: read("eligible"),
+    queued: read("queued", "dispatchable", "assignable"),
+    leased: read("leased", "activeLeases", "active_leases"),
+    running: read("running"),
+    reviewFix: read("reviewFix", "review_fix"),
+    requiredRetrospective: read("requiredRetrospective", "required_retrospective"),
+    otherwiseRequired: read("otherwiseRequired", "otherwise_required"),
+  };
+}
+
+function normalizeUnresolvedApprovalGatedWork(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 24).map((item, index) => {
+    const object = isPlainObject(item) ? item : { workId: item };
+    return {
+      workId: sanitizeLedgerField(object.workId || object.work_id || object.id || `approval-gated-${index + 1}`, `approval-gated-${index + 1}`, 140),
+      title: sanitizeLedgerField(object.title || object.summary || object.workId || object.work_id || `Approval-gated work ${index + 1}`, `Approval-gated work ${index + 1}`, 180),
+      reason: sanitizeLedgerField(object.reason || object.gateReason || object.gate_reason || "operator approval is required before this work can proceed", "operator approval is required before this work can proceed", 240),
+      sourceRefs: uniqueStrings(sourceRefList(object.sourceRefs || object.source_refs || object.sourceRef || object.source_ref)).slice(0, 8),
+      evidenceRefs: uniqueStrings(sourceRefList(object.evidenceRefs || object.evidence_refs)).slice(0, 8),
+    };
+  });
+}
+
+function isValidUnresolvedApprovalGatedWorkRecord(record) {
+  if (!isPlainObject(record)) return false;
+  const workId = record.workId || record.work_id;
+  const title = record.title || record.summary;
+  const reason = record.reason || record.gateReason || record.gate_reason;
+  const sourceRefs = record.sourceRefs || record.source_refs || record.sourceRef || record.source_ref;
+  const evidenceRefs = record.evidenceRefs || record.evidence_refs;
+  const nonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+  return nonEmptyString(workId) &&
+    nonEmptyString(title) &&
+    nonEmptyString(reason) &&
+    Array.isArray(sourceRefs) && sourceRefs.length > 0 && sourceRefs.every(nonEmptyString) &&
+    Array.isArray(evidenceRefs) && evidenceRefs.length > 0 && evidenceRefs.every(nonEmptyString);
+}
+
+function authoritativeRemainingCandidatesFromEligibility(sourceWorkEligibility, sourceBackedPacketSeed, context = {}) {
+  const summary = sourceWorkEligibility?.summary || sourceWorkEligibility || {};
+  const eligibleCandidates = Array.isArray(summary.candidateWorkPackets) ? summary.candidateWorkPackets.map((candidate) => ({ ...candidate, status: "eligible" })) : [];
+  const needsReviewCandidates = Array.isArray(summary.needsReviewPackets) ? summary.needsReviewPackets.map((candidate) => ({ ...candidate, status: "needs_review" })) : [];
+  const blockedCandidates = Array.isArray(summary.blockedPackets) ? summary.blockedPackets.map((candidate) => ({ ...candidate, status: "blocked" })) : [];
+  const candidates = [...eligibleCandidates, ...needsReviewCandidates, ...blockedCandidates];
+  const readAggregate = (...keys) => keys.map((key) => nonNegativeInteger(summary[key])).find((value) => value !== null) ?? null;
+  const aggregation = {
+    eligibleCount: readAggregate("eligibleCount", "eligible_count"),
+    needsReviewCount: readAggregate("needsReviewCount", "needs_review_count"),
+    blockedCount: readAggregate("blockedCount", "blocked_count"),
+  };
+  const aggregatePresent = Object.values(aggregation).some((value) => value !== null);
+  if (aggregatePresent && (
+    aggregation.eligibleCount !== eligibleCandidates.length ||
+    aggregation.needsReviewCount !== needsReviewCandidates.length ||
+    aggregation.blockedCount !== blockedCandidates.length
+  )) {
+    return {
+      candidates,
+      aggregation,
+      blocker: {
+        code: "authoritative-candidate-aggregate-mismatch",
+        message: "Authoritative source candidate aggregate counts disagree with the normalized eligible, review-needed, or blocked candidate arrays.",
+        nextAction: "Reconcile candidate arrays and aggregate counts before continuing; do not emit terminal exhaustion.",
+      },
+    };
+  }
+  if (candidates.length > 0) return { candidates, aggregation, blocker: null };
+  const seedPacket = sourceBackedPacketSeed?.summary?.seedPacket;
+  if (sourceBackedPacketSeed?.summary?.packetState === "eligible" && seedPacket) return { candidates: [{ ...seedPacket, status: "eligible" }], aggregation, blocker: null };
+  return {
+    candidates: Array.isArray(context.authoritativeRemainingCandidates || context.authoritative_remaining_candidates)
+      ? context.authoritativeRemainingCandidates || context.authoritative_remaining_candidates
+      : [],
+    aggregation,
+    blocker: null,
+  };
+}
+
+function buildAuthoritativeBacklogExhaustionBlockedPacket({
+  desiredWorkers,
+  dispatchable,
+  active,
+  closed,
+  sourceSlice,
+  sourceArtifactDiscovery,
+  sourceWorkEligibility,
+  sourceBackedPacketSeed,
+  closedEvidence,
+  blocker,
+  remainingCandidates = [],
+  candidateAggregation = null,
+  warnings = [],
+} = {}) {
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: {
+      desiredWorkers,
+      dispatchableLanes: dispatchable,
+      activeLanes: active,
+      safeWorkSupply: dispatchable + active,
+      refillNeeded: Math.max(0, desiredWorkers - (dispatchable + active)),
+      closedLanes: closed,
+      source: sourceSlice?.label || null,
+      sourceSlice,
+      sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
+      sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+      sourceBackedPacketSeed: sourceBackedPacketSeed?.summary || null,
+      authoritativeRemainingCandidates: remainingCandidates,
+      candidateAggregation,
+      candidateLanes: [],
+      terminalDisposition: null,
+      closedEvidence,
+      workCreationStep: null,
+      splitPlan: null,
+      mutationMode: "blocked; authoritative exhaustion validation failed",
+      stopLines: REFILL_STOP_LINES,
+    },
+    blockers: [blocker],
+    warnings,
+  });
+}
+
+function buildAuthoritativeBacklogExhaustedRefillPacket({
+  options = {},
+  context = {},
+  desiredWorkers,
+  dispatchable,
+  active,
+  closed,
+  sourceSlice,
+  sourceArtifactDiscovery,
+  sourceWorkEligibility,
+  sourceBackedPacketSeed,
+  closedEvidence,
+  disposition,
+} = {}) {
+  const timestamp = sanitizeLedgerField(options.now || context.now || new Date().toISOString(), new Date().toISOString(), 80);
+  const sourceRefs = uniqueStrings([sourceSlice?.ref, disposition.sourceIdentity, ...sourceRefList(context.sourceRefs)]).slice(0, 12);
+  const unresolvedCount = disposition.unresolvedApprovalGatedWork.length;
+  const nextAction = {
+    code: "authoritative-backlog-exhausted",
+    summary: "Authoritative source bundle is reconciled and no required executable work remains.",
+    nextAction: disposition.nextManagerAction,
+    resumeRequirement: disposition.resumeRequirement,
+    idempotencyKey: disposition.idempotencyKey,
+  };
+  const refillJob = refillJobSummary({
+    runId: resolveManagerRunId(options, context),
+    sourceRefs,
+    triggerReason: "source_exhaustion_check",
+    lowWatermark: DEFAULT_REFILL_LOW_WATERMARK,
+    highWatermark: DEFAULT_REFILL_HIGH_WATERMARK,
+    lockId: `refill:${resolveManagerRunId(options, context)}:${refillSourceKey(sourceRefs)}:source_exhaustion_check`,
+    timestamp,
+    state: "completed",
+    result: "authoritative_backlog_exhausted",
+    candidateCount: disposition.reconciliationCounts.totalItems,
+    queuedCount: 0,
+    needsReviewCount: unresolvedCount,
+    blockedCount: 0,
+    evidenceRefs: disposition.evidenceRefs,
+    terminalDisposition: disposition,
+    nextActions: [nextAction],
+  });
+  const summary = {
+    apply: options.apply === true,
+    desiredWorkers,
+    dispatchableLanes: dispatchable,
+    activeLanes: active,
+    safeWorkSupply: 0,
+    refillNeeded: false,
+    closedLanes: closed,
+    source: sourceSlice?.label || disposition.sourceIdentity,
+    sourceSlice,
+    sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
+    sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+    sourceBackedPacketSeed: sourceBackedPacketSeed?.summary || null,
+    candidateLanes: [],
+    bmadPlanningGap: null,
+    bmadRequestPacket: null,
+    materializationGate: null,
+    workCreationStep: null,
+    splitPlan: null,
+    closedEvidence,
+    refillJob,
+    refillWatermark: {
+      sourceExhausted: true,
+      terminalDisposition: disposition,
+      currentEligibleQueueDepth: 0,
+      activeLeaseCount: 0,
+      queuedCount: 0,
+      needsReviewCount: unresolvedCount,
+      blockedCount: 0,
+      rawPayloadRetained: false,
+    },
+    terminalDisposition: disposition,
+    mutationMode: "none; metadata-only terminal disposition",
+    supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
+    stopLines: REFILL_STOP_LINES,
+  };
+  return packet({
+    status: "authoritative_backlog_exhausted",
+    summary,
+    blockers: [{
+      code: "missing_supervisor_contract",
+      message: "Manager terminal disposition is not a persisted supervisor-owned canonical event in the current contract.",
+      nextAction: "Keep this manager packet metadata-only and implement/test the supervisor canonical event contract before claiming integrated persistence.",
+    }],
+    warnings: unresolvedCount > 0
+      ? [{ code: "authoritative-backlog-approval-gated", message: `${unresolvedCount} approval-gated item(s) remain visible and were not converted into safe backlog.` }]
+      : [],
+    nextActions: [nextAction],
+  });
+}
+
 function refillTriggerReason(value) {
   const text = String(value || "").trim();
   return ["low_watermark", "manual_bootstrap", "source_exhaustion_check", "recovery"].includes(text) ? text : "low_watermark";
@@ -13591,6 +14145,8 @@ function normalizeRefillJobForSummary(job = {}, defaults = {}) {
     lockId: defaults.lockId,
     timestamp: defaults.timestamp,
     refillJobId: job.refillJobId || job.refill_job_id,
+    sourceIdentity: job.sourceIdentity || job.source_identity,
+    sourceRevision: job.sourceRevision || job.source_revision,
     state: job.state || job.status || "running",
     result: job.result || "queued_work",
     candidateCount: job.candidateCount ?? job.candidate_count,
@@ -13603,6 +14159,7 @@ function normalizeRefillJobForSummary(job = {}, defaults = {}) {
     blockers: job.blockers,
     nextActions: job.nextActions || job.next_actions,
     dedupe: job.dedupe,
+    terminalDisposition: job.terminalDisposition || job.terminal_disposition,
   });
 }
 
@@ -13615,6 +14172,8 @@ function refillJobSummary({
   lockId = "",
   timestamp = new Date().toISOString(),
   refillJobId = "",
+  sourceIdentity = "",
+  sourceRevision = "",
   state = "running",
   result = "queued_work",
   candidateCount = 0,
@@ -13627,10 +14186,22 @@ function refillJobSummary({
   blockers = [],
   nextActions = [],
   dedupe = null,
+  terminalDisposition = null,
 } = {}) {
   const normalizedState = ["planned", "running", "completed", "blocked", "failed"].includes(String(state)) ? String(state) : "running";
-  const normalizedResult = ["queued_work", "queued_with_gated_candidates", "no_safe_work", "needs_review", "blocked", "failed"].includes(String(result)) ? String(result) : "queued_work";
-  const id = sanitizeLedgerField(refillJobId || `refill-${refillSourceKey(sourceRefs)}-${triggerReason}-${lowWatermark}-${highWatermark}`, "refill-job", 180);
+  const requestedResult = String(result);
+  const terminalDispositionValid = requestedResult === "authoritative_backlog_exhausted" && isValidAuthoritativeBacklogExhaustedDisposition(terminalDisposition);
+  const normalizedResult = requestedResult === "authoritative_backlog_exhausted" && !terminalDispositionValid
+    ? "blocked"
+    : ["queued_work", "queued_with_gated_candidates", "no_safe_work", "authoritative_backlog_exhausted", "needs_review", "blocked", "failed"].includes(requestedResult)
+      ? requestedResult
+      : "queued_work";
+  const terminalSourceIdentity = terminalDispositionValid ? terminalDisposition.sourceIdentity : sanitizeLedgerField(sourceIdentity, "", 240);
+  const terminalSourceRevision = terminalDispositionValid ? terminalDisposition.sourceRevision : sanitizeLedgerField(sourceRevision, "", 160);
+  const terminalIdentity = terminalDispositionValid
+    ? `refill-authoritative-backlog-exhausted-${hashLedgerValue(JSON.stringify({ runId: sanitizeLedgerField(runId, "manager-run", 120), sourceIdentity: terminalDisposition.sourceIdentity, sourceRevision: terminalDisposition.sourceRevision })).slice(0, 32)}`
+    : "";
+  const id = sanitizeLedgerField(refillJobId || terminalIdentity || `refill-${refillSourceKey(sourceRefs)}-${triggerReason}-${lowWatermark}-${highWatermark}`, "refill-job", 180);
   const authorityClass = normalizedResult === "blocked" || normalizedResult === "queued_with_gated_candidates"
     ? "block_and_record"
     : normalizedResult === "needs_review"
@@ -13640,6 +14211,9 @@ function refillJobSummary({
   return {
     refillJobId: id,
     sourceRefs: sourceRefs.map((ref) => sanitizeLedgerField(ref, "", 180)).filter(Boolean).slice(0, 12),
+    ...(normalizedResult === "authoritative_backlog_exhausted" && terminalDispositionValid
+      ? { sourceIdentity: terminalSourceIdentity, sourceRevision: terminalSourceRevision }
+      : {}),
     triggerReason,
     lowWatermark,
     highWatermark,
@@ -13653,12 +14227,28 @@ function refillJobSummary({
     startedAt: sanitizeLedgerField(startedAt || timestamp, timestamp, 80),
     finishedAt: finishedAt === undefined ? (normalizedState === "completed" || normalizedState === "blocked" || normalizedState === "failed" ? sanitizeLedgerField(timestamp, timestamp, 80) : null) : finishedAt,
     result: normalizedResult,
+    terminalDisposition: normalizedResult === "authoritative_backlog_exhausted" && terminalDispositionValid ? terminalDisposition : null,
     evidenceRefs: compactRefillEvidenceRefs(suppliedEvidenceRefs.length > 0 ? suppliedEvidenceRefs : sourceRefs.map((ref) => `source:${ref}`)),
-    blockers: compactRefillBlockers(blockers),
+    blockers: compactRefillBlockers([
+      ...blockers,
+      ...(requestedResult === "authoritative_backlog_exhausted" && !terminalDispositionValid
+        ? [{ code: "authoritative-terminal-disposition-invalid", message: "Terminal refill result requires a valid authoritative backlog exhaustion disposition.", nextAction: "Discard the bare terminal result and rerun authoritative source reconciliation." }]
+        : []),
+    ]),
     nextActions: compactRefillNextActions(nextActions),
     dedupe: dedupe || refillDedupeSummary([]),
     rawPayloadRetained: false,
   };
+}
+
+function isValidAuthoritativeBacklogExhaustedDisposition(disposition) {
+  if (!isPlainObject(disposition) || disposition.disposition !== "authoritative_backlog_exhausted") return false;
+  if (!sanitizeLedgerField(disposition.runId || "", "", 120) || !sanitizeLedgerField(disposition.sourceIdentity || "", "", 240) || !sanitizeLedgerField(disposition.sourceRevision || "", "", 160) || disposition.canonicalEventIntegration !== "missing_supervisor_contract" || disposition.rawPayloadRetained !== false || !sanitizeLedgerField(disposition.idempotencyKey || "", "", 180) || !sanitizeLedgerField(disposition.resumeRequirement || "", "", 360) || !sanitizeLedgerField(disposition.nextManagerAction || "", "", 360) || !isPlainObject(disposition.reconciliationCounts) || !Array.isArray(disposition.unresolvedApprovalGatedWork) || !disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord) || !Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0) return false;
+  const counts = disposition.reconciliationCounts;
+  if (["totalItems", "reconciledItems", ...AUTHORITATIVE_RECONCILIATION_STATUS_KEYS].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
+  if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + counts[key], 0)) return false;
+  if (AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS.some((key) => counts[key] !== 0) || counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
+  return true;
 }
 
 function normalizeRefillCandidates(candidates = [], fallbackSourceRefs = []) {
@@ -13820,6 +14410,9 @@ function refillWatermarkNextActions(result, sourceExhausted) {
   }
   if (result === "queued_with_gated_candidates") {
     return [{ code: "dispatcher-refill-mixed-gated", summary: "Refill queued eligible work and retained gated candidates for attention.", nextAction: "Record queued work and surface review-needed or blocked refill candidates." }];
+  }
+  if (result === "authoritative_backlog_exhausted") {
+    return [{ code: "authoritative-backlog-exhausted", summary: "Authoritative source bundle is fully reconciled with no required executable work remaining.", nextAction: "Stop and await a new source-bound manager run." }];
   }
   if (sourceExhausted || result === "no_safe_work") {
     return [{ code: "dispatcher-refill-source-exhausted", summary: "No eligible source-owned refill candidates are available.", nextAction: "Run housekeeping and stop, or request the narrowest BMAD planning step." }];

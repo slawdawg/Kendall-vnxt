@@ -1,6 +1,7 @@
 import type { ManagerAuthorityDecisionClass, ManagerAuthorityStage } from "./authority";
 import type { EvidenceRefId, ExecutionAttemptId, LeaseId, ManagerEventId, ManagerRunId, WorkItemId } from "./ids";
 import type { EvidenceFreshnessState, ManagerFreshnessState, ManagerSummaryPhase } from "./lifecycle";
+import type { AuthoritativeBacklogExhaustedDisposition } from "./refill";
 
 export type ManagerSummaryStateSource = "dispatcher" | "fixture" | "projection" | "unknown";
 export type ManagerSummaryProofMode = "backend_proof" | "read_only_projection" | "unknown";
@@ -96,6 +97,7 @@ export interface ManagerExecutionLaneSummary {
   sourceCursor: string;
   authorityStage: ManagerAuthorityStage;
   authorityClass: ManagerAuthorityDecisionClass;
+  terminalDisposition?: AuthoritativeBacklogExhaustedDisposition | null;
   queuedWorkItemIds: readonly WorkItemId[];
   activeWorkItemIds: readonly WorkItemId[];
   evidenceRefs: readonly EvidenceRefId[];

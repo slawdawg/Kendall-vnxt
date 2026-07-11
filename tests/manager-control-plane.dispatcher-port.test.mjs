@@ -2300,6 +2300,212 @@ test("memory dispatcher summary distinguishes empty, authority-blocked, and stal
   assert.equal(staleSummary.rawStateLabels.includes("freshness:stale"), true);
 });
 
+test("summary projection preserves authoritative exhaustion and its resume requirement", () => {
+  const terminalDisposition = {
+    disposition: "authoritative_backlog_exhausted",
+    runId: "run-terminal",
+    sourceIdentity: "doc:docs/architecture/adr-current-product-slice-and-authority.md",
+    sourceRevision: "adr-2026-07-11",
+    reconciliationCounts: {
+      totalItems: 4,
+      reconciledItems: 4,
+      eligible: 0,
+      queued: 0,
+      leased: 0,
+      running: 0,
+      reviewFix: 0,
+      requiredRetrospective: 0,
+      otherwiseRequired: 0,
+      completed: 2,
+      closed: 1,
+      approvalGated: 1,
+    },
+    unresolvedApprovalGatedWork: [{
+      workId: "approval-gated-item",
+      title: "Needs approval",
+      reason: "operator approval required",
+      sourceRefs: ["doc:docs/architecture/adr-current-product-slice-and-authority.md"],
+      evidenceRefs: ["evidence:approval-gated-item"],
+    }],
+    evidenceRefs: ["evidence:terminal"],
+    resumeRequirement: "Start a new source-bound manager run.",
+    nextManagerAction: "Stop and await a new source-bound manager run.",
+    canonicalEventIntegration: "missing_supervisor_contract",
+    idempotencyKey: "authoritative-backlog-exhausted:test",
+    rawPayloadRetained: false,
+  };
+  const summary = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [{
+      refillJobId: "refill-terminal",
+      sourceRefs: [terminalDisposition.sourceIdentity],
+      sourceIdentity: terminalDisposition.sourceIdentity,
+      sourceRevision: terminalDisposition.sourceRevision,
+      state: "completed",
+      result: "authoritative_backlog_exhausted",
+      queuedCount: 0,
+      needsReviewCount: 1,
+      blockedCount: 0,
+      evidenceRefs: terminalDisposition.evidenceRefs,
+      terminalDisposition,
+    }],
+    events: [],
+  });
+
+  assert.equal(summary.currentPhase, "authoritative_backlog_exhausted");
+  assert.equal(summary.terminalDisposition.sourceRevision, "adr-2026-07-11");
+  assert.equal(summary.nextAction, "await_new_source_bound_manager_run");
+  assert.equal(summary.operatorAttentionRequired, true);
+  assert.equal(summary.attentionReason, "approval_gated_work_remains_visible");
+  assert.ok(summary.blockers.includes("missing_supervisor_contract"));
+  assert.ok(summary.rawStateLabels.includes("terminal:authoritative_backlog_exhausted"));
+  const serialized = toManagerSummaryJson({ ok: true, status: summary.currentPhase, summary });
+  assert.equal(serialized.summary.terminalDisposition.resumeRequirement, "Start a new source-bound manager run.");
+
+  const makeTerminalJob = (disposition, refillJobId) => ({
+    refillJobId,
+    sourceRefs: [terminalDisposition.sourceIdentity],
+    sourceIdentity: terminalDisposition.sourceIdentity,
+    sourceRevision: terminalDisposition.sourceRevision,
+    state: "completed",
+    result: "authoritative_backlog_exhausted",
+    terminalDisposition: disposition,
+  });
+  const projectWithDisposition = (disposition, refillJobId) => buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [makeTerminalJob(disposition, refillJobId)],
+    events: [],
+  });
+
+  const missingResumeRequirement = projectWithDisposition({ ...terminalDisposition, resumeRequirement: "" }, "refill-terminal-missing-resume");
+  assert.equal(missingResumeRequirement.terminalDisposition, null);
+  assert.equal(missingResumeRequirement.currentPhase, "blocked");
+  assert.ok(missingResumeRequirement.blockers.includes("terminal_refill_history_conflict"));
+
+  const missingNextManagerAction = projectWithDisposition({ ...terminalDisposition, nextManagerAction: "" }, "refill-terminal-missing-action");
+  assert.equal(missingNextManagerAction.terminalDisposition, null);
+  assert.equal(missingNextManagerAction.currentPhase, "blocked");
+  assert.ok(missingNextManagerAction.blockers.includes("terminal_refill_history_conflict"));
+
+  const invalidApprovalGatedRecord = projectWithDisposition({
+    ...terminalDisposition,
+    unresolvedApprovalGatedWork: [{ ...terminalDisposition.unresolvedApprovalGatedWork[0], evidenceRefs: [] }],
+  }, "refill-terminal-invalid-record");
+  assert.equal(invalidApprovalGatedRecord.terminalDisposition, null);
+  assert.equal(invalidApprovalGatedRecord.currentPhase, "blocked");
+  assert.ok(invalidApprovalGatedRecord.blockers.includes("terminal_refill_history_conflict"));
+
+  const conflictingPayload = projectWithDisposition({
+    ...terminalDisposition,
+    reconciliationCounts: { ...terminalDisposition.reconciliationCounts, totalItems: 5, reconciledItems: 5, completed: 3 },
+    idempotencyKey: terminalDisposition.idempotencyKey,
+  }, "refill-terminal-conflicting-payload");
+  const conflictingHistory = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [
+      {
+        ...makeTerminalJob(terminalDisposition, "refill-terminal"),
+      },
+      makeTerminalJob(conflictingPayload.terminalDisposition ?? { ...terminalDisposition, reconciliationCounts: { ...terminalDisposition.reconciliationCounts, totalItems: 5, reconciledItems: 5, completed: 3 }, idempotencyKey: terminalDisposition.idempotencyKey }, "refill-terminal-conflicting-payload"),
+    ],
+    events: [],
+  });
+  assert.equal(conflictingHistory.terminalDisposition, null);
+  assert.equal(conflictingHistory.currentPhase, "blocked");
+  assert.ok(conflictingHistory.blockers.includes("terminal_refill_history_conflict"));
+
+  const invalidEarlierHistory = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [
+      makeTerminalJob({ ...terminalDisposition, canonicalEventIntegration: "unexpected_supervisor_contract" }, "refill-terminal-invalid-earlier"),
+      makeTerminalJob(terminalDisposition, "refill-terminal-valid-later"),
+    ],
+    events: [],
+  });
+  assert.equal(invalidEarlierHistory.terminalDisposition, null);
+  assert.equal(invalidEarlierHistory.currentPhase, "blocked");
+  assert.ok(invalidEarlierHistory.blockers.includes("terminal_refill_history_conflict"));
+
+  const bareHistorical = buildManagerExecutionLaneSummary({
+    runId: "run-bare-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [{ result: "authoritative_backlog_exhausted", state: "completed", queuedCount: 0, needsReviewCount: 0, blockedCount: 0, evidenceRefs: ["evidence:bare"] }],
+    events: [],
+  });
+  assert.equal(bareHistorical.terminalDisposition, null);
+  assert.equal(bareHistorical.currentPhase, "blocked");
+  assert.ok(bareHistorical.blockers.includes("terminal_refill_history_conflict"));
+  assert.equal(bareHistorical.rawStateLabels.includes("terminal:authoritative_backlog_exhausted"), false);
+
+  const wrongRun = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [{
+      refillJobId: "refill-wrong-run",
+      sourceRefs: [terminalDisposition.sourceIdentity],
+      sourceIdentity: terminalDisposition.sourceIdentity,
+      sourceRevision: terminalDisposition.sourceRevision,
+      state: "completed",
+      result: "authoritative_backlog_exhausted",
+      terminalDisposition: { ...terminalDisposition, runId: "different-run" },
+    }],
+    events: [],
+  });
+  assert.equal(wrongRun.terminalDisposition, null);
+  assert.equal(wrongRun.currentPhase, "blocked");
+  assert.ok(wrongRun.blockers.includes("terminal_refill_history_conflict"));
+
+  const wrongSourceRevision = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [{
+      refillJobId: "refill-wrong-source-revision",
+      sourceRefs: [terminalDisposition.sourceIdentity],
+      sourceIdentity: terminalDisposition.sourceIdentity,
+      sourceRevision: terminalDisposition.sourceRevision,
+      state: "completed",
+      result: "authoritative_backlog_exhausted",
+      terminalDisposition: { ...terminalDisposition, sourceRevision: "different-revision" },
+    }],
+    events: [],
+  });
+  assert.equal(wrongSourceRevision.terminalDisposition, null);
+  assert.equal(wrongSourceRevision.currentPhase, "blocked");
+  assert.ok(wrongSourceRevision.blockers.includes("terminal_refill_history_conflict"));
+
+  const laterNonterminal = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-11T12:00:00.000Z"), nowIso: () => "2026-07-11T12:00:00.000Z" },
+    refillJobs: [{
+      refillJobId: "refill-terminal-history",
+      sourceRefs: [terminalDisposition.sourceIdentity],
+      sourceIdentity: terminalDisposition.sourceIdentity,
+      sourceRevision: terminalDisposition.sourceRevision,
+      state: "completed",
+      result: "authoritative_backlog_exhausted",
+      terminalDisposition,
+    }, {
+      refillJobId: "refill-later-nonterminal",
+      sourceRefs: [terminalDisposition.sourceIdentity],
+      state: "completed",
+      result: "no_safe_work",
+      queuedCount: 0,
+      needsReviewCount: 0,
+      blockedCount: 0,
+      evidenceRefs: ["evidence:later-nonterminal"],
+    }],
+    events: [],
+  });
+  assert.equal(laterNonterminal.terminalDisposition, null);
+  assert.equal(laterNonterminal.currentPhase, "blocked");
+  assert.ok(laterNonterminal.rawStateLabels.includes("terminal:history_conflict"));
+  assert.ok(laterNonterminal.blockers.includes("missing_supervisor_contract"));
+});
+
 test("summary projection marks corrupt or future progress timestamps unknown", async () => {
   const lifecycle = await loadWorkflowCoreManagerControlPlane();
   const clock = lifecycle.createManualClock("2026-06-30T00:00:00.000Z");
