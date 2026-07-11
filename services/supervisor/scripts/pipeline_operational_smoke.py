@@ -672,6 +672,82 @@ def main() -> int:
                     ).fetchone()[0]
                     if packet_count or event_count:
                         fail(f"rejected adversarial packet seed {packet_id} persisted a packet or lifecycle event")
+            prefixed_credential_families = {
+                "glpat": "glpat-1234567890abcdef",
+                "npm": "npm_1234567890abcdef",
+                "ASIA": "ASIA1234567890ABCDEF",
+            }
+            for family, signature in prefixed_credential_families.items():
+                scalar_title = f"Prefixed {family} scalar credential WorkItem"
+                scalar_response = client.post(
+                    "/work-items",
+                    json={
+                        "title": scalar_title,
+                        "requestedOutcome": f"prefix {signature}",
+                        "source": source_path,
+                        "metadata": {},
+                    },
+                )
+                require_typed_422(scalar_response, f"prefixed {family} scalar WorkItem")
+                nested_title = f"Prefixed {family} nested credential WorkItem"
+                nested_response = client.post(
+                    "/work-items",
+                    json={
+                        "title": nested_title,
+                        "requestedOutcome": "Must be rejected before nested metadata persistence.",
+                        "source": source_path,
+                        "metadata": {"nested": {"opaque": f"prefix {signature}"}},
+                    },
+                )
+                require_typed_422(nested_response, f"prefixed {family} nested metadata WorkItem")
+                with sqlite3.connect(db_path) as prefixed_work_item_db:
+                    for work_item_title in (scalar_title, nested_title):
+                        persisted_item_count = prefixed_work_item_db.execute(
+                            "SELECT COUNT(*) FROM work_items WHERE title = ?",
+                            (work_item_title,),
+                        ).fetchone()[0]
+                        persisted_event_count = prefixed_work_item_db.execute(
+                            "SELECT COUNT(*) FROM workflow_events WHERE payload LIKE ?",
+                            (f"%{work_item_title}%",),
+                        ).fetchone()[0]
+                        if persisted_item_count or persisted_event_count:
+                            fail(f"prefixed {family} WorkItem rejection persisted a WorkItem or workflow event")
+                packet_title_id = f"packet-adversarial-prefixed-{family.lower()}-title"
+                packet_title_response = client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": packet_title_id,
+                        "title": f"prefix {signature}",
+                        "sourceRef": source_ref,
+                        "idempotencyKey": f"create-{packet_title_id}",
+                        "correlationId": f"corr:create-{packet_title_id}",
+                    },
+                )
+                require_typed_422(packet_title_response, f"prefixed {family} packet title")
+                source_title_id = f"packet-adversarial-prefixed-{family.lower()}-source-title"
+                source_title_response = client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": source_title_id,
+                        "title": "Safe packet title",
+                        "sourceRef": {**source_ref, "title": f"prefix {signature}"},
+                        "idempotencyKey": f"create-{source_title_id}",
+                        "correlationId": f"corr:create-{source_title_id}",
+                    },
+                )
+                require_typed_422(source_title_response, f"prefixed {family} source title")
+                with sqlite3.connect(db_path) as prefixed_packet_db:
+                    for packet_id in (packet_title_id, source_title_id):
+                        packet_count = prefixed_packet_db.execute(
+                            "SELECT COUNT(*) FROM authoritative_work_packets WHERE id = ?",
+                            (packet_id,),
+                        ).fetchone()[0]
+                        event_count = prefixed_packet_db.execute(
+                            "SELECT COUNT(*) FROM authoritative_work_packet_lifecycle_events WHERE packet_id = ?",
+                            (packet_id,),
+                        ).fetchone()[0]
+                        if packet_count or event_count:
+                            fail(f"prefixed {family} packet-title rejection persisted a packet or lifecycle event")
             repo_root = Path(__file__).resolve().parents[3]
             untracked_source_path = "docs/workflows/.gate4b-untracked-source.md"
             untracked_source_file = repo_root / untracked_source_path

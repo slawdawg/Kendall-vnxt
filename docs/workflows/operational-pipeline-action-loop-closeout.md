@@ -98,10 +98,10 @@ each is replayed after materialized packet/WorkItem deletion and must preserve
 the resulting status, operator-test decision, stage, root lineage, and single
 successful execution attempt.
 Credential signatures are detected inside scalar strings at token boundaries,
-including prefixed `ghp_`, `sk-proj-`, `AKIA`, and related forms, while ordinary
-prose remains allowed. Smoke HTTP cases cover WorkItem title/request/source/
-details, nested metadata, packet title, and source-reference title, with typed
-422 responses and zero durable rows/events.
+including prefixed `ghp_`, `sk-proj-`, `AKIA`, `glpat-`, `npm_`, `ASIA`, and
+related forms, while ordinary prose remains allowed. Smoke HTTP cases cover
+WorkItem title/request/source/details, nested metadata, packet title, and
+source-reference title, with typed 422 responses and zero durable rows/events.
 Engine/session reload is separately labeled from event reconstruction. For event
 reconstruction, the disposable packet and linked WorkItem materialized rows are
 deleted and verified absent while lifecycle/workflow events remain; the rebuild
