@@ -28068,6 +28068,10 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     assert.equal(preflight.summary.runway.refillNeeded, 5);
     assert.equal(preflight.summary.cleanup.mutationMode, "dry_run_required");
 
+    seedManagerLedgerForPreflight(stateRoot, "manager-test", {
+      stateSource: "dispatcher_summary_unavailable",
+      freshness: "unknown",
+    });
     const previewBacked = buildPreflight(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
@@ -28104,8 +28108,11 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     assert.equal(previewBacked.summary.runway.refillNeeded, 6);
     assert.equal(previewBacked.summary.runway.sourceSlice.type, "prd");
     assert.equal(previewBacked.summary.dispatcher.status, "blocked");
+    assert.equal(previewBacked.summary.dispatcher.dispatcherSummaryState, "dispatch_preview_live");
+    assert.equal(previewBacked.summary.dispatcher.freshness, "fresh");
     assert.equal(previewBacked.status, "blocked");
     assert.ok(previewBacked.blockers.some((blocker) => blocker.code === "preflight-dispatcher-blocked"));
+    assert.equal(previewBacked.blockers.some((blocker) => blocker.message.includes("Dispatcher summary is unavailable or stale")), false);
     assert.equal(previewBacked.blockers.some((blocker) => blocker.code === "assignment-report-malformed"), false);
 
     const packetBlocked = buildPreflight(

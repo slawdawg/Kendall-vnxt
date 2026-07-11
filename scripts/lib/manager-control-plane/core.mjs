@@ -21473,7 +21473,11 @@ function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
   const placeholderSummaryUnavailable =
     dispatcherSummaryUnavailable &&
     (!isPlainObject(ledgerDispatcher) || ledgerDispatcher.stateSource === "dispatcher_summary_unavailable" || String(ledgerDispatcher.freshness || "").toLowerCase() === "unknown");
-  const previewBacked = placeholderSummaryUnavailable && previewHasDispatcherTruth && effectiveDispatchBlockers.length === 0;
+  // The current dispatch preview is produced through the guarded workspace
+  // path, so a structured preview remains authoritative even when it proves
+  // that no dispatchable lane exists. Preserve that real blocker without
+  // adding the stale placeholder ledger warning on top of it.
+  const previewBacked = placeholderSummaryUnavailable && previewHasDispatcherTruth;
   const status = effectiveDispatchBlockers.length > 0 || (allowed === false && effectiveDispatchBlockers.length > 0) ? "blocked" : dispatcherSummaryUnavailable && !previewBacked ? "blocked" : dispatchableLanes > 0 || activeLanes > 0 ? "ready" : "ready";
   const warnings = dispatcherSummaryUnavailable && !previewBacked
     ? [{ code: "preflight-dispatcher-summary-unknown", message: "Dispatcher summary is unavailable or stale; refresh dispatcher state before inferring active work." }]
