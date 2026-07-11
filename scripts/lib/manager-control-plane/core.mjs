@@ -262,6 +262,7 @@ export function parseCommonArgs(argv = []) {
     promptIdle: false,
     includeWarmReviewers: false,
     retireBlockedQuestion: false,
+    retireMissingSession: false,
     answer: "",
     operatorVisiblePrompt: false,
     maxIterations: null,
@@ -459,6 +460,8 @@ export function parseCommonArgs(argv = []) {
       options.includeWarmReviewers = true;
     } else if (arg === "--retire-blocked-question") {
       options.retireBlockedQuestion = true;
+    } else if (arg === "--retire-missing-session") {
+      options.retireMissingSession = true;
     } else if (arg === "--answer") {
       options.answer = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--answer=")) {
@@ -6142,6 +6145,27 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
   const blockedQuestionCandidates = runOptions.retireBlockedQuestion
     ? buildBlockedQuestionRetireCandidates({ progressWorkers, questionAnswer, workersById, runOptions, runId })
     : [];
+  const missingLiveSessionIds = missingLiveWorkerIdsFromWorkerStatus(workerPacket);
+  const missingSessionCandidates = runOptions.retireMissingSession
+    ? workers
+      .filter((worker) => workerMatchesExactTarget(worker, runOptions))
+      .filter((worker) => missingLiveSessionIds.has(worker.workerId))
+      .filter((worker) => (
+        worker.state === "warm" &&
+        !worker.assignmentId &&
+        !worker.taskId &&
+        !worker.leaseId &&
+        !worker.currentLease?.assignmentId &&
+        !hasActiveWorkerLease(worker)
+      ))
+      .map((worker) => ({
+        ...worker,
+        progressState: "missing_live_tmux_session",
+        retireBasis: "missing_live_tmux_session",
+        record: worker,
+      }))
+      .filter((worker) => isManagerOwnedWorker(worker.record, runId) && worker.record.sessionName)
+    : [];
   const candidates = resourceState === "critical"
     ? criticalKillOrder
       .map((worker) => ({ ...worker, progressState: "critical_resource_pressure", retireBasis: "critical_resource_pressure", record: workersById.get(worker.workerId) || null }))
@@ -6149,6 +6173,8 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       .filter((worker) => worker.record && isManagerOwnedWorker(worker.record, runId) && worker.record.sessionName)
     : runOptions.retireBlockedQuestion
       ? blockedQuestionCandidates
+      : runOptions.retireMissingSession
+        ? missingSessionCandidates
       : exactBootingRecoveryRequested
         ? bootingRecoveryCandidates
         : recoverySubmitCandidates;
@@ -6171,6 +6197,8 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
         ? "park_policy_blocked_lane_and_free_worker_capacity"
         : worker.retireBasis === "booting_warm_reviewer_recovery"
           ? "retire_unready_booting_warm_reviewer"
+        : worker.retireBasis === "missing_live_tmux_session"
+          ? "retire_logical_record_after_verified_missing_live_session"
         : "retire_recovery_stuck_worker",
     retireMarker: worker.retireBasis === "unsafe_question_policy_blocked" ? RETIRE_BLOCKED_QUESTION_BASIS : null,
     blockedQuestion: worker.blockedQuestion || null,
@@ -6179,6 +6207,20 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
   if (!paths.proof.ok) {
     blockers.push({ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." });
   }
+  if (runOptions.retireMissingSession && !runOptions.workerId) {
+    blockers.push({
+      code: "worker-retire-missing-session-requires-exact-target",
+      message: "Missing-session logical retirement requires an exact worker-id target.",
+      nextAction: "Provide --worker-id for one manager-owned warm record after verifying its session is absent and it has no assignment or lease.",
+    });
+  }
+  if (runOptions.retireMissingSession && runOptions.retireBlockedQuestion) {
+    blockers.push({
+      code: "worker-retire-conflicting-modes",
+      message: "Missing-session and blocked-question retirement modes cannot be combined.",
+      nextAction: "Run one exact retirement mode at a time.",
+    });
+  }
   if (selected.length === 0) {
     blockers.push({
       code: resourceState === "critical" ? "worker-retire-no-critical-resource-candidates" : bootingRetireInspection?.code || "worker-retire-no-candidates",
@@ -6186,6 +6228,8 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
         ? "No manager-owned worker is eligible for critical resource termination."
         : runOptions.retireBlockedQuestion
           ? "No manager-owned unsafe-question-blocked worker is eligible for retire."
+          : runOptions.retireMissingSession
+            ? "No exact-target manager-owned warm worker with verified missing live session and no assignment or lease is eligible for logical retirement."
           : exactBootingRecoveryRequested
             ? "No exact-target manager-owned booting warm reviewer is safely eligible for retire."
             : "No manager-owned recovery-submit-unanswered worker is eligible for retire.",
@@ -6221,12 +6265,12 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
           runId,
           targets: selected,
         }),
-        stopLines: ["manager-owned-session-only", "no unknown session mutation", "no assignment takeover", "no dispatch apply", "no provider payload retention"],
+        stopLines: ["manager-owned-session-only", "no unknown session mutation", "no assignment takeover", "no dispatch apply", "no provider payload retention", ...(runOptions.retireMissingSession ? ["missing-session-logical-retirement-only", "do-not-kill-absent-session"] : [])],
       },
       nextActions: [{
         code: "worker-retire-apply-ready",
         summary: workerRetireSummary(resourceState, selected),
-        nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json${workerExactTargetFlags(selected[0]) || ` --limit ${selected.length}`}${resourceState === "critical" ? " --resource-state critical" : ""}${selected.some((request) => request.basis === "unsafe_question_policy_blocked") ? " --retire-blocked-question" : ""} --apply`,
+        nextAction: `node ./scripts/manager-worker-retire.mjs --summary-json${workerExactTargetFlags(selected[0]) || ` --limit ${selected.length}`}${resourceState === "critical" ? " --resource-state critical" : ""}${selected.some((request) => request.basis === "unsafe_question_policy_blocked") ? " --retire-blocked-question" : ""}${selected.some((request) => request.basis === "missing_live_tmux_session") ? " --retire-missing-session" : ""} --apply`,
       }],
     });
   }
@@ -6257,10 +6301,25 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
         blockers: [{ code: "worker-retire-booting-target-changed", message: `Exact-target booting worker is no longer safe to retire: ${bootingRecoveryExclusion}.`, nextAction: "Refresh worker status and rerun exact-target retirement preview; do not kill the session." }],
       });
     }
-    const expectedState = request.basis === "booting_warm_reviewer_recovery" ? "warm" : "active";
+    const missingSessionLogical = request.basis === "missing_live_tmux_session";
+    const expectedState = request.basis === "booting_warm_reviewer_recovery" || missingSessionLogical ? "warm" : "active";
     if (!record || !record.sessionName || (resourceState !== "critical" && record.state !== expectedState)) {
       results.push({ ...request, status: "skipped_not_active_manager_owned" });
       continue;
+    }
+    if (missingSessionLogical && (
+      record.assignmentId ||
+      record.taskId ||
+      record.leaseId ||
+      record.currentLease?.assignmentId ||
+      hasActiveWorkerLease(record)
+    )) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, apply: true, mutation: "none", results },
+        blockers: [{ code: "worker-retire-missing-session-worker-gained-work", message: "The exact missing-session worker gained an assignment or lease before logical retirement.", nextAction: "Refresh worker status and do not retire this worker." }],
+      });
     }
     if (request.basis === "booting_warm_reviewer_recovery") {
       const reinspection = inspectBootingWarmReviewerRetireCandidate(record, runId, request, { ...context, tmuxRunner: runner });
@@ -6296,10 +6355,25 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       }
     }
     const retiredAt = new Date().toISOString();
-    const killTarget = request.basis === "booting_warm_reviewer_recovery" ? `=${record.sessionName}` : record.sessionName;
-    const kill = runner("tmux", ["kill-session", "-t", killTarget], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
-    let killOk = !kill?.error && (kill?.status ?? 0) === 0;
+    let kill = null;
+    let killOk = false;
     let killReconciliation = null;
+    if (missingSessionLogical) {
+      killReconciliation = reconcileExactSessionAfterKill(record.sessionName, runner, context);
+      if (killReconciliation.status !== "missing") {
+        return packet({
+          ok: false,
+          status: "blocked",
+          summary: { runId, apply: true, mutation: "none", results },
+          blockers: [{ code: "worker-retire-missing-session-live-or-ambiguous", message: `Exact worker session is ${killReconciliation.status}; logical retirement did not mutate it.`, nextAction: "Refresh exact tmux session identity and keep the worker blocked until absence is proven." }],
+        });
+      }
+      killOk = true;
+    } else {
+      const killTarget = request.basis === "booting_warm_reviewer_recovery" ? `=${record.sessionName}` : record.sessionName;
+      kill = runner("tmux", ["kill-session", "-t", killTarget], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+      killOk = !kill?.error && (kill?.status ?? 0) === 0;
+    }
     if (!killOk && request.basis === "booting_warm_reviewer_recovery") {
       killReconciliation = reconcileExactSessionAfterKill(record.sessionName, runner, context);
       if (killReconciliation.status === "missing") {
@@ -6319,7 +6393,7 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
         return packet({ ok: false, status: "blocked", summary: { runId, apply: true, mutation: "partial; durable retirement recovery marker", results }, blockers: [{ code: "worker-retire-kill-recovery-required", message: `Exact session kill outcome requires recovery: ${killReconciliation.status}.`, nextAction: record.recoveryAction }] });
       }
     }
-    results.push({ ...request, status: killOk ? (killReconciliation?.status === "missing" ? "retired_reconciled" : "retired") : "failed", sessionName: record.sessionName, kill: killOk ? { ok: true, sessionName: record.sessionName, reconciled: killReconciliation?.status === "missing" } : { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status }, ...(killReconciliation ? { reconciliation: killReconciliation } : {}) });
+    results.push({ ...request, status: killOk ? (killReconciliation?.status === "missing" ? "retired_reconciled" : "retired") : "failed", sessionName: record.sessionName, kill: killOk ? { ok: true, sessionName: record.sessionName, skipped: missingSessionLogical, reason: missingSessionLogical ? "session_already_missing" : undefined, reconciled: killReconciliation?.status === "missing" } : { ok: false, error: kill?.error?.message || String(kill?.stderr || kill?.stdout || "tmux kill-session failed").trim(), status: kill?.status }, ...(killReconciliation ? { reconciliation: killReconciliation } : {}) });
     if (!killOk) {
       const retiredCount = results.filter(workerRetireResultIsFinal).length;
       if (retiredCount > 0) {
@@ -6358,8 +6432,10 @@ export function buildWorkerRetirePlan(options = {}, context = {}) {
       ? "retired_for_critical_resource_pressure"
       : request.basis === "unsafe_question_policy_blocked"
         ? "retired_after_policy_blocked_question"
-        : request.basis === "booting_warm_reviewer_recovery"
-          ? "retired_after_booting_warm_reviewer_recovery"
+          : request.basis === "booting_warm_reviewer_recovery"
+            ? "retired_after_booting_warm_reviewer_recovery"
+        : request.basis === "missing_live_tmux_session"
+          ? "retired_after_missing_live_session"
         : "retired_after_recovery_submit_unanswered";
     if (request.basis === "booting_warm_reviewer_recovery") {
       record.lifecycleState = "retired";
@@ -6458,6 +6534,9 @@ function workerRetireAuthorityBasis(resourceState = "unknown", results = []) {
   if (bases.size === 1 && bases.has("booting_warm_reviewer_recovery")) {
     return "manager-owned-worker-exact-target-booting-reviewer-retire-existing-gates";
   }
+  if (bases.size === 1 && bases.has("missing_live_tmux_session")) {
+    return "manager-owned-worker-exact-target-missing-session-logical-retire-existing-gates";
+  }
   if (bases.has("unsafe_question_policy_blocked")) {
     return "manager-owned-worker-retire-mixed-existing-gates";
   }
@@ -6467,6 +6546,8 @@ function workerRetireAuthorityBasis(resourceState = "unknown", results = []) {
 function workerRetireSummary(resourceState = "unknown", selected = []) {
   if (resourceState === "critical") return `Terminate ${selected.length} manager-owned worker(s) for critical resource pressure.`;
   const bootingRecoveryCount = selected.filter((request) => request.basis === "booting_warm_reviewer_recovery").length;
+  const missingSessionCount = selected.filter((request) => request.basis === "missing_live_tmux_session").length;
+  if (missingSessionCount > 0) return `Logically retire ${missingSessionCount} exact-target manager-owned worker record(s) after verified missing live session(s).`;
   if (bootingRecoveryCount > 0) return `Retire ${bootingRecoveryCount} exact-target booting warm reviewer(s) after readiness recovery could not complete.`;
   const blockedQuestionCount = selected.filter((request) => request.basis === "unsafe_question_policy_blocked").length;
   const recoveryCount = selected.length - blockedQuestionCount;
@@ -6479,6 +6560,8 @@ function workerRetirePastTenseSummary(resourceState = "unknown", results = []) {
   const count = Array.isArray(results) ? results.length : 0;
   if (resourceState === "critical") return `Terminated ${count} manager-owned worker(s) for critical resource pressure`;
   const bootingRecoveryCount = results.filter((result) => result.basis === "booting_warm_reviewer_recovery").length;
+  const missingSessionCount = results.filter((result) => result.basis === "missing_live_tmux_session").length;
+  if (missingSessionCount > 0) return `Logically retired ${missingSessionCount} exact-target manager-owned worker record(s) after verified missing live session(s)`;
   if (bootingRecoveryCount > 0) return `Retired ${bootingRecoveryCount} exact-target booting warm reviewer(s) after readiness recovery could not complete`;
   const blockedQuestionCount = results.filter((result) => result.basis === "unsafe_question_policy_blocked").length;
   const recoveryCount = count - blockedQuestionCount;

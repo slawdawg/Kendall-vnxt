@@ -14255,6 +14255,98 @@ test("worker retire gate retires only recovery-stuck manager-owned active worker
   }
 });
 
+test("worker retire gate logically retires an exact warm record after verified missing session", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-missing-session-"));
+  try {
+    assert.equal(parseCommonArgs(["--retire-missing-session"]).retireMissingSession, true);
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const workerPath = join(stateRoot, "manager-runs", "manager-test", "workers.json");
+    const workers = [
+      {
+        workerId: "codex-6",
+        owner: "manager-test/codex-6",
+        runId: "manager-test",
+        sessionName: "codex-6",
+        provider: "codex",
+        modelPolicy: "task-fit",
+        state: "warm",
+        assignmentState: "warm",
+        assignmentId: null,
+        taskId: null,
+        leaseId: null,
+        currentLease: null,
+        worktreePath: "/tmp/deleted-25-1-worktree",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+      {
+        workerId: "codex-active",
+        owner: "manager-test/codex-active",
+        runId: "manager-test",
+        sessionName: "codex-active",
+        state: "active",
+        assignmentState: "active",
+        assignmentId: "lane-active",
+        taskId: "task-active",
+        lastHeartbeatAt: "2026-06-29T00:00:00.000Z",
+      },
+    ];
+    writeFileSync(workerPath, `${JSON.stringify(workers, null, 2)}\n`);
+    const workerStatus = {
+      summary: {
+        workers,
+        lifecyclePlan: {
+          terminationPlan: {
+            excludedSessions: [
+              { workerId: "codex-6", sessionName: "codex-6", reason: "missing-live-tmux-session" },
+            ],
+          },
+        },
+      },
+    };
+    const progressStatus = { summary: { workerProgress: [] } };
+    const preview = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, workerId: "codex-6", retireMissingSession: true },
+      { workerStatus, progressStatus },
+    );
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.requests[0].basis, "missing_live_tmux_session");
+    assert.match(preview.nextActions[0].nextAction, /--retire-missing-session/);
+
+    const noTarget = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, retireMissingSession: true },
+      { workerStatus, progressStatus },
+    );
+    assert.equal(noTarget.status, "blocked");
+    assert.ok(noTarget.blockers.some((blocker) => blocker.code === "worker-retire-missing-session-requires-exact-target"));
+
+    const calls = [];
+    const applied = buildWorkerRetirePlan(
+      { runId: "manager-test", stateRoot, workerId: "codex-6", retireMissingSession: true, apply: true },
+      {
+        workerStatus,
+        progressStatus,
+        tmuxRunner: (cmd, args) => {
+          calls.push({ cmd, args });
+          return { status: 1, stdout: "", stderr: "can't find session: codex-6" };
+        },
+      },
+    );
+    assert.equal(applied.status, "ready");
+    assert.equal(applied.summary.results[0].status, "retired_reconciled");
+    assert.equal(applied.summary.results[0].kill.skipped, true);
+    assert.deepEqual(calls, [{ cmd: "tmux", args: ["has-session", "-t", "=codex-6"] }]);
+    const records = JSON.parse(readFileSync(workerPath, "utf8"));
+    assert.equal(records.find((worker) => worker.workerId === "codex-6").state, "retired");
+    assert.equal(records.find((worker) => worker.workerId === "codex-6").recoveryState, "retired_after_missing_live_session");
+    assert.equal(records.find((worker) => worker.workerId === "codex-active").state, "active");
+    const ledger = ledgerCommand({ command: "read", runId: "manager-test", stateRoot });
+    assert.equal(ledger.summary.events.at(-1).authorityBasis, "manager-owned-worker-exact-target-missing-session-logical-retire-existing-gates");
+    assert.doesNotMatch(JSON.stringify(applied), /capture-pane|provider payload|reasoning trace|raw prompt/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("worker retire gate can park unsafe-question-blocked manager-owned workers with explicit flag", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-retire-blocked-question-"));
   try {
