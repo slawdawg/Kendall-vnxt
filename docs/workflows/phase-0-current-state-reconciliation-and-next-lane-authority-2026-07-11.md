@@ -13,15 +13,18 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Reconciled baseline
 
-- `origin/dev` is at `a9c974b50a6d769691127dd0e1a6e120612a0e31`, including the
+- `origin/dev` is at `9796f21274a500006a32e548002bede777de6478`, including the
   merged Gate 5/6 terminal backlog and readiness gates, the Phase 0
   reconciliation artifacts, the post-merge course-correction policy update,
-  and the refreshed post-merge audit handoff.
+  the refreshed post-merge audit handoff, the stale merged-assignment
+  closeout gate repair, and the exact-task duplicate-manifest selector fix.
 - PR inventory is empty: no open pull requests target `dev`.
 - Epic 25-1 (#473), Epic 25-2 (#474), the earlier 24-1 fixture stabilization
   (#461), the Phase 0 reconciliation (#485), the post-merge policy update
-  (#488), and the post-merge audit refresh (#489) are merged. There is no open
-  PR available for merge or review-fix work.
+  (#488), the post-merge audit refresh (#489), the stale merged-assignment
+  closeout repair (#491), and the exact-task duplicate-manifest selector fix
+  (#492) are merged. There is no open PR available for merge or review-fix
+  work.
 - The primary checkout remains intentionally dirty in four user-owned paths:
   `AGENTS.md`,
   `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`,
@@ -35,13 +38,12 @@ provider operation, scoring operation, takeover, or cleanup authority.
 - Current read-only preflight reports no safe work supply or dispatchable lanes;
   the authoritative PRD source is present and exhausted, while dispatcher state
   remains unavailable/stale.
-- Assignment inventory reports 252 lane assignments, including 237 closed and
-  15 `blocked_stale_owner_needs_takeover`; and 419 workspace assignments,
-  including 402 closed, 16 `blocked_stale_owner_needs_takeover`, and 1 active
-  assignment.
-- Canonical stale-owner inspection covers 12 targets: the canonical stale
-  record is closed, 9 stale workspaces require dirty-worktree preservation, and
-  2 clean stale lanes remain blocked pending ownership/evidence approval.
+- Assignment inventory reports the two formerly orphaned PR-backed records as
+  closed with `stale_merged_pr_record_cleanup` evidence. Canonical stale-owner
+  inspection covers 12 remaining targets: all 12 require dirty-worktree
+  preservation, with zero clean cleanup candidates and zero takeover candidates.
+- The three clean no-PR stale lanes previously eligible for integrated cleanup
+  were removed through the governed cleanup gate and their assignments closed.
 - Workspace orientation reports 8 tmux panes, 4 manager-owned panes, 2
   unmanaged panes, and 2 panes whose recorded worktrees are missing.
 - Worker posture is 0 active, 4 warm, and 2 retirement-blocked. Usage is
@@ -61,11 +63,13 @@ missing-worktree references. No pane was mutated.
 The exact stale-owner inspection covered 12 targets. The sanitized target
 `3-3-execution-completion-and-failure-evidence` was proven absent and its
 assignment was closed by the governed `close-assignments --apply` command after
-the operator approved any stale cleanup. The follow-up packet reports zero
-canonical closeout candidates, 9 dirty stale workspaces with bounded
-preservation evidence, 2 clean stale lanes blocked on ownership/evidence, and
-zero other cleanup candidates. No takeover, worker mutation, dispatch apply,
-provider call, or runtime merge has been performed.
+the operator approved any stale cleanup. Three clean no-PR stale lanes were
+then removed through the exact integrated-cleanup gate and their linked
+assignments reconciled. The current packet reports 12 dirty stale workspaces
+with bounded preservation evidence, zero clean cleanup candidates, and zero
+takeover candidates. No dirty workspace was deleted, no takeover was applied,
+and no worker mutation, dispatch apply, provider call, or runtime merge was
+performed.
 
 ## Post-merge delivery audit
 
@@ -92,6 +96,27 @@ runtime audit:
   explicit approval `Operator approval: I approve any cleanup of anything stale.`
   The assignment is now closed; no source worktree or branch was removed.
 
+## Stale merged-delivery closeout repair
+
+- PR #491 added the approval-gated `stale_merged_pr_record_cleanup` closeout
+  mode. It requires a closed manifest, explicit merged PR metadata, absent
+  worktree/local/remote branch evidence, and no open GitHub PR reference. It
+  preserves merged PR evidence and continues to fail closed for unmerged or
+  open PR evidence. Its exact head was
+  `2444813bc4d42f1f7d3049a7c796b299e677ab14`; it merged as
+  `cc97feb2c82086b158cf51afe28e99c98de31fe9`.
+- PR #491 also fixed integrated cleanup to pass approved ownership-takeover
+  options through linked assignment closeout, preventing a manifest from
+  becoming `cleanup_partial` after its worktree and branch were already
+  removed. The full nested workspace integration suite and CI fast/static
+  gates passed; the lane was cleaned at exact head.
+- PR #492 fixed duplicate closed-manifest selection to prefer an exact
+  assignment task ID before falling back to source-assignment ID. Its exact
+  head was `9a4e99e5833425fc87d1b0b59daec71ddc54ddb8`; it merged as
+  `9796f21274a500006a32e548002bede777de6478`. The full nested workspace
+  integration suite and CI fast/static gates passed; the lane was cleaned at
+  exact head.
+
 ## Canonical stale-record cleanup closeout
 
 Target: `3-3-execution-completion-and-failure-evidence`
@@ -110,6 +135,20 @@ node ./scripts/codex-workspace.mjs close-assignments --ids 3-3-execution-complet
 The closeout does not authorize takeover or cleanup of the remaining dirty or
 ambiguous lanes. Their preservation and ownership gates remain active.
 
+The approved stale merged-delivery closeout was then applied to the two
+remaining PR-backed assignment records:
+
+- `read-only-evidence-polish` closed against exact manifest
+  `20260622-read-only-evidence-polish`, preserving merged PR #189 evidence.
+- `verification-surface-hardening` closed against exact manifest
+  `20260623-verification-surface-hardening`, preserving merged PR #191
+  evidence. The exact-task selector repair prevented the older duplicate PR
+  #187 manifest from being selected.
+
+Both records retain the explicit approval and bounded closeout evidence. No
+worktree or branch existed for either record, and no dirty workspace was
+mutated.
+
 The current primary-checkout patch also remains held. Its manager-control-plane
 diff removes authoritative worker assignment locks, review reservation and
 lease identity checks, pane/session identity revalidation, and self-review or
@@ -123,15 +162,16 @@ reconciled by the owning lane.
 
 The implementation gates are current and green, but the manager runtime
 control state is not ready for autonomous mutation. The immediate technical
-debt is stale run/dispatcher state, ambiguous stale-owner records, dirty
-workspace preservation, missing tmux/worktree orientation, and absent current
-source evidence in the refill packet. These are reconciliation debts, not
+debt is stale run/dispatcher state, 12 dirty workspace preservation packets,
+missing tmux/worktree orientation, and absent current source evidence in the
+refill packet. The previously ambiguous PR-backed assignment records and
+clean orphaned stale lanes are reconciled. These are reconciliation debts, not
 permission to invent post-slice product work.
 
 ## Required repair order
 
-1. Preserve all dirty stale-worktree evidence; the canonical stale-record
-   cleanup is complete and must not be repeated.
+1. Preserve all dirty stale-worktree evidence; the canonical stale-record and
+   clean orphaned-lane cleanups are complete and must not be repeated.
 2. Reconcile the two missing tmux/worktree references without mutating unknown
    panes or taking ownership of any lane implicitly.
 3. Refresh or retire the stale manager run and reconstruct dispatcher summary
@@ -149,12 +189,13 @@ credential access, or GitHub mutation is authorized by this artifact.
 
 ## Next-lane recommendation
 
-The existing execution-authority decision contract identifies
-`adaptive-scoring` decision preparation as the recommended candidate lane. The
-candidate is not selected or approved yet. The safe next package is the
-existing non-executing `docs/workflows/adaptive-scoring-decision-prep.md`
-contract and `pnpm run check:adaptive-scoring`, which passed during this
-reconciliation.
+The next safe work is reconciliation of the 12 dirty stale lanes and the
+primary-checkout safety patch through their existing ownership, preservation,
+verification, and PR gates. No clean stale cleanup or takeover candidate is
+currently eligible. After runtime state is coherent and the primary patch is
+reconciled, revisit the existing non-executing
+`docs/workflows/adaptive-scoring-decision-prep.md` contract and
+`pnpm run check:adaptive-scoring`; no score may be computed or used yet.
 
 Before any future exact approval packet, the lane must name its intended use,
 affected decision surfaces, lifecycle owners, approved metadata inputs,
@@ -176,6 +217,7 @@ post-slice epics remain alternative approval-required lanes, not current work.
 - `node ./scripts/manager-resume-state.mjs --summary-json`
 - `node ./scripts/manager-cycle-packet.mjs --summary-json`
 - `node ./scripts/manager-stale-owner-inspection.mjs --summary-json`
+- `node ./scripts/manager-dirty-workspace-preservation.mjs --summary-json`
 - `pnpm run check:adaptive-scoring`
 - `pnpm run check:authority-readiness`
 - `pnpm run check:branch-protection-readiness`
