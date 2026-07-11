@@ -921,16 +921,13 @@ class SupervisorService:
         if approval_evidence_required:
             try:
                 if payload.actionId == "requeue":
-                    # Validate first to preserve the established server-issued-approval
-                    # contract.  Do not consume a valid approval if the authoritative
-                    # packet has subsequently left its only requeueable state.
-                    await self._validate_and_consume_operational_approval(
-                        session,
-                        payload,
-                        packet,
-                        consume=False,
-                    )
                     if not packet or packet.status != "blocked":
+                        # Preserve the missing-approval contract, but make the
+                        # packet-state guard authoritative once an approval was
+                        # supplied.  A stale approval must not mask the fact that
+                        # requeue is only valid for a currently blocked packet.
+                        if not payload.approvalId:
+                            await self._validate_and_consume_operational_approval(session, payload, packet)
                         raise ValueError("Requeue requires the authoritative WorkPacket to be currently blocked.")
                 approval = await self._validate_and_consume_operational_approval(session, payload, packet)
             except OperationalActionReplay as replay:
