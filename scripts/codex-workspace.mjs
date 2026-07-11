@@ -3974,6 +3974,12 @@ function staleRecordGithubPrEvidence(branch) {
 }
 
 function closedManifestForAssignment(assignment, manifests) {
+  const exactTaskMatch = assignment.task_id
+    ? manifests.find(({ manifest }) => manifest.status === "closed" && manifest.task_id === assignment.task_id)
+    : null;
+  if (exactTaskMatch) {
+    return exactTaskMatch;
+  }
   return manifests.find(({ manifest }) => {
     if (manifest.status !== "closed") {
       return false;

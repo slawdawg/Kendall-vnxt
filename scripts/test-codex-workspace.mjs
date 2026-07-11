@@ -2156,6 +2156,80 @@ try {
     }
   });
 
+  test("close-assignments prefers an exact task manifest over an older duplicate assignment manifest", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-exact-task-manifest-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      const assignmentId = "duplicate-assignment-manifest-fixture";
+      const exactTaskId = "20260623-duplicate-assignment-manifest-fixture";
+      const manifests = [
+        {
+          task_id: "20260622-duplicate-assignment-manifest-fixture",
+          branch: "codex/duplicate-assignment-old-fixture",
+        },
+        {
+          task_id: exactTaskId,
+          branch: "codex/duplicate-assignment-exact-fixture",
+        },
+      ];
+      for (const manifest of manifests) {
+        writeFileSync(
+          join(tasksDir, `${manifest.task_id}.json`),
+          `${JSON.stringify(
+            {
+              task_id: manifest.task_id,
+              branch: manifest.branch,
+              worktree_path: join(closeoutStateRoot, "worktrees", manifest.task_id),
+              base_branch: "dev",
+              status: "closed",
+              owner: "runner-a",
+              source_assignment_id: assignmentId,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+      writeFileSync(
+        join(assignmentsDir, `${assignmentId}.json`),
+        `${JSON.stringify(
+          {
+            assignment_id: assignmentId,
+            task_id: exactTaskId,
+            branch: "codex/duplicate-assignment-exact-fixture",
+            status: "active",
+            owner: "runner-a",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        assignmentId,
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--summary-json",
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.counts.closeable === 1, result.stdout || result.stderr);
+      assert(packet.results[0].manifestTaskId === exactTaskId, result.stdout || result.stderr);
+      assert(packet.results[0].branch === "codex/duplicate-assignment-exact-fixture", result.stdout || result.stderr);
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("close-assignments apply closes only assignments backed by closed workspace evidence", () => {
     const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-apply-"));
     try {
