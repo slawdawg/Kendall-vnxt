@@ -13,7 +13,7 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Reconciled baseline
 
-- `origin/dev` is at `9796f21274a500006a32e548002bede777de6478`, including the
+- `origin/dev` is at `daadcdc5b4aeac84ce4faea669f837d0ae73b46d`, including the
   merged Gate 5/6 terminal backlog and readiness gates, the Phase 0
   reconciliation artifacts, the post-merge course-correction policy update,
   the refreshed post-merge audit handoff, the stale merged-assignment
@@ -22,9 +22,9 @@ provider operation, scoring operation, takeover, or cleanup authority.
 - Epic 25-1 (#473), Epic 25-2 (#474), the earlier 24-1 fixture stabilization
   (#461), the Phase 0 reconciliation (#485), the post-merge policy update
   (#488), the post-merge audit refresh (#489), the stale merged-assignment
-  closeout repair (#491), and the exact-task duplicate-manifest selector fix
-  (#492) are merged. There is no open PR available for merge or review-fix
-  work.
+  closeout repair (#491), the exact-task duplicate-manifest selector fix
+  (#492), and this durable Phase 0 audit refresh (#493) are merged. There is
+  no open PR available for merge or review-fix work.
 - The primary checkout remains intentionally dirty in four user-owned paths:
   `AGENTS.md`,
   `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`,
@@ -116,6 +116,10 @@ runtime audit:
   `9796f21274a500006a32e548002bede777de6478`. The full nested workspace
   integration suite and CI fast/static gates passed; the lane was cleaned at
   exact head.
+- PR #493 refreshed this durable handoff at exact head
+  `70397f8dfae77b234e8c1ad38929f0d984d999ca` and merged as
+  `daadcdc5b4aeac84ce4faea669f837d0ae73b46d`. Its documentation checks,
+  fast CI gate, and exact-head cleanup gate passed.
 
 ## Canonical stale-record cleanup closeout
 
