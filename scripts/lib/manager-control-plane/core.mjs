@@ -70,6 +70,38 @@ const WORKER_REVIEW_RESERVATION_MAX_AGE_MS = 30 * 60 * 1000;
 const BOOTING_WARM_REVIEWER_RETIRE_GRACE_MS = 30 * 1000;
 const DEFAULT_MODEL_ROUTING_MODEL = "gpt-5.6-luna";
 const DEFAULT_MODEL_ROUTING_EFFORT = "high";
+const RECONCILE_PREFLIGHT_MUTATION = "none; read-only preflight summary";
+const RECONCILE_DISPATCHER_MUTATION = "none; dispatcher readiness summary only";
+const RECONCILE_PREFLIGHT_PRODUCER = "manager-preflight";
+const RECONCILE_PREFLIGHT_SCHEMA_VERSION = "manager-preflight.v1";
+const RECONCILE_PREFLIGHT_MAX_AGE_MS = 5 * 60 * 1000;
+const RECONCILE_PREFLIGHT_ALLOWED_FUTURE_SKEW_MS = 60 * 1000;
+const RECONCILE_PROHIBITED_RAW_KEYS = new Set([
+  "rawpayload",
+  "rawtranscript",
+  "rawresponse",
+  "providerpayload",
+  "provideroutput",
+  "rawprompt",
+  "prompt",
+  "transcript",
+  "payload",
+  "secret",
+  "credential",
+  "response",
+  "stdout",
+  "stderr",
+  "scrollback",
+  "log",
+  "logs",
+  "completion",
+  "reasoningtrace",
+  "providerresponse",
+  "stackdump",
+  "rawscrollback",
+  "sourcedump",
+  "sourcecopy",
+]);
 
 export const MANAGER_WORKER_LIFECYCLE_STATES = Object.freeze([
   "busy",
@@ -281,6 +313,7 @@ export function parseCommonArgs(argv = []) {
     capabilityReasonCodes: [],
     capabilitySafeFallbacks: [],
     runtimeMode: "",
+    preflightFile: "",
   };
   const positionals = [];
   const singletonTargetFlags = new Set();
@@ -554,6 +587,10 @@ export function parseCommonArgs(argv = []) {
     } else if (arg.startsWith("--runtime-mode=")) {
       options.runtimeMode = arg.slice("--runtime-mode=".length);
       if (!String(options.runtimeMode || "").trim()) throw new Error("--runtime-mode requires a non-empty value");
+    } else if (arg === "--preflight-file") {
+      options.preflightFile = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--preflight-file=")) {
+      options.preflightFile = arg.slice("--preflight-file=".length);
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -21209,9 +21246,13 @@ export function buildPreflight(options = {}, context = {}) {
     const blocker = sandboxBoundaryBlocker(boundary, "preflight-known-sandbox-boundary");
     const warnings = [managerSandboxPreventionNotice(boundary, "preflight-known-sandbox-boundary")];
     return packet({
+      producer: RECONCILE_PREFLIGHT_PRODUCER,
+      schemaVersion: RECONCILE_PREFLIGHT_SCHEMA_VERSION,
       ok: false,
       status: "sandbox_incomplete",
       summary: {
+        producer: RECONCILE_PREFLIGHT_PRODUCER,
+        schemaVersion: RECONCILE_PREFLIGHT_SCHEMA_VERSION,
         repoRoot,
         workspace: {
           ok: stateRoot ? null : false,
@@ -21306,10 +21347,16 @@ export function buildPreflight(options = {}, context = {}) {
     ...(cleanup.nextActions || []),
   ]);
   const recommendedNextAction = nextActions[0]?.nextAction || (blockerList.length > 0 ? "Resolve preflight blockers before manager mutation." : "Preflight ready; continue with bounded manager cycle.");
-  return packet({
+  const preflightPacket = packet({
+    producer: RECONCILE_PREFLIGHT_PRODUCER,
+    schemaVersion: RECONCILE_PREFLIGHT_SCHEMA_VERSION,
+    mutation: RECONCILE_PREFLIGHT_MUTATION,
     ok: blockerList.length === 0,
     status: blockerList.length > 0 ? "blocked" : "ready",
     summary: {
+      producer: RECONCILE_PREFLIGHT_PRODUCER,
+      schemaVersion: RECONCILE_PREFLIGHT_SCHEMA_VERSION,
+      runId: runOptions.runId,
       repoRoot,
       repo,
       branch,
@@ -21334,6 +21381,7 @@ export function buildPreflight(options = {}, context = {}) {
         schemaGapCount: ledger.summary.schemaGaps.length,
         dispatcherSummary: summarizeLedgerDispatcherSummary(ledger.summary.dispatcherSummary),
       },
+      generatedAt: new Date().toISOString(),
       recommendedNextAction,
       mutation: "none; read-only preflight summary",
       rawPayloadRetained: false,
@@ -21342,6 +21390,7 @@ export function buildPreflight(options = {}, context = {}) {
     warnings,
     nextActions,
   });
+  return { ...preflightPacket, producer: RECONCILE_PREFLIGHT_PRODUCER, schemaVersion: RECONCILE_PREFLIGHT_SCHEMA_VERSION, mutation: RECONCILE_PREFLIGHT_MUTATION, rawPayloadRetained: false };
 }
 
 function buildRepoPreflightStatus(context = {}) {
@@ -21466,6 +21515,7 @@ function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
       dispatch.generatedAt
     )
   );
+  const generatedAt = summary.generatedAt || dispatch.generatedAt || dispatchPreview.generatedAt || null;
   const dispatcherSummaryUnavailable =
     !isPlainObject(ledgerDispatcher) ||
     ledgerDispatcher.stateSource === "dispatcher_summary_unavailable" ||
@@ -21494,12 +21544,16 @@ function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
     dispatchableLanes,
     activeLanes,
     blockedLanes: Number(counts.blocked ?? 0) || 0,
+    allowed: typeof allowed === "boolean" ? allowed : null,
+    dispatchApplyAllowed: false,
     dispatcherSummaryState: sanitizeLedgerField(previewBacked ? "dispatch_preview_live" : ledgerDispatcher.stateSource || "dispatcher_summary_unavailable", "dispatcher_summary_unavailable", 80),
     freshness: sanitizeLedgerField(previewBacked ? "fresh" : ledgerDispatcher.freshness || "unknown", "unknown", 40),
+    ...(generatedAt ? { generatedAt: sanitizeLedgerField(generatedAt, "", 80) || null } : {}),
     blockers,
     mutation: "none; dispatcher readiness summary only",
     warnings,
     nextActions,
+    rawPayloadRetained: false,
   };
 }
 
@@ -26324,6 +26378,656 @@ function uniqueWarnings(warnings = []) {
   return result;
 }
 
+function reconcileStateBlocker(runId, code, message, nextAction = "Refresh the guarded read-only live dispatcher preflight before retrying.") {
+  return packet({
+    ok: false,
+    status: "blocked",
+    summary: { runId, mutation: "none; reconcile-state blocked", rawPayloadRetained: false },
+    blockers: [{ code, message, nextAction }],
+  });
+}
+
+function reconcileNowMs(options = {}, context = {}) {
+  const supplied = context.now ?? options.now;
+  const parsed = supplied === undefined ? NaN : Date.parse(String(supplied));
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function readReconcilePreflight(options = {}, runId = "", context = {}) {
+  const preflightFile = String(options.preflightFile || "").trim();
+  if (!preflightFile) return reconcileStateBlocker(runId, "reconcile-preflight-file-missing", "reconcile-state requires --preflight-file.");
+  const parsed = readJsonStrict(preflightFile);
+  if (parsed.status === "missing") return reconcileStateBlocker(runId, "reconcile-preflight-file-missing", "The reconcile-state preflight file is missing.");
+  if (parsed.status !== "ready" || !isPlainObject(parsed.value)) {
+    return reconcileStateBlocker(runId, "reconcile-preflight-malformed", "The reconcile-state preflight file is not a JSON object.");
+  }
+  const source = parsed.value;
+  const summary = isPlainObject(source.summary) ? source.summary : null;
+  const dispatcher = summary && isPlainObject(summary.dispatcher) ? summary.dispatcher : null;
+  const summaryRecord = summary || {};
+  const dispatcherRecord = dispatcher || {};
+  const blockers = [];
+  const runIdEntries = [
+    ["packet.runId", source.runId],
+    ["summary.runId", summary?.runId],
+    ["summary.ledger.runId", summary?.ledger?.runId],
+    ["summary.dispatcher.runId", dispatcher?.runId],
+  ].filter(([, value]) => value !== undefined && value !== null);
+  if (runIdEntries.some(([, value]) => typeof value !== "string" || !value.trim())) {
+    blockers.push({ code: "reconcile-preflight-run-id-malformed", message: "Every present preflight run id must be a non-empty string." });
+  }
+  const distinctRunIds = [...new Set(runIdEntries.map(([, value]) => String(value)))];
+  if (distinctRunIds.length > 1) blockers.push({ code: "reconcile-preflight-run-id-conflict", message: "The preflight packet contains conflicting present run ids." });
+  const packetOrSummaryRunId = source.runId || summary?.runId || "";
+  if (!packetOrSummaryRunId) blockers.push({ code: "reconcile-preflight-run-id-missing", message: "The preflight packet requires a top-level or summary run id." });
+  if (packetOrSummaryRunId && String(packetOrSummaryRunId) !== runId) blockers.push({ code: "reconcile-preflight-run-id-mismatch", message: "The preflight packet run id does not match the requested manager run." });
+  for (const [label, value] of [["packet", source], ["summary", summary], ["dispatcher", dispatcher]]) {
+    if (!isPlainObject(value) || value.rawPayloadRetained !== false) {
+      blockers.push({ code: `reconcile-preflight-${label}-raw-retention`, message: `The ${label} preflight record must explicitly set rawPayloadRetained to false.` });
+    }
+  }
+  for (const [label, value] of [
+    ["packet", source],
+    ["summary", summary],
+  ]) {
+    if (!isPlainObject(value) || value.producer !== RECONCILE_PREFLIGHT_PRODUCER) {
+      blockers.push({ code: "reconcile-preflight-producer-unsupported", message: `The ${label} preflight record must identify producer ${RECONCILE_PREFLIGHT_PRODUCER}.` });
+    }
+    if (!isPlainObject(value) || value.schemaVersion !== RECONCILE_PREFLIGHT_SCHEMA_VERSION) {
+      blockers.push({ code: "reconcile-preflight-schema-unsupported", message: `The ${label} preflight record must identify schemaVersion ${RECONCILE_PREFLIGHT_SCHEMA_VERSION}.` });
+    }
+  }
+  if (source.mutation !== RECONCILE_PREFLIGHT_MUTATION) {
+    blockers.push({ code: "reconcile-preflight-mutation-unsafe", message: "The top-level preflight mutation declaration is not the exact read-only contract value." });
+  }
+  if (summary?.mutation !== RECONCILE_PREFLIGHT_MUTATION) {
+    blockers.push({ code: "reconcile-preflight-mutation-unsafe", message: "The preflight summary mutation declaration is not the exact read-only contract value." });
+  }
+  if (dispatcher?.mutation !== RECONCILE_DISPATCHER_MUTATION) {
+    blockers.push({ code: "reconcile-preflight-dispatcher-mutation-unsafe", message: "The dispatcher mutation declaration is not the exact read-only contract value." });
+  }
+  const allowedEntries = [
+    ["packet.allowed", source.allowed],
+    ["summary.allowed", summary?.allowed],
+    ["dispatcher.allowed", dispatcher?.allowed],
+  ].filter(([, value]) => value !== undefined && value !== null);
+  const dispatchApplyEntries = [
+    ["packet.dispatchApplyAllowed", source.dispatchApplyAllowed],
+    ["summary.dispatchApplyAllowed", summary?.dispatchApplyAllowed],
+    ["dispatcher.dispatchApplyAllowed", dispatcher?.dispatchApplyAllowed],
+  ].filter(([, value]) => value !== undefined && value !== null);
+  for (const [label, value] of [...allowedEntries, ...dispatchApplyEntries]) {
+    if (typeof value !== "boolean") blockers.push({ code: "reconcile-preflight-authority-field-malformed", message: `${label} must be boolean when present.` });
+  }
+  if (new Set(allowedEntries.map(([, value]) => value)).size > 1) {
+    blockers.push({ code: "reconcile-preflight-allowed-conflict", message: "The preflight source and dispatcher allowed fields contradict one another." });
+  }
+  if (allowedEntries.some(([, value]) => value === true)) {
+    blockers.push({ code: "reconcile-preflight-allowed-unsafe", message: "A reconcile-state packet cannot authorize dispatch or another allowed action." });
+  }
+  if (dispatchApplyEntries.some(([, value]) => value === true)) {
+    blockers.push({ code: "reconcile-preflight-dispatch-apply-unsafe", message: "A reconcile-state packet cannot carry dispatchApplyAllowed: true." });
+  }
+  if (summary?.dispatcher?.dispatcherSummaryState !== "dispatch_preview_live") {
+    blockers.push({ code: "reconcile-preflight-dispatcher-not-live", message: "The preflight packet was not produced by the guarded live dispatcher preview path." });
+  }
+  if (summary?.dispatcher?.freshness !== "fresh") {
+    blockers.push({ code: "reconcile-preflight-stale", message: "The preflight packet dispatcher evidence is not fresh." });
+  }
+  if (source.status !== "blocked") {
+    blockers.push({ code: "reconcile-preflight-outcome-not-blocked", message: "reconcile-state accepts only a blocked dispatcher preflight outcome." });
+  }
+  if (dispatcher?.status !== "blocked") {
+    blockers.push({ code: "reconcile-preflight-dispatcher-not-blocked", message: "reconcile-state accepts only dispatcher.status === blocked." });
+  }
+  if (!dispatcher || !Array.isArray(dispatcher.blockers) || dispatcher.blockers.length === 0 || dispatcher.blockers.some((blocker) => typeof blocker !== "string")) {
+    blockers.push({ code: "reconcile-preflight-dispatcher-blockers-malformed", message: "The blocked dispatcher preflight must contain a non-empty string blocker list." });
+  } else if (!dispatcher.blockers.some(isNoSafeBacklogReconcileBlocker)) {
+    blockers.push({ code: "reconcile-preflight-no-safe-backlog-evidence-missing", message: "The blocked dispatcher preflight lacks no-dispatch or safe-backlog blocker evidence." });
+  }
+  const countValidation = validateReconcileCounts(dispatcherRecord);
+  blockers.push(...countValidation.blockers);
+  const timestampValidation = validateReconcileTimestamp(source, summaryRecord, dispatcherRecord, reconcileNowMs(options, context));
+  blockers.push(...timestampValidation.blockers);
+  if (blockers.length > 0) {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        runId,
+        preflightFile,
+        validation: "closed",
+        rawPayloadRetained: false,
+      },
+      blockers: blockers.map((blocker) => ({
+        ...blocker,
+        nextAction: "Rerun manager-preflight through the guarded read-only live dispatcher path and provide the fresh blocked packet unchanged.",
+      })),
+    });
+  }
+  const evidenceIdentity = buildReconcileEvidenceIdentity(source, summary, dispatcher, timestampValidation.timestamp);
+  return {
+    source,
+    summary,
+    dispatcher,
+    preflightFile,
+    timestamp: timestampValidation.timestamp,
+    timestampSource: timestampValidation.source,
+    hasExplicitTimestamp: true,
+    evidenceIdentity,
+    evidenceDigest: ledgerValueDigest({ ...evidenceIdentity, timestamp: null }),
+  };
+}
+
+function isNoSafeBacklogReconcileBlocker(value = "") {
+  return /no\s+(?:dispatchable|safe\s+backlog|ready\s+dispatch)|no\s+.*safe\s+backlog/i.test(String(value || ""));
+}
+
+function strictReconcileCount(value) {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+}
+
+function validateReconcileCounts(dispatcher = {}) {
+  const blockers = [];
+  const countContainers = [];
+  for (const [label, value] of [["counts", dispatcher.counts], ["candidateStateCounts", dispatcher.candidateStateCounts || dispatcher.candidate_state_counts]]) {
+    if (value !== undefined) {
+      if (!isPlainObject(value)) blockers.push({ code: "reconcile-preflight-counts-malformed", message: `${label} must be an object when present.` });
+      else countContainers.push([label, value]);
+    }
+  }
+  const presentValues = (fields) => fields.filter(([, value]) => value !== undefined).map(([label, value]) => ({ label, value }));
+  for (const [label, value] of [["dispatcher.dispatchableLanes", dispatcher.dispatchableLanes], ["dispatcher.activeLanes", dispatcher.activeLanes], ["dispatcher.blockedLanes", dispatcher.blockedLanes]]) {
+    if (value !== undefined && !strictReconcileCount(value)) blockers.push({ code: "reconcile-preflight-count-invalid", message: `${label} must be a finite non-negative integer.` });
+  }
+  for (const [containerLabel, container] of countContainers) {
+    for (const [key, value] of Object.entries(container)) {
+      if (!strictReconcileCount(value)) blockers.push({ code: "reconcile-preflight-count-invalid", message: `${containerLabel}.${key} must be a finite non-negative integer.` });
+    }
+  }
+  const counts = dispatcher.counts || {};
+  const candidate = dispatcher.candidateStateCounts || dispatcher.candidate_state_counts || {};
+  const groups = [
+    ["dispatchable", presentValues([["dispatcher.dispatchableLanes", dispatcher.dispatchableLanes], ["counts.dispatchable", counts.dispatchable], ["counts.assignable", counts.assignable], ["candidateStateCounts.assignable", candidate.assignable]])],
+    ["active", presentValues([["dispatcher.activeLanes", dispatcher.activeLanes], ["counts.active", counts.active], ["candidateStateCounts.active", candidate.active]])],
+    ["blocked", presentValues([["dispatcher.blockedLanes", dispatcher.blockedLanes], ["counts.blocked", counts.blocked], ["candidateStateCounts.blocked", candidate.blocked]])],
+  ];
+  const normalized = {};
+  for (const [label, values] of groups) {
+    const distinct = [...new Set(values.map(({ value }) => value))];
+    if (distinct.length > 1) blockers.push({ code: "reconcile-preflight-count-conflict", message: `Conflicting ${label} count fields are present.` });
+    if (values.length > 0) normalized[label] = values[0].value;
+  }
+  if (normalized.dispatchable === undefined) blockers.push({ code: "reconcile-preflight-dispatchable-count-missing", message: "The blocked preflight must provide a dispatchable/assignable count." });
+  if (normalized.dispatchable !== undefined && normalized.dispatchable !== 0) blockers.push({ code: "reconcile-preflight-dispatchable-count-unsafe", message: "A no-safe-backlog reconciliation packet must prove zero dispatchable work." });
+  const totalValues = presentValues([["dispatcher.totalLanes", dispatcher.totalLanes], ["counts.total", counts.total], ["candidateStateCounts.total", candidate.total]]);
+  if (totalValues.some(({ value }) => !strictReconcileCount(value))) blockers.push({ code: "reconcile-preflight-count-invalid", message: "Total count fields must be finite non-negative integers." });
+  const total = totalValues[0]?.value;
+  if (totalValues.length > 1 && new Set(totalValues.map(({ value }) => value)).size > 1) blockers.push({ code: "reconcile-preflight-count-conflict", message: "Conflicting total count fields are present." });
+  if (total !== undefined && normalized.dispatchable !== undefined && normalized.active !== undefined && normalized.blocked !== undefined && normalized.dispatchable + normalized.active + normalized.blocked > total) {
+    blockers.push({ code: "reconcile-preflight-count-relationship-invalid", message: "Dispatchable, active, and blocked counts exceed the reported total." });
+  }
+  return { blockers, counts: normalized };
+}
+
+function validateReconcileTimestamp(source = {}, summary = {}, dispatcher = {}, nowMs = Date.now()) {
+  const candidates = [
+    ["dispatcher.generatedAt", dispatcher.generatedAt],
+    ["dispatcher.updatedAt", dispatcher.updatedAt],
+    ["summary.generatedAt", summary.generatedAt],
+    ["packet.generatedAt", source.generatedAt],
+  ].filter(([, value]) => value !== undefined && value !== null);
+  const blockers = [];
+  const parsed = candidates.map(([label, value]) => [label, typeof value === "string" ? Date.parse(value) : NaN]);
+  if (candidates.length === 0) blockers.push({ code: "reconcile-preflight-timestamp-missing", message: "The preflight packet requires a dispatcher or packet generated/updated timestamp." });
+  if (parsed.some(([, value]) => !Number.isFinite(value))) blockers.push({ code: "reconcile-preflight-timestamp-invalid", message: "Every present preflight timestamp must be a valid timestamp string." });
+  const selected = parsed[0];
+  if (selected && Number.isFinite(selected[1])) {
+    if (selected[1] > nowMs + RECONCILE_PREFLIGHT_ALLOWED_FUTURE_SKEW_MS) blockers.push({ code: "reconcile-preflight-timestamp-future", message: "The preflight evidence timestamp is in the future." });
+    if (selected[1] < nowMs - RECONCILE_PREFLIGHT_MAX_AGE_MS) blockers.push({ code: "reconcile-preflight-timestamp-stale", message: "The preflight evidence timestamp is stale." });
+  }
+  return { blockers, timestamp: selected && Number.isFinite(selected[1]) ? new Date(selected[1]).toISOString() : "", source: selected?.[0] || "" };
+}
+
+function buildReconcileEvidenceIdentity(source = {}, summary = {}, dispatcher = {}, timestamp = "") {
+  const boundedRefs = (value) => (Array.isArray(value) ? value : []).filter((entry) => typeof entry === "string").map((entry) => sanitizeLedgerField(entry, "", 160)).filter(Boolean).slice(0, 12);
+  return {
+    schemaVersion: "manager-reconcile-evidence.v1",
+    runId: sanitizeLedgerField(source.runId || summary.runId || "", "", 80),
+    dispatcherSummaryState: dispatcher.dispatcherSummaryState,
+    freshness: dispatcher.freshness,
+    status: dispatcher.status,
+    timestamp,
+    eventWatermark: sanitizeLedgerField(dispatcher.eventWatermark || summary.eventWatermark || source.eventWatermark || "", "", 140) || null,
+    sourceRefs: boundedRefs(dispatcher.sourceRefs || summary.sourceRefs || source.sourceRefs),
+    evidenceRefs: boundedRefs(dispatcher.evidenceRefs || summary.evidenceRefs || source.evidenceRefs),
+    blockers: dispatcher.blockers.slice(0, 8).map((blocker) => sanitizeLedgerField(blocker, "dispatcher blocker", 220)),
+    counts: {
+      dispatchable: dispatcher.dispatchableLanes,
+      active: dispatcher.activeLanes,
+      blocked: dispatcher.blockedLanes,
+      counts: dispatcher.counts || null,
+      candidateStateCounts: dispatcher.candidateStateCounts || dispatcher.candidate_state_counts || null,
+    },
+    rawPayloadRetained: false,
+  };
+}
+
+function reconcileCount(value) {
+  return nonNegativeInteger(value);
+}
+
+function reconcileOutcome(source = {}, summary = {}, dispatcher = {}) {
+  const counts = isPlainObject(dispatcher.counts) ? dispatcher.counts : {};
+  const candidateStateCounts = isPlainObject(dispatcher.candidateStateCounts || dispatcher.candidate_state_counts)
+    ? (dispatcher.candidateStateCounts || dispatcher.candidate_state_counts)
+    : {};
+  const blockers = (Array.isArray(dispatcher.blockers) ? dispatcher.blockers : Array.isArray(source.blockers) ? source.blockers : [])
+    .map((blocker) => sanitizeLedgerField(blocker?.message || blocker, "dispatcher blocker", 220))
+    .filter(Boolean)
+    .slice(0, 8);
+  const nextAction = sanitizeLedgerField(
+    dispatcher.nextAction || dispatcher.nextActions?.[0]?.nextAction || summary.recommendedNextAction || "Resolve dispatcher blockers before manager mutation.",
+    "Resolve dispatcher blockers before manager mutation.",
+    220,
+  );
+  const dispatchableLanes = 0;
+  const activeLanes = reconcileCount(dispatcher.activeLanes ?? counts.active ?? candidateStateCounts.active) ?? 0;
+  const blockedLanes = reconcileCount(dispatcher.blockedLanes ?? counts.blocked ?? candidateStateCounts.blocked);
+  const outcome = {
+    status: "blocked",
+    dispatcherSummaryState: "dispatch_preview_live",
+    freshness: "fresh",
+    currentPhase: "blocked",
+    dispatchableLanes,
+    activeLanes,
+    blockedLanes,
+    blockers,
+    nextAction,
+    dispatchApplyAllowed: false,
+    noDispatchStop: true,
+    runtimeCoherence: "not_proven",
+    followUpGatesRequired: ["manager-runtime-coherence", "worker-assignment-and-lease-coherence", "dispatch-apply-authority"],
+    mutation: RECONCILE_DISPATCHER_MUTATION,
+    source: "guarded_read_only_live_dispatcher_preflight",
+    rawPayloadRetained: false,
+  };
+  return outcome;
+}
+
+function reconcileSourceTimestamp(preflight = {}) {
+  return preflight.timestamp;
+}
+
+function removeKnownReconcileRawKeys(value) {
+  if (Array.isArray(value)) return value.map(removeKnownReconcileRawKeys);
+  if (!isPlainObject(value)) return value;
+  const next = {};
+  for (const [key, child] of Object.entries(value)) {
+    const normalizedKey = key.toLowerCase().replaceAll("_", "").replaceAll("-", "").replaceAll(" ", "");
+    const prohibited = RECONCILE_PROHIBITED_RAW_KEYS.has(normalizedKey) ||
+      normalizedKey.includes("rawresponse") ||
+      normalizedKey.includes("transcript") ||
+      normalizedKey.includes("prompt") ||
+      normalizedKey.includes("payload") ||
+      normalizedKey.includes("secret") ||
+      normalizedKey.includes("credential") ||
+      normalizedKey.includes("response") ||
+      normalizedKey.includes("provideroutput") ||
+      normalizedKey === "stdout" ||
+      normalizedKey === "stderr" ||
+      normalizedKey.includes("scrollback") ||
+      /^(?:raw|provider|event|manager)?logs?$/.test(normalizedKey);
+    if (prohibited) continue;
+    next[key] = removeKnownReconcileRawKeys(child);
+  }
+  return next;
+}
+
+function buildReconciledMission(existingMission = {}, runId = "", outcome = {}, timestamp = "") {
+  return {
+    ...removeKnownReconcileRawKeys(existingMission),
+    runId,
+    objective: sanitizeLedgerField(existingMission.objective || "Complete Kendall_Nxt PRDs end to end", "Complete Kendall_Nxt PRDs end to end", 220),
+    authorityProfile: sanitizeLedgerField(existingMission.authorityProfile || "backend_proof", "backend_proof", 80),
+    authorityStage: sanitizeLedgerField(existingMission.authorityStage || existingMission.authorityProfile || "backend_proof", "backend_proof", 80),
+    createdAt: sanitizeLedgerField(existingMission.createdAt || timestamp, timestamp, 80),
+    runState: outcome.status,
+    controlState: outcome.status,
+    dispatcherSummaryState: outcome.dispatcherSummaryState,
+    dispatcherFreshness: outcome.freshness,
+    dispatcherStatus: outcome.status,
+    dispatchableLanes: outcome.dispatchableLanes,
+    activeLanes: outcome.activeLanes,
+    blockedLanes: outcome.blockedLanes,
+    nextAction: outcome.nextAction,
+    dispatchApplyAllowed: false,
+    noDispatchStop: true,
+    runtimeCoherence: "not_proven",
+    followUpGatesRequired: outcome.followUpGatesRequired,
+    lastReconciledFrom: outcome.source,
+    lastReconciledAt: timestamp,
+    updatedAt: timestamp,
+    rawPayloadRetained: false,
+  };
+}
+
+function buildReconciledDispatcherSummary(existingSummary = {}, runId = "", outcome = {}, timestamp = "") {
+  return {
+    ...removeKnownReconcileRawKeys(existingSummary),
+    runId,
+    schemaVersion: sanitizeLedgerField(existingSummary.schemaVersion || "manager_dispatcher_summary.v1", "manager_dispatcher_summary.v1", 100),
+    stateSource: outcome.dispatcherSummaryState,
+    freshness: outcome.freshness,
+    currentPhase: outcome.currentPhase,
+    status: outcome.status,
+    dispatchableLanes: outcome.dispatchableLanes,
+    activeLanes: outcome.activeLanes,
+    blockedLanes: outcome.blockedLanes,
+    counts: {
+      dispatchable: outcome.dispatchableLanes,
+      active: outcome.activeLanes,
+      blocked: outcome.blockedLanes,
+    },
+    blockers: outcome.blockers,
+    nextAction: outcome.nextAction,
+    dispatchApplyAllowed: false,
+    noDispatchStop: true,
+    runtimeCoherence: "not_proven",
+    followUpGatesRequired: outcome.followUpGatesRequired,
+    updatedAt: timestamp,
+    source: outcome.source,
+    mutation: outcome.mutation,
+    rawPayloadRetained: false,
+  };
+}
+
+function boundedReconcileMissionSnapshot(mission = {}) {
+  return {
+    runId: sanitizeLedgerField(mission.runId || "", "", 80) || null,
+    runState: sanitizeLedgerField(mission.runState || "unknown", "unknown", 40),
+    controlState: sanitizeLedgerField(mission.controlState || "unknown", "unknown", 40),
+    dispatcherSummaryState: sanitizeLedgerField(mission.dispatcherSummaryState || "unknown", "unknown", 80),
+    dispatcherFreshness: sanitizeLedgerField(mission.dispatcherFreshness || "unknown", "unknown", 40),
+    dispatcherStatus: sanitizeLedgerField(mission.dispatcherStatus || "unknown", "unknown", 40),
+    nextAction: sanitizeLedgerField(mission.nextAction || "", "", 220) || null,
+    updatedAt: sanitizeLedgerField(mission.updatedAt || "", "", 80) || null,
+    rawPayloadRetained: false,
+  };
+}
+
+function boundedReconcileDispatcherSnapshot(dispatcher = {}) {
+  return {
+    stateSource: sanitizeLedgerField(dispatcher.stateSource || "dispatcher_summary_unavailable", "dispatcher_summary_unavailable", 80),
+    freshness: sanitizeLedgerField(dispatcher.freshness || "unknown", "unknown", 40),
+    currentPhase: sanitizeLedgerField(dispatcher.currentPhase || "unknown", "unknown", 80),
+    status: sanitizeLedgerField(dispatcher.status || "unknown", "unknown", 40),
+    dispatchableLanes: reconcileCount(dispatcher.dispatchableLanes ?? dispatcher.counts?.dispatchable),
+    activeLanes: reconcileCount(dispatcher.activeLanes ?? dispatcher.counts?.active),
+    blockedLanes: reconcileCount(dispatcher.blockedLanes ?? dispatcher.counts?.blocked),
+    blockers: (Array.isArray(dispatcher.blockers) ? dispatcher.blockers : [])
+      .map((blocker) => sanitizeLedgerField(blocker?.message || blocker, "dispatcher blocker", 220))
+      .filter(Boolean)
+      .slice(0, 8),
+    nextAction: sanitizeLedgerField(dispatcher.nextAction || "", "", 220) || null,
+    updatedAt: sanitizeLedgerField(dispatcher.updatedAt || "", "", 80) || null,
+    rawPayloadRetained: false,
+  };
+}
+
+function reconcileEventOptions(runId, outcome, idempotencyKey, evidenceDigest) {
+  return {
+    eventType: "manager.replay.summarized",
+    summary: "Reconciled blocked manager run and dispatcher summary from fresh guarded dispatcher-preflight evidence; full runtime coherence remains unproven.",
+    authorityBasis: "guarded-read-only-live-dispatcher-preflight",
+    recoveryPath: "Rerun manager-preflight through the guarded read-only live dispatcher path before another reconcile-state apply.",
+    result: "blocked",
+    sourceRefs: [`preflight:${runId}`],
+    evidenceRefs: [`preflight:dispatch_preview_live:fresh`, "dispatcher-outcome:blocked", `dispatcher-evidence:${evidenceDigest.slice(0, 48)}`],
+    idempotencyKey,
+    correlationId: idempotencyKey,
+    causationId: idempotencyKey,
+    orderingKey: idempotencyKey,
+  };
+}
+
+const RECONCILE_STOP_LINE = "Stop: dispatcher-preflight-only; no takeover, cleanup, worker launch/retirement, dispatch apply, provider calls, credential access, GitHub mutation, source planning mutation, raw retention, or claim of full runtime coherence.";
+
+function validateReconcileTargetRunIds(runId, mission = {}, dispatcherSummary = {}) {
+  const blockers = [];
+  if (mission.runId !== runId) blockers.push({ code: "reconcile-target-mission-run-id-mismatch", message: "mission.json runId must match the requested manager run id." });
+  if (Object.hasOwn(dispatcherSummary, "runId") && dispatcherSummary.runId !== runId) blockers.push({ code: "reconcile-target-dispatcher-run-id-mismatch", message: "dispatcher-summary.json runId must match the requested manager run id when present." });
+  return blockers;
+}
+
+function reconcileRuntimeFileSnapshot(pathValue) {
+  return { exists: existsSync(pathValue), content: existsSync(pathValue) ? readFileSync(pathValue, "utf8") : null };
+}
+
+function restoreReconcileRuntimeFile(pathValue, snapshot) {
+  if (snapshot.exists) writeFileSync(pathValue, snapshot.content);
+  else rmSync(pathValue, { force: true });
+}
+
+function reconcileRuntimeFilesMatch(paths, mission, dispatcherSummary) {
+  const missionRead = readJsonStrict(paths.mission);
+  const dispatcherRead = readJsonStrict(paths.dispatcherSummary);
+  return missionRead.status === "ready" && dispatcherRead.status === "ready" &&
+    stableLedgerValue(missionRead.value) === stableLedgerValue(mission) &&
+    stableLedgerValue(dispatcherRead.value) === stableLedgerValue(dispatcherSummary);
+}
+
+function reconcileRuntimeStateDigest(mission, dispatcherSummary) {
+  return ledgerValueDigest({
+    mission: ledgerValueDigest(mission),
+    dispatcherSummary: ledgerValueDigest(dispatcherSummary),
+  });
+}
+
+const RECONCILE_EVENT_IMMUTABLE_FIELDS = Object.freeze([
+  "schemaVersion",
+  "eventName",
+  "eventType",
+  "authorityBasis",
+  "summary",
+  "recoveryPath",
+  "result",
+  "sourceRefs",
+  "evidenceRefs",
+  "idempotencyKey",
+  "correlationId",
+  "causationId",
+  "orderingKey",
+  "redactionBoundary",
+  "projectionBehavior",
+  "actionFingerprintVersion",
+  "actionFingerprint",
+  "reconciliationTimestamp",
+  "reconciliationScope",
+  "reconciliationPreStateDigest",
+  "reconciliationPostStateDigest",
+  "rawPayloadRetained",
+]);
+
+function reconcileImmutableEventMismatch(actual = {}, expected = {}) {
+  return RECONCILE_EVENT_IMMUTABLE_FIELDS.filter((field) =>
+    !Object.hasOwn(actual, field) ||
+    !Object.hasOwn(expected, field) ||
+    stableLedgerValue(actual[field]) !== stableLedgerValue(expected[field]),
+  );
+}
+
+function reconcileWriteJson(pathValue, value, file, context = {}) {
+  if (typeof context.reconcileStateWrite === "function") {
+    const result = context.reconcileStateWrite({ path: pathValue, file, value, writeDefault: () => writeJsonAtomically(pathValue, value) });
+    if (result?.ok === false) throw new Error("reconcile-state write hook rejected the runtime write");
+    return result;
+  }
+  return writeJsonAtomically(pathValue, value);
+}
+
+function reconcileAppendEvent(paths, record, context = {}) {
+  if (typeof context.reconcileStateAppendEvent === "function") {
+    const result = context.reconcileStateAppendEvent({ path: paths.events, record, appendDefault: () => appendFileSync(paths.events, `${JSON.stringify(record)}\n`) });
+    if (result?.ok === false) throw new Error("reconcile-state event hook rejected the event append");
+    return result;
+  }
+  return appendFileSync(paths.events, `${JSON.stringify(record)}\n`);
+}
+
+function buildReconcileEventRecord(runId, eventOptions, timestamp, state = {}) {
+  const record = ledgerRecord({
+    idPrefix: "evt",
+    idName: "eventId",
+    actor: "manager",
+    typeName: "eventType",
+    typeValue: eventOptions.eventType,
+    options: eventOptions,
+    fallbackSummary: eventOptions.summary,
+    eventName: eventOptions.eventType,
+  });
+  record.reconciliationTimestamp = timestamp;
+  record.reconciliationScope = "manager-owned-mission-and-dispatcher-summary";
+  record.reconciliationPreStateDigest = state.preStateDigest || "";
+  record.reconciliationPostStateDigest = state.postStateDigest || "";
+  const validationError = validateRuntimeLedgerEventRecord(record);
+  if (validationError) return { error: validationError, record: null };
+  return { error: null, record };
+}
+
+function reconcileApplyRollback(paths, snapshots) {
+  const rollbackErrors = [];
+  for (const [pathValue, snapshot] of [[paths.mission, snapshots.mission], [paths.dispatcherSummary, snapshots.dispatcherSummary], [paths.events, snapshots.events]]) {
+    try {
+      restoreReconcileRuntimeFile(pathValue, snapshot);
+    } catch (error) {
+      rollbackErrors.push(`${pathValue}:${sanitizeLedgerField(error?.code || error?.message || "rollback-failed", "rollback-failed", 120)}`);
+    }
+  }
+  return rollbackErrors;
+}
+
+function reconcileStateCommand(options = {}, paths, runId, preflight, context = {}) {
+  const readiness = buildLedgerReadiness(options, context);
+  if (!readiness.ok) return readiness;
+  const readMission = readJsonStrict(paths.mission);
+  const readDispatcher = readJsonStrict(paths.dispatcherSummary);
+  if (readMission.status !== "ready" || !isPlainObject(readMission.value)) return malformedLedgerFile(paths, "mission", paths.mission, "mission.json must contain an object.");
+  if (readDispatcher.status !== "ready" || !isPlainObject(readDispatcher.value)) return malformedLedgerFile(paths, "dispatcherSummary", paths.dispatcherSummary, "dispatcher-summary.json must contain an object.");
+  const targetRunIdBlockers = validateReconcileTargetRunIds(runId, readMission.value, readDispatcher.value);
+  if (targetRunIdBlockers.length > 0) return packet({ ok: false, status: "blocked", summary: { runId, validation: "closed", rawPayloadRetained: false }, blockers: targetRunIdBlockers });
+  const outcome = reconcileOutcome(preflight.source, preflight.summary, preflight.dispatcher);
+  const timestamp = reconcileSourceTimestamp(preflight);
+  const missionAfter = buildReconciledMission(readMission.value, runId, outcome, timestamp);
+  const dispatcherAfter = buildReconciledDispatcherSummary(readDispatcher.value, runId, outcome, timestamp);
+  const idempotencyKey = `reconcile:${runId}:${preflight.evidenceDigest.slice(0, 48)}`;
+  const eventOptions = reconcileEventOptions(runId, outcome, idempotencyKey, preflight.evidenceDigest);
+  const preStateDigest = reconcileRuntimeStateDigest(readMission.value, readDispatcher.value);
+  const postStateDigest = reconcileRuntimeStateDigest(missionAfter, dispatcherAfter);
+  const baseSummary = {
+    runId,
+    mode: options.apply === true ? "apply" : "dry_run",
+    applied: false,
+    mutation: options.apply === true ? "manager-owned runtime mission.json, dispatcher-summary.json, and one metadata-only ledger event" : "none; dry-run only",
+    preflightFile: preflight.preflightFile,
+    validation: "guarded_read_only_live_dispatcher_preflight",
+    preflightStatus: String(preflight.source.status || "ready"),
+    reconciledOutcome: outcome.status,
+    before: {
+      mission: boundedReconcileMissionSnapshot(readMission.value),
+      dispatcherSummary: boundedReconcileDispatcherSnapshot(readDispatcher.value),
+    },
+    after: {
+      mission: boundedReconcileMissionSnapshot(missionAfter),
+      dispatcherSummary: boundedReconcileDispatcherSnapshot(dispatcherAfter),
+    },
+    eventPlan: {
+      eventName: "manager.replay.summarized",
+      idempotencyKey,
+      evidenceDigest: preflight.evidenceDigest,
+      preStateDigest,
+      postStateDigest,
+      rawPayloadRetained: false,
+    },
+    authorityLine: "Authority: dispatcher-preflight-only; fresh dispatch_preview_live evidence proves a blocked no-safe-backlog outcome, not full runtime coherence.",
+    followUpGatesRequired: outcome.followUpGatesRequired,
+    stopLine: RECONCILE_STOP_LINE,
+    dispatchApplyAllowed: false,
+    noDispatchStop: true,
+    rawPayloadRetained: false,
+  };
+  if (!options.apply) return packet({ status: "ready", summary: baseSummary, nextActions: [{ code: "reconcile-state-apply-ready", summary: "Review the bounded reconciliation packet before applying manager-owned runtime metadata.", nextAction: "Rerun the same command with --apply after reviewing before/after and stop lines." }] });
+
+  const result = withLedgerAppendLock(paths, () => {
+    const lockedMission = readJsonStrict(paths.mission);
+    const lockedDispatcher = readJsonStrict(paths.dispatcherSummary);
+    if (lockedMission.status !== "ready" || lockedDispatcher.status !== "ready" || !isPlainObject(lockedMission.value) || !isPlainObject(lockedDispatcher.value)) {
+      return reconcileStateBlocker(runId, "reconcile-target-runtime-malformed", "Manager runtime targets became unreadable before reconcile-state apply.");
+    }
+    const lockedRunIdBlockers = validateReconcileTargetRunIds(runId, lockedMission.value, lockedDispatcher.value);
+    if (lockedRunIdBlockers.length > 0) return packet({ ok: false, status: "blocked", summary: { runId, validation: "closed", rawPayloadRetained: false }, blockers: lockedRunIdBlockers });
+    const lockedMissionAfter = buildReconciledMission(lockedMission.value, runId, outcome, timestamp);
+    const lockedDispatcherAfter = buildReconciledDispatcherSummary(lockedDispatcher.value, runId, outcome, timestamp);
+    const lockedPreStateDigest = reconcileRuntimeStateDigest(lockedMission.value, lockedDispatcher.value);
+    const lockedPostStateDigest = reconcileRuntimeStateDigest(lockedMissionAfter, lockedDispatcherAfter);
+    const duplicate = findDuplicateLedgerEvent(paths.events, idempotencyKey);
+    if (duplicate) {
+      const expectedDuplicate = buildReconcileEventRecord(runId, eventOptions, timestamp, {
+        preStateDigest: duplicate.reconciliationPreStateDigest,
+        postStateDigest: duplicate.reconciliationPostStateDigest,
+      });
+      if (expectedDuplicate.error || !expectedDuplicate.record) {
+        return reconcileStateBlocker(runId, "reconcile-event-idempotency-conflict", "The existing replay event does not carry valid immutable reconciliation metadata.");
+      }
+      const immutableMismatch = reconcileImmutableEventMismatch(duplicate, expectedDuplicate.record);
+      if (immutableMismatch.length > 0) {
+        return packet({
+          ok: false,
+          status: "blocked",
+          summary: { ...baseSummary, mode: "apply", applied: false, immutableMismatch, rawPayloadRetained: false },
+          blockers: [{ code: "reconcile-event-idempotency-conflict", message: "The existing replay event has conflicting immutable metadata for the same preflight evidence identity.", nextAction: "Inspect the existing manager replay event before retrying reconciliation." }],
+        });
+      }
+      if (lockedPreStateDigest === duplicate.reconciliationPostStateDigest) {
+        return packet({ status: "ready", summary: { ...baseSummary, mode: "apply", applied: false, duplicateIgnored: true, event: duplicate } });
+      }
+      if (lockedPreStateDigest !== duplicate.reconciliationPreStateDigest || lockedPostStateDigest !== duplicate.reconciliationPostStateDigest) {
+        return packet({
+          ok: false,
+          status: "blocked",
+          summary: { ...baseSummary, mode: "apply", applied: false, stateConflict: true, rawPayloadRetained: false },
+          blockers: [{ code: "reconcile-state-state-conflict", message: "Current manager runtime files do not match the replay event pre-state or post-state; a newer state may be present, so duplicate repair is blocked.", nextAction: "Inspect mission.json and dispatcher-summary.json under the ledger lock before retrying." }],
+        });
+      }
+      const snapshots = { mission: reconcileRuntimeFileSnapshot(paths.mission), dispatcherSummary: reconcileRuntimeFileSnapshot(paths.dispatcherSummary), events: reconcileRuntimeFileSnapshot(paths.events) };
+      try {
+        reconcileWriteJson(paths.mission, lockedMissionAfter, "mission", context);
+        reconcileWriteJson(paths.dispatcherSummary, lockedDispatcherAfter, "dispatcherSummary", context);
+        return packet({ status: "ready", summary: { ...baseSummary, mode: "apply", applied: true, repairedDuplicate: true, duplicateIgnored: true, event: duplicate } });
+      } catch {
+        const rollbackErrors = reconcileApplyRollback(paths, snapshots);
+        return packet({ ok: false, status: "blocked", summary: { ...baseSummary, mode: "apply", applied: false, repairedDuplicate: false, rollback: rollbackErrors.length === 0 ? "completed" : "failed", rawPayloadRetained: false }, blockers: [{ code: rollbackErrors.length === 0 ? "reconcile-state-apply-rolled-back" : "reconcile-state-rollback-failed", message: "Duplicate reconciliation repair failed; runtime files were rolled back where possible.", nextAction: "Inspect manager runtime state under the ledger lock before retrying." }] });
+      }
+    }
+    const plannedEvent = buildReconcileEventRecord(runId, eventOptions, timestamp, {
+      preStateDigest: lockedPreStateDigest,
+      postStateDigest: lockedPostStateDigest,
+    });
+    if (plannedEvent.error) return reconcileStateBlocker(runId, "reconcile-event-prevalidation-failed", "The metadata-only replay event failed schema validation before any runtime write.");
+    const snapshots = { mission: reconcileRuntimeFileSnapshot(paths.mission), dispatcherSummary: reconcileRuntimeFileSnapshot(paths.dispatcherSummary), events: reconcileRuntimeFileSnapshot(paths.events) };
+    try {
+      reconcileWriteJson(paths.mission, lockedMissionAfter, "mission", context);
+      reconcileWriteJson(paths.dispatcherSummary, lockedDispatcherAfter, "dispatcherSummary", context);
+      reconcileAppendEvent(paths, plannedEvent.record, context);
+      return packet({ status: "ready", summary: { ...baseSummary, applied: true, event: plannedEvent.record, transaction: "committed" } });
+    } catch {
+      const rollbackErrors = reconcileApplyRollback(paths, snapshots);
+      return packet({ ok: false, status: "blocked", summary: { ...baseSummary, applied: false, transaction: rollbackErrors.length === 0 ? "rolled_back" : "rollback_failed", rawPayloadRetained: false }, blockers: [{ code: rollbackErrors.length === 0 ? "reconcile-state-apply-rolled-back" : "reconcile-state-rollback-failed", message: "Reconciliation apply failed; mission, dispatcher summary, and event state were rolled back where possible.", nextAction: "Inspect manager runtime state under the ledger lock before retrying." }] });
+    }
+  }, { timeoutMs: context.reconcileLockTimeoutMs });
+  return result?.packet ?? result;
+}
+
 export function ledgerCommand(options = {}, context = {}) {
   const runId = safeRunId(options.runId || defaultRunId());
   const paths = managerRunPaths(runId, options, context);
@@ -26363,6 +27067,13 @@ export function ledgerCommand(options = {}, context = {}) {
     const readiness = buildLedgerReadiness(options, context);
     if (!readiness.ok) return readiness;
     return packet({ status: "ready", summary: { runId, root: paths.root, initialized: true } });
+  }
+  if (options.command === "reconcile-state") {
+    const missing = ensureManagerRunExists(paths);
+    if (missing) return missing;
+    const preflight = readReconcilePreflight(options, runId, context);
+    if (preflight?.ok === false) return preflight;
+    return reconcileStateCommand(options, paths, runId, preflight, context);
   }
   if (options.command === "append-event") {
     const blocked = ensureLedgerAppendReady(paths, options, context, { requireEvidence: true });
@@ -26987,7 +27698,10 @@ function readLedgerEventsStrict(paths) {
 }
 
 function appendLedgerEvent(paths, runId, recordArgs) {
-  return withLedgerAppendLock(paths, () => {
+  return withLedgerAppendLock(paths, () => appendLedgerEventUnlocked(paths, runId, recordArgs));
+}
+
+function appendLedgerEventUnlocked(paths, runId, recordArgs) {
     const eventsRead = readLedgerEventsStrict(paths);
     if (eventsRead.status !== "ready") {
       return { packet: malformedLedgerFile(paths, "events", paths.events, eventsRead.message) };
@@ -27010,7 +27724,6 @@ function appendLedgerEvent(paths, runId, recordArgs) {
     });
     appendFileSync(paths.events, `${JSON.stringify(record)}\n`);
     return { record };
-  });
 }
 
 function reserveLedgerAction(paths, runId, recordArgs, { duplicateReconciler = null } = {}) {
@@ -27187,7 +27900,7 @@ function writeNdjson(path, records = []) {
   writeFileSync(path, records.map((record) => JSON.stringify(record)).join("\n") + (records.length > 0 ? "\n" : ""));
 }
 
-function withLedgerAppendLock(paths, fn) {
+function withLedgerAppendLock(paths, fn, options = {}) {
   const lockDir = join(paths.root, ".ledger-append.lock");
   const ownerPath = join(lockDir, "owner.json");
   const owner = {
@@ -27197,6 +27910,7 @@ function withLedgerAppendLock(paths, fn) {
     token: `${paths.runId}:${process.pid}:${Date.now()}:${process.hrtime.bigint().toString(36)}`,
     createdAt: new Date().toISOString(),
   };
+  const timeoutMs = Math.max(0, nonNegativeInteger(options.timeoutMs) ?? 5000);
   const started = Date.now();
   while (true) {
     try {
@@ -27206,7 +27920,7 @@ function withLedgerAppendLock(paths, fn) {
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       if (recoverStaleLedgerAppendLock(lockDir, ownerPath)) continue;
-      if (Date.now() - started > 5000) {
+      if (Date.now() - started >= timeoutMs) {
         const existingOwner = readJson(ownerPath, null);
         return {
           packet: packet({
