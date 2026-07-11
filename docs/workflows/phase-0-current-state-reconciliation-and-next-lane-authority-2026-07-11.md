@@ -159,6 +159,25 @@ Both records retain the explicit approval and bounded closeout evidence. No
 worktree or branch existed for either record, and no dirty workspace was
 mutated.
 
+## Staged-lane recovery audit
+
+The exact stale lane `20260710-fix-booting-promotion-second-review` was
+inspected read-only after the exact governed takeover preview identified its
+dirty worktree, stale owner heartbeat, absent remote branch, and no PR. Its
+staged implementation is substantial but is not delivery-ready on that old
+branch base: the manager-control-plane suite reported 447 passing and 6
+failing tests. The failures were in older handoff, pointer-receipt, tmux
+format, submit-pending, and question-answer fixtures.
+
+The same six named cases pass on a clean `origin/dev` recovery lane, and the
+full current manager-control-plane suite passes 463/463 on `origin/dev` at
+`11f6cd7a0d42648e375719ce219e2b1ca9719f24`. This establishes the stale-lane
+failures as old-base drift rather than a current `dev` regression. No staged
+files were changed, no takeover was applied, and no dirty worktree was
+cleaned. If the staged booting-reviewer safety work is still needed, it must
+be ported and re-reviewed as a fresh current-baseline change; the stale lane
+remains preservation-gated.
+
 The current primary-checkout patch also remains held. Its manager-control-plane
 diff removes authoritative worker assignment locks, review reservation and
 lease identity checks, pane/session identity revalidation, and self-review or
