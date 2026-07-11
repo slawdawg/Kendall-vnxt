@@ -81,6 +81,18 @@ def _validate_authoritative_metadata_text(value: str, *, path: str) -> str:
     return text
 
 
+def _validate_work_item_scalar_text(value: str) -> str:
+    text = value.strip()
+    if (
+        len(text) > 1000
+        or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+        or TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+        or re.search(r"(?:provider\s*[:=]|(?:request|response)[\s_-]*ids?\s*[:=])", text, re.IGNORECASE)
+    ):
+        raise ValueError("WorkItem scalar contains secret, credential, raw-provider, or token-like content.")
+    return text
+
+
 def _validate_metadata_tree(
     value: Any,
     *,
@@ -147,7 +159,7 @@ class WorkItemCreate(BaseModel):
     def _copied_scalar_fields_must_be_safe_metadata(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _validate_metadata_tree(value, path="WorkItem scalar")
+        return _validate_work_item_scalar_text(value)
 
     @field_validator("metadata")
     @classmethod
@@ -1340,6 +1352,11 @@ class AuthoritativePacketSourceRefView(BaseModel):
         if not value:
             raise ValueError("source ref id must not be blank")
         return value
+
+    @field_validator("contentSha256")
+    @classmethod
+    def _normalize_content_digest(cls, value: str | None) -> str | None:
+        return value.lower() if value is not None else None
 
     @field_validator("title")
     @classmethod

@@ -229,6 +229,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     _validate_authoritative_metadata_text,
     _validate_metadata_tree,
+    _validate_work_item_scalar_text,
     WorkItemExecutionAttemptCreateRequest,
     WorkItemLocalProofLeaseRequest,
     WorkItemLocalProofRequest,
@@ -856,6 +857,8 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
         if not packet:
             raise ValueError("Authoritative WorkPacket not found.")
+        if payload.actionId == "requeue" and packet.status != "blocked":
+            raise ValueError("Requeue approval requires the authoritative WorkPacket to be currently blocked.")
         if payload.actionId in {"mark_tested", "request_rework"} and (
             not packet.ready_to_test_json or packet.operator_test_state != "ready"
         ):
@@ -904,6 +907,8 @@ class SupervisorService:
             packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
             if not packet:
                 raise ValueError("Authoritative WorkPacket not found.")
+            if payload.actionId == "requeue" and packet.status != "blocked":
+                raise ValueError("Requeue requires the authoritative WorkPacket to be currently blocked.")
             if policy["authority"] == "not_required" and payload.expectedCurrentEventId and packet.current_event_id != payload.expectedCurrentEventId:
                 raise ValueError("Operational action rejected because packet state changed.")
 
@@ -1410,7 +1415,11 @@ class SupervisorService:
         control = await self.ensure_control(session)
         paused = control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}
         disabled = control.mode == RunMode.DISABLED.value
-        local_proof_available = self._local_proof_capability is LOCAL_PROOF_TEST_CAPABILITY and self._local_proof_database_attested()
+        local_proof_available = (
+            self._local_proof_capability is LOCAL_PROOF_TEST_CAPABILITY
+            and self._local_proof_database_attested()
+            and self._local_proof_settings_safe()
+        )
         mode = "read_only" if paused else "unavailable" if disabled or not local_proof_available else "local_proof"
         readiness_state = "unavailable" if disabled or not local_proof_available else "ready"
         capability_state = "unavailable" if disabled or not local_proof_available else "available"
@@ -1426,7 +1435,7 @@ class SupervisorService:
             summary=(
                 "Local proof runtime is ready; external provider and high-risk actions remain gated."
                 if not paused and not disabled and local_proof_available
-                else "Local proof capability is disabled; projection remains inspection-only."
+                else "Local proof capability is unavailable because server capability, disposable database, or external-authority safety checks failed; projection remains inspection-only."
                 if not paused and not disabled
                 else "Runtime is paused/draining; inspection and projection refresh remain available."
                 if paused
@@ -1925,11 +1934,11 @@ class SupervisorService:
         *,
         _internal_authoritative: bool = False,
     ) -> WorkItem:
-        _validate_metadata_tree(payload.title, path="title")
-        _validate_metadata_tree(payload.requestedOutcome, path="requestedOutcome")
-        _validate_metadata_tree(payload.source, path="source")
+        _validate_work_item_scalar_text(payload.title)
+        _validate_work_item_scalar_text(payload.requestedOutcome)
+        _validate_work_item_scalar_text(payload.source)
         if payload.details is not None:
-            _validate_metadata_tree(payload.details, path="details")
+            _validate_work_item_scalar_text(payload.details)
         if not _internal_authoritative:
             if any(str(key).lower() in {"authoritativepacketid", "localproofauthority"} for key in payload.metadata):
                 raise ValueError("Generic WorkItem creation cannot provide canonical packet linkage metadata.")
@@ -19182,7 +19191,11 @@ class SupervisorService:
         normal_database_path = (Path(self._repo_root() or Path(__file__).resolve().parents[5]) / ".data" / "supervisor.db").resolve()
         if resolved_database_path == normal_database_path:
             raise ValueError("Integrated local proof rejects the normal persistent supervisor database.")
-        if any(
+        if not self._local_proof_settings_safe():
+            raise ValueError("Integrated local proof rejects live or externally-authorized supervisor settings.")
+
+    def _local_proof_settings_safe(self) -> bool:
+        return not any(
             (
                 self.settings.allow_remote_delivery,
                 self.settings.allow_subscription_agent_launch,
@@ -19194,8 +19207,7 @@ class SupervisorService:
                 self.settings.allow_local_provider_calls,
                 self.settings.allow_ollama_provider_calls,
             )
-        ):
-            raise ValueError("Integrated local proof rejects live or externally-authorized supervisor settings.")
+        )
 
     def _local_proof_database_attested(self) -> bool:
         if self._local_proof_attestation is None or not self.settings.database_url.startswith("sqlite"):

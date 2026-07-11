@@ -44,6 +44,17 @@ def require_rejected(response, label: str, message_fragment: str) -> None:
         fail(f"{label} did not explain the typed rejection: {response.text[:240]}")
 
 
+def require_approval_rejected(response, label: str, message_fragment: str) -> None:
+    if response.status_code != 400:
+        fail(f"{label} returned HTTP {response.status_code}: {response.text[:240]}")
+    payload = response.json()
+    error = payload.get("detail", {}).get("error", {}) if isinstance(payload, dict) else {}
+    if error.get("code") != "invalid_pipeline_operational_approval":
+        fail(f"{label} did not return the typed approval rejection: {response.text[:240]}")
+    if message_fragment not in error.get("message", ""):
+        fail(f"{label} did not explain the typed approval rejection: {response.text[:240]}")
+
+
 def require_local_rejected(response, label: str, message_fragment: str) -> None:
     if response.status_code != 409:
         fail(f"{label} returned HTTP {response.status_code}: {response.text[:240]}")
@@ -463,6 +474,134 @@ def main() -> int:
                 200,
                 "non-approval blocked packet seed",
             )
+            requeue_nonblocked_before = require(
+                client.get(f"/pipeline-control-plane/work-packets/{rework_packet['packetId']}"),
+                200,
+                "non-blocked requeue packet before approval",
+            )
+            requeue_nonblocked_approval = client.post(
+                "/pipeline-control-plane/approvals",
+                json={
+                    "actionId": "requeue",
+                    "targetType": "work_packet",
+                    "targetId": rework_packet["packetId"],
+                    "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                    "requestedAuthorityState": "needs_authority_approval",
+                    "requestedRiskTier": "medium",
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+            )
+            require_approval_rejected(requeue_nonblocked_approval, "non-blocked requeue approval", "currently blocked")
+            requeue_nonblocked_after = require(
+                client.get(f"/pipeline-control-plane/work-packets/{rework_packet['packetId']}"),
+                200,
+                "non-blocked requeue packet after rejected approval",
+            )
+            if (
+                requeue_nonblocked_after["status"] != requeue_nonblocked_before["status"]
+                or requeue_nonblocked_after["currentEventId"] != requeue_nonblocked_before["currentEventId"]
+            ):
+                fail("non-blocked requeue approval mutated its authoritative packet")
+
+            def seed_blocked_requeue_packet(packet_id: str) -> dict:
+                return require(
+                    client.post(
+                        "/pipeline-control-plane/work-packets",
+                        json={
+                            "packetId": packet_id,
+                            "title": "Pipeline operational requeue guard packet",
+                            "initialStage": "needs_approval",
+                            "status": "blocked",
+                            "truthLabel": "source_owned",
+                            "sourceRef": source_ref,
+                            "actor": {"actorType": "manager", "actorId": "smoke-manager", "actorLabel": "Smoke manager"},
+                            "idempotencyKey": f"create-{packet_id}",
+                            "correlationId": f"corr:create-{packet_id}",
+                            "metadataOnly": True,
+                            "rawPayloadRetained": False,
+                        },
+                    ),
+                    200,
+                    f"{packet_id} blocked requeue packet seed",
+                )
+
+            requeue_packet = seed_blocked_requeue_packet("packet-pipeline-operational-requeue-smoke")
+            requeue_approval = issue_approval(
+                client,
+                requeue_packet,
+                action_id="requeue",
+                actor_id=actor_id,
+                key="blocked-requeue",
+                requested_authority_state="needs_authority_approval",
+            )
+            requeue_action = apply_gated_action(
+                client,
+                requeue_packet,
+                requeue_approval,
+                action_id="requeue",
+                actor_id=actor_id,
+                idempotency_key="blocked-requeue",
+                evidence_ref="evidence:blocked-requeue",
+                requested_authority_state="needs_authority_approval",
+            )
+            if requeue_action["outcome"] != "succeeded" or requeue_action["resultingStatus"] != "waiting":
+                fail("blocked requeue did not return the packet to waiting")
+
+            requeue_apply_guard_packet = seed_blocked_requeue_packet("packet-pipeline-operational-requeue-apply-guard")
+            requeue_apply_guard_approval = issue_approval(
+                client,
+                requeue_apply_guard_packet,
+                action_id="requeue",
+                actor_id=actor_id,
+                key="non-blocked-requeue-apply",
+                requested_authority_state="needs_authority_approval",
+            )
+            requeue_apply_guard_transition = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{requeue_apply_guard_packet['packetId']}/transitions",
+                    json={
+                        "targetStage": "execute",
+                        "expectedCurrentEventId": requeue_apply_guard_packet["currentEventId"],
+                        "status": "waiting",
+                        "actor": {"actorType": "manager", "actorId": "smoke-manager", "actorLabel": "Smoke manager"},
+                        "idempotencyKey": "transition-non-blocked-requeue-apply",
+                        "correlationId": "corr:transition-non-blocked-requeue-apply",
+                    },
+                ),
+                200,
+                "non-blocked requeue apply transition",
+            )
+            requeue_apply_guard_response = client.post(
+                "/pipeline-control-plane/actions",
+                json={
+                    "actionId": "requeue",
+                    "targetType": "work_packet",
+                    "targetId": requeue_apply_guard_packet["packetId"],
+                    "idempotencyKey": "non-blocked-requeue-apply",
+                    "correlationId": "corr:non-blocked-requeue-apply",
+                    "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                    "requestedAuthorityState": "needs_authority_approval",
+                    "requestedRiskTier": "medium",
+                    "approvalId": requeue_apply_guard_approval["approvalId"],
+                    "expectedCurrentEventId": requeue_apply_guard_approval["expectedCurrentEventId"],
+                    "operatorIntentSummary": "Attempt requeue after packet leaves blocked state.",
+                    "evidenceRefs": ["evidence:non-blocked-requeue-apply"],
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+            )
+            require_rejected(requeue_apply_guard_response, "non-blocked requeue apply", "currently blocked")
+            requeue_apply_guard_after = require(
+                client.get(f"/pipeline-control-plane/work-packets/{requeue_apply_guard_packet['packetId']}"),
+                200,
+                "non-blocked requeue apply packet after rejection",
+            )
+            if (
+                requeue_apply_guard_after["status"] != "waiting"
+                or requeue_apply_guard_after["currentEventId"] != requeue_apply_guard_transition["currentEventId"]
+            ):
+                fail("non-blocked requeue apply mutated the packet after its guard transition")
 
             def seed_local_packet(item_id: str) -> dict:
                 return require(
@@ -509,6 +648,66 @@ def main() -> int:
             )
             require_local_rejected(arbitrary_database_proof, "arbitrary SQLite database", "does not match the server-created disposable attestation")
             service.settings.database_url = f"sqlite+aiosqlite:///{db_path}"
+            service.settings.allow_worker_network = True
+            unsafe_settings_readiness = require(
+                client.get("/pipeline-control-plane/projection"),
+                200,
+                "unsafe local-proof settings readiness",
+            )["runtimeReadiness"]
+            if (
+                unsafe_settings_readiness["operationalMode"] != "unavailable"
+                or unsafe_settings_readiness["readinessState"] != "unavailable"
+                or unsafe_settings_readiness["capabilityState"] != "unavailable"
+                or unsafe_settings_readiness["typedReason"] != "runtime_unavailable"
+            ):
+                fail("runtime readiness advertised local proof despite externally-authorized supervisor settings")
+            service.settings.allow_worker_network = False
+            ready_settings_readiness = require(
+                client.get("/pipeline-control-plane/projection"),
+                200,
+                "safe local-proof settings readiness",
+            )["runtimeReadiness"]
+            if (
+                ready_settings_readiness["operationalMode"] != "local_proof"
+                or ready_settings_readiness["readinessState"] != "ready"
+                or ready_settings_readiness["capabilityState"] != "available"
+            ):
+                fail("runtime readiness did not restore the safe attested local-proof path")
+            uppercase_digest_packet = require(
+                client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": "packet-gate-4b-uppercase-source-digest",
+                        "title": "Gate 4B uppercase source digest proof",
+                        "initialStage": "capture",
+                        "status": "waiting",
+                        "truthLabel": "source_owned",
+                        "sourceRef": {**source_ref, "contentSha256": source_digest.upper()},
+                        "actor": {"actorType": "manager", "actorId": "gate-4b-proof", "actorLabel": "Gate 4B proof"},
+                        "idempotencyKey": "create-gate-4b-uppercase-source-digest",
+                        "correlationId": "corr:create-gate-4b-uppercase-source-digest",
+                    },
+                ),
+                200,
+                "uppercase source digest packet seed",
+            )
+            if uppercase_digest_packet["sourceRef"]["contentSha256"] != source_digest:
+                fail("uppercase source digest was not normalized before packet persistence")
+            uppercase_digest_proof = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{uppercase_digest_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-uppercase-source-digest-proof",
+                        "correlationId": "corr:gate-4b-uppercase-source-digest-proof",
+                        "scenario": "happy",
+                    },
+                ),
+                200,
+                "uppercase source digest local proof",
+            )
+            if uppercase_digest_proof["attempt"]["status"] != "completed":
+                fail("uppercase source digest did not complete the local proof")
             public_forgery_work_item = require(
                 client.post(
                     "/work-items",
@@ -574,6 +773,21 @@ def main() -> int:
             )
             if unsafe_work_item.status_code != 422:
                 fail(f"generic WorkItem accepted token-like metadata: {unsafe_work_item.text[:240]}")
+            safe_prose_work_item = require(
+                client.post(
+                    "/work-items",
+                    json={
+                        "title": "Rotate refresh tokens",
+                        "requestedOutcome": "Fix response id mapping",
+                        "source": source_path,
+                        "metadata": {},
+                    },
+                ),
+                200,
+                "safe WorkItem security and API prose",
+            )
+            if safe_prose_work_item["title"] != "Rotate refresh tokens" or safe_prose_work_item["requestedOutcome"] != "Fix response id mapping":
+                fail("safe WorkItem security and API prose was not preserved")
             generic_signature_work_item = client.post(
                 "/work-items",
                 json={
@@ -1341,11 +1555,6 @@ def main() -> int:
                     "action": accepted_action,
                 }
 
-            requeue_replay_fixture = prepare_action_replay_fixture(
-                "requeue-replay",
-                "requeue",
-                "needs_authority_approval",
-            )
             reject_replay_fixture = prepare_action_replay_fixture(
                 "reject-replay",
                 "reject",
@@ -1424,7 +1633,6 @@ def main() -> int:
                         f"{fixture_action['actionId']} event reconstruction",
                     )
 
-                replay_accepted_action_fixture(requeue_replay_fixture, "waiting", "not_ready")
                 replay_accepted_action_fixture(reject_replay_fixture, "deferred", "passed")
                 captured_packet_history = require(
                     reloaded_client.get(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}"),
@@ -1758,7 +1966,7 @@ def main() -> int:
                         "eventReconstructionRowsAbsentBeforeRebuildVerified": True,
                         "eventReconstructionDatabaseLinkageVerified": True,
                         "authoritativePacketLinkUniquenessVerified": True,
-                        "acceptedRequeueReplayVerified": True,
+                        "blockedRequeueVerified": True,
                         "acceptedRejectReplayVerified": True,
                         "engineSessionReloadVerified": True,
                     },
