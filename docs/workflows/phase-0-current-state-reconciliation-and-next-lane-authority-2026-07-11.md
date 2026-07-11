@@ -226,6 +226,33 @@ behavior, and stale-owner story-artifact numbering. The patch must not be
 delivered as a baseline repair until those safety invariants and tests are
 reconciled by the owning lane.
 
+## Remaining stale-lane lineage map
+
+The remaining dirty stale lanes were compared with current `origin/dev` history
+to distinguish already-delivered implementation from unresolved local work.
+This is lineage evidence only: it does not authorize takeover, deletion, or
+discard of any dirty worktree.
+
+| Stale lane | Current-dev delivery evidence | Reconciliation result |
+| --- | --- | --- |
+| `20260704-bmad-1-2-lifecycle-transition-and-authority-rules` | `afc51163` merged the BMAD 1.2 operational action contract; `7ac9302a` carries the manager operational action policy. | The delivery surface is present in current `dev`; preserve any dirty lane delta until its owner reconciles it. |
+| `20260704-bmad-1-4-replayable-action-projection` | Current `dev` contains the replay proof and persistence lineage, including merged PR #396 at `af911a92`, plus later replay-boundary repairs. | The replayable projection work is represented in current `dev`; no stale-lane cleanup is inferred. |
+| `20260704-bmad-2-2-adapter-contract-test-suite` | `59b0ef93` is the current-dev adapter contract reconciliation, merged by PR #398 at `98bba441`. | The adapter contract suite is delivered; preserve dirty local evidence. |
+| `20260705-bmad-2-3-runtime-readiness-and-operational-modes` | `cc8442a0` is the current-dev runtime-readiness delivery, merged by PR #399 at `8a3d604e`; related readiness commits are in its ancestry. | Runtime-readiness implementation is delivered; do not take over or clean the stale lane implicitly. |
+| `20260709-bmad-23-6-overnight-run-recovery-and-housekeeping` | `3decb49e` is the overnight recovery and housekeeping proof, merged by PR #460 at `0578bccd`. | The overnight recovery surface is delivered; retain dirty-lane ownership evidence. |
+| `20260705-bmad-3-2-minimum-happy-path-operational-loop` | PR #394 merged the minimum happy-path operational loop at `6bda1b55`. | The minimum happy path is delivered in current `dev`; no port is outstanding on lineage evidence alone. |
+| `20260705-bmad-3-3-blocked-path-operational-proof` | PR #395 merged the blocked-path operational proof at `7b48f17b`. | The blocked path is delivered in current `dev`; preserve any stale dirty delta. |
+| `20260705-bmad-4-1-operational-summary-and-capability-gated-action-projection` | PR #393 merged the operational summary and capability-gated action projection at `e4019c7a`. | The summary/action projection is delivered; no cleanup or takeover follows from this comparison. |
+| `20260705-bmad-3-1-source-backed-packet-seed-and-eligibility` | `fe43110c` is the source-backed packet-seed planner already in current `dev`; its stale-lane audit is recorded above. | Superseded delivery surface; five dirty paths remain owner-preserved. |
+
+The comparison shows no evidence that these stale lanes contain an unmerged
+product capability missing from current `dev`. It does show unresolved
+reconciliation debt: dirty deltas, stale ownership, and missing proof that
+each delta is equivalent, obsolete, or safe to retire. Until those proofs are
+owner-provided or an explicitly approved takeover can inspect them without
+violating dirty-worktree preservation, all twelve stale targets remain
+preservation-gated.
+
 ## Baseline interpretation
 
 The implementation gates are current and green, but the manager runtime
