@@ -39,6 +39,7 @@ export const MANAGER_SUMMARY_PHASES = [
   "manager_only",
   "unknown",
   "no_safe_work",
+  "authoritative_backlog_exhausted",
   "unverified",
   "simulated"
 ] as const;
