@@ -85,17 +85,24 @@ Adversarial proof coverage includes capability-off and arbitrary-database
 rejection, source traversal and untracked-source rejection, forged linkage
 rejection, omitted/stale/same-token lease fencing, durable accepted/rejected
 lease-action idempotency, completion fencing, worker/verification held paths,
-and metadata-only redaction assertions. Engine/session reload is separately
-labeled from event reconstruction. For event reconstruction, the disposable
-packet and linked WorkItem materialized rows are deleted and verified absent
-while lifecycle/workflow events remain; the rebuild then reconstructs packet and
-WorkItem state from preserved events without duplicating the execution attempt.
+and metadata-only redaction assertions. Authoritative packet titles and source
+reference titles reject secret, token, and raw-provider-shaped values before
+packet/event persistence while safe source titles remain unchanged. The smoke
+also sends 1,001 shallow metadata entries (node limit 1,000) and 500 individually
+safe short strings totaling more than 64 KiB (aggregate limit 65,536 bytes),
+asserting typed 422 responses and zero WorkItem/workflow-event persistence.
+Engine/session reload is separately labeled from event reconstruction. For event
+reconstruction, the disposable packet and linked WorkItem materialized rows are
+deleted and verified absent while lifecycle/workflow events remain; the rebuild
+then reconstructs packet and WorkItem state from preserved events without
+duplicating the execution attempt, with the authoritative packet id restored in
+the database column under its unique constraint.
 
 Exact bounded proof command and result:
 
 ```text
 timeout 180s uv run --directory services/supervisor python scripts/pipeline_operational_smoke.py
-exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataRejectionPersistenceVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
+exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
 ```
 
 This closeout does not claim live, bounded-live, production-observed, external

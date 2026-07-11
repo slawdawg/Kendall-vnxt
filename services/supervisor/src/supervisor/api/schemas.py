@@ -24,6 +24,10 @@ UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
     re.IGNORECASE,
 )
+UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE = re.compile(
+    r"(?:\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|secrets?|credentials?|passwords?)\b|raw[\s_-]*provider[\s_-]*payloads?|provider\s*[:=]|(?:api|access|refresh)[\s_-]*tokens?|api[\s_-]*keys?|authorization\s*:\s*bearer|(?:request|response)[\s_-]*ids?)",
+    re.IGNORECASE,
+)
 UNSAFE_METADATA_KEY_RE = re.compile(r"(secret|credential|password|token|raw.?payload|provider.?payload|prompt|completion|reasoning)", re.IGNORECASE)
 TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
     r"^(?:sk-|gh[pousr]_\w{12,}|github_pat_|xox[baprs]-|AIza|AKIA|Bearer\s+|eyJ[A-Za-z0-9_-]{20,})"
@@ -56,7 +60,24 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
 
 def _is_safe_local_proof_text(value: str) -> bool:
     text = value.strip()
-    return bool(text) and len(text) <= 160 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text) and not TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+    return (
+        bool(text)
+        and len(text) <= 160
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+    )
+
+
+def _validate_authoritative_metadata_text(value: str, *, path: str) -> str:
+    text = value.strip()
+    if not text:
+        raise ValueError(f"{path} must not be blank")
+    if (
+        UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE.search(text)
+        or TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+    ):
+        raise ValueError(f"{path} contains secret, credential, raw-provider, or token-like content.")
+    return text
 
 
 def _validate_metadata_tree(
@@ -1307,6 +1328,16 @@ class AuthoritativePacketSourceRefView(BaseModel):
             raise ValueError("source ref id must not be blank")
         return value
 
+    @field_validator("title")
+    @classmethod
+    def _source_title_must_be_safe_metadata(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("source ref title must not be blank")
+        return _validate_authoritative_metadata_text(value, path="sourceRef.title")
+
 
 class AuthoritativeWorkPacketCreateRequest(BaseModel):
     packetId: str | None = Field(default=None, max_length=80)
@@ -1334,6 +1365,11 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
         if not stripped:
             raise ValueError("value must not be blank")
         return stripped
+
+    @field_validator("title")
+    @classmethod
+    def _packet_title_must_be_safe_metadata(cls, value: str) -> str:
+        return _validate_authoritative_metadata_text(value, path="title")
 
 
 class AuthoritativeWorkPacketTransitionRequest(BaseModel):

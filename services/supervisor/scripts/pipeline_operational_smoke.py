@@ -55,6 +55,15 @@ def require_local_rejected(response, label: str, message_fragment: str) -> None:
         fail(f"{label} did not explain the typed rejection: {response.text[:240]}")
 
 
+def require_typed_422(response, label: str) -> None:
+    if response.status_code != 422:
+        fail(f"{label} returned HTTP {response.status_code}: {response.text[:240]}")
+    payload = response.json()
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if not isinstance(detail, list) or not any(isinstance(error, dict) and error.get("type") for error in detail):
+        fail(f"{label} did not return typed request-validation errors: {response.text[:240]}")
+
+
 def issue_approval(client, packet: dict, *, action_id: str, actor_id: str, key: str) -> dict:
     return require(
         client.post(
@@ -145,6 +154,27 @@ def assert_canonical_trace(proof: dict, packet_id: str, label: str) -> None:
             fail(f"{label} packet stage {entry['packetStage']} disagreed with WorkItem state {entry['workItemState']}")
         if not entry["metadataOnly"] or entry["rawPayloadRetained"]:
             fail(f"{label} lifecycle trace crossed the metadata-only boundary")
+
+
+def assert_authoritative_packet_column_and_uniqueness(db_path: Path, item_id: str, packet_id: str, label: str) -> None:
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT authoritative_packet_id FROM work_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if not row or row[0] != packet_id:
+            fail(f"{label} did not persist authoritative_packet_id={packet_id!r}: {row!r}")
+        for index_row in connection.execute("PRAGMA index_list(work_items)").fetchall():
+            if not bool(index_row[2]):
+                continue
+            index_name = index_row[1]
+            index_columns = tuple(
+                column_row[2]
+                for column_row in connection.execute(f"PRAGMA index_info({index_name})").fetchall()
+            )
+            if index_columns == ("authoritative_packet_id",):
+                return
+    fail(f"{label} lost the unique authoritative_packet_id database constraint")
 
 
 def main() -> int:
@@ -488,51 +518,84 @@ def main() -> int:
             )
             if unsafe_work_item.status_code != 422:
                 fail(f"generic WorkItem accepted token-like metadata: {unsafe_work_item.text[:240]}")
-            deep_metadata: dict[str, object] = {}
-            deep_cursor = deep_metadata
-            for index in range(1500):
-                child: dict[str, object] = {}
-                deep_cursor[f"level{index}"] = child
-                deep_cursor = child
-            deep_metadata_response = client.post(
+            node_limit_metadata = {f"node{index:04d}": "safe" for index in range(1001)}
+            node_limit_metadata_response = client.post(
                 "/work-items",
                 json={
-                    "title": "Deep metadata WorkItem",
-                    "requestedOutcome": "Must be rejected without recursion failure.",
+                    "title": "Node-limit metadata WorkItem",
+                    "requestedOutcome": "Must be rejected at the metadata node limit.",
                     "source": source_path,
-                    "metadata": deep_metadata,
+                    "metadata": node_limit_metadata,
                 },
             )
-            if deep_metadata_response.status_code != 422:
-                fail(f"deep metadata was not rejected as typed 422: {deep_metadata_response.status_code} {deep_metadata_response.text[:240]}")
-            oversized_metadata_response = client.post(
+            require_typed_422(node_limit_metadata_response, "shallow metadata node-limit WorkItem")
+            aggregate_metadata = {
+                "chunks": [f"safe-metadata-chunk-{index:04d}-{'x' * 130}" for index in range(500)]
+            }
+            aggregate_size_metadata_response = client.post(
                 "/work-items",
                 json={
-                    "title": "Oversized metadata WorkItem",
-                    "requestedOutcome": "Must be rejected before event persistence.",
+                    "title": "Aggregate-size metadata WorkItem",
+                    "requestedOutcome": "Must be rejected at the metadata aggregate-size limit.",
                     "source": source_path,
-                    "metadata": {"oversized": "x" * (64 * 1024 + 1)},
+                    "metadata": aggregate_metadata,
                 },
             )
-            if oversized_metadata_response.status_code != 422:
-                fail(f"oversized metadata was not rejected as typed 422: {oversized_metadata_response.status_code} {oversized_metadata_response.text[:240]}")
+            require_typed_422(aggregate_size_metadata_response, "safe-chunk metadata aggregate-size WorkItem")
             listed_work_items_after_metadata = client.get("/work-items")
             if listed_work_items_after_metadata.status_code != 200 or any(
-                item.get("title") in {"Deep metadata WorkItem", "Oversized metadata WorkItem"}
+                item.get("title") in {"Node-limit metadata WorkItem", "Aggregate-size metadata WorkItem"}
                 for item in listed_work_items_after_metadata.json().get("data", [])
             ):
-                fail("rejected deep or oversized metadata created a WorkItem projection")
+                fail("rejected node-limit or aggregate-size metadata created a WorkItem projection")
             with sqlite3.connect(db_path) as metadata_db:
                 persisted_metadata_events = metadata_db.execute(
                     "SELECT COUNT(*) FROM workflow_events WHERE payload LIKE ? OR payload LIKE ?",
-                    ("%Deep metadata WorkItem%", "%Oversized metadata WorkItem%"),
+                    ("%Node-limit metadata WorkItem%", "%Aggregate-size metadata WorkItem%"),
                 ).fetchone()[0]
                 persisted_metadata_items = metadata_db.execute(
                     "SELECT COUNT(*) FROM work_items WHERE title IN (?, ?)",
-                    ("Deep metadata WorkItem", "Oversized metadata WorkItem"),
+                    ("Node-limit metadata WorkItem", "Aggregate-size metadata WorkItem"),
                 ).fetchone()[0]
             if persisted_metadata_events or persisted_metadata_items:
-                fail("rejected deep or oversized metadata persisted a workflow event or WorkItem")
+                fail("rejected node-limit or aggregate-size metadata persisted a workflow event or WorkItem")
+            adversarial_packet_seeds = [
+                (
+                    "packet-adversarial-title-safety",
+                    "OPENAI_API_KEY=sk-adversarial-secret",
+                    source_ref,
+                ),
+                (
+                    "packet-adversarial-source-title-safety",
+                    "Safe packet title",
+                    {**source_ref, "title": "provider=openai response_id=resp_adversarial"},
+                ),
+            ]
+            for packet_id, packet_title, packet_source_ref in adversarial_packet_seeds:
+                adversarial_packet_response = client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": packet_id,
+                        "title": packet_title,
+                        "sourceRef": packet_source_ref,
+                        "actor": {"actorType": "manager", "actorId": "smoke-manager", "actorLabel": "Smoke manager"},
+                        "idempotencyKey": f"create-{packet_id}",
+                        "correlationId": f"corr:create-{packet_id}",
+                    },
+                )
+                require_typed_422(adversarial_packet_response, f"adversarial authoritative packet seed {packet_id}")
+            with sqlite3.connect(db_path) as adversarial_db:
+                for packet_id, _, _ in adversarial_packet_seeds:
+                    packet_count = adversarial_db.execute(
+                        "SELECT COUNT(*) FROM authoritative_work_packets WHERE id = ?",
+                        (packet_id,),
+                    ).fetchone()[0]
+                    event_count = adversarial_db.execute(
+                        "SELECT COUNT(*) FROM authoritative_work_packet_lifecycle_events WHERE packet_id = ?",
+                        (packet_id,),
+                    ).fetchone()[0]
+                    if packet_count or event_count:
+                        fail(f"rejected adversarial packet seed {packet_id} persisted a packet or lifecycle event")
             repo_root = Path(__file__).resolve().parents[3]
             untracked_source_path = "docs/workflows/.gate4b-untracked-source.md"
             untracked_source_file = repo_root / untracked_source_path
@@ -956,6 +1019,12 @@ def main() -> int:
                     or replay["materializedWorkItemCountBeforeRebuild"] != 0
                 ):
                     fail("replay was not reconstructed from the captured authoritative lifecycle events")
+                assert_authoritative_packet_column_and_uniqueness(
+                    db_path,
+                    happy_item["id"],
+                    happy_packet["packetId"],
+                    "happy event reconstruction",
+                )
                 replayed_projection = require(
                     reloaded_client.get("/pipeline-control-plane/projection"),
                     200,
@@ -1047,6 +1116,12 @@ def main() -> int:
                     or not held_replayed_item["blockedReason"]
                 ):
                     fail("held event reconstruction changed blocker, state, lane, or packet linkage")
+                assert_authoritative_packet_column_and_uniqueness(
+                    db_path,
+                    worker_failure_item["id"],
+                    worker_failure_packet["packetId"],
+                    "held event reconstruction",
+                )
                 reloaded_projection = require(
                     reloaded_client.get("/pipeline-control-plane/projection"),
                     200,
@@ -1210,14 +1285,23 @@ def main() -> int:
                         "leaseAdversarialFencingVerified": True,
                         "metadataSafetyBoundaryVerified": True,
                         "metadataDepthAndSizeBoundsVerified": True,
+                        "metadataNodeLimit": 1000,
+                        "metadataAggregateSizeBytesLimit": 64 * 1024,
+                        "metadataNodeLimitVerified": True,
+                        "metadataAggregateSizeLimitVerified": True,
                         "sourceIndexDigestBoundaryVerified": True,
                         "replayedWorkItemSnapshotVerified": True,
                         "heldWorkItemReplaySnapshotVerified": True,
                         "metadataRejectionPersistenceVerified": True,
+                        "authoritativePacketTitleSafetyVerified": True,
+                        "authoritativePacketSourceTitleSafetyVerified": True,
+                        "authoritativePacketRejectionPersistenceVerified": True,
                         "sourceTraversalRejected": True,
                         "canonicalPacketWorkItemStateAgreementVerified": True,
                         "eventReconstructionReplayVerified": True,
                         "eventReconstructionRowsAbsentBeforeRebuildVerified": True,
+                        "eventReconstructionDatabaseLinkageVerified": True,
+                        "authoritativePacketLinkUniquenessVerified": True,
                         "engineSessionReloadVerified": True,
                     },
                     sort_keys=True,

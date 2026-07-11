@@ -227,6 +227,7 @@ from supervisor.api.schemas import (
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
+    _validate_authoritative_metadata_text,
     _validate_metadata_tree,
     WorkItemExecutionAttemptCreateRequest,
     WorkItemLocalProofLeaseRequest,
@@ -605,6 +606,7 @@ class SupervisorService:
         session: AsyncSession,
         payload: AuthoritativeWorkPacketCreateRequest,
     ) -> AuthoritativeWorkPacketLifecycleView:
+        _validate_authoritative_metadata_text(payload.title, path="title")
         if payload.idempotencyKey:
             existing_event = await self._authoritative_lifecycle_event_by_idempotency(
                 session,
@@ -1564,6 +1566,8 @@ class SupervisorService:
 
     def _authoritative_source_ref_payload(self, source_ref: AuthoritativePacketSourceRefView) -> dict:
         source_payload = source_ref.model_dump()
+        if source_payload.get("title") is not None:
+            _validate_authoritative_metadata_text(source_payload["title"], path="sourceRef.title")
         planning_authority = self._planning_source_authority(source_payload.get("pathOrUrl"))
         if planning_authority["status"] == "superseded":
             raise ValueError(
@@ -19450,6 +19454,7 @@ class SupervisorService:
             title=str(queued_payload.get("title") or packet_title),
             requested_outcome=str(queued_payload.get("requestedOutcome") or packet_title),
             source=str(queued_payload.get("source") or source_ref.get("pathOrUrl") or "source-owned"),
+            authoritative_packet_id=packet_id,
             details=queued_payload.get("details") if isinstance(queued_payload.get("details"), str) else None,
             risk_level=str(queued_payload.get("riskLevel") or RiskLevel.LOW.value),
             metadata_json=item_metadata,
