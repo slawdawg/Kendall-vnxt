@@ -543,6 +543,330 @@ function seedManagerLedgerForPreflight(stateRoot, runId = "manager-test", dispat
   }, null, 2));
 }
 
+function writeReconcilePreflight(stateRoot, runId = "manager-test", overrides = {}) {
+  const preflightPath = join(stateRoot, "preflight.json");
+  const dispatcher = {
+    status: "blocked",
+    dispatcherSummaryState: "dispatch_preview_live",
+    freshness: "fresh",
+    mutation: "none; dispatcher readiness summary only",
+    dispatchableLanes: 0,
+    activeLanes: 0,
+    blockedLanes: 78,
+    blockers: ["no dispatchable safe backlog lane found"],
+    nextAction: "Resolve dispatcher blockers before manager mutation.",
+    rawPayloadRetained: false,
+    ...(overrides.summary?.dispatcher || {}),
+  };
+  const summary = {
+    producer: "manager-preflight",
+    schemaVersion: "manager-preflight.v1",
+    runId,
+    mutation: "none; read-only preflight summary",
+    dispatcher,
+    generatedAt: overrides.generatedAt || new Date().toISOString(),
+    recommendedNextAction: "Resolve dispatcher blockers before manager mutation.",
+    rawPayloadRetained: false,
+    ...(overrides.summary || {}),
+    dispatcher,
+  };
+  writeFileSync(preflightPath, JSON.stringify({
+    producer: "manager-preflight",
+    schemaVersion: "manager-preflight.v1",
+    mutation: "none; read-only preflight summary",
+    runId,
+    status: "blocked",
+    rawPayloadRetained: false,
+    ...overrides,
+    summary,
+  }, null, 2));
+  return preflightPath;
+}
+
+test("manager-ledger reconcile-state dry-run is bounded and read-only", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-dry-run-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    const preflightFile = writeReconcilePreflight(stateRoot, runId);
+    const beforeMission = readFileSync(join(runRoot, "mission.json"), "utf8");
+    const beforeDispatcher = readFileSync(join(runRoot, "dispatcher-summary.json"), "utf8");
+    const beforeEvents = readFileSync(join(runRoot, "events.ndjson"), "utf8");
+    const parsed = parseCommonArgs(["reconcile-state", "--run-id", runId, "--preflight-file", preflightFile]);
+    assert.equal(parsed.command, "reconcile-state");
+    assert.equal(parsed.preflightFile, preflightFile);
+
+    const result = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile });
+
+    assert.equal(result.status, "ready");
+    assert.equal(result.summary.mode, "dry_run");
+    assert.equal(result.summary.applied, false);
+    assert.equal(result.summary.reconciledOutcome, "blocked");
+    assert.equal(result.summary.after.mission.runState, "blocked");
+    assert.deepEqual(result.summary.after.dispatcherSummary.blockers, ["no dispatchable safe backlog lane found"]);
+    assert.match(result.summary.authorityLine, /dispatch_preview_live/);
+    assert.match(result.summary.stopLine, /no takeover.*cleanup.*worker launch\/retirement.*dispatch apply.*provider calls.*credential access.*GitHub mutation.*source planning mutation.*raw retention/i);
+    assert.doesNotMatch(JSON.stringify(result), /rawTranscript|providerPayload/);
+    assert.equal(readFileSync(join(runRoot, "mission.json"), "utf8"), beforeMission);
+    assert.equal(readFileSync(join(runRoot, "dispatcher-summary.json"), "utf8"), beforeDispatcher);
+    assert.equal(readFileSync(join(runRoot, "events.ndjson"), "utf8"), beforeEvents);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state apply updates manager summaries and replays metadata only", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-apply-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    const mission = JSON.parse(readFileSync(join(runRoot, "mission.json"), "utf8"));
+    mission.updatedAt = "2026-07-06T00:00:00.000Z";
+    mission.sentinel = "preserve-mission-metadata";
+    writeFileSync(join(runRoot, "mission.json"), JSON.stringify(mission, null, 2));
+    writeFileSync(join(runRoot, "dispatcher-summary.json"), JSON.stringify({
+      stateSource: "dispatcher_summary_unavailable",
+      freshness: "unknown",
+      sentinel: "preserve-dispatcher-metadata",
+      benignNested: { sentinel: "keep", rawResponse: "must not survive", transcript: "must not survive", prompt: "must not survive", payload: "must not survive", secret: "must not survive", credential: "must not survive", response: "must not survive", provider_output: "must not survive", stdout: "must not survive", stderr: "must not survive", scrollback: "must not survive", event_log: "must not survive" },
+      rawTranscript: "must not survive reconciliation",
+      providerPayload: "must not survive reconciliation",
+    }, null, 2));
+    const preflightFile = writeReconcilePreflight(stateRoot, runId);
+    const result = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+
+    assert.equal(result.status, "ready");
+    assert.equal(result.summary.applied, true);
+    const appliedMission = JSON.parse(readFileSync(join(runRoot, "mission.json"), "utf8"));
+    assert.equal(appliedMission.runState, "blocked");
+    assert.equal(appliedMission.sentinel, "preserve-mission-metadata");
+    assert.notEqual(appliedMission.updatedAt, "2026-07-06T00:00:00.000Z");
+    assert.ok(Date.now() - Date.parse(appliedMission.updatedAt) < 5000);
+    const dispatcher = JSON.parse(readFileSync(join(runRoot, "dispatcher-summary.json"), "utf8"));
+    assert.equal(dispatcher.stateSource, "dispatch_preview_live");
+    assert.equal(dispatcher.freshness, "fresh");
+    assert.deepEqual(dispatcher.blockers, ["no dispatchable safe backlog lane found"]);
+    assert.equal(dispatcher.sentinel, "preserve-dispatcher-metadata");
+    assert.equal(dispatcher.benignNested.sentinel, "keep");
+    for (const key of ["rawResponse", "transcript", "prompt", "payload", "secret", "credential", "response", "provider_output", "stdout", "stderr", "scrollback", "event_log"]) {
+      assert.equal(Object.hasOwn(dispatcher.benignNested, key), false, `nested hostile key ${key} should be scrubbed`);
+    }
+    assert.equal(Object.hasOwn(dispatcher, "rawTranscript"), false);
+    assert.equal(Object.hasOwn(dispatcher, "providerPayload"), false);
+    const events = readFileSync(join(runRoot, "events.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].eventName, "manager.replay.summarized");
+    assert.equal(events[0].redactionBoundary, "metadata_only");
+    assert.equal(events[0].rawPayloadRetained, false);
+    assert.equal(events[0].result, "blocked");
+    assert.match(events[0].reconciliationPreStateDigest, /^[0-9a-f]{64}$/);
+    assert.match(events[0].reconciliationPostStateDigest, /^[0-9a-f]{64}$/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state apply is idempotent for the same preflight", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-idempotent-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const preflightFile = writeReconcilePreflight(stateRoot, runId);
+    const first = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    const firstMission = readFileSync(join(stateRoot, "manager-runs", runId, "mission.json"), "utf8");
+    const firstDispatcher = readFileSync(join(stateRoot, "manager-runs", runId, "dispatcher-summary.json"), "utf8");
+    const second = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+
+    assert.equal(first.summary.event.idempotencyKey, second.summary.event.idempotencyKey);
+    assert.equal(second.summary.duplicateIgnored, true);
+    assert.equal(readFileSync(join(stateRoot, "manager-runs", runId, "mission.json"), "utf8"), firstMission);
+    assert.equal(readFileSync(join(stateRoot, "manager-runs", runId, "dispatcher-summary.json"), "utf8"), firstDispatcher);
+    assert.equal(readFileSync(join(stateRoot, "manager-runs", runId, "events.ndjson"), "utf8").trim().split("\n").length, 1);
+
+    const eventsPath = join(stateRoot, "manager-runs", runId, "events.ndjson");
+    const event = JSON.parse(readFileSync(eventsPath, "utf8").trim());
+    event.summary = "tampered immutable replay metadata";
+    writeFileSync(eventsPath, `${JSON.stringify(event)}\n`);
+    const metadataConflict = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(metadataConflict.status, "blocked");
+    assert.ok(metadataConflict.blockers.some((blocker) => blocker.code === "reconcile-event-idempotency-conflict"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state rejects stale and unsafe preflight packets", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-reject-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    const preflightFile = writeReconcilePreflight(stateRoot, runId, { summary: { dispatcher: { freshness: "stale" } } });
+    const stale = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(stale.status, "blocked");
+    assert.ok(stale.blockers.some((blocker) => blocker.code === "reconcile-preflight-stale"));
+
+    const unsafeFile = writeReconcilePreflight(stateRoot, runId, { summary: { mutation: "dispatch apply writes assignments" } });
+    const unsafe = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile: unsafeFile, apply: true });
+    assert.equal(unsafe.status, "blocked");
+    assert.ok(unsafe.blockers.some((blocker) => blocker.code === "reconcile-preflight-mutation-unsafe"));
+    assert.equal(readFileSync(join(runRoot, "events.ndjson"), "utf8"), "");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state closes conflicting provenance, raw, timestamp, and ready packets", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-shape-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const cases = [
+      [{ summary: { runId: "other-run" } }, "reconcile-preflight-run-id-conflict"],
+      [{ rawPayloadRetained: true }, "reconcile-preflight-packet-raw-retention"],
+      [{ producer: "untrusted-producer" }, "reconcile-preflight-producer-unsupported"],
+      [{ schemaVersion: "manager-preflight.v0" }, "reconcile-preflight-schema-unsupported"],
+      [{ summary: { mutation: "none; dry-run summary" } }, "reconcile-preflight-mutation-unsafe"],
+      [{ generatedAt: "2026-07-10T23:00:00.000Z" }, "reconcile-preflight-timestamp-stale"],
+      [{ generatedAt: "2026-07-11T00:00:00.000Z", summary: { dispatcher: { generatedAt: "2026-07-10T23:00:00.000Z" } } }, "reconcile-preflight-timestamp-stale"],
+      [{ generatedAt: "2026-07-11T01:01:00.000Z" }, "reconcile-preflight-timestamp-future"],
+      [{ summary: { allowed: true } }, "reconcile-preflight-allowed-unsafe"],
+      [{ summary: { dispatcher: { dispatchApplyAllowed: true } } }, "reconcile-preflight-dispatch-apply-unsafe"],
+      [{ status: "ready", summary: { dispatcher: { status: "ready" } } }, "reconcile-preflight-outcome-not-blocked"],
+    ];
+    for (const [overrides, expectedCode] of cases) {
+      const preflightFile = writeReconcilePreflight(stateRoot, runId, overrides);
+      const result = ledgerCommand(
+        { command: "reconcile-state", runId, stateRoot, preflightFile, apply: true },
+        { now: "2026-07-11T00:00:00.000Z" },
+      );
+      assert.equal(result.status, "blocked", expectedCode);
+      assert.ok(result.blockers.some((blocker) => blocker.code === expectedCode), `${expectedCode} should be reported`);
+    }
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state rejects unsafe numeric fields and count relationships", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-counts-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const cases = [
+      [{ summary: { dispatcher: { counts: { dispatchable: true } } } }, "reconcile-preflight-count-invalid"],
+      [{ summary: { dispatcher: { dispatchableLanes: -1 } } }, "reconcile-preflight-count-invalid"],
+      [{ summary: { dispatcher: { dispatchableLanes: 0, activeLanes: 1, blockedLanes: 1, counts: { total: 1, dispatchable: 0, active: 1, blocked: 1 } } } }, "reconcile-preflight-count-relationship-invalid"],
+    ];
+    for (const [overrides, expectedCode] of cases) {
+      const preflightFile = writeReconcilePreflight(stateRoot, runId, overrides);
+      const result = ledgerCommand(
+        { command: "reconcile-state", runId, stateRoot, preflightFile, apply: true },
+        { now: "2026-07-11T00:00:00.000Z" },
+      );
+      assert.equal(result.status, "blocked", expectedCode);
+      assert.ok(result.blockers.some((blocker) => blocker.code === expectedCode), `${expectedCode} should be reported`);
+    }
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state rejects target run-id drift and rolls back injected apply failures", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-transaction-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    const mission = JSON.parse(readFileSync(join(runRoot, "mission.json"), "utf8"));
+    mission.sentinel = "must-survive-rollback";
+    writeFileSync(join(runRoot, "mission.json"), JSON.stringify(mission, null, 2));
+    const dispatcher = JSON.parse(readFileSync(join(runRoot, "dispatcher-summary.json"), "utf8"));
+    dispatcher.runId = "other-run";
+    writeFileSync(join(runRoot, "dispatcher-summary.json"), JSON.stringify(dispatcher, null, 2));
+    const preflightFile = writeReconcilePreflight(stateRoot, runId);
+    const targetMismatch = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(targetMismatch.status, "blocked");
+    assert.ok(targetMismatch.blockers.some((blocker) => blocker.code === "reconcile-target-dispatcher-run-id-mismatch"));
+
+    dispatcher.runId = runId;
+    writeFileSync(join(runRoot, "dispatcher-summary.json"), JSON.stringify(dispatcher, null, 2));
+    const before = ["mission.json", "dispatcher-summary.json", "events.ndjson"].map((file) => readFileSync(join(runRoot, file), "utf8"));
+    const failed = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true }, {
+      reconcileStateWrite: ({ file, writeDefault }) => {
+        if (file === "dispatcherSummary") throw new Error("injected dispatcher write failure");
+        return writeDefault();
+      },
+    });
+    assert.equal(failed.status, "blocked");
+    assert.equal(failed.blockers[0].code, "reconcile-state-apply-rolled-back");
+    assert.deepEqual(["mission.json", "dispatcher-summary.json", "events.ndjson"].map((file) => readFileSync(join(runRoot, file), "utf8")), before);
+
+    const failedEvent = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true }, {
+      reconcileStateAppendEvent: () => { throw new Error("injected event append failure"); },
+    });
+    assert.equal(failedEvent.status, "blocked");
+    assert.equal(failedEvent.blockers[0].code, "reconcile-state-apply-rolled-back");
+    assert.deepEqual(["mission.json", "dispatcher-summary.json", "events.ndjson"].map((file) => readFileSync(join(runRoot, file), "utf8")), before);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state unwraps lock timeout into a blocked envelope", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-lock-timeout-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    const preflightFile = writeReconcilePreflight(stateRoot, runId);
+    const lockDir = join(runRoot, ".ledger-append.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ runId, pid: process.pid, createdAt: new Date().toISOString(), token: "held-by-test" }));
+    const result = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true }, { reconcileLockTimeoutMs: 0 });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.ok, false);
+    assert.ok(result.blockers.some((blocker) => blocker.code === "ledger-append-lock-timeout"));
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("manager-ledger reconcile-state repairs drifted targets without duplicating the replay event", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-reconcile-duplicate-repair-"));
+  try {
+    const runId = "manager-test";
+    ledgerCommand({ command: "init", runId, stateRoot });
+    const runRoot = join(stateRoot, "manager-runs", runId);
+    const preflightFile = writeReconcilePreflight(stateRoot, runId);
+    const preMission = readFileSync(join(runRoot, "mission.json"), "utf8");
+    const preDispatcher = readFileSync(join(runRoot, "dispatcher-summary.json"), "utf8");
+    const first = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(first.summary.applied, true);
+    writeFileSync(join(runRoot, "mission.json"), preMission);
+    writeFileSync(join(runRoot, "dispatcher-summary.json"), preDispatcher);
+    const repaired = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(repaired.summary.repairedDuplicate, true);
+    assert.equal(repaired.summary.duplicateIgnored, true);
+    assert.equal(JSON.parse(readFileSync(join(runRoot, "mission.json"), "utf8")).runState, "blocked");
+    assert.equal(readFileSync(join(runRoot, "events.ndjson"), "utf8").trim().split("\n").length, 1);
+
+    const newerMission = JSON.parse(readFileSync(join(runRoot, "mission.json"), "utf8"));
+    newerMission.runState = "newer-manager-state";
+    newerMission.sentinel = "preserve-newer-state";
+    writeFileSync(join(runRoot, "mission.json"), JSON.stringify(newerMission, null, 2));
+    const conflict = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(conflict.status, "blocked");
+    assert.equal(conflict.summary.stateConflict, true);
+    assert.ok(conflict.blockers.some((blocker) => blocker.code === "reconcile-state-state-conflict"));
+    assert.equal(JSON.parse(readFileSync(join(runRoot, "mission.json"), "utf8")).runState, "newer-manager-state");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("sprint status counting uses adjacent story file lifecycle when tracker is stale", () => {
   const artifactDir = mkdtempSync(join(tmpdir(), "manager-sprint-status-drift-"));
   try {
@@ -28005,6 +28329,7 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-preflight-"));
   try {
     seedManagerLedgerForPreflight(stateRoot);
+    const dispatchPreviewGeneratedAt = new Date().toISOString();
     const preflight = buildPreflight(
       { stateRoot, desiredWorkers: 6, runId: "manager-test" },
       {
@@ -28024,6 +28349,7 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
           },
         },
         dispatchPreview: {
+          generatedAt: dispatchPreviewGeneratedAt,
           counts: {
             dispatchable: 1,
             active: 0,
@@ -28052,6 +28378,14 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
     );
 
     assert.equal(preflight.summary.repo.root, "/workspace/Kendall_Nxt");
+    assert.equal(preflight.rawPayloadRetained, false);
+    assert.equal(preflight.producer, "manager-preflight");
+    assert.equal(preflight.schemaVersion, "manager-preflight.v1");
+    assert.equal(preflight.summary.producer, "manager-preflight");
+    assert.equal(preflight.summary.schemaVersion, "manager-preflight.v1");
+    assert.match(preflight.summary.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(preflight.summary.dispatcher.generatedAt, dispatchPreviewGeneratedAt);
+    assert.equal(preflight.summary.dispatcher.rawPayloadRetained, false);
     assert.equal(preflight.summary.branch.current, "dev");
     assert.equal(preflight.summary.branch.dirty, true);
     assert.equal(preflight.summary.githubCli.available, true);

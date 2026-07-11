@@ -40,6 +40,35 @@ Manager runtime state lives under:
 
 Use `node ./scripts/manager-ledger.mjs init --run-id <run-id> --summary-json` before writing manager-owned runtime state. Ledger mutation is metadata-only and is allowed only for manager-owned summaries, events, worker state, questions, checkpoints, usage snapshots, and resource snapshots.
 
+When a live dispatcher summary is stale but a fresh guarded read-only preflight
+proves the current dispatcher outcome, reconcile only manager-owned run metadata
+through the explicit dry-run-first gate:
+
+```bash
+node ./scripts/manager-ledger.mjs reconcile-state --run-id <run-id> --preflight-file <preflight.json> --summary-json
+node ./scripts/manager-ledger.mjs reconcile-state --run-id <run-id> --preflight-file <preflight.json> --apply --summary-json
+```
+
+The packet must identify the same run, contain
+`summary.dispatcher.dispatcherSummaryState === dispatch_preview_live`, have
+fresh bounded timestamped dispatcher evidence, prove the exact read-only
+mutation contract, identify producer `manager-preflight` with
+`schemaVersion === manager-preflight.v1`, explicitly set `rawPayloadRetained ===
+false`, and report a blocked no-dispatch/safe-backlog outcome. The canonical
+dispatcher preview timestamp is checked before the enclosing packet timestamp;
+this is a local provenance/shape gate, not cryptographic authentication. This
+is a dispatcher-preflight-only reconciliation: it does not prove full runtime
+coherence and must report the follow-up runtime/worker/dispatch gates required.
+Ready packets, contradictory `allowed` metadata, and any `dispatchApplyAllowed:
+true` field are rejected. A replay duplicate is ignored only when both runtime
+files match the recorded post-state; repair is allowed only from the recorded
+pre-state, otherwise the gate reports a state conflict without overwriting newer
+manager metadata.
+The gate may update only `mission.json`, `dispatcher-summary.json`, and one
+idempotent metadata-only `manager.replay.summarized` event. It never performs
+takeover, cleanup, worker launch or retirement, dispatch apply, provider calls,
+credential access, GitHub mutation, source planning mutation, or raw retention.
+
 ## Durable PRD Goal Contract
 
 Use `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md` as the generic
