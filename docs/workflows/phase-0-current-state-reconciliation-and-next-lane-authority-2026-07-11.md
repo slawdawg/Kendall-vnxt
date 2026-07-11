@@ -191,6 +191,24 @@ corrections; its verification suite passes 10/10 and the full manager suite
 passes 463/463. This stale staged lane is therefore superseded, not an
 unmerged implementation. No takeover or dirty-worktree mutation was applied.
 
+## Primary branch lineage reconciliation
+
+The primary branch `agent/operational-pipeline-action-loop` was audited without
+touching its dirty worktree. Its committed operational-pipeline feature
+(`4f4182ea` followed by `b59ed9f0`) is already represented in current `dev` by
+the delivered operational-pipeline action-loop change `3b9909bb` (PR #469).
+The attempted current-baseline replay exposed conflicts because the primary
+lineage also carries manager-control-plane deletions; those deletions are not
+missing operational-pipeline behavior and must not be delivered.
+
+The primary branch's committed documentation/policy intent is likewise already
+present in current `dev`. The only unresolved primary work is the uncommitted
+four-file patch: 157 additions and 2,327 deletions across `AGENTS.md`, the
+latest PRD, manager-control-plane core, and manager-control-plane tests. Its
+source/test portion removes safety invariants and is not green. No primary
+files were reset, discarded, or merged; the patch remains owner-preserved for
+later reconciliation.
+
 The current primary-checkout patch also remains held. Its manager-control-plane
 diff removes authoritative worker assignment locks, review reservation and
 lease identity checks, pane/session identity revalidation, and self-review or
