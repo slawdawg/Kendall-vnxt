@@ -574,6 +574,17 @@ def main() -> int:
             )
             if unsafe_work_item.status_code != 422:
                 fail(f"generic WorkItem accepted token-like metadata: {unsafe_work_item.text[:240]}")
+            generic_signature_work_item = client.post(
+                "/work-items",
+                json={
+                    "title": "Generic signature WorkItem",
+                    "requestedOutcome": "Must reject generic opaque credential-like metadata.",
+                    "source": source_path,
+                    "metadata": {"opaque": "aB3" * 20},
+                },
+            )
+            if generic_signature_work_item.status_code != 422:
+                fail(f"generic WorkItem accepted a long mixed alphanumeric signature: {generic_signature_work_item.text[:240]}")
             node_limit_metadata = {f"node{index:04d}": "safe" for index in range(1001)}
             node_limit_metadata_response = client.post(
                 "/work-items",
