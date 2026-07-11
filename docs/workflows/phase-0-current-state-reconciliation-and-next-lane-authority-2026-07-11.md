@@ -13,11 +13,13 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Reconciled baseline
 
-- `origin/dev` is at `daadcdc5b4aeac84ce4faea669f837d0ae73b46d`, including the
-  merged Gate 5/6 terminal backlog and readiness gates, the Phase 0
-  reconciliation artifacts, the post-merge course-correction policy update,
-  the refreshed post-merge audit handoff, the stale merged-assignment
-  closeout gate repair, and the exact-task duplicate-manifest selector fix.
+- The audited pre-artifact baseline was `origin/dev` at
+  `daadcdc5b4aeac84ce4faea669f837d0ae73b46d`, including the merged Gate 5/6
+  terminal backlog and readiness gates, the Phase 0 reconciliation artifacts,
+  the post-merge course-correction policy update, the refreshed post-merge
+  audit handoff, the stale merged-assignment closeout gate repair, and the
+  exact-task duplicate-manifest selector fix. The delivery history below
+  records the docs PRs that carried this artifact afterward.
 - PR inventory is empty: no open pull requests target `dev`.
 - Epic 25-1 (#473), Epic 25-2 (#474), the earlier 24-1 fixture stabilization
   (#461), the Phase 0 reconciliation (#485), the post-merge policy update
@@ -120,6 +122,10 @@ runtime audit:
   `70397f8dfae77b234e8c1ad38929f0d984d999ca` and merged as
   `daadcdc5b4aeac84ce4faea669f837d0ae73b46d`. Its documentation checks,
   fast CI gate, and exact-head cleanup gate passed.
+- PR #494 corrected the baseline wording above at exact head
+  `31e6ed449e06ffec3190e6098ceb0934d10e5d0c` and merged as
+  `c2c2915d4037e07045b7fc891aee783b7dbfeba3`. Its fast CI gate and
+  exact-head cleanup gate passed.
 
 ## Canonical stale-record cleanup closeout
 
