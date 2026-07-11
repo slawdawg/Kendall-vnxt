@@ -34,6 +34,8 @@ import type {
   MvpProofTrialReportView,
   PipelineDashboardProjectionV0,
   PipelineOperationalActionRequestV0,
+  PipelineOperationalActionApprovalRequestV0,
+  PipelineOperationalActionApprovalV0,
   PipelineOperationalActionResultV0,
   RuntimeEvidenceReviewReportView,
   ReviewResourcePolicyReportView,
@@ -217,6 +219,23 @@ export async function applyPipelineOperationalAction(
   if (!response.ok || !envelope.data) {
     const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
     throw new Error(detail.detail?.error?.message ?? `Operational action failed: ${response.status}`);
+  }
+  return envelope.data;
+}
+
+export async function issuePipelineOperationalApproval(
+  payload: PipelineOperationalActionApprovalRequestV0,
+): Promise<PipelineOperationalActionApprovalV0> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/approvals`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionApprovalV0>;
+  if (!response.ok || !envelope.data) {
+    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
+    throw new Error(detail.detail?.error?.message ?? `Operational approval failed: ${response.status}`);
   }
   return envelope.data;
 }

@@ -1,6 +1,8 @@
 import type {
   PipelineDashboardProjectionV0,
   PipelineOperationalActionRequestV0,
+  PipelineOperationalActionApprovalRequestV0,
+  PipelineOperationalActionApprovalV0,
   PipelineOperationalActionResultV0,
 } from "@kendall/contracts";
 
@@ -11,7 +13,16 @@ import {
   type PipelineFixturePacket,
 } from "./pipeline-fixtures";
 import { getPipelineDashboardProjection, getWorkPackets } from "./supervisor";
-import { applyPipelineOperationalAction as applySupervisorPipelineOperationalAction } from "./supervisor";
+import {
+  applyPipelineOperationalAction as applySupervisorPipelineOperationalAction,
+  issuePipelineOperationalApproval as issueSupervisorPipelineOperationalApproval,
+} from "./supervisor";
+
+export async function requestPipelineOperationalApproval(
+  payload: PipelineOperationalActionApprovalRequestV0,
+): Promise<PipelineOperationalActionApprovalV0> {
+  return issueSupervisorPipelineOperationalApproval(payload);
+}
 
 export async function applyPipelineOperationalAction(
   payload: PipelineOperationalActionRequestV0,

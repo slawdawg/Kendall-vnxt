@@ -149,6 +149,7 @@ class OperationalActionRecord(Base):
     requested_authority_state: Mapped[str] = mapped_column(String(40))
     requested_risk_tier: Mapped[str] = mapped_column(String(16))
     expected_current_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     outcome: Mapped[str] = mapped_column(String(16))
     resulting_stage: Mapped[str] = mapped_column(String(32))
     resulting_status: Mapped[str] = mapped_column(String(32))
@@ -161,6 +162,24 @@ class OperationalActionRecord(Base):
     test_result: Mapped[str | None] = mapped_column(String(16), nullable=True)
     test_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OperationalActionApprovalRecord(Base):
+    __tablename__ = "pipeline_operational_approvals"
+
+    approval_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    action_id: Mapped[str] = mapped_column(String(64))
+    target_type: Mapped[str] = mapped_column(String(32))
+    target_id: Mapped[str] = mapped_column(String(120))
+    requested_actor_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    requested_authority_family: Mapped[str] = mapped_column(String(40))
+    requested_risk_tier: Mapped[str] = mapped_column(String(16))
+    expected_current_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_action_idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    consumed_action_record_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class ExecutionAttempt(Base):

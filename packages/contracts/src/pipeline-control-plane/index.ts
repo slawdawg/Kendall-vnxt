@@ -174,7 +174,7 @@ export interface AuthoritativePacketLifecycleEvent {
   eventId: string;
   packetId: string;
   schemaVersion: 1;
-  eventType: "packet.created" | "packet.stage_transitioned";
+  eventType: "packet.created" | "packet.stage_transitioned" | "packet.operational_action_applied";
   previousStage?: AuthoritativePacketStage | null;
   targetStage: AuthoritativePacketStage;
   status: AuthoritativePacketStatus;
@@ -306,6 +306,7 @@ export const PIPELINE_OPERATIONAL_ACTION_IDS = [
   "credential_or_provider_change",
 ] as const;
 export type PipelineOperationalActionIdV0 = (typeof PIPELINE_OPERATIONAL_ACTION_IDS)[number];
+export type PipelineGatedOperationalActionIdV0 = "mark_tested" | "request_rework";
 
 export const PIPELINE_OPERATIONAL_ACTION_TARGET_TYPES = [
   "work_packet",
@@ -739,11 +740,42 @@ export interface PipelineOperationalActionRequestV0 {
   requestedBy: AuthoritativePacketActor;
   requestedAuthorityState: PipelineOperationalActionRequestedAuthorityStateV0;
   requestedRiskTier: PipelineOperationalActionRiskTierV0;
+  approvalId?: string | null;
   operatorIntentSummary?: string | null;
   evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
   expectedCurrentEventId?: string | null;
   testResult?: "pass" | "fail" | "notes" | null;
   testNotes?: string | null;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface PipelineOperationalActionApprovalRequestV0 {
+  actionId: PipelineGatedOperationalActionIdV0;
+  targetType: "work_packet";
+  targetId: string;
+  requestedBy: AuthoritativePacketActor;
+  requestedAuthorityState: "needs_product_approval";
+  requestedRiskTier: "medium";
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface PipelineOperationalActionApprovalV0 {
+  approvalId: string;
+  actionId: PipelineGatedOperationalActionIdV0;
+  targetType: "work_packet";
+  targetId: string;
+  requestedBy: AuthoritativePacketActor;
+  requestedAuthorityState: "needs_product_approval";
+  requestedRiskTier: "medium";
+  expectedCurrentEventId: string;
+  issuedAt: string;
+  expiresAt: string;
+  consumed: boolean;
+  consumedAt?: string | null;
+  consumedActionIdempotencyKey?: string | null;
+  consumedActionRecordId?: string | null;
   metadataOnly: true;
   rawPayloadRetained: false;
 }
@@ -764,6 +796,7 @@ export interface PipelineOperationalActionResultV0 {
   correlationId: string;
   idempotencyKey: string;
   actionRecordId: string;
+  approvalId?: string | null;
   childPacketId?: string | null;
   metadataOnly: true;
   rawPayloadRetained: false;
@@ -946,6 +979,29 @@ export function validatePipelineOperationalActionRequestV0(request: unknown): Pi
   pushEnumIssue(issues, "requestedRiskTier", record.requestedRiskTier, PIPELINE_OPERATIONAL_ACTION_RISK_TIERS);
   pushRequestedByIssues(issues, record.requestedBy);
   pushActionPolicyIssues(issues, record, "request");
+  if (record.actionId === "mark_tested" || record.actionId === "request_rework") {
+    if (typeof record.approvalId !== "string" || !isSafeOperationalIdentifierText(record.approvalId)) {
+      issues.push({
+        field: "approvalId",
+        code: "policy_violation",
+        summary: "Gated pipeline action requests require a server-issued approval id.",
+      });
+    }
+    if (typeof record.expectedCurrentEventId !== "string" || !isSafeOperationalIdentifierText(record.expectedCurrentEventId)) {
+      issues.push({
+        field: "expectedCurrentEventId",
+        code: "policy_violation",
+        summary: "Gated pipeline action requests require the server-issued current packet event.",
+      });
+    }
+    if (Array.isArray(record.evidenceRefs) && record.evidenceRefs.some((ref) => typeof ref === "string" && (ref.startsWith("evidence:product-test-approval") || ref.startsWith("evidence:authority-approval")))) {
+      issues.push({
+        field: "evidenceRefs",
+        code: "policy_violation",
+        summary: "Legacy client approval evidence markers cannot authorize gated pipeline actions.",
+      });
+    }
+  }
   if ((record as { authorityState?: unknown }).authorityState === "allowed" || record.requestedAuthorityState === "allowed") {
     issues.push({
       field: "requestedAuthorityState",
@@ -966,6 +1022,38 @@ export function validatePipelineOperationalActionRequestV0(request: unknown): Pi
       summary: "Operator intent summaries must not retain raw prompts, provider payloads, secrets, credentials, or terminal scrollback.",
     });
   }
+  return issues;
+}
+
+export function validatePipelineOperationalActionApprovalV0(approval: unknown): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(approval, issues);
+  pushUnknownFieldIssues(issues, record, OPERATIONAL_ACTION_APPROVAL_KEYS);
+  if (typeof record.approvalId !== "string" || !isSafeOperationalIdentifierText(record.approvalId)) issues.push({ field: "approvalId", code: "blank_identifier", summary: "Operational approval id must be a safe metadata identifier." });
+  if (!isPipelineOperationalActionIdV0(record.actionId)) {
+    issues.push({ field: "actionId", code: "unknown_action_id", summary: "Operational approval uses an unknown built-in action id." });
+  } else if (record.actionId !== "mark_tested" && record.actionId !== "request_rework") {
+    issues.push({ field: "actionId", code: "policy_violation", summary: "Server-issued approvals are limited to mark_tested and request_rework." });
+  }
+  if (record.targetType !== "work_packet") {
+    issues.push({ field: "targetType", code: "policy_violation", summary: "Server-issued approvals must target a work_packet." });
+  }
+  if (typeof record.targetId !== "string" || !isSafeOperationalIdentifierText(record.targetId)) issues.push({ field: "targetId", code: "blank_identifier", summary: "Operational approval target id must be a safe metadata identifier." });
+  pushRequestedByIssues(issues, record.requestedBy);
+  if (record.requestedAuthorityState !== "needs_product_approval") {
+    issues.push({ field: "requestedAuthorityState", code: "policy_violation", summary: "Server-issued approvals must use the needs_product_approval authority family." });
+  }
+  if (record.requestedRiskTier !== "medium") {
+    issues.push({ field: "requestedRiskTier", code: "policy_violation", summary: "Server-issued approvals must use the medium risk tier." });
+  }
+  if (typeof record.expectedCurrentEventId !== "string" || !isSafeOperationalIdentifierText(record.expectedCurrentEventId)) {
+    issues.push({ field: "expectedCurrentEventId", code: "policy_violation", summary: "Eligible operational approvals require a non-null current packet event." });
+  }
+  const issuedAt = typeof record.issuedAt === "string" ? Date.parse(record.issuedAt) : NaN;
+  const expiresAt = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt) issues.push({ field: "expiresAt", code: "stale_or_unparseable_readiness", summary: "Operational approval issue and expiry timestamps must be ordered and parseable." });
+  if (typeof record.consumed !== "boolean") issues.push({ field: "consumed", code: "inconsistent_result", summary: "Operational approval consumption state must be explicit." });
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false) issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Operational approval metadata must not retain raw payloads." });
   return issues;
 }
 
@@ -994,16 +1082,23 @@ export function validatePipelineOperationalActionResultV0(result: unknown): Pipe
       summary: "Successful available operational action results must not carry failure typed reasons.",
     });
   }
-  if (
-    record.authorityState === "allowed" &&
-    isPipelineOperationalActionIdV0(record.actionId) &&
-    !hasRequiredOperationalApprovalEvidence(record.actionId, record.evidenceRefs, record)
-  ) {
-    issues.push({
-      field: "evidenceRefs",
-      code: "policy_violation",
-      summary: "Successful high-risk operational action results require approval-family evidence.",
-    });
+  if (record.authorityState === "allowed" && isPipelineOperationalActionIdV0(record.actionId)) {
+    const serverBoundApprovalRequired = record.actionId === "mark_tested" || record.actionId === "request_rework";
+    if (serverBoundApprovalRequired && Array.isArray(record.evidenceRefs) && record.evidenceRefs.some((ref) => typeof ref === "string" && (ref.startsWith("evidence:product-test-approval") || ref.startsWith("evidence:authority-approval")))) {
+      issues.push({ field: "evidenceRefs", code: "policy_violation", summary: "Legacy client approval evidence markers cannot authorize gated pipeline actions." });
+    }
+    const approvalSatisfied = serverBoundApprovalRequired
+      ? typeof record.approvalId === "string" && isSafeOperationalIdentifierText(record.approvalId)
+      : hasRequiredOperationalApprovalEvidence(record.actionId, record.evidenceRefs, record);
+    if (!approvalSatisfied) {
+      issues.push({
+        field: serverBoundApprovalRequired ? "approvalId" : "evidenceRefs",
+        code: "policy_violation",
+        summary: serverBoundApprovalRequired
+          ? "Gated pipeline action results require a server-issued approval id."
+          : "Successful high-risk operational action results require approval-family evidence.",
+      });
+    }
   }
   if (
     record.outcome !== "succeeded" &&
@@ -1523,6 +1618,9 @@ function pushOperationalActionCommonIssues(
       issues.push({ field, code: "unsafe_metadata_retention", summary: `Operational action ${field} must be safe metadata text.` });
     }
   }
+  if (action.approvalId !== undefined && action.approvalId !== null && (typeof action.approvalId !== "string" || !isSafeOperationalIdentifierText(action.approvalId))) {
+    issues.push({ field: "approvalId", code: "unsafe_metadata_retention", summary: "Operational approval ids must be safe metadata identifiers." });
+  }
   if (!isPipelineOperationalActionEvidenceRefsV0(action.evidenceRefs)) {
     issues.push({ field: "evidenceRefs", code: "evidence_required", summary: "Operational action requires safe metadata evidence refs." });
   }
@@ -2015,11 +2113,31 @@ const OPERATIONAL_ACTION_REQUEST_KEYS = new Set([
   "requestedBy",
   "requestedAuthorityState",
   "requestedRiskTier",
+  "approvalId",
   "operatorIntentSummary",
   "expectedCurrentEventId",
   "testResult",
   "testNotes",
   "evidenceRefs",
+  "metadataOnly",
+  "rawPayloadRetained",
+]);
+
+const OPERATIONAL_ACTION_APPROVAL_KEYS = new Set([
+  "approvalId",
+  "actionId",
+  "targetType",
+  "targetId",
+  "requestedBy",
+  "requestedAuthorityState",
+  "requestedRiskTier",
+  "expectedCurrentEventId",
+  "issuedAt",
+  "expiresAt",
+  "consumed",
+  "consumedAt",
+  "consumedActionIdempotencyKey",
+  "consumedActionRecordId",
   "metadataOnly",
   "rawPayloadRetained",
 ]);
@@ -2040,6 +2158,7 @@ const OPERATIONAL_ACTION_RESULT_KEYS = new Set([
   "correlationId",
   "idempotencyKey",
   "actionRecordId",
+  "approvalId",
   "childPacketId",
   "metadataOnly",
   "rawPayloadRetained",

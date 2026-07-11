@@ -179,6 +179,10 @@ test("operational action contracts define capability-gated metadata-only request
     "PipelineOperationalActionTypedReasonV0",
     "PipelineOperationalActionEvidenceRefsV0",
     "PipelineOperationalActionRequestV0",
+    "PipelineOperationalActionApprovalRequestV0",
+    "PipelineOperationalActionApprovalV0",
+    "PipelineGatedOperationalActionIdV0",
+    "validatePipelineOperationalActionApprovalV0",
     "PipelineOperationalActionResultV0",
     "PipelineOperationalActionCapabilityV0",
     "PipelineOperationalRuntimeReadinessV0",
@@ -293,9 +297,11 @@ test("operational action contracts define capability-gated metadata-only request
 });
 
 test("operational action contracts validate runtime objects without throwing", async () => {
+  const contractSource = await readFile(contractPath, "utf8");
   const {
     validatePipelineOperationalActionRequestV0,
     validatePipelineOperationalActionResultV0,
+    validatePipelineOperationalActionApprovalV0,
     validatePipelineOperationalActionCapabilityV0,
     validatePipelineOperationalRuntimeReadinessV0,
     isPipelineOperationalActionIdV0,
@@ -788,6 +794,45 @@ test("operational action contracts validate runtime objects without throwing", a
     evidenceRefs: mergeSuccessEvidenceRefs,
   }), []);
 
+  const gatedRequestWithoutServerApproval = validatePipelineOperationalActionRequestV0({
+    ...validRequest,
+    actionId: "mark_tested",
+    targetType: "work_packet",
+    requestedAuthorityState: "needs_product_approval",
+    requestedRiskTier: "medium",
+    evidenceRefs: ["evidence:product-test-approval"],
+  }).map((issue) => issue.code);
+  assert.ok(gatedRequestWithoutServerApproval.includes("policy_violation"));
+
+  const validServerApproval = {
+    approvalId: "approval-server-bound",
+    actionId: "mark_tested",
+    targetType: "work_packet",
+    targetId: "packet-server-bound",
+    requestedBy: { actorType: "operator", actorId: "operator-test" },
+    requestedAuthorityState: "needs_product_approval",
+    requestedRiskTier: "medium",
+    expectedCurrentEventId: "event-current",
+    issuedAt: "2026-07-11T00:00:00.000Z",
+    expiresAt: "2026-07-11T00:05:00.000Z",
+    consumed: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.deepEqual(validatePipelineOperationalActionApprovalV0(validServerApproval), []);
+  assert.ok(validatePipelineOperationalActionApprovalV0({ ...validServerApproval, expectedCurrentEventId: null }).some((issue) => issue.code === "policy_violation"));
+  assert.match(contractSource, /expectedCurrentEventId:\s*string;/, "approval event binding must be required and non-null");
+
+  for (const [field, value] of [
+    ["actionId", "inspect"],
+    ["targetType", "projection"],
+    ["requestedAuthorityState", "needs_authority_approval"],
+    ["requestedRiskTier", "high"],
+  ]) {
+    const issues = validatePipelineOperationalActionApprovalV0({ ...validServerApproval, [field]: value });
+    assert.ok(issues.some((issue) => issue.field === field && issue.code === "policy_violation"), `ineligible approval ${field} must be rejected`);
+  }
+
   const maxIdentifier = "a" + "b".repeat(198) + "c";
   const maxIdentifierEvidence = approvalEvidenceRef("needs_product_approval", "mark_viewed", maxIdentifier, maxIdentifier, maxIdentifier);
   assert.equal(maxIdentifierEvidence.length <= 180, true);
@@ -1265,6 +1310,19 @@ test("operational action contracts validate runtime objects without throwing", a
     }).map((issue) => issue.code);
     assert.ok(missingLowMediumApprovalIssues.includes("policy_violation"), `missing approval evidence issue for ${result.actionId}`);
   }
+
+  assert.deepEqual(validatePipelineOperationalActionResultV0({
+    ...validResult,
+    actionId: "mark_tested",
+    targetType: "work_packet",
+    targetId: "packet-server-bound",
+    resultingStage: "promote",
+    resultingStatus: "waiting",
+    riskTier: "medium",
+    authorityState: "allowed",
+    approvalId: "approval-server-bound",
+    evidenceRefs: ["evidence:dashboard-action-request"],
+  }), []);
 
   assert.deepEqual(validatePipelineOperationalActionResultV0({
     ...validResult,

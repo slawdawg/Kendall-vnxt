@@ -67,6 +67,12 @@ settings = get_settings()
 engine: AsyncEngine = create_async_engine(settings.database_url, future=True, echo=False)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
+POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("child_packet_id", "VARCHAR(80)"),
+    ("expected_current_event_id", "VARCHAR(80)"),
+    ("approval_id", "VARCHAR(120)"),
+)
+
 
 async def _sqlite_table_columns(connection, table_name: str) -> set[str]:
     result = await connection.execute(text(f"PRAGMA table_info({table_name})"))
@@ -184,8 +190,13 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS ready_to_test_json JSON"))
             await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS operator_test_state VARCHAR(24) DEFAULT 'not_ready'"))
             await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS operator_test_note TEXT"))
-            await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN IF NOT EXISTS child_packet_id VARCHAR(80)"))
-            await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN IF NOT EXISTS expected_current_event_id VARCHAR(80)"))
+            for column_name, column_type in POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS:
+                await connection.execute(
+                    text(
+                        "ALTER TABLE pipeline_operational_action_records "
+                        f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                    )
+                )
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
             result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
@@ -234,6 +245,8 @@ async def init_db() -> None:
                 await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN child_packet_id VARCHAR(80)"))
             if "expected_current_event_id" not in action_columns:
                 await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN expected_current_event_id VARCHAR(80)"))
+            if "approval_id" not in action_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN approval_id VARCHAR(120)"))
             await _ensure_sqlite_memory_proposals_schema(connection)
 
 
