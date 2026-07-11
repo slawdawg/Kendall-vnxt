@@ -13,13 +13,15 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Reconciled baseline
 
-- `origin/dev` is at `cc1a4e7ca0e0071e96dad01d40cd2aca68a12ba3`, including the
+- `origin/dev` is at `a9c974b50a6d769691127dd0e1a6e120612a0e31`, including the
   merged Gate 5/6 terminal backlog and readiness gates, the Phase 0
-  reconciliation artifacts, and the post-merge course-correction policy update.
+  reconciliation artifacts, the post-merge course-correction policy update,
+  and the refreshed post-merge audit handoff.
 - PR inventory is empty: no open pull requests target `dev`.
 - Epic 25-1 (#473), Epic 25-2 (#474), the earlier 24-1 fixture stabilization
-  (#461), the Phase 0 reconciliation (#485), and the post-merge policy update
-  (#488) are merged. There is no open PR available for merge or review-fix work.
+  (#461), the Phase 0 reconciliation (#485), the post-merge policy update
+  (#488), and the post-merge audit refresh (#489) are merged. There is no open
+  PR available for merge or review-fix work.
 - The primary checkout remains intentionally dirty in four user-owned paths:
   `AGENTS.md`,
   `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`,
@@ -33,13 +35,13 @@ provider operation, scoring operation, takeover, or cleanup authority.
 - Current read-only preflight reports no safe work supply or dispatchable lanes;
   the authoritative PRD source is present and exhausted, while dispatcher state
   remains unavailable/stale.
-- Assignment inventory reports 252 lane assignments, including 236 closed and
-  16 `blocked_stale_owner_needs_takeover`; and 415 workspace assignments,
-  including 398 closed, 15 `blocked_stale_owner_needs_takeover`, 1
-  `blocked_owned_active`, and 1 active assignment.
-- Canonical stale-owner inspection covered 12 targets: 1 requires canonical
-  closeout evidence, 9 require dirty-worktree preservation, and the remaining
-  clean targets remain blocked pending operator/evidence approval.
+- Assignment inventory reports 252 lane assignments, including 237 closed and
+  15 `blocked_stale_owner_needs_takeover`; and 419 workspace assignments,
+  including 402 closed, 16 `blocked_stale_owner_needs_takeover`, and 1 active
+  assignment.
+- Canonical stale-owner inspection covers 12 targets: the canonical stale
+  record is closed, 9 stale workspaces require dirty-worktree preservation, and
+  2 clean stale lanes remain blocked pending ownership/evidence approval.
 - Workspace orientation reports 8 tmux panes, 4 manager-owned panes, 2
   unmanaged panes, and 2 panes whose recorded worktrees are missing.
 - Worker posture is 0 active, 4 warm, and 2 retirement-blocked. Usage is
@@ -48,7 +50,7 @@ provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Runtime repair gate
 
-The exact outside-sandbox preflight at 2026-07-11T16:42Z confirmed that the
+The exact outside-sandbox preflight at 2026-07-11T17:31Z confirmed that the
 manager runtime is read-only and blocked: the stale run is
 `manager-20260706-001` in `starting` state, dispatcher freshness is unknown,
 safe work supply is zero and the authoritative PRD has no remaining backlog.
@@ -56,16 +58,14 @@ Tmux
 orientation found 8 panes, 4 manager-owned panes, 2 unmanaged panes, and 2
 missing-worktree references. No pane was mutated.
 
-The exact stale-owner inspection covered 12 targets. The sanitized target now
-resolves canonically to
-`3-3-execution-completion-and-failure-evidence`; its worktree, local branch,
-remote branch, and PR are all absent, so the close-assignments dry-run marks it
-eligible for stale-record cleanup. Apply remains blocked pending explicit
-operator approval. Nine dirty stale workspaces have bounded preservation
-evidence, 2 clean stale lanes remain blocked on explicit takeover/evidence, and
-there are 0 other cleanup candidates and 0 takeover-approval candidates. No
-takeover, worker mutation, dispatch apply, provider call, runtime cleanup
-apply, or runtime merge has been performed.
+The exact stale-owner inspection covered 12 targets. The sanitized target
+`3-3-execution-completion-and-failure-evidence` was proven absent and its
+assignment was closed by the governed `close-assignments --apply` command after
+the operator approved any stale cleanup. The follow-up packet reports zero
+canonical closeout candidates, 9 dirty stale workspaces with bounded
+preservation evidence, 2 clean stale lanes blocked on ownership/evidence, and
+zero other cleanup candidates. No takeover, worker mutation, dispatch apply,
+provider call, or runtime merge has been performed.
 
 ## Post-merge delivery audit
 
@@ -84,25 +84,31 @@ runtime audit:
   the lane manifest is closed with cleanup error `null`.
 - No source implementation, worker state, stale assignment, takeover, or
   dispatcher state was changed by that delivery.
+- PR #489 refreshed this handoff at exact head
+  `cb74611ddd3420773555f0f114871d6aeeb88833` and merged as
+  `a9c974b50a6d769691127dd0e1a6e120612a0e31`; its docs-only CI and exact-head
+  cleanup gates passed, and its managed branch/worktree were removed.
+- The canonical stale assignment cleanup was then applied separately with the
+  explicit approval `Operator approval: I approve any cleanup of anything stale.`
+  The assignment is now closed; no source worktree or branch was removed.
 
-## Canonical stale-record cleanup approval packet
+## Canonical stale-record cleanup closeout
 
 Target: `3-3-execution-completion-and-failure-evidence`
 
 Evidence: the exact dry-run reported `worktreeStatus: missing`, absent local
 and remote branch heads, no PR references, and `staleRecordCleanupEligible:
-true`. No source files or active worktree are attached to this record.
+true`. No source files or active worktree were attached to this record.
 
-Required mutation gate: an operator must explicitly approve stale-record
-cleanup before the existing command may apply it. The target-specific command
-is:
+The governed mutation was applied successfully after explicit operator
+approval. The target-specific command was:
 
 ```text
 node ./scripts/codex-workspace.mjs close-assignments --ids 3-3-execution-completion-and-failure-evidence --allow-stale-record-cleanup --approval "<explicit operator approval>" --apply
 ```
 
-This packet does not approve that command, and it does not authorize takeover
-or cleanup of the remaining dirty or ambiguous lanes.
+The closeout does not authorize takeover or cleanup of the remaining dirty or
+ambiguous lanes. Their preservation and ownership gates remain active.
 
 The current primary-checkout patch also remains held. Its manager-control-plane
 diff removes authoritative worker assignment locks, review reservation and
@@ -124,8 +130,8 @@ permission to invent post-slice product work.
 
 ## Required repair order
 
-1. Preserve all dirty stale-worktree evidence and apply the canonical stale
-   record cleanup only after the explicit approval packet above is satisfied.
+1. Preserve all dirty stale-worktree evidence; the canonical stale-record
+   cleanup is complete and must not be repeated.
 2. Reconcile the two missing tmux/worktree references without mutating unknown
    panes or taking ownership of any lane implicitly.
 3. Refresh or retire the stale manager run and reconstruct dispatcher summary
