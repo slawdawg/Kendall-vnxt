@@ -2510,6 +2510,173 @@ try {
     }
   });
 
+  test("close-assignments closes approved stale assignment with merged PR evidence", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-merged-pr-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      const branch = "codex/stale-merged-pr-cleanup-fixture";
+      const prUrl = "https://example.test/pull/456";
+      const mergedAt = "2026-06-27T12:00:00.000Z";
+      writeFileSync(
+        join(tasksDir, "closed-stale-merged-pr-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-stale-merged-pr-lane",
+            branch,
+            worktree_path: join(closeoutStateRoot, "worktrees", "stale-merged-pr-cleanup-fixture"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-merged-pr-cleanup-fixture",
+            pr_url: prUrl,
+            pr_number: 456,
+            merged_at: mergedAt,
+            cleanup_pr_url: prUrl,
+            cleanup_pr_number: 456,
+            cleanup_merged_at: mergedAt,
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-merged-pr-cleanup-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-merged-pr-cleanup-fixture",
+            task_id: "closed-stale-merged-pr-lane",
+            branch,
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+
+      const dryRun = run([
+        "close-assignments",
+        "--ids",
+        "stale-merged-pr-cleanup-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--summary-json",
+      ], { env });
+
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      const packet = JSON.parse(dryRun.stdout);
+      assert(packet.counts.blocked === 1, dryRun.stdout || dryRun.stderr);
+      assert(packet.results[0].closeoutMode === "stale_merged_pr_record_cleanup", dryRun.stdout || dryRun.stderr);
+      assert(packet.results[0].staleRecordCleanupEligible === true, dryRun.stdout || dryRun.stderr);
+      assert(packet.results[0].reason.includes("--allow-stale-record-cleanup"), dryRun.stdout || dryRun.stderr);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-merged-pr-cleanup-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("approved stale merged PR record cleanup"), result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "stale-merged-pr-cleanup-fixture.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync(join(tasksDir, "closed-stale-merged-pr-lane.json"), "utf8"));
+      assert(assignment.status === "closed", JSON.stringify(assignment));
+      assert(assignment.closeout_mode === "stale_merged_pr_record_cleanup", JSON.stringify(assignment));
+      assert(assignment.closeout_approval_evidence === "operator approved stale cleanup", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.prStatus === "merged", JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.mergedAt === mergedAt, JSON.stringify(assignment));
+      assert(assignment.closeout_abandonment_evidence.prNumber === 456, JSON.stringify(assignment));
+      assert(assignment.last_result === "operator-approved stale merged PR record cleanup from closed workspace closed-stale-merged-pr-lane", JSON.stringify(assignment));
+      assert(manifest.source_assignment_closed_at === assignment.closed_at, JSON.stringify(manifest));
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments keeps stale assignment with unmerged PR evidence blocked", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-unmerged-pr-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      const branch = "codex/stale-unmerged-pr-cleanup-fixture";
+      writeFileSync(
+        join(tasksDir, "closed-stale-unmerged-pr-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-stale-unmerged-pr-lane",
+            branch,
+            worktree_path: join(closeoutStateRoot, "worktrees", "stale-unmerged-pr-cleanup-fixture"),
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "stale-unmerged-pr-cleanup-fixture",
+            pr_url: "https://example.test/pull/789",
+            pr_number: 789,
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "stale-unmerged-pr-cleanup-fixture.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-unmerged-pr-cleanup-fixture",
+            task_id: "closed-stale-unmerged-pr-lane",
+            branch,
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const env = staleCleanupFixtureEnv(closeoutStateRoot);
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "stale-unmerged-pr-cleanup-fixture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--allow-stale-record-cleanup",
+        "--approval",
+        "operator approved stale cleanup",
+        "--apply",
+      ], { env });
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("Refusing to close blocked assignments"), result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "stale-unmerged-pr-cleanup-fixture.json"), "utf8"));
+      assert(assignment.status === "active", JSON.stringify(assignment));
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("close-assignments approved manager stale cleanup blocks fresh worker without delegation evidence", () => {
     const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-manager-delegation-blocked-"));
     try {
@@ -6831,6 +6998,44 @@ try {
     }
   });
 
+  test("cleanup-integrated closes an assignment after an approved owner takeover", () => {
+    const fixture = createIntegratedCleanupFixture({
+      manifestOwner: "runner-a",
+      assignmentOwner: "runner-b",
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "cleanup-integrated",
+          "integrated-task",
+          "--apply",
+          "--base",
+          "origin/main",
+          "--owner",
+          "runner-a",
+          "--take-ownership",
+          "--takeover-reason",
+          "operator approved cleanup takeover for stale assignment",
+          "--state-root",
+          fixture.stateRoot,
+        ],
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!existsSync(fixture.worktree), "takeover cleanup did not remove target worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "takeover cleanup did not delete local branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "integrated-task.json"));
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "integrated-assignment.json"));
+      assert(manifest.status === "closed", `manifest status is ${manifest.status}`);
+      assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
+      assert(assignment.owner === "runner-a", `assignment owner is ${assignment.owner}`);
+      assert(assignment.events.some((event) => event.type === "cleanup_takeover_applied"), "assignment takeover event missing");
+      assert(manifest.source_assignment_closed_at === assignment.closed_at, "assignment closure timestamp missing from manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-integrated refuses dirty no-PR worktrees", () => {
     const fixture = createIntegratedCleanupFixture();
     try {
@@ -7327,6 +7532,8 @@ function createIntegratedCleanupFixture(options = {}) {
   const stateRootFixture = join(fixtureRoot, "state");
   const branch = "codex/integrated-cleanup";
   const worktree = join(stateRootFixture, "worktrees", "integrated-task");
+  const manifestOwner = options.manifestOwner || "runner-a";
+  const assignmentOwner = options.assignmentOwner || manifestOwner;
 
   copyWorkspaceScriptFixture(fixtureRoot);
   runGit(fixtureRoot, ["init", "-q"]);
@@ -7367,7 +7574,7 @@ function createIntegratedCleanupFixture(options = {}) {
       status: "active",
       mode: "pr",
       source_assignment_id: "integrated-assignment",
-      owner: "runner-a",
+      owner: manifestOwner,
       events: [],
     }, null, 2)}\n`,
   );
@@ -7382,7 +7589,7 @@ function createIntegratedCleanupFixture(options = {}) {
       branch,
       worktree_path: worktree,
       status: "claimed",
-      owner: "runner-a",
+      owner: assignmentOwner,
       phase: "handoff",
       runner_kind: "codex-cli",
       events: [],
