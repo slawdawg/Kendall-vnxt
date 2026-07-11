@@ -64,6 +64,15 @@ def require_typed_422(response, label: str) -> None:
         fail(f"{label} did not return typed request-validation errors: {response.text[:240]}")
 
 
+def require_typed_4xx(response, label: str, code_prefix: str) -> None:
+    if not 400 <= response.status_code < 500:
+        fail(f"{label} returned HTTP {response.status_code}: {response.text[:240]}")
+    payload = response.json()
+    error = payload.get("detail", {}).get("error", {}) if isinstance(payload, dict) else {}
+    if not error.get("code", "").startswith(code_prefix):
+        fail(f"{label} did not return the typed rejection {code_prefix}: {response.text[:240]}")
+
+
 def issue_approval(
     client,
     packet: dict,
@@ -270,10 +279,12 @@ def main() -> int:
                 fail("packet seed did not preserve the tracked source-owned authority ref")
 
             initial_projection = require(client.get("/pipeline-control-plane/projection"), 200, "initial projection")
-            if initial_projection["runtimeReadiness"]["operationalMode"] != "local_proof":
-                fail("projection did not report local_proof runtime readiness")
+            if initial_projection["runtimeReadiness"]["operationalMode"] not in {"unavailable", "read_only"}:
+                fail("capability-off projection incorrectly reported an operational runtime mode")
             if initial_projection["runtimeReadiness"]["capabilityState"] != "unavailable" or initial_projection["runtimeReadiness"]["readinessState"] != "unavailable":
                 fail("projection did not report the server local-proof capability as unavailable before enablement")
+            if initial_projection["runtimeReadiness"]["operationalMode"] == "unavailable" and initial_projection["runtimeReadiness"]["capabilityState"] != "unavailable":
+                fail("unavailable projection mode did not agree with its capability state")
             if initial_projection["fixtureMode"]["enabled"] or initial_projection["truthSummary"]["fixtureBacked"]:
                 fail("projection unexpectedly used fixture state")
             initial_detail = packet_detail(initial_projection, packet["packetId"])
@@ -498,6 +509,40 @@ def main() -> int:
             )
             require_local_rejected(arbitrary_database_proof, "arbitrary SQLite database", "does not match the server-created disposable attestation")
             service.settings.database_url = f"sqlite+aiosqlite:///{db_path}"
+            public_forgery_work_item = require(
+                client.post(
+                    "/work-items",
+                    json={
+                        "title": "Public local-proof forgery WorkItem",
+                        "requestedOutcome": "Must not mint a server local-proof attempt.",
+                        "source": source_path,
+                        "metadata": {"sourceArtifactPath": source_path},
+                    },
+                ),
+                200,
+                "public local-proof forgery WorkItem",
+            )
+            public_forgery_attempt = client.post(
+                f"/work-items/{public_forgery_work_item['id']}/execution-attempts",
+                json={"stepId": "local-proof", "taskKind": "path_scope_check"},
+            )
+            require_typed_4xx(public_forgery_attempt, "public local-proof forgery attempt", "invalid_execution_attempt")
+            public_forgery_attempts_response = client.get(f"/work-items/{public_forgery_work_item['id']}/execution-attempts")
+            if public_forgery_attempts_response.status_code != 200 or public_forgery_attempts_response.json().get("data"):
+                fail("public local-proof forgery created an execution attempt despite missing server attestation")
+            public_forgery_events_response = client.get(f"/work-items/{public_forgery_work_item['id']}/events")
+            if public_forgery_events_response.status_code != 200:
+                fail(f"public local-proof forgery event list returned HTTP {public_forgery_events_response.status_code}")
+            public_forgery_events = public_forgery_events_response.json().get("data", [])
+            if any(event.get("eventType") == "execution_attempt.verification_recorded" for event in public_forgery_events):
+                fail("public local-proof forgery created verification evidence")
+            public_forgery_readiness = require(
+                client.get(f"/work-items/{public_forgery_work_item['id']}/trusted-delivery-eligibility-report"),
+                200,
+                "public local-proof forgery trusted-delivery readiness",
+            )
+            if public_forgery_readiness.get("pushPrAutoEligible") is True:
+                fail("public local-proof forgery reached trusted-delivery readiness")
             forged_work_item = client.post(
                 "/work-items",
                 json={
@@ -749,8 +794,16 @@ def main() -> int:
                         if packet_count or event_count:
                             fail(f"prefixed {family} packet-title rejection persisted a packet or lifecycle event")
             repo_root = Path(__file__).resolve().parents[3]
-            untracked_source_path = "docs/workflows/.gate4b-untracked-source.md"
-            untracked_source_file = repo_root / untracked_source_path
+            untracked_source_dir = repo_root / "docs/workflows"
+            untracked_fd, untracked_source_name = tempfile.mkstemp(
+                prefix=".gate4b-untracked-source-",
+                suffix=".md",
+                dir=untracked_source_dir,
+            )
+            os.close(untracked_fd)
+            untracked_source_file = Path(untracked_source_name)
+            untracked_source_path = untracked_source_file.relative_to(repo_root).as_posix()
+            untracked_source_created = True
             untracked_source_file.write_text("temporary untracked source authority probe\n", encoding="utf-8")
             try:
                 untracked_digest = hashlib.sha256(untracked_source_file.read_bytes()).hexdigest()
@@ -783,7 +836,10 @@ def main() -> int:
                 )
                 require_local_rejected(untracked_proof, "untracked source authority", "Git-tracked file")
             finally:
-                untracked_source_file.unlink(missing_ok=True)
+                if untracked_source_created and untracked_source_file.exists():
+                    untracked_source_file.unlink()
+                if untracked_source_created and untracked_source_file.exists():
+                    fail("untracked source fixture was not cleaned up")
             traversal_packet = require(
                 client.post(
                     "/pipeline-control-plane/work-packets",
@@ -1556,6 +1612,11 @@ def main() -> int:
                         "canonicalSourcePacketLifecycleVerified": True,
                         "authoritativePacketApprovalPassVerified": True,
                         "serverBoundLocalProofAuthorityVerified": True,
+                        "localProofVerificationAttestationEnforced": True,
+                        "publicLocalProofForgeryRejected": True,
+                        "trustedDeliveryReadinessBlockedForPublicForgery": True,
+                        "disabledLocalProofProjectionVerified": True,
+                        "untrackedSourceFixtureIsolationVerified": True,
                         "leaseAttemptFencingVerified": True,
                         "leaseActionIdempotencyVerified": True,
                         "completionFencingRejected": True,

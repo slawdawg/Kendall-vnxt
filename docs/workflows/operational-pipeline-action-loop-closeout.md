@@ -102,6 +102,13 @@ including prefixed `ghp_`, `sk-proj-`, `AKIA`, `glpat-`, `npm_`, `ASIA`, and
 related forms, while ordinary prose remains allowed. Smoke HTTP cases cover
 WorkItem title/request/source/details, nested metadata, packet title, and
 source-reference title, with typed 422 responses and zero durable rows/events.
+Public callers cannot mint `local-proof` execution attempts or record the
+special no-op verification command: the accepted path requires the server
+local-proof capability, linked source packet, local-proof attestation event,
+active queue lease, and matching fencing token. Capability-off/unattested
+projection reports `unavailable` or `read_only`, never `local_proof`. The
+untracked-source smoke fixture uses an exclusive collision-resistant temporary
+file and removes only the file it created, preserving pre-existing paths.
 Engine/session reload is separately labeled from event reconstruction. For event
 reconstruction, the disposable packet and linked WorkItem materialized rows are
 deleted and verified absent while lifecycle/workflow events remain; the rebuild
@@ -113,7 +120,7 @@ Exact bounded proof command and result:
 
 ```text
 timeout 180s uv run --directory services/supervisor python scripts/pipeline_operational_smoke.py
-exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, workItemScalarMetadataSafetyVerified=true, workItemScalarRejectionPersistenceVerified=true, prefixedCredentialSignatureRejectionVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, acceptedRequeueReplayVerified=true, acceptedRejectReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
+exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, workItemScalarMetadataSafetyVerified=true, workItemScalarRejectionPersistenceVerified=true, prefixedCredentialSignatureRejectionVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, localProofVerificationAttestationEnforced=true, publicLocalProofForgeryRejected=true, trustedDeliveryReadinessBlockedForPublicForgery=true, disabledLocalProofProjectionVerified=true, untrackedSourceFixtureIsolationVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, acceptedRequeueReplayVerified=true, acceptedRejectReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
 ```
 
 This closeout does not claim live, bounded-live, production-observed, external

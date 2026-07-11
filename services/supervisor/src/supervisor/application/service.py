@@ -1410,8 +1410,8 @@ class SupervisorService:
         control = await self.ensure_control(session)
         paused = control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}
         disabled = control.mode == RunMode.DISABLED.value
-        mode = "read_only" if paused else "unavailable" if disabled else "local_proof"
         local_proof_available = self._local_proof_capability is LOCAL_PROOF_TEST_CAPABILITY and self._local_proof_database_attested()
+        mode = "read_only" if paused else "unavailable" if disabled or not local_proof_available else "local_proof"
         readiness_state = "unavailable" if disabled or not local_proof_available else "ready"
         capability_state = "unavailable" if disabled or not local_proof_available else "available"
         typed_reason = "runtime_unavailable" if disabled or not local_proof_available else None
@@ -19102,6 +19102,8 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
+        if payload.stepId == "local-proof" and (lease_id is None or fencing_token is None):
+            raise ValueError("Local-proof execution attempts can only be created by the attested supervisor proof path.")
         active_attempt = await self._active_execution_attempt(session, work_item_id)
         if active_attempt:
             raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
@@ -20545,7 +20547,11 @@ class SupervisorService:
         if not attempt or attempt.work_item_id != work_item_id:
             return None
         await self._validate_execution_attempt_lease(session, attempt)
-        if attempt.queue_lease_id and not local_proof_authorized:
+        if payload.commandShape == LOCAL_PROOF_VERIFICATION_COMMAND:
+            if not local_proof_authorized:
+                raise ValueError("Local-proof verification evidence can only be recorded by the supervisor local-proof path.")
+            await self._assert_local_proof_verification_attestation(session, item, attempt)
+        elif attempt.queue_lease_id and not local_proof_authorized:
             raise ValueError("Lease-bound local-proof verification evidence can only be attached by the supervisor local-proof path.")
         if attempt.status != ExecutionAttemptStatus.COMPLETED.value:
             raise ValueError("Verification evidence can be recorded only for a completed execution attempt.")
@@ -20641,6 +20647,40 @@ class SupervisorService:
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
+
+    async def _assert_local_proof_verification_attestation(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+    ) -> None:
+        self._assert_local_proof_authority()
+        if not attempt.queue_lease_id or attempt.queue_fencing_token is None:
+            raise ValueError("Local-proof verification evidence requires a server-created queue lease and fencing attestation.")
+        if not isinstance(item.metadata_json, dict) or item.metadata_json.get("localProofAuthority") != "integrated_local":
+            raise ValueError("Local-proof verification evidence requires a server-attested WorkItem.")
+        packet_id = item.metadata_json.get("authoritativePacketId")
+        if not isinstance(packet_id, str) or not packet_id:
+            raise ValueError("Local-proof verification evidence requires a server-linked authoritative packet.")
+        packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if not packet:
+            raise ValueError("Local-proof verification evidence requires an existing authoritative packet.")
+        lease = await session.get(QueueLease, attempt.queue_lease_id)
+        if not lease or lease.work_item_id != attempt.work_item_id:
+            raise ValueError("Local-proof verification evidence requires the server-created queue lease.")
+        if not lease.active or self._ensure_aware(lease.lease_expires_at) <= datetime.now(timezone.utc):
+            raise ValueError("Local-proof verification evidence requires an active queue lease.")
+        if lease.fencing_token != attempt.queue_fencing_token:
+            raise ValueError("Local-proof verification evidence requires the current queue fencing token.")
+        events = await self.list_work_item_events(session, item.id)
+        if not any(
+            event.event_type == "local_proof.started"
+            and isinstance(event.payload, dict)
+            and event.payload.get("leaseId") == lease.id
+            and event.payload.get("fencingToken") == lease.fencing_token
+            for event in events
+        ):
+            raise ValueError("Local-proof verification evidence requires a server-recorded local-proof attestation event.")
 
     def _subscription_launch_verification_evidence(
         self,
