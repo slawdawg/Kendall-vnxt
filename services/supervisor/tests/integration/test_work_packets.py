@@ -4364,7 +4364,9 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
         projection_response = client.get("/pipeline-control-plane/projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
-        assert projection["runtimeReadiness"]["operationalMode"] == "local_proof"
+        assert projection["runtimeReadiness"]["operationalMode"] == "unavailable"
+        assert projection["runtimeReadiness"]["capabilityState"] == "unavailable"
+        assert projection["runtimeReadiness"]["readinessState"] == "unavailable"
         detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet["packetId"])
         assert detail["readyToTest"]["readyId"] == ready_to_test["readyId"]
         assert any(capability["actionId"] == "mark_tested" and capability["capabilityState"] == "available" for capability in detail["actionCapabilities"])

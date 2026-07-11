@@ -816,6 +816,8 @@ export interface WorkPacketCleanupDryRunGateV0 {
 export interface WorkPacketExecutionAttemptSummaryV0 {
   attemptId: string;
   workItemId: string;
+  leaseId?: string | null;
+  fencingToken?: number | null;
   routeDecisionId: string;
   workerId: string;
   lane: string;

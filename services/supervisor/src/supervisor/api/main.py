@@ -34,6 +34,8 @@ from supervisor.api.schemas import (
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
     WorkItemExecutionAttemptTransitionRequest,
+    WorkItemLocalProofLeaseRequest,
+    WorkItemLocalProofRequest,
     WorkItemEscalationRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
@@ -216,6 +218,21 @@ async def transition_authoritative_work_packet(
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
     return ApiEnvelope(data=packet)
+
+
+@app.post("/pipeline-control-plane/work-packets/{packet_id}/local-proof", response_model=ApiEnvelope)
+async def run_authoritative_work_packet_local_proof(
+    packet_id: str,
+    payload: WorkItemLocalProofRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        proof = await service.run_authoritative_local_proof(session, packet_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_local_proof", payload.correlationId).model_dump()) from exc
+    if not proof:
+        raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
+    return ApiEnvelope(data=proof)
 
 
 @app.post("/pipeline-control-plane/actions", response_model=ApiEnvelope)
@@ -432,6 +449,35 @@ async def create_work_item_execution_attempt(
     if not attempt:
         raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
     return ApiEnvelope(data=attempt)
+
+
+@app.post("/pipeline-control-plane/work-packets/{packet_id}/local-proof/lease", response_model=ApiEnvelope)
+async def operate_authoritative_work_packet_local_proof_lease(
+    packet_id: str,
+    payload: WorkItemLocalProofLeaseRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        lease = await service.operate_authoritative_local_proof_lease(session, packet_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_local_proof_lease", payload.correlationId).model_dump()) from exc
+    if not lease:
+        raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
+    return ApiEnvelope(data=lease)
+
+
+@app.post("/pipeline-control-plane/work-packets/{packet_id}/local-proof/replay", response_model=ApiEnvelope)
+async def replay_authoritative_work_packet_local_proof(
+    packet_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        replay = await service.rebuild_authoritative_local_proof_projection(session, packet_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_local_proof_replay").model_dump()) from exc
+    if not replay:
+        raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
+    return ApiEnvelope(data=replay)
 
 
 @app.post("/work-items/{work_item_id}/execution-attempts/{attempt_id}/lifecycle", response_model=ApiEnvelope)

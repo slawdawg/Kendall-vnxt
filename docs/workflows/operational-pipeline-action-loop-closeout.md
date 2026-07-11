@@ -46,10 +46,12 @@ actions as live controls.
 The smoke's evidence level is `integrated_local`: it proves only the behavior
 exercised through the real supervisor routes and disposable local SQLite state.
 It does not claim `bounded_live`, production, or full Gate 4 integrated MVP
-coverage. Queue/lease behavior, fake-worker execution, and restart/recovery
-proof remain pending until a separate smoke covers those paths. FR-13 blocked
-visibility is covered for this packet, while defer/rework-from-blocked and
-restart/replay implications remain pending.
+coverage. Queue/lease fencing, UtilityWorkerAdapter execution, engine/session
+reload, and event reconstruction are covered only within this bounded local
+proof. External workers/providers/processes, network/credentials, source
+mutation, and production recovery remain outside scope. FR-13 blocked
+visibility is covered for this packet, while broader unattended execution and
+delivery authority remain pending.
 
 ## Verification evidence
 
@@ -58,9 +60,90 @@ restart/replay implications remain pending.
 - `node --test tests/pipeline-gate3-approval.test.mjs tests/dashboard-pipeline-fixtures.test.mjs tests/pipeline-control-plane-lifecycle.test.mjs`
 - `pnpm run test:manager-control-plane:contracts`
 - `pnpm --filter @kendall/dashboard exec tsc --noEmit`
-- `tests/fixtures/pipeline/pipeline-operational-action-loop-proof-2026-07-10.json`
 
 The smoke and integration proof use disposable local SQLite state, do not call
 providers, and retain only bounded metadata. Client-supplied approval evidence
 markers are not accepted or emitted; authority comes from the supervisor-issued
 approval id and its server-returned expected event id.
+
+## BMAD Gate 4B canonical integrated-local closeout
+
+Status: review. Evidence level: `integrated_local`.
+
+The bounded proof uses the tracked source authority
+`docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`, verifies its Git index
+membership and SHA-256 digest before packet creation, and drives one
+server-created linked WorkItem through the same authoritative packet lifecycle:
+capture/queue, lease claim and heartbeat, UtilityWorkerAdapter local proof,
+persisted execution attempt, verification evidence, review/Ready-to-Test,
+server-bound approval/pass, and `/pipeline` projection. The packet and WorkItem
+state agreement is asserted after each local-proof transition. Public independent
+WorkItem local-proof/lease mutation routes are absent; generic WorkItem creation
+rejects canonical-linkage and secret/token-like metadata.
+
+Adversarial proof coverage includes capability-off and arbitrary-database
+rejection, source traversal and untracked-source rejection, forged linkage
+rejection, omitted/stale/same-token lease fencing, durable accepted/rejected
+lease-action idempotency, completion fencing, worker/verification held paths,
+and metadata-only redaction assertions. Authoritative packet titles and source
+reference titles reject secret, token, and raw-provider-shaped values before
+packet/event persistence while safe source titles remain unchanged. The smoke
+also sends 1,001 shallow metadata entries (node limit 1,000) and 500 individually
+safe short strings totaling more than 64 KiB (aggregate limit 65,536 bytes),
+asserting typed 422 responses and zero WorkItem/workflow-event persistence.
+Queued WorkItem title, requested outcome, source, and details scalars use the
+same safe metadata policy before the queued row/event is created. Accepted
+requeue and reject actions append source-backed canonical lifecycle snapshots;
+each is replayed after materialized packet/WorkItem deletion and must preserve
+the resulting status, operator-test decision, stage, root lineage, and single
+successful execution attempt.
+Credential signatures are detected inside scalar strings at token boundaries,
+including prefixed `ghp_`, `sk-proj-`, `AKIA`, `glpat-`, `npm_`, `ASIA`, and
+related forms, while ordinary prose remains allowed. Smoke HTTP cases cover
+WorkItem title/request/source/details, nested metadata, packet title, and
+source-reference title, with typed 422 responses and zero durable rows/events.
+Public callers cannot mint `local-proof` execution attempts or record the
+special no-op verification command: the accepted path requires the server
+local-proof capability, linked source packet, local-proof attestation event,
+active queue lease, and matching fencing token. Capability-off/unattested
+projection reports `unavailable` or `read_only`, never `local_proof`. The
+untracked-source smoke fixture uses an exclusive collision-resistant temporary
+file and removes only the file it created, preserving pre-existing paths.
+Engine/session reload is separately labeled from event reconstruction. For event
+reconstruction, the disposable packet and linked WorkItem materialized rows are
+deleted and verified absent while lifecycle/workflow events remain; the rebuild
+then reconstructs packet and WorkItem state from preserved events without
+duplicating the execution attempt, with the authoritative packet id restored in
+the database column under its unique constraint.
+
+Exact bounded proof command and result:
+
+```text
+timeout 180s uv run --directory services/supervisor python scripts/pipeline_operational_smoke.py
+exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, workItemScalarMetadataSafetyVerified=true, workItemScalarRejectionPersistenceVerified=true, prefixedCredentialSignatureRejectionVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, localProofVerificationAttestationEnforced=true, publicLocalProofForgeryRejected=true, trustedDeliveryReadinessBlockedForPublicForgery=true, disabledLocalProofProjectionVerified=true, untrackedSourceFixtureIsolationVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, acceptedRequeueReplayVerified=true, acceptedRejectReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
+```
+
+This closeout does not claim live, bounded-live, production-observed, external
+provider/worker/process/shell/network/credential/GitHub/tmux/source-mutation
+authority, or full Gate 4 coverage. Queue leases, attempts, evidence, and
+workflow/lifecycle events remain durable metadata-only lineage; replay rebuilds
+the packet and linked WorkItem materialized projections from preserved events.
+
+Final repair verification:
+
+```text
+timeout 120s uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q -k 'execution_attempt or pipeline_operational or operational_action'
+2 passed, 46 deselected, 1 warning
+timeout 120s uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k 'execution_attempt or verification_evidence or utility'
+13 passed, 153 deselected, 1 warning
+node --test tests/pipeline-gate3-approval.test.mjs tests/pipeline-control-plane-lifecycle.test.mjs tests/dashboard-pipeline-fixtures.test.mjs
+3 passed, 0 failed
+timeout 120s pnpm --filter @kendall/dashboard exec tsc --noEmit
+exit 0
+timeout 120s apps/dashboard/node_modules/.bin/tsc -p packages/contracts/tsconfig.json --noEmit
+exit 0
+timeout 60s uv run --directory services/supervisor python -m compileall -q src scripts/pipeline_operational_smoke.py
+exit 0
+git diff --check
+exit 0
+```

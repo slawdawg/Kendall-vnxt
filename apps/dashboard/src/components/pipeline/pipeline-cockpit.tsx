@@ -218,11 +218,11 @@ export function PipelineCockpit({
     );
   }, []);
   const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
-    const gatedActionIds = ["mark_tested", "request_rework"] as const satisfies readonly PipelineGatedOperationalActionIdV0[];
-    if (action.state !== "available" || !gatedActionIds.includes(action.actionId as PipelineGatedOperationalActionIdV0)) {
+    const gatedActionIds = ["mark_tested", "request_rework", "requeue", "reject"] as const satisfies readonly PipelineGatedOperationalActionIdV0[];
+    if (action.state !== "available" || !gatedActionIds.includes(action.actionId as (typeof gatedActionIds)[number])) {
       return;
     }
-    const gatedActionId = action.actionId as PipelineGatedOperationalActionIdV0;
+    const gatedActionId = action.actionId as (typeof gatedActionIds)[number];
     const testResult = action.actionInstanceId.endsWith(":pass")
       ? "pass"
       : action.actionInstanceId.endsWith(":fail")
@@ -234,7 +234,7 @@ export function PipelineCockpit({
       targetType: "work_packet",
       targetId: packetId,
       requestedBy,
-      requestedAuthorityState: "needs_product_approval",
+      requestedAuthorityState: gatedActionId === "requeue" ? "needs_authority_approval" : "needs_product_approval",
       requestedRiskTier: "medium",
       metadataOnly: true,
       rawPayloadRetained: false,

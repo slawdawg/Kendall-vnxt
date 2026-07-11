@@ -294,6 +294,8 @@ test("operational action contracts define capability-gated metadata-only request
   assert.match(contractSource, /PipelineOperationalActionEvidenceRefsV0 = \[string, \.\.\.string\[\]\]/);
   assert.match(contractSource, /metadataOnly:\s*true;/);
   assert.match(contractSource, /rawPayloadRetained:\s*false;/);
+  assert.match(contractSource, /contentSha256\?:\s*string \| null;/, "source references must expose the optional content digest");
+  assert.match(contractSource, /export function isAuthoritativePacketSourceRef\b/);
   assert.doesNotMatch(contractSource.replaceAll("credential_or_provider_change", ""), /\b(?:rawPrompt|rawCompletion|reasoningTrace|providerPayload|secret|credential)\??:/);
 });
 
@@ -307,7 +309,19 @@ test("operational action contracts validate runtime objects without throwing", a
     validatePipelineOperationalRuntimeReadinessV0,
     isPipelineOperationalActionIdV0,
     isPipelineOperationalActionEvidenceRefsV0,
+    isAuthoritativePacketSourceRef,
   } = await loadCompiledContractModule();
+
+  assert.equal(isAuthoritativePacketSourceRef({
+    refId: "repo_doc:source",
+    sourceType: "repo_doc",
+    contentSha256: "a".repeat(64),
+  }), true);
+  assert.equal(isAuthoritativePacketSourceRef({
+    refId: "repo_doc:source",
+    sourceType: "repo_doc",
+    contentSha256: "not-a-sha256",
+  }), false);
 
   const validEvidence = ["verification:operational-action-contract"];
   const validRequest = {
@@ -821,6 +835,17 @@ test("operational action contracts validate runtime objects without throwing", a
     rawPayloadRetained: false,
   };
   assert.deepEqual(validatePipelineOperationalActionApprovalV0(validServerApproval), []);
+  assert.deepEqual(validatePipelineOperationalActionApprovalV0({
+    ...validServerApproval,
+    approvalId: "approval-server-bound-requeue",
+    actionId: "requeue",
+    requestedAuthorityState: "needs_authority_approval",
+  }), []);
+  assert.deepEqual(validatePipelineOperationalActionApprovalV0({
+    ...validServerApproval,
+    approvalId: "approval-server-bound-reject",
+    actionId: "reject",
+  }), []);
   assert.ok(validatePipelineOperationalActionApprovalV0({ ...validServerApproval, expectedCurrentEventId: null }).some((issue) => issue.code === "policy_violation"));
   assert.match(contractSource, /expectedCurrentEventId:\s*string;/, "approval event binding must be required and non-null");
 
@@ -833,6 +858,11 @@ test("operational action contracts validate runtime objects without throwing", a
     const issues = validatePipelineOperationalActionApprovalV0({ ...validServerApproval, [field]: value });
     assert.ok(issues.some((issue) => issue.field === field && issue.code === "policy_violation"), `ineligible approval ${field} must be rejected`);
   }
+  assert.ok(validatePipelineOperationalActionApprovalV0({
+    ...validServerApproval,
+    actionId: "requeue",
+    requestedAuthorityState: "needs_product_approval",
+  }).some((issue) => issue.field === "requestedAuthorityState" && issue.code === "policy_violation"));
 
   const maxIdentifier = "a" + "b".repeat(198) + "c";
   const maxIdentifierEvidence = approvalEvidenceRef("needs_product_approval", "mark_viewed", maxIdentifier, maxIdentifier, maxIdentifier);

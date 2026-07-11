@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
 
 from supervisor.domain.types import (
     AuditMode,
@@ -24,6 +24,20 @@ UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
     re.IGNORECASE,
 )
+UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE = re.compile(
+    r"(?:\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|secrets?|credentials?|passwords?)\b|raw[\s_-]*provider[\s_-]*payloads?|provider\s*[:=]|(?:api|access|refresh)[\s_-]*tokens?|api[\s_-]*keys?|authorization\s*:\s*bearer|(?:request|response)[\s_-]*ids?)",
+    re.IGNORECASE,
+)
+UNSAFE_METADATA_KEY_RE = re.compile(r"(secret|credential|password|token|raw.?payload|provider.?payload|prompt|completion|reasoning)", re.IGNORECASE)
+TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])"
+    r"|(?<![A-Za-z0-9])[A-Za-z]{2,12}[-_](?=(?:[A-Za-z0-9]*\d){2})[A-Za-z0-9]{20,}(?![A-Za-z0-9])"
+    r"|^(?=[A-Za-z0-9+/]{48,}={0,2}$)(?=.*[0-9+/=])[A-Za-z0-9+/]+={0,2}$|^(?=[a-f0-9]{40,}$)(?=.*[0-9])[a-f0-9]+$",
+    re.IGNORECASE,
+)
+MAX_METADATA_DEPTH = 64
+MAX_METADATA_NODES = 1000
+MAX_METADATA_AGGREGATE_BYTES = 64 * 1024
 EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -45,6 +59,93 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
     )
 
 
+def _is_safe_local_proof_text(value: str) -> bool:
+    text = value.strip()
+    return (
+        bool(text)
+        and len(text) <= 160
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+    )
+
+
+def _validate_authoritative_metadata_text(value: str, *, path: str) -> str:
+    text = value.strip()
+    if not text:
+        raise ValueError(f"{path} must not be blank")
+    if (
+        UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE.search(text)
+        or TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+    ):
+        raise ValueError(f"{path} contains secret, credential, raw-provider, or token-like content.")
+    return text
+
+
+def _validate_work_item_scalar_text(value: str) -> str:
+    text = value.strip()
+    if (
+        len(text) > 1000
+        or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+        or TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+        or re.search(r"(?:provider\s*[:=]|(?:request|response)[\s_-]*ids?\s*[:=])", text, re.IGNORECASE)
+    ):
+        raise ValueError("WorkItem scalar contains secret, credential, raw-provider, or token-like content.")
+    return text
+
+
+def _validate_metadata_tree(
+    value: Any,
+    *,
+    path: str = "metadata",
+    _depth: int = 0,
+    _state: dict[str, int] | None = None,
+) -> Any:
+    state = {"nodes": 0, "bytes": 0} if _state is None else _state
+    if _depth > MAX_METADATA_DEPTH:
+        raise ValueError(f"{path} exceeds the metadata nesting limit of {MAX_METADATA_DEPTH}.")
+    state["nodes"] += 1
+    if state["nodes"] > MAX_METADATA_NODES:
+        raise ValueError(f"{path} exceeds the metadata node limit of {MAX_METADATA_NODES}.")
+
+    def add_size(size: int) -> None:
+        state["bytes"] += size
+        if state["bytes"] > MAX_METADATA_AGGREGATE_BYTES:
+            raise ValueError(f"{path} exceeds the metadata aggregate size limit of {MAX_METADATA_AGGREGATE_BYTES} bytes.")
+
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, child in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"{path} keys must be non-empty strings.")
+            key = key.strip()
+            add_size(len(key.encode("utf-8")))
+            if UNSAFE_METADATA_KEY_RE.search(key):
+                raise ValueError(f"{path}.{key} is not permitted in metadata-only state.")
+            safe[key] = _validate_metadata_tree(child, path=f"{path}.{key}", _depth=_depth + 1, _state=state)
+        return safe
+    if isinstance(value, list):
+        return [
+            _validate_metadata_tree(child, path=f"{path}[]", _depth=_depth + 1, _state=state)
+            for child in value
+        ]
+    if isinstance(value, str):
+        text = value.strip()
+        add_size(len(text.encode("utf-8")))
+        digest_value = path.endswith(".sourceContentSha256") and bool(re.fullmatch(r"[0-9a-fA-F]{64}", text))
+        if (
+            len(text) > 1000
+            or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+            or UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE.search(text)
+            or (TOKEN_LIKE_METADATA_VALUE_RE.search(text) and not digest_value)
+        ):
+            raise ValueError(f"{path} contains secret, credential, raw-provider, or token-like content.")
+        return text
+    if value is None or isinstance(value, (bool, int, float)):
+        add_size(len(str(value).encode("utf-8")))
+        return value
+    raise ValueError(f"{path} contains an unsupported metadata value.")
+
+
 class WorkItemCreate(BaseModel):
     title: str
     requestedOutcome: str
@@ -52,6 +153,21 @@ class WorkItemCreate(BaseModel):
     details: str | None = None
     riskLevel: RiskLevel = RiskLevel.LOW
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("title", "requestedOutcome", "source", "details")
+    @classmethod
+    def _copied_scalar_fields_must_be_safe_metadata(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_work_item_scalar_text(value)
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_must_be_safe_and_non_authoritative(cls, value: dict[str, Any]) -> dict[str, Any]:
+        reserved = {"authoritativepacketid", "localproofauthority"}
+        if any(str(key).lower() in reserved for key in value):
+            raise ValueError("Generic WorkItem creation cannot provide canonical packet linkage metadata.")
+        return _validate_metadata_tree(value)
 
 
 class CandidateWorkCreate(BaseModel):
@@ -402,6 +518,41 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemLocalProofRequest(BaseModel):
+    proofMode: Literal["integrated_local"]
+    idempotencyKey: str = Field(min_length=1, max_length=160)
+    correlationId: str = Field(min_length=1, max_length=80)
+    scenario: Literal["happy", "worker_failure", "verification_failure", "completion_fencing_failure"] = "happy"
+    actorId: str = "local-proof"
+    actorLabel: str = "Integrated local proof"
+
+    @field_validator("idempotencyKey", "correlationId", "actorId", "actorLabel")
+    @classmethod
+    def _local_proof_text_must_be_metadata_only(cls, value: str) -> str:
+        value = value.strip()
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Local-proof identifiers and actor metadata must be safe metadata-only text.")
+        return value
+
+
+class WorkItemLocalProofLeaseRequest(BaseModel):
+    proofMode: Literal["integrated_local"]
+    idempotencyKey: str = Field(min_length=1, max_length=160)
+    correlationId: str = Field(min_length=1, max_length=120)
+    operation: Literal["claim", "heartbeat", "stale_heartbeat", "expire"]
+    fencingToken: int | None = None
+    actorId: str = "local-proof"
+    actorLabel: str = "Integrated local proof"
+
+    @field_validator("idempotencyKey", "correlationId", "actorId", "actorLabel")
+    @classmethod
+    def _local_proof_lease_text_must_be_metadata_only(cls, value: str) -> str:
+        value = value.strip()
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Local-proof lease identifiers and actor metadata must be safe metadata-only text.")
+        return value
+
+
 class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     status: ExecutionAttemptStatus
     reason: str | None = None
@@ -486,6 +637,8 @@ class WorkspaceIsolationPlanView(BaseModel):
 class ExecutionAttemptView(BaseModel):
     attemptId: str
     workItemId: str
+    leaseId: str | None = None
+    fencingToken: int | None = None
     routeDecisionId: str
     workerId: str
     lane: str
@@ -1174,12 +1327,23 @@ class AuthoritativePacketActorView(BaseModel):
     actorId: str | None = Field(default=None, max_length=100)
     actorLabel: str | None = Field(default=None, max_length=120)
 
+    @field_validator("actorId", "actorLabel")
+    @classmethod
+    def _actor_metadata_must_be_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or not _is_safe_local_proof_text(value):
+            raise ValueError("Actor identifiers and labels must be safe metadata-only text.")
+        return value
+
 
 class AuthoritativePacketSourceRefView(BaseModel):
     refId: str = Field(min_length=1, max_length=255)
     sourceType: Literal["prd", "bmad_story", "operator_input", "workflow", "repo_doc"]
     pathOrUrl: str | None = Field(default=None, max_length=500)
     title: str | None = Field(default=None, max_length=255)
+    contentSha256: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
 
     @field_validator("refId")
     @classmethod
@@ -1188,6 +1352,28 @@ class AuthoritativePacketSourceRefView(BaseModel):
         if not value:
             raise ValueError("source ref id must not be blank")
         return value
+
+    @field_validator("contentSha256")
+    @classmethod
+    def _normalize_content_digest(cls, value: str | None) -> str | None:
+        return value.lower() if value is not None else None
+
+    @field_validator("title")
+    @classmethod
+    def _source_title_must_be_safe_metadata(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("source ref title must not be blank")
+        return _validate_authoritative_metadata_text(value, path="sourceRef.title")
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_content_digest(self, handler):
+        serialized = handler(self)
+        if self.contentSha256 is None:
+            serialized.pop("contentSha256", None)
+        return serialized
 
 
 class AuthoritativeWorkPacketCreateRequest(BaseModel):
@@ -1216,6 +1402,11 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
         if not stripped:
             raise ValueError("value must not be blank")
         return stripped
+
+    @field_validator("title")
+    @classmethod
+    def _packet_title_must_be_safe_metadata(cls, value: str) -> str:
+        return _validate_authoritative_metadata_text(value, path="title")
 
 
 class AuthoritativeWorkPacketTransitionRequest(BaseModel):
@@ -1293,7 +1484,7 @@ OperationalActionId = Literal[
     "reassign",
     "reject",
 ]
-OperationalGatedActionId = Literal["mark_tested", "request_rework"]
+OperationalGatedActionId = Literal["mark_tested", "request_rework", "requeue", "reject"]
 OperationalActionTargetType = Literal["work_packet", "projection", "runtime", "worker", "manager_run"]
 OperationalActionRiskTier = Literal["low", "medium", "high", "extreme"]
 OperationalActionCapabilityState = Literal["available", "unavailable", "gated", "simulated"]
@@ -1401,7 +1592,7 @@ class OperationalActionApprovalRequest(BaseModel):
     targetType: Literal["work_packet"] = "work_packet"
     targetId: str = Field(min_length=1, max_length=120)
     requestedBy: AuthoritativePacketActorView
-    requestedAuthorityState: Literal["needs_product_approval"]
+    requestedAuthorityState: Literal["needs_product_approval", "needs_authority_approval"]
     requestedRiskTier: Literal["medium"]
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
@@ -1421,7 +1612,7 @@ class OperationalActionApprovalView(BaseModel):
     targetType: Literal["work_packet"]
     targetId: str
     requestedBy: AuthoritativePacketActorView
-    requestedAuthorityState: Literal["needs_product_approval"]
+    requestedAuthorityState: Literal["needs_product_approval", "needs_authority_approval"]
     requestedRiskTier: Literal["medium"]
     expectedCurrentEventId: str
     issuedAt: datetime
@@ -1576,6 +1767,32 @@ class PipelineSourceStateV0View(BaseModel):
     metadataOnly: Literal[True] = True
 
 
+class PipelineQueueLeaseV0View(BaseModel):
+    leaseId: str
+    workItemId: str
+    attemptCount: int
+    heartbeatAt: datetime
+    leaseExpiresAt: datetime
+    fencingToken: int
+    active: bool
+    state: Literal["active", "expired", "inactive"]
+    metadataOnly: Literal[True] = True
+
+
+class PipelineExecutionAttemptLineageV0View(BaseModel):
+    attemptId: str
+    workItemId: str
+    leaseId: str | None = None
+    fencingToken: int | None = None
+    routeDecisionId: str
+    workerId: str
+    lane: str
+    status: str
+    eventRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
 class PipelineDashboardWorkPacketV0View(BaseModel):
     packetId: str
     title: str
@@ -1588,8 +1805,20 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
     unblocker: PipelinePacketUnblockerV0 = "unknown"
     readyToTest: WorkPacketReadyToTestV0View | None = None
     evidenceRefs: list[str] = Field(default_factory=list)
+    workItemId: str | None = None
+    queueLease: PipelineQueueLeaseV0View | None = None
+    executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
+    correlationIds: list[str] = Field(default_factory=list)
     updatedAt: datetime
     metadataOnly: Literal[True] = True
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_legacy_lineage(self, handler):
+        serialized = handler(self)
+        if self.workItemId is None:
+            for field_name in ("workItemId", "queueLease", "executionAttempts", "correlationIds"):
+                serialized.pop(field_name, None)
+        return serialized
 
 
 class PipelineSelectedPacketDetailV0View(BaseModel):
@@ -1613,7 +1842,19 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     operatorTestNote: str | None = None
     actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
     actionResults: list[OperationalActionResultView] = Field(default_factory=list)
+    workItemId: str | None = None
+    queueLease: PipelineQueueLeaseV0View | None = None
+    executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
+    correlationIds: list[str] = Field(default_factory=list)
     metadataOnly: Literal[True] = True
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_legacy_lineage(self, handler):
+        serialized = handler(self)
+        if self.workItemId is None:
+            for field_name in ("workItemId", "queueLease", "executionAttempts", "correlationIds"):
+                serialized.pop(field_name, None)
+        return serialized
 
 
 class PipelineManagerSummaryV0View(BaseModel):
@@ -1891,6 +2132,8 @@ class WorkPacketCleanupDryRunGateV0View(BaseModel):
 class WorkPacketExecutionAttemptSummaryV0View(BaseModel):
     attemptId: str
     workItemId: str
+    leaseId: str | None = None
+    fencingToken: int | None = None
     routeDecisionId: str
     workerId: str
     lane: str
