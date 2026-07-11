@@ -170,13 +170,13 @@ failing tests. The failures were in older handoff, pointer-receipt, tmux
 format, submit-pending, and question-answer fixtures.
 
 The same six named cases pass on a clean `origin/dev` recovery lane, and the
-full current manager-control-plane suite passes 463/463 on `origin/dev` at
-`11f6cd7a0d42648e375719ce219e2b1ca9719f24`. This establishes the stale-lane
-failures as old-base drift rather than a current `dev` regression. No staged
+full current manager-control-plane suite passes 463/463. This establishes the
+stale-lane failures as old-base drift rather than a current `dev` regression.
+The staged booting-reviewer safety work is already delivered in current dev by
+commit `41055c55` (`Fix booting warm reviewer delivery continuation`, PR #470),
+with later baseline fixture corrections. No port is outstanding. No staged
 files were changed, no takeover was applied, and no dirty worktree was
-cleaned. If the staged booting-reviewer safety work is still needed, it must
-be ported and re-reviewed as a fresh current-baseline change; the stale lane
-remains preservation-gated.
+cleaned; the original stale lane remains preservation-gated.
 
 The exact stale lane `20260710-harden-manager-full-verification-fail-closed-ser`
 was separately inspected read-only. Its five staged files add a fail-closed
