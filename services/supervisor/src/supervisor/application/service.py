@@ -844,7 +844,7 @@ class SupervisorService:
         payload: OperationalActionApprovalRequest,
     ) -> OperationalActionApprovalView:
         policy = OPERATIONAL_ACTION_POLICIES.get(payload.actionId)
-        if policy is None or policy["authority"] == "not_required" or payload.actionId not in {"mark_tested", "request_rework"}:
+        if policy is None or policy["authority"] == "not_required" or payload.actionId not in {"mark_tested", "request_rework", "requeue", "reject"}:
             raise ValueError("Operational action is not eligible for a server-issued approval.")
         if payload.targetType not in policy["targets"]:
             raise ValueError("Operational action target type is not allowed by policy.")
@@ -856,7 +856,9 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
         if not packet:
             raise ValueError("Authoritative WorkPacket not found.")
-        if not packet.ready_to_test_json or packet.operator_test_state != "ready":
+        if payload.actionId in {"mark_tested", "request_rework"} and (
+            not packet.ready_to_test_json or packet.operator_test_state != "ready"
+        ):
             raise ValueError("Operational action is not eligible because the packet is not ready to test.")
 
         now = datetime.now(timezone.utc)
@@ -1020,12 +1022,28 @@ class SupervisorService:
                 raise ValueError("Requeue requires a WorkPacket target.")
             packet.status = "waiting"
             packet.operator_test_state = "not_ready"
+            await self._append_operational_stage_event(
+                session,
+                packet,
+                target_stage=packet.current_stage,
+                status=packet.status,
+                payload=payload,
+                evidence_refs=evidence_refs,
+            )
             packet.updated_at = datetime.now(timezone.utc)
             outcome = "succeeded"
         elif payload.actionId == "reject":
             if not packet:
                 raise ValueError("Reject requires a WorkPacket target.")
             packet.status = "deferred"
+            await self._append_operational_stage_event(
+                session,
+                packet,
+                target_stage=packet.current_stage,
+                status=packet.status,
+                payload=payload,
+                evidence_refs=evidence_refs,
+            )
             packet.updated_at = datetime.now(timezone.utc)
             outcome = "succeeded"
         elif payload.actionId in {"pause", "drain"}:
@@ -1163,7 +1181,13 @@ class SupervisorService:
             payload_summary=(
                 "Accepted operator test pass and advanced packet."
                 if event_type == "packet.stage_transitioned"
-                else "Accepted gated operator action and recorded packet state."
+                else (
+                    "Accepted packet requeue and recorded packet state."
+                    if payload.actionId == "requeue"
+                    else "Accepted packet rejection and recorded packet state."
+                    if payload.actionId == "reject"
+                    else "Accepted gated operator action and recorded packet state."
+                )
             ),
             evidence_refs_json=evidence_refs,
             occurred_at=now,
@@ -1901,6 +1925,11 @@ class SupervisorService:
         *,
         _internal_authoritative: bool = False,
     ) -> WorkItem:
+        _validate_metadata_tree(payload.title, path="title")
+        _validate_metadata_tree(payload.requestedOutcome, path="requestedOutcome")
+        _validate_metadata_tree(payload.source, path="source")
+        if payload.details is not None:
+            _validate_metadata_tree(payload.details, path="details")
         if not _internal_authoritative:
             if any(str(key).lower() in {"authoritativepacketid", "localproofauthority"} for key in payload.metadata):
                 raise ValueError("Generic WorkItem creation cannot provide canonical packet linkage metadata.")

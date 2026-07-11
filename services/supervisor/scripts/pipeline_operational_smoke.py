@@ -64,7 +64,16 @@ def require_typed_422(response, label: str) -> None:
         fail(f"{label} did not return typed request-validation errors: {response.text[:240]}")
 
 
-def issue_approval(client, packet: dict, *, action_id: str, actor_id: str, key: str) -> dict:
+def issue_approval(
+    client,
+    packet: dict,
+    *,
+    action_id: str,
+    actor_id: str,
+    key: str,
+    requested_authority_state: str = "needs_product_approval",
+    requested_risk_tier: str = "medium",
+) -> dict:
     return require(
         client.post(
             "/pipeline-control-plane/approvals",
@@ -73,8 +82,8 @@ def issue_approval(client, packet: dict, *, action_id: str, actor_id: str, key: 
                 "targetType": "work_packet",
                 "targetId": packet["packetId"],
                 "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
-                "requestedAuthorityState": "needs_product_approval",
-                "requestedRiskTier": "medium",
+                "requestedAuthorityState": requested_authority_state,
+                "requestedRiskTier": requested_risk_tier,
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             },
@@ -94,6 +103,8 @@ def apply_gated_action(
     idempotency_key: str,
     evidence_ref: str,
     test_result: str | None = None,
+    requested_authority_state: str = "needs_product_approval",
+    requested_risk_tier: str = "medium",
 ) -> dict:
     return require(
         client.post(
@@ -105,8 +116,8 @@ def apply_gated_action(
                 "idempotencyKey": idempotency_key,
                 "correlationId": f"corr:{idempotency_key}",
                 "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
-                "requestedAuthorityState": "needs_product_approval",
-                "requestedRiskTier": "medium",
+                "requestedAuthorityState": requested_authority_state,
+                "requestedRiskTier": requested_risk_tier,
                 "approvalId": approval["approvalId"],
                 "expectedCurrentEventId": approval["expectedCurrentEventId"],
                 "operatorIntentSummary": "Record a bounded metadata-only operator decision.",
@@ -559,6 +570,40 @@ def main() -> int:
                 ).fetchone()[0]
             if persisted_metadata_events or persisted_metadata_items:
                 fail("rejected node-limit or aggregate-size metadata persisted a workflow event or WorkItem")
+            adversarial_scalar_work_items = [
+                (
+                    "Unsafe requestedOutcome WorkItem",
+                    {"requestedOutcome": "provider=openai response_id=resp-work-item"},
+                ),
+                (
+                    "Unsafe details WorkItem",
+                    {"details": "OPENAI_API_KEY=sk-work-item-secret"},
+                ),
+            ]
+            for work_item_title, scalar_override in adversarial_scalar_work_items:
+                adversarial_scalar_response = client.post(
+                    "/work-items",
+                    json={
+                        "title": work_item_title,
+                        "requestedOutcome": "Must be rejected before queued event persistence.",
+                        "source": source_path,
+                        **scalar_override,
+                        "metadata": {},
+                    },
+                )
+                require_typed_422(adversarial_scalar_response, work_item_title)
+            with sqlite3.connect(db_path) as adversarial_scalar_db:
+                for work_item_title, _ in adversarial_scalar_work_items:
+                    persisted_item_count = adversarial_scalar_db.execute(
+                        "SELECT COUNT(*) FROM work_items WHERE title = ?",
+                        (work_item_title,),
+                    ).fetchone()[0]
+                    persisted_event_count = adversarial_scalar_db.execute(
+                        "SELECT COUNT(*) FROM workflow_events WHERE payload LIKE ?",
+                        (f"%{work_item_title}%",),
+                    ).fetchone()[0]
+                    if persisted_item_count or persisted_event_count:
+                        fail(f"rejected scalar WorkItem {work_item_title} persisted a WorkItem or workflow event")
             adversarial_packet_seeds = [
                 (
                     "packet-adversarial-title-safety",
@@ -957,6 +1002,82 @@ def main() -> int:
             if completion_fencing["attempt"]["status"] != "running" or not completion_fencing["attempt"]["failureReason"]:
                 fail("completion fencing did not reject completion and preserve a held attempt")
 
+            def prepare_action_replay_fixture(item_id: str, action_id: str, authority_state: str) -> dict:
+                replay_packet_seed = seed_local_packet(item_id)
+                replay_proof = require(
+                    client.post(
+                        f"/pipeline-control-plane/work-packets/{replay_packet_seed['packetId']}/local-proof",
+                        json={
+                            "proofMode": "integrated_local",
+                            "idempotencyKey": f"gate-4b-{item_id}-proof",
+                            "correlationId": f"corr:gate-4b-{item_id}-proof",
+                            "scenario": "happy",
+                        },
+                    ),
+                    200,
+                    f"{action_id} replay fixture local proof",
+                )
+                pass_approval = issue_approval(
+                    client,
+                    replay_proof["authoritativePacket"],
+                    action_id="mark_tested",
+                    actor_id="smoke-operator",
+                    key=f"gate-4b-{item_id}-pass-approval",
+                )
+                pass_action = apply_gated_action(
+                    client,
+                    replay_proof["authoritativePacket"],
+                    pass_approval,
+                    action_id="mark_tested",
+                    actor_id="smoke-operator",
+                    idempotency_key=f"gate-4b-{item_id}-pass",
+                    evidence_ref=f"evidence:{item_id}:pass",
+                    test_result="pass",
+                )
+                if pass_action["outcome"] != "succeeded" or pass_action["resultingStage"] != "promote":
+                    fail(f"{action_id} replay fixture did not reach the approved promote state")
+                post_pass_replay_packet = require(
+                    client.get(f"/pipeline-control-plane/work-packets/{replay_packet_seed['packetId']}"),
+                    200,
+                    f"{action_id} replay fixture post-pass packet",
+                )
+                action_approval = issue_approval(
+                    client,
+                    post_pass_replay_packet,
+                    action_id=action_id,
+                    actor_id="smoke-operator",
+                    key=f"gate-4b-{item_id}-action-approval",
+                    requested_authority_state=authority_state,
+                )
+                accepted_action = apply_gated_action(
+                    client,
+                    post_pass_replay_packet,
+                    action_approval,
+                    action_id=action_id,
+                    actor_id="smoke-operator",
+                    idempotency_key=f"gate-4b-{item_id}-action",
+                    evidence_ref=f"evidence:{item_id}:action",
+                    requested_authority_state=authority_state,
+                )
+                if accepted_action["outcome"] != "succeeded":
+                    fail(f"accepted {action_id} action was not recorded as succeeded")
+                return {
+                    "packet": replay_packet_seed,
+                    "proof": replay_proof,
+                    "action": accepted_action,
+                }
+
+            requeue_replay_fixture = prepare_action_replay_fixture(
+                "requeue-replay",
+                "requeue",
+                "needs_authority_approval",
+            )
+            reject_replay_fixture = prepare_action_replay_fixture(
+                "reject-replay",
+                "reject",
+                "needs_product_approval",
+            )
+
             client.__exit__(None, None, None)
             client_closed = True
             import supervisor.infrastructure.db.database as database
@@ -978,6 +1099,59 @@ def main() -> int:
                     200,
                     "reloaded pipeline projection",
                 )
+
+                def replay_accepted_action_fixture(fixture: dict, expected_status: str, expected_operator_test_state: str) -> None:
+                    fixture_packet = fixture["packet"]
+                    fixture_proof = fixture["proof"]
+                    fixture_action = fixture["action"]
+                    if fixture_action["resultingStage"] != "promote" or fixture_action["resultingStatus"] != expected_status:
+                        fail(f"accepted {fixture_action['actionId']} action did not expose its resulting packet decision")
+                    replay_result = require(
+                        reloaded_client.post(
+                            f"/pipeline-control-plane/work-packets/{fixture_packet['packetId']}/local-proof/replay"
+                        ),
+                        200,
+                        f"{fixture_action['actionId']} event reconstruction replay",
+                    )
+                    if (
+                        replay_result["replayMode"] != "event_reconstruction"
+                        or not replay_result["materializedRowsAbsentBeforeRebuild"]
+                        or replay_result["materializedPacketCountBeforeRebuild"] != 0
+                        or replay_result["materializedWorkItemCountBeforeRebuild"] != 0
+                    ):
+                        fail(f"{fixture_action['actionId']} replay did not delete materialized rows before rebuild")
+                    replayed_action_packet = require(
+                        reloaded_client.get(f"/pipeline-control-plane/work-packets/{fixture_packet['packetId']}"),
+                        200,
+                        f"replayed {fixture_action['actionId']} authoritative packet",
+                    )
+                    if (
+                        replayed_action_packet["currentStage"] != "promote"
+                        or replayed_action_packet["status"] != expected_status
+                        or replayed_action_packet["operatorTestState"] != expected_operator_test_state
+                        or replayed_action_packet["parentPacketId"] is not None
+                        or replayed_action_packet["lineageKind"] != "root"
+                    ):
+                        fail(f"replayed {fixture_action['actionId']} packet lost its resulting status, decision, stage, or lineage")
+                    replayed_action_item = require(
+                        reloaded_client.get(f"/work-items/{fixture_proof['workItem']['id']}"),
+                        200,
+                        f"replayed {fixture_action['actionId']} canonical WorkItem",
+                    )
+                    if replayed_action_item["metadata"].get("authoritativePacketStatus") != expected_status:
+                        fail(f"replayed {fixture_action['actionId']} WorkItem metadata lost the resulting packet status")
+                    replayed_attempts = reloaded_client.get(f"/work-items/{fixture_proof['workItem']['id']}/execution-attempts")
+                    if replayed_attempts.status_code != 200 or len(replayed_attempts.json().get("data", [])) != 1:
+                        fail(f"{fixture_action['actionId']} replay duplicated or lost the successful execution attempt")
+                    assert_authoritative_packet_column_and_uniqueness(
+                        db_path,
+                        fixture_proof["workItem"]["id"],
+                        fixture_packet["packetId"],
+                        f"{fixture_action['actionId']} event reconstruction",
+                    )
+
+                replay_accepted_action_fixture(requeue_replay_fixture, "waiting", "not_ready")
+                replay_accepted_action_fixture(reject_replay_fixture, "deferred", "passed")
                 captured_packet_history = require(
                     reloaded_client.get(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}"),
                     200,
@@ -1293,6 +1467,8 @@ def main() -> int:
                         "replayedWorkItemSnapshotVerified": True,
                         "heldWorkItemReplaySnapshotVerified": True,
                         "metadataRejectionPersistenceVerified": True,
+                        "workItemScalarMetadataSafetyVerified": True,
+                        "workItemScalarRejectionPersistenceVerified": True,
                         "authoritativePacketTitleSafetyVerified": True,
                         "authoritativePacketSourceTitleSafetyVerified": True,
                         "authoritativePacketRejectionPersistenceVerified": True,
@@ -1302,6 +1478,8 @@ def main() -> int:
                         "eventReconstructionRowsAbsentBeforeRebuildVerified": True,
                         "eventReconstructionDatabaseLinkageVerified": True,
                         "authoritativePacketLinkUniquenessVerified": True,
+                        "acceptedRequeueReplayVerified": True,
+                        "acceptedRejectReplayVerified": True,
                         "engineSessionReloadVerified": True,
                     },
                     sort_keys=True,

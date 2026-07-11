@@ -119,7 +119,12 @@ def _validate_metadata_tree(
         text = value.strip()
         add_size(len(text.encode("utf-8")))
         digest_value = path.endswith(".sourceContentSha256") and bool(re.fullmatch(r"[0-9a-fA-F]{64}", text))
-        if len(text) > 1000 or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text) or (TOKEN_LIKE_METADATA_VALUE_RE.search(text) and not digest_value):
+        if (
+            len(text) > 1000
+            or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+            or UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE.search(text)
+            or (TOKEN_LIKE_METADATA_VALUE_RE.search(text) and not digest_value)
+        ):
             raise ValueError(f"{path} contains secret, credential, raw-provider, or token-like content.")
         return text
     if value is None or isinstance(value, (bool, int, float)):
@@ -135,6 +140,13 @@ class WorkItemCreate(BaseModel):
     details: str | None = None
     riskLevel: RiskLevel = RiskLevel.LOW
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("title", "requestedOutcome", "source", "details")
+    @classmethod
+    def _copied_scalar_fields_must_be_safe_metadata(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_metadata_tree(value, path="WorkItem scalar")
 
     @field_validator("metadata")
     @classmethod
@@ -1447,7 +1459,7 @@ OperationalActionId = Literal[
     "reassign",
     "reject",
 ]
-OperationalGatedActionId = Literal["mark_tested", "request_rework"]
+OperationalGatedActionId = Literal["mark_tested", "request_rework", "requeue", "reject"]
 OperationalActionTargetType = Literal["work_packet", "projection", "runtime", "worker", "manager_run"]
 OperationalActionRiskTier = Literal["low", "medium", "high", "extreme"]
 OperationalActionCapabilityState = Literal["available", "unavailable", "gated", "simulated"]
@@ -1555,7 +1567,7 @@ class OperationalActionApprovalRequest(BaseModel):
     targetType: Literal["work_packet"] = "work_packet"
     targetId: str = Field(min_length=1, max_length=120)
     requestedBy: AuthoritativePacketActorView
-    requestedAuthorityState: Literal["needs_product_approval"]
+    requestedAuthorityState: Literal["needs_product_approval", "needs_authority_approval"]
     requestedRiskTier: Literal["medium"]
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
@@ -1575,7 +1587,7 @@ class OperationalActionApprovalView(BaseModel):
     targetType: Literal["work_packet"]
     targetId: str
     requestedBy: AuthoritativePacketActorView
-    requestedAuthorityState: Literal["needs_product_approval"]
+    requestedAuthorityState: Literal["needs_product_approval", "needs_authority_approval"]
     requestedRiskTier: Literal["medium"]
     expectedCurrentEventId: str
     issuedAt: datetime
