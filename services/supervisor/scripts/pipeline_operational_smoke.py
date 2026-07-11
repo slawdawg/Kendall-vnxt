@@ -527,8 +527,12 @@ def main() -> int:
                     "SELECT COUNT(*) FROM workflow_events WHERE payload LIKE ? OR payload LIKE ?",
                     ("%Deep metadata WorkItem%", "%Oversized metadata WorkItem%"),
                 ).fetchone()[0]
-            if persisted_metadata_events:
-                fail("rejected deep or oversized metadata persisted a workflow event")
+                persisted_metadata_items = metadata_db.execute(
+                    "SELECT COUNT(*) FROM work_items WHERE title IN (?, ?)",
+                    ("Deep metadata WorkItem", "Oversized metadata WorkItem"),
+                ).fetchone()[0]
+            if persisted_metadata_events or persisted_metadata_items:
+                fail("rejected deep or oversized metadata persisted a workflow event or WorkItem")
             repo_root = Path(__file__).resolve().parents[3]
             untracked_source_path = "docs/workflows/.gate4b-untracked-source.md"
             untracked_source_file = repo_root / untracked_source_path
@@ -987,7 +991,67 @@ def main() -> int:
                     or replayed_item["state"] != "reviewing"
                 ):
                     fail("replayed packet and WorkItem did not retain canonical state agreement")
-                reloaded_projection = replayed_projection
+
+                pre_replay_held_packet = require(
+                    reloaded_client.get(f"/pipeline-control-plane/work-packets/{worker_failure_packet['packetId']}"),
+                    200,
+                    "pre-delete held authoritative packet",
+                )
+                pre_replay_held_item = require(
+                    reloaded_client.get(f"/work-items/{worker_failure_item['id']}"),
+                    200,
+                    "pre-delete held canonical WorkItem",
+                )
+                held_blocker = pre_replay_held_item["blockedReason"]
+                if (
+                    pre_replay_held_item["state"] != "needs_rework"
+                    or not held_blocker
+                    or pre_replay_held_item["lane"] != "corrective_loop"
+                    or pre_replay_held_item["metadata"].get("authoritativePacketId") != worker_failure_packet["packetId"]
+                ):
+                    fail("held replay fixture did not have the required non-null blocker and canonical state")
+                held_replay = require(
+                    reloaded_client.post(
+                        f"/pipeline-control-plane/work-packets/{worker_failure_packet['packetId']}/local-proof/replay"
+                    ),
+                    200,
+                    "held event reconstruction replay",
+                )
+                if (
+                    held_replay["replayMode"] != "event_reconstruction"
+                    or not held_replay["materializedRowsAbsentBeforeRebuild"]
+                    or held_replay["materializedPacketCountBeforeRebuild"] != 0
+                    or held_replay["materializedWorkItemCountBeforeRebuild"] != 0
+                ):
+                    fail("held event reconstruction did not delete materialized rows before rebuild")
+                held_replayed_packet = require(
+                    reloaded_client.get(f"/pipeline-control-plane/work-packets/{worker_failure_packet['packetId']}"),
+                    200,
+                    "replayed held authoritative packet",
+                )
+                held_replayed_item = require(
+                    reloaded_client.get(f"/work-items/{worker_failure_item['id']}"),
+                    200,
+                    "replayed held canonical WorkItem",
+                )
+                if (
+                    held_replayed_item["state"] != pre_replay_held_item["state"]
+                    or held_replayed_item["lane"] != pre_replay_held_item["lane"]
+                    or held_replayed_item["blockedReason"] != held_blocker
+                    or held_replayed_item["metadata"].get("authoritativePacketId") != worker_failure_packet["packetId"]
+                    or held_replayed_item["metadata"].get("authoritativePacketStage") != held_replayed_packet["currentStage"]
+                    or held_replayed_item["metadata"].get("authoritativePacketStatus") != held_replayed_packet["status"]
+                    or held_replayed_packet["currentStage"] != pre_replay_held_packet["currentStage"]
+                    or held_replayed_packet["status"] != pre_replay_held_packet["status"]
+                    or held_replayed_item["state"] != "needs_rework"
+                    or not held_replayed_item["blockedReason"]
+                ):
+                    fail("held event reconstruction changed blocker, state, lane, or packet linkage")
+                reloaded_projection = require(
+                    reloaded_client.get("/pipeline-control-plane/projection"),
+                    200,
+                    "projection after held event reconstruction",
+                )
 
             with sqlite3.connect(db_path) as persisted_db:
                 counts = {
@@ -1148,6 +1212,8 @@ def main() -> int:
                         "metadataDepthAndSizeBoundsVerified": True,
                         "sourceIndexDigestBoundaryVerified": True,
                         "replayedWorkItemSnapshotVerified": True,
+                        "heldWorkItemReplaySnapshotVerified": True,
+                        "metadataRejectionPersistenceVerified": True,
                         "sourceTraversalRejected": True,
                         "canonicalPacketWorkItemStateAgreementVerified": True,
                         "eventReconstructionReplayVerified": True,
