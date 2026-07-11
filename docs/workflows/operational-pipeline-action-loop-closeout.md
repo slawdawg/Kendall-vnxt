@@ -97,6 +97,11 @@ requeue and reject actions append source-backed canonical lifecycle snapshots;
 each is replayed after materialized packet/WorkItem deletion and must preserve
 the resulting status, operator-test decision, stage, root lineage, and single
 successful execution attempt.
+Credential signatures are detected inside scalar strings at token boundaries,
+including prefixed `ghp_`, `sk-proj-`, `AKIA`, and related forms, while ordinary
+prose remains allowed. Smoke HTTP cases cover WorkItem title/request/source/
+details, nested metadata, packet title, and source-reference title, with typed
+422 responses and zero durable rows/events.
 Engine/session reload is separately labeled from event reconstruction. For event
 reconstruction, the disposable packet and linked WorkItem materialized rows are
 deleted and verified absent while lifecycle/workflow events remain; the rebuild
@@ -108,7 +113,7 @@ Exact bounded proof command and result:
 
 ```text
 timeout 180s uv run --directory services/supervisor python scripts/pipeline_operational_smoke.py
-exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, workItemScalarMetadataSafetyVerified=true, workItemScalarRejectionPersistenceVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, acceptedRequeueReplayVerified=true, acceptedRejectReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
+exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, workItemScalarMetadataSafetyVerified=true, workItemScalarRejectionPersistenceVerified=true, prefixedCredentialSignatureRejectionVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, acceptedRequeueReplayVerified=true, acceptedRejectReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
 ```
 
 This closeout does not claim live, bounded-live, production-observed, external

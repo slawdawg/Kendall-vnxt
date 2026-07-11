@@ -579,6 +579,26 @@ def main() -> int:
                     "Unsafe details WorkItem",
                     {"details": "OPENAI_API_KEY=sk-work-item-secret"},
                 ),
+                (
+                    "Prefixed title credential WorkItem",
+                    {"title": "prefix ghp_1234567890abcdef"},
+                ),
+                (
+                    "Prefixed requestedOutcome credential WorkItem",
+                    {"requestedOutcome": "prefix sk-proj-1234567890abcdef"},
+                ),
+                (
+                    "Prefixed source credential WorkItem",
+                    {"source": "prefix AKIA1234567890ABCDEF"},
+                ),
+                (
+                    "Prefixed details credential WorkItem",
+                    {"details": "prefix xoxb-1234567890abcdef"},
+                ),
+                (
+                    "Prefixed nested metadata credential WorkItem",
+                    {"metadata": {"nested": {"opaque": "prefix github_pat_1234567890abcdef"}}},
+                ),
             ]
             for work_item_title, scalar_override in adversarial_scalar_work_items:
                 adversarial_scalar_response = client.post(
@@ -587,16 +607,17 @@ def main() -> int:
                         "title": work_item_title,
                         "requestedOutcome": "Must be rejected before queued event persistence.",
                         "source": source_path,
-                        **scalar_override,
                         "metadata": {},
+                        **scalar_override,
                     },
                 )
                 require_typed_422(adversarial_scalar_response, work_item_title)
             with sqlite3.connect(db_path) as adversarial_scalar_db:
-                for work_item_title, _ in adversarial_scalar_work_items:
+                for work_item_title, scalar_override in adversarial_scalar_work_items:
+                    unsafe_title = scalar_override.get("title", work_item_title)
                     persisted_item_count = adversarial_scalar_db.execute(
-                        "SELECT COUNT(*) FROM work_items WHERE title = ?",
-                        (work_item_title,),
+                        "SELECT COUNT(*) FROM work_items WHERE title IN (?, ?)",
+                        (work_item_title, unsafe_title),
                     ).fetchone()[0]
                     persisted_event_count = adversarial_scalar_db.execute(
                         "SELECT COUNT(*) FROM workflow_events WHERE payload LIKE ?",
@@ -614,6 +635,16 @@ def main() -> int:
                     "packet-adversarial-source-title-safety",
                     "Safe packet title",
                     {**source_ref, "title": "provider=openai response_id=resp_adversarial"},
+                ),
+                (
+                    "packet-adversarial-prefixed-title-credential",
+                    "prefix AKIA1234567890ABCDEF",
+                    source_ref,
+                ),
+                (
+                    "packet-adversarial-prefixed-source-title-credential",
+                    "Safe packet title",
+                    {**source_ref, "title": "prefix sk-proj-1234567890abcdef"},
                 ),
             ]
             for packet_id, packet_title, packet_source_ref in adversarial_packet_seeds:
@@ -1469,6 +1500,7 @@ def main() -> int:
                         "metadataRejectionPersistenceVerified": True,
                         "workItemScalarMetadataSafetyVerified": True,
                         "workItemScalarRejectionPersistenceVerified": True,
+                        "prefixedCredentialSignatureRejectionVerified": True,
                         "authoritativePacketTitleSafetyVerified": True,
                         "authoritativePacketSourceTitleSafetyVerified": True,
                         "authoritativePacketRejectionPersistenceVerified": True,
