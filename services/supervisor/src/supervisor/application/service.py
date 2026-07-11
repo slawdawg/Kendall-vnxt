@@ -907,8 +907,6 @@ class SupervisorService:
             packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
             if not packet:
                 raise ValueError("Authoritative WorkPacket not found.")
-            if payload.actionId == "requeue" and packet.status != "blocked":
-                raise ValueError("Requeue requires the authoritative WorkPacket to be currently blocked.")
             if policy["authority"] == "not_required" and payload.expectedCurrentEventId and packet.current_event_id != payload.expectedCurrentEventId:
                 raise ValueError("Operational action rejected because packet state changed.")
 
@@ -922,6 +920,18 @@ class SupervisorService:
         approval: OperationalActionApprovalRecord | None = None
         if approval_evidence_required:
             try:
+                if payload.actionId == "requeue":
+                    # Validate first to preserve the established server-issued-approval
+                    # contract.  Do not consume a valid approval if the authoritative
+                    # packet has subsequently left its only requeueable state.
+                    await self._validate_and_consume_operational_approval(
+                        session,
+                        payload,
+                        packet,
+                        consume=False,
+                    )
+                    if not packet or packet.status != "blocked":
+                        raise ValueError("Requeue requires the authoritative WorkPacket to be currently blocked.")
                 approval = await self._validate_and_consume_operational_approval(session, payload, packet)
             except OperationalActionReplay as replay:
                 return self._operational_action_result_view(replay.record)  # type: ignore[arg-type]
@@ -1284,6 +1294,8 @@ class SupervisorService:
         session: AsyncSession,
         payload: OperationalActionRequest,
         packet: AuthoritativeWorkPacket | None,
+        *,
+        consume: bool = True,
     ) -> OperationalActionApprovalRecord:
         if not payload.approvalId:
             raise ValueError("Gated operational actions require a server-issued approval id.")
@@ -1311,6 +1323,8 @@ class SupervisorService:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at <= now:
             raise ValueError("Operational action approval is expired.")
+        if not consume:
+            return approval
         consumed_at = now
         result = await session.execute(
             update(OperationalActionApprovalRecord)
