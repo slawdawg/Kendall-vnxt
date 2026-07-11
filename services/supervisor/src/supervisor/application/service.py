@@ -1589,7 +1589,7 @@ class SupervisorService:
         return result.scalars().first()
 
     def _authoritative_source_ref_payload(self, source_ref: AuthoritativePacketSourceRefView) -> dict:
-        source_payload = source_ref.model_dump()
+        source_payload = source_ref.model_dump(exclude_none=True)
         if source_payload.get("title") is not None:
             _validate_authoritative_metadata_text(source_payload["title"], path="sourceRef.title")
         planning_authority = self._planning_source_authority(source_payload.get("pathOrUrl"))

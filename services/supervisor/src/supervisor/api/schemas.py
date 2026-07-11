@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
 
 from supervisor.domain.types import (
     AuditMode,
@@ -1351,6 +1351,13 @@ class AuthoritativePacketSourceRefView(BaseModel):
             raise ValueError("source ref title must not be blank")
         return _validate_authoritative_metadata_text(value, path="sourceRef.title")
 
+    @model_serializer(mode="wrap")
+    def _omit_unset_content_digest(self, handler):
+        serialized = handler(self)
+        if self.contentSha256 is None:
+            serialized.pop("contentSha256", None)
+        return serialized
+
 
 class AuthoritativeWorkPacketCreateRequest(BaseModel):
     packetId: str | None = Field(default=None, max_length=80)
@@ -1788,6 +1795,14 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
     updatedAt: datetime
     metadataOnly: Literal[True] = True
 
+    @model_serializer(mode="wrap")
+    def _omit_unset_legacy_lineage(self, handler):
+        serialized = handler(self)
+        if self.workItemId is None:
+            for field_name in ("workItemId", "queueLease", "executionAttempts", "correlationIds"):
+                serialized.pop(field_name, None)
+        return serialized
+
 
 class PipelineSelectedPacketDetailV0View(BaseModel):
     packetId: str
@@ -1815,6 +1830,14 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
     correlationIds: list[str] = Field(default_factory=list)
     metadataOnly: Literal[True] = True
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_legacy_lineage(self, handler):
+        serialized = handler(self)
+        if self.workItemId is None:
+            for field_name in ("workItemId", "queueLease", "executionAttempts", "correlationIds"):
+                serialized.pop(field_name, None)
+        return serialized
 
 
 class PipelineManagerSummaryV0View(BaseModel):
