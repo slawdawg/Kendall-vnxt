@@ -30,6 +30,9 @@ TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
     r"|^[A-Za-z0-9+/]{48,}={0,2}$|^[a-f0-9]{40,}$",
     re.IGNORECASE,
 )
+MAX_METADATA_DEPTH = 64
+MAX_METADATA_NODES = 1000
+MAX_METADATA_AGGREGATE_BYTES = 64 * 1024
 EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -56,26 +59,50 @@ def _is_safe_local_proof_text(value: str) -> bool:
     return bool(text) and len(text) <= 160 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text) and not TOKEN_LIKE_METADATA_VALUE_RE.search(text)
 
 
-def _validate_metadata_tree(value: Any, *, path: str = "metadata") -> Any:
+def _validate_metadata_tree(
+    value: Any,
+    *,
+    path: str = "metadata",
+    _depth: int = 0,
+    _state: dict[str, int] | None = None,
+) -> Any:
+    state = {"nodes": 0, "bytes": 0} if _state is None else _state
+    if _depth > MAX_METADATA_DEPTH:
+        raise ValueError(f"{path} exceeds the metadata nesting limit of {MAX_METADATA_DEPTH}.")
+    state["nodes"] += 1
+    if state["nodes"] > MAX_METADATA_NODES:
+        raise ValueError(f"{path} exceeds the metadata node limit of {MAX_METADATA_NODES}.")
+
+    def add_size(size: int) -> None:
+        state["bytes"] += size
+        if state["bytes"] > MAX_METADATA_AGGREGATE_BYTES:
+            raise ValueError(f"{path} exceeds the metadata aggregate size limit of {MAX_METADATA_AGGREGATE_BYTES} bytes.")
+
     if isinstance(value, dict):
         safe: dict[str, Any] = {}
         for key, child in value.items():
             if not isinstance(key, str) or not key.strip():
                 raise ValueError(f"{path} keys must be non-empty strings.")
             key = key.strip()
+            add_size(len(key.encode("utf-8")))
             if UNSAFE_METADATA_KEY_RE.search(key):
                 raise ValueError(f"{path}.{key} is not permitted in metadata-only state.")
-            safe[key] = _validate_metadata_tree(child, path=f"{path}.{key}")
+            safe[key] = _validate_metadata_tree(child, path=f"{path}.{key}", _depth=_depth + 1, _state=state)
         return safe
     if isinstance(value, list):
-        return [_validate_metadata_tree(child, path=f"{path}[]") for child in value]
+        return [
+            _validate_metadata_tree(child, path=f"{path}[]", _depth=_depth + 1, _state=state)
+            for child in value
+        ]
     if isinstance(value, str):
         text = value.strip()
+        add_size(len(text.encode("utf-8")))
         digest_value = path.endswith(".sourceContentSha256") and bool(re.fullmatch(r"[0-9a-fA-F]{64}", text))
         if len(text) > 1000 or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text) or (TOKEN_LIKE_METADATA_VALUE_RE.search(text) and not digest_value):
             raise ValueError(f"{path} contains secret, credential, raw-provider, or token-like content.")
         return text
     if value is None or isinstance(value, (bool, int, float)):
+        add_size(len(str(value).encode("utf-8")))
         return value
     raise ValueError(f"{path} contains an unsupported metadata value.")
 

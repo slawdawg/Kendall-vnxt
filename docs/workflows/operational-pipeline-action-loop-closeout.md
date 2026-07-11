@@ -60,7 +60,6 @@ delivery authority remain pending.
 - `node --test tests/pipeline-gate3-approval.test.mjs tests/dashboard-pipeline-fixtures.test.mjs tests/pipeline-control-plane-lifecycle.test.mjs`
 - `pnpm run test:manager-control-plane:contracts`
 - `pnpm --filter @kendall/dashboard exec tsc --noEmit`
-- `tests/fixtures/pipeline/pipeline-operational-action-loop-proof-2026-07-10.json`
 
 The smoke and integration proof use disposable local SQLite state, do not call
 providers, and retain only bounded metadata. Client-supplied approval evidence
@@ -96,7 +95,7 @@ Exact bounded proof command and result:
 
 ```text
 timeout 180s uv run --directory services/supervisor python scripts/pipeline_operational_smoke.py
-exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, engineSessionReloadVerified=true
+exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, replayedWorkItemSnapshotVerified=true, engineSessionReloadVerified=true
 ```
 
 This closeout does not claim live, bounded-live, production-observed, external

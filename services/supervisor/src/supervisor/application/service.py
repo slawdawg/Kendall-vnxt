@@ -1931,6 +1931,9 @@ class SupervisorService:
             "work_item.queued",
             item.status_summary,
             {
+                "state": item.state,
+                "lane": item.lane,
+                "blockedReason": item.blocked_reason,
                 "source": item.source,
                 "title": item.title,
                 "requestedOutcome": item.requested_outcome,
@@ -19193,9 +19196,21 @@ class SupervisorService:
             raise ValueError("Local proof source authority must be a Git-tracked file in the repository index.")
         if "implementation-artifacts" in source_path or "proof" in source_path.lower():
             raise ValueError("Proof output artifacts cannot be used as local proof source authority.")
-        digest = hashlib.sha256(source_file.read_bytes()).hexdigest()
+        working_tree_bytes = source_file.read_bytes()
+        index_blob_result = subprocess.run(
+            ["git", "show", f":{source_path}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if index_blob_result.returncode != 0:
+            raise ValueError("Local proof source authority Git index blob could not be read.")
+        index_bytes = index_blob_result.stdout
+        if working_tree_bytes != index_bytes:
+            raise ValueError("Local proof source authority working-tree bytes do not match the Git index blob.")
+        digest = hashlib.sha256(index_bytes).hexdigest()
         if source_ref.get("contentSha256") != digest:
-            raise ValueError("Local proof source authority digest does not match the repository file.")
+            raise ValueError("Local proof source authority digest does not match the Git index blob.")
         return digest
 
     async def run_authoritative_local_proof(
@@ -19382,8 +19397,21 @@ class SupervisorService:
             raise ValueError("Cannot rebuild a local-proof WorkItem without its queued event.")
         queued_payload = queued_event.payload if isinstance(queued_event.payload, dict) else {}
         latest_lifecycle = lifecycle_events[-1]
-        latest_workflow = workflow_events[-1] if workflow_events else queued_event
-        latest_workflow_payload = latest_workflow.payload if isinstance(latest_workflow.payload, dict) else {}
+        state_events: list[WorkflowEvent] = []
+        for event in workflow_events:
+            event_payload = event.payload if isinstance(event.payload, dict) else {}
+            event_state = event_payload.get("state")
+            if not isinstance(event_state, str):
+                continue
+            try:
+                WorkflowState(event_state)
+            except ValueError:
+                continue
+            state_events.append(event)
+        if not state_events:
+            raise ValueError("Cannot rebuild a local-proof WorkItem without preserved state-bearing workflow events.")
+        latest_state_event = state_events[-1]
+        latest_state_payload = latest_state_event.payload if isinstance(latest_state_event.payload, dict) else {}
 
         first_lifecycle = lifecycle_events[0]
         source_ref = dict(first_lifecycle.source_ref_json or {})
@@ -19425,18 +19453,18 @@ class SupervisorService:
             details=queued_payload.get("details") if isinstance(queued_payload.get("details"), str) else None,
             risk_level=str(queued_payload.get("riskLevel") or RiskLevel.LOW.value),
             metadata_json=item_metadata,
-            state=str(latest_workflow_payload.get("state") or WorkflowState.QUEUED.value),
-            lane=latest_workflow_payload.get("lane") if isinstance(latest_workflow_payload.get("lane"), str) else None,
-            assignee_id=latest_workflow_payload.get("assigneeId") if isinstance(latest_workflow_payload.get("assigneeId"), str) else None,
-            assignee_label=latest_workflow_payload.get("assigneeLabel") if isinstance(latest_workflow_payload.get("assigneeLabel"), str) else None,
-            status_summary=latest_workflow.summary,
-            blocked_reason=latest_workflow_payload.get("blockedReason") if isinstance(latest_workflow_payload.get("blockedReason"), str) else None,
-            next_step=next_step_summary(WorkflowState(str(latest_workflow_payload.get("state") or WorkflowState.QUEUED.value))),
+            state=str(latest_state_payload["state"]),
+            lane=latest_state_payload.get("lane") if isinstance(latest_state_payload.get("lane"), str) else None,
+            assignee_id=latest_state_payload.get("assigneeId") if isinstance(latest_state_payload.get("assigneeId"), str) else None,
+            assignee_label=latest_state_payload.get("assigneeLabel") if isinstance(latest_state_payload.get("assigneeLabel"), str) else None,
+            status_summary=latest_state_event.summary,
+            blocked_reason=latest_state_payload.get("blockedReason") if isinstance(latest_state_payload.get("blockedReason"), str) else None,
+            next_step=next_step_summary(WorkflowState(str(latest_state_payload["state"]))),
             requires_audit=bool(queued_payload.get("requiresAudit", False)),
             audit_mode=str(queued_payload.get("auditMode") or AuditMode.NONE.value),
             created_at=queued_event.created_at,
-            updated_at=latest_workflow.created_at,
-            last_event_at=latest_workflow.created_at,
+            updated_at=latest_state_event.created_at,
+            last_event_at=latest_state_event.created_at,
         )
 
         # Delete only materialized packet/WorkItem projections. Workflow and

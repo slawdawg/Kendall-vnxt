@@ -148,6 +148,7 @@ def assert_canonical_trace(proof: dict, packet_id: str, label: str) -> None:
 
 
 def main() -> int:
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
     designated_temp_root = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
     designated_temp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="gate4b-", dir=designated_temp_root) as temp_dir:
@@ -168,7 +169,16 @@ def main() -> int:
         )
         if tracked_source.returncode != 0 or tracked_source.stdout.strip() != source_path:
             fail(f"source authority is not Git-tracked in the fresh worktree: {source_path}")
-        source_digest = hashlib.sha256(source_file.read_bytes()).hexdigest()
+        index_source = subprocess.run(
+            ["git", "show", f":{source_path}"],
+            cwd=source_file.parents[2],
+            capture_output=True,
+            check=False,
+        )
+        working_source_bytes = source_file.read_bytes()
+        if index_source.returncode != 0 or working_source_bytes != index_source.stdout:
+            fail("tracked source authority working-tree bytes did not match the Git index blob")
+        source_digest = hashlib.sha256(index_source.stdout).hexdigest()
         source_ref = {
             "refId": f"repo_doc:{source_path}",
             "sourceType": "repo_doc",
@@ -478,6 +488,47 @@ def main() -> int:
             )
             if unsafe_work_item.status_code != 422:
                 fail(f"generic WorkItem accepted token-like metadata: {unsafe_work_item.text[:240]}")
+            deep_metadata: dict[str, object] = {}
+            deep_cursor = deep_metadata
+            for index in range(1500):
+                child: dict[str, object] = {}
+                deep_cursor[f"level{index}"] = child
+                deep_cursor = child
+            deep_metadata_response = client.post(
+                "/work-items",
+                json={
+                    "title": "Deep metadata WorkItem",
+                    "requestedOutcome": "Must be rejected without recursion failure.",
+                    "source": source_path,
+                    "metadata": deep_metadata,
+                },
+            )
+            if deep_metadata_response.status_code != 422:
+                fail(f"deep metadata was not rejected as typed 422: {deep_metadata_response.status_code} {deep_metadata_response.text[:240]}")
+            oversized_metadata_response = client.post(
+                "/work-items",
+                json={
+                    "title": "Oversized metadata WorkItem",
+                    "requestedOutcome": "Must be rejected before event persistence.",
+                    "source": source_path,
+                    "metadata": {"oversized": "x" * (64 * 1024 + 1)},
+                },
+            )
+            if oversized_metadata_response.status_code != 422:
+                fail(f"oversized metadata was not rejected as typed 422: {oversized_metadata_response.status_code} {oversized_metadata_response.text[:240]}")
+            listed_work_items_after_metadata = client.get("/work-items")
+            if listed_work_items_after_metadata.status_code != 200 or any(
+                item.get("title") in {"Deep metadata WorkItem", "Oversized metadata WorkItem"}
+                for item in listed_work_items_after_metadata.json().get("data", [])
+            ):
+                fail("rejected deep or oversized metadata created a WorkItem projection")
+            with sqlite3.connect(db_path) as metadata_db:
+                persisted_metadata_events = metadata_db.execute(
+                    "SELECT COUNT(*) FROM workflow_events WHERE payload LIKE ? OR payload LIKE ?",
+                    ("%Deep metadata WorkItem%", "%Oversized metadata WorkItem%"),
+                ).fetchone()[0]
+            if persisted_metadata_events:
+                fail("rejected deep or oversized metadata persisted a workflow event")
             repo_root = Path(__file__).resolve().parents[3]
             untracked_source_path = "docs/workflows/.gate4b-untracked-source.md"
             untracked_source_file = repo_root / untracked_source_path
@@ -542,6 +593,34 @@ def main() -> int:
                 },
             )
             require_local_rejected(traversal_proof, "outside-root source authority", "repository-relative path")
+            digest_mismatch_packet = require(
+                client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": "packet-gate-4b-index-digest-mismatch",
+                        "title": "Gate 4B index digest mismatch rejection",
+                        "initialStage": "capture",
+                        "status": "waiting",
+                        "truthLabel": "source_owned",
+                        "sourceRef": {**source_ref, "contentSha256": "0" * 64},
+                        "actor": {"actorType": "manager", "actorId": "gate-4b-proof", "actorLabel": "Gate 4B proof"},
+                        "idempotencyKey": "create-gate-4b-index-digest-mismatch",
+                        "correlationId": "corr:create-gate-4b-index-digest-mismatch",
+                    },
+                ),
+                200,
+                "Git index digest mismatch packet seed",
+            )
+            digest_mismatch_proof = client.post(
+                f"/pipeline-control-plane/work-packets/{digest_mismatch_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-index-digest-mismatch-proof",
+                    "correlationId": "corr:gate-4b-index-digest-mismatch-proof",
+                    "scenario": "happy",
+                },
+            )
+            require_local_rejected(digest_mismatch_proof, "Git index digest mismatch", "digest does not match the Git index blob")
             unsafe_actor = client.post(
                 f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
                 json={
@@ -843,6 +922,23 @@ def main() -> int:
                 captured_work_item_history = captured_work_item_history_response.json().get("data", [])
                 if len(captured_packet_history) < 7 or len(captured_work_item_history) < 6:
                     fail("event reconstruction proof did not capture a complete packet and WorkItem history")
+                pre_replay_packet = require(
+                    reloaded_client.get(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}"),
+                    200,
+                    "pre-delete authoritative packet",
+                )
+                pre_replay_item = require(
+                    reloaded_client.get(f"/work-items/{happy_item['id']}"),
+                    200,
+                    "pre-delete canonical WorkItem",
+                )
+                pre_replay_item_snapshot = {
+                    key: pre_replay_item[key]
+                    for key in ("state", "lane", "blockedReason", "nextStep", "statusSummary")
+                }
+                pre_replay_item_snapshot["authoritativePacketId"] = pre_replay_item["metadata"].get("authoritativePacketId")
+                pre_replay_item_snapshot["authoritativePacketStage"] = pre_replay_item["metadata"].get("authoritativePacketStage")
+                pre_replay_item_snapshot["authoritativePacketStatus"] = pre_replay_item["metadata"].get("authoritativePacketStatus")
                 replay = require(
                     reloaded_client.post(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/replay"),
                     200,
@@ -874,8 +970,23 @@ def main() -> int:
                 if replayed_packet["sourceRef"] != source_ref or replayed_packet["parentPacketId"] is not None or replayed_packet["lineageKind"] != "root":
                     fail("event reconstruction replay did not rebuild packet authority and lineage solely from events")
                 replayed_item = require(reloaded_client.get(f"/work-items/{happy_item['id']}"), 200, "replayed canonical WorkItem")
-                if replayed_item["metadata"].get("authoritativePacketId") != happy_packet["packetId"]:
-                    fail("event reconstruction replay did not rebuild the canonical WorkItem association")
+                replayed_item_snapshot = {
+                    key: replayed_item[key]
+                    for key in ("state", "lane", "blockedReason", "nextStep", "statusSummary")
+                }
+                replayed_item_snapshot["authoritativePacketId"] = replayed_item["metadata"].get("authoritativePacketId")
+                replayed_item_snapshot["authoritativePacketStage"] = replayed_item["metadata"].get("authoritativePacketStage")
+                replayed_item_snapshot["authoritativePacketStatus"] = replayed_item["metadata"].get("authoritativePacketStatus")
+                if replayed_item_snapshot != pre_replay_item_snapshot:
+                    fail(f"event reconstruction changed the canonical WorkItem state snapshot: before={pre_replay_item_snapshot}, after={replayed_item_snapshot}")
+                if (
+                    replayed_packet["currentStage"] != pre_replay_packet["currentStage"]
+                    or replayed_packet["status"] != pre_replay_packet["status"]
+                    or replayed_item["metadata"].get("authoritativePacketStage") != replayed_packet["currentStage"]
+                    or replayed_item["metadata"].get("authoritativePacketStatus") != replayed_packet["status"]
+                    or replayed_item["state"] != "reviewing"
+                ):
+                    fail("replayed packet and WorkItem did not retain canonical state agreement")
                 reloaded_projection = replayed_projection
 
             with sqlite3.connect(db_path) as persisted_db:
@@ -1034,6 +1145,9 @@ def main() -> int:
                         "untrackedSourceRejectedAndRemoved": True,
                         "leaseAdversarialFencingVerified": True,
                         "metadataSafetyBoundaryVerified": True,
+                        "metadataDepthAndSizeBoundsVerified": True,
+                        "sourceIndexDigestBoundaryVerified": True,
+                        "replayedWorkItemSnapshotVerified": True,
                         "sourceTraversalRejected": True,
                         "canonicalPacketWorkItemStateAgreementVerified": True,
                         "eventReconstructionReplayVerified": True,
