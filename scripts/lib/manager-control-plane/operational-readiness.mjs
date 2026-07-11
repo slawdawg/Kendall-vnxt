@@ -85,7 +85,7 @@ function reasonFor(code, fallback = "unknown") {
     "resource_threshold_exceeded", "cost_threshold_exceeded", "timeout", "recovery_boundary_breached", "unknown",
     "canary_not_passed", "stage_plan_invalid", "capacity_missing", "stage_threshold_exceeded",
     "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
-    "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed",
+    "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed", "fixture_evidence",
     "runbook_gap", "high_risk_gap", "runbook_owner_missing", "runbook_trigger_missing", "runbook_gate_missing", "runbook_recovery_missing",
   ]);
   return known.has(code) ? code : fallback;
@@ -301,6 +301,7 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
   };
   const readinessContract = context.readinessContract || options.readinessContract || {};
   const backendTruth = BACKEND_TRUTHS.has(context.backendTruth || options.backendTruth) ? (context.backendTruth || options.backendTruth) : "dry_run";
+  const fixtureEvidence = context.fixtureEvidence === true;
   const authority = context.canaryAuthority || context.authority || {};
   const authorityAllowed = (authority.state || context.authorityState || options.authorityState) === "allowed" &&
     (authority.proven === true || context.authorityProven === true || options.authorityProven === true);
@@ -375,7 +376,7 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
   addGate("exact_canary_scope", exactTarget && oneWorker, "target_not_exact", "Provide exactly one worker, assignment, owner, and run identity.");
   addGate("predecessor_readiness", readinessReady, "predecessor_gate_not_passed", "Verify the passing 25-1 readiness contract before running the canary.");
   addGate("canary_authority", authorityAllowed, "canary_authority_missing", "Record explicit bounded canary authority before live execution.");
-  addGate("live_truth", backendTruth === "live" && context.backendTruthProven === true, "backend_truth_unproven", "Hold the canary until live backend truth is explicitly proven.");
+  addGate("live_truth", backendTruth === "live" && context.backendTruthProven === true && !fixtureEvidence, fixtureEvidence ? "fixture_evidence" : "backend_truth_unproven", fixtureEvidence ? "Replace fixture evidence with an independently observed canary before allowing ramp." : "Hold the canary until live backend truth is explicitly proven.");
   addGate("telemetry", telemetryReady, "telemetry_missing", "Provide fresh telemetry coverage and alert threshold metadata.");
   addGate("lease", leaseReady, "lease_missing", "Provide exact dispatcher lease proof for the canary worker.", refs([...evidenceRefs, lease.proofRef].filter(Boolean)));
   addGate("checkpoint", checkpointReady, "checkpoint_missing", "Provide a checkpoint or receipt proof for the canary worker.", refs([...evidenceRefs, checkpoint.proofRef].filter(Boolean)));
@@ -396,6 +397,7 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
       : "Repair the typed canary blockers and rerun the bounded readiness/canary evidence gate.";
   return {
     schemaVersion: CANARY_SCHEMA_VERSION,
+    evidenceClass: fixtureEvidence ? "fixture" : backendTruth === "live" ? "live_observed" : "simulated",
     target,
     workerCount: oneWorker ? 1 : Number(context.workerCount),
     backendTruth,
@@ -428,6 +430,7 @@ export function validateOneWorkerLiveCanaryEvidence(evidence = {}) {
   if (!CANARY_OUTCOMES.has(evidence?.outcome)) blockers.push({ code: "unknown", message: "Canary outcome is missing or malformed." });
   if (evidence?.workerCount !== 1) blockers.push({ code: "target_not_exact", message: "Canary evidence must cover exactly one worker." });
   if (BACKEND_TRUTHS.has(evidence?.backendTruth) === false) blockers.push({ code: "backend_truth_unproven", message: "Canary truth label is missing or malformed." });
+  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Canary evidence requires an explicit provenance class." });
   if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Canary evidence requires safe source refs." });
   if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Canary evidence requires safe evidence refs." });
   if (!Array.isArray(evidence?.gates) || evidence.gates.length < 10) blockers.push({ code: "evidence_missing", message: "Canary evidence requires the bounded gate set." });
@@ -435,7 +438,7 @@ export function validateOneWorkerLiveCanaryEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Canary evidence timestamps must be fresh and bounded." });
-  if (evidence?.outcome === "pass" && (evidence.backendTruth !== "live" || evidence.rampAllowed !== true || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "A passing canary requires live truth, ramp permission, and no blockers." });
+  if (evidence?.outcome === "pass" && (evidence.backendTruth !== "live" || evidence.evidenceClass !== "live_observed" || evidence.rampAllowed !== true || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "A passing canary requires independently observed live truth, ramp permission, and no blockers." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped canary requires rollback metadata." });
   return blockers;
 }
@@ -503,6 +506,7 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
   const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
   const canaryEvidence = context.canaryEvidence || options.canaryEvidence || {};
+  const fixtureEvidence = context.fixtureEvidence === true || canaryEvidence.evidenceClass === "fixture";
   const sourceRefs = refs([...(canaryEvidence.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(canaryEvidence.evidenceRefs || []), ...(context.evidenceRefs || [])]);
   const requestedStages = Array.isArray(context.stages || options.stages) ? (context.stages || options.stages) : DEFAULT_RAMP_WORKER_COUNTS.map((workerCount) => ({ workerCount }));
@@ -517,7 +521,7 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
   const blockers = [];
   const stageResults = [];
   const canaryPass = canaryEvidence?.schemaVersion === CANARY_SCHEMA_VERSION &&
-    canaryEvidence.outcome === "pass" && canaryEvidence.backendTruth === "live" && canaryEvidence.rampAllowed === true &&
+    canaryEvidence.outcome === "pass" && canaryEvidence.backendTruth === "live" && canaryEvidence.evidenceClass === "live_observed" && canaryEvidence.rampAllowed === true &&
     validateOneWorkerLiveCanaryEvidence(canaryEvidence).length === 0;
   if (!canaryPass) blockers.push({ gateId: "canary_predecessor", reason: reasonFor("canary_not_passed"), nextAction: "Complete and preserve a passing live 25-2 canary evidence packet before ramp." });
   const planValid = expectedWorkerCounts.length > 0 && (expectedWorkerCounts.every((value, index) => index === 0 || value > expectedWorkerCounts[index - 1])) &&
@@ -569,6 +573,7 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
       : "Repair the canary, stage plan, authority, threshold, or lifecycle blockers before any ramp attempt.";
   return {
     schemaVersion: RAMP_SCHEMA_VERSION,
+    evidenceClass: fixtureEvidence ? "fixture" : canaryEvidence.evidenceClass || "unknown",
     canaryEvidenceRef: evidenceRefs.find((ref) => ref.startsWith("evidence:")) || null,
     canaryOutcome: canaryEvidence.outcome || "unknown",
     defaultStageWorkerCounts: DEFAULT_RAMP_WORKER_COUNTS,
@@ -605,7 +610,8 @@ export function validateLiveCapacityRampEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Ramp evidence timestamps must be fresh and bounded." });
-  if (evidence?.outcome === "pass" && (evidence.scaleEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0 || evidence.canaryOutcome !== "pass")) blockers.push({ code: "inconsistent_result", message: "A passing ramp requires a passing canary, complete stage evidence, and rollout disabled." });
+  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Ramp evidence requires an explicit provenance class." });
+  if (evidence?.outcome === "pass" && (evidence.evidenceClass !== "live_observed" || evidence.scaleEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0 || evidence.canaryOutcome !== "pass")) blockers.push({ code: "inconsistent_result", message: "A passing ramp requires independently observed canary evidence, complete stage evidence, and rollout disabled." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped ramp requires rollback metadata." });
   return blockers;
 }
@@ -642,9 +648,10 @@ export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
   const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
   const predecessor = context.rampEvidence || context.canaryEvidence || options.rampEvidence || options.canaryEvidence || {};
+  const fixtureEvidence = context.fixtureEvidence === true || predecessor.evidenceClass === "fixture";
   const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
-  const predecessorReady = (predecessor.outcome === "pass" && (predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true)) || context.fixtureEvidence === true;
+  const predecessorReady = !fixtureEvidence && predecessor.outcome === "pass" && (predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true);
   const requestedDrills = Array.isArray(context.drills || options.drills) ? (context.drills || options.drills) : RECOVERY_DRILL_KINDS.map((kind) => ({ kind }));
   const drills = requestedDrills.map(normalizeRecoveryDrill);
   const blockers = [];
@@ -682,6 +689,7 @@ export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
   };
   return {
     schemaVersion: RECOVERY_SCHEMA_VERSION,
+    evidenceClass: fixtureEvidence ? "fixture" : predecessor.evidenceClass || "unknown",
     predecessorOutcome: predecessor.outcome || "unknown",
     predecessorReady,
     drillKinds: RECOVERY_DRILL_KINDS,
@@ -719,7 +727,8 @@ export function validateResilienceRecoveryEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Recovery evidence timestamps must be fresh and bounded." });
-  if (evidence?.outcome === "pass" && (evidence.reliabilityEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing recovery evidence requires complete drills, no blockers, and rollout disabled." });
+  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Recovery evidence requires an explicit provenance class." });
+  if (evidence?.outcome === "pass" && (evidence.evidenceClass !== "live_observed" || evidence.reliabilityEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing recovery evidence requires independently observed drills, no blockers, and rollout disabled." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped recovery validation requires rollback metadata." });
   return blockers;
 }
@@ -745,9 +754,10 @@ export function buildOperationalHardeningRunbookEvidence(options = {}, context =
   const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
   const predecessor = context.recoveryEvidence || context.rampEvidence || context.canaryEvidence || options.recoveryEvidence || options.rampEvidence || {};
+  const fixtureEvidence = context.fixtureEvidence === true || predecessor.evidenceClass === "fixture";
   const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
-  const predecessorReady = predecessor.outcome === "pass" && (predecessor.reliabilityEvidenceReady === true || predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true) || context.fixtureEvidence === true;
+  const predecessorReady = !fixtureEvidence && predecessor.outcome === "pass" && (predecessor.reliabilityEvidenceReady === true || predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true);
   const requestedDomains = Array.isArray(context.domains || options.domains) ? (context.domains || options.domains) : HARDENING_DOMAINS.map((domain) => ({ domain }));
   const domains = HARDENING_DOMAINS.map((domain, index) => normalizeHardeningDomain(requestedDomains.find((candidate) => candidate?.domain === domain) || {}, index));
   const blockers = [];
@@ -770,6 +780,7 @@ export function buildOperationalHardeningRunbookEvidence(options = {}, context =
   };
   return {
     schemaVersion: HARDENING_SCHEMA_VERSION,
+    evidenceClass: fixtureEvidence ? "fixture" : predecessor.evidenceClass || "unknown",
     predecessorOutcome: predecessor.outcome || "unknown",
     predecessorReady,
     domains,
@@ -805,7 +816,8 @@ export function validateOperationalHardeningRunbookEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Hardening evidence timestamps must be fresh and bounded." });
-  if (evidence?.outcome === "pass" && (evidence.readinessHandoffReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing hardening evidence requires complete domains, no blockers, and rollout disabled." });
+  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Hardening evidence requires an explicit provenance class." });
+  if (evidence?.outcome === "pass" && (evidence.evidenceClass !== "live_observed" || evidence.readinessHandoffReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing hardening evidence requires independently observed predecessors, complete domains, no blockers, and rollout disabled." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "Stopped hardening requires recovery metadata." });
   return blockers;
 }
@@ -897,6 +909,8 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
   let structurallyReady = true;
   let simulatedEvidence = false;
   let staleEvidence = false;
+  let fixtureEvidence = context.fixtureEvidence === true;
+  let unknownEvidence = false;
   for (const entry of packetEntries) {
     const packet = entry.packet;
     if (!packet || typeof packet !== "object" || !packet.schemaVersion) {
@@ -907,10 +921,23 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
     const validator = decisionPacketValidator(entry.id);
     const validation = typeof validator === "function" ? validator(packet) : [{ code: "invalid", message: "No predecessor validator is available." }];
     const isSimulated = packet.backendTruth === "simulated" || packet.truthLabel === "simulated" || packet.sourceTruth === "simulated";
+    const isFixture = packet.evidenceClass === "fixture" || packet.decisionSignals?.fixtureEvidence === true;
+    const isLiveObserved = packet.evidenceClass === "live_observed";
+    fixtureEvidence ||= isFixture;
+    if (isFixture) {
+      simulatedEvidence = true;
+      structurallyReady = false;
+      typedBlockers.push(decisionBlocker("decision_fixture_evidence", `${entry.id} evidence is fixture-backed.`, "Hold the decision until independently observed evidence is captured."));
+    }
     if (isSimulated) {
       simulatedEvidence = true;
       structurallyReady = false;
       typedBlockers.push(decisionBlocker("decision_simulated_evidence", `${entry.id} evidence is simulated-only.`, "Hold the decision until authoritative evidence is captured."));
+    }
+    if (!isLiveObserved && !isFixture && !isSimulated) {
+      unknownEvidence = true;
+      structurallyReady = false;
+      typedBlockers.push(decisionBlocker("decision_evidence_provenance_missing", `${entry.id} evidence has no explicit live provenance.`, "Hold the decision until independently observed live evidence is classified."));
     }
     if (validation.length > 0) {
       structurallyReady = false;
@@ -924,6 +951,10 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
     if (!decisionPacketOutcome(entry.id, packet)) {
       typedBlockers.push(decisionBlocker("decision_predecessor_not_passed", `${entry.id} evidence did not pass.`, `Hold ${entry.id} promotion and follow its recovery or remediation action.`));
     }
+  }
+  if (fixtureEvidence && !typedBlockers.some((blocker) => blocker.code === "decision_fixture_evidence")) {
+    structurallyReady = false;
+    typedBlockers.push(decisionBlocker("decision_fixture_evidence", "The readiness decision was requested with fixture-backed evidence.", "Hold the decision until independently observed evidence is captured."));
   }
   const finalAuthority = context.finalAuthority || context.decisionAuthority || options.finalAuthority || {};
   const authorityRefs = decisionRefs(finalAuthority.evidenceRefs);
@@ -942,7 +973,7 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
 
   const allPredecessorsPass = packetEntries.every((entry) => decisionPacketOutcome(entry.id, entry.packet));
   const noStopPredecessor = packetEntries.every((entry) => !["stop"].includes(entry.packet?.outcome));
-  const limitedEligible = structurallyReady && noStopPredecessor && limitedRequested && limitedBoundaries.length > 0 && authorityReady;
+  const limitedEligible = structurallyReady && allPredecessorsPass && noStopPredecessor && limitedRequested && limitedBoundaries.length > 0 && authorityReady;
   const decision = limitedEligible ? "limited_rollout" : structurallyReady && allPredecessorsPass && authorityReady && !limitedRequested ? "go" : "hold";
   const predecessorOutcomes = Object.fromEntries(packetEntries.map((entry) => [entry.id, safeId(entry.packet?.outcome || "missing") || "missing"]));
   const scopeInput = context.scope || options.scope || {};
@@ -986,6 +1017,7 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
       : "Hold production readiness until predecessor evidence, freshness, scope, and final authority blockers are resolved.";
   return {
     schemaVersion: PRODUCTION_DECISION_SCHEMA_VERSION,
+    evidenceClass: fixtureEvidence ? "fixture" : simulatedEvidence ? "simulated" : unknownEvidence ? "unknown" : "live_observed",
     decision,
     rationale,
     scope,
@@ -1019,7 +1051,7 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
       authorityReady,
       simulatedEvidence,
       staleEvidence,
-      fixtureEvidence: context.fixtureEvidence === true,
+      fixtureEvidence,
     },
   };
 }
@@ -1047,7 +1079,9 @@ export function validateProductionReadinessDecisionEvidence(evidence = {}) {
   const predecessorOutcomes = evidence?.predecessorOutcomes;
   if (!predecessorOutcomes || typeof predecessorOutcomes !== "object" || Array.isArray(predecessorOutcomes) || !["canary", "ramp", "recovery", "hardening"].every((id) => safeId(predecessorOutcomes[id]))) blockers.push({ code: "evidence_missing", message: "Production decision requires all predecessor outcomes." });
   if (evidence?.decision === "go" && (evidence.scope?.limited === true || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] !== "pass") || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Go requires all predecessor outcomes to pass with no blockers." });
-  if (evidence?.decision === "limited_rollout" && (evidence.scope?.limited !== true || !Array.isArray(evidence.scope.boundaries) || evidence.scope.boundaries.length === 0 || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] === "stop"))) blockers.push({ code: "inconsistent_result", message: "Limited rollout requires bounded scope and no stopped predecessor." });
+  if (!["fixture", "simulated", "unknown", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Production readiness decisions require an explicit provenance class." });
+  if (["go", "limited_rollout"].includes(evidence?.decision) && evidence.evidenceClass !== "live_observed") blockers.push({ code: "decision_non_live_evidence", message: "Production readiness decisions cannot promote non-live evidence." });
+  if (evidence?.decision === "limited_rollout" && (evidence.scope?.limited !== true || !Array.isArray(evidence.scope.boundaries) || evidence.scope.boundaries.length === 0 || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] !== "pass"))) blockers.push({ code: "inconsistent_result", message: "Limited rollout requires bounded scope and all predecessors to pass." });
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Production decision timestamps must be fresh and bounded." });
