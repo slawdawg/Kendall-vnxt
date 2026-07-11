@@ -119,6 +119,46 @@ Use task-fit model selection: choose the best model expected to complete the wor
 Report concise progress every few minutes with worker count, current story/epic, blockers needing operator action, usage/resource posture, and user-facing work ready to test. Do not ask for direction unless blocked, high-risk, or scope/authority expands.
 ```
 
+## BMAD-Supported Course-Correction Loop
+
+Use BMAD as the controlled planning and delivery loop around the authoritative
+source bundle. BMAD artifacts guide discovery and execution, but they do not
+invent product scope or replace source-owned requirements, architecture, policy,
+tests, or delivery evidence.
+
+For a course-correction cycle, follow this order:
+
+1. **Discover:** use Analyst/PM review and bounded party-mode or subagent
+   analysis to reconcile the PRD, architecture, epics, tracker, source state,
+   delivery evidence, and technical debt. Retain only metadata findings and
+   paths in local `_bmad-output/` review artifacts.
+2. **Decide:** use `bmad-correct-course` to produce a scoped proposal when a
+   requirement, architecture, authority, or acceptance boundary is wrong. Do
+   not create a new epic merely because the backlog or worker queue is empty.
+3. **Architect:** record runtime ownership, authority boundaries, evidence
+   provenance, topology, rollback, and stop lines in a source-owned ADR or
+   workflow contract before implementation scope is approved.
+4. **Plan:** use `bmad-sprint-planning` to reconcile statuses, then
+   `bmad-create-story` only for approved source-backed work with explicit
+   acceptance criteria, verification, and completion boundaries.
+5. **Implement:** use `bmad-dev-story` in a managed lane. Keep BMAD stories and
+   reviews local; rewrite durable decisions into source-owned code, tests, docs,
+   scripts, or policy.
+6. **Review and verify:** delegate `bmad-code-review` and required fixes, then
+   run focused and broader checks appropriate to the changed surface. Review is
+   incomplete until findings are fixed, explicitly gated, or operator-deferred.
+7. **Deliver:** use the governed workspace, PR, exact-head, merge, and cleanup
+   workflow. Keep delivery and cleanup evidence metadata-only.
+8. **Learn:** run `bmad-retrospective` at the end of each correction group or
+   epic and carry only source-owned lessons into the next cycle.
+
+For the current project correction, the first approved objective must be the
+source hierarchy, terminal backlog behavior, server-bound authority, and one
+honest integrated local operational loop. Epic 26 must remain blocked unless a
+new source-owned product outcome explicitly authorizes it. Hold when source
+authority, baseline ownership, evidence provenance, lifecycle ownership, or
+production/live definitions are ambiguous.
+
 ## Standing Authority
 
 Within the selected PRD scope, the manager may:
