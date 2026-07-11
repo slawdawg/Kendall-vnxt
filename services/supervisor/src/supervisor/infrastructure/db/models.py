@@ -14,11 +14,13 @@ def utcnow() -> datetime:
 
 class WorkItem(Base):
     __tablename__ = "work_items"
+    __table_args__ = (UniqueConstraint("authoritative_packet_id", name="uq_work_items_authoritative_packet"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title: Mapped[str] = mapped_column(String(255))
     requested_outcome: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(255))
+    authoritative_packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     risk_level: Mapped[str] = mapped_column(String(16), default=RiskLevel.LOW.value)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -126,6 +128,8 @@ class AuthoritativeWorkPacketLifecycleEvent(Base):
     causation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     packet_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parent_packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    lineage_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ready_to_test_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     operator_test_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
     operator_test_note: Mapped[str | None] = mapped_column(Text, nullable=True)

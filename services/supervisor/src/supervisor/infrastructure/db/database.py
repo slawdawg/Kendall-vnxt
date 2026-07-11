@@ -178,6 +178,13 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_label VARCHAR(120)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee_id VARCHAR(100)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee_label VARCHAR(120)"))
+            await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS authoritative_packet_id VARCHAR(80)"))
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_authoritative_packet "
+                    "ON work_items(authoritative_packet_id) WHERE authoritative_packet_id IS NOT NULL"
+                )
+            )
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalation_reason TEXT"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_by_id VARCHAR(100)"))
@@ -186,6 +193,8 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS queue_lease_id VARCHAR(36)"))
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS queue_fencing_token INTEGER"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS packet_title VARCHAR(255)"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS parent_packet_id VARCHAR(80)"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS lineage_kind VARCHAR(32)"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS ready_to_test_json JSON"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS operator_test_state VARCHAR(24)"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS operator_test_note TEXT"))
@@ -214,6 +223,14 @@ async def init_db() -> None:
                 await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN actor_label VARCHAR(120)"))
             result = await connection.execute(text("PRAGMA table_info(work_items)"))
             item_columns = {row[1] for row in result.fetchall()}
+            if "authoritative_packet_id" not in item_columns:
+                await connection.execute(text("ALTER TABLE work_items ADD COLUMN authoritative_packet_id VARCHAR(80)"))
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_authoritative_packet "
+                    "ON work_items(authoritative_packet_id) WHERE authoritative_packet_id IS NOT NULL"
+                )
+            )
             if "assignee_id" not in item_columns:
                 await connection.execute(text("ALTER TABLE work_items ADD COLUMN assignee_id VARCHAR(100)"))
             if "assignee_label" not in item_columns:
@@ -238,6 +255,10 @@ async def init_db() -> None:
             lifecycle_event_columns = {row[1] for row in result.fetchall()}
             if "packet_title" not in lifecycle_event_columns:
                 await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN packet_title VARCHAR(255)"))
+            if "parent_packet_id" not in lifecycle_event_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN parent_packet_id VARCHAR(80)"))
+            if "lineage_kind" not in lifecycle_event_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN lineage_kind VARCHAR(32)"))
             if "ready_to_test_json" not in lifecycle_event_columns:
                 await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN ready_to_test_json JSON"))
             if "operator_test_state" not in lifecycle_event_columns:

@@ -15,6 +15,7 @@ import importlib
 import os
 import sqlite3
 import sys
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -147,7 +148,9 @@ def assert_canonical_trace(proof: dict, packet_id: str, label: str) -> None:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="kendall-pipeline-smoke-") as temp_dir:
+    designated_temp_root = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
+    designated_temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="gate4b-", dir=designated_temp_root) as temp_dir:
         db_path = Path(temp_dir) / "smoke.db"
         os.environ["SUPERVISOR_DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
         os.environ["SUPERVISOR_ENABLE_BACKGROUND"] = "false"
@@ -156,6 +159,15 @@ def main() -> int:
         source_file = Path(__file__).resolve().parents[3] / source_path
         if not source_file.is_file() or source_file.is_symlink():
             fail(f"tracked source authority is missing or not a regular file: {source_path}")
+        tracked_source = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", source_path],
+            cwd=source_file.parents[2],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tracked_source.returncode != 0 or tracked_source.stdout.strip() != source_path:
+            fail(f"source authority is not Git-tracked in the fresh worktree: {source_path}")
         source_digest = hashlib.sha256(source_file.read_bytes()).hexdigest()
         source_ref = {
             "refId": f"repo_doc:{source_path}",
@@ -209,6 +221,8 @@ def main() -> int:
             initial_projection = require(client.get("/pipeline-control-plane/projection"), 200, "initial projection")
             if initial_projection["runtimeReadiness"]["operationalMode"] != "local_proof":
                 fail("projection did not report local_proof runtime readiness")
+            if initial_projection["runtimeReadiness"]["capabilityState"] != "unavailable" or initial_projection["runtimeReadiness"]["readinessState"] != "unavailable":
+                fail("projection did not report the server local-proof capability as unavailable before enablement")
             if initial_projection["fixtureMode"]["enabled"] or initial_projection["truthSummary"]["fixtureBacked"]:
                 fail("projection unexpectedly used fixture state")
             initial_detail = packet_detail(initial_projection, packet["packetId"])
@@ -420,7 +434,86 @@ def main() -> int:
                 },
             )
             require_local_rejected(disabled_proof, "local proof without server capability", "disabled by the server")
-            service.enable_local_proof_for_test(LOCAL_PROOF_TEST_CAPABILITY)
+            service.enable_local_proof_for_test(LOCAL_PROOF_TEST_CAPABILITY, db_path)
+            service.settings.database_url = f"sqlite+aiosqlite:///{Path(temp_dir) / 'arbitrary.db'}"
+            arbitrary_database_proof = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-arbitrary-db",
+                    "correlationId": "corr:gate-4b-arbitrary-db",
+                    "scenario": "happy",
+                },
+            )
+            require_local_rejected(arbitrary_database_proof, "arbitrary SQLite database", "does not match the server-created disposable attestation")
+            service.settings.database_url = f"sqlite+aiosqlite:///{db_path}"
+            forged_work_item = client.post(
+                "/work-items",
+                json={
+                    "title": "Forged canonical WorkItem",
+                    "requestedOutcome": "Must be rejected.",
+                    "source": source_path,
+                    "metadata": {
+                        "authoritativePacketId": happy_packet["packetId"],
+                        "localProofAuthority": "integrated_local",
+                        "tokenLikeValue": "ghp_1234567890abcdef",
+                    },
+                },
+            )
+            if forged_work_item.status_code != 422:
+                fail(f"generic WorkItem accepted forged canonical linkage metadata: {forged_work_item.text[:240]}")
+            listed_work_items = client.get("/work-items")
+            if listed_work_items.status_code != 200 or any(
+                item.get("title") == "Forged canonical WorkItem" for item in listed_work_items.json().get("data", [])
+            ):
+                fail("forged generic WorkItem metadata was persisted")
+            unsafe_work_item = client.post(
+                "/work-items",
+                json={
+                    "title": "Unsafe metadata WorkItem",
+                    "requestedOutcome": "Must be rejected.",
+                    "source": source_path,
+                    "metadata": {"opaque": "ghp_1234567890abcdef"},
+                },
+            )
+            if unsafe_work_item.status_code != 422:
+                fail(f"generic WorkItem accepted token-like metadata: {unsafe_work_item.text[:240]}")
+            repo_root = Path(__file__).resolve().parents[3]
+            untracked_source_path = "docs/workflows/.gate4b-untracked-source.md"
+            untracked_source_file = repo_root / untracked_source_path
+            untracked_source_file.write_text("temporary untracked source authority probe\n", encoding="utf-8")
+            try:
+                untracked_digest = hashlib.sha256(untracked_source_file.read_bytes()).hexdigest()
+                untracked_packet = require(
+                    client.post(
+                        "/pipeline-control-plane/work-packets",
+                        json={
+                            "packetId": "packet-gate-4b-untracked-source",
+                            "title": "Gate 4B untracked source rejection",
+                            "initialStage": "capture",
+                            "status": "waiting",
+                            "truthLabel": "source_owned",
+                            "sourceRef": {**source_ref, "pathOrUrl": untracked_source_path, "contentSha256": untracked_digest},
+                            "actor": {"actorType": "manager", "actorId": "gate-4b-proof", "actorLabel": "Gate 4B proof"},
+                            "idempotencyKey": "create-gate-4b-untracked-source",
+                            "correlationId": "corr:create-gate-4b-untracked-source",
+                        },
+                    ),
+                    200,
+                    "untracked source packet seed",
+                )
+                untracked_proof = client.post(
+                    f"/pipeline-control-plane/work-packets/{untracked_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-untracked-source-proof",
+                        "correlationId": "corr:gate-4b-untracked-source-proof",
+                        "scenario": "happy",
+                    },
+                )
+                require_local_rejected(untracked_proof, "untracked source authority", "Git-tracked file")
+            finally:
+                untracked_source_file.unlink(missing_ok=True)
             traversal_packet = require(
                 client.post(
                     "/pipeline-control-plane/work-packets",
@@ -448,7 +541,7 @@ def main() -> int:
                     "scenario": "happy",
                 },
             )
-            require_local_rejected(traversal_proof, "outside-root source authority", "regular file inside")
+            require_local_rejected(traversal_proof, "outside-root source authority", "repository-relative path")
             unsafe_actor = client.post(
                 f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
                 json={
@@ -520,6 +613,38 @@ def main() -> int:
             if not happy_lease["active"] or happy_lease["fencingToken"] < 2 or happy_lease["attemptCount"] < 1:
                 fail("happy local proof did not persist an active fenced queue lease")
 
+            omitted_heartbeat = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-omitted-heartbeat-token",
+                    "correlationId": "corr:gate-4b-omitted-heartbeat-token",
+                    "operation": "heartbeat",
+                },
+            )
+            require_local_rejected(omitted_heartbeat, "omitted heartbeat fencing token", "requires an explicit fencing token")
+            omitted_heartbeat_replay = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-omitted-heartbeat-token",
+                    "correlationId": "corr:gate-4b-omitted-heartbeat-token-replay",
+                    "operation": "heartbeat",
+                    "fencingToken": happy_lease["fencingToken"],
+                },
+            )
+            require_local_rejected(omitted_heartbeat_replay, "replayed omitted heartbeat token", "requires an explicit fencing token")
+            omitted_expire = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-omitted-expire-token",
+                    "correlationId": "corr:gate-4b-omitted-expire-token",
+                    "operation": "expire",
+                },
+            )
+            require_local_rejected(omitted_expire, "omitted expire fencing token", "requires an explicit fencing token")
+
             duplicate_local = client.post(
                 f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
                 json={
@@ -568,6 +693,17 @@ def main() -> int:
             )
             if heartbeat["fencingToken"] <= happy_lease["fencingToken"] or not heartbeat["active"]:
                 fail("valid lease heartbeat did not advance fencing metadata")
+            same_token_mutation = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-distinct-same-token-heartbeat",
+                    "correlationId": "corr:gate-4b-distinct-same-token-heartbeat",
+                    "operation": "heartbeat",
+                    "fencingToken": happy_lease["fencingToken"],
+                },
+            )
+            require_local_rejected(same_token_mutation, "distinct same-token lease mutation", "fencing token is stale")
             duplicate_heartbeat = client.post(
                 f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
                 json={
@@ -587,6 +723,7 @@ def main() -> int:
                         "idempotencyKey": "gate-4b-expire-lease",
                         "correlationId": "corr:gate-4b-expire-lease",
                         "operation": "expire",
+                        "fencingToken": heartbeat["fencingToken"],
                     },
                 ),
                 200,
@@ -598,9 +735,10 @@ def main() -> int:
                 f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
                 json={
                     "proofMode": "integrated_local",
-                    "idempotencyKey": "gate-4b-expire-lease",
-                    "correlationId": "corr:gate-4b-expire-lease-replay",
-                    "operation": "expire",
+                        "idempotencyKey": "gate-4b-expire-lease",
+                        "correlationId": "corr:gate-4b-expire-lease-replay",
+                        "operation": "expire",
+                        "fencingToken": heartbeat["fencingToken"],
                 },
             )
             require_local_rejected(duplicate_expire, "duplicate successful expiry", "already succeeded")
@@ -710,7 +848,13 @@ def main() -> int:
                     200,
                     "event reconstruction replay",
                 )
-                if replay["replayMode"] != "event_reconstruction" or replay["replayedLifecycleEventCount"] != len(captured_packet_history):
+                if (
+                    replay["replayMode"] != "event_reconstruction"
+                    or replay["replayedLifecycleEventCount"] != len(captured_packet_history)
+                    or not replay["materializedRowsAbsentBeforeRebuild"]
+                    or replay["materializedPacketCountBeforeRebuild"] != 0
+                    or replay["materializedWorkItemCountBeforeRebuild"] != 0
+                ):
                     fail("replay was not reconstructed from the captured authoritative lifecycle events")
                 replayed_projection = require(
                     reloaded_client.get("/pipeline-control-plane/projection"),
@@ -727,6 +871,11 @@ def main() -> int:
                     fail("event reconstruction replay produced a duplicate success or lost attempt lineage")
                 if replayed_packet["currentStage"] != "promote" or replayed_packet["operatorTestState"] != "passed":
                     fail("event reconstruction replay did not rebuild the approved packet state")
+                if replayed_packet["sourceRef"] != source_ref or replayed_packet["parentPacketId"] is not None or replayed_packet["lineageKind"] != "root":
+                    fail("event reconstruction replay did not rebuild packet authority and lineage solely from events")
+                replayed_item = require(reloaded_client.get(f"/work-items/{happy_item['id']}"), 200, "replayed canonical WorkItem")
+                if replayed_item["metadata"].get("authoritativePacketId") != happy_packet["packetId"]:
+                    fail("event reconstruction replay did not rebuild the canonical WorkItem association")
                 reloaded_projection = replayed_projection
 
             with sqlite3.connect(db_path) as persisted_db:
@@ -834,6 +983,8 @@ def main() -> int:
                 fail("non-approval blocked packet did not retain its generic blocker next action")
             if projection["runtimeReadiness"]["operationalMode"] != "local_proof":
                 fail("final projection changed runtime mode unexpectedly")
+            if projection["runtimeReadiness"]["capabilityState"] != "available":
+                fail("final projection did not report the attested local-proof capability as available")
 
             print(
                 json.dumps(
@@ -879,9 +1030,14 @@ def main() -> int:
                         "completionFencingRejected": True,
                         "serverCapabilityBoundaryVerified": True,
                         "sourceAuthorityDigestVerified": True,
+                        "forgedCanonicalWorkItemRejected": True,
+                        "untrackedSourceRejectedAndRemoved": True,
+                        "leaseAdversarialFencingVerified": True,
+                        "metadataSafetyBoundaryVerified": True,
                         "sourceTraversalRejected": True,
                         "canonicalPacketWorkItemStateAgreementVerified": True,
                         "eventReconstructionReplayVerified": True,
+                        "eventReconstructionRowsAbsentBeforeRebuildVerified": True,
                         "engineSessionReloadVerified": True,
                     },
                     sort_keys=True,

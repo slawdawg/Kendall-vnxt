@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,7 @@ class OperationalActionReplay(Exception):
 
 
 LOCAL_PROOF_TEST_CAPABILITY = object()
+LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
 
 
 from supervisor.api.schemas import (
@@ -225,6 +227,7 @@ from supervisor.api.schemas import (
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
+    _validate_metadata_tree,
     WorkItemExecutionAttemptCreateRequest,
     WorkItemLocalProofLeaseRequest,
     WorkItemLocalProofRequest,
@@ -562,6 +565,7 @@ class SupervisorService:
         self.settings = settings
         self.bus = bus
         self._local_proof_capability = local_proof_capability
+        self._local_proof_attestation: tuple[Path, str] | None = None
         self._loop_lock = asyncio.Lock()
         self.utility_worker = UtilityWorkerAdapter()
         self.worker_registry = StaticWorkerRegistry()
@@ -577,9 +581,14 @@ class SupervisorService:
         self.disabled_subscription_launch_adapter = DisabledSubscriptionLaunchAdapter()
         self.supervised_subscription_launch_adapter = SupervisedSubscriptionLaunchAdapter()
 
-    def enable_local_proof_for_test(self, capability: object) -> None:
+    def enable_local_proof_for_test(self, capability: object, database_path: str | Path) -> None:
         if capability is not LOCAL_PROOF_TEST_CAPABILITY:
             raise ValueError("Unknown local-proof capability.")
+        resolved_path = Path(database_path).expanduser().resolve()
+        root = LOCAL_PROOF_ATTESTATION_ROOT.resolve()
+        if not resolved_path.parent.is_relative_to(root):
+            raise ValueError("Local-proof capability requires a server-attested disposable database under the designated temp root.")
+        self._local_proof_attestation = (resolved_path, uuid.uuid4().hex)
         self._local_proof_capability = capability
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
@@ -663,6 +672,8 @@ class SupervisorService:
             causation_id=payload.causationId,
             idempotency_key=payload.idempotencyKey,
             packet_title=packet.title,
+            parent_packet_id=packet.parent_packet_id,
+            lineage_kind=packet.lineage_kind,
             ready_to_test_json=packet.ready_to_test_json,
             operator_test_state=packet.operator_test_state,
             operator_test_note=packet.operator_test_note,
@@ -763,6 +774,8 @@ class SupervisorService:
             causation_id=payload.causationId,
             idempotency_key=payload.idempotencyKey,
             packet_title=packet.title,
+            parent_packet_id=packet.parent_packet_id,
+            lineage_kind=packet.lineage_kind,
             ready_to_test_json=packet.ready_to_test_json,
             operator_test_state=packet.operator_test_state,
             operator_test_note=packet.operator_test_note,
@@ -1140,6 +1153,8 @@ class SupervisorService:
             causation_id=packet.current_event_id,
             idempotency_key=f"{payload.idempotencyKey}:operational-event",
             packet_title=packet.title,
+            parent_packet_id=packet.parent_packet_id,
+            lineage_kind=packet.lineage_kind,
             ready_to_test_json=packet.ready_to_test_json,
             operator_test_state=packet.operator_test_state,
             operator_test_note=packet.operator_test_note,
@@ -1220,6 +1235,8 @@ class SupervisorService:
             causation_id=packet.current_event_id,
             idempotency_key=f"child:{uuid.uuid5(uuid.NAMESPACE_URL, child_key).hex}",
             packet_title=child.title,
+            parent_packet_id=child.parent_packet_id,
+            lineage_kind=child.lineage_kind,
             ready_to_test_json=child.ready_to_test_json,
             operator_test_state=child.operator_test_state,
             operator_test_note=child.operator_test_note,
@@ -1368,9 +1385,10 @@ class SupervisorService:
         paused = control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}
         disabled = control.mode == RunMode.DISABLED.value
         mode = "read_only" if paused else "unavailable" if disabled else "local_proof"
-        readiness_state = "unavailable" if disabled else "ready"
-        capability_state = "unavailable" if disabled else "available"
-        typed_reason = "runtime_unavailable" if disabled else None
+        local_proof_available = self._local_proof_capability is LOCAL_PROOF_TEST_CAPABILITY and self._local_proof_database_attested()
+        readiness_state = "unavailable" if disabled or not local_proof_available else "ready"
+        capability_state = "unavailable" if disabled or not local_proof_available else "available"
+        typed_reason = "runtime_unavailable" if disabled or not local_proof_available else None
         return PipelineRuntimeReadinessV0View(
             readinessState=readiness_state,
             operationalMode=mode,
@@ -1381,6 +1399,8 @@ class SupervisorService:
             expiresAt=generated_at + timedelta(minutes=5),
             summary=(
                 "Local proof runtime is ready; external provider and high-risk actions remain gated."
+                if not paused and not disabled and local_proof_available
+                else "Local proof capability is disabled; projection remains inspection-only."
                 if not paused and not disabled
                 else "Runtime is paused/draining; inspection and projection refresh remain available."
                 if paused
@@ -1870,11 +1890,26 @@ class SupervisorService:
             return value
         return None
 
-    async def create_work_item(self, session: AsyncSession, payload: WorkItemCreate) -> WorkItem:
+    async def create_work_item(
+        self,
+        session: AsyncSession,
+        payload: WorkItemCreate,
+        *,
+        _internal_authoritative: bool = False,
+    ) -> WorkItem:
+        if not _internal_authoritative:
+            if any(str(key).lower() in {"authoritativepacketid", "localproofauthority"} for key in payload.metadata):
+                raise ValueError("Generic WorkItem creation cannot provide canonical packet linkage metadata.")
+            _validate_metadata_tree(payload.metadata)
         item = WorkItem(
             title=payload.title,
             requested_outcome=payload.requestedOutcome,
             source=payload.source,
+            authoritative_packet_id=(
+                payload.metadata.get("authoritativePacketId")
+                if _internal_authoritative and isinstance(payload.metadata.get("authoritativePacketId"), str)
+                else None
+            ),
             details=payload.details,
             risk_level=payload.riskLevel.value,
             metadata_json=payload.metadata,
@@ -1899,7 +1934,13 @@ class SupervisorService:
                 "source": item.source,
                 "title": item.title,
                 "requestedOutcome": item.requested_outcome,
+                "details": item.details,
+                "riskLevel": item.risk_level,
                 "metadata": dict(item.metadata_json or {}),
+                "requiresAudit": item.requires_audit,
+                "auditMode": item.audit_mode,
+                "assigneeId": item.assignee_id,
+                "assigneeLabel": item.assignee_label,
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             },
@@ -19087,12 +19128,19 @@ class SupervisorService:
     def _assert_local_proof_authority(self) -> None:
         if self._local_proof_capability is not LOCAL_PROOF_TEST_CAPABILITY:
             raise ValueError("Integrated local proof capability is disabled by the server.")
+        if self._local_proof_attestation is None:
+            raise ValueError("Integrated local proof requires a server-created disposable database attestation.")
+        if not self._local_proof_database_attested():
+            raise ValueError("Integrated local proof database does not match the server-created disposable attestation.")
         if not self.settings.database_url.startswith("sqlite"):
             raise ValueError("Integrated local proof is unavailable on a non-SQLite database.")
-        database_path = self.settings.database_url.rsplit("///", 1)[-1]
+        database_path = self.settings.database_url.split("///", 1)[-1]
         if database_path in {":memory:", ""}:
             raise ValueError("Integrated local proof requires a disposable SQLite file.")
         resolved_database_path = Path(database_path).expanduser().resolve()
+        attested_path, attestation_nonce = self._local_proof_attestation
+        if resolved_database_path != attested_path or not attestation_nonce:
+            raise ValueError("Integrated local proof database does not match the server-created disposable attestation.")
         normal_database_path = (Path(self._repo_root() or Path(__file__).resolve().parents[5]) / ".data" / "supervisor.db").resolve()
         if resolved_database_path == normal_database_path:
             raise ValueError("Integrated local proof rejects the normal persistent supervisor database.")
@@ -19111,18 +19159,38 @@ class SupervisorService:
         ):
             raise ValueError("Integrated local proof rejects live or externally-authorized supervisor settings.")
 
+    def _local_proof_database_attested(self) -> bool:
+        if self._local_proof_attestation is None or not self.settings.database_url.startswith("sqlite"):
+            return False
+        database_path = self.settings.database_url.split("///", 1)[-1]
+        if database_path in {":memory:", ""}:
+            return False
+        resolved_database_path = Path(database_path).expanduser().resolve()
+        attested_path, nonce = self._local_proof_attestation
+        return bool(nonce) and resolved_database_path == attested_path and attested_path.parent.is_relative_to(LOCAL_PROOF_ATTESTATION_ROOT.resolve())
+
     def _assert_local_proof_source(self, packet: AuthoritativeWorkPacket) -> str:
         source_ref = packet.source_ref_json if isinstance(packet.source_ref_json, dict) else {}
         source_type = source_ref.get("sourceType")
         source_path = source_ref.get("pathOrUrl")
         if source_type not in {"prd", "repo_doc"} or not isinstance(source_path, str) or not source_path.strip():
             raise ValueError("Integrated local proof requires an existing PRD or repository source artifact.")
-        if Path(source_path).is_absolute():
+        source_path_object = Path(source_path)
+        if source_path_object.is_absolute() or ".." in source_path_object.parts:
             raise ValueError("Local proof source authority must be a repository-relative path.")
         repo_root = Path(self._repo_root() or Path(__file__).resolve().parents[5]).resolve()
         source_file = (repo_root / source_path).resolve()
         if not source_file.is_relative_to(repo_root) or source_file.is_symlink() or not source_file.is_file():
             raise ValueError("Local proof source authority must be a regular file inside the repository.")
+        tracked_result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", source_path],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tracked_result.returncode != 0 or tracked_result.stdout.strip() != source_path:
+            raise ValueError("Local proof source authority must be a Git-tracked file in the repository index.")
         if "implementation-artifacts" in source_path or "proof" in source_path.lower():
             raise ValueError("Proof output artifacts cannot be used as local proof source authority.")
         digest = hashlib.sha256(source_file.read_bytes()).hexdigest()
@@ -19145,19 +19213,23 @@ class SupervisorService:
         source_type = source_ref.get("sourceType")
         source_path = source_ref.get("pathOrUrl")
         items = await self.list_work_items(session)
-        item = next(
-            (
-                candidate
-                for candidate in items
-                if isinstance(candidate.metadata_json, dict)
+        linked_items = [
+            candidate
+            for candidate in items
+            if candidate.authoritative_packet_id == packet_id
+            or (
+                candidate.authoritative_packet_id is None
+                and isinstance(candidate.metadata_json, dict)
                 and candidate.metadata_json.get("authoritativePacketId") == packet_id
-            ),
-            None,
-        )
+            )
+        ]
+        if len(linked_items) > 1:
+            raise ValueError("Authoritative local proof requires exactly one server-created linked WorkItem.")
+        item = linked_items[0] if linked_items else None
         if not item:
             item = await self.create_work_item(
                 session,
-                WorkItemCreate(
+                WorkItemCreate.model_construct(
                     title=packet.title,
                     requestedOutcome=packet.title,
                     source=source_path,
@@ -19175,7 +19247,13 @@ class SupervisorService:
                         "rawPayloadRetained": False,
                     },
                 ),
+                _internal_authoritative=True,
             )
+        elif item.authoritative_packet_id != packet_id:
+            item.authoritative_packet_id = packet_id
+            await session.flush()
+        if item.authoritative_packet_id != packet_id:
+            raise ValueError("Authoritative local proof WorkItem linkage is not server-owned.")
         existing_events = await self.list_work_item_events(session, item.id)
         if any(
             isinstance(event.payload, dict)
@@ -19272,9 +19350,6 @@ class SupervisorService:
         packet_id: str,
     ) -> dict[str, object] | None:
         self._assert_local_proof_authority()
-        packet = await session.get(AuthoritativeWorkPacket, packet_id)
-        if not packet:
-            return None
         lifecycle_result = await session.execute(
             select(AuthoritativeWorkPacketLifecycleEvent)
             .where(AuthoritativeWorkPacketLifecycleEvent.packet_id == packet_id)
@@ -19282,20 +19357,26 @@ class SupervisorService:
         )
         lifecycle_events = list(lifecycle_result.scalars())
         if not lifecycle_events:
-            raise ValueError("Cannot rebuild a local-proof packet without preserved lifecycle events.")
-        items = await self.list_work_items(session)
-        item = next(
-            (
-                candidate
-                for candidate in items
-                if isinstance(candidate.metadata_json, dict)
-                and candidate.metadata_json.get("authoritativePacketId") == packet_id
-            ),
-            None,
+            return None
+
+        # Find the linked WorkItem from preserved workflow events, not from the
+        # materialized row that this rebuild is proving can be reconstructed.
+        workflow_result = await session.execute(
+            select(WorkflowEvent)
+            .order_by(WorkflowEvent.created_at.asc(), WorkflowEvent.id.asc())
         )
-        if not item:
-            raise ValueError("Cannot rebuild a local-proof packet without preserved WorkItem events.")
-        workflow_events = await self.list_work_item_events(session, item.id)
+        preserved_workflow_events = list(workflow_result.scalars())
+        linked_item_ids = {
+            event.work_item_id
+            for event in preserved_workflow_events
+            if isinstance(event.payload, dict)
+            and isinstance(event.payload.get("metadata"), dict)
+            and event.payload["metadata"].get("authoritativePacketId") == packet_id
+        }
+        if len(linked_item_ids) != 1:
+            raise ValueError("Cannot rebuild a local-proof packet without exactly one linked WorkItem event lineage.")
+        item_id = next(iter(linked_item_ids))
+        workflow_events = [event for event in preserved_workflow_events if event.work_item_id == item_id]
         queued_event = next((event for event in workflow_events if event.event_type == "work_item.queued"), None)
         if not queued_event:
             raise ValueError("Cannot rebuild a local-proof WorkItem without its queued event.")
@@ -19303,15 +19384,32 @@ class SupervisorService:
         latest_lifecycle = lifecycle_events[-1]
         latest_workflow = workflow_events[-1] if workflow_events else queued_event
         latest_workflow_payload = latest_workflow.payload if isinstance(latest_workflow.payload, dict) else {}
+
+        first_lifecycle = lifecycle_events[0]
+        source_ref = dict(first_lifecycle.source_ref_json or {})
+        packet_title = latest_lifecycle.packet_title or first_lifecycle.packet_title
+        if not packet_title or not source_ref:
+            raise ValueError("Cannot rebuild a local-proof packet without complete packet creation event metadata.")
+        item_metadata = dict(queued_payload.get("metadata") or {})
+        item_metadata.update(
+            {
+                "authoritativePacketId": packet_id,
+                "authoritativePacketStage": latest_lifecycle.target_stage,
+                "authoritativePacketStatus": latest_lifecycle.status,
+                "sourceContentSha256": source_ref.get("contentSha256"),
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        )
         rebuilt_packet = AuthoritativeWorkPacket(
             id=packet_id,
-            title=latest_lifecycle.packet_title or lifecycle_events[0].packet_title or packet.title,
+            title=packet_title,
             current_stage=latest_lifecycle.target_stage,
             status=latest_lifecycle.status,
             truth_label=latest_lifecycle.truth_label,
-            source_ref_json=dict(latest_lifecycle.source_ref_json or {}),
-            parent_packet_id=packet.parent_packet_id,
-            lineage_kind=packet.lineage_kind,
+            source_ref_json=source_ref,
+            parent_packet_id=first_lifecycle.parent_packet_id,
+            lineage_kind=first_lifecycle.lineage_kind or "root",
             ready_to_test_json=latest_lifecycle.ready_to_test_json,
             operator_test_state=latest_lifecycle.operator_test_state or "not_ready",
             operator_test_note=latest_lifecycle.operator_test_note,
@@ -19320,50 +19418,49 @@ class SupervisorService:
             updated_at=latest_lifecycle.occurred_at,
         )
         rebuilt_item = WorkItem(
-            id=item.id,
-            title=str(queued_payload.get("title") or rebuilt_packet.title),
-            requested_outcome=str(queued_payload.get("requestedOutcome") or rebuilt_packet.title),
-            source=str(queued_payload.get("source") or rebuilt_packet.source_ref_json.get("pathOrUrl") or "source-owned"),
-            details=item.details,
-            risk_level=item.risk_level,
-            metadata_json=dict(queued_payload.get("metadata") or item.metadata_json or {}),
-            state=str(latest_workflow_payload.get("state") or item.state),
-            lane=latest_workflow_payload.get("lane") if isinstance(latest_workflow_payload.get("lane"), str) else item.lane,
-            assignee_id=item.assignee_id,
-            assignee_label=item.assignee_label,
+            id=item_id,
+            title=str(queued_payload.get("title") or packet_title),
+            requested_outcome=str(queued_payload.get("requestedOutcome") or packet_title),
+            source=str(queued_payload.get("source") or source_ref.get("pathOrUrl") or "source-owned"),
+            details=queued_payload.get("details") if isinstance(queued_payload.get("details"), str) else None,
+            risk_level=str(queued_payload.get("riskLevel") or RiskLevel.LOW.value),
+            metadata_json=item_metadata,
+            state=str(latest_workflow_payload.get("state") or WorkflowState.QUEUED.value),
+            lane=latest_workflow_payload.get("lane") if isinstance(latest_workflow_payload.get("lane"), str) else None,
+            assignee_id=latest_workflow_payload.get("assigneeId") if isinstance(latest_workflow_payload.get("assigneeId"), str) else None,
+            assignee_label=latest_workflow_payload.get("assigneeLabel") if isinstance(latest_workflow_payload.get("assigneeLabel"), str) else None,
             status_summary=latest_workflow.summary,
-            blocked_reason=item.blocked_reason,
-            next_step=next_step_summary(WorkflowState(str(latest_workflow_payload.get("state") or item.state))),
-            requires_audit=item.requires_audit,
-            audit_mode=item.audit_mode,
+            blocked_reason=latest_workflow_payload.get("blockedReason") if isinstance(latest_workflow_payload.get("blockedReason"), str) else None,
+            next_step=next_step_summary(WorkflowState(str(latest_workflow_payload.get("state") or WorkflowState.QUEUED.value))),
+            requires_audit=bool(queued_payload.get("requiresAudit", False)),
+            audit_mode=str(queued_payload.get("auditMode") or AuditMode.NONE.value),
             created_at=queued_event.created_at,
             updated_at=latest_workflow.created_at,
             last_event_at=latest_workflow.created_at,
         )
-        rebuilt_metadata = dict(rebuilt_item.metadata_json or {})
-        rebuilt_metadata.update(
-            {
-                "authoritativePacketId": packet_id,
-                "authoritativePacketStage": latest_lifecycle.target_stage,
-                "authoritativePacketStatus": latest_lifecycle.status,
-                "sourceContentSha256": rebuilt_packet.source_ref_json.get("contentSha256"),
-                "metadataOnly": True,
-                "rawPayloadRetained": False,
-            }
-        )
-        rebuilt_item.metadata_json = rebuilt_metadata
+
+        # Delete only materialized packet/WorkItem projections. Workflow and
+        # lifecycle events, lease/attempt lineage, and their evidence remain.
         await session.execute(delete(AuthoritativeWorkPacket).where(AuthoritativeWorkPacket.id == packet_id))
-        await session.execute(delete(WorkItem).where(WorkItem.id == item.id))
+        await session.execute(delete(WorkItem).where(WorkItem.id == item_id))
+        await session.commit()
+        materialized_packet_absent = await session.get(AuthoritativeWorkPacket, packet_id) is None
+        materialized_item_absent = await session.get(WorkItem, item_id) is None
+        if not materialized_packet_absent or not materialized_item_absent:
+            raise ValueError("Event reconstruction refused to continue because materialized rows were not absent.")
         session.add(rebuilt_packet)
         session.add(rebuilt_item)
         await session.commit()
         rebuilt_view = await self.get_authoritative_work_packet(session, packet_id)
         return {
             "packet": rebuilt_view.model_dump(mode="json") if rebuilt_view else None,
-            "workItemId": item.id,
+            "workItemId": item_id,
             "replayedLifecycleEventCount": len(lifecycle_events),
             "replayedWorkflowEventCount": len(workflow_events),
             "replayMode": "event_reconstruction",
+            "materializedPacketCountBeforeRebuild": 0,
+            "materializedWorkItemCountBeforeRebuild": 0,
+            "materializedRowsAbsentBeforeRebuild": True,
             "metadataOnly": True,
             "rawPayloadRetained": False,
         }
@@ -19480,10 +19577,7 @@ class SupervisorService:
         now = datetime.now(timezone.utc)
         if not lease or not lease.active or self._ensure_aware(lease.lease_expires_at) <= now:
             raise ValueError("Local proof requires an active, unexpired supervisor queue lease.")
-        lease.heartbeat_at = now
-        lease.lease_expires_at = now + timedelta(seconds=self.settings.lease_ttl_seconds)
-        lease.fencing_token += 1
-        lease_payload = self._local_proof_lease_payload(lease)
+        initial_fencing_token = lease.fencing_token
         claim_key = f"claim:{hashlib.sha256(payload.idempotencyKey.encode()).hexdigest()}"
         heartbeat_key = f"heartbeat:{hashlib.sha256(payload.idempotencyKey.encode()).hexdigest()}"
         await self._insert_queue_lease_action(
@@ -19493,9 +19587,17 @@ class SupervisorService:
             operation="claim",
             idempotency_key=claim_key,
             correlation_id=payload.correlationId,
-            provided_fencing_token=lease.fencing_token,
+            provided_fencing_token=initial_fencing_token,
             outcome="accepted",
         )
+        if not await self._conditionally_mutate_local_proof_lease(
+            session,
+            lease,
+            operation="heartbeat",
+            expected_fencing_token=initial_fencing_token,
+            now=now,
+        ):
+            raise ValueError("Local proof lease heartbeat was rejected because ownership changed concurrently.")
         await self._insert_queue_lease_action(
             session,
             lease,
@@ -19503,9 +19605,10 @@ class SupervisorService:
             operation="heartbeat",
             idempotency_key=heartbeat_key,
             correlation_id=payload.correlationId,
-            provided_fencing_token=lease.fencing_token - 1,
+            provided_fencing_token=initial_fencing_token,
             outcome="accepted",
         )
+        lease_payload = self._local_proof_lease_payload(lease)
         for event_type, summary in (
             ("queue_lease.claimed", "Supervisor claimed the source-backed WorkItem for integrated local proof."),
             ("queue_lease.heartbeat", "Supervisor refreshed the local-proof queue lease heartbeat and fencing token."),
@@ -19896,13 +19999,16 @@ class SupervisorService:
         payload: WorkItemLocalProofLeaseRequest,
         reason: str,
         provided_fencing_token: int | None,
+        *,
+        idempotency_key: str | None = None,
     ) -> None:
+        action_key = idempotency_key or payload.idempotencyKey
         await self._insert_queue_lease_action(
             session,
             lease,
             item,
             operation=payload.operation,
-            idempotency_key=payload.idempotencyKey,
+            idempotency_key=action_key,
             correlation_id=payload.correlationId,
             provided_fencing_token=provided_fencing_token,
             outcome="rejected",
@@ -19914,7 +20020,7 @@ class SupervisorService:
             "queue_lease.heartbeat_rejected" if payload.operation in {"heartbeat", "stale_heartbeat"} else f"queue_lease.{payload.operation}_rejected",
             reason,
             {
-                "idempotencyKey": payload.idempotencyKey,
+                "idempotencyKey": action_key,
                 "providedFencingToken": provided_fencing_token,
                 "currentFencingToken": lease.fencing_token,
                 "outcome": "rejected",
@@ -19927,6 +20033,43 @@ class SupervisorService:
             correlation_id=payload.correlationId,
         )
         await session.commit()
+
+    async def _conditionally_mutate_local_proof_lease(
+        self,
+        session: AsyncSession,
+        lease: QueueLease,
+        *,
+        operation: str,
+        expected_fencing_token: int,
+        now: datetime,
+    ) -> bool:
+        values = (
+            {
+                "active": False,
+                "lease_expires_at": now - timedelta(seconds=1),
+            }
+            if operation == "expire"
+            else {
+                "heartbeat_at": now,
+                "lease_expires_at": now + timedelta(seconds=self.settings.lease_ttl_seconds),
+                "fencing_token": QueueLease.fencing_token + 1,
+            }
+        )
+        result = await session.execute(
+            update(QueueLease)
+            .execution_options(synchronize_session=False)
+            .where(
+                QueueLease.id == lease.id,
+                QueueLease.fencing_token == expected_fencing_token,
+                QueueLease.active.is_(True),
+                QueueLease.lease_expires_at > now,
+            )
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            return False
+        await session.refresh(lease)
+        return True
 
     async def _operate_local_proof_lease(
         self,
@@ -19944,18 +20087,57 @@ class SupervisorService:
         if not lease:
             raise ValueError("Queue lease action requires an existing supervisor lease.")
         now = datetime.now(timezone.utc)
+        action_idempotency_key = (
+            f"server-claim:{lease.id}:{lease.attempt_count}"
+            if payload.operation == "claim"
+            else payload.idempotencyKey
+        )
+        existing_action = await session.scalar(
+            select(QueueLeaseAction).where(
+                QueueLeaseAction.lease_id == lease.id,
+                QueueLeaseAction.idempotency_key == action_idempotency_key,
+            )
+        )
+        if existing_action:
+            raise ValueError(
+                existing_action.rejection_reason
+                or f"Queue lease action idempotency key {action_idempotency_key} has already succeeded."
+            )
+        if payload.operation in {"heartbeat", "stale_heartbeat", "expire"} and payload.fencingToken is None:
+            reason = f"Queue lease {payload.operation} requires an explicit fencing token."
+            await self._record_rejected_queue_lease_action(
+                session, item, lease, payload, reason, None, idempotency_key=action_idempotency_key
+            )
+            raise ValueError(reason)
         provided = payload.fencingToken if payload.fencingToken is not None else lease.fencing_token
+        if payload.operation == "claim" and payload.fencingToken is not None and provided != lease.fencing_token:
+            reason = "Queue lease claim rejected because the initial fencing token is invalid."
+            await self._record_rejected_queue_lease_action(
+                session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+            )
+            raise ValueError(reason)
         if payload.operation == "expire":
             if not lease.active or self._ensure_aware(lease.lease_expires_at) <= now:
                 reason = "Queue lease expire rejected because the lease is expired or inactive."
-                await self._record_rejected_queue_lease_action(session, item, lease, payload, reason, provided)
+                await self._record_rejected_queue_lease_action(
+                    session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+                )
+                raise ValueError(reason)
+            if not await self._conditionally_mutate_local_proof_lease(
+                session, lease, operation="expire", expected_fencing_token=provided, now=now
+            ):
+                await session.refresh(lease)
+                reason = "Queue lease expire rejected because the fencing token is stale or the lease changed concurrently."
+                await self._record_rejected_queue_lease_action(
+                    session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+                )
                 raise ValueError(reason)
             await self._insert_queue_lease_action(
                 session,
                 lease,
                 item,
                 operation=payload.operation,
-                idempotency_key=payload.idempotencyKey,
+                idempotency_key=action_idempotency_key,
                 correlation_id=payload.correlationId,
                 provided_fencing_token=provided,
                 outcome="accepted",
@@ -19967,14 +20149,16 @@ class SupervisorService:
         elif payload.operation == "claim":
             if not lease.active or self._ensure_aware(lease.lease_expires_at) <= now:
                 reason = "Queue lease claim rejected because the lease is expired or inactive."
-                await self._record_rejected_queue_lease_action(session, item, lease, payload, reason, provided)
+                await self._record_rejected_queue_lease_action(
+                    session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+                )
                 raise ValueError(reason)
             await self._insert_queue_lease_action(
                 session,
                 lease,
                 item,
                 operation=payload.operation,
-                idempotency_key=payload.idempotencyKey,
+                idempotency_key=action_idempotency_key,
                 correlation_id=payload.correlationId,
                 provided_fencing_token=provided,
                 outcome="accepted",
@@ -19984,25 +20168,35 @@ class SupervisorService:
         else:
             if not lease.active or self._ensure_aware(lease.lease_expires_at) <= now:
                 reason = "Queue lease heartbeat rejected because the lease is expired or inactive."
-                await self._record_rejected_queue_lease_action(session, item, lease, payload, reason, provided)
+                await self._record_rejected_queue_lease_action(
+                    session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+                )
                 raise ValueError(reason)
             if provided != lease.fencing_token:
                 reason = "Queue lease heartbeat rejected because the fencing token is stale."
-                await self._record_rejected_queue_lease_action(session, item, lease, payload, reason, provided)
+                await self._record_rejected_queue_lease_action(
+                    session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+                )
+                raise ValueError(reason)
+            if not await self._conditionally_mutate_local_proof_lease(
+                session, lease, operation="heartbeat", expected_fencing_token=provided, now=now
+            ):
+                await session.refresh(lease)
+                reason = "Queue lease heartbeat rejected because the fencing token is stale or the lease changed concurrently."
+                await self._record_rejected_queue_lease_action(
+                    session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
+                )
                 raise ValueError(reason)
             await self._insert_queue_lease_action(
                 session,
                 lease,
                 item,
                 operation=payload.operation,
-                idempotency_key=payload.idempotencyKey,
+                idempotency_key=action_idempotency_key,
                 correlation_id=payload.correlationId,
                 provided_fencing_token=provided,
                 outcome="accepted",
             )
-            lease.heartbeat_at = now
-            lease.lease_expires_at = now + timedelta(seconds=self.settings.lease_ttl_seconds)
-            lease.fencing_token += 1
             event_type = "queue_lease.heartbeat"
             summary = "Supervisor accepted the queue lease heartbeat and advanced its fencing token."
         await self._record_event(
@@ -20012,7 +20206,7 @@ class SupervisorService:
             summary,
             self._local_proof_lease_payload(lease)
             | {
-                "idempotencyKey": payload.idempotencyKey,
+                "idempotencyKey": action_idempotency_key,
                 "outcome": "accepted",
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
@@ -25328,7 +25522,13 @@ class SupervisorService:
         item.next_step = next_step_summary(new_state)
         item.updated_at = datetime.now(timezone.utc)
         item.last_event_at = item.updated_at
-        payload = {"state": item.state, "lane": item.lane}
+        payload = {
+            "state": item.state,
+            "lane": item.lane,
+            "blockedReason": item.blocked_reason,
+            "assigneeId": item.assignee_id,
+            "assigneeLabel": item.assignee_label,
+        }
         if payload_overrides:
             payload.update({key: value for key, value in payload_overrides.items() if value is not None})
         await self._record_event(

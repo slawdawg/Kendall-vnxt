@@ -24,6 +24,12 @@ UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
     re.IGNORECASE,
 )
+UNSAFE_METADATA_KEY_RE = re.compile(r"(secret|credential|password|token|raw.?payload|provider.?payload|prompt|completion|reasoning)", re.IGNORECASE)
+TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
+    r"^(?:sk-|gh[pousr]_\w{12,}|github_pat_|xox[baprs]-|AIza|AKIA|Bearer\s+|eyJ[A-Za-z0-9_-]{20,})"
+    r"|^[A-Za-z0-9+/]{48,}={0,2}$|^[a-f0-9]{40,}$",
+    re.IGNORECASE,
+)
 EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -47,7 +53,31 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
 
 def _is_safe_local_proof_text(value: str) -> bool:
     text = value.strip()
-    return bool(text) and len(text) <= 160 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+    return bool(text) and len(text) <= 160 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text) and not TOKEN_LIKE_METADATA_VALUE_RE.search(text)
+
+
+def _validate_metadata_tree(value: Any, *, path: str = "metadata") -> Any:
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, child in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"{path} keys must be non-empty strings.")
+            key = key.strip()
+            if UNSAFE_METADATA_KEY_RE.search(key):
+                raise ValueError(f"{path}.{key} is not permitted in metadata-only state.")
+            safe[key] = _validate_metadata_tree(child, path=f"{path}.{key}")
+        return safe
+    if isinstance(value, list):
+        return [_validate_metadata_tree(child, path=f"{path}[]") for child in value]
+    if isinstance(value, str):
+        text = value.strip()
+        digest_value = path.endswith(".sourceContentSha256") and bool(re.fullmatch(r"[0-9a-fA-F]{64}", text))
+        if len(text) > 1000 or UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text) or (TOKEN_LIKE_METADATA_VALUE_RE.search(text) and not digest_value):
+            raise ValueError(f"{path} contains secret, credential, raw-provider, or token-like content.")
+        return text
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    raise ValueError(f"{path} contains an unsupported metadata value.")
 
 
 class WorkItemCreate(BaseModel):
@@ -57,6 +87,14 @@ class WorkItemCreate(BaseModel):
     details: str | None = None
     riskLevel: RiskLevel = RiskLevel.LOW
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_must_be_safe_and_non_authoritative(cls, value: dict[str, Any]) -> dict[str, Any]:
+        reserved = {"authoritativepacketid", "localproofauthority"}
+        if any(str(key).lower() in reserved for key in value):
+            raise ValueError("Generic WorkItem creation cannot provide canonical packet linkage metadata.")
+        return _validate_metadata_tree(value)
 
 
 class CandidateWorkCreate(BaseModel):
