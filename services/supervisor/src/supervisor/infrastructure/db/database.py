@@ -183,6 +183,15 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_by_id VARCHAR(100)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_by_label VARCHAR(120)"))
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS workspace_isolation_plan_json JSON"))
+            await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS queue_lease_id VARCHAR(36)"))
+            await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS queue_fencing_token INTEGER"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS packet_title VARCHAR(255)"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS ready_to_test_json JSON"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS operator_test_state VARCHAR(24)"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS operator_test_note TEXT"))
+            await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN IF NOT EXISTS provided_fencing_token INTEGER"))
+            await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN IF NOT EXISTS outcome VARCHAR(16) DEFAULT 'accepted'"))
+            await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN IF NOT EXISTS rejection_reason TEXT"))
             await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN IF NOT EXISTS sort_order INTEGER"))
             await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN IF NOT EXISTS import_metadata_json JSON"))
             await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN IF NOT EXISTS parent_packet_id VARCHAR(80)"))
@@ -221,6 +230,28 @@ async def init_db() -> None:
             attempt_columns = {row[1] for row in result.fetchall()}
             if "workspace_isolation_plan_json" not in attempt_columns:
                 await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN workspace_isolation_plan_json JSON"))
+            if "queue_lease_id" not in attempt_columns:
+                await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN queue_lease_id VARCHAR(36)"))
+            if "queue_fencing_token" not in attempt_columns:
+                await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN queue_fencing_token INTEGER"))
+            result = await connection.execute(text("PRAGMA table_info(authoritative_work_packet_lifecycle_events)"))
+            lifecycle_event_columns = {row[1] for row in result.fetchall()}
+            if "packet_title" not in lifecycle_event_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN packet_title VARCHAR(255)"))
+            if "ready_to_test_json" not in lifecycle_event_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN ready_to_test_json JSON"))
+            if "operator_test_state" not in lifecycle_event_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN operator_test_state VARCHAR(24)"))
+            if "operator_test_note" not in lifecycle_event_columns:
+                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN operator_test_note VARCHAR(255)"))
+            result = await connection.execute(text("PRAGMA table_info(queue_lease_actions)"))
+            lease_action_columns = {row[1] for row in result.fetchall()}
+            if "provided_fencing_token" not in lease_action_columns:
+                await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN provided_fencing_token INTEGER"))
+            if "outcome" not in lease_action_columns:
+                await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN outcome VARCHAR(16) DEFAULT 'accepted'"))
+            if "rejection_reason" not in lease_action_columns:
+                await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN rejection_reason TEXT"))
             result = await connection.execute(text("PRAGMA table_info(candidate_work)"))
             candidate_columns = {row[1] for row in result.fetchall()}
             if "sort_order" not in candidate_columns:

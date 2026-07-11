@@ -2508,6 +2508,32 @@ export interface PipelineSourceStateV0 {
   metadataOnly: true;
 }
 
+export interface PipelineQueueLeaseV0 {
+  leaseId: string;
+  workItemId: string;
+  attemptCount: number;
+  heartbeatAt: string;
+  leaseExpiresAt: string;
+  fencingToken: number;
+  active: boolean;
+  state: "active" | "expired" | "inactive";
+  metadataOnly: true;
+}
+
+export interface PipelineExecutionAttemptLineageV0 {
+  attemptId: string;
+  workItemId: string;
+  leaseId?: string | null;
+  fencingToken?: number | null;
+  routeDecisionId: string;
+  workerId: string;
+  lane: string;
+  status: string;
+  eventRefs: string[];
+  evidenceRefs: string[];
+  metadataOnly: true;
+}
+
 export interface PipelineReadyToTestV0 {
   readyId: string;
   userFacingSummary: string;
@@ -2530,6 +2556,10 @@ export interface PipelineDashboardWorkPacketV0 {
   unblocker: PipelinePacketUnblockerV0;
   readyToTest?: PipelineReadyToTestV0 | null;
   evidenceRefs: string[];
+  workItemId?: string | null;
+  queueLease?: PipelineQueueLeaseV0 | null;
+  executionAttempts?: PipelineExecutionAttemptLineageV0[];
+  correlationIds?: string[];
   updatedAt: string;
   metadataOnly: true;
 }
@@ -2555,6 +2585,10 @@ export interface PipelineSelectedPacketDetailV0 {
   operatorTestNote?: string | null;
   actionCapabilities?: PipelineOperationalActionCapabilityV0[];
   actionResults?: PipelineOperationalActionResultV0[];
+  workItemId?: string | null;
+  queueLease?: PipelineQueueLeaseV0 | null;
+  executionAttempts?: PipelineExecutionAttemptLineageV0[];
+  correlationIds?: string[];
   metadataOnly: true;
 }
 

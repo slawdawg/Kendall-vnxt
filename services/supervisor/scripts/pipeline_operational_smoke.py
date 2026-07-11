@@ -1,16 +1,19 @@
-"""Run the bounded local-proof Operational Pipeline Action Loop smoke.
+"""Run the bounded integrated-local Operational Pipeline lifecycle proof.
 
 The smoke uses a disposable SQLite database and the real FastAPI routes. It
 does not contact providers, launch workers, or retain raw payloads. Its
 evidence level is limited to the supervisor/API/local SQLite behavior covered
-by this script; broader queue, lease, worker, and restart proof remains out of
-scope.
+by this script. It does not claim live or production-observed evidence.
 """
 
 from __future__ import annotations
 
 import json
+import asyncio
+import hashlib
+import importlib
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -36,6 +39,17 @@ def require_rejected(response, label: str, message_fragment: str) -> None:
     error = payload.get("detail", {}).get("error", {}) if isinstance(payload, dict) else {}
     if error.get("code") != "invalid_pipeline_operational_action":
         fail(f"{label} did not return the typed action rejection: {response.text[:240]}")
+    if message_fragment not in error.get("message", ""):
+        fail(f"{label} did not explain the typed rejection: {response.text[:240]}")
+
+
+def require_local_rejected(response, label: str, message_fragment: str) -> None:
+    if response.status_code != 409:
+        fail(f"{label} returned HTTP {response.status_code}: {response.text[:240]}")
+    payload = response.json()
+    error = payload.get("detail", {}).get("error", {}) if isinstance(payload, dict) else {}
+    if not error.get("code", "").startswith("invalid_local_proof"):
+        fail(f"{label} did not return the typed local-proof rejection: {response.text[:240]}")
     if message_fragment not in error.get("message", ""):
         fail(f"{label} did not explain the typed rejection: {response.text[:240]}")
 
@@ -105,16 +119,50 @@ def packet_detail(projection: dict, packet_id: str) -> dict:
         raise AssertionError from exc
 
 
+def assert_canonical_trace(proof: dict, packet_id: str, label: str) -> None:
+    trace = proof.get("lifecycleTrace")
+    if not isinstance(trace, list) or not trace:
+        fail(f"{label} did not return a canonical packet/WorkItem lifecycle trace")
+    expected_states = {
+        ("capture", "waiting"): "queued",
+        ("classify", "active"): "triaged",
+        ("route", "active"): "ready",
+        ("shape", "waiting"): "ready",
+        ("needs_approval", "waiting"): "ready",
+        ("execute", "active"): "implementing",
+        ("review", "waiting"): "reviewing",
+        ("execute", "failed"): "needs_rework",
+    }
+    work_item_id = proof["workItem"]["id"]
+    for entry in trace:
+        if entry["packetId"] != packet_id or entry["workItemId"] != work_item_id:
+            fail(f"{label} trace diverged to another packet or WorkItem: {entry}")
+        if entry["packetStage"] != entry["authoritativePacketStage"] or entry["packetStatus"] != entry["authoritativePacketStatus"]:
+            fail(f"{label} packet and WorkItem authoritative metadata diverged: {entry}")
+        expected_state = expected_states.get((entry["packetStage"], entry["packetStatus"]))
+        if expected_state and entry["workItemState"] != expected_state:
+            fail(f"{label} packet stage {entry['packetStage']} disagreed with WorkItem state {entry['workItemState']}")
+        if not entry["metadataOnly"] or entry["rawPayloadRetained"]:
+            fail(f"{label} lifecycle trace crossed the metadata-only boundary")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="kendall-pipeline-smoke-") as temp_dir:
         db_path = Path(temp_dir) / "smoke.db"
         os.environ["SUPERVISOR_DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
         os.environ["SUPERVISOR_ENABLE_BACKGROUND"] = "false"
+        os.environ["SUPERVISOR_ALLOW_DIRTY_REPO"] = "true"
+        source_path = "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md"
+        source_file = Path(__file__).resolve().parents[3] / source_path
+        if not source_file.is_file() or source_file.is_symlink():
+            fail(f"tracked source authority is missing or not a regular file: {source_path}")
+        source_digest = hashlib.sha256(source_file.read_bytes()).hexdigest()
         source_ref = {
-            "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
-            "sourceType": "prd",
-            "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
-            "title": "Operational pipeline action loop",
+            "refId": f"repo_doc:{source_path}",
+            "sourceType": "repo_doc",
+            "pathOrUrl": source_path,
+            "title": "Latest PRD autonomous BMAD loop goal",
+            "contentSha256": source_digest,
         }
         ready_to_test = {
             "readyId": "ready:operational-pipeline-smoke",
@@ -126,9 +174,13 @@ def main() -> int:
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
         from fastapi.testclient import TestClient
-        from supervisor.api.main import app
+        from supervisor.api.main import app, service
+        from supervisor.application.service import LOCAL_PROOF_TEST_CAPABILITY
 
-        with TestClient(app) as client:
+        client = TestClient(app)
+        client.__enter__()
+        client_closed = False
+        try:
             packet = require(
                 client.post(
                     "/pipeline-control-plane/work-packets",
@@ -152,7 +204,7 @@ def main() -> int:
                 "packet seed",
             )
             if packet["sourceRef"] != source_ref or packet["truthLabel"] != "source_owned":
-                fail("packet seed did not preserve the current source-owned PRD ref")
+                fail("packet seed did not preserve the tracked source-owned authority ref")
 
             initial_projection = require(client.get("/pipeline-control-plane/projection"), 200, "initial projection")
             if initial_projection["runtimeReadiness"]["operationalMode"] != "local_proof":
@@ -336,7 +388,398 @@ def main() -> int:
                 "non-approval blocked packet seed",
             )
 
-            projection = require(client.get("/pipeline-control-plane/projection"), 200, "final projection")
+            def seed_local_packet(item_id: str) -> dict:
+                return require(
+                    client.post(
+                        "/pipeline-control-plane/work-packets",
+                        json={
+                            "packetId": f"packet-gate-4b-{item_id}",
+                            "title": f"Gate 4B canonical local proof {item_id}",
+                            "initialStage": "capture",
+                            "status": "waiting",
+                            "truthLabel": "source_owned",
+                            "sourceRef": source_ref,
+                            "actor": {"actorType": "manager", "actorId": "gate-4b-proof", "actorLabel": "Gate 4B proof"},
+                            "idempotencyKey": f"create-gate-4b-{item_id}",
+                            "correlationId": f"corr:create-gate-4b-{item_id}",
+                            "evidenceRefs": ["test:pipeline-operational-smoke"],
+                        },
+                    ),
+                    200,
+                    f"{item_id} authoritative source-backed packet seed",
+                )
+
+            happy_packet = seed_local_packet("happy")
+            disabled_proof = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-capability-disabled",
+                    "correlationId": "corr:gate-4b-capability-disabled",
+                    "scenario": "happy",
+                },
+            )
+            require_local_rejected(disabled_proof, "local proof without server capability", "disabled by the server")
+            service.enable_local_proof_for_test(LOCAL_PROOF_TEST_CAPABILITY)
+            traversal_packet = require(
+                client.post(
+                    "/pipeline-control-plane/work-packets",
+                    json={
+                        "packetId": "packet-gate-4b-traversal-source",
+                        "title": "Gate 4B traversal source rejection",
+                        "initialStage": "capture",
+                        "status": "waiting",
+                        "truthLabel": "source_owned",
+                        "sourceRef": {**source_ref, "pathOrUrl": "../docs/workflows/latest-prd-autonomous-bmad-loop-goal.md"},
+                        "actor": {"actorType": "manager", "actorId": "gate-4b-proof", "actorLabel": "Gate 4B proof"},
+                        "idempotencyKey": "create-gate-4b-traversal-source",
+                        "correlationId": "corr:create-gate-4b-traversal-source",
+                    },
+                ),
+                200,
+                "traversal source packet seed",
+            )
+            traversal_proof = client.post(
+                f"/pipeline-control-plane/work-packets/{traversal_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-traversal-source-proof",
+                    "correlationId": "corr:gate-4b-traversal-source-proof",
+                    "scenario": "happy",
+                },
+            )
+            require_local_rejected(traversal_proof, "outside-root source authority", "regular file inside")
+            unsafe_actor = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-unsafe-actor",
+                    "correlationId": "corr:gate-4b-unsafe-actor",
+                    "scenario": "happy",
+                    "actorId": "provider-secret-token",
+                },
+            )
+            if unsafe_actor.status_code != 422:
+                fail(f"unsafe local-proof actor metadata was not rejected before persistence: {unsafe_actor.text[:240]}")
+            happy_proof = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-happy-local-proof",
+                        "correlationId": "corr:gate-4b-happy-local-proof",
+                        "scenario": "happy",
+                    },
+                ),
+                200,
+                "happy integrated local proof",
+            )
+            if happy_proof["evidenceLevel"] != "integrated_local" or not happy_proof["metadataOnly"] or happy_proof["rawPayloadRetained"]:
+                fail("happy local proof did not retain its honest metadata-only evidence boundary")
+            if happy_proof["attempt"]["status"] != "completed":
+                fail("happy local proof did not persist a completed supervisor execution attempt")
+            happy_item = happy_proof["workItem"]
+            legacy_work_item_route = client.post(
+                f"/work-items/{happy_item['id']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-legacy-work-item-route",
+                    "correlationId": "corr:gate-4b-legacy-work-item-route",
+                    "scenario": "happy",
+                },
+            )
+            if legacy_work_item_route.status_code != 404:
+                fail("the independent WorkItem local-proof route remains public")
+            assert_canonical_trace(happy_proof, happy_packet["packetId"], "happy local proof")
+            if happy_proof["authoritativePacket"]["sourceRef"]["contentSha256"] != source_digest:
+                fail("happy local proof did not retain the verified tracked source digest")
+            if happy_proof["authoritativePacket"]["currentStage"] != "review" or not happy_proof["authoritativePacket"]["readyToTest"]:
+                fail("happy local proof did not drive the authoritative packet to review/ReadyToTest")
+            local_approval = issue_approval(client, happy_proof["authoritativePacket"], action_id="mark_tested", actor_id="smoke-operator", key="gate-4b-local-pass")
+            local_action = apply_gated_action(
+                client,
+                happy_proof["authoritativePacket"],
+                local_approval,
+                action_id="mark_tested",
+                actor_id="smoke-operator",
+                idempotency_key="gate-4b-local-pass",
+                evidence_ref="evidence:local-proof:gate-4b-happy-local-proof",
+                test_result="pass",
+            )
+            if local_action["resultingStage"] != "promote" or local_action["outcome"] != "succeeded":
+                fail("approved local proof packet did not advance through the server-bound pass action")
+            post_pass_packet = require(
+                client.get(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}"),
+                200,
+                "post-pass authoritative packet",
+            )
+            post_pass_item = require(client.get(f"/work-items/{happy_item['id']}"), 200, "post-pass canonical WorkItem")
+            if post_pass_packet["currentStage"] != post_pass_item["metadata"]["authoritativePacketStage"] or post_pass_packet["status"] != post_pass_item["metadata"]["authoritativePacketStatus"]:
+                fail("approved pass left the canonical packet and WorkItem states divergent")
+            happy_lease = happy_proof["queueLease"]
+            if not happy_lease["active"] or happy_lease["fencingToken"] < 2 or happy_lease["attemptCount"] < 1:
+                fail("happy local proof did not persist an active fenced queue lease")
+
+            duplicate_local = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-happy-local-proof",
+                    "correlationId": "corr:gate-4b-happy-local-proof-replay",
+                    "scenario": "happy",
+                },
+            )
+            require_local_rejected(duplicate_local, "duplicate local proof", "idempotency key")
+            stale_heartbeat = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-stale-heartbeat",
+                    "correlationId": "corr:gate-4b-stale-heartbeat",
+                    "operation": "stale_heartbeat",
+                    "fencingToken": happy_lease["fencingToken"] - 1,
+                },
+            )
+            require_local_rejected(stale_heartbeat, "stale lease heartbeat", "fencing token is stale")
+            stale_heartbeat_replay = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-stale-heartbeat",
+                    "correlationId": "corr:gate-4b-stale-heartbeat-replay",
+                    "operation": "heartbeat",
+                    "fencingToken": happy_lease["fencingToken"],
+                },
+            )
+            require_local_rejected(stale_heartbeat_replay, "replayed rejected lease heartbeat", "fencing token is stale")
+            heartbeat = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-valid-heartbeat",
+                        "correlationId": "corr:gate-4b-valid-heartbeat",
+                        "operation": "heartbeat",
+                        "fencingToken": happy_lease["fencingToken"],
+                    },
+                ),
+                200,
+                "valid lease heartbeat",
+            )
+            if heartbeat["fencingToken"] <= happy_lease["fencingToken"] or not heartbeat["active"]:
+                fail("valid lease heartbeat did not advance fencing metadata")
+            duplicate_heartbeat = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-valid-heartbeat",
+                    "correlationId": "corr:gate-4b-valid-heartbeat-replay",
+                    "operation": "heartbeat",
+                    "fencingToken": happy_lease["fencingToken"],
+                },
+            )
+            require_local_rejected(duplicate_heartbeat, "duplicate successful heartbeat", "already succeeded")
+            expired_lease = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-expire-lease",
+                        "correlationId": "corr:gate-4b-expire-lease",
+                        "operation": "expire",
+                    },
+                ),
+                200,
+                "expire local proof lease",
+            )
+            if expired_lease["active"] or expired_lease["state"] != "expired":
+                fail("expired local proof lease did not persist an expired state")
+            duplicate_expire = client.post(
+                f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-expire-lease",
+                    "correlationId": "corr:gate-4b-expire-lease-replay",
+                    "operation": "expire",
+                },
+            )
+            require_local_rejected(duplicate_expire, "duplicate successful expiry", "already succeeded")
+            expired_heartbeat = client.post(
+                    f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/lease",
+                json={
+                    "proofMode": "integrated_local",
+                    "idempotencyKey": "gate-4b-expired-heartbeat",
+                    "correlationId": "corr:gate-4b-expired-heartbeat",
+                    "operation": "heartbeat",
+                    "fencingToken": expired_lease["fencingToken"],
+                },
+            )
+            require_local_rejected(expired_heartbeat, "expired lease heartbeat", "expired or inactive")
+
+            worker_failure_packet = seed_local_packet("worker-failure")
+            worker_failure = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{worker_failure_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-worker-failure",
+                        "correlationId": "corr:gate-4b-worker-failure",
+                        "scenario": "worker_failure",
+                    },
+                ),
+                200,
+                "typed worker failure local proof",
+            )
+            worker_failure_item = worker_failure["workItem"]
+            assert_canonical_trace(worker_failure, worker_failure_packet["packetId"], "worker failure local proof")
+            if worker_failure["attempt"]["status"] != "failed" or worker_failure["workItem"]["state"] != "needs_rework":
+                fail("worker failure did not become a supervisor-owned held/recovery state")
+
+            verification_failure_packet = seed_local_packet("verification-failure")
+            verification_failure = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{verification_failure_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-verification-failure",
+                        "correlationId": "corr:gate-4b-verification-failure",
+                        "scenario": "verification_failure",
+                    },
+                ),
+                200,
+                "typed verification failure local proof",
+            )
+            verification_failure_item = verification_failure["workItem"]
+            assert_canonical_trace(verification_failure, verification_failure_packet["packetId"], "verification failure local proof")
+            if verification_failure["workItem"]["state"] != "needs_rework" or not verification_failure["attempt"]["failureReason"]:
+                fail("verification failure did not persist a truthful held/recovery state")
+
+            completion_fencing_packet = seed_local_packet("completion-fencing")
+            completion_fencing = require(
+                client.post(
+                    f"/pipeline-control-plane/work-packets/{completion_fencing_packet['packetId']}/local-proof",
+                    json={
+                        "proofMode": "integrated_local",
+                        "idempotencyKey": "gate-4b-completion-fencing",
+                        "correlationId": "corr:gate-4b-completion-fencing",
+                        "scenario": "completion_fencing_failure",
+                    },
+                ),
+                200,
+                "completion fencing local proof",
+            )
+            completion_fencing_item = completion_fencing["workItem"]
+            assert_canonical_trace(completion_fencing, completion_fencing_packet["packetId"], "completion fencing local proof")
+            if completion_fencing["attempt"]["status"] != "running" or not completion_fencing["attempt"]["failureReason"]:
+                fail("completion fencing did not reject completion and preserve a held attempt")
+
+            client.__exit__(None, None, None)
+            client_closed = True
+            import supervisor.infrastructure.db.database as database
+
+            asyncio.run(database.engine.dispose())
+            importlib.reload(database)
+            with TestClient(app) as reloaded_client:
+                reload_attempt_response = reloaded_client.get(f"/work-items/{happy_item['id']}/execution-attempts")
+                if reload_attempt_response.status_code != 200:
+                    fail(f"reloaded happy attempts returned HTTP {reload_attempt_response.status_code}: {reload_attempt_response.text[:500]}")
+                reload_payload = reload_attempt_response.json()
+                reloaded_attempts = reload_payload.get("data") if isinstance(reload_payload, dict) else None
+                if not isinstance(reloaded_attempts, list):
+                    fail(f"reloaded happy attempts did not return a data list: {reload_attempt_response.text[:500]}")
+                if len(reloaded_attempts) != 1 or reloaded_attempts[0]["attemptId"] != happy_proof["attempt"]["attemptId"]:
+                    fail("engine/session reload created a duplicate success or lost execution lineage")
+                reloaded_projection = require(
+                    reloaded_client.get("/pipeline-control-plane/projection"),
+                    200,
+                    "reloaded pipeline projection",
+                )
+                captured_packet_history = require(
+                    reloaded_client.get(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}"),
+                    200,
+                    "captured authoritative lifecycle history",
+                )["history"]
+                captured_work_item_history_response = reloaded_client.get(f"/work-items/{happy_item['id']}/events")
+                if captured_work_item_history_response.status_code != 200:
+                    fail(f"captured WorkItem workflow history returned HTTP {captured_work_item_history_response.status_code}")
+                captured_work_item_history = captured_work_item_history_response.json().get("data", [])
+                if len(captured_packet_history) < 7 or len(captured_work_item_history) < 6:
+                    fail("event reconstruction proof did not capture a complete packet and WorkItem history")
+                replay = require(
+                    reloaded_client.post(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}/local-proof/replay"),
+                    200,
+                    "event reconstruction replay",
+                )
+                if replay["replayMode"] != "event_reconstruction" or replay["replayedLifecycleEventCount"] != len(captured_packet_history):
+                    fail("replay was not reconstructed from the captured authoritative lifecycle events")
+                replayed_projection = require(
+                    reloaded_client.get("/pipeline-control-plane/projection"),
+                    200,
+                    "replayed pipeline projection",
+                )
+                replayed_packet = require(
+                    reloaded_client.get(f"/pipeline-control-plane/work-packets/{happy_packet['packetId']}"),
+                    200,
+                    "replayed authoritative packet",
+                )
+                replayed_attempts_response = reloaded_client.get(f"/work-items/{happy_item['id']}/execution-attempts")
+                if replayed_attempts_response.status_code != 200 or len(replayed_attempts_response.json().get("data", [])) != 1:
+                    fail("event reconstruction replay produced a duplicate success or lost attempt lineage")
+                if replayed_packet["currentStage"] != "promote" or replayed_packet["operatorTestState"] != "passed":
+                    fail("event reconstruction replay did not rebuild the approved packet state")
+                reloaded_projection = replayed_projection
+
+            with sqlite3.connect(db_path) as persisted_db:
+                counts = {
+                    key: persisted_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table, key in (
+                        ("queue_leases", "leases"),
+                        ("queue_lease_actions", "leaseActions"),
+                        ("execution_attempts", "attempts"),
+                        ("authoritative_work_packets", "authoritativePackets"),
+                        ("work_items", "workItems"),
+                        ("workflow_events", "events"),
+                    )
+                }
+                local_events = persisted_db.execute(
+                    "SELECT event_type, payload FROM workflow_events WHERE work_item_id = ?",
+                    (happy_item["id"],),
+                ).fetchall()
+            persisted = {"counts": counts, "localEvents": local_events}
+            if persisted["counts"]["leases"] < 4 or persisted["counts"]["leaseActions"] < 8 or persisted["counts"]["attempts"] < 4 or persisted["counts"]["authoritativePackets"] < 4 or persisted["counts"]["workItems"] < 4 or persisted["counts"]["events"] < 10:
+                fail("disposable SQLite did not persist queue, attempt, and event records")
+            if not any(event_type == "queue_lease.heartbeat_rejected" for event_type, _ in persisted["localEvents"]):
+                fail("stale fencing rejection was not persisted as a workflow event")
+            if any(
+                json.loads(event_payload).get("rawPayloadRetained") is True
+                for _, event_payload in persisted["localEvents"]
+                if isinstance(event_payload, str)
+            ):
+                fail("local proof retained raw payload metadata")
+            if not any(json.loads(event_payload).get("idempotencyKey") for _, event_payload in persisted["localEvents"] if isinstance(event_payload, str)):
+                fail("local proof lease and lifecycle events did not retain idempotency metadata")
+
+            local_projection_detail = packet_detail(reloaded_projection, happy_packet["packetId"])
+            if local_projection_detail["currentStage"] != local_action["resultingStage"] or local_projection_detail["status"] != local_action["resultingStatus"]:
+                fail(f"pipeline projection did not preserve the approved happy local proof result: {local_projection_detail}")
+            if local_projection_detail["workItemId"] != happy_item["id"] or not local_projection_detail["queueLease"]:
+                fail("pipeline projection omitted WorkItem and queue lease lineage")
+            if (
+                not local_projection_detail["executionAttempts"]
+                or local_projection_detail["executionAttempts"][0]["attemptId"] != happy_proof["attempt"]["attemptId"]
+            ):
+                fail("pipeline projection omitted execution attempt lineage")
+            if "corr:gate-4b-happy-local-proof" not in local_projection_detail["correlationIds"]:
+                fail("pipeline projection omitted the local proof correlation id")
+            worker_failure_detail = packet_detail(reloaded_projection, worker_failure_packet["packetId"])
+            verification_failure_detail = packet_detail(reloaded_projection, verification_failure_packet["packetId"])
+            if worker_failure_detail["status"] != "failed" or verification_failure_detail["status"] != "failed":
+                fail("pipeline projection did not expose both held failure paths")
+            completion_fencing_detail = packet_detail(reloaded_projection, completion_fencing_packet["packetId"])
+            if completion_fencing_detail["status"] != "failed" or not completion_fencing_detail["executionAttempts"][0]["leaseId"]:
+                fail("pipeline projection did not expose completion fencing lineage")
+
+            projection = reloaded_projection
             if projection["fixtureMode"]["enabled"] or projection["truthSummary"]["fixtureBacked"]:
                 fail("final projection unexpectedly used fixture state")
             main_detail = packet_detail(projection, packet["packetId"])
@@ -419,11 +862,34 @@ def main() -> int:
                         ],
                         "metadataOnly": True,
                         "rawPayloadRetained": False,
-                        "broaderQueueLeaseWorkerRestartProof": "pending",
+                        "broaderQueueLeaseWorkerRestartProof": "integrated_local",
+                        "happyLocalProofVerified": True,
+                        "workerFailureHeldVerified": True,
+                        "verificationFailureHeldVerified": True,
+                        "leaseHeartbeatFencingExpiryVerified": True,
+                        "engineReloadLineageVerified": True,
+                        "persistedDatabaseStateVerified": True,
+                        "projectionLifecycleLineageVerified": True,
+                        "sourceAuthorityPath": source_ref["pathOrUrl"],
+                        "canonicalSourcePacketLifecycleVerified": True,
+                        "authoritativePacketApprovalPassVerified": True,
+                        "serverBoundLocalProofAuthorityVerified": True,
+                        "leaseAttemptFencingVerified": True,
+                        "leaseActionIdempotencyVerified": True,
+                        "completionFencingRejected": True,
+                        "serverCapabilityBoundaryVerified": True,
+                        "sourceAuthorityDigestVerified": True,
+                        "sourceTraversalRejected": True,
+                        "canonicalPacketWorkItemStateAgreementVerified": True,
+                        "eventReconstructionReplayVerified": True,
+                        "engineSessionReloadVerified": True,
                     },
                     sort_keys=True,
                 )
             )
+        finally:
+            if not client_closed:
+                client.__exit__(None, None, None)
     return 0
 
 

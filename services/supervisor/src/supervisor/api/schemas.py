@@ -45,6 +45,11 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
     )
 
 
+def _is_safe_local_proof_text(value: str) -> bool:
+    text = value.strip()
+    return bool(text) and len(text) <= 160 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+
+
 class WorkItemCreate(BaseModel):
     title: str
     requestedOutcome: str
@@ -402,6 +407,41 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemLocalProofRequest(BaseModel):
+    proofMode: Literal["integrated_local"]
+    idempotencyKey: str = Field(min_length=1, max_length=160)
+    correlationId: str = Field(min_length=1, max_length=120)
+    scenario: Literal["happy", "worker_failure", "verification_failure", "completion_fencing_failure"] = "happy"
+    actorId: str = "local-proof"
+    actorLabel: str = "Integrated local proof"
+
+    @field_validator("idempotencyKey", "correlationId", "actorId", "actorLabel")
+    @classmethod
+    def _local_proof_text_must_be_metadata_only(cls, value: str) -> str:
+        value = value.strip()
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Local-proof identifiers and actor metadata must be safe metadata-only text.")
+        return value
+
+
+class WorkItemLocalProofLeaseRequest(BaseModel):
+    proofMode: Literal["integrated_local"]
+    idempotencyKey: str = Field(min_length=1, max_length=160)
+    correlationId: str = Field(min_length=1, max_length=120)
+    operation: Literal["claim", "heartbeat", "stale_heartbeat", "expire"]
+    fencingToken: int | None = None
+    actorId: str = "local-proof"
+    actorLabel: str = "Integrated local proof"
+
+    @field_validator("idempotencyKey", "correlationId", "actorId", "actorLabel")
+    @classmethod
+    def _local_proof_lease_text_must_be_metadata_only(cls, value: str) -> str:
+        value = value.strip()
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Local-proof lease identifiers and actor metadata must be safe metadata-only text.")
+        return value
+
+
 class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     status: ExecutionAttemptStatus
     reason: str | None = None
@@ -486,6 +526,8 @@ class WorkspaceIsolationPlanView(BaseModel):
 class ExecutionAttemptView(BaseModel):
     attemptId: str
     workItemId: str
+    leaseId: str | None = None
+    fencingToken: int | None = None
     routeDecisionId: str
     workerId: str
     lane: str
@@ -1174,12 +1216,23 @@ class AuthoritativePacketActorView(BaseModel):
     actorId: str | None = Field(default=None, max_length=100)
     actorLabel: str | None = Field(default=None, max_length=120)
 
+    @field_validator("actorId", "actorLabel")
+    @classmethod
+    def _actor_metadata_must_be_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or not _is_safe_local_proof_text(value):
+            raise ValueError("Actor identifiers and labels must be safe metadata-only text.")
+        return value
+
 
 class AuthoritativePacketSourceRefView(BaseModel):
     refId: str = Field(min_length=1, max_length=255)
     sourceType: Literal["prd", "bmad_story", "operator_input", "workflow", "repo_doc"]
     pathOrUrl: str | None = Field(default=None, max_length=500)
     title: str | None = Field(default=None, max_length=255)
+    contentSha256: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
 
     @field_validator("refId")
     @classmethod
@@ -1576,6 +1629,32 @@ class PipelineSourceStateV0View(BaseModel):
     metadataOnly: Literal[True] = True
 
 
+class PipelineQueueLeaseV0View(BaseModel):
+    leaseId: str
+    workItemId: str
+    attemptCount: int
+    heartbeatAt: datetime
+    leaseExpiresAt: datetime
+    fencingToken: int
+    active: bool
+    state: Literal["active", "expired", "inactive"]
+    metadataOnly: Literal[True] = True
+
+
+class PipelineExecutionAttemptLineageV0View(BaseModel):
+    attemptId: str
+    workItemId: str
+    leaseId: str | None = None
+    fencingToken: int | None = None
+    routeDecisionId: str
+    workerId: str
+    lane: str
+    status: str
+    eventRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
 class PipelineDashboardWorkPacketV0View(BaseModel):
     packetId: str
     title: str
@@ -1588,6 +1667,10 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
     unblocker: PipelinePacketUnblockerV0 = "unknown"
     readyToTest: WorkPacketReadyToTestV0View | None = None
     evidenceRefs: list[str] = Field(default_factory=list)
+    workItemId: str | None = None
+    queueLease: PipelineQueueLeaseV0View | None = None
+    executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
+    correlationIds: list[str] = Field(default_factory=list)
     updatedAt: datetime
     metadataOnly: Literal[True] = True
 
@@ -1613,6 +1696,10 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     operatorTestNote: str | None = None
     actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
     actionResults: list[OperationalActionResultView] = Field(default_factory=list)
+    workItemId: str | None = None
+    queueLease: PipelineQueueLeaseV0View | None = None
+    executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
+    correlationIds: list[str] = Field(default_factory=list)
     metadataOnly: Literal[True] = True
 
 
@@ -1891,6 +1978,8 @@ class WorkPacketCleanupDryRunGateV0View(BaseModel):
 class WorkPacketExecutionAttemptSummaryV0View(BaseModel):
     attemptId: str
     workItemId: str
+    leaseId: str | None = None
+    fencingToken: int | None = None
     routeDecisionId: str
     workerId: str
     lane: str

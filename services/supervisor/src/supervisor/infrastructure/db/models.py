@@ -125,6 +125,10 @@ class AuthoritativeWorkPacketLifecycleEvent(Base):
     correlation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     causation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    packet_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ready_to_test_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    operator_test_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    operator_test_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_summary: Mapped[str] = mapped_column(Text, default="")
     evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -187,6 +191,8 @@ class ExecutionAttempt(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"))
+    queue_lease_id: Mapped[str | None] = mapped_column(ForeignKey("queue_leases.id"), nullable=True)
+    queue_fencing_token: Mapped[int | None] = mapped_column(Integer, nullable=True)
     route_decision_id: Mapped[str] = mapped_column(String(255))
     worker_id: Mapped[str] = mapped_column(String(120))
     lane: Mapped[str] = mapped_column(String(64))
@@ -221,6 +227,23 @@ class QueueLease(Base):
     fencing_token: Mapped[int] = mapped_column(Integer, default=1)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     work_item: Mapped[WorkItem] = relationship(back_populates="leases")
+
+
+class QueueLeaseAction(Base):
+    __tablename__ = "queue_lease_actions"
+    __table_args__ = (UniqueConstraint("lease_id", "idempotency_key", name="uq_queue_lease_action_idempotency"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    lease_id: Mapped[str] = mapped_column(ForeignKey("queue_leases.id"))
+    work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"))
+    operation: Mapped[str] = mapped_column(String(32))
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    correlation_id: Mapped[str] = mapped_column(String(120))
+    fencing_token: Mapped[int] = mapped_column(Integer)
+    provided_fencing_token: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16), default="accepted")
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AuditEvent(Base):
