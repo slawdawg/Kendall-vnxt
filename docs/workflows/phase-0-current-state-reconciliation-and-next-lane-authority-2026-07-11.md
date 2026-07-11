@@ -1,21 +1,25 @@
-# Phase 0 Current-State Reconciliation And Next-Lane Authority
+# Phase 0 Runtime Repair Gate And Next-Lane Authority
 
 Date: 2026-07-11
-Status: reconciled baseline; decision-only; no new authority granted
+Status: runtime repair gated; decision-only; no new authority granted
 Evidence retention: metadata only
 
 ## Purpose
 
-This artifact records the Phase 0 baseline after Gate 5 and Gate 6 merged. It
-is the source-owned handoff for the next session. It does not create a new
-epic, story, PRD, worker lane, provider operation, scoring operation, or
-cleanup authority.
+This artifact updates the Phase 0 baseline after Gate 5, Gate 6, and the
+current-state reconciliation artifact merged. It is the source-owned handoff
+for the next session. It does not create a new epic, story, PRD, worker lane,
+provider operation, scoring operation, takeover, or cleanup authority.
 
 ## Reconciled baseline
 
-- `origin/dev` is at `9e87f62417389b8d933537a6a87ed5a7094f8098`, including the
-  merged Gate 5/6 terminal backlog and readiness gates.
+- `origin/dev` is at `c1cfe896ffedde7f3e0bc11c86fc12e1903d5493`, including the
+  merged Gate 5/6 terminal backlog and readiness gates plus the Phase 0
+  reconciliation artifact.
 - PR inventory is empty: no open pull requests target `dev`.
+- Epic 25-1 (#473), Epic 25-2 (#474), the earlier 24-1 fixture stabilization
+  (#461), and the Phase 0 reconciliation (#485) are merged. There is no open
+  PR available for merge or review-fix work.
 - The primary checkout remains intentionally dirty in four user-owned paths:
   `AGENTS.md`,
   `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`,
@@ -26,21 +30,47 @@ cleanup authority.
   `starting` state with its last ledger update on 2026-07-06. Its dispatcher
   summary is unavailable/stale, so queue and lease truth cannot be inferred
   from that run.
-- Current read-only inventory reports 91 backlog candidates, 90 closed and 1
+- Current read-only preflight reports 91 backlog candidates, 90 closed and 1
   claimed; 0 dispatchable lanes; 0 active leases; and 91 blocked dispatcher
-  candidates.
+  candidates. Dispatcher state is unavailable/stale.
 - Assignment inventory reports 252 lane assignments, including 236 closed and
-  16 `blocked_stale_owner_needs_takeover`; and 414 workspace assignments,
-  including 397 closed, 15 `blocked_stale_owner_needs_takeover`, and 1
-  `blocked_owned_active`.
+  16 `blocked_stale_owner_needs_takeover`; and 415 workspace assignments,
+  including 398 closed, 15 `blocked_stale_owner_needs_takeover`, 1
+  `blocked_owned_active`, and 1 active assignment.
 - Canonical stale-owner inspection covered 12 targets: 1 requires canonical
   closeout evidence, 9 require dirty-worktree preservation, and the remaining
   clean targets remain blocked pending operator/evidence approval.
 - Workspace orientation reports 8 tmux panes, 4 manager-owned panes, 2
   unmanaged panes, and 2 panes whose recorded worktrees are missing.
 - Worker posture is 0 active, 4 warm, and 2 retirement-blocked. Usage is
-  normal with 95% remaining; weekly usage is unavailable and must not be
+  normal with 93% remaining; weekly usage is unavailable and must not be
   treated as pressure. CPU and RAM posture are normal.
+
+## Runtime repair gate
+
+The exact outside-sandbox preflight at 2026-07-11T15:37Z confirmed that the
+manager runtime is read-only and blocked: the stale run is
+`manager-20260706-001` in `starting` state, dispatcher freshness is unknown,
+safe work supply is zero, and source-backed refill evidence is absent. Tmux
+orientation found 8 panes, 4 manager-owned panes, 2 unmanaged panes, and 2
+missing-worktree references. No pane was mutated.
+
+The exact stale-owner inspection covered 12 targets. One sanitized or legacy
+assignment still requires canonical closeout evidence; 9 dirty stale
+workspaces have bounded preservation evidence; 2 clean stale lanes remain
+blocked on explicit takeover/evidence; and there are 0 cleanup candidates and
+0 takeover-approval candidates. No takeover, assignment closeout, worker
+mutation, dispatch apply, provider call, GitHub mutation, merge, or cleanup
+apply is justified by these packets.
+
+The current primary-checkout patch also remains held. Its manager-control-plane
+diff removes authoritative worker assignment locks, review reservation and
+lease identity checks, pane/session identity revalidation, and self-review or
+assignment-history exclusions. Its full manager test suite is not green: the
+remaining failures include stale 24-to-25 fixture expectations, warm-handoff
+behavior, and stale-owner story-artifact numbering. The patch must not be
+delivered as a baseline repair until those safety invariants and tests are
+reconciled by the owning lane.
 
 ## Baseline interpretation
 
@@ -63,6 +93,9 @@ permission to invent post-slice product work.
    inspection checks. Keep dispatch blocked until those packets agree.
 5. Refresh authority-readiness and current-state evidence after runtime state
    is coherent.
+6. Reconcile the primary-checkout patch against the current source baseline;
+   restore or prove every worker lock, lease, reservation, pane identity, and
+   review-routing safety invariant before any PR delivery.
 
 No takeover, cleanup, worker launch/retirement, dispatch apply, provider call,
 credential access, or GitHub mutation is authorized by this artifact.
@@ -97,6 +130,10 @@ post-slice epics remain alternative approval-required lanes, not current work.
 - `node ./scripts/manager-cycle-packet.mjs --summary-json`
 - `node ./scripts/manager-stale-owner-inspection.mjs --summary-json`
 - `pnpm run check:adaptive-scoring`
+- `pnpm run check:authority-readiness`
+- `pnpm run check:branch-protection-readiness`
+- `pnpm run check:delivery-readiness`
+- `pnpm run check:cleanup-automation`
 - `gh pr list --state open --base dev --limit 100 --json number,title,headRefName,baseRefName,isDraft,mergeable,statusCheckRollup,updatedAt,url`
 
 All outputs above are metadata-only summaries. Generated BMAD stories,
