@@ -7,6 +7,7 @@ import {
   buildContinuousRunPlan,
   buildCyclePacket,
   buildRefillPlan,
+  buildSourceBackedPacketSeedPlan,
 } from "../scripts/lib/manager-control-plane/core.mjs";
 import { runManagerSourceIntakeCycle } from "../scripts/manager-source-intake-cycle.mjs";
 
@@ -109,6 +110,8 @@ test("default refill and cycle resolve one ready BMAD story with matching bundle
   const plan = refill();
   assert.equal(plan.status, "refill_needed");
   assert.equal(plan.summary.sourceBackedPacketSeed.packetState, "eligible");
+  assert.equal(plan.summary.refillWatermark.queuedCount, 0);
+  assert.equal(plan.nextActions.some((action) => action.dispatcherRefillAction), false);
   assert.deepEqual(plan.summary.sourceBackedPacketSeed.seedPacket.sourceRefs, [STORY_REF]);
   assert.deepEqual(plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance, {
     mode: "default_local_bmad",
@@ -199,6 +202,51 @@ test("explicit source-backed candidates keep precedence over default BMAD resolu
   assert.equal(plan.summary.sourceBackedPacketSeed.seedPacket.candidateWorkPacketId, "explicit-source-candidate");
   assert.equal(plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance, undefined);
   assert.ok(plan.nextActions.some((action) => action.code === "manager-source-intake-ready"));
+  assert.equal(plan.blockers.some((blocker) => blocker.code.startsWith("default-bmad-source-")), false);
+});
+
+test("precomputed explicit source eligibility keeps precedence over default BMAD resolution", () => {
+  writeFixture({ storyStatus: "in-progress" });
+  const explicitSeed = buildSourceBackedPacketSeedPlan({
+    runId: "manager-default-bmad-source-test",
+    candidateId: "precomputed-explicit-source-candidate",
+    title: "Precomputed explicit source candidate",
+    sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+    acceptanceCriteria: ["Precomputed explicit eligibility remains authoritative."],
+    verificationTargets: ["node --test tests/manager-default-bmad-source-resolution.test.mjs"],
+    touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+    riskClass: "low",
+    authorityClass: "allowed_unattended",
+  });
+  const plan = refill({}, {
+    sourceWorkEligibility: {
+      status: "ready",
+      summary: explicitSeed.summary.sourceWorkEligibility,
+    },
+  });
+
+  assert.equal(plan.summary.sourceWorkEligibility.candidateWorkPackets[0].candidateWorkPacketId, "precomputed-explicit-source-candidate");
+  assert.equal(plan.summary.defaultBmadSourceResolution, undefined);
+  assert.equal(plan.blockers.some((blocker) => blocker.code.startsWith("default-bmad-source-")), false);
+});
+
+test("explicit dispatcher refill candidates keep precedence over default BMAD resolution", () => {
+  writeFixture({ storyStatus: "in-progress" });
+  const plan = refill({}, {
+    sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+    refillCandidates: [{
+      candidateId: "explicit-dispatcher-refill-candidate",
+      title: "Explicit dispatcher refill candidate",
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      dedupeKey: "explicit-dispatcher-refill-candidate",
+      authorityClass: "allowed_unattended",
+      verificationTargets: ["node --test tests/manager-default-bmad-source-resolution.test.mjs"],
+      evidenceRefs: ["evidence:explicit-dispatcher-refill-candidate"],
+    }],
+  });
+
+  assert.equal(plan.summary.refillWatermark.eligibleCandidates[0].candidateId, "explicit-dispatcher-refill-candidate");
+  assert.equal(plan.summary.defaultBmadSourceResolution, undefined);
   assert.equal(plan.blockers.some((blocker) => blocker.code.startsWith("default-bmad-source-")), false);
 });
 

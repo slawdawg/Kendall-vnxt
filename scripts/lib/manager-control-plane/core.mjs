@@ -13607,13 +13607,16 @@ export function buildRefillPlan(options = {}, context = {}) {
       ? buildSourceWorkEligibilityPlan(options, { ...context, sourceArtifactDiscovery })
       : null);
   const explicitSourceWorkCandidateInputs = sourceWorkCandidateInputs(options, context);
-  const hasExplicitSourceWorkCandidates = explicitSourceWorkCandidateInputs.length > 0;
+  const sourceWorkEligibilitySummary = sourceWorkEligibility?.summary || sourceWorkEligibility || {};
+  const hasExplicitSourceWorkCandidates = explicitSourceWorkCandidateInputs.length > 0 ||
+    sourceWorkEligibilityHasCandidates(sourceWorkEligibilitySummary);
+  const hasExplicitRefillCandidates = Array.isArray(context.refillCandidates) && context.refillCandidates.length > 0;
   const eligibleSourceWorkPackets = Array.isArray(sourceWorkEligibility?.summary?.candidateWorkPackets)
     ? sourceWorkEligibility.summary.candidateWorkPackets
     : [];
   const shouldBuildSourceBackedSeed = hasSourceBackedSeedInputs(options, context);
   const suppliedSourceBackedPacketSeed = normalizeSourceBackedPacketSeedForRefill(options, context, sourceArtifactDiscovery);
-  const defaultBmadSourceResolution = starvation && !hasExplicitSourceWorkCandidates && !shouldBuildSourceBackedSeed
+  const defaultBmadSourceResolution = starvation && !hasExplicitSourceWorkCandidates && !hasExplicitRefillCandidates && !shouldBuildSourceBackedSeed
     ? resolveDefaultBmadSourceSeed(options, context)
     : { attempted: false, status: "not_requested", summary: null, blockers: [], seedCandidate: null };
   const defaultBmadSourceBackedPacketSeed = defaultBmadSourceResolution.status === "ready"
@@ -13634,6 +13637,9 @@ export function buildRefillPlan(options = {}, context = {}) {
     ? [sourceBackedPacketSeed.summary.seedPacket]
     : [];
   const refillEligibleSourceWorkPackets = eligibleSourceWorkPackets.length > 0 ? eligibleSourceWorkPackets : eligibleSeedPackets;
+  const dispatcherRefillCandidates = eligibleSourceWorkPackets.length > 0
+    ? eligibleSourceWorkPackets
+    : eligibleSeedPackets.filter((candidate) => candidate.sourceProvenance?.mode !== "default_local_bmad");
   const discoveredSourceRefs = Array.isArray(sourceArtifactDiscovery?.summary?.artifacts)
     ? sourceArtifactDiscovery.summary.artifacts.map((artifact) => artifact.ref).filter(Boolean)
     : [];
@@ -13861,8 +13867,8 @@ export function buildRefillPlan(options = {}, context = {}) {
       ...context,
       sourceRefs: sourceSlice ? [sourceSlice.ref] : explicitSourceRefs,
       candidateLanes,
-      refillCandidates: refillEligibleSourceWorkPackets.length > 0
-        ? refillEligibleSourceWorkPackets
+      refillCandidates: dispatcherRefillCandidates.length > 0
+        ? dispatcherRefillCandidates
         : hasExplicitSourceWorkCandidates
           ? []
           : context.refillCandidates,
@@ -13956,6 +13962,16 @@ export function buildRefillPlan(options = {}, context = {}) {
         ]
       : [],
   });
+}
+
+function sourceWorkEligibilityHasCandidates(summary = {}) {
+  return [
+    summary.candidateWorkPackets,
+    summary.needsReviewPackets,
+    summary.blockedPackets,
+    summary.dedupe?.skippedCandidates,
+  ].some((candidates) => Array.isArray(candidates) && candidates.length > 0) ||
+    nonNegativeInteger(summary.candidateCount ?? summary.candidate_count) > 0;
 }
 
 function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", sourceBackedPacketSeed = null } = {}) {
