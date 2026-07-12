@@ -22,6 +22,7 @@ from supervisor.api.schemas import (
     OperationalActionApprovalRequest,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
+    PipelineEpic25EvidenceChainIngestRequest,
     WorkItemActionRequest,
     WorkItemAssignmentRequest,
     WorkItemBranchPreparationRequest,
@@ -227,6 +228,23 @@ async def get_authoritative_work_packet(packet_id: str, session: AsyncSession = 
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
     return ApiEnvelope(data=packet)
+
+
+@app.post("/pipeline-control-plane/work-packets/{packet_id}/epic-25-evidence-chain", response_model=ApiEnvelope)
+async def ingest_pipeline_epic_25_evidence_chain(
+    packet_id: str,
+    payload: PipelineEpic25EvidenceChainIngestRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    require_local_operational_boundary(request)
+    try:
+        evidence_chain = await service.ingest_pipeline_epic_25_evidence_chain(session, packet_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_epic_25_evidence_chain").model_dump()) from exc
+    if evidence_chain is None:
+        raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
+    return ApiEnvelope(data=evidence_chain)
 
 
 @app.post("/pipeline-control-plane/work-packets/{packet_id}/transitions", response_model=ApiEnvelope)
