@@ -162,17 +162,21 @@ PR #525 (`d3a27aa9e588ca23118ab984ec0ea979963d1cd9`) supplied the initial defaul
 local story-and-bundle resolver. PR #526
 (`86418bae99b2bc41c438ccd1ffe47dbe90278ecd`, reviewed head
 `14423d4e11483fb051978366b63cc737c758f2df`) adds authoritative
-`WorkPacketV0` list/detail parity. PR #528 (`43f1309004f683a9c68db3878bd68e7402942eed`,
-reviewed head `4452cc4e1ceff9fa305c34ae655c0205c4af1b01`) reconciles the full
-metadata-only local BMAD hierarchy; CI run `29191400049` was green for that
-reviewed head. PR #529 (`e4bd044f59bde7864155c88cb553a2a76915924d`, reviewed
-head `c5b65ba941514ad074e4c0385d0880e4cc2cc849`) proves the reconciled manager
-→ supervisor → dashboard list/detail path through real loopback processes;
-CI run `29192291676` was green for that reviewed head. The restart-persistence
-successor extends this same evidence by restarting the supervisor against the
-same disposable SQLite before the repeated dashboard assertions. The resulting
-`integrated_local` claim is limited to the named reconciled BMAD → manager →
-supervisor → dashboard path. It grants no provider, worker, dispatch,
-source-mutation, or production claim. Broader ADR Gate 4 remains open until
-the honest integrated MVP loop also proves the required real worker result path
-without split truth or simulated completion.
+`WorkPacketV0` list/detail parity. PR #528, full metadata-only BMAD hierarchy,
+merged as `43f1309004f683a9c68db3878bd68e7402942eed`; CI 1014 was green.
+PR #529, real dashboard process proof, merged as
+`e4bd044f59bde7864155c88cb553a2a76915924d`; CI 1016 was green. PR #530,
+restart persistence, merged as `2a842eaadd29586f399f6a180a9da7520e8bfff6`; CI
+1017 was green. PR #531, canonical worker-result continuation, merged as
+`59c3a5229b7ee1c1d1f6515e8b023ebfb787a755` from reviewed head
+`2fca4c49a7cb019e1f5797331f5666d52f43e209`; CI 1018 was green. Its 65 manager
+tests plus the real worker-result/dashboard restart integration ran with zero
+skips. The server owns the WorkItem, attempt, lease, and evidence; stale fencing
+and duplicate idempotency are proven.
+
+The resulting `integrated_local` claim is limited to the named reconciled
+BMAD → manager → supervisor → local worker-result → dashboard path, with
+restart and persistence evidence. It does not imply `bounded_live` or
+`production_observed`, provider/model calls, external workers, dispatch,
+source mutation, or unattended execution. Broader product requirements outside
+this path are deferred; they do not make the named path unaccepted.
