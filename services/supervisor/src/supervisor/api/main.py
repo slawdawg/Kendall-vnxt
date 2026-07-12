@@ -1,8 +1,9 @@
 ﻿import asyncio
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,6 +88,25 @@ app.add_middleware(
 )
 
 
+def request_has_local_operational_transport(request: Request) -> bool:
+    client_host = request.client.host if request.client else None
+    try:
+        return client_host is not None and ip_address(client_host).is_loopback
+    except ValueError:
+        return False
+
+
+def require_local_operational_boundary(request: Request) -> None:
+    if not request_has_local_operational_transport(request):
+        raise HTTPException(
+            status_code=403,
+            detail=error_response(
+                "Operational approval and action endpoints require a loopback request.",
+                "local_operational_boundary_required",
+            ).model_dump(),
+        )
+
+
 def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiErrorEnvelope:
     return ApiErrorEnvelope(
         error=ApiErrorShape(
@@ -149,12 +169,6 @@ async def list_work_packets(session: AsyncSession = Depends(get_session)):
     return ApiEnvelope(data=packets)
 
 
-@app.get("/pipeline-control-plane/projection", response_model=ApiEnvelope)
-async def get_pipeline_dashboard_projection(session: AsyncSession = Depends(get_session)):
-    projection = await service.get_pipeline_dashboard_projection(session)
-    return ApiEnvelope(data=projection)
-
-
 @app.get("/work-packets/{packet_id}", response_model=ApiEnvelope)
 async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
     packet = await service.get_work_packet(session, packet_id)
@@ -193,8 +207,13 @@ async def list_authoritative_work_packets(session: AsyncSession = Depends(get_se
 
 
 @app.get("/pipeline-control-plane/projection", response_model=ApiEnvelope)
-async def get_pipeline_dashboard_projection(session: AsyncSession = Depends(get_session)):
-    return ApiEnvelope(data=await service.get_pipeline_dashboard_projection(session))
+async def get_pipeline_dashboard_projection(request: Request, session: AsyncSession = Depends(get_session)):
+    return ApiEnvelope(
+        data=await service.get_pipeline_dashboard_projection(
+            session,
+            mutation_access=request_has_local_operational_transport(request),
+        )
+    )
 
 
 @app.get("/pipeline-control-plane/work-packets/{packet_id}", response_model=ApiEnvelope)
@@ -238,6 +257,7 @@ async def run_authoritative_work_packet_local_proof(
 @app.post("/pipeline-control-plane/actions", response_model=ApiEnvelope)
 async def apply_pipeline_operational_action(
     payload: OperationalActionRequest,
+    _: None = Depends(require_local_operational_boundary),
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -250,6 +270,7 @@ async def apply_pipeline_operational_action(
 @app.post("/pipeline-control-plane/approvals", response_model=ApiEnvelope)
 async def issue_pipeline_operational_approval(
     payload: OperationalActionApprovalRequest,
+    _: None = Depends(require_local_operational_boundary),
     session: AsyncSession = Depends(get_session),
 ):
     try:

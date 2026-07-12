@@ -10,6 +10,21 @@ The dashboard is the operator control plane. It can show evidence and submit bou
 
 This boundary classifies dashboard actions so future UI work can add useful controls without implying that real workers, providers, commands, or source mutation are enabled.
 
+## Topology And Remote Access Contract
+
+The supervisor and dashboard may bind to `0.0.0.0` for LAN or Tailscale reachability. `SUPERVISOR_INTERNAL_URL` is the dashboard server-side supervisor URL and `NEXT_PUBLIC_SUPERVISOR_URL` is the browser-facing supervisor URL. Reachability is not operator identity.
+
+Gate 3 covers the pipeline operational approval/action boundary only. Until the supervisor has an authenticated, server-bound session identity, browser requests from a non-loopback client receive a read-only pipeline projection. The projection reports operational mutation capabilities as unavailable with typed reason `authenticated_session_required`; the dashboard must not offer an actionable remote pipeline mutation control. The exact protected endpoints are:
+
+- `POST /pipeline-control-plane/approvals`
+- `POST /pipeline-control-plane/actions`
+
+Both reject non-loopback requests with `403`. Local mutation is limited to a direct loopback request and is persisted under the canonical server-owned local operator (`actorType=operator`, `actorId=pipeline-operator`). Client-supplied actor fields do not establish identity. `Forwarded` and `X-Forwarded-For` headers are not trusted.
+
+A reverse proxy that forwards these endpoints over a loopback hop is a deployment blocker until the proxy itself prevents remote access: without an authenticated server-bound session or a trusted identity boundary, the supervisor cannot distinguish that proxy hop from a local browser. The supervisor therefore does not infer the original client from proxy headers.
+
+Other dashboard POST/PATCH routes, including candidate-work creation/import/promotion, work-item actions, control-panel commands, assignments, escalations, and evidence forms, are outside this Gate 3 boundary and retain their existing behavior. Their remote authorization posture is an explicit follow-up gap; this document does not imply that they are authenticated. A future remote mutation path requires an authenticated server-bound session contract before expanding the protected endpoint set.
+
 ## Boundary Classes
 
 | Class | Meaning | Current examples | Requirements |

@@ -1512,6 +1512,7 @@ OperationalActionTypedReason = Literal[
     "projection_stale",
     "invalid_transition",
     "test_not_ready",
+    "authenticated_session_required",
     "unsupported_action",
     "unknown",
 ]

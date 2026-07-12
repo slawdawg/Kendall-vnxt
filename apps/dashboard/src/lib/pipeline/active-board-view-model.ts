@@ -566,6 +566,8 @@ function readyToTestResultControl(
     ? "Packet is not currently Ready To Test."
     : capability?.typedReason === "blocked_by_approval"
       ? "Operator product-test approval evidence is required."
+      : capability?.typedReason === "authenticated_session_required"
+        ? "Remote dashboard actions require an authenticated supervisor session."
       : "Backend action capability is not available.";
   return {
     actionInstanceId: `${packetId}:${actionId}:${actionSuffix}`,
