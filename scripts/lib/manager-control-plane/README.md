@@ -7,6 +7,12 @@ in-memory adapter, fixture, and bounded-summary behavior only. It does not
 authorize live worker orchestration, delivery, durable queue adoption, cleanup,
 or supervisor integration.
 
+The separately invoked `manager-supervisor-source-intake.mjs` adapter is not a
+`backend_proof` operation. It is a bounded loopback-only Gate 4 intake boundary
+for one already-eligible metadata-only source seed. It does not change the
+authority of refill, cycle, run-loop, dispatcher, or worker operations. See
+`docs/architecture/manager-supervisor-source-intake-boundary.md`.
+
 Real in this slice:
 
 - deterministic contract objects
@@ -40,4 +46,5 @@ Verification:
 
 - `pnpm run test:manager-control-plane-forbidden-boundary`
 - `pnpm run test:manager-control-plane-dispatcher-port`
+- `pnpm run test:manager-source-intake`
 - `pnpm run check:manager-control-plane`
