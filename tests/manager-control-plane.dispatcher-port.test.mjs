@@ -2360,8 +2360,43 @@ test("summary projection preserves authoritative exhaustion and its resume requi
   assert.equal(summary.attentionReason, "approval_gated_work_remains_visible");
   assert.ok(summary.blockers.includes("missing_supervisor_contract"));
   assert.ok(summary.rawStateLabels.includes("terminal:authoritative_backlog_exhausted"));
+  assert.ok(summary.rawStateLabels.includes("terminal:missing_supervisor_contract"));
   const serialized = toManagerSummaryJson({ ok: true, status: summary.currentPhase, summary });
   assert.equal(serialized.summary.terminalDisposition.resumeRequirement, "Start a new source-bound manager run.");
+
+  const integratedDisposition = {
+    ...terminalDisposition,
+    canonicalEventIntegration: "supervisor_canonical_event",
+    supervisorEvent: {
+      eventId: "manager-terminal-event-1234567890abcdef1234567890abcdef12345678",
+      evidenceRef: "supervisor-event:manager-terminal-event-1234567890abcdef1234567890abcdef12345678",
+      status: "persisted",
+      persistedAt: "2026-07-12T01:02:03.000Z",
+    },
+  };
+  const integratedSummary = buildManagerExecutionLaneSummary({
+    runId: "run-terminal",
+    clock: { nowEpochMs: () => Date.parse("2026-07-12T01:03:00.000Z"), nowIso: () => "2026-07-12T01:03:00.000Z" },
+    refillJobs: [{
+      refillJobId: "refill-terminal-integrated",
+      sourceRefs: [integratedDisposition.sourceIdentity],
+      sourceIdentity: integratedDisposition.sourceIdentity,
+      sourceRevision: integratedDisposition.sourceRevision,
+      state: "completed",
+      result: "authoritative_backlog_exhausted",
+      queuedCount: 0,
+      needsReviewCount: 1,
+      blockedCount: 0,
+      evidenceRefs: integratedDisposition.evidenceRefs,
+      terminalDisposition: integratedDisposition,
+    }],
+    events: [],
+  });
+  assert.equal(integratedSummary.currentPhase, "authoritative_backlog_exhausted");
+  assert.equal(integratedSummary.blockers.includes("missing_supervisor_contract"), false);
+  assert.ok(integratedSummary.rawStateLabels.includes("terminal:supervisor_canonical_event"));
+  assert.ok(integratedSummary.warnings.includes("approval_gated_work_remains_visible"));
+  assert.equal(integratedSummary.operatorAttentionRequired, true);
 
   const makeTerminalJob = (disposition, refillJobId) => ({
     refillJobId,

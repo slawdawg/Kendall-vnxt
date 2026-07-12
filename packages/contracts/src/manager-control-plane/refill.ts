@@ -28,6 +28,13 @@ export interface ManagerUnresolvedApprovalGatedWork {
   evidenceRefs: readonly EvidenceRefId[];
 }
 
+export interface ManagerSupervisorCanonicalEventMetadata {
+  eventId: string;
+  evidenceRef: EvidenceRefId;
+  status: "persisted";
+  persistedAt: string;
+}
+
 export interface AuthoritativeBacklogExhaustedDisposition {
   disposition: "authoritative_backlog_exhausted";
   runId: string;
@@ -38,7 +45,8 @@ export interface AuthoritativeBacklogExhaustedDisposition {
   evidenceRefs: readonly EvidenceRefId[];
   resumeRequirement: string;
   nextManagerAction: string;
-  canonicalEventIntegration: "missing_supervisor_contract";
+  canonicalEventIntegration: "missing_supervisor_contract" | "supervisor_canonical_event";
+  supervisorEvent?: ManagerSupervisorCanonicalEventMetadata;
   idempotencyKey: string;
   rawPayloadRetained: false;
 }

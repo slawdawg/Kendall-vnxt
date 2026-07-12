@@ -19,6 +19,8 @@ const suites = {
     "cycle continuation allows safe dispatch claims while active workers continue under stale ownership blockers",
   ],
   focused: [
+    "manager supervisor terminal sync",
+    "manager refill dry runs never fetch supervisor state",
     "explicit eligible source-backed packet seed feeds refill and continuous refresh",
     "cycle packet reports PR stewardship blockers while unrelated safe work continues",
     "blocked PR stewardship suppresses trusted unrelated dispatch apply",

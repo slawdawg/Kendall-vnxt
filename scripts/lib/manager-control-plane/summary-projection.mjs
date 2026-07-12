@@ -43,7 +43,7 @@ export function buildManagerExecutionLaneSummary({
   const terminalSelection = selectTerminalRefillJob(refillJobs, runId);
   const currentPhase = derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refillJobs, stateCounts, terminalJob: terminalSelection.job, terminalHistoryConflict: terminalSelection.contradiction });
   const terminalDisposition = terminalSelection.job?.terminalDisposition ?? null;
-  const supervisorIntegrationMissing = terminalDisposition !== null || refillJobs.some((job) => job?.terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract");
+  const supervisorIntegrationMissing = terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract" || refillJobs.some((job) => job?.terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract");
   const actualAuthorityBlockedCandidates = blockedCandidates.filter((candidate) => candidate.authorityClass && candidate.authorityClass !== "allowed_unattended");
   const blockedAuthorityClasses = unique(actualAuthorityBlockedCandidates.map((candidate) => candidate.authorityClass).filter(Boolean));
   const authorityBlockedReason = blockedAuthorityClasses[0] ?? null;
@@ -402,13 +402,15 @@ function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsR
     duplicateCandidates.length > 0 ? "candidate:duplicate" : null,
     currentPhase === "no_safe_work" ? "supply:no_safe_work" : null,
     terminalDisposition?.disposition === "authoritative_backlog_exhausted" ? "terminal:authoritative_backlog_exhausted" : null,
+    terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract" ? "terminal:missing_supervisor_contract" : null,
+    terminalDisposition?.canonicalEventIntegration === "supervisor_canonical_event" ? "terminal:supervisor_canonical_event" : null,
     blockers.includes("terminal_refill_history_conflict") ? "terminal:history_conflict" : null,
     `freshness:${freshness}`
   ].filter(Boolean));
 }
 
 function isValidatedTerminalDisposition(disposition) {
-  if (!disposition || disposition.disposition !== "authoritative_backlog_exhausted" || disposition.canonicalEventIntegration !== "missing_supervisor_contract" || disposition.rawPayloadRetained !== false) return false;
+  if (!disposition || disposition.disposition !== "authoritative_backlog_exhausted" || !["missing_supervisor_contract", "supervisor_canonical_event"].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false) return false;
   if (!String(disposition.runId || "").trim() || !String(disposition.sourceIdentity || "").trim() || !String(disposition.sourceRevision || "").trim() || !String(disposition.idempotencyKey || "").trim() || !String(disposition.resumeRequirement || "").trim() || !String(disposition.nextManagerAction || "").trim()) return false;
   if (!Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0 || !Array.isArray(disposition.unresolvedApprovalGatedWork)) return false;
   if (!disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord)) return false;
@@ -418,7 +420,16 @@ function isValidatedTerminalDisposition(disposition) {
   if (["totalItems", "reconciledItems", ...keys].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
   if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== keys.reduce((total, key) => total + counts[key], 0)) return false;
   if (["eligible", "queued", "leased", "running", "reviewFix", "requiredRetrospective", "otherwiseRequired"].some((key) => counts[key] !== 0)) return false;
-  return counts.approvalGated === disposition.unresolvedApprovalGatedWork.length;
+  if (counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
+  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorEvent(disposition.supervisorEvent);
+}
+
+function isValidSupervisorEvent(event) {
+  return Boolean(event && typeof event === "object" &&
+    typeof event.eventId === "string" && event.eventId.trim() && event.eventId.length <= 120 &&
+    typeof event.evidenceRef === "string" && event.evidenceRef.trim() && event.evidenceRef.length <= 220 &&
+    event.status === "persisted" &&
+    typeof event.persistedAt === "string" && event.persistedAt.length <= 64 && Number.isFinite(Date.parse(event.persistedAt)));
 }
 
 function isValidUnresolvedApprovalGatedWorkRecord(record) {
@@ -456,6 +467,7 @@ function terminalDispositionFingerprint(disposition) {
     resumeRequirement: disposition.resumeRequirement,
     nextManagerAction: disposition.nextManagerAction,
     canonicalEventIntegration: disposition.canonicalEventIntegration,
+    supervisorEvent: disposition.supervisorEvent ?? null,
     rawPayloadRetained: disposition.rawPayloadRetained,
     idempotencyKey: disposition.idempotencyKey,
   });

@@ -6,6 +6,7 @@ Status: current navigation index
 ## Current Spine
 
 - `kendall-vnxt-overall-architecture.md`: durable system architecture spine.
+- `manager-supervisor-terminal-event-sync-boundary.md`: explicit loopback-only manager terminal-event persistence boundary that keeps refill planning network-free.
 - `kendall-vnxt-current-gap-review-2026-06-08.md`: current gap review and recommended next work.
 - `kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md`: code-aware implementation reconciliation.
 - `kendall-vnxt-authority-dependency-graph-2026-06-08.md`: dependency graph for deferred execution authority.
