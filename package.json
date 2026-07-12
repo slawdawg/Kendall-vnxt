@@ -95,6 +95,8 @@
     "check:maintenance-readiness": "node ./scripts/check-maintenance-readiness-report.mjs",
     "check:token-economy": "node ./scripts/check-token-economy.mjs",
     "manager:quality-gate": "node ./scripts/manager-quality-gate-adapter.mjs",
+    "epic25:prelive": "node ./scripts/epic-25-prelive-harness.mjs",
+    "test:epic25:prelive": "node --test tests/epic-25-prelive-harness.test.mjs",
     "manager:preflight": "node ./scripts/manager-preflight.mjs --summary-json",
     "manager:resource": "node ./scripts/manager-resource-status.mjs --summary-json",
     "manager:usage": "node ./scripts/manager-usage-status.mjs --summary-json",
