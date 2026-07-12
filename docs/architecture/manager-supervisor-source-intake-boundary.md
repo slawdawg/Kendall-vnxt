@@ -6,29 +6,34 @@ Status: bounded Gate 4 source-owned architecture contract
 ## Decision
 
 The normal manager source-candidate path remains read-only and network-free.
-`manager:source-packet-seed`, refill planning, cycle planning, and the manager run
-loop do not contact the supervisor. An eligible source-backed seed can cross
-into the supervisor-owned authoritative WorkPacket lifecycle only through the
-separate explicit command:
+`manager:source-packet-seed`, refill planning, cycle planning, and the manager
+run loop do not contact the supervisor, including their dry-run paths. One
+explicit bounded manager cycle now composes the existing pure planner and
+loopback adapter. An eligible source-backed seed can cross into the
+supervisor-owned authoritative WorkPacket lifecycle only through that command:
 
 ```text
-manager:source-packet-seed (read-only eligible CandidateWorkPacket metadata)
-  -> manager:supervisor-source-intake (explicit command)
+manager:source-intake-cycle (explicit bounded command)
+  -> buildSourceBackedPacketSeedPlan (read-only eligibility first)
+  -> refuse blocked / needs-review / dedupe / non-eligible states
+  -> intakeManagerSourcePacket (eligible only)
   -> loopback POST /pipeline-control-plane/work-packets
   -> exact packet and packet.created event identity validation
   -> supervisor persistence and live projection truth
 ```
 
-This is the smallest honest normal-path integration for this Gate 4 slice. It
+This is a bounded explicit manager cycle, not a long-lived manager cycle. It
 does not wire intake into `manager-cycle-packet`, `manager-refill-plan`, or
-`manager-run-loop`, and therefore is not full Gate 4 completion.
+`manager-run-loop`. Full Gate 4 still requires long-lived run-loop/refill
+orchestration to invoke the governed intake boundary.
 
 ## Explicit Command
 
-First produce a source-backed manager packet without network access:
+Run the cycle with the same source-backed seed inputs plus a loopback supervisor
+URL:
 
 ```bash
-pnpm run manager:source-packet-seed -- \
+pnpm run manager:source-intake-cycle -- \
   --candidate-id gate-4-source-candidate \
   --title "Gate 4 source candidate" \
   --source-ref doc:docs/workflows/current-session-runbook.md \
@@ -36,16 +41,16 @@ pnpm run manager:source-packet-seed -- \
   --verification-target "pnpm run test:manager-source-intake" \
   --touched-surface scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs \
   --risk-class low \
-  --authority-class allowed_unattended > /tmp/gate-4-source-packet.json
-```
-
-Then explicitly submit the eligible packet to a local supervisor:
-
-```bash
-pnpm run manager:supervisor-source-intake -- \
-  --input /tmp/gate-4-source-packet.json \
+  --authority-class allowed_unattended \
   --supervisor-url http://127.0.0.1:8000
 ```
+
+The pre-existing `manager:source-packet-seed` remains available as a pure,
+network-free planning command. The lower-level
+`manager:supervisor-source-intake` remains available for explicit submission of
+an already-planned eligible packet. Their invocation and authority boundaries
+remain unchanged; successful adapter results now keep the original eligibility
+projection separate from the seed packet's supervisor-persistence annotation.
 
 The adapter accepts only uncredentialed `localhost`, `127.0.0.1`, or `::1`
 HTTP(S) base URLs. The packet must contain exactly one eligible
@@ -65,13 +70,16 @@ verification commands, dependencies, enclosing manager packets, BMAD story
 bodies, prompts, completions, provider payloads, reasoning traces, secrets, and
 terminal output are not sent or retained.
 
-Before POST, the adapter cross-checks the seed against the manager packet's
+Before any adapter call, the cycle requires both planner packet state and seed
+eligibility decision to be exactly `eligible`. Blocked, needs-review,
+dedupe/skipped, no-seed, or any other state is returned as typed blocked evidence
+without fetch. Before POST, the adapter cross-checks the seed against the manager packet's
 single eligible candidate projection and single source-artifact discovery
 projection. Authority must remain `allowed_unattended`, risk must remain low or
 medium, every raw-retention marker must remain false, and unsafe or unbounded
 fields are rejected rather than reflected into failure output.
 
-The command creates no CandidateWork row, WorkItem, execution attempt, queue
+The cycle creates no CandidateWork row, WorkItem, execution attempt, queue
 lease, worker process, dispatch action, provider call, or source mutation. The
 supervisor owns the authoritative WorkPacket and `packet.created` lifecycle
 event after the POST succeeds.

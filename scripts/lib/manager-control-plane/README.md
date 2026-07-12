@@ -7,10 +7,12 @@ in-memory adapter, fixture, and bounded-summary behavior only. It does not
 authorize live worker orchestration, delivery, durable queue adoption, cleanup,
 or supervisor integration.
 
-The separately invoked `manager-supervisor-source-intake.mjs` adapter is not a
-`backend_proof` operation. It is a bounded loopback-only Gate 4 intake boundary
-for one already-eligible metadata-only source seed. It does not change the
-authority of refill, cycle, run-loop, dispatcher, or worker operations. See
+The separately invoked `manager-source-intake-cycle.mjs` command and its
+`manager-supervisor-source-intake.mjs` adapter are not `backend_proof`
+operations. Together they form one bounded loopback-only Gate 4 manager cycle:
+the command performs read-only planning and calls the adapter only for one
+eligible metadata-only source seed. They do not change the authority of refill,
+cycle, run-loop, dispatcher, or worker operations. See
 `docs/architecture/manager-supervisor-source-intake-boundary.md`.
 
 Real in this slice:
