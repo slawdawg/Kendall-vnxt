@@ -240,15 +240,16 @@ pnpm run test:manager-control-plane:focused
 
 ## Gate 4 named bounded source-intake path closeout
 
-Status: `integrated_local` is accepted only for the named path below. Full Gate
-4 remains open: the ADR's honest integrated MVP loop still lacks a proven real
-worker-result path, so this closeout does not claim worker execution or
-simulated completion as acceptance.
+Status: `integrated_local` is accepted only for the named path below. The
+canonical local worker-result continuation is proven by PR #531; this is not an
+unaccepted worker-result path. Broader product requirements outside this named
+path remain deferred.
 
 The named path is: default local BMAD story-and-bundle resolution in the
 manager, metadata-only manager intake of one eligible seed through the loopback
-supervisor, authoritative `WorkPacketV0` list/detail parity, and the matching
-dashboard `/pipeline` list and packet-detail projection.
+supervisor, canonical local worker-result continuation, authoritative
+`WorkPacketV0` list/detail parity, and the matching dashboard `/pipeline` list
+and packet-detail projection.
 
 - PR #525 merged as `d3a27aa9e588ca23118ab984ec0ea979963d1cd9`. Its default,
   local-only resolver selects one ready BMAD story and its matching PRD bundle
@@ -261,32 +262,35 @@ dashboard `/pipeline` list and packet-detail projection.
   head `14423d4e11483fb051978366b63cc737c758f2df`. It makes the
   supervisor-owned authoritative `WorkPacketV0` visible with identical list
   and detail identities.
-- PR #528 merged as `43f1309004f683a9c68db3878bd68e7402942eed` from reviewed
-  head `4452cc4e1ceff9fa305c34ae655c0205c4af1b01`; its CI run
-  `29191400049` was green. It reconciles the full metadata-only local BMAD
-  hierarchy required before default intake may contribute a candidate.
-- PR #529 merged as `e4bd044f59bde7864155c88cb553a2a76915924d` from reviewed
-  head `c5b65ba941514ad074e4c0385d0880e4cc2cc849`; its CI run
-  `29192291676` was green. It proves the reconciled manager → supervisor →
-  dashboard path through disposable SQLite and real loopback processes.
-- This restart-persistence successor extends that proof: it stops the first
-  real supervisor and dashboard, restarts a fresh supervisor against the same
-  disposable SQLite, reads the same authoritative lifecycle history and
+- PR #528, full metadata-only BMAD hierarchy, merged as
+  `43f1309004f683a9c68db3878bd68e7402942eed`; CI 1014 was green.
+- PR #529, real dashboard process proof, merged as
+  `e4bd044f59bde7864155c88cb553a2a76915924d`; CI 1016 was green.
+- PR #530, restart persistence, merged as
+  `2a842eaadd29586f399f6a180a9da7520e8bfff6`; CI 1017 was green. It stops the
+  first real supervisor and dashboard, restarts a fresh supervisor against the
+  same disposable SQLite, reads the same authoritative lifecycle history and
   `WorkPacketV0` projection by exact packet ID, and reruns the real dashboard
   `/pipeline` list and packet-detail assertions without fixture substitution.
+- PR #531, canonical worker-result continuation, merged as
+  `59c3a5229b7ee1c1d1f6515e8b023ebfb787a755` from reviewed head
+  `2fca4c49a7cb019e1f5797331f5666d52f43e209`; CI 1018 was green. Its 65
+  manager tests plus the real worker-result/dashboard restart integration ran
+  with zero skips. The server owns the WorkItem, attempt, lease, and evidence;
+  stale fencing and duplicate idempotency are proven.
 
 The accepted `integrated_local` label applies only to the reconciled
-BMAD → manager → supervisor → dashboard path above. It does not mean that full
-Gate 4 is integrated: the precise remaining ADR blocker is an honest local
-worker-result loop bound to the canonical supervisor lifecycle, with no split
-truth or simulated completion. No provider, worker, dispatch, source mutation,
-credential, shell, external network, or unattended execution is proven or
-enabled by this closeout.
+BMAD → manager → supervisor → local worker-result → dashboard path above, with
+restart and persistence evidence. It does not imply `bounded_live` or
+`production_observed`, provider/model calls, external workers, dispatch,
+source mutation, or unattended execution. Any broader product requirement
+outside this named path is deferred rather than a reason to call the path
+unaccepted.
 
 ## Gate 4 canonical worker-result continuation evidence
 
-The focused `pnpm run test:gate4-worker-result-loop` command proves the remaining
-bounded continuation through disposable loopback processes: reconciled manager
+The focused `pnpm run test:gate4-worker-result-loop` command proves the bounded
+continuation through disposable loopback processes: reconciled manager
 intake persists one supervisor packet, the explicit manager local-proof
 continuation invokes only that packet's supervisor route, and the supervisor
 records one linked WorkItem, completed attempt, verification evidence, queue
