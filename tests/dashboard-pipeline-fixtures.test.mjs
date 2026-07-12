@@ -283,6 +283,21 @@ function projectionFixture(overrides = {}) {
     },
     reliabilityProblems: [],
     gatedControls: [],
+    executeAdmission: {
+      schemaVersion: "pipeline-execute-admission/v0",
+      policyVersion: "supervisor-wip/v0",
+      state: "ready",
+      capacityAvailable: true,
+      typedReason: "capacity_available",
+      source: "supervisor_settings",
+      limits: { review: 1, deliver: 1, verification: 1, operatorTesting: 1 },
+      observed: { review: 0, deliver: 0, verification: 0, operatorTesting: 0 },
+      blockingDimensions: [],
+      nextSafeAction: "New Execute work may be admitted.",
+      evidenceRefs: ["evidence:wip-capacity-available"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
     queueSummary: {
       activeCount: 0,
       dispatchableCount: 1,
@@ -1026,6 +1041,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(packetInspectionSource, /packetDetailWhyDiagnostics/);
   assert.match(packetInspectionSource, /Execution attempts/);
   assert.match(packetInspectionSource, /Manager lane details/);
+  assert.match(packetInspectionSource, /CanonicalPacketDetailPanel/);
+  assert.match(cockpitSource, /Canonical source, readiness, quality, retention, delivery, and product-mode posture are unavailable/);
+  assert.match(cockpitSource, /Canonical readiness components/);
+  assert.match(cockpitSource, /Canonical quality gates/);
+  assert.match(cockpitSource, /Canonical delivery and retention evidence/);
   assert.match(cockpitSource, /buildPipelineActiveBoardViewModel/);
   assert.match(cockpitSource, /activeBoardViewModel\.activeBoard\.stageLanes/);
   assert.match(cockpitSource, /activeBoardCard/);
@@ -1053,6 +1073,13 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(activeBoardViewModelSource, /PipelinePacketDetailWhyDiagnostics/);
   assert.match(activeBoardViewModelSource, /PipelineBackpressureState/);
   assert.match(activeBoardViewModelSource, /deriveBackpressureState/);
+  assert.match(activeBoardViewModelSource, /buildCanonicalPacketDetail/);
+  assert.match(activeBoardViewModelSource, /detail \? detail\.canonicalContract : packet\.canonicalContract/);
+  assert.match(activeBoardViewModelSource, /canonicalPostureLabel\(packet\.productModeMapping\)/);
+  assert.match(activeBoardViewModelSource, /projection\.executeAdmission\.state === "unavailable"/);
+  assert.match(activeBoardViewModelSource, /projection\.executeAdmission\?\.state === "blocked"/);
+  assert.doesNotMatch(activeBoardViewModelSource, /function deriveStageBackpressure/);
+  assert.doesNotMatch(activeBoardViewModelSource, /Review has blocked or failed packets/);
   assert.match(activeBoardViewModelSource, /operator_testing_overloaded/);
   assert.match(activeBoardViewModelSource, /rawPayloadRetained: false/);
   assert.match(activeBoardViewModelSource, /buildPacketDetailWhyDiagnosticsForPacket/);
@@ -1068,7 +1095,14 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /aria-live="polite"/);
   assert.match(cockpitSource, /role="status"/);
   assert.match(cockpitSource, /Backpressure: \{backpressure\.summary\}/);
+  assert.match(cockpitSource, /Backend WIP:/);
+  assert.match(cockpitSource, /formatBackendWipCounts\(backpressure\.backendWip\.observed, backpressure\.backendWip\.limits\)/);
   assert.match(cockpitSource, /Next safe action: \{backpressure\.nextSafeAction\}/);
+  assert.match(cockpitSource, /canonicalDetail\?\.source/);
+  assert.match(cockpitSource, /canonicalSourceTrustState\(canonicalDetail\.source\.trust, packetSourceLabel, packetFreshness\)/);
+  assert.match(cockpitSource, /projectionState === "stale" \|\| projectionState === "unavailable"/);
+  assert.match(cockpitSource, /canonicalDetail\.source\.sourceRef/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.canonicalPostureLabel \?\? "canonical posture unavailable"/);
   assert.match(cockpitSource, /Backpressure next/);
   assert.match(cockpitSource, /aria-disabled="true"/);
   assert.doesNotMatch(cockpitSource, /disabled\s*\n\s*title=\{`\$\{action\.reason/);
