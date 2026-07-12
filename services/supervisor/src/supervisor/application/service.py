@@ -780,6 +780,13 @@ class SupervisorService:
         now = datetime.now(timezone.utc)
         if evidence_chain.checkedAt > now + timedelta(minutes=1) or evidence_chain.expiresAt < now:
             raise ValueError("Epic 25 evidence chain is stale, expired, or future-dated.")
+        policy_profile = evidence_chain.policyProfile
+        if policy_profile.checkedAt > now + timedelta(minutes=1) or policy_profile.expiresAt < now:
+            raise ValueError("Epic 25 policy profile is stale, expired, or future-dated.")
+        if any(gate.expiresAt < now for gate in policy_profile.qualityGates):
+            raise ValueError("Epic 25 policy profile contains a stale or expired quality gate.")
+        if policy_profile.retentionPolicy.expiresAt < now:
+            raise ValueError("Epic 25 retention policy is expired.")
         for slot in ("readiness", "canary", "ramp", "recovery", "hardening", "decision"):
             evidence_packet = getattr(evidence_chain.packets, slot)
             if evidence_packet.expiresAt < now:
@@ -1820,6 +1827,18 @@ class SupervisorService:
             blockers.append("evidence_chain_stale")
         if chain.evidenceClass == "live_observed":
             blockers.append("live_evidence_unavailable")
+        policy_profile = chain.policyProfile
+        if policy_profile.expiresAt < read_at or any(gate.expiresAt < read_at for gate in policy_profile.qualityGates):
+            blockers.append("policy_profile_stale")
+        if policy_profile.retentionPolicy.expiresAt < read_at:
+            blockers.append("retention_policy_expired")
+        if policy_profile.retentionPolicy.verificationStatus != "verified":
+            blockers.append("retention_policy_unverified")
+        if any(
+            gate.status == "fail" or (gate.requirement == "required" and gate.status != "pass")
+            for gate in policy_profile.qualityGates
+        ):
+            blockers.append("quality_gate_not_passed")
         stored_decision = chain.packets.decision.outcome
         effective_decision = "hold" if blockers else stored_decision
         return PipelineEpic25EvidenceChainReadV0View(

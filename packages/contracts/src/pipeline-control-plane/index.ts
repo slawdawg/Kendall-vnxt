@@ -610,6 +610,7 @@ export const PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION = "pipeline-operation
 export const PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION = "pipeline-production-readiness-decision/v0" as const;
 export const PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION = "pipeline-observed-evidence-attestation/v0" as const;
 export const PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION = "pipeline-epic-25-evidence-chain/v0" as const;
+export const PIPELINE_EPIC_25_POLICY_PROFILE_SCHEMA_VERSION = "pipeline-epic-25-policy-profile/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -1122,6 +1123,51 @@ export interface PipelineProductionReadinessDecisionEvidenceV0 {
 export const PIPELINE_EPIC_25_EVIDENCE_CHAIN_SLOTS = ["readiness", "canary", "ramp", "recovery", "hardening", "decision"] as const;
 export type PipelineEpic25EvidenceChainSlotV0 = (typeof PIPELINE_EPIC_25_EVIDENCE_CHAIN_SLOTS)[number];
 
+export const PIPELINE_EPIC_25_QUALITY_GATE_FAMILIES = ["security", "retention", "rollback", "runbook", "telemetry", "recovery"] as const;
+export type PipelineEpic25QualityGateFamilyV0 = (typeof PIPELINE_EPIC_25_QUALITY_GATE_FAMILIES)[number];
+export type PipelineEpic25QualityGateRequirementV0 = "required" | "optional";
+export type PipelineEpic25QualityGateStatusV0 = "pass" | "fail" | "skipped";
+
+export interface PipelineEpic25QualityGateV0 {
+  family: PipelineEpic25QualityGateFamilyV0;
+  requirement: PipelineEpic25QualityGateRequirementV0;
+  status: PipelineEpic25QualityGateStatusV0;
+  targetRevision: string;
+  checkedAt: string;
+  expiresAt: string;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  skippedReason: string | null;
+}
+
+export interface PipelineEpic25RetentionPolicyV0 {
+  sourceOwner: string;
+  toolOwner: string;
+  disposition: "metadata_only";
+  redactionState: "verified_redacted" | "not_applicable";
+  expiresAt: string;
+  retentionPeriodDays: number;
+  disposalAction: "delete_metadata" | "revalidate_before_expiry";
+  verificationStatus: "verified" | "pending" | "failed";
+  policyReason: string;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface PipelineEpic25PolicyProfileV0 {
+  schemaVersion: typeof PIPELINE_EPIC_25_POLICY_PROFILE_SCHEMA_VERSION;
+  targetRevision: string;
+  checkedAt: string;
+  expiresAt: string;
+  qualityGates: PipelineEpic25QualityGateV0[];
+  retentionPolicy: PipelineEpic25RetentionPolicyV0;
+  executionAllowed: false;
+  providerCallsAllowed: false;
+  mutationAllowed: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
 export type PipelineEpic25EvidenceDetailsV0 =
   | { kind: "readiness"; backendTruth: PipelineOperationalReadinessBackendTruthV0; authorityState: PipelineOperationalActionAuthorityStateV0; gateCount: number; thresholdsComplete: boolean; telemetryReady: boolean; rollbackReady: boolean; recoveryReady: boolean; configurationValid: boolean }
   | { kind: "canary"; workerCount: 1; backendTruth: PipelineOperationalReadinessBackendTruthV0; leaseState: "pass" | "fail" | "blocked"; checkpointState: "pass" | "fail" | "blocked"; measurementsComplete: boolean; canaryAuthorityProven: boolean; rampAllowed: boolean }
@@ -1157,6 +1203,7 @@ export interface PipelineEpic25EvidenceChainV0 {
   schemaVersion: typeof PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION;
   authoritativePacketId: string;
   evidenceClass: PipelineOperationalEvidenceClassV0;
+  policyProfile: PipelineEpic25PolicyProfileV0;
   packets: {
     readiness: PipelineEpic25EvidenceChainPacketV0;
     canary: PipelineEpic25EvidenceChainPacketV0;
@@ -1178,7 +1225,7 @@ export interface PipelineEpic25EvidenceChainReadV0 extends PipelineEpic25Evidenc
   chainDigestSha256: `sha256:${string}`;
   freshnessState: "fresh" | "stale";
   effectiveDecision: PipelineProductionReadinessDecisionV0;
-  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable">;
+  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable" | "policy_profile_stale" | "retention_policy_expired" | "retention_policy_unverified" | "quality_gate_not_passed">;
 }
 
 export interface PipelineOperationalActionValidationIssueV0 {
@@ -1325,6 +1372,8 @@ const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
 const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
 const EPIC_25_RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const EPIC_25_HIGH_ENTROPY_OR_PEM = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?:^|:)[A-Za-z0-9+/]{48,}={0,2}$/i;
+const EPIC_25_EXACT_TARGET_REVISION = /^[a-f0-9]{40}$/;
+const EPIC_25_EXECUTABLE_POLICY_TEXT = /\b(?:tmux\s+(?:kill|send|capture|new|attach)|git(?:hub)?\s+(?:push|merge|checkout|reset|clean|branch|pr)|gh\s+(?:pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(?:call|request|payload))\b/i;
 const OPERATIONAL_ACTION_MERGE_HEAD_SHA_EVIDENCE = /^evidence:merge-head-sha-[a-f0-9]{40}$/;
 const OPERATIONAL_ACTION_MERGE_BASE_EVIDENCE = /^evidence:merge-base-[a-z0-9._/@:-]{1,120}$/;
 const OPERATIONAL_ACTION_MERGE_PR_EVIDENCE = /^evidence:merge-pr-[0-9]{1,10}$/;
@@ -2153,7 +2202,7 @@ export function validatePipelineEpic25EvidenceChainV0(
   const record = operationalActionRecord(evidence, issues);
   pushForbiddenObjectFieldIssues(issues, record);
   pushUnknownFieldIssues(issues, record, new Set([
-    "schemaVersion", "authoritativePacketId", "evidenceClass", "packets", "checkedAt", "expiresAt",
+    "schemaVersion", "authoritativePacketId", "evidenceClass", "policyProfile", "packets", "checkedAt", "expiresAt",
     "executionAllowed", "providerCallsAllowed", "mutationAllowed", "metadataOnly", "rawPayloadRetained",
   ]));
   if (record.schemaVersion !== PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION) {
@@ -2163,6 +2212,9 @@ export function validatePipelineEpic25EvidenceChainV0(
     issues.push({ field: "authoritativePacketId", code: "blank_identifier", summary: "Epic 25 evidence chains require an exact safe authoritative packet id." });
   }
   pushEnumIssue(issues, "evidenceClass", record.evidenceClass, PIPELINE_OPERATIONAL_EVIDENCE_CLASSES);
+  for (const issue of validatePipelineEpic25PolicyProfileV0(record.policyProfile, nowMs)) {
+    issues.push({ ...issue, field: `policyProfile.${issue.field}` });
+  }
   if (record.metadataOnly !== true || record.rawPayloadRetained !== false || record.executionAllowed !== false ||
       record.providerCallsAllowed !== false || record.mutationAllowed !== false) {
     issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Epic 25 evidence chains are metadata-only and grant no execution, provider, or mutation authority." });
@@ -2173,6 +2225,12 @@ export function validatePipelineEpic25EvidenceChainV0(
       !EPIC_25_RFC3339_TIMESTAMP.test(record.expiresAt) || !Number.isFinite(chainCheckedAtMs) || !Number.isFinite(chainExpiresAtMs) || chainCheckedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS ||
       chainExpiresAtMs < nowMs || chainExpiresAtMs <= chainCheckedAtMs || chainExpiresAtMs - chainCheckedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
     issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Epic 25 evidence-chain timestamps must be current, unexpired, and bounded." });
+  }
+  const policyProfile = record.policyProfile as Record<string, unknown> | undefined;
+  const policyCheckedAtMs = typeof policyProfile?.checkedAt === "string" ? Date.parse(policyProfile.checkedAt) : NaN;
+  const policyExpiresAtMs = typeof policyProfile?.expiresAt === "string" ? Date.parse(policyProfile.expiresAt) : NaN;
+  if (!Number.isFinite(policyCheckedAtMs) || !Number.isFinite(policyExpiresAtMs) || policyCheckedAtMs > chainCheckedAtMs || policyExpiresAtMs < chainCheckedAtMs) {
+    issues.push({ field: "policyProfile.checkedAt", code: "stale_or_unparseable_readiness", summary: "The Epic 25 policy profile must be fresh at the exact evidence-chain check time." });
   }
 
   const packets = operationalActionRecord(record.packets, issues, "packets");
@@ -2291,10 +2349,120 @@ export function validatePipelineEpic25EvidenceChainV0(
   return issues;
 }
 
+export function validatePipelineEpic25PolicyProfileV0(
+  profile: unknown,
+  nowMs: number = Date.now(),
+): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(profile, issues, "policyProfile");
+  pushForbiddenObjectFieldIssues(issues, record);
+  pushUnknownFieldIssues(issues, record, new Set([
+    "schemaVersion", "targetRevision", "checkedAt", "expiresAt", "qualityGates", "retentionPolicy",
+    "executionAllowed", "providerCallsAllowed", "mutationAllowed", "metadataOnly", "rawPayloadRetained",
+  ]));
+  if (record.schemaVersion !== PIPELINE_EPIC_25_POLICY_PROFILE_SCHEMA_VERSION) {
+    issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Epic 25 policy profiles use an unsupported schema version." });
+  }
+  if (typeof record.targetRevision !== "string" || !EPIC_25_EXACT_TARGET_REVISION.test(record.targetRevision)) {
+    issues.push({ field: "targetRevision", code: "blank_identifier", summary: "Epic 25 policy profiles require an exact lowercase 40-character Git target revision." });
+  }
+  if (record.executionAllowed !== false || record.providerCallsAllowed !== false || record.mutationAllowed !== false ||
+      record.metadataOnly !== true || record.rawPayloadRetained !== false) {
+    issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Epic 25 policy profiles are metadata-only and cannot grant execution, provider, mutation, or raw-payload authority." });
+  }
+  const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (typeof record.checkedAt !== "string" || typeof record.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(record.checkedAt) ||
+      !EPIC_25_RFC3339_TIMESTAMP.test(record.expiresAt) || !Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) ||
+      checkedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS || expiresAtMs < nowMs || expiresAtMs <= checkedAtMs ||
+      expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
+    issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Epic 25 policy-profile freshness must be current, unexpired, and bounded to five minutes." });
+  }
+
+  const gates = safeOperationalUnknownArray(record.qualityGates);
+  const seenFamilies = new Set<string>();
+  if (!gates) {
+    issues.push({ field: "qualityGates", code: "evidence_required", summary: "Epic 25 policy profiles require all named quality-gate families." });
+  } else {
+    for (let index = 0; index < gates.length; index += 1) {
+      const gate = operationalActionRecord(gates[index], issues, `qualityGates.${index}`);
+      pushForbiddenObjectFieldIssues(issues, gate);
+      pushUnknownFieldIssues(issues, gate, new Set(["family", "requirement", "status", "targetRevision", "checkedAt", "expiresAt", "evidenceRefs", "skippedReason"]));
+      const family = gate.family;
+      if (typeof family !== "string" || !isOneOfString(family, PIPELINE_EPIC_25_QUALITY_GATE_FAMILIES) || seenFamilies.has(family)) {
+        issues.push({ field: `qualityGates.${index}.family`, code: "policy_violation", summary: "Epic 25 quality-gate families must be named exactly once." });
+      } else {
+        seenFamilies.add(family);
+      }
+      if (!isOneOfString(gate.requirement, ["required", "optional"]) || !isOneOfString(gate.status, ["pass", "fail", "skipped"])) {
+        issues.push({ field: `qualityGates.${index}.status`, code: "invalid_enum", summary: "Epic 25 gates require explicit required/optional and pass/fail/skipped status." });
+      }
+      if (gate.targetRevision !== record.targetRevision) {
+        issues.push({ field: `qualityGates.${index}.targetRevision`, code: "stale_or_unparseable_readiness", summary: "Every Epic 25 gate must target the profile's exact Git revision." });
+      }
+      const gateCheckedAtMs = typeof gate.checkedAt === "string" ? Date.parse(gate.checkedAt) : NaN;
+      const gateExpiresAtMs = typeof gate.expiresAt === "string" ? Date.parse(gate.expiresAt) : NaN;
+      if (typeof gate.checkedAt !== "string" || typeof gate.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(gate.checkedAt) ||
+          !EPIC_25_RFC3339_TIMESTAMP.test(gate.expiresAt) || !Number.isFinite(gateCheckedAtMs) || !Number.isFinite(gateExpiresAtMs) ||
+          gateCheckedAtMs > checkedAtMs || gateExpiresAtMs < nowMs || gateExpiresAtMs <= gateCheckedAtMs || gateExpiresAtMs > expiresAtMs) {
+        issues.push({ field: `qualityGates.${index}.checkedAt`, code: "stale_or_unparseable_readiness", summary: "Every Epic 25 gate must be fresh within the policy-profile window." });
+      }
+      if (!isPipelineOperationalActionEvidenceRefsV0(gate.evidenceRefs) ||
+          (gate.evidenceRefs as unknown[] | undefined)?.some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref))) {
+        issues.push({ field: `qualityGates.${index}.evidenceRefs`, code: "evidence_required", summary: "Every Epic 25 gate requires safe metadata-only evidence refs." });
+      }
+      if (gate.status === "skipped") {
+        if (gate.requirement !== "optional" || typeof gate.skippedReason !== "string" || !isSafeEpic25PolicyText(gate.skippedReason)) {
+          issues.push({ field: `qualityGates.${index}.skippedReason`, code: "policy_violation", summary: "Only optional gates may be skipped, and every skipped gate requires a safe reason." });
+        }
+      } else if (gate.skippedReason !== null) {
+        issues.push({ field: `qualityGates.${index}.skippedReason`, code: "policy_violation", summary: "Non-skipped Epic 25 gates must not retain a skipped reason." });
+      }
+    }
+  }
+  for (const family of PIPELINE_EPIC_25_QUALITY_GATE_FAMILIES) {
+    if (!seenFamilies.has(family)) issues.push({ field: `qualityGates.${family}`, code: "evidence_required", summary: `Epic 25 policy profiles require the ${family} gate family.` });
+  }
+
+  const retention = operationalActionRecord(record.retentionPolicy, issues, "retentionPolicy");
+  pushForbiddenObjectFieldIssues(issues, retention);
+  pushUnknownFieldIssues(issues, retention, new Set([
+    "sourceOwner", "toolOwner", "disposition", "redactionState", "expiresAt", "retentionPeriodDays", "disposalAction",
+    "verificationStatus", "policyReason", "evidenceRefs", "metadataOnly", "rawPayloadRetained",
+  ]));
+  if (typeof retention.sourceOwner !== "string" || !isSafeOperationalIdentifierText(retention.sourceOwner) ||
+      typeof retention.toolOwner !== "string" || !isSafeOperationalIdentifierText(retention.toolOwner)) {
+    issues.push({ field: "retentionPolicy.sourceOwner", code: "unsafe_metadata_retention", summary: "Epic 25 retention requires safe source and tool owners." });
+  }
+  if (retention.disposition !== "metadata_only" || !isOneOfString(retention.redactionState, ["verified_redacted", "not_applicable"]) ||
+      !isOneOfString(retention.disposalAction, ["delete_metadata", "revalidate_before_expiry"]) ||
+      !isOneOfString(retention.verificationStatus, ["verified", "pending", "failed"]) || retention.metadataOnly !== true || retention.rawPayloadRetained !== false) {
+    issues.push({ field: "retentionPolicy", code: "bad_retention_flag", summary: "Epic 25 retention must declare metadata-only disposition, redaction, disposal, verification, and no raw payload retention." });
+  }
+  const retentionExpiresAtMs = typeof retention.expiresAt === "string" ? Date.parse(retention.expiresAt) : NaN;
+  if (typeof retention.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(retention.expiresAt) || !Number.isFinite(retentionExpiresAtMs) ||
+      retentionExpiresAtMs < nowMs || typeof retention.retentionPeriodDays !== "number" || !Number.isInteger(retention.retentionPeriodDays) ||
+      retention.retentionPeriodDays < 1 || retention.retentionPeriodDays > 3650 || retentionExpiresAtMs !== checkedAtMs + retention.retentionPeriodDays * 86_400_000) {
+    issues.push({ field: "retentionPolicy.expiresAt", code: "stale_or_unparseable_readiness", summary: "Epic 25 retention requires an unexpired exact retention period of one to 3650 days from profile checkedAt." });
+  }
+  if (typeof retention.policyReason !== "string" || !isSafeEpic25PolicyText(retention.policyReason)) {
+    issues.push({ field: "retentionPolicy.policyReason", code: "unsafe_metadata_retention", summary: "Epic 25 retention requires a safe metadata-only policy reason." });
+  }
+  if (!isPipelineOperationalActionEvidenceRefsV0(retention.evidenceRefs) ||
+      (retention.evidenceRefs as unknown[] | undefined)?.some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref))) {
+    issues.push({ field: "retentionPolicy.evidenceRefs", code: "evidence_required", summary: "Epic 25 retention requires safe policy evidence refs." });
+  }
+  return issues;
+}
+
 function sameStringSet(left: unknown, right: unknown): boolean {
   if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length ||
       left.some((value) => typeof value !== "string") || right.some((value) => typeof value !== "string")) return false;
   return new Set(left as string[]).size === left.length && (left as string[]).every((value) => (right as string[]).includes(value));
+}
+
+function isSafeEpic25PolicyText(value: string): boolean {
+  return isSafeOperationalMetadataText(value) && !EPIC_25_EXECUTABLE_POLICY_TEXT.test(value);
 }
 
 function validatePipelineEpic25PacketDetailsV0(

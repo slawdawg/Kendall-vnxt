@@ -734,6 +734,10 @@ test("Epic 25 TypeScript and runtime provenance schemas stay aligned", async () 
     "pipeline-epic-25-evidence-chain/v0",
     "validatePipelineEpic25EvidenceChainV0",
     "Final decision must hold whenever complete passing live predecessors are absent.",
+    "PipelineEpic25PolicyProfileV0",
+    "pipeline-epic-25-policy-profile/v0",
+    "security", "retention", "rollback", "runbook", "telemetry", "recovery",
+    "rawPayloadRetained: false",
   ]) {
     assert.ok(types.includes(token), `TypeScript evidence-chain contract must include ${token}`);
   }

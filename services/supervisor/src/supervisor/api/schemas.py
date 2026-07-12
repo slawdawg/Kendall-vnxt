@@ -1781,6 +1781,138 @@ PipelineEpic25EvidenceDetailsV0View = (
 )
 
 
+PipelineEpic25QualityGateFamily = Literal["security", "retention", "rollback", "runbook", "telemetry", "recovery"]
+
+
+class PipelineEpic25QualityGateV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family: PipelineEpic25QualityGateFamily
+    requirement: Literal["required", "optional"]
+    status: Literal["pass", "fail", "skipped"]
+    targetRevision: str = Field(pattern=r"^[a-f0-9]{40}$")
+    checkedAt: datetime
+    expiresAt: datetime
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+    skippedReason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("checkedAt", "expiresAt")
+    @classmethod
+    def _gate_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Epic 25 quality-gate timestamp")
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _gate_refs_must_be_safe(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or not all(_is_safe_epic_25_evidence_ref(ref) for ref in refs):
+            raise ValueError("Epic 25 quality-gate refs must be unique safe metadata refs.")
+        return sorted(refs)
+
+    @field_validator("skippedReason")
+    @classmethod
+    def _skipped_reason_must_be_safe(cls, value: str | None) -> str | None:
+        if value is not None and not _is_safe_pipeline_control_text(value):
+            raise ValueError("Epic 25 skipped reasons must be safe metadata-only text.")
+        return value
+
+    @model_validator(mode="after")
+    def _gate_freshness_and_skip_rules_must_hold(self):
+        if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
+            raise ValueError("Epic 25 quality-gate freshness must be ordered and bounded to five minutes.")
+        if self.status == "skipped" and (self.requirement != "optional" or self.skippedReason is None):
+            raise ValueError("Only optional Epic 25 gates may be skipped and a skipped reason is required.")
+        if self.status != "skipped" and self.skippedReason is not None:
+            raise ValueError("Non-skipped Epic 25 gates must not carry a skipped reason.")
+        return self
+
+
+class PipelineEpic25RetentionPolicyV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceOwner: str = Field(min_length=1, max_length=200)
+    toolOwner: str = Field(min_length=1, max_length=200)
+    disposition: Literal["metadata_only"]
+    redactionState: Literal["verified_redacted", "not_applicable"]
+    expiresAt: datetime
+    retentionPeriodDays: int = Field(ge=1, le=3650)
+    disposalAction: Literal["delete_metadata", "revalidate_before_expiry"]
+    verificationStatus: Literal["verified", "pending", "failed"]
+    policyReason: str = Field(min_length=1, max_length=500)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("expiresAt")
+    @classmethod
+    def _retention_expiry_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Epic 25 retention expiry")
+
+    @field_validator("sourceOwner", "toolOwner")
+    @classmethod
+    def _retention_owners_must_be_safe(cls, value: str) -> str:
+        if (
+            not _is_safe_local_proof_text(value)
+            or value != value.lower()
+            or re.fullmatch(r"[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?", value) is None
+            or re.search(r"[._/@:,-]{2,}", value)
+            or re.search(r"(?:^|[/\\])\.{1,2}(?:[/\\]|$)", value)
+        ):
+            raise ValueError("Epic 25 retention owners must be safe metadata-only identifiers.")
+        return value
+
+    @field_validator("policyReason")
+    @classmethod
+    def _retention_reason_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_control_text(value):
+            raise ValueError("Epic 25 retention policy reasons must be safe metadata-only text.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _retention_refs_must_be_safe(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or not all(_is_safe_epic_25_evidence_ref(ref) for ref in refs):
+            raise ValueError("Epic 25 retention refs must be unique safe metadata refs.")
+        return sorted(refs)
+
+
+class PipelineEpic25PolicyProfileV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["pipeline-epic-25-policy-profile/v0"]
+    targetRevision: str = Field(pattern=r"^[a-f0-9]{40}$")
+    checkedAt: datetime
+    expiresAt: datetime
+    qualityGates: list[PipelineEpic25QualityGateV0View] = Field(min_length=6, max_length=6)
+    retentionPolicy: PipelineEpic25RetentionPolicyV0View
+    executionAllowed: Literal[False]
+    providerCallsAllowed: Literal[False]
+    mutationAllowed: Literal[False]
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("checkedAt", "expiresAt")
+    @classmethod
+    def _profile_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Epic 25 policy-profile timestamp")
+
+    @model_validator(mode="after")
+    def _profile_must_be_complete_exact_and_bounded(self):
+        if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
+            raise ValueError("Epic 25 policy-profile freshness must be ordered and bounded to five minutes.")
+        expected_families = {"security", "retention", "rollback", "runbook", "telemetry", "recovery"}
+        if {gate.family for gate in self.qualityGates} != expected_families:
+            raise ValueError("Epic 25 policy profiles require every named quality-gate family exactly once.")
+        for gate in self.qualityGates:
+            if gate.targetRevision != self.targetRevision:
+                raise ValueError("Every Epic 25 quality gate must target the profile's exact Git revision.")
+            if gate.checkedAt > self.checkedAt or gate.expiresAt > self.expiresAt:
+                raise ValueError("Every Epic 25 quality gate must be fresh within the policy-profile window.")
+        expected_retention_expiry = self.checkedAt + timedelta(days=self.retentionPolicy.retentionPeriodDays)
+        if self.retentionPolicy.expiresAt != expected_retention_expiry:
+            raise ValueError("Epic 25 retention expiry must exactly match its period from profile checkedAt.")
+        return self
+
+
 class PipelineEpic25EvidenceChainPacketV0View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1856,6 +1988,7 @@ class PipelineEpic25EvidenceChainV0View(BaseModel):
     schemaVersion: Literal["pipeline-epic-25-evidence-chain/v0"]
     authoritativePacketId: str = Field(min_length=1, max_length=80)
     evidenceClass: PipelineOperationalEvidenceClass
+    policyProfile: PipelineEpic25PolicyProfileV0View
     packets: PipelineEpic25EvidenceChainPacketsV0View
     checkedAt: datetime
     expiresAt: datetime
@@ -1881,6 +2014,8 @@ class PipelineEpic25EvidenceChainV0View(BaseModel):
     def _chain_must_be_complete_and_fail_closed(self):
         if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
             raise ValueError("Evidence-chain timestamps must be ordered and bounded to five minutes.")
+        if self.policyProfile.checkedAt > self.checkedAt or self.policyProfile.expiresAt < self.checkedAt:
+            raise ValueError("The Epic 25 policy profile must be fresh at the exact evidence-chain check time.")
         expected_schemas = {
             "readiness": "pipeline-operational-readiness-contract/v0",
             "canary": "pipeline-one-worker-live-canary/v0",
@@ -1960,7 +2095,16 @@ class PipelineEpic25EvidenceChainReadV0View(PipelineEpic25EvidenceChainV0View):
     chainDigestSha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     freshnessState: Literal["fresh", "stale"]
     effectiveDecision: Literal["go", "hold", "limited_rollout"]
-    typedBlockers: list[Literal["evidence_chain_stale", "live_evidence_unavailable"]] = Field(default_factory=list)
+    typedBlockers: list[
+        Literal[
+            "evidence_chain_stale",
+            "live_evidence_unavailable",
+            "policy_profile_stale",
+            "retention_policy_expired",
+            "retention_policy_unverified",
+            "quality_gate_not_passed",
+        ]
+    ] = Field(default_factory=list)
 
 
 class PipelineProductModeMappingV0View(BaseModel):
