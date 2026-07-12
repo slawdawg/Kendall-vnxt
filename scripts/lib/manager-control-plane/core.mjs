@@ -13,6 +13,7 @@ import { planManagerSourcePacketIntake, resolveLoopbackSourceIntakeEndpoint } fr
 import {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
+  projectCanonicalSupervisorPacket,
   buildOneWorkerLiveCanaryEvidence,
   validateOneWorkerLiveCanaryEvidence,
   buildLiveCapacityRampEvidence,
@@ -35,6 +36,7 @@ import {
 export {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
+  projectCanonicalSupervisorPacket,
   buildOneWorkerLiveCanaryEvidence,
   validateOneWorkerLiveCanaryEvidence,
   buildLiveCapacityRampEvidence,
@@ -12008,6 +12010,8 @@ export function buildSourceBackedPacketSeedPlan(options = {}, context = {}) {
   const needsReviewPacket = sourceWorkEligibility.summary?.needsReviewPackets?.[0] || null;
   const blockedPacket = sourceWorkEligibility.summary?.blockedPackets?.[0] || null;
   const skippedPacket = sourceWorkEligibility.summary?.dedupe?.skippedCandidates?.[0] || null;
+  const canonicalInput = context.supervisorPacket || context.authoritativeSupervisorPacket || context.projectionPacket || null;
+  const canonicalSupervisor = projectCanonicalSupervisorPacket(canonicalInput || {}, { now: options.now || context.now });
   const packetState = eligiblePacket
     ? "eligible"
     : needsReviewPacket
@@ -12017,7 +12021,9 @@ export function buildSourceBackedPacketSeedPlan(options = {}, context = {}) {
         : skippedPacket
           ? "skipped"
           : "no_seed";
-  const status = packetState === "eligible" ? "ready" : ["blocked", "skipped"].includes(packetState) ? "blocked" : "attention";
+  const status = canonicalSupervisor.present && !canonicalSupervisor.valid
+    ? "blocked"
+    : packetState === "eligible" ? "ready" : ["blocked", "skipped"].includes(packetState) ? "blocked" : "attention";
   return packet({
     ok: status !== "blocked",
     status,
@@ -12030,16 +12036,20 @@ export function buildSourceBackedPacketSeedPlan(options = {}, context = {}) {
       mutationMode: "none; read-only source-backed packet seed",
       retention: "metadata_only_seed_packet_and_eligibility_summary",
       rawPayloadRetained: false,
+      ...(canonicalSupervisor.present ? { canonicalSupervisor } : {}),
       stopLines: ["do_not_queue_without_eligibility", "do_not_create_worker", "do_not_call_provider", "do_not_retain_raw_payload"],
     },
-    blockers: ["blocked", "skipped"].includes(packetState)
+    blockers: [
+      ...(canonicalSupervisor.present ? canonicalSupervisor.blockers : []),
+      ...(["blocked", "skipped"].includes(packetState)
       ? [{
           code: packetState === "skipped" ? "source-backed-seed-dedupe-skipped" : "source-backed-seed-blocked",
           message: packetState === "skipped" ? "Seeded source-backed packet duplicates existing work." : "Seeded source-backed packet did not pass eligibility.",
           reason: (blockedPacket || skippedPacket)?.eligibilityReason || packetState,
           nextAction: packetState === "skipped" ? "Use the existing candidate work packet instead of creating a duplicate seed." : "Repair seed source refs, verification targets, authority class, or source-owned rewrite evidence before queueing.",
         }]
-      : [],
+      : []),
+    ],
     warnings: [
       ...(sourceArtifactDiscovery.warnings || []),
       ...(sourceWorkEligibility.warnings || []),

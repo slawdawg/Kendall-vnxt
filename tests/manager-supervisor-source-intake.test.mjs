@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildSourceBackedPacketSeedPlan } from "../scripts/lib/manager-control-plane/core.mjs";
+import {
+  buildOperationalReadinessContract,
+  buildSourceBackedPacketSeedPlan,
+  projectCanonicalSupervisorPacket,
+} from "../scripts/lib/manager-control-plane/core.mjs";
 import {
   ManagerSupervisorSourceIntakeError,
   buildManagerSourceIntakeRequest,
@@ -73,6 +77,94 @@ function responseFor(request, overrides = {}) {
   };
 }
 
+const READINESS_COMPONENT_IDS = [
+  "source_provenance",
+  "trust_boundary",
+  "authority_boundary",
+  "evidence_retention",
+  "quality_gates",
+  "delivery_evidence",
+];
+
+function canonicalFields(request, overrides = {}) {
+  const authority = {
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+    rawPayloadRetentionAllowed: false,
+  };
+  const canonicalContract = {
+    schemaVersion: "pipeline-canonical-contract/v1",
+    productMode: "read_only",
+    canonicalSource: {
+      sourceId: "manager-source-intake",
+      role: "canonical",
+      trust: "authoritative",
+      provenance: {
+        sourceRef: request.sourceRef,
+        observedAt: "2026-07-12T12:00:00.000Z",
+        evidenceRefs: ["evidence:canonical-source"],
+      },
+      authority,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    qualityGates: {
+      kind: "gate",
+      gateId: "manager-source-intake-quality",
+      requirement: "required",
+      state: "pass",
+      evidenceRefs: ["evidence:quality"],
+    },
+    readinessComponents: Object.fromEntries(READINESS_COMPONENT_IDS.map((componentId) => [componentId, {
+      componentId,
+      requirement: "required",
+      state: "pass",
+      evidenceRefs: [`evidence:${componentId}`],
+    }])),
+    deliveryEvidence: [{
+      deliveryId: "manager-source-delivery",
+      action: "pull_request",
+      status: "recorded",
+      target: { repository: "slawdawg/kendall-vnxt", baseBranch: "dev" },
+      evidence: {
+        evidenceId: "manager-source-delivery-evidence",
+        disposition: "metadata_only",
+        evidenceRefs: ["evidence:delivery"],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      authority,
+      deliveryAuthorityGranted: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    }],
+    authority,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const productModeMapping = {
+    requestedProductMode: "read_only",
+    effectiveProductMode: "read_only",
+    operationalMode: "read_only",
+    readinessState: "ready",
+    freshnessState: "live",
+    capabilityState: "gated",
+    checkedAt: "2026-07-12T12:00:00.000Z",
+    expiresAt: "2026-07-12T12:05:00.000Z",
+    ready: true,
+    blockedReasons: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+  };
+  return { canonicalContract, productModeMapping, ...overrides };
+}
+
 test("manager source intake allowlists eligible source metadata and validates exact persisted identity", async () => {
   const packet = sourcePacket({ internalPlanningMetadata: { marker: "must never cross the boundary" } });
   const calls = [];
@@ -97,7 +189,155 @@ test("manager source intake allowlists eligible source metadata and validates ex
   assert.equal(result.summary.seedPacket.supervisorIntake.packetId, calls[0].request.packetId);
   assert.equal(result.summary.seedPacket.supervisorIntake.currentEventId, "event-source-intake-test");
   assert.equal(result.summary.seedPacket.supervisorIntake.metadataOnly, true);
+  assert.equal(result.summary.seedPacket.supervisorIntake.truthSource, "legacy_lifecycle_fallback");
+  assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth, null);
   assert.equal(result.summary.seedPacket.rawPayloadRetained, false);
+});
+
+test("manager source intake consumes canonical supervisor truth without inferring authority", async () => {
+  const packet = sourcePacket();
+  let request;
+  const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return responseFor(request, canonicalFields(request));
+    },
+  });
+  const intake = result.summary.seedPacket.supervisorIntake;
+  assert.equal(intake.truthSource, "supervisor_canonical");
+  assert.equal(intake.canonicalSource.trust, "authoritative");
+  assert.equal(intake.canonicalSource.provenance.sourceRef.refId, request.sourceRef.refId);
+  assert.equal(intake.readinessComponents.delivery_evidence.state, "pass");
+  assert.equal(intake.qualityEvidence.state, "pass");
+  assert.equal(intake.retentionEvidence[1].disposition, "metadata_only");
+  assert.equal(intake.deliveryEvidence[0].deliveryAuthorityGranted, false);
+  assert.deepEqual(intake.typedCapabilityTruth, {
+    requestedProductMode: "read_only",
+    effectiveProductMode: "read_only",
+    operationalMode: "read_only",
+    readinessState: "ready",
+    freshnessState: "live",
+    capabilityState: "gated",
+    ready: true,
+    blockedReasons: [],
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+  });
+});
+
+test("canonical supervisor consumer rejects missing stale and contradictory fields and never falls back", async (t) => {
+  const scenarios = [
+    ["missing mapping", "manager_supervisor_canonical_fields_invalid", (request) => ({ canonicalContract: canonicalFields(request).canonicalContract })],
+    ["stale mapping", "manager_supervisor_canonical_fields_stale", (request) => canonicalFields(request, { productModeMapping: { ...canonicalFields(request).productModeMapping, expiresAt: "2026-07-12T11:59:00.000Z" } })],
+    ["contradictory mode", "manager_supervisor_canonical_fields_invalid", (request) => canonicalFields(request, { productModeMapping: { ...canonicalFields(request).productModeMapping, requestedProductMode: "operator_review" } })],
+    ["contradictory source", "manager_supervisor_canonical_fields_invalid", (request) => {
+      const fields = canonicalFields(request);
+      fields.canonicalContract.canonicalSource.provenance.sourceRef = { ...request.sourceRef, refId: "doc:docs/other.md", pathOrUrl: "docs/other.md" };
+      return fields;
+    }],
+    ["contradictory readiness", "manager_supervisor_canonical_fields_invalid", (request) => {
+      const fields = canonicalFields(request);
+      fields.canonicalContract.readinessComponents.trust_boundary.state = "blocked";
+      return fields;
+    }],
+  ];
+  for (const [name, code, fields] of scenarios) {
+    await t.test(name, async () => {
+      await assert.rejects(
+        intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+          now: "2026-07-12T12:01:00.000Z",
+          fetchImpl: async (_url, options) => {
+            const request = JSON.parse(options.body);
+            return responseFor(request, fields(request));
+          },
+        }),
+        (error) => error.code === code && error.packet.summary.seedPacket.supervisorIntake === undefined,
+      );
+    });
+  }
+});
+
+test("canonical source intake preserves supervisor terminal state", async () => {
+  const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      const response = responseFor(request, canonicalFields(request));
+      const body = await response.json();
+      const terminalEvent = {
+        ...body.data.history[0],
+        eventId: "event-source-intake-terminal",
+        eventType: "packet.transitioned",
+        previousStage: "capture",
+        targetStage: "deliver",
+        status: "done",
+        idempotencyKey: "terminal-transition",
+      };
+      body.data.currentStage = "deliver";
+      body.data.status = "done";
+      body.data.currentEventId = terminalEvent.eventId;
+      body.data.history.push(terminalEvent);
+      return { ok: true, status: 200, json: async () => body };
+    },
+  });
+  assert.equal(result.summary.seedPacket.supervisorIntake.currentStage, "deliver");
+  assert.equal(result.summary.seedPacket.supervisorIntake.lifecycleStatus, "done");
+  assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth.githubMutationAllowed, false);
+});
+
+test("operational readiness uses canonical backend truth instead of contradictory manager fallback", () => {
+  const request = buildManagerSourceIntakeRequest(sourcePacket());
+  const supervisorPacket = { sourceRef: request.sourceRef, ...canonicalFields(request) };
+  const projection = projectCanonicalSupervisorPacket(supervisorPacket, { now: "2026-07-12T12:01:00.000Z" });
+  assert.equal(projection.valid, true);
+  assert.equal(projection.typedCapabilityTruth.capabilityState, "gated");
+
+  const readiness = buildOperationalReadinessContract({}, {
+    now: "2026-07-12T12:01:00.000Z",
+    supervisorPacket,
+    backendTruth: "simulated",
+    freshnessState: "stale",
+    target: { workerId: "worker-1", assignmentId: "assignment-1", owner: "manager", runId: "run-1", sourceRefs: ["source:fallback"], evidenceRefs: ["evidence:fallback"] },
+  });
+  assert.equal(readiness.backendTruth, "live");
+  assert.equal(readiness.canonicalSupervisor.typedCapabilityTruth.capabilityState, "gated");
+  assert.deepEqual(readiness.target.sourceRefs, [`source:${request.sourceRef.refId}`]);
+  assert.equal(readiness.target.sourceRefs.includes("source:fallback"), false);
+  assert.equal(readiness.outcome, "no_go", "canonical capability truth does not grant missing manager authority");
+
+  const failedQualityPacket = structuredClone(supervisorPacket);
+  failedQualityPacket.canonicalContract.qualityGates.state = "fail";
+  const failedQuality = buildOperationalReadinessContract({}, {
+    now: "2026-07-12T12:01:00.000Z",
+    supervisorPacket: failedQualityPacket,
+    target: { workerId: "worker-1", assignmentId: "assignment-1", owner: "manager", runId: "run-1" },
+  });
+  assert.equal(failedQuality.canonicalSupervisor.valid, true, "failed quality is canonical truth, not malformed truth");
+  assert.equal(failedQuality.canonicalSupervisor.readinessReady, false);
+  assert.equal(failedQuality.gates.find((gate) => gate.gateId === "canonical_supervisor_contract").state, "blocked");
+});
+
+test("source-backed seed fails closed instead of falling back from invalid canonical projection", () => {
+  const request = buildManagerSourceIntakeRequest(sourcePacket());
+  const fields = canonicalFields(request);
+  fields.productModeMapping.ready = false;
+  const result = buildSourceBackedPacketSeedPlan({
+    runId: "canonical-seed-fail-closed",
+    candidateId: "canonical-seed-candidate",
+    title: "Canonical seed candidate",
+    sourceRefs: [request.sourceRef.refId],
+    acceptanceCriteria: ["Canonical truth remains authoritative."],
+    verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+    touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+    riskClass: "low",
+    authorityClass: "allowed_unattended",
+  }, { supervisorPacket: { sourceRef: request.sourceRef, ...fields }, now: "2026-07-12T12:01:00.000Z" });
+  assert.equal(result.status, "blocked");
+  assert.equal(result.summary.canonicalSupervisor.fallbackAllowed, false);
+  assert.ok(result.blockers.some((blocker) => blocker.code === "canonical_contract_contradictory"));
 });
 
 test("manager source intake derives deterministic bounded identities and maps a contract-valid BMAD story fixture", () => {
