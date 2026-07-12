@@ -16585,15 +16585,15 @@ function bmadSprintMetadata(content = "") {
   };
 }
 
-function planningMetadataArtifacts() {
-  const planningRoot = join(repoRoot, "_bmad-output", "planning-artifacts");
+function planningMetadataArtifacts(root = repoRoot) {
+  const planningRoot = join(root, "_bmad-output", "planning-artifacts");
   if (!existsSync(planningRoot)) return [];
   try {
     return readdirSync(planningRoot, { withFileTypes: true })
       .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
       .map((entry) => {
         const ref = `_bmad-output/planning-artifacts/${entry.name}`;
-        return { ref, metadata: bmadFrontmatterMetadata(join(repoRoot, ref)) };
+        return { ref, metadata: bmadFrontmatterMetadata(join(root, ref)) };
       })
       .filter((entry) => entry.metadata !== null);
   } catch {
@@ -16858,10 +16858,203 @@ function discoverSourcePlanningState(sourceSlice, context = {}) {
     };
   }
   const sprintStatus = findMatchingSprintStatus(sourceKey);
+  const terminalReconciliation = discoverTerminalReconciliationSourcePlanning(sourceSlice, sprintStatus);
   return {
     sourceKey,
     sprintStatus,
+    ...(terminalReconciliation.activeSourceBinding ? { activeSourceBinding: terminalReconciliation.activeSourceBinding } : {}),
+    ...(terminalReconciliation.authoritativeSourceBundle ? { authoritativeSourceBundle: terminalReconciliation.authoritativeSourceBundle } : {}),
   };
+}
+
+function discoverTerminalReconciliationSourcePlanning(sourceSlice, sprintStatus, root = repoRoot) {
+  const empty = { activeSourceBinding: null, authoritativeSourceBundle: null };
+  if (!sourceSlice || sourceSlice.type !== "prd" || sprintStatus?.exists !== true) return empty;
+  const sourceIdentity = sanitizeLedgerField(sourceSlice.ref, "", 240);
+  const sourcePath = sourceIdentity.replace(/^prd:/i, "");
+  const sprintPath = sanitizeRelativeBmadOutputPath(sprintStatus.path || "");
+  if (!/^_bmad-output\/planning-artifacts\/prds\/[^/]+\/prd\.md$/i.test(sourcePath) ||
+      !/^_bmad-output\/implementation-artifacts\/sprint-status[^/]*\.ya?ml$/i.test(sprintPath)) return empty;
+  const sprintContent = readLocalBmadMetadata(join(root, sprintPath));
+  const sourceRevision = canonicalSprintSourceRevision(sprintContent);
+  if (!sourceRevision) return empty;
+  const activeSourceBinding = {
+    sourceIdentity,
+    sourceRevision,
+    sourceRefs: [sourceIdentity],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const authoritativeSourceBundle = discoverValidatedTerminalReconciliationBundle({
+    root,
+    sourceIdentity,
+    sourcePath,
+    sourceRevision,
+    sprintPath,
+  });
+  return { activeSourceBinding, authoritativeSourceBundle };
+}
+
+function canonicalSprintSourceRevision(content) {
+  if (typeof content !== "string") return "";
+  const revisions = [...content.matchAll(/^\s*source_revision\s*:\s*["']?([^"'\n#]+)["']?\s*(?:#.*)?$/gim)]
+    .map((match) => String(match[1] || "").trim().toLowerCase());
+  if (revisions.length !== 1) return "";
+  const match = revisions[0].match(/^(?:git:)?([0-9a-f]{40,64})$/);
+  return match ? `git:${match[1]}` : "";
+}
+
+function discoverValidatedTerminalReconciliationBundle({ root, sourceIdentity, sourcePath, sourceRevision, sprintPath }) {
+  const artifactRoot = join(root, "_bmad-output", "implementation-artifacts");
+  if (!existsSync(artifactRoot)) return null;
+  let entries;
+  try {
+    entries = readdirSync(artifactRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^terminal-reconciliation(?:-[a-z0-9]+)*\.json$/i.test(entry.name))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch {
+    return null;
+  }
+  const matches = [];
+  for (const entry of entries) {
+    const packetRef = `_bmad-output/implementation-artifacts/${entry.name}`;
+    const packet = readBoundedTerminalReconciliationPacket(join(artifactRoot, entry.name));
+    if (!packet || packet.packetType !== "manager-terminal-reconciliation") continue;
+    const bundleIdentity = packet.sourceBundle?.sourceIdentity;
+    const dispositionIdentity = packet.terminalDisposition?.sourceIdentity;
+    if (bundleIdentity === sourceIdentity || dispositionIdentity === sourceIdentity) matches.push({ packetRef, packet });
+  }
+  if (matches.length !== 1) return null;
+  const { packetRef, packet } = matches[0];
+  if (!isValidTerminalReconciliationPacketShape(packet, { sourceIdentity, sourceRevision })) return null;
+
+  const hierarchy = resolveTerminalDigestArtifacts(root, sourcePath);
+  if (!hierarchy) return null;
+  const currentDigests = {
+    prd: sha256FileDigest(join(root, sourcePath)),
+    epics: sha256FileDigest(join(root, hierarchy.epicsPath)),
+    readiness: sha256FileDigest(join(root, hierarchy.readinessPath)),
+    sprintStatus: sha256FileDigest(join(root, sprintPath)),
+  };
+  if (Object.values(currentDigests).some((value) => !value) ||
+      Object.entries(currentDigests).some(([key, value]) => packet.sourceBundle.digests[key] !== value)) return null;
+
+  const disposition = packet.terminalDisposition;
+  const counts = normalizeAuthoritativeReconciliationCounts(disposition.reconciliationCounts);
+  if (!counts || AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS.some((key) => counts[key] !== 0) ||
+      counts.approvalGated !== 0 || counts.totalItems !== counts.reconciledItems ||
+      counts.totalItems !== AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + counts[key], 0)) return null;
+  const evidenceRefs = canonicalStringRefs(disposition.evidenceRefs).slice(0, 12);
+  return {
+    packetRef,
+    sourceIdentity,
+    sourceRevision,
+    digests: currentDigests,
+    fullyReconciled: true,
+    noSeparatelyApprovedSource: true,
+    remainingCandidates: [],
+    reconciliationCounts: counts,
+    unresolvedApprovalGatedWork: [],
+    evidenceRefs,
+    resumeRequirement: sanitizeLedgerField(disposition.resumeRequirement, "", 360),
+    nextManagerAction: sanitizeLedgerField(disposition.nextManagerAction, "", 360),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function readBoundedTerminalReconciliationPacket(path) {
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile() || stat.size < 2 || stat.size > 32 * 1024) return null;
+    const packet = JSON.parse(readFileSync(path, "utf8"));
+    return isPlainObject(packet) ? packet : null;
+  } catch {
+    return null;
+  }
+}
+
+function terminalMetadataIsBounded(value, depth = 0, budget = { nodes: 0 }) {
+  budget.nodes += 1;
+  if (budget.nodes > 512 || depth > 10) return false;
+  if (typeof value === "string") return value.length <= 1200;
+  if (value === null || typeof value === "number" || typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length <= 24 && value.every((item) => terminalMetadataIsBounded(item, depth + 1, budget));
+  if (!isPlainObject(value) || Object.keys(value).length > 32) return false;
+  for (const [key, item] of Object.entries(value)) {
+    const normalizedKey = String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (normalizedKey === "rawpayloadretained") {
+      if (item !== false) return false;
+    } else if (RECONCILE_PROHIBITED_RAW_KEYS.has(normalizedKey) ||
+      normalizedKey.includes("rawresponse") ||
+      normalizedKey.includes("transcript") ||
+      normalizedKey.includes("prompt") ||
+      normalizedKey.includes("payload") ||
+      normalizedKey.includes("secret") ||
+      normalizedKey.includes("credential") ||
+      normalizedKey.includes("provideroutput") ||
+      normalizedKey.includes("scrollback") ||
+      /^(?:raw|provider|event|manager)?logs?$/.test(normalizedKey)) return false;
+    if (!terminalMetadataIsBounded(item, depth + 1, budget)) return false;
+  }
+  return true;
+}
+
+function isValidTerminalReconciliationPacketShape(packet, { sourceIdentity, sourceRevision }) {
+  const bundle = packet.sourceBundle;
+  const disposition = packet.terminalDisposition;
+  const evidenceRefs = disposition?.evidenceRefs;
+  return terminalMetadataIsBounded(packet) &&
+    packet.proofMode === "metadata_only" &&
+    packet.status === "authoritative_backlog_exhausted" &&
+    packet.ok === true &&
+    packet.noNewEpic === true &&
+    packet.noFillerWork === true &&
+    packet.rawPayloadRetained === false &&
+    isPlainObject(packet.managerEvidence) &&
+    isPlainObject(bundle) &&
+    bundle.sourceIdentity === sourceIdentity &&
+    bundle.sourceRevision === sourceRevision &&
+    isPlainObject(bundle.digests) &&
+    bundle.fullyReconciled === true &&
+    bundle.noSeparatelyApprovedSource === true &&
+    Array.isArray(bundle.remainingCandidates) && bundle.remainingCandidates.length === 0 &&
+    isPlainObject(disposition) &&
+    disposition.disposition === "authoritative_backlog_exhausted" &&
+    disposition.sourceIdentity === sourceIdentity &&
+    disposition.sourceRevision === sourceRevision &&
+    disposition.rawPayloadRetained === false &&
+    Array.isArray(disposition.unresolvedApprovalGatedWork) && disposition.unresolvedApprovalGatedWork.length === 0 &&
+    Array.isArray(evidenceRefs) && evidenceRefs.length > 0 && evidenceRefs.length <= 12 &&
+    evidenceRefs.every((value) => typeof value === "string" && value.trim().length > 0) &&
+    typeof disposition.resumeRequirement === "string" && disposition.resumeRequirement.trim().length > 0 &&
+    typeof disposition.nextManagerAction === "string" && disposition.nextManagerAction.trim().length > 0;
+}
+
+function resolveTerminalDigestArtifacts(root, sourcePath) {
+  const artifacts = planningMetadataArtifacts(root);
+  const epics = artifacts.filter((entry) =>
+    String(entry.metadata.fields.workflowType || "").toLowerCase() === "epics-and-stories" &&
+    entry.metadata.fields.authoritative_prd === sourcePath &&
+    String(entry.metadata.fields.status || "").toLowerCase() === "complete" &&
+    entry.metadata.duplicates.length === 0);
+  if (epics.length !== 1) return null;
+  const readiness = artifacts.filter((entry) =>
+    String(entry.metadata.fields.workflowType || "").toLowerCase() === "implementation-readiness" &&
+    entry.metadata.fields.authoritative_prd === sourcePath &&
+    entry.metadata.fields.authoritative_epics === epics[0].ref &&
+    String(entry.metadata.fields.status || "").toLowerCase() === "complete" &&
+    entry.metadata.duplicates.length === 0);
+  if (readiness.length !== 1) return null;
+  return { epicsPath: epics[0].ref, readinessPath: readiness[0].ref };
+}
+
+function sha256FileDigest(path) {
+  try {
+    return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+  } catch {
+    return "";
+  }
 }
 
 function sourcePlanningKey(sourcePath) {
