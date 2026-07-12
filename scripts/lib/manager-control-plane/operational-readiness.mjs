@@ -17,6 +17,19 @@ const RECOVERY_DRILL_KINDS = ["restart", "worker_death", "stale_lease", "timeout
 const HARDENING_DOMAINS = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"];
 const FRESHNESS_TTL_MS = 5 * 60 * 1000;
 const FUTURE_SKEW_MS = 60 * 1000;
+const CANONICAL_CONTRACT_SCHEMA_VERSION = "pipeline-canonical-contract/v1";
+const CANONICAL_READINESS_COMPONENT_IDS = [
+  "source_provenance",
+  "trust_boundary",
+  "authority_boundary",
+  "evidence_retention",
+  "quality_gates",
+  "delivery_evidence",
+];
+const CANONICAL_PRODUCT_MODES = new Set(["contract_only", "operator_review", "local_proof", "read_only", "bounded_write"]);
+const CANONICAL_DELIVERY_ACTIONS = new Set(["branch_push", "pull_request", "merge", "cleanup"]);
+const CANONICAL_RETENTION_DISPOSITIONS = new Set(["metadata_only", "summary_only", "fixture_only"]);
+const CANONICAL_FORBIDDEN_FIELD = /^(?:rawPrompt|rawCompletion|rawPayload|providerPayload|reasoningTrace|secret|credential|password|apiKey|accessToken|terminalOutput|stdout|stderr|transcript)$/i;
 const SAFE_REF = /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact|readiness):[A-Za-z0-9._/@:-]{1,180}$/;
 const SECRET_LIKE = /\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])/i;
 const FORBIDDEN = /\b(?:raw[\s_-]*(?:prompt|completion|transcript|log|source)|reasoning[\s_-]*trace|provider[\s_-]*payload|secret(?:[\s_-]*(?:key|token|value|id))?|credential|password|api[\s_-]*key|access[\s_-]*token|terminal[\s_-]*(?:scrollback|output)|tmux[\s_-]*scrollback|pane[\s_-]*text)\b/i;
@@ -87,8 +100,237 @@ function reasonFor(code, fallback = "unknown") {
     "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
     "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed", "fixture_evidence",
     "runbook_gap", "high_risk_gap", "runbook_owner_missing", "runbook_trigger_missing", "runbook_gate_missing", "runbook_recovery_missing",
+    "canonical_contract_missing", "canonical_contract_invalid", "canonical_contract_contradictory",
   ]);
   return known.has(code) ? code : fallback;
+}
+
+function own(record, key) {
+  return Boolean(record && typeof record === "object" && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function plainRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function canonicalText(value, max = 500) {
+  return typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= max && safeText(value, "", max);
+}
+
+function canonicalRefs(value) {
+  return Array.isArray(value) && value.length <= 25 && value.every((entry) => canonicalText(entry, 240));
+}
+
+function canonicalAuthorityDenied(value) {
+  return plainRecord(value) && [
+    "sourceMutationAllowed",
+    "providerCallsAllowed",
+    "workerLaunchAllowed",
+    "githubMutationAllowed",
+    "rawPayloadRetentionAllowed",
+  ].every((key) => value[key] === false);
+}
+
+function canonicalPayloadSafe(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 16) return false;
+  if (value && typeof value === "object") {
+    if (seen.has(value)) return false;
+    seen.add(value);
+  }
+  let safe;
+  if (Array.isArray(value)) safe = value.length <= 128 && value.every((entry) => canonicalPayloadSafe(entry, depth + 1, seen));
+  else if (!plainRecord(value)) safe = typeof value !== "string" || value.length <= 4096;
+  else {
+    const entries = Object.entries(value);
+    safe = entries.length <= 128 && entries.every(([key, nested]) => !CANONICAL_FORBIDDEN_FIELD.test(key) && canonicalPayloadSafe(nested, depth + 1, seen));
+  }
+  if (value && typeof value === "object") seen.delete(value);
+  return safe;
+}
+
+function canonicalSourceRef(value) {
+  return plainRecord(value) && canonicalText(value.refId, 255) &&
+    ["prd", "bmad_story", "operator_input", "workflow", "repo_doc"].includes(value.sourceType) &&
+    (value.pathOrUrl == null || canonicalText(value.pathOrUrl, 500)) &&
+    (value.title == null || canonicalText(value.title, 255)) &&
+    (value.contentSha256 == null || /^[0-9a-f]{64}$/i.test(value.contentSha256));
+}
+
+function sameCanonicalSourceRef(left, right) {
+  if (!canonicalSourceRef(left) || !canonicalSourceRef(right)) return false;
+  return ["refId", "sourceType", "pathOrUrl", "title", "contentSha256"]
+    .every((key) => (left[key] ?? null) === (right[key] ?? null));
+}
+
+function canonicalDeliveryTarget(value) {
+  return plainRecord(value) && canonicalText(value.repository, 240) &&
+    ["baseBranch", "headRevision", "pullRequestUrl"].every((key) => value[key] == null || canonicalText(value[key], key === "pullRequestUrl" ? 500 : 240));
+}
+
+function canonicalQualityGateState(node, issues, depth = 0) {
+  if (!plainRecord(node) || depth > 8 || !canonicalText(node.gateId, 240)) {
+    issues.push("quality_gate_invalid");
+    return "blocked";
+  }
+  if (node.kind === "gate") {
+    if (!canonicalRefs(node.evidenceRefs)) issues.push("quality_gate_evidence_invalid");
+    if (node.requirement === "required" && ["pass", "fail", "blocked"].includes(node.state)) return node.state;
+    if (node.requirement === "not_applicable" && node.state === "not_applicable" && canonicalText(node.notApplicableReason, 240)) return "not_applicable";
+    issues.push("quality_gate_semantics_invalid");
+    return "blocked";
+  }
+  if (!["all_of", "any_of"].includes(node.kind) || !Array.isArray(node.children) || node.children.length === 0) {
+    issues.push("quality_gate_group_invalid");
+    return "blocked";
+  }
+  const states = node.children.map((child) => canonicalQualityGateState(child, issues, depth + 1));
+  if (states.every((state) => state === "not_applicable")) return "not_applicable";
+  if (node.kind === "all_of") return states.every((state) => ["pass", "not_applicable"].includes(state)) ? "pass" : states.includes("fail") ? "fail" : "blocked";
+  return states.some((state) => state === "pass") ? "pass" : states.some((state) => state === "fail") && states.every((state) => ["fail", "not_applicable"].includes(state)) ? "fail" : "blocked";
+}
+
+/**
+ * Consume supervisor-owned canonical packet/projection truth without granting authority.
+ * Both canonical fields absent/null is the only legacy fallback posture.
+ */
+export function projectCanonicalSupervisorPacket(packet = {}, context = {}) {
+  const record = plainRecord(packet) ? packet : {};
+  const contract = record.canonicalContract;
+  const mapping = record.productModeMapping;
+  const hasContract = contract != null;
+  const hasMapping = mapping != null;
+  if (!hasContract && !hasMapping) {
+    return {
+      present: false,
+      valid: false,
+      fallbackAllowed: true,
+      status: "legacy_fallback",
+      blockers: [],
+      readinessReady: false,
+      readinessReasons: ["canonical_fields_absent"],
+      source: null,
+      readinessComponents: null,
+      productModeMapping: null,
+      retentionEvidence: [],
+      qualityEvidence: null,
+      deliveryEvidence: [],
+      typedCapabilityTruth: null,
+    };
+  }
+
+  const issues = [];
+  if (!hasContract || !hasMapping || !plainRecord(contract) || !plainRecord(mapping)) {
+    issues.push("canonical_contract_missing");
+  }
+  if (!canonicalPayloadSafe({ canonicalContract: contract, productModeMapping: mapping })) issues.push("canonical_payload_unsafe");
+  try {
+    if (Buffer.byteLength(JSON.stringify({ canonicalContract: contract, productModeMapping: mapping }), "utf8") > 256 * 1024) issues.push("canonical_payload_unsafe");
+  } catch {
+    issues.push("canonical_payload_unsafe");
+  }
+  const authority = contract?.authority;
+  const source = contract?.canonicalSource;
+  const provenance = source?.provenance;
+  if (contract?.schemaVersion !== CANONICAL_CONTRACT_SCHEMA_VERSION || !CANONICAL_PRODUCT_MODES.has(contract?.productMode)) issues.push("canonical_contract_invalid");
+  if (!plainRecord(source) || !canonicalText(source.sourceId, 240) || source.role !== "canonical" || !["authoritative", "attested"].includes(source.trust)) issues.push("canonical_source_invalid");
+  if (!canonicalSourceRef(provenance?.sourceRef) || !Number.isFinite(Date.parse(provenance?.observedAt || "")) || !canonicalRefs(provenance?.evidenceRefs)) issues.push("canonical_provenance_invalid");
+  if (!canonicalSourceRef(record.sourceRef)) issues.push("canonical_packet_source_missing");
+  else if (!sameCanonicalSourceRef(record.sourceRef, provenance?.sourceRef)) issues.push("canonical_source_contradictory");
+  if (!canonicalAuthorityDenied(source?.authority) || !canonicalAuthorityDenied(authority)) issues.push("canonical_authority_invalid");
+  if (source?.metadataOnly !== true || source?.rawPayloadRetained !== false || contract?.metadataOnly !== true || contract?.rawPayloadRetained !== false) issues.push("canonical_retention_invalid");
+
+  const readinessComponents = contract?.readinessComponents;
+  if (!plainRecord(readinessComponents)) issues.push("canonical_readiness_missing");
+  for (const componentId of CANONICAL_READINESS_COMPONENT_IDS) {
+    const component = readinessComponents?.[componentId];
+    const validRequired = component?.requirement === "required" && ["pass", "fail", "blocked"].includes(component?.state);
+    const validNotApplicable = component?.requirement === "not_applicable" && component?.state === "not_applicable" && canonicalText(component?.notApplicableReason, 240);
+    if (!plainRecord(component) || component.componentId !== componentId || (!validRequired && !validNotApplicable) || !canonicalRefs(component.evidenceRefs)) issues.push(`canonical_readiness_invalid:${componentId}`);
+  }
+
+  const qualityIssues = [];
+  const qualityState = canonicalQualityGateState(contract?.qualityGates, qualityIssues);
+  issues.push(...qualityIssues);
+  if (!Array.isArray(contract?.deliveryEvidence)) issues.push("canonical_delivery_missing");
+  for (const delivery of Array.isArray(contract?.deliveryEvidence) ? contract.deliveryEvidence : []) {
+    const evidence = delivery?.evidence;
+    if (!plainRecord(delivery) || !canonicalText(delivery.deliveryId, 240) || !CANONICAL_DELIVERY_ACTIONS.has(delivery.action) ||
+      !["recorded", "blocked", "not_applicable"].includes(delivery.status) || delivery.deliveryAuthorityGranted !== false ||
+      delivery.metadataOnly !== true || delivery.rawPayloadRetained !== false || !canonicalAuthorityDenied(delivery.authority) || !canonicalDeliveryTarget(delivery.target) ||
+      !plainRecord(evidence) || !canonicalText(evidence.evidenceId, 240) || !CANONICAL_RETENTION_DISPOSITIONS.has(evidence.disposition) ||
+      !canonicalRefs(evidence.evidenceRefs) || evidence.metadataOnly !== true || evidence.rawPayloadRetained !== false) issues.push("canonical_delivery_invalid");
+  }
+
+  const checkedAtMs = Date.parse(mapping?.checkedAt || "");
+  const expiresAtMs = Date.parse(mapping?.expiresAt || "");
+  const nowMs = Date.parse(context.now || new Date().toISOString());
+  const mappingAuthorityDenied = ["sourceMutationAllowed", "providerCallsAllowed", "workerLaunchAllowed", "githubMutationAllowed"].every((key) => mapping?.[key] === false);
+  if (!CANONICAL_PRODUCT_MODES.has(mapping?.requestedProductMode) || ![...CANONICAL_PRODUCT_MODES, "blocked"].includes(mapping?.effectiveProductMode) ||
+    !["disabled", "local_proof", "read_only", "bounded_write", "unavailable", "unknown"].includes(mapping?.operationalMode) ||
+    !["ready", "degraded", "blocked", "unavailable", "unknown"].includes(mapping?.readinessState) ||
+    !["live", "stale", "unavailable", "unknown"].includes(mapping?.freshnessState) ||
+    !["available", "gated", "unavailable", "simulated", "unknown"].includes(mapping?.capabilityState) ||
+    !Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs < checkedAtMs || typeof mapping?.ready !== "boolean" ||
+    !Array.isArray(mapping?.blockedReasons) || !mapping.blockedReasons.every((reason) => canonicalText(reason, 240)) ||
+    mapping?.metadataOnly !== true || mapping?.rawPayloadRetained !== false || !mappingAuthorityDenied) issues.push("canonical_mapping_invalid");
+  if (mapping?.requestedProductMode !== contract?.productMode) issues.push("canonical_mode_contradictory");
+  const requiredReadinessBlocked = CANONICAL_READINESS_COMPONENT_IDS.some((componentId) => {
+    const component = readinessComponents?.[componentId];
+    return component?.requirement === "required" && ["fail", "blocked"].includes(component?.state);
+  });
+  if ((mapping?.ready === true && (mapping?.readinessState !== "ready" || mapping?.freshnessState !== "live" || mapping?.blockedReasons?.length > 0 || requiredReadinessBlocked || ["unavailable", "unknown"].includes(mapping?.capabilityState) || ["unavailable", "unknown"].includes(mapping?.operationalMode))) ||
+    (mapping?.ready === false && mapping?.readinessState === "ready" && mapping?.blockedReasons?.length === 0) ||
+    (mapping?.effectiveProductMode === "blocked" && (mapping?.ready !== false || mapping?.blockedReasons?.length === 0)) ||
+    (requiredReadinessBlocked && mapping?.readinessState !== "blocked")) issues.push("canonical_contract_contradictory");
+  const stale = Number.isFinite(nowMs) && Number.isFinite(checkedAtMs) && Number.isFinite(expiresAtMs) &&
+    (expiresAtMs < nowMs || checkedAtMs > nowMs + FUTURE_SKEW_MS || mapping?.freshnessState !== "live");
+  const uniqueIssues = [...new Set(issues)];
+  const blockers = uniqueIssues.map((code) => ({
+    code: code === "canonical_contract_missing" ? "canonical_contract_missing" : code.includes("contradictory") ? "canonical_contract_contradictory" : "canonical_contract_invalid",
+    message: `Supervisor canonical packet truth is not consumable: ${code}.`,
+    nextAction: "Refresh the supervisor packet/projection and keep manager capability gated until canonical truth is complete and consistent.",
+  }));
+  if (stale) blockers.push({ code: "evidence_stale", message: "Supervisor product-mode mapping is stale or not live.", nextAction: "Refresh the authoritative supervisor projection before continuing." });
+  const readinessReasons = [
+    ...(mapping?.ready === true ? [] : ["product_mode_not_ready"]),
+    ...(["pass", "not_applicable"].includes(qualityState) ? [] : [`quality_gates_${qualityState}`]),
+    ...(requiredReadinessBlocked ? ["required_readiness_component_blocked"] : []),
+    ...(["unavailable", "unknown"].includes(mapping?.capabilityState) ? [`capability_${mapping.capabilityState}`] : []),
+    ...(["unavailable", "unknown"].includes(mapping?.operationalMode) ? [`operational_mode_${mapping.operationalMode}`] : []),
+  ];
+
+  return {
+    present: true,
+    valid: blockers.length === 0,
+    fallbackAllowed: false,
+    status: blockers.length === 0 ? "canonical" : stale ? "stale" : "blocked",
+    blockers,
+    readinessReady: blockers.length === 0 && readinessReasons.length === 0,
+    readinessReasons,
+    source: plainRecord(source) ? structuredClone(source) : null,
+    readinessComponents: plainRecord(readinessComponents) ? structuredClone(readinessComponents) : null,
+    productModeMapping: plainRecord(mapping) ? structuredClone(mapping) : null,
+    retentionEvidence: [
+      ...(contract?.metadataOnly === true && contract?.rawPayloadRetained === false ? [{ evidenceId: "canonical-contract", disposition: "metadata_only", metadataOnly: true, rawPayloadRetained: false }] : []),
+      ...(Array.isArray(contract?.deliveryEvidence) ? contract.deliveryEvidence.map((entry) => structuredClone(entry.evidence)).filter(plainRecord) : []),
+    ],
+    qualityEvidence: plainRecord(contract?.qualityGates) ? { state: qualityState, gates: structuredClone(contract.qualityGates) } : null,
+    deliveryEvidence: Array.isArray(contract?.deliveryEvidence) ? structuredClone(contract.deliveryEvidence) : [],
+    typedCapabilityTruth: plainRecord(mapping) ? {
+      requestedProductMode: mapping.requestedProductMode,
+      effectiveProductMode: mapping.effectiveProductMode,
+      operationalMode: mapping.operationalMode,
+      readinessState: mapping.readinessState,
+      freshnessState: mapping.freshnessState,
+      capabilityState: mapping.capabilityState,
+      ready: mapping.ready,
+      blockedReasons: structuredClone(mapping.blockedReasons || []),
+      sourceMutationAllowed: false,
+      providerCallsAllowed: false,
+      workerLaunchAllowed: false,
+      githubMutationAllowed: false,
+    } : null,
+  };
 }
 
 function threshold(value, name) {
@@ -143,14 +385,27 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
   const checkedAtMs = Number.isFinite(now) ? now : Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
   const expiresAt = new Date(checkedAtMs + FRESHNESS_TTL_MS).toISOString();
+  const canonicalInput = context.supervisorPacket || context.authoritativeSupervisorPacket || context.projectionPacket ||
+    (own(context, "canonicalContract") || own(context, "productModeMapping") ? context : null);
+  const canonicalSupervisor = projectCanonicalSupervisorPacket(canonicalInput || {}, { now: checkedAt });
+  const canonicalEvidenceRefs = canonicalSupervisor.present
+    ? [
+        ...(canonicalSupervisor.source?.provenance?.evidenceRefs || []),
+        ...CANONICAL_READINESS_COMPONENT_IDS.flatMap((componentId) => canonicalSupervisor.readinessComponents?.[componentId]?.evidenceRefs || []),
+        ...canonicalSupervisor.deliveryEvidence.flatMap((entry) => entry?.evidence?.evidenceRefs || []),
+      ]
+    : [];
+  const canonicalSourceRefs = canonicalSupervisor.present && canonicalSupervisor.source?.provenance?.sourceRef?.refId
+    ? [`source:${canonicalSupervisor.source.provenance.sourceRef.refId}`]
+    : [];
   const targetInput = context.target || options.target || {};
   const target = {
     workerId: safeId(targetInput.workerId),
     assignmentId: safeId(targetInput.assignmentId),
     owner: safeId(targetInput.owner),
     runId: safeId(targetInput.runId),
-    sourceRefs: refs(targetInput.sourceRefs),
-    evidenceRefs: refs(targetInput.evidenceRefs),
+    sourceRefs: refs(canonicalSupervisor.present ? canonicalSourceRefs : targetInput.sourceRefs),
+    evidenceRefs: refs(canonicalSupervisor.present ? canonicalEvidenceRefs : targetInput.evidenceRefs),
   };
   const profile = context.readinessProfile || options.readinessProfile || {};
   const thresholds = explicitThresholds(profile);
@@ -174,7 +429,9 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
     recheckAt: safeText(recoveryInput.recheckAt) ? text(recoveryInput.recheckAt) : "",
     expiryAt: safeText(recoveryInput.expiryAt) ? text(recoveryInput.expiryAt) : "",
   };
-  const backendTruth = BACKEND_TRUTHS.has(context.backendTruth || options.backendTruth) ? (context.backendTruth || options.backendTruth) : "dry_run";
+  const backendTruth = canonicalSupervisor.present
+    ? canonicalSupervisor.valid ? "live" : "dry_run"
+    : BACKEND_TRUTHS.has(context.backendTruth || options.backendTruth) ? (context.backendTruth || options.backendTruth) : "dry_run";
   const sourceEvidence = target.sourceRefs.length > 0 && target.evidenceRefs.length > 0;
   const exactTarget = [target.workerId, target.assignmentId, target.owner, target.runId].every(Boolean);
   const backendProof = backendTruth !== "live" || context.backendTruthProven === true || context.backendTruthProof === true;
@@ -198,11 +455,22 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
     suppliedGate(gatesInput, "dispatcher_lease", context.dispatcherLease?.proven === true, "dispatcher_lease_unproven", "Provide dispatcher lease proof for the exact target.", evidence),
     suppliedGate(gatesInput, "receipt_evidence", context.receipt?.proven === true, "receipt_unproven", "Provide receipt/checkpoint proof for the exact target.", evidence),
   ];
+  if (canonicalSupervisor.present) {
+    const canonicalBlocker = canonicalSupervisor.blockers[0];
+    const canonicalReady = canonicalSupervisor.valid && canonicalSupervisor.readinessReady;
+    gates.push(gate("canonical_supervisor_contract", {
+      state: canonicalReady ? "pass" : "blocked",
+      typedReason: canonicalBlocker?.code || "predecessor_gate_not_passed",
+      nextAction: canonicalBlocker?.nextAction || "Hold until canonical readiness components, quality gates, and product-mode mapping are ready.",
+      evidenceRefs: canonicalEvidenceRefs,
+    }, "canonical_contract_invalid", "Refresh authoritative supervisor canonical truth.", canonicalEvidenceRefs));
+  }
   if (missingThresholds.length > 0) {
     gates.push(gate("explicit_thresholds", { state: "blocked", typedReason: "threshold_missing" }, "threshold_missing", `Provide explicit thresholds for: ${missingThresholds.join(", ")}.`, evidence));
   }
   const typedBlockers = gates.filter((entry) => entry.state !== "pass").map((entry) => ({ gateId: entry.gateId, reason: entry.typedReason || "unknown", nextAction: entry.nextAction }));
-  const outcome = typedBlockers.length === 0 && backendTruth === "live" && context.freshnessState === "live" && context.metadataOnly !== false ? "go" : "no_go";
+  const authoritativeFreshness = canonicalSupervisor.present ? canonicalSupervisor.productModeMapping?.freshnessState : context.freshnessState;
+  const outcome = typedBlockers.length === 0 && backendTruth === "live" && authoritativeFreshness === "live" && context.metadataOnly !== false ? "go" : "no_go";
   return {
     schemaVersion: SCHEMA_VERSION,
     target,
@@ -216,6 +484,7 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
     gates,
     outcome,
     typedBlockers,
+    ...(canonicalSupervisor.present ? { canonicalSupervisor } : {}),
     checkedAt,
     expiresAt,
     metadataOnly: true,
@@ -238,6 +507,7 @@ export function validateOperationalReadinessContract(contract = {}) {
   if (contract?.outcome === "go" && (!Array.isArray(contract?.configuration?.names) || contract.configuration.names.length === 0 || contract.configuration.noValueRetention !== true || contract.configuration.validationState !== "pass" || contract.configuration.names.some((name) => !safeId(name)))) blockers.push({ code: "configuration_invalid", message: "Configuration readiness must contain allowlisted names without values.", nextAction: "Provide validated allowlisted configuration metadata only." });
   if (contract?.outcome === "go" && (!safeId(contract?.telemetry?.source) || !safeId(contract?.telemetry?.coverage) || contract.telemetry.alertReady !== true || !Array.isArray(contract.telemetry.alertThresholdIds) || contract.telemetry.alertThresholdIds.length === 0)) blockers.push({ code: "telemetry_missing", message: "Telemetry and alert coverage is incomplete.", nextAction: "Provide fresh telemetry source, coverage, and alert threshold metadata." });
   if (contract?.outcome === "go" && (contract.backendTruth !== "live" || contract.typedBlockers?.length)) blockers.push({ code: "backend_truth_unproven", message: "Go requires live backend truth and no blockers.", nextAction: "Hold until live proof is complete." });
+  if (contract?.canonicalSupervisor?.present === true && contract.canonicalSupervisor.valid !== true) blockers.push({ code: "canonical_contract_invalid", message: "Operational readiness cannot use incomplete, stale, or contradictory supervisor canonical truth.", nextAction: "Refresh the authoritative supervisor packet/projection." });
   return blockers;
 }
 

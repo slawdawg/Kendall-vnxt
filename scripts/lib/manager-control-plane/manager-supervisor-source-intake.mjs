@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
+import { projectCanonicalSupervisorPacket } from "./operational-readiness.mjs";
+
 const SOURCE_INTAKE_PATH = "/pipeline-control-plane/work-packets";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -235,6 +237,16 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
     throw new ManagerSupervisorSourceIntakeError(code, error.message, sourcePacket, { cause: error });
   }
 
+  const canonicalSupervisor = projectCanonicalSupervisorPacket(lifecycle, { now: context.now });
+  if (canonicalSupervisor.present && !canonicalSupervisor.valid) {
+    const stale = canonicalSupervisor.blockers.some((blocker) => blocker.code === "evidence_stale");
+    throw new ManagerSupervisorSourceIntakeError(
+      stale ? "manager_supervisor_canonical_fields_stale" : "manager_supervisor_canonical_fields_invalid",
+      canonicalSupervisor.blockers[0]?.message || "Supervisor source intake returned unusable canonical packet truth.",
+      sourcePacket,
+    );
+  }
+
   const integrated = structuredClone(sourcePacket);
   integrated.summary.seedPacket = {
     ...structuredClone(integrated.summary.seedPacket),
@@ -246,6 +258,14 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
       currentEventId: lifecycle.currentEventId,
       persistedAt: new Date(lifecycle.updatedAt).toISOString(),
       evidenceRef: `supervisor-work-packet:${lifecycle.packetId}`,
+      truthSource: canonicalSupervisor.present ? "supervisor_canonical" : "legacy_lifecycle_fallback",
+      canonicalSource: canonicalSupervisor.source,
+      readinessComponents: canonicalSupervisor.readinessComponents,
+      productModeMapping: canonicalSupervisor.productModeMapping,
+      retentionEvidence: canonicalSupervisor.retentionEvidence,
+      qualityEvidence: canonicalSupervisor.qualityEvidence,
+      deliveryEvidence: canonicalSupervisor.deliveryEvidence,
+      typedCapabilityTruth: canonicalSupervisor.typedCapabilityTruth,
       metadataOnly: true,
       rawPayloadRetained: false,
     },
@@ -533,7 +553,7 @@ function validateBoundedMetadataOnlyValue(value, field, maxBytes = MAX_PACKET_BY
     for (const [key, nested] of entries) {
       if (key === "rawPayloadRetained") {
         if (nested !== false) throw new TypeError(`${path}.${key} must be false.`);
-      } else if (FORBIDDEN_FIELD.test(key)) {
+      } else if (key !== "rawPayloadRetentionAllowed" && FORBIDDEN_FIELD.test(key)) {
         throw new TypeError(`${path}.${key} is forbidden non-metadata input.`);
       }
       walk(nested, `${path}.${key}`, depth + 1);
