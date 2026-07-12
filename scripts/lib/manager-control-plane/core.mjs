@@ -23640,20 +23640,43 @@ export function buildCyclePacket(options = {}, context = {}) {
   blockers.push(...steeringBlockers);
   blockers.push(...(feedback.blockers || []));
   blockers.push(...(delivery.blockers || []));
-  const baseStatus = blockers.length > 0 ? "blocked" : frictionAttention || steeringAttention || feedbackAttention || workerProgressAttention || laneAdvanceAttention ? "attention" : "ready";
-  const deliveryOrPrOperationBlocked = blockers.some((blocker) =>
+  const terminalContinuationProjection = buildTerminalContinuationProjection({
+    dispatcherState,
+    preflight,
+    workers,
+    blockers,
+    resume,
+  });
+  const operationalBlockers = terminalContinuationProjection
+    ? blockers.filter((blocker) => blocker.code !== "assignment-ambiguous-status")
+    : blockers;
+  const baseStatus = operationalBlockers.length > 0 ? "blocked" : frictionAttention || steeringAttention || feedbackAttention || workerProgressAttention || laneAdvanceAttention ? "attention" : "ready";
+  const deliveryOrPrOperationBlocked = operationalBlockers.some((blocker) =>
     ["delivery-phase-authority-missing", "delivery-phase-authority-invalid", "pr-stewardship-evidence-missing", "pr-stewardship-high-risk"].includes(blocker.code),
   );
-  const continuation = withContinuationGateEvidence(buildContinuationPlan({ status: baseStatus, blockers, runway, usage, resources, workers, workerProgress, laneAdvance, resume, dispatchPreview, operationalActions }));
+  const continuation = withContinuationGateEvidence(buildContinuationPlan({
+    status: baseStatus,
+    blockers: operationalBlockers,
+    runway,
+    usage,
+    resources,
+    workers,
+    workerProgress,
+    laneAdvance,
+    resume,
+    dispatchPreview,
+    operationalActions,
+    terminalContinuationProjection,
+  }));
   const status = baseStatus === "blocked" && continuation.canContinue && !deliveryOrPrOperationBlocked ? "attention" : baseStatus;
-  const reportedBlockers = suppressSupersededCycleBlockers({ blockers, cleanup });
+  const reportedBlockers = suppressSupersededCycleBlockers({ blockers: operationalBlockers, cleanup });
   const recoveryMutationBlocked = recoveryBlocksManagerMutation(recovery);
   const autoApply = [
     classifyAutoApply("ledger.append", { resourceState: resources.status, usageState: usage.status, weeklyUsage: usage.summary?.weekly }),
     classifyAutoApply("dispatch.apply", { resourceState: resources.status, usageState: usage.status, weeklyUsage: usage.summary?.weekly }),
   ];
   const currentSource = runway.summary.sourceSlice?.label || "none";
-  const blockerActions = blockers
+  const blockerActions = operationalBlockers
     .map((blocker) => ({
       code: blocker.code ? `${blocker.code}-action` : "blocker-action",
       summary: blocker.message || "Manager is blocked.",
@@ -23715,7 +23738,23 @@ export function buildCyclePacket(options = {}, context = {}) {
     "dispatch_apply",
   );
   const dispatchPreviewActions = continuation.canContinue && dispatchApplyOperationallyAllowed ? safeActionArray(dispatchPreview.nextActions) : [];
-  const nextActions = uniqueActions([
+  const terminalContinuationActions = continuation.state === "terminal_waiting_for_new_source"
+    ? [
+        {
+          code: "terminal-waiting-for-new-source",
+          summary: "Authoritative source backlog is exhausted; remain read-only until a new accepted source-owned bundle is available.",
+          nextAction: continuation.resumeRequirement,
+        },
+        ...(continuation.preservedOwnership.blockedLaneAssignments > 0 || continuation.preservedOwnership.blockedWorkspaceAssignments > 0
+          ? [{
+              code: "terminal-stale-ownership-status",
+              summary: "Preserve stale assignment ownership evidence without takeover or cleanup mutation.",
+              nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+            }]
+          : []),
+      ]
+    : null;
+  const nextActions = terminalContinuationActions || uniqueActions([
     ...(recoveryMutationBlocked ? [] : workerQuestionBlockerActions),
     ...(recoveryMutationBlocked ? [] : workerWarmActions),
     ...(recoveryMutationBlocked ? [] : workerHandoffActions),
@@ -23742,6 +23781,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   const laneAdvanceAction = recoveryMutationBlocked ? null : laneAdvanceActions[0]?.nextAction || null;
   const cleanupAction = recoveryMutationBlocked || !continuation.canContinue ? null : cleanupActions[0]?.nextAction || null;
   const actionNeeded =
+    terminalContinuationActions?.[0]?.nextAction ||
     (recoveryMutationBlocked ? null : workerQuestionBlockerActions[0]?.nextAction) ||
     (recoveryMutationBlocked ? null : steering.blockers?.[0]?.nextAction) ||
     (recoveryMutationBlocked ? null : steering.nextActions?.[0]?.nextAction) ||
@@ -23935,6 +23975,12 @@ export function buildCyclePacket(options = {}, context = {}) {
     },
     blockers: sanitizeCyclePacketValue(reportedBlockers),
     warnings: sanitizeCyclePacketValue(uniqueWarnings([
+      ...(terminalContinuationProjection?.preservedOwnershipBlockers?.length > 0
+        ? [{
+            code: "terminal-stale-ownership-preserved",
+            message: `${terminalContinuationProjection.blockedLaneAssignments} blocked lane assignment(s) and ${terminalContinuationProjection.blockedWorkspaceAssignments} blocked workspace assignment(s) remain preservation-gated; terminal projection authorizes no takeover or cleanup mutation.`,
+          }]
+        : []),
       ...safeWarningArray(usage.warnings, "usage-warnings-unreadable"),
       ...safeWarningArray(resources.warnings, "resource-warnings-unreadable"),
       ...safeWarningArray(preflight.warnings, "preflight-warnings-unreadable"),
@@ -26296,7 +26342,42 @@ function malformedContinuousSubplanBlockers(plan = {}, label = "subplan") {
   return blockers;
 }
 
-function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, workerProgress = {}, laneAdvance = {}, resume = {}, dispatchPreview = {} } = {}) {
+function buildTerminalContinuationProjection({ dispatcherState = {}, preflight = {}, workers = {}, blockers = [], resume = {} } = {}) {
+  const dispatcher = dispatcherState.dispatcher || {};
+  const queue = dispatcherState.queue || {};
+  const lease = dispatcherState.lease || {};
+  const activeWorkerCount = nonNegativeInteger(workers.summary?.workerCounts?.active);
+  const preflightBlockers = Array.isArray(preflight.blockers) ? preflight.blockers : [];
+  const preservedOwnershipBlockers = blockers.filter((blocker) => blocker.code === "assignment-ambiguous-status");
+  const unrelatedBlockers = blockers.filter((blocker) => blocker.code !== "assignment-ambiguous-status");
+  if (
+    dispatcher.status !== "authoritative_backlog_exhausted" ||
+    dispatcher.terminalState?.status !== "authoritative_backlog_exhausted" ||
+    dispatcher.terminalState?.canonicalEventIntegration !== "supervisor_canonical_event" ||
+    preflight.ok !== true ||
+    preflight.status !== "ready" ||
+    preflightBlockers.length > 0 ||
+    (nonNegativeInteger(queue.dispatchableCount) ?? 0) !== 0 ||
+    (nonNegativeInteger(queue.queuedCount) ?? 0) !== 0 ||
+    (nonNegativeInteger(lease.activeCount) ?? 0) !== 0 ||
+    activeWorkerCount !== 0 ||
+    unrelatedBlockers.length > 0
+  ) return null;
+  return {
+    terminalState: dispatcher.terminalState,
+    preservedOwnershipBlockers: preservedOwnershipBlockers.slice(0, 8).map((blocker) => ({
+      code: "assignment-ambiguous-status",
+      message: sanitizeLedgerField(blocker.message || "Stale assignment ownership remains preservation-gated.", "Stale assignment ownership remains preservation-gated.", 180),
+      nextAction: "node ./scripts/manager-stale-owner-inspection.mjs --summary-json",
+    })),
+    blockedLaneAssignments: resume.summary?.assignment?.blockedLaneAssignments?.length || 0,
+    blockedWorkspaceAssignments: resume.summary?.assignment?.blockedWorkspaceAssignments?.length || 0,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {}, resources = {}, workers = {}, workerProgress = {}, laneAdvance = {}, resume = {}, dispatchPreview = {}, terminalContinuationProjection = null } = {}) {
   const blockerCodes = blockers.map((blocker) => blocker.code).filter(Boolean);
   const usageState = normalizePosture(usage, "unknown");
   const resourceState = normalizePosture(resources, "unknown");
@@ -26320,6 +26401,37 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
     ...plan,
     allowedActions: [...new Set([...(Array.isArray(plan.allowedActions) ? plan.allowedActions : []), ...exactAllowedActions])],
   });
+  if (terminalContinuationProjection) {
+    return {
+      state: "terminal_waiting_for_new_source",
+      canContinue: false,
+      progressRunState: "terminal-waiting-for-new-source",
+      workerMutationAllowed: false,
+      workerStartAllowed: false,
+      dispatchApplyAllowed: false,
+      deliveryAllowed: false,
+      takeoverAllowed: false,
+      refillAllowed: false,
+      allowedActions: ["status_reporting", "read_only_inspection"],
+      blockedActions: ["worker_start", "worker_kill", "worker_answer", "lane_advance", "dispatch_apply", "delivery", "cleanup", "ownership_takeover", "refill", "source_intake"],
+      reason: "Authoritative backlog exhaustion is canonically persisted; stale ownership evidence remains preserved while the manager waits read-only for a new accepted source-owned bundle.",
+      blockerCodes,
+      preservedOwnership: {
+        status: "preserved_warning",
+        blockedLaneAssignments: terminalContinuationProjection.blockedLaneAssignments,
+        blockedWorkspaceAssignments: terminalContinuationProjection.blockedWorkspaceAssignments,
+        evidence: terminalContinuationProjection.preservedOwnershipBlockers,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      blockedLaneAssignments: terminalContinuationProjection.blockedLaneAssignments,
+      blockedWorkspaceAssignments: terminalContinuationProjection.blockedWorkspaceAssignments,
+      resumeRequirement: terminalContinuationProjection.terminalState.resumeRequirement,
+      nextManagerAction: terminalContinuationProjection.terminalState.nextManagerAction,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
   if (blockerCodes.includes("split-brain-state")) {
     return {
       state: "blocked",

@@ -173,6 +173,26 @@ function injectedContext(overrides = {}) {
   };
 }
 
+function staleAssignmentSummary() {
+  const blockedLaneAssignments = Array.from({ length: 9 }, (_, index) => ({
+    assignmentId: `stale-lane-${index + 1}`,
+    status: "blocked_stale_owner_needs_takeover",
+  }));
+  const blockedWorkspaceAssignments = Array.from({ length: 13 }, (_, index) => ({
+    taskId: `stale-workspace-${index + 1}`,
+    status: "blocked_stale_owner_needs_takeover",
+  }));
+  return {
+    summary: {
+      backlogStatusCounts: { assignable: 0, active: 0, closed: 1 },
+      laneAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: blockedLaneAssignments.length },
+      workspaceAssignmentStatusCounts: { blocked_stale_owner_needs_takeover: blockedWorkspaceAssignments.length },
+      blockedLaneAssignments,
+      blockedWorkspaceAssignments,
+    },
+  };
+}
+
 test("validated terminal exhaustion projects dispatcher preflight and cycle without empty-backlog blockers", () => {
   const stateRoot = seedStateRoot();
   try {
@@ -204,6 +224,92 @@ test("validated terminal exhaustion projects dispatcher preflight and cycle with
     assert.equal(preflight.summary.runway.noNewEpic, true);
     assert.equal(preflight.summary.runway.noPostSliceWork, true);
     assert.doesNotMatch(JSON.stringify({ preflight, cycle }), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("terminal cycle preserves stale ownership evidence without projecting assignment ambiguity as an operational blocker", () => {
+  const stateRoot = seedStateRoot();
+  try {
+    const context = injectedContext({ assignmentSummary: staleAssignmentSummary() });
+    const preflight = buildPreflight({ runId: RUN_ID, stateRoot, desiredWorkers: 6 }, context);
+    const cycle = buildCyclePacket({ runId: RUN_ID, stateRoot, desiredWorkers: 6 }, { ...context, preflightStatus: preflight });
+
+    assert.equal(preflight.status, "ready");
+    assert.equal(cycle.status, "ready");
+    assert.equal(cycle.ok, true);
+    assert.equal(cycle.summary.continuation.state, "terminal_waiting_for_new_source");
+    assert.equal(cycle.summary.continuation.canContinue, false);
+    assert.equal(cycle.summary.continuation.progressRunState, "terminal-waiting-for-new-source");
+    assert.equal(cycle.summary.continuation.workerMutationAllowed, false);
+    assert.equal(cycle.summary.continuation.workerStartAllowed, false);
+    assert.equal(cycle.summary.continuation.dispatchApplyAllowed, false);
+    assert.equal(cycle.summary.continuation.deliveryAllowed, false);
+    assert.equal(cycle.summary.continuation.takeoverAllowed, false);
+    assert.equal(cycle.summary.continuation.refillAllowed, false);
+    assert.deepEqual(cycle.summary.continuation.allowedActions, ["status_reporting", "read_only_inspection"]);
+    for (const action of ["worker_start", "worker_kill", "worker_answer", "lane_advance", "dispatch_apply", "delivery", "cleanup", "ownership_takeover", "refill", "source_intake"]) {
+      assert.ok(cycle.summary.continuation.blockedActions.includes(action), action);
+    }
+    assert.equal(cycle.summary.continuation.blockedLaneAssignments, 9);
+    assert.equal(cycle.summary.continuation.blockedWorkspaceAssignments, 13);
+    assert.equal(cycle.summary.resume.blockedLaneAssignments.length, 9);
+    assert.equal(cycle.summary.resume.blockedWorkspaceAssignments.length, 13);
+    assert.equal(cycle.blockers.some((blocker) => blocker.code === "assignment-ambiguous-status"), false);
+    assert.equal(cycle.summary.blockers.some((blocker) => blocker.code === "assignment-ambiguous-status"), false);
+    assert.ok(cycle.warnings.some((warning) => warning.code === "terminal-stale-ownership-preserved"));
+    assert.ok(cycle.warnings.some((warning) => warning.code === "dirty-stale-owner-workspaces"));
+    assert.equal(cycle.nextActions.every((action) => ["terminal-waiting-for-new-source", "terminal-stale-ownership-status"].includes(action.code)), true);
+    assert.doesNotMatch(JSON.stringify(cycle.nextActions), /--apply|worker-warm|worker-submit|worker-answer|cleanup-current|cleanup-merged/i);
+    assert.equal(cycle.summary.runway.noNewEpic, true);
+    assert.equal(cycle.summary.runway.noPostSliceWork, true);
+    assert.doesNotMatch(JSON.stringify(cycle), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("assignment ambiguity remains blocking when terminal proof or zero-work evidence is absent", () => {
+  const stateRoot = seedStateRoot();
+  try {
+    const missingProofContext = injectedContext({
+      assignmentSummary: staleAssignmentSummary(),
+      authoritativeSourceBundle: terminalBundle({ canonicalProof: false }),
+    });
+    const missingProofPreflight = buildPreflight({ runId: RUN_ID, stateRoot, desiredWorkers: 6 }, missingProofContext);
+    const missingProofCycle = buildCyclePacket(
+      { runId: RUN_ID, stateRoot, desiredWorkers: 6 },
+      { ...missingProofContext, preflightStatus: missingProofPreflight },
+    );
+    assert.equal(missingProofCycle.status, "blocked");
+    assert.notEqual(missingProofCycle.summary.continuation.state, "terminal_waiting_for_new_source");
+    assert.ok(missingProofCycle.summary.continuation.blockerCodes.includes("assignment-ambiguous-status"));
+
+    const inconsistentContext = injectedContext({ assignmentSummary: staleAssignmentSummary() });
+    const inconsistentPreflight = buildPreflight({ runId: RUN_ID, stateRoot, desiredWorkers: 6 }, inconsistentContext);
+    inconsistentPreflight.ok = false;
+    const inconsistentCycle = buildCyclePacket(
+      { runId: RUN_ID, stateRoot, desiredWorkers: 6 },
+      { ...inconsistentContext, preflightStatus: inconsistentPreflight },
+    );
+    assert.equal(inconsistentCycle.status, "blocked");
+    assert.notEqual(inconsistentCycle.summary.continuation.state, "terminal_waiting_for_new_source");
+    assert.ok(inconsistentCycle.summary.continuation.blockerCodes.includes("assignment-ambiguous-status"));
+
+    const activeContext = injectedContext({
+      assignmentSummary: staleAssignmentSummary(),
+      dispatchPreview: dispatchPreview({ active: 1 }),
+    });
+    const activePreflight = buildPreflight({ runId: RUN_ID, stateRoot, desiredWorkers: 6 }, activeContext);
+    const activeCycle = buildCyclePacket(
+      { runId: RUN_ID, stateRoot, desiredWorkers: 6 },
+      { ...activeContext, preflightStatus: activePreflight },
+    );
+    assert.equal(activeCycle.status, "blocked");
+    assert.notEqual(activeCycle.summary.continuation.state, "terminal_waiting_for_new_source");
+    assert.ok(activeCycle.summary.continuation.blockerCodes.includes("assignment-ambiguous-status"));
+    assert.doesNotMatch(JSON.stringify({ missingProofCycle, inconsistentCycle, activeCycle }), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*/i);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
