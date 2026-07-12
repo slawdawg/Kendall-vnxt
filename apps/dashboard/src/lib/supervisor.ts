@@ -402,6 +402,7 @@ function isPipelineDashboardProjection(value: unknown): value is PipelineDashboa
     projection.reliabilityProblems.every(isReliabilityProblem) &&
     Array.isArray(projection.gatedControls) &&
     projection.gatedControls.every(isGatedControl) &&
+    isExecuteAdmission(projection.executeAdmission) &&
     isQueueSummary(projection.queueSummary) &&
     isProjectionFreshnessConsistent(projection) &&
     isProjectionFixtureTruthConsistent(projection) &&
@@ -989,6 +990,39 @@ function isQueueSummary(value: unknown) {
     isEmptyReason(queueSummary.emptyReason) &&
     typeof queueSummary.sourceExhausted === "boolean" &&
     typeof queueSummary.summary === "string"
+  );
+}
+
+function isExecuteAdmission(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const admission = value as PipelineDashboardProjectionV0["executeAdmission"];
+  const validDimensions = new Set(["review", "deliver", "verification", "operatorTesting"]);
+  const validCounts = (counts: typeof admission.limits) => counts === null || (
+    typeof counts === "object" &&
+    counts !== null &&
+    [counts.review, counts.deliver, counts.verification, counts.operatorTesting]
+      .every((count) => Number.isInteger(count) && count >= 0)
+  );
+  return (
+    admission.schemaVersion === "pipeline-execute-admission/v0" &&
+    admission.policyVersion === "supervisor-wip/v0" &&
+    ["ready", "blocked", "unavailable"].includes(admission.state) &&
+    typeof admission.capacityAvailable === "boolean" &&
+    typeof admission.typedReason === "string" &&
+    ["supervisor_settings", "unavailable"].includes(admission.source) &&
+    validCounts(admission.limits) &&
+    validCounts(admission.observed) &&
+    Array.isArray(admission.blockingDimensions) &&
+    admission.blockingDimensions.every((dimension) => validDimensions.has(dimension)) &&
+    typeof admission.nextSafeAction === "string" &&
+    Array.isArray(admission.evidenceRefs) &&
+    admission.evidenceRefs.every(isSafeEvidenceRef) &&
+    admission.metadataOnly === true &&
+    admission.rawPayloadRetained === false &&
+    (admission.state === "ready") === admission.capacityAvailable &&
+    (admission.state === "unavailable" || (admission.limits !== null && admission.observed !== null))
   );
 }
 

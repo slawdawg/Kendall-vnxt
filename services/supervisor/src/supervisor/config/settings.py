@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     allow_worker_credentials: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_CREDENTIALS")
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
     lease_ttl_seconds: int = 30
+    review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
+    deliver_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_DELIVER_WIP_LIMIT")
+    verification_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_VERIFICATION_WIP_LIMIT")
+    operator_testing_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_OPERATOR_TESTING_WIP_LIMIT")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -5465,3 +5465,264 @@ def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_co
         asyncio_run(initialize_and_check())
     finally:
         asyncio_run(live_engine.dispose())
+
+
+def test_execute_admission_blocks_new_lease_at_review_capacity_and_projects_backend_truth(tmp_path, monkeypatch) -> None:
+    db_name = "execute-admission-review-capacity.db"
+    db_path = _db_path(tmp_path, db_name)
+    monkeypatch.setenv("SUPERVISOR_ALLOW_DIRTY_REPO", "true")
+    monkeypatch.setenv("SUPERVISOR_REVIEW_WIP_LIMIT", "1")
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        ready_item = _create_work_item(client, title="Execute admission candidate")
+        _update_work_item_fixture(
+            db_path,
+            ready_item["id"],
+            state="needs_rework",
+            lane="corrective_loop",
+            status_summary="Ready to retry Execute admission.",
+            next_step="Restart implementation",
+        )
+        packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-review-at-capacity",
+                "title": "Review capacity occupant",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": {
+                    "refId": "test:review-capacity",
+                    "sourceType": "workflow",
+                    "pathOrUrl": "tests/execute-admission-review-capacity",
+                    "title": "Review capacity fixture",
+                },
+            },
+        )
+        assert packet_response.status_code == 200
+
+        from supervisor.api.main import service
+
+        monkeypatch.setattr(service, "_repo_is_dirty", lambda: False)
+        admission_response = client.post(
+            f"/work-items/{ready_item['id']}/actions",
+            json={"action": "restart_implementation", "note": "Retry after bounded rework."},
+        )
+        assert admission_response.status_code == 409
+        assert "review_wip_limit_reached" in admission_response.text
+
+        held_item = client.get(f"/work-items/{ready_item['id']}").json()["data"]
+        assert held_item["state"] == "needs_rework"
+        assert held_item["blockedReason"] is None
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from queue_leases where work_item_id = ?", (ready_item["id"],)).fetchone()[0] == 0
+            assert conn.execute("select count(*) from execution_attempts where work_item_id = ?", (ready_item["id"],)).fetchone()[0] == 0
+
+        projection = client.get("/pipeline-control-plane/projection").json()["data"]
+        admission = projection["executeAdmission"]
+        assert admission == {
+            "schemaVersion": "pipeline-execute-admission/v0",
+            "policyVersion": "supervisor-wip/v0",
+            "state": "blocked",
+            "capacityAvailable": False,
+            "typedReason": "review_wip_limit_reached",
+            "source": "supervisor_settings",
+            "limits": {"review": 1, "deliver": 1, "verification": 1, "operatorTesting": 1},
+            "observed": {"review": 1, "deliver": 0, "verification": 0, "operatorTesting": 0},
+            "blockingDimensions": ["review"],
+            "nextSafeAction": "Complete or move Review work below its configured WIP limit, then retry Execute admission.",
+            "evidenceRefs": ["evidence:wip-policy-supervisor-wip-v0", "evidence:wip-review-1-of-1"],
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+
+
+def test_automatic_ready_cycle_holds_before_execute_side_effects_when_capacity_is_exhausted(tmp_path, monkeypatch) -> None:
+    db_name = "automatic-execute-admission.db"
+    db_path = _db_path(tmp_path, db_name)
+    monkeypatch.setenv("SUPERVISOR_REVIEW_WIP_LIMIT", "1")
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        candidate = _create_work_item(client, title="Automatic Execute admission candidate")
+        _update_work_item_fixture(db_path, candidate["id"], state="ready", lane="implementation")
+        assert client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-review-automatic-capacity",
+                "title": "Automatic Review capacity occupant",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": {"refId": "test:automatic-review-capacity", "sourceType": "workflow"},
+            },
+        ).status_code == 200
+
+        from supervisor.api.main import process_once_for_tests, service
+
+        monkeypatch.setattr(service, "_repo_is_dirty", lambda: False)
+        asyncio_run(process_once_for_tests())
+        held = client.get(f"/work-items/{candidate['id']}").json()["data"]
+        assert held["state"] == "ready"
+        events = client.get(f"/work-items/{candidate['id']}/events").json()["data"]
+        assert not any(event["eventType"] in {"work_item.implementing", "recipe.implementation_passed"} for event in events)
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from queue_leases where work_item_id = ?", (candidate["id"],)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("dimension", "expected_reason"),
+    [
+        ("review", "review_wip_limit_reached"),
+        ("deliver", "deliver_wip_limit_reached"),
+        ("verification", "verification_wip_limit_reached"),
+        ("operatorTesting", "operator_testing_wip_limit_reached"),
+    ],
+)
+def test_execute_admission_enforces_each_downstream_wip_dimension(
+    tmp_path, monkeypatch, dimension: str, expected_reason: str
+) -> None:
+    db_name = f"execute-admission-{dimension}.db"
+    db_path = _db_path(tmp_path, db_name)
+    for env_name in (
+        "SUPERVISOR_REVIEW_WIP_LIMIT",
+        "SUPERVISOR_DELIVER_WIP_LIMIT",
+        "SUPERVISOR_VERIFICATION_WIP_LIMIT",
+        "SUPERVISOR_OPERATOR_TESTING_WIP_LIMIT",
+    ):
+        monkeypatch.setenv(env_name, "2")
+    monkeypatch.setenv(
+        {
+            "review": "SUPERVISOR_REVIEW_WIP_LIMIT",
+            "deliver": "SUPERVISOR_DELIVER_WIP_LIMIT",
+            "verification": "SUPERVISOR_VERIFICATION_WIP_LIMIT",
+            "operatorTesting": "SUPERVISOR_OPERATOR_TESTING_WIP_LIMIT",
+        }[dimension],
+        "1",
+    )
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        candidate = _create_work_item(client, title=f"Candidate blocked by {dimension}")
+        _update_work_item_fixture(db_path, candidate["id"], state="needs_rework", lane="corrective_loop")
+        if dimension == "verification":
+            occupant = _create_work_item(client, title="Verification capacity occupant")
+            _update_work_item_fixture(db_path, occupant["id"], state="validating", lane="validation")
+        else:
+            stage = "deliver" if dimension == "deliver" else "review"
+            packet_payload = {
+                "packetId": f"packet-{dimension}-capacity",
+                "title": f"{dimension} capacity occupant",
+                "initialStage": stage,
+                "status": "waiting",
+                "sourceRef": {
+                    "refId": f"test:{dimension}-capacity",
+                    "sourceType": "workflow",
+                    "pathOrUrl": f"tests/execute-admission-{dimension}",
+                },
+            }
+            if dimension == "operatorTesting":
+                packet_payload["readyToTest"] = {
+                    "readyId": "ready:operator-testing-capacity",
+                    "userFacingSummary": "Operator testing capacity occupant.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:operator-testing-capacity"],
+                }
+            assert client.post("/pipeline-control-plane/work-packets", json=packet_payload).status_code == 200
+
+        from supervisor.api.main import service
+
+        monkeypatch.setattr(service, "_repo_is_dirty", lambda: False)
+        response = client.post(
+            f"/work-items/{candidate['id']}/actions",
+            json={"action": "restart_implementation", "note": "Retry bounded implementation."},
+        )
+        assert response.status_code == 409
+        assert expected_reason in response.text
+        projection = client.get("/pipeline-control-plane/projection").json()["data"]
+        assert projection["executeAdmission"]["typedReason"] == expected_reason
+        assert projection["executeAdmission"]["blockingDimensions"] == [dimension]
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from queue_leases where work_item_id = ?", (candidate["id"],)).fetchone()[0] == 0
+
+
+def test_execute_admission_retry_terminal_exclusion_and_existing_lease_refresh(tmp_path, monkeypatch) -> None:
+    db_name = "execute-admission-retry-and-refresh.db"
+    db_path = _db_path(tmp_path, db_name)
+    monkeypatch.setenv("SUPERVISOR_REVIEW_WIP_LIMIT", "1")
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+
+        monkeypatch.setattr(service, "_repo_is_dirty", lambda: False)
+        candidate = _create_work_item(client, title="Retryable Execute candidate")
+        _update_work_item_fixture(db_path, candidate["id"], state="needs_rework", lane="corrective_loop")
+        packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-review-retry-capacity",
+                "title": "Review occupant that will complete",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": {"refId": "test:review-retry", "sourceType": "workflow"},
+            },
+        )
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        action_payload = {"action": "restart_implementation", "note": "Retry bounded implementation."}
+
+        blocked = client.post(f"/work-items/{candidate['id']}/actions", json=action_payload)
+        assert blocked.status_code == 409
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update authoritative_work_packets set status = 'complete' where id = ?",
+                (packet["packetId"],),
+            )
+            conn.commit()
+
+        admitted = client.post(f"/work-items/{candidate['id']}/actions", json=action_payload)
+        assert admitted.status_code == 200
+        assert admitted.json()["data"]["state"] == "implementing"
+        with sqlite3.connect(db_path) as conn:
+            lease_before = conn.execute(
+                "select id, attempt_count from queue_leases where work_item_id = ?",
+                (candidate["id"],),
+            ).fetchone()
+        assert lease_before is not None and lease_before[1] == 1
+        terminal_packet = client.get(
+            f"/pipeline-control-plane/work-packets/{packet['packetId']}"
+        ).json()["data"]
+        assert terminal_packet["status"] == "complete"
+        assert terminal_packet["currentEventId"] == packet["currentEventId"]
+
+        _update_work_item_fixture(db_path, candidate["id"], state="needs_rework", lane="corrective_loop")
+        assert client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-review-after-existing-lease",
+                "title": "Review pressure after admission",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": {"refId": "test:review-existing-lease", "sourceType": "workflow"},
+            },
+        ).status_code == 200
+        refreshed = client.post(f"/work-items/{candidate['id']}/actions", json=action_payload)
+        assert refreshed.status_code == 200
+        with sqlite3.connect(db_path) as conn:
+            leases = conn.execute(
+                "select id, attempt_count from queue_leases where work_item_id = ?",
+                (candidate["id"],),
+            ).fetchall()
+        assert leases == [(lease_before[0], 2)]
+
+        _update_work_item_fixture(db_path, candidate["id"], state="needs_rework", lane="corrective_loop")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update queue_leases set lease_expires_at = '2000-01-01 00:00:00' where id = ?",
+                (lease_before[0],),
+            )
+            conn.commit()
+        expired_refresh = client.post(f"/work-items/{candidate['id']}/actions", json=action_payload)
+        assert expired_refresh.status_code == 409
+        assert "review_wip_limit_reached" in expired_refresh.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select attempt_count from queue_leases where id = ?",
+                (lease_before[0],),
+            ).fetchone()[0] == 2

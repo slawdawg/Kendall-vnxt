@@ -100,6 +100,8 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
     "PipelineDashboardWorkPacketV0",
     "PipelineManagerSummaryV0",
     "PipelineQueueSummaryV0",
+    "PipelineExecuteAdmissionCountsV0",
+    "PipelineExecuteAdmissionV0",
   ]) {
     assert.match(contractSource, new RegExp(`export (const|type|interface) ${exportedName}\\b`));
   }
@@ -138,6 +140,9 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(contractSource, /reliabilityProblems:\s*PipelineReliabilityProblemV0\[\];/);
   assert.match(contractSource, /PipelineGatedControlV0/);
   assert.match(contractSource, /gatedControls:\s*PipelineGatedControlV0\[\];/);
+  assert.match(contractSource, /executeAdmission:\s*PipelineExecuteAdmissionV0;/);
+  assert.match(contractSource, /policyVersion:\s*"supervisor-wip\/v0";/);
+  assert.match(contractSource, /capacityAvailable:\s*boolean;/);
   assert.match(contractSource, /kill_worker/);
   assert.match(contractSource, /github_mutation/);
   assert.match(contractSource, /terminal_access/);
@@ -2605,6 +2610,21 @@ function projectionContractFixture(overrides = {}) {
         metadataOnly: true,
       },
     ],
+    executeAdmission: {
+      schemaVersion: "pipeline-execute-admission/v0",
+      policyVersion: "supervisor-wip/v0",
+      state: "ready",
+      capacityAvailable: true,
+      typedReason: "capacity_available",
+      source: "supervisor_settings",
+      limits: { review: 1, deliver: 1, verification: 1, operatorTesting: 1 },
+      observed: { review: 0, deliver: 0, verification: 0, operatorTesting: 0 },
+      blockingDimensions: [],
+      nextSafeAction: "New Execute work may be admitted.",
+      evidenceRefs: ["evidence:wip-policy-supervisor-wip-v0", "evidence:wip-capacity-available"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
     queueSummary: {
       activeCount: 0,
       dispatchableCount: 1,
@@ -2630,6 +2650,7 @@ function projectionContractFixture(overrides = {}) {
     workerSummary: { ...base.workerSummary, ...(overrides.workerSummary ?? {}) },
     reliabilityProblems: overrides.reliabilityProblems ?? base.reliabilityProblems,
     gatedControls: overrides.gatedControls ?? base.gatedControls,
+    executeAdmission: { ...base.executeAdmission, ...(overrides.executeAdmission ?? {}) },
     queueSummary: { ...base.queueSummary, ...(overrides.queueSummary ?? {}) },
     stageSummaries: overrides.stageSummaries ?? base.stageSummaries,
     sourceStates: overrides.sourceStates ?? base.sourceStates,
