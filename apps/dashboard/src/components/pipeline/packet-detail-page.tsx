@@ -11,7 +11,7 @@ export function PacketDetailPage({
   snapshot: PipelineGoldenPathSnapshot | null;
   sourceBoundaries: SourceBoundaryDeclarationV0[];
 }) {
-  const fixtureWarning = packet.fixtureId.startsWith("projection:")
+  const fixtureWarning = packet.fixtureId.startsWith("projection:") || packet.fixtureId.startsWith("supervisor:")
     ? null
     : "Fixture/non-live packet; cannot satisfy live proof.";
   return (

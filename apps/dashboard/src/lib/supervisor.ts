@@ -85,7 +85,7 @@ async function requestJson<T>(path: string): Promise<T> {
   const baseUrl = typeof window === "undefined" ? internalBaseUrl : getSupervisorBaseUrl();
   const response = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`Request failed for ${path}`);
+    throw new Error(`Request failed for ${path} (${response.status})`);
   }
   const payload = (await response.json()) as ApiEnvelope<T>;
   if (!payload || !("data" in payload)) {

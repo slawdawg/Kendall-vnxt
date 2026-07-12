@@ -2910,17 +2910,30 @@ class SupervisorService:
         result = await session.execute(select(CandidateWork).order_by(CandidateWork.sort_order.asc(), CandidateWork.created_at.desc()))
         return list(result.scalars())
 
-    async def list_work_packets(self, session: AsyncSession) -> list[WorkPacketV0View]:
+    async def list_work_packets(
+        self,
+        session: AsyncSession,
+        *,
+        include_authoritative_linked: bool = False,
+    ) -> list[WorkPacketV0View]:
+        authoritative_packets = await self.list_authoritative_work_packets(session)
         candidates = await self.list_candidate_work(session)
         items = await self.list_work_items(session)
         candidate_by_work_item_id = self._candidate_by_work_item_id(candidates, items)
         events_by_work_item_id = await self._workflow_events_by_work_item_id(session, [item.id for item in items])
         item_ids = {item.id for item in items}
-        packet_views: list[WorkPacketV0View] = []
+        authoritative_packet_ids = {packet.packetId for packet in authoritative_packets}
+        packet_views = [self._authoritative_work_packet_v0_projection(packet) for packet in authoritative_packets]
         emitted_candidate_ids: set[str] = set()
 
         for item in items:
             candidate = candidate_by_work_item_id.get(item.id)
+            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+            linked_authoritative_packet_id = item.authoritative_packet_id or metadata.get("authoritativePacketId")
+            if linked_authoritative_packet_id in authoritative_packet_ids and not include_authoritative_linked:
+                if candidate:
+                    emitted_candidate_ids.add(candidate.id)
+                continue
             if candidate:
                 emitted_candidate_ids.add(candidate.id)
             packet_views.append(
@@ -3027,7 +3040,7 @@ class SupervisorService:
         stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
         try:
             authoritative_packets = await self.list_authoritative_work_packets(session)
-            legacy_packets = await self.list_work_packets(session)
+            legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
             legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
             candidates = await self.list_candidate_work(session)
             source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
@@ -3675,6 +3688,9 @@ class SupervisorService:
         )
 
     async def get_work_packet(self, session: AsyncSession, packet_id: str) -> WorkPacketV0View | None:
+        authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
+        if authoritative_packet:
+            return self._authoritative_work_packet_v0_projection(authoritative_packet)
         if packet_id.startswith("work_item:"):
             work_item_id = packet_id.removeprefix("work_item:")
             item = await session.get(WorkItem, work_item_id)
@@ -3694,16 +3710,167 @@ class SupervisorService:
             return await self._assemble_work_packet(session, candidate=candidate, item=None)
         return None
 
+    def _authoritative_work_packet_v0_projection(
+        self,
+        packet: AuthoritativeWorkPacketLifecycleView,
+    ) -> WorkPacketV0View:
+        stage = self._authoritative_work_packet_v0_stage(packet.currentStage)
+        owner = self._authoritative_work_packet_v0_owner(packet.currentStage, packet.status)
+        current_event = next(
+            (event for event in packet.history if event.eventId == packet.currentEventId),
+            packet.history[-1] if packet.history else None,
+        )
+        source_ref = self._authoritative_work_packet_v0_source_ref(packet.sourceRef)
+        event_refs = [f"event:{event.eventId}" for event in packet.history]
+        supplied_evidence_refs = self._projection_safe_lifecycle_refs(
+            [ref for event in packet.history for ref in event.evidenceRefs]
+        )
+        evidence_ref_ids = list(dict.fromkeys([*event_refs, *supplied_evidence_refs]))
+        latest_event_ref = f"event:{packet.currentEventId}"
+        reason_codes = [
+            "supervisor.authoritative_work_packet",
+            f"supervisor.truth.{packet.truthLabel}",
+            f"supervisor.stage.{packet.currentStage}",
+        ]
+        transition_events = [
+            WorkPacketStageTransitionEventV0View(
+                eventId=event.eventId,
+                eventType=event.eventType,
+                summary=self._projection_safe_lifecycle_summary(event.payloadSummary),
+                createdAt=event.occurredAt,
+                sourceStage=(
+                    self._authoritative_work_packet_v0_stage(event.previousStage)
+                    if event.previousStage is not None
+                    else None
+                ),
+                targetStage=self._authoritative_work_packet_v0_stage(event.targetStage),
+                sourceOwner=(
+                    self._authoritative_work_packet_v0_owner(event.previousStage, "active")
+                    if event.previousStage is not None
+                    else None
+                ),
+                targetOwner=self._authoritative_work_packet_v0_owner(event.targetStage, event.status),
+                sourceStatus=None,
+                targetStatus=event.status,
+                reasonCodes=["supervisor.authoritative_lifecycle_event", f"supervisor.truth.{event.truthLabel}"],
+                evidenceRefs=list(
+                    dict.fromkeys(
+                        [
+                            f"event:{event.eventId}",
+                            *self._projection_safe_lifecycle_refs(event.evidenceRefs),
+                        ]
+                    )
+                ),
+                durable=True,
+                sourceEventId=None,
+                actorLabel=event.actor.actorLabel or event.actor.actorId or event.actor.actorType,
+            )
+            for event in packet.history
+        ]
+        return WorkPacketV0View(
+            packetId=packet.packetId,
+            title=packet.title,
+            requestedOutcome=(
+                self._projection_safe_lifecycle_summary(current_event.payloadSummary)
+                if current_event is not None
+                else "Inspect the supervisor-owned metadata-only lifecycle packet."
+            ),
+            currentStage=stage,
+            currentOwner=owner,
+            status=packet.status,
+            lifecycleState=WorkPacketLifecycleStateV0View(
+                source="workflow_event",
+                stage=stage,
+                owner=owner,
+                status=packet.status,
+                reasonCodes=reason_codes,
+                authoritativeRef=f"authoritative_work_packet:{packet.packetId}",
+                derivedFromRefs=[source_ref.refId, *event_refs],
+                transitionEventRefs=event_refs,
+                latestTransitionEventRef=latest_event_ref,
+                attemptRef=None,
+            ),
+            riskLevel="medium",
+            priority="normal",
+            candidateWork=None,
+            workItem=None,
+            taskPacket=None,
+            routingPreview=None,
+            routeSummary=None,
+            executionAttempts=[],
+            transitionEvents=transition_events,
+            sourceRefs=[source_ref],
+            evidenceRefs=[
+                EvidenceRefV0View(
+                    refId=ref,
+                    evidenceType="event",
+                    label=(
+                        "Supervisor authoritative lifecycle event"
+                        if ref.startswith("event:")
+                        else "Supervisor authoritative lifecycle evidence"
+                    ),
+                    retentionClass="metadata_only",
+                    rawPayloadRetained=False,
+                )
+                for ref in evidence_ref_ids
+            ],
+            artifactRefs=[],
+            humanGateActions=[],
+            humanGateActionRequests=[],
+            laneCards=[],
+            memoryProposals=[],
+            deliveryEvidence=None,
+            learnOutcome=None,
+            learnRefill=None,
+            alphaMemorySourceStatus=None,
+            gateStateValidation=None,
+            loopStopStates=[],
+            reviewSummaries=[],
+            recoveryActions=[],
+        )
+
+    @staticmethod
+    def _authoritative_work_packet_v0_stage(stage: str) -> str:
+        return "human_gate" if stage == "needs_approval" else stage
+
+    @staticmethod
+    def _authoritative_work_packet_v0_owner(stage: str, status: str) -> str:
+        if status in {"blocked", "failed"}:
+            return "blocked"
+        if stage == "needs_approval":
+            return "operator"
+        return "kendall"
+
+    def _authoritative_work_packet_v0_source_ref(
+        self,
+        source_ref: AuthoritativePacketSourceRefView,
+    ) -> SourceRefV0View:
+        planning_authority = self._planning_source_authority(source_ref.pathOrUrl)
+        superseded = planning_authority["status"] == "superseded"
+        return SourceRefV0View(
+            refId=source_ref.refId,
+            sourceType="bmad_artifact" if source_ref.sourceType in {"prd", "bmad_story"} else "manual",
+            label=source_ref.title or source_ref.refId,
+            pathOrUrl=None if superseded else source_ref.pathOrUrl,
+            freshness="stale" if superseded else "unknown",
+            accessState="blocked" if superseded else "allowed",
+            canonical=True,
+            summaryOnly=True,
+            blockedReason=(
+                f"Source is superseded by {planning_authority['superseded_by']}."
+                if superseded
+                else None
+            ),
+        )
+
     async def create_work_packet_learn_follow_up_candidate_work(
         self,
         session: AsyncSession,
         packet_id: str,
         payload: WorkPacketLearnFollowUpCandidateWorkRequest,
     ) -> CandidateWork | None:
-        packet = await self.get_work_packet(session, packet_id)
-        authoritative_packet = None
-        if packet is None:
-            authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
+        authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
+        packet = None if authoritative_packet is not None else await self.get_work_packet(session, packet_id)
         if packet is None and authoritative_packet is None:
             return None
 
