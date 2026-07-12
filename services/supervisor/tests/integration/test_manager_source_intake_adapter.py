@@ -138,16 +138,43 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert rejected["blockers"][-1]["code"] == "manager_supervisor_source_intake_input_invalid"  # type: ignore[index]
         assert _table_count(db_path, "authoritative_work_packets") == 0
 
+        cycle_args = [
+            "./scripts/manager-source-intake-cycle.mjs",
+            "--summary-json",
+            "--run-id",
+            "gate-4-manager-source-intake-proof",
+            "--candidate-id",
+            "gate-4-source-backed-candidate",
+            "--title",
+            "Gate 4 source-backed manager candidate",
+            "--source-ref",
+            "doc:docs/workflows/current-session-runbook.md",
+            "--acceptance-criterion",
+            "Supervisor owns the persisted WorkPacket lifecycle truth.",
+            "--verification-target",
+            "pnpm run test:manager-source-intake",
+            "--touched-surface",
+            "scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs",
+            "--risk-class",
+            "low",
+            "--authority-class",
+            "allowed_unattended",
+            "--supervisor-url",
+            f"http://127.0.0.1:{port}",
+        ]
+        dry_run = _run_node([*cycle_args, "--dry-run"])
+        assert dry_run["summary"]["sourceIntakePlan"]["fetchPerformed"] is False  # type: ignore[index]
+        assert dry_run["summary"]["continuousSelection"]["status"] == "ready"  # type: ignore[index]
+        assert _table_count(db_path, "authoritative_work_packets") == 0
+
         integrated = _run_node(
             [
-                "./scripts/manager-supervisor-source-intake.mjs",
-                "--input",
-                "-",
-                "--supervisor-url",
-                f"http://127.0.0.1:{port}",
+                *cycle_args,
+                "--apply",
             ],
-            input_text=json.dumps(manager_packet),
         )
+        assert integrated["summary"]["sourceIntakePlan"]["fetchPerformed"] is True  # type: ignore[index]
+        assert integrated["summary"]["continuousSelection"] == dry_run["summary"]["continuousSelection"]  # type: ignore[index]
         intake = integrated["summary"]["seedPacket"]["supervisorIntake"]  # type: ignore[index]
         packet_id = str(intake["packetId"])
         assert intake["status"] == "persisted"

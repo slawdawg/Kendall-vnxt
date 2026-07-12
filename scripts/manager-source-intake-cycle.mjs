@@ -8,6 +8,7 @@ import {
 import {
   ManagerSupervisorSourceIntakeError,
   intakeManagerSourcePacket,
+  planManagerSourcePacketIntake,
 } from "./lib/manager-control-plane/manager-supervisor-source-intake.mjs";
 
 export class ManagerSourceIntakeCycleError extends Error {
@@ -23,9 +24,19 @@ export class ManagerSourceIntakeCycleError extends Error {
 export function parseManagerSourceIntakeCycleArgs(argv = []) {
   const seedArgv = [];
   let supervisorUrl = null;
+  let mode = "apply";
+  let modeSpecified = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--supervisor-url") {
+    if (arg === "--apply") {
+      if (modeSpecified) throw new Error("source intake mode may only be specified once");
+      mode = "apply";
+      modeSpecified = true;
+    } else if (arg === "--dry-run" || arg === "--plan") {
+      if (modeSpecified) throw new Error("source intake mode may only be specified once");
+      mode = "dry_run";
+      modeSpecified = true;
+    } else if (arg === "--supervisor-url") {
       if (supervisorUrl !== null) throw new Error("--supervisor-url specified more than once");
       const value = argv[++index];
       if (!value || value.startsWith("--")) throw new Error("--supervisor-url requires a value");
@@ -41,16 +52,30 @@ export function parseManagerSourceIntakeCycleArgs(argv = []) {
   if (!supervisorUrl) {
     throw new Error("Usage: manager-source-intake-cycle <source-backed seed options> --supervisor-url <loopback-url>");
   }
-  return { seedOptions: parseCommonArgs(seedArgv), supervisorUrl };
+  return { seedOptions: parseCommonArgs(seedArgv), supervisorUrl, mode };
 }
 
 export async function runManagerSourceIntakeCycle(argv = process.argv.slice(2), context = {}) {
-  const { seedOptions, supervisorUrl } = parseManagerSourceIntakeCycleArgs(argv);
+  const { seedOptions, supervisorUrl, mode } = parseManagerSourceIntakeCycleArgs(argv);
   const plan = buildSourceBackedPacketSeedPlan(seedOptions, context);
   if (plan.summary?.packetState !== "eligible" || plan.summary?.seedPacket?.eligibilityDecision !== "eligible") {
     throw new ManagerSourceIntakeCycleError(plan);
   }
-  return intakeManagerSourcePacket(plan, supervisorUrl, context);
+  let intakePlan;
+  try {
+    intakePlan = planManagerSourcePacketIntake(plan, supervisorUrl);
+  } catch (error) {
+    throw new ManagerSupervisorSourceIntakeError(
+      /supervisorUrl/.test(String(error?.message || ""))
+        ? "manager_supervisor_source_intake_non_loopback_url"
+        : "manager_supervisor_source_intake_input_invalid",
+      error.message,
+      plan,
+      { cause: error },
+    );
+  }
+  if (mode === "dry_run") return withIntakeSelection(plan, intakePlan, false);
+  return withIntakeSelection(await intakeManagerSourcePacket(plan, supervisorUrl, context), intakePlan, true);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -83,4 +108,19 @@ function failClosedPlanningPacket(packet, code, message) {
     nextAction: "Do not contact the supervisor; repair or review the source-backed seed inputs before retrying this explicit cycle.",
   });
   return failed;
+}
+
+function withIntakeSelection(packet, intakePlan, applied) {
+  const result = structuredClone(packet);
+  result.summary.continuousSelection = structuredClone(intakePlan.continuousSelection);
+  result.summary.sourceIntakePlan = {
+    mode: applied ? "apply" : "dry_run",
+    endpoint: intakePlan.endpoint,
+    packetId: intakePlan.request.packetId,
+    sourceRef: intakePlan.request.sourceRef.refId,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    fetchPerformed: applied,
+  };
+  return result;
 }

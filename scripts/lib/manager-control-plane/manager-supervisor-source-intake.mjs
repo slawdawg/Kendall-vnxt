@@ -97,6 +97,30 @@ export function buildManagerSourceIntakeRequest(packet) {
   };
 }
 
+export function planManagerSourcePacketIntake(packet, supervisorUrl) {
+  validateBoundedMetadataOnlyValue(packet, "managerPacket");
+  const endpoint = resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
+  const request = buildManagerSourceIntakeRequest(packet);
+  const targetComponents = [
+    `candidate:${requiredSafeMetadata(packet.summary.seedPacket.candidateWorkPacketId, "seedPacket.candidateWorkPacketId", 120)}`,
+    `packet:${request.packetId}`,
+    `source:${request.sourceRef.refId}`,
+    `supervisor:${endpoint}`,
+  ].sort();
+  return {
+    endpoint,
+    request,
+    continuousSelection: {
+      code: "continuous-source-intake",
+      mutationClass: "source_backed_supervisor_intake",
+      target: targetComponents.join("|"),
+      targetComponents,
+      allowed: true,
+      status: "ready",
+    },
+  };
+}
+
 export async function intakeManagerSourcePacket(packet, supervisorUrl, context = {}) {
   let sourcePacket;
   try {
@@ -108,14 +132,12 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   let endpoint;
   let request;
   try {
-    endpoint = resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
+    ({ endpoint, request } = planManagerSourcePacketIntake(sourcePacket, supervisorUrl));
   } catch (error) {
-    throw intakeError("manager_supervisor_source_intake_non_loopback_url", error, sourcePacket);
-  }
-  try {
-    request = buildManagerSourceIntakeRequest(sourcePacket);
-  } catch (error) {
-    throw intakeError("manager_supervisor_source_intake_input_invalid", error, sourcePacket);
+    const code = /supervisorUrl/.test(String(error?.message || ""))
+      ? "manager_supervisor_source_intake_non_loopback_url"
+      : "manager_supervisor_source_intake_input_invalid";
+    throw intakeError(code, error, sourcePacket);
   }
 
   const fetchImpl = context.fetchImpl ?? globalThis.fetch;

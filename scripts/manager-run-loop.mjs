@@ -90,7 +90,7 @@ function knownCommandFingerprint(command = "") {
 
 function normalizeCommandArguments(args = []) {
   const ignoredFlags = new Set(["--apply", "--dry-run", "--summary-json"]);
-  const singletonFlags = new Set(["--state-root", "--owner", "--run-id", "--limit", "--worker-id", "--session-name", "--assignment-id", "--task-id"]);
+  const singletonFlags = new Set(["--state-root", "--owner", "--run-id", "--limit", "--worker-id", "--session-name", "--assignment-id", "--task-id", "--candidate-id", "--supervisor-url"]);
   const seenSingletonFlags = new Set();
   const normalized = [];
   for (let index = 0; index < args.length; index += 1) {

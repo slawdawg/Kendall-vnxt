@@ -7,12 +7,13 @@ in-memory adapter, fixture, and bounded-summary behavior only. It does not
 authorize live worker orchestration, delivery, durable queue adoption, cleanup,
 or supervisor integration.
 
-The separately invoked `manager-source-intake-cycle.mjs` command and its
-`manager-supervisor-source-intake.mjs` adapter are not `backend_proof`
-operations. Together they form one bounded loopback-only Gate 4 manager cycle:
-the command performs read-only planning and calls the adapter only for one
-eligible metadata-only source seed. They do not change the authority of refill,
-cycle, run-loop, dispatcher, or worker operations. See
+The `manager-source-intake-cycle.mjs` command and its
+`manager-supervisor-source-intake.mjs` adapter are not generic `backend_proof`
+operations. Refill and cycle may project that command only for one eligible
+metadata-only source seed plus an explicit loopback URL. Continuous dry-run
+validates without fetch; continuous apply requires exact target pairing and the
+distinct `sourceIntake` capability/continuation gates. This does not change the
+authority of dispatcher or worker operations. See
 `docs/architecture/manager-supervisor-source-intake-boundary.md`.
 
 Real in this slice:
