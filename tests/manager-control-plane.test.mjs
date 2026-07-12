@@ -31797,12 +31797,14 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
   assert.equal(JSON.stringify(calls[0].body).includes("mustNotCrossBoundary"), false);
   assert.equal(calls[0].body.metadataOnly, true);
   assert.equal(calls[0].body.rawPayloadRetained, false);
+  assert.match(calls[0].body.eventId, /^manager-terminal-event:[0-9a-f]{40}$/);
+  assert.doesNotMatch(calls[0].body.eventId, /^manager-terminal-event-[0-9a-f]{40}$/);
   assert.equal(calls[0].options.redirect, "error");
   assert.equal(packet.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract", "input must remain immutable");
   assert.equal(result.summary.terminalDisposition.canonicalEventIntegration, "supervisor_canonical_event");
   assert.deepEqual(result.summary.terminalDisposition.supervisorEvent, result.summary.refillJob.terminalDisposition.supervisorEvent);
   assert.equal(result.summary.terminalDisposition.supervisorEvent.status, "persisted");
-  assert.match(result.summary.terminalDisposition.supervisorEvent.evidenceRef, /^supervisor-event:manager-terminal-event-[0-9a-f]{40}$/);
+  assert.match(result.summary.terminalDisposition.supervisorEvent.evidenceRef, /^supervisor-event:manager-terminal-event:[0-9a-f]{40}$/);
   assert.equal(result.summary.supervisorPersistence, "persisted; supervisor canonical terminal event recorded");
   assert.deepEqual(result.blockers.map((blocker) => blocker.code), ["unrelated-stop-line"]);
   assert.equal(result.warnings.length, 1);
