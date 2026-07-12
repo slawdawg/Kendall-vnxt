@@ -3864,10 +3864,8 @@ class SupervisorService:
         packet_id: str,
         payload: WorkPacketLearnFollowUpCandidateWorkRequest,
     ) -> CandidateWork | None:
-        packet = await self.get_work_packet(session, packet_id)
-        authoritative_packet = None
-        if packet is None:
-            authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
+        authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
+        packet = None if authoritative_packet is not None else await self.get_work_packet(session, packet_id)
         if packet is None and authoritative_packet is None:
             return None
 
