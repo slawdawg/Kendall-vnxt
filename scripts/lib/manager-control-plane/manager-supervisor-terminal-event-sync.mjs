@@ -5,6 +5,16 @@ const TERMINAL_EVENT_PATH = "/manager-control-plane/terminal-events";
 const INTEGRATION_MISSING = "missing_supervisor_contract";
 const INTEGRATION_PERSISTED = "supervisor_canonical_event";
 const DEFAULT_TIMEOUT_MS = 10_000;
+const REQUEST_KEYS = [
+  "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
+  "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
+  "idempotencyKey", "metadataOnly", "rawPayloadRetained",
+];
+const PERSISTED_EVENT_KEYS = [...REQUEST_KEYS, "createdAt"];
+const RECONCILIATION_COUNT_KEYS = [
+  "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
+  "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
+];
 
 export class ManagerSupervisorTerminalEventSyncError extends Error {
   constructor(code, message, packet, options = {}) {
@@ -146,7 +156,7 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
     );
   }
   const event = envelope?.data;
-  if (!event || typeof event !== "object" || Array.isArray(event) || !validPersistedAt(event.createdAt)) {
+  if (!isExactPersistedEvent(event)) {
     throw new ManagerSupervisorTerminalEventSyncError(
       "manager_supervisor_sync_response_malformed",
       "Supervisor terminal-event sync success data is missing bounded persisted event metadata.",
@@ -162,11 +172,79 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
     );
   }
 
+  const readbackEndpoint = `${endpoint}/${encodeURIComponent(request.eventId)}`;
+  let readbackResponse;
+  try {
+    readbackResponse = await fetchImpl(readbackEndpoint, {
+      method: "GET",
+      headers: { "accept": "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(context.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_network_error",
+      "Supervisor terminal-event sync could not read the exact event from the current loopback store.",
+      sourcePacket,
+      { cause: error },
+    );
+  }
+  if (!readbackResponse || typeof readbackResponse.ok !== "boolean" || !Number.isInteger(readbackResponse.status)) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_malformed",
+      "Supervisor terminal-event current-store readback returned a malformed HTTP response.",
+      sourcePacket,
+    );
+  }
+  if (!readbackResponse.ok || readbackResponse.status < 200 || readbackResponse.status >= 300) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_http_error",
+      `Supervisor terminal-event current-store readback failed with HTTP ${readbackResponse.status}.`,
+      sourcePacket,
+    );
+  }
+  let readbackEnvelope;
+  try {
+    readbackEnvelope = await readbackResponse.json();
+  } catch (error) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_malformed",
+      "Supervisor terminal-event current-store readback returned non-JSON success data.",
+      sourcePacket,
+      { cause: error },
+    );
+  }
+  const readbackEvent = readbackEnvelope?.data;
+  if (!isExactPersistedEvent(readbackEvent)) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_malformed",
+      "Supervisor terminal-event current-store readback is missing bounded metadata-only event data.",
+      sourcePacket,
+    );
+  }
+  const readbackIdentity = Object.fromEntries(REQUEST_KEYS.map((key) => [key, readbackEvent[key]]));
+  if (!isDeepStrictEqual(readbackIdentity, request)) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_identity_conflict",
+      "Supervisor terminal-event current-store readback conflicts with the requested canonical identity and evidence.",
+      sourcePacket,
+    );
+  }
+  if (readbackEvent.createdAt !== event.createdAt) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_stale",
+      "Supervisor terminal-event current-store readback does not match the persisted POST result.",
+      sourcePacket,
+    );
+  }
+
   return transformPersistedPacket(sourcePacket, {
     eventId: request.eventId,
     evidenceRef: `supervisor-event:${request.eventId}`,
     status: "persisted",
-    persistedAt: new Date(event.createdAt).toISOString(),
+    persistedAt: readbackEvent.createdAt,
+    metadataOnly: true,
+    rawPayloadRetained: false,
   });
 }
 
@@ -252,14 +330,28 @@ function validateRequestShape(request) {
   for (const [field, limit] of [["eventId", 120], ["runId", 120], ["sourceIdentity", 240], ["sourceRevision", 160], ["idempotencyKey", 180], ["resumeRequirement", 360], ["nextManagerAction", 360]]) {
     requiredString(request[field], `terminalDisposition.${field}`, limit);
   }
-  if (!request.reconciliationCounts || typeof request.reconciliationCounts !== "object" || Array.isArray(request.reconciliationCounts)) throw new TypeError("terminalDisposition.reconciliationCounts must be an object.");
+  if (!/^manager-terminal-event:[0-9a-f]{40}$/.test(request.eventId)) throw new TypeError("terminalDisposition.eventId must be canonical manager terminal-event identity.");
+  if (!hasExactKeys(request, REQUEST_KEYS)) throw new TypeError("terminalDisposition request metadata keys are invalid.");
+  if (!request.reconciliationCounts || typeof request.reconciliationCounts !== "object" || Array.isArray(request.reconciliationCounts) || !hasExactKeys(request.reconciliationCounts, RECONCILIATION_COUNT_KEYS)) throw new TypeError("terminalDisposition.reconciliationCounts must contain only the bounded canonical keys.");
+  if (RECONCILIATION_COUNT_KEYS.some((key) => !Number.isInteger(request.reconciliationCounts[key]) || request.reconciliationCounts[key] < 0)) throw new TypeError("terminalDisposition.reconciliationCounts values must be non-negative integers.");
   if (!Array.isArray(request.unresolvedApprovalGatedWork) || request.unresolvedApprovalGatedWork.length > 24) throw new TypeError("terminalDisposition.unresolvedApprovalGatedWork is invalid.");
   if (!Array.isArray(request.evidenceRefs) || request.evidenceRefs.length === 0 || request.evidenceRefs.length > 12) throw new TypeError("terminalDisposition.evidenceRefs is invalid.");
+  if (request.metadataOnly !== true) throw new TypeError("terminalDisposition must be metadata-only.");
   if (request.rawPayloadRetained !== false) throw new TypeError("terminalDisposition must prohibit raw payload retention.");
 }
 
 function validPersistedAt(value) {
-  return typeof value === "string" && value.length <= 64 && Number.isFinite(Date.parse(value));
+  return typeof value === "string" && value.length <= 64 && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+}
+
+function isExactPersistedEvent(event) {
+  return Boolean(event && typeof event === "object" && !Array.isArray(event) &&
+    hasExactKeys(event, PERSISTED_EVENT_KEYS) && validPersistedAt(event.createdAt));
+}
+
+function hasExactKeys(value, expectedKeys) {
+  const keys = Object.keys(value);
+  return keys.length === expectedKeys.length && keys.every((key) => expectedKeys.includes(key));
 }
 
 function requiredString(value, field, maxLength = Number.MAX_SAFE_INTEGER) {

@@ -2368,10 +2368,12 @@ test("summary projection preserves authoritative exhaustion and its resume requi
     ...terminalDisposition,
     canonicalEventIntegration: "supervisor_canonical_event",
     supervisorEvent: {
-      eventId: "manager-terminal-event-1234567890abcdef1234567890abcdef12345678",
-      evidenceRef: "supervisor-event:manager-terminal-event-1234567890abcdef1234567890abcdef12345678",
+      eventId: "manager-terminal-event:1234567890abcdef1234567890abcdef12345678",
+      evidenceRef: "supervisor-event:manager-terminal-event:1234567890abcdef1234567890abcdef12345678",
       status: "persisted",
       persistedAt: "2026-07-12T01:02:03.000Z",
+      metadataOnly: true,
+      rawPayloadRetained: false,
     },
   };
   const integratedSummary = buildManagerExecutionLaneSummary({
@@ -2397,6 +2399,38 @@ test("summary projection preserves authoritative exhaustion and its resume requi
   assert.ok(integratedSummary.rawStateLabels.includes("terminal:supervisor_canonical_event"));
   assert.ok(integratedSummary.warnings.includes("approval_gated_work_remains_visible"));
   assert.equal(integratedSummary.operatorAttentionRequired, true);
+
+  const invalidCanonicalMetadata = [
+    ["noncanonical eventId", { eventId: `manager-terminal-event-${"a".repeat(40)}` }],
+    ["uppercase eventId", { eventId: `manager-terminal-event:${"A".repeat(40)}` }],
+    ["mismatched evidenceRef", { evidenceRef: "supervisor-event:copied-proof" }],
+    ["wrong status", { status: "copied" }],
+    ["noncanonical persistedAt", { persistedAt: "2026-07-12T01:02:03Z" }],
+    ["missing metadataOnly", { metadataOnly: undefined }],
+    ["retained raw payload", { rawPayloadRetained: true }],
+    ["unbounded extra key", { rawPayload: { forbidden: true } }],
+  ];
+  for (const [label, eventOverride] of invalidCanonicalMetadata) {
+    const supervisorEvent = { ...integratedDisposition.supervisorEvent, ...eventOverride };
+    if (eventOverride.metadataOnly === undefined) delete supervisorEvent.metadataOnly;
+    const invalidSummary = buildManagerExecutionLaneSummary({
+      runId: "run-terminal",
+      clock: { nowEpochMs: () => Date.parse("2026-07-12T01:03:00.000Z"), nowIso: () => "2026-07-12T01:03:00.000Z" },
+      refillJobs: [{
+        refillJobId: `refill-terminal-invalid-${String(label).replaceAll(" ", "-")}`,
+        sourceRefs: [integratedDisposition.sourceIdentity],
+        sourceIdentity: integratedDisposition.sourceIdentity,
+        sourceRevision: integratedDisposition.sourceRevision,
+        state: "completed",
+        result: "authoritative_backlog_exhausted",
+        terminalDisposition: { ...integratedDisposition, supervisorEvent },
+      }],
+      events: [],
+    });
+    assert.equal(invalidSummary.terminalDisposition, null, label);
+    assert.ok(invalidSummary.blockers.includes("terminal_refill_history_conflict"), label);
+    assert.equal(invalidSummary.rawStateLabels.includes("terminal:supervisor_canonical_event"), false, label);
+  }
 
   const makeTerminalJob = (disposition, refillJobId) => ({
     refillJobId,

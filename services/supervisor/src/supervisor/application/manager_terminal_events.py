@@ -1,3 +1,5 @@
+from datetime import UTC
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,8 +32,18 @@ def _record_payload(record: ManagerTerminalEvent) -> dict[str, object]:
 
 
 def _to_view(record: ManagerTerminalEvent) -> ManagerTerminalEventView:
+    created_at = record.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    else:
+        created_at = created_at.astimezone(UTC)
     return ManagerTerminalEventView.model_validate(
-        {**_record_payload(record), "createdAt": record.created_at}
+        {
+            **_record_payload(record),
+            "createdAt": created_at.isoformat(timespec="milliseconds").replace(
+                "+00:00", "Z"
+            ),
+        }
     )
 
 
@@ -100,3 +112,11 @@ async def persist_manager_terminal_event(
         raise ValueError("Manager terminal event conflicts with persisted metadata.") from exc
     await session.refresh(record)
     return _to_view(record)
+
+
+async def get_manager_terminal_event(
+    session: AsyncSession,
+    event_id: str,
+) -> ManagerTerminalEventView | None:
+    record = await session.get(ManagerTerminalEvent, event_id)
+    return _to_view(record) if record is not None else None

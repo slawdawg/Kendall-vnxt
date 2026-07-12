@@ -384,3 +384,30 @@ test("missing canonical proof and unrelated dispatcher blockers remain fail clos
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test("manager core rejects malformed canonical supervisor terminal metadata", () => {
+  const stateRoot = seedStateRoot();
+  try {
+    const validEvent = terminalBundle().supervisorEvent;
+    const invalidEvents = [
+      { ...validEvent, eventId: `manager-terminal-event-${"a".repeat(40)}` },
+      { ...validEvent, evidenceRef: "supervisor-event:copied-proof" },
+      { ...validEvent, status: "copied" },
+      { ...validEvent, persistedAt: "2026-07-12T14:28:15Z" },
+      { ...validEvent, metadataOnly: false },
+      { ...validEvent, rawPayloadRetained: true },
+      { ...validEvent, rawPayload: { forbidden: true } },
+    ];
+    for (const supervisorEvent of invalidEvents) {
+      const context = injectedContext({
+        authoritativeSourceBundle: { ...terminalBundle(), supervisorEvent },
+      });
+      const preflight = buildPreflight({ runId: RUN_ID, stateRoot, desiredWorkers: 6 }, context);
+      assert.equal(preflight.status, "blocked");
+      assert.equal(preflight.summary.dispatcher.terminalState, null);
+      assert.ok(preflight.blockers.some((blocker) => blocker.code === "missing_supervisor_contract"));
+    }
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});

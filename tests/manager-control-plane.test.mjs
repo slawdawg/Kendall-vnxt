@@ -31779,16 +31779,20 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
   packet.warnings.push({ code: "authoritative-backlog-approval-gated", message: "approval remains required" });
   packet.blockers.push({ code: "unrelated-stop-line", message: "preserve me", nextAction: "wait" });
   const calls = [];
+  let persisted;
   const result = await syncManagerSupervisorTerminalEvent(packet, "http://127.0.0.1:8000", {
     fetchImpl: async (url, options) => {
-      const body = JSON.parse(options.body);
+      const body = options.method === "POST" ? JSON.parse(options.body) : null;
       calls.push({ url, options, body });
-      return managerSupervisorResponse(body);
+      if (body) persisted = { ...structuredClone(body), createdAt: "2026-07-12T01:02:03.000Z" };
+      return managerSupervisorResponseData(persisted);
     },
   });
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "http://127.0.0.1:8000/manager-control-plane/terminal-events");
+  assert.equal(calls[1].url, `http://127.0.0.1:8000/manager-control-plane/terminal-events/${encodeURIComponent(calls[0].body.eventId)}`);
+  assert.equal(calls[1].options.method, "GET");
   assert.deepEqual(Object.keys(calls[0].body).sort(), [
     "eventId", "eventType", "evidenceRefs", "idempotencyKey", "metadataOnly", "nextManagerAction",
     "rawPayloadRetained", "reconciliationCounts", "resumeRequirement", "runId", "sourceIdentity",
@@ -31805,6 +31809,11 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
   assert.deepEqual(result.summary.terminalDisposition.supervisorEvent, result.summary.refillJob.terminalDisposition.supervisorEvent);
   assert.equal(result.summary.terminalDisposition.supervisorEvent.status, "persisted");
   assert.match(result.summary.terminalDisposition.supervisorEvent.evidenceRef, /^supervisor-event:manager-terminal-event:[0-9a-f]{40}$/);
+  assert.equal(result.summary.terminalDisposition.supervisorEvent.metadataOnly, true);
+  assert.equal(result.summary.terminalDisposition.supervisorEvent.rawPayloadRetained, false);
+  assert.deepEqual(Object.keys(result.summary.terminalDisposition.supervisorEvent).sort(), [
+    "eventId", "evidenceRef", "metadataOnly", "persistedAt", "rawPayloadRetained", "status",
+  ].sort());
   assert.equal(result.summary.supervisorPersistence, "persisted; supervisor canonical terminal event recorded");
   assert.deepEqual(result.blockers.map((blocker) => blocker.code), ["unrelated-stop-line"]);
   assert.equal(result.warnings.length, 1);
@@ -31814,10 +31823,14 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
 test("manager supervisor terminal sync derives deterministic replay identity", async () => {
   const packet = managerSupervisorSyncPacket();
   const requests = [];
+  let persisted;
   const fetchImpl = async (_url, options) => {
-    const request = JSON.parse(options.body);
-    requests.push(request);
-    return managerSupervisorResponse(request, "2026-07-12T02:00:00.000Z");
+    if (options.method === "POST") {
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      persisted ??= { ...structuredClone(request), createdAt: "2026-07-12T02:00:00.000Z" };
+    }
+    return managerSupervisorResponseData(persisted);
   };
   const first = await syncManagerSupervisorTerminalEvent(packet, "http://localhost:8000/", { fetchImpl });
   const replay = await syncManagerSupervisorTerminalEvent(packet, "http://localhost:8000/", { fetchImpl });
@@ -31866,6 +31879,31 @@ test("manager supervisor terminal sync fails closed for unavailable malformed an
         const request = JSON.parse(options.body);
         return managerSupervisorResponse({ ...request, sourceRevision: "conflicting-revision" });
       },
+    },
+    {
+      name: "missing exact readback route",
+      code: "manager_supervisor_sync_readback_http_error",
+      fetchImpl: managerSupervisorReadbackFetch({ readbackStatus: 404 }),
+    },
+    {
+      name: "malformed exact readback",
+      code: "manager_supervisor_sync_readback_malformed",
+      fetchImpl: managerSupervisorReadbackFetch({ readbackData: { createdAt: "invalid" } }),
+    },
+    {
+      name: "mismatched exact readback identity",
+      code: "manager_supervisor_sync_readback_identity_conflict",
+      fetchImpl: managerSupervisorReadbackFetch({ mutateReadback: (event) => ({ ...event, sourceIdentity: "source:copied-proof" }) }),
+    },
+    {
+      name: "stale copied readback",
+      code: "manager_supervisor_sync_readback_stale",
+      fetchImpl: managerSupervisorReadbackFetch({ mutateReadback: (event) => ({ ...event, createdAt: "2026-07-11T01:02:03.000Z" }) }),
+    },
+    {
+      name: "raw payload in exact readback",
+      code: "manager_supervisor_sync_readback_malformed",
+      fetchImpl: managerSupervisorReadbackFetch({ mutateReadback: (event) => ({ ...event, rawPayload: { forbidden: true } }) }),
     },
   ];
   for (const scenario of cases) {
@@ -31958,9 +31996,26 @@ function managerSupervisorSyncPacket() {
 }
 
 function managerSupervisorResponse(request, createdAt = "2026-07-12T01:02:03.000Z") {
+  return managerSupervisorResponseData({ ...structuredClone(request), createdAt });
+}
+
+function managerSupervisorResponseData(data, status = 200) {
   return {
-    ok: true,
-    status: 200,
-    json: async () => ({ data: { ...structuredClone(request), createdAt } }),
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => ({ data: structuredClone(data) }),
+  };
+}
+
+function managerSupervisorReadbackFetch({ readbackStatus = 200, readbackData, mutateReadback } = {}) {
+  let persisted;
+  return async (_url, options) => {
+    if (options.method === "POST") {
+      const request = JSON.parse(options.body);
+      persisted = { ...structuredClone(request), createdAt: "2026-07-12T01:02:03.000Z" };
+      return managerSupervisorResponseData(persisted);
+    }
+    const data = readbackData ?? (mutateReadback ? mutateReadback(structuredClone(persisted)) : persisted);
+    return managerSupervisorResponseData(data, readbackStatus);
   };
 }

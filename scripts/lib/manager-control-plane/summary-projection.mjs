@@ -425,11 +425,15 @@ function isValidatedTerminalDisposition(disposition) {
 }
 
 function isValidSupervisorEvent(event) {
-  return Boolean(event && typeof event === "object" &&
-    typeof event.eventId === "string" && event.eventId.trim() && event.eventId.length <= 120 &&
-    typeof event.evidenceRef === "string" && event.evidenceRef.trim() && event.evidenceRef.length <= 220 &&
-    event.status === "persisted" &&
-    typeof event.persistedAt === "string" && event.persistedAt.length <= 64 && Number.isFinite(Date.parse(event.persistedAt)));
+  if (!event || typeof event !== "object" || Array.isArray(event)) return false;
+  const allowedKeys = ["eventId", "evidenceRef", "metadataOnly", "persistedAt", "rawPayloadRetained", "status"];
+  const keys = Object.keys(event);
+  if (keys.length !== allowedKeys.length || keys.some((key) => !allowedKeys.includes(key))) return false;
+  if (typeof event.eventId !== "string" || !/^manager-terminal-event:[0-9a-f]{40}$/.test(event.eventId)) return false;
+  if (event.evidenceRef !== `supervisor-event:${event.eventId}` || event.status !== "persisted") return false;
+  if (typeof event.persistedAt !== "string" || event.persistedAt.length > 64 || !Number.isFinite(Date.parse(event.persistedAt))) return false;
+  if (new Date(event.persistedAt).toISOString() !== event.persistedAt) return false;
+  return event.metadataOnly === true && event.rawPayloadRetained === false;
 }
 
 function isValidUnresolvedApprovalGatedWorkRecord(record) {

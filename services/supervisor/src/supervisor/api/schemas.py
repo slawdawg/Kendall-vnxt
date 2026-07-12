@@ -4398,7 +4398,14 @@ class ManagerTerminalEventRequest(BaseModel):
     @field_validator("eventId", "runId", "sourceIdentity", "sourceRevision", "idempotencyKey")
     @classmethod
     def _identity_metadata_must_be_safe(cls, value: str, info) -> str:
-        return _validate_authoritative_metadata_text(value, path=info.field_name)
+        safe = _validate_authoritative_metadata_text(value, path=info.field_name)
+        if info.field_name == "eventId" and not re.fullmatch(
+            r"manager-terminal-event:[0-9a-f]{40}", safe
+        ):
+            raise ValueError(
+                "eventId must be manager-terminal-event:<40 lowercase hex>."
+            )
+        return safe
 
     @field_validator("resumeRequirement", "nextManagerAction")
     @classmethod
@@ -4464,4 +4471,7 @@ class ManagerTerminalEventRequest(BaseModel):
 
 
 class ManagerTerminalEventView(ManagerTerminalEventRequest):
-    createdAt: datetime
+    createdAt: str = Field(
+        max_length=64,
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
+    )
