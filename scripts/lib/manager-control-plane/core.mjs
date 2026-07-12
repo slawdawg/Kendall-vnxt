@@ -11691,6 +11691,7 @@ export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
   }
   if (exhaustionEvaluation.disposition) {
     const exhaustedDisposition = exhaustionEvaluation.disposition;
+    const supervisorProjection = authoritativeTerminalSupervisorProjection(exhaustedDisposition);
     const nextAction = {
       code: "authoritative-backlog-exhausted",
       summary: "Authoritative source bundle is fully reconciled with no required executable work remaining.",
@@ -11730,13 +11731,9 @@ export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
         needsReviewCandidates: [],
         blockedCandidates: [],
         mutationMode: "none; metadata-only terminal disposition",
-        supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
+        supervisorPersistence: supervisorProjection.supervisorPersistence,
       },
-      blockers: [{
-        code: "missing_supervisor_contract",
-        message: "Manager terminal disposition is not a persisted supervisor-owned canonical event in the current contract.",
-        nextAction: "Keep this manager packet metadata-only and implement/test the supervisor canonical event contract before claiming integrated persistence.",
-      }],
+      blockers: supervisorProjection.blockers,
       warnings: exhaustedDisposition.unresolvedApprovalGatedWork.length > 0
         ? [{ code: "authoritative-backlog-approval-gated", message: `${exhaustedDisposition.unresolvedApprovalGatedWork.length} approval-gated item(s) remain visible and were not converted into safe backlog.` }]
         : [],
@@ -14161,6 +14158,7 @@ function evaluateAuthoritativeBacklogExhaustion(input = {}) {
     .map((item) => ({ ...item, sourceRefs: canonicalStringRefs(item.sourceRefs), evidenceRefs: canonicalStringRefs(item.evidenceRefs) }))
     .sort((left, right) => left.workId.localeCompare(right.workId));
   const idempotencyKey = `authoritative-backlog-exhausted:${hashLedgerValue(JSON.stringify({ runId, sourceIdentity, sourceRevision, counts: effectiveCounts, unresolvedApprovalGatedWork: canonicalUnresolvedWork, evidenceRefs })).slice(0, 32)}`;
+  const supervisorEvent = normalizeSupervisorCanonicalEventMetadata(bundle.canonicalEventIntegration, bundle.supervisorEvent);
   return {
     disposition: {
       disposition: "authoritative_backlog_exhausted",
@@ -14172,7 +14170,8 @@ function evaluateAuthoritativeBacklogExhaustion(input = {}) {
       evidenceRefs,
       resumeRequirement,
       nextManagerAction,
-      canonicalEventIntegration: "missing_supervisor_contract",
+      canonicalEventIntegration: supervisorEvent ? "supervisor_canonical_event" : "missing_supervisor_contract",
+      ...(supervisorEvent ? { supervisorEvent } : {}),
       idempotencyKey,
       rawPayloadRetained: false,
     },
@@ -14386,6 +14385,7 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
   const timestamp = sanitizeLedgerField(options.now || context.now || new Date().toISOString(), new Date().toISOString(), 80);
   const sourceRefs = uniqueStrings([sourceSlice?.ref, disposition.sourceIdentity, ...sourceRefList(context.sourceRefs)]).slice(0, 12);
   const unresolvedCount = disposition.unresolvedApprovalGatedWork.length;
+  const supervisorProjection = authoritativeTerminalSupervisorProjection(disposition);
   const nextAction = {
     code: "authoritative-backlog-exhausted",
     summary: "Authoritative source bundle is reconciled and no required executable work remains.",
@@ -14454,17 +14454,13 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     noNewEpic: true,
     noPostSliceWork: true,
     mutationMode: "none; metadata-only terminal disposition",
-    supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
+    supervisorPersistence: supervisorProjection.supervisorPersistence,
     stopLines: REFILL_STOP_LINES,
   };
   return packet({
     status: "authoritative_backlog_exhausted",
     summary,
-    blockers: [{
-      code: "missing_supervisor_contract",
-      message: "Manager terminal disposition is not a persisted supervisor-owned canonical event in the current contract.",
-      nextAction: "Keep this manager packet metadata-only and implement/test the supervisor canonical event contract before claiming integrated persistence.",
-    }],
+    blockers: supervisorProjection.blockers,
     warnings: unresolvedCount > 0
       ? [{ code: "authoritative-backlog-approval-gated", message: `${unresolvedCount} approval-gated item(s) remain visible and were not converted into safe backlog.` }]
       : [],
@@ -14742,11 +14738,44 @@ function isValidAuthoritativeBacklogExhaustedDisposition(disposition) {
 }
 
 function isValidSupervisorCanonicalEventMetadata(event) {
-  return Boolean(isPlainObject(event) &&
-    typeof event.eventId === "string" && event.eventId.length <= 120 && sanitizeLedgerField(event.eventId, "", 120) &&
-    typeof event.evidenceRef === "string" && event.evidenceRef.length <= 220 && sanitizeLedgerField(event.evidenceRef, "", 220) &&
-    event.status === "persisted" &&
-    typeof event.persistedAt === "string" && event.persistedAt.length <= 64 && Number.isFinite(Date.parse(event.persistedAt)));
+  if (!isPlainObject(event)) return false;
+  const allowedKeys = ["eventId", "evidenceRef", "metadataOnly", "persistedAt", "rawPayloadRetained", "status"];
+  if (Object.keys(event).length !== allowedKeys.length || Object.keys(event).some((key) => !allowedKeys.includes(key))) return false;
+  if (typeof event.eventId !== "string" || !/^manager-terminal-event:[0-9a-f]{40}$/.test(event.eventId)) return false;
+  if (event.evidenceRef !== `supervisor-event:${event.eventId}` || event.status !== "persisted") return false;
+  if (typeof event.persistedAt !== "string" || event.persistedAt.length > 64 || !Number.isFinite(Date.parse(event.persistedAt))) return false;
+  if (new Date(event.persistedAt).toISOString() !== event.persistedAt) return false;
+  return event.metadataOnly === true && event.rawPayloadRetained === false;
+}
+
+function normalizeSupervisorCanonicalEventMetadata(integration, event) {
+  if (integration !== "supervisor_canonical_event" || !isValidSupervisorCanonicalEventMetadata(event)) return null;
+  return {
+    eventId: event.eventId,
+    evidenceRef: event.evidenceRef,
+    status: "persisted",
+    persistedAt: event.persistedAt,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function authoritativeTerminalSupervisorProjection(disposition) {
+  const supervisorEvent = normalizeSupervisorCanonicalEventMetadata(disposition?.canonicalEventIntegration, disposition?.supervisorEvent);
+  if (supervisorEvent) {
+    return {
+      supervisorPersistence: "persisted; supervisor canonical terminal event recorded",
+      blockers: [],
+    };
+  }
+  return {
+    supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
+    blockers: [{
+      code: "missing_supervisor_contract",
+      message: "Manager terminal disposition is not a persisted supervisor-owned canonical event in the current contract.",
+      nextAction: "Keep this manager packet metadata-only and implement/test the supervisor canonical event contract before claiming integrated persistence.",
+    }],
+  };
 }
 
 function normalizeRefillCandidates(candidates = [], fallbackSourceRefs = []) {
@@ -16945,6 +16974,7 @@ function discoverValidatedTerminalReconciliationBundle({ root, sourceIdentity, s
       counts.approvalGated !== 0 || counts.totalItems !== counts.reconciledItems ||
       counts.totalItems !== AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + counts[key], 0)) return null;
   const evidenceRefs = canonicalStringRefs(disposition.evidenceRefs).slice(0, 12);
+  const supervisorEvent = normalizeSupervisorCanonicalEventMetadata(disposition.canonicalEventIntegration, disposition.supervisorEvent);
   return {
     packetRef,
     sourceIdentity,
@@ -16958,6 +16988,12 @@ function discoverValidatedTerminalReconciliationBundle({ root, sourceIdentity, s
     evidenceRefs,
     resumeRequirement: sanitizeLedgerField(disposition.resumeRequirement, "", 360),
     nextManagerAction: sanitizeLedgerField(disposition.nextManagerAction, "", 360),
+    ...(supervisorEvent
+      ? {
+          canonicalEventIntegration: "supervisor_canonical_event",
+          supervisorEvent,
+        }
+      : {}),
     metadataOnly: true,
     rawPayloadRetained: false,
   };
