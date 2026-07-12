@@ -21,6 +21,7 @@ import {
   buildPipelineActiveBoardViewModel,
   type PipelineActiveBoardViewModel,
   type PipelineBackpressureState,
+  type PipelineCanonicalPacketDetail,
   type PipelineCompactPacketCard,
   type PipelineContextualActionStrip,
   type PipelineDiagnosticsItem,
@@ -159,8 +160,16 @@ export function PipelineCockpit({
   const selectedProjectionDetail = selectedItem?.type === "packet"
     ? currentProjection?.selectedPacketDetails.find((detail) => detail.packetId === selectedItem.id) ?? null
     : null;
+  const selectedPacketDetailWhyDiagnostics = selectedItem?.type === "packet"
+    ? activeBoardViewModel?.packetDetails?.byPacketId?.[selectedItem.id] ?? null
+    : null;
   const selectedDetailOnlyPacket = selectedItem?.type === "packet" && !selectedMapPacket && selectedProjectionWorkPacket
-    ? projectionWorkPacketToDetailOnlyCockpitPacket(selectedProjectionWorkPacket, selectedProjectionDetail, currentProjection)
+    ? projectionWorkPacketToDetailOnlyCockpitPacket(
+        selectedProjectionWorkPacket,
+        selectedProjectionDetail,
+        currentProjection,
+        selectedPacketDetailWhyDiagnostics?.canonical ?? null
+      )
     : null;
   const selectedProjectionPacketMissing = selectedItem?.type === "packet"
     && Boolean(currentProjection)
@@ -169,9 +178,6 @@ export function PipelineCockpit({
     && !currentProjection?.selectedPacketDetails.some((detail) => detail.packetId === selectedItem.id);
   const selectedContextualActionStrip = selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
-    : null;
-  const selectedPacketDetailWhyDiagnostics = selectedItem?.type === "packet"
-    ? activeBoardViewModel?.packetDetails?.byPacketId?.[selectedItem.id] ?? null
     : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(dashboardPackets);
@@ -804,9 +810,24 @@ function BackpressureSummaryBanner({ backpressure }: { backpressure: PipelineBac
       <p>
         Backpressure: {backpressure.summary} Severity {backpressure.severity}; source {backpressure.source}; affected {affectedStages}.
       </p>
+      {backpressure.backendWip ? (
+        <p className="text-[var(--muted)]">
+          Backend WIP: {formatBackendWipCounts(backpressure.backendWip.observed, backpressure.backendWip.limits)}; reason {backpressure.backendWip.typedReason}; evidence {backpressure.backendWip.evidenceRefs.length} metadata ref{backpressure.backendWip.evidenceRefs.length === 1 ? "" : "s"}.
+        </p>
+      ) : null}
       <p className="text-[var(--muted)]">Next safe action: {backpressure.nextSafeAction}</p>
     </section>
   );
+}
+
+function formatBackendWipCounts(
+  observed: NonNullable<PipelineBackpressureState["backendWip"]>["observed"],
+  limits: NonNullable<PipelineBackpressureState["backendWip"]>["limits"]
+) {
+  if (!observed || !limits) {
+    return "capacity unavailable";
+  }
+  return `review ${observed.review}/${limits.review}, deliver ${observed.deliver}/${limits.deliver}, verification ${observed.verification}/${limits.verification}, operator testing ${observed.operatorTesting}/${limits.operatorTesting}`;
 }
 
 function ProjectionTruthChip({ label, value }: { label: string; value: string }) {
@@ -906,13 +927,18 @@ function projectionToCockpitPackets(
       : packet.truthLabel === "live"
         ? projectionLiveProofLabel(projectionLiveProof)
         : `not live proof: packet ${packet.truthLabel}`;
-    const sourceTrustState = projectionSourceTrustState(packetSourceLabel, packetFreshness);
+    const canonicalDetail = activeBoardViewModel.packetDetails.byPacketId[packet.packetId]?.canonical ?? null;
+    const sourceTrustState = canonicalDetail?.source
+      ? canonicalSourceTrustState(canonicalDetail.source.trust, packetSourceLabel, packetFreshness)
+      : projectionSourceTrustState(packetSourceLabel, packetFreshness);
     const projectionDetailSourceRefs = detail?.sourceRefs ?? [];
-    const detailSourceRefs = projectionDetailSourceRefs.length > 0
-      ? projectionDetailSourceRefs
-      : packet.sourceRef
-        ? [packet.sourceRef]
-        : [];
+    const detailSourceRefs = canonicalDetail?.source
+      ? [canonicalDetail.source.sourceRef]
+      : projectionDetailSourceRefs.length > 0
+        ? projectionDetailSourceRefs
+        : packet.sourceRef
+          ? [packet.sourceRef]
+          : [];
     const sourceRefs = detailSourceRefs.map((ref) => projectionSourceRefForPacket(ref, packetSourceLabel, packetFreshness));
     const projectionDetailEvidenceRefs = detail?.evidenceRefs ?? [];
     const detailEvidenceRefs = projectionDetailEvidenceRefs.length > 0 ? projectionDetailEvidenceRefs : packet.evidenceRefs;
@@ -992,7 +1018,9 @@ function projectionToCockpitPackets(
       freshnessLabel: packetFreshness,
       sourceTrustState,
       sourceTrustStates: [sourceTrustState],
-      sourceTrustSummary: projection.truthSummary.summary,
+      sourceTrustSummary: canonicalDetail?.source
+        ? `Canonical ${canonicalDetail.source.role} source; trust ${canonicalDetail.source.trust}; observed ${canonicalDetail.source.observedAt}.`
+        : "Canonical source and trust unavailable; projection labels are lifecycle context only.",
       routeFork: {
         selectedRoute: currentStage,
         rejectedRoutes: [],
@@ -1018,18 +1046,23 @@ function projectionToCockpitPackets(
 function projectionWorkPacketToDetailOnlyCockpitPacket(
   packet: PipelineDashboardProjectionV0["workPackets"][number],
   detail: ProjectionSelectedPacketDetail | null,
-  projection: PipelineDashboardProjectionV0 | null
+  projection: PipelineDashboardProjectionV0 | null,
+  canonicalDetail: PipelineCanonicalPacketDetail | null
 ): ActiveBoardCockpitPacket {
   const stage = activeBoardStageToCockpitStage(packet.currentStage);
   const currentOwner = stage === "human_gate" ? "operator" : "kendall";
   const sourceLabel = packet.truthLabel === "live" ? projection?.sourceLabel ?? "live" : packet.truthLabel;
   const freshnessState = packet.truthLabel === "stale" ? "stale" : projection?.freshnessState ?? "unknown";
-  const sourceTrustState = projectionSourceTrustState(sourceLabel, freshnessState);
-  const sourceRefs = detail
-    ? detail.sourceRefs.map((ref) => projectionSourceRefForPacket(ref, sourceLabel, freshnessState))
-    : packet.sourceRef
-      ? [projectionSourceRefForPacket(packet.sourceRef, sourceLabel, freshnessState)]
-      : [];
+  const sourceTrustState = canonicalDetail?.source
+    ? canonicalSourceTrustState(canonicalDetail.source.trust, sourceLabel, freshnessState)
+    : projectionSourceTrustState(sourceLabel, freshnessState);
+  const sourceRefs = canonicalDetail?.source
+    ? [projectionSourceRefForPacket(canonicalDetail.source.sourceRef, sourceLabel, freshnessState)]
+    : detail
+      ? detail.sourceRefs.map((ref) => projectionSourceRefForPacket(ref, sourceLabel, freshnessState))
+      : packet.sourceRef
+        ? [projectionSourceRefForPacket(packet.sourceRef, sourceLabel, freshnessState)]
+        : [];
   const attemptEvidenceRefs = (detail?.executionAttempts ?? packet.executionAttempts ?? []).flatMap((attempt) => attempt.evidenceRefs);
   const evidenceRefs = [...new Set([...(detail?.evidenceRefs ?? packet.evidenceRefs), ...attemptEvidenceRefs])].map((refId) => ({
     refId,
@@ -1103,7 +1136,9 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     freshnessLabel: freshnessState,
     sourceTrustState,
     sourceTrustStates: [sourceTrustState],
-    sourceTrustSummary: projection?.truthSummary.summary ?? "Projection detail-only packet.",
+    sourceTrustSummary: canonicalDetail?.source
+      ? `Canonical ${canonicalDetail.source.role} source; trust ${canonicalDetail.source.trust}; observed ${canonicalDetail.source.observedAt}.`
+      : "Canonical source and trust unavailable; projection labels are lifecycle context only.",
     routeFork: {
       selectedRoute: stage,
       rejectedRoutes: [],
@@ -1151,6 +1186,24 @@ function projectionSourceTrustState(
     return "derived-only";
   }
   return "included";
+}
+
+function canonicalSourceTrustState(
+  trust: NonNullable<PipelineCanonicalPacketDetail["source"]>["trust"],
+  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
+  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+): PipelineFixturePacket["sourceTrustState"] {
+  const projectionState = projectionSourceTrustState(sourceLabel, freshnessState);
+  if (projectionState === "stale" || projectionState === "unavailable") {
+    return projectionState;
+  }
+  if (trust === "authoritative" || trust === "attested") {
+    return "included";
+  }
+  if (trust === "derived") {
+    return "derived-only";
+  }
+  return "excluded";
 }
 
 function projectionSourceRefType(
@@ -2181,7 +2234,7 @@ function PacketMiniCard({
 }
 
 function authoritativePacketLine(packet: ActiveBoardCockpitPacket): string {
-  return `authoritative ${packet.packetId}; origin ${packet.sourceRefs.map((ref) => ref.refId).join(", ") || "none"}; proof ${packet.evidenceRefs.map((ref) => ref.refId).join(", ") || "none"}`;
+  return packet.activeBoardCard?.canonicalPostureLabel ?? "canonical posture unavailable";
 }
 
 function StaleHistoryPanel({
@@ -2492,6 +2545,7 @@ function PacketInspection({
       <ContextualActionStripPanel onAction={(action) => onOperationalAction(action, packet.packetId)} strip={contextualActionStrip} />
       {actionFeedback ? <p aria-live="polite" className="mt-2 rounded-[0.375rem] border border-[var(--line)] px-3 py-1.5 text-xs text-[var(--muted)]">{actionFeedback}</p> : null}
       <PacketWhyDiagnosticsPanel detail={packetDetailWhyDiagnostics} />
+      <CanonicalPacketDetailPanel detail={packetDetailWhyDiagnostics?.canonical ?? null} />
       <dl className="mt-3 grid gap-2 text-sm">
         <InspectionRow label="Where" value={detailStage} />
         <InspectionRow label="Status" value={detailState} />
@@ -2585,6 +2639,92 @@ function PacketInspection({
         </Link>
       ) : null}
     </aside>
+  );
+}
+
+function CanonicalPacketDetailPanel({ detail }: { detail: PipelineCanonicalPacketDetail | null }) {
+  if (!detail || detail.availability === "unavailable") {
+    return (
+      <section aria-label="Canonical packet contract" className="mt-3 rounded-[0.5rem] border border-[var(--line)] bg-[var(--background-elevated)] p-3">
+        <h3 className="text-sm font-semibold">Canonical packet contract</h3>
+        <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+          Canonical source, readiness, quality, retention, delivery, and product-mode posture are unavailable. No dashboard fallback is treated as canonical truth.
+        </p>
+      </section>
+    );
+  }
+  const mode = detail.productMode;
+  return (
+    <section aria-label="Canonical packet contract" className="mt-3 grid gap-3 rounded-[0.5rem] border border-[var(--line)] bg-[var(--background-elevated)] p-3">
+      <h3 className="text-sm font-semibold">Canonical packet contract</h3>
+      <dl className="grid gap-2 text-sm">
+        <InspectionRow label="Canonical source" value={detail.source ? `${detail.source.sourceId}; ${detail.source.role}; trust ${detail.source.trust}` : "unavailable"} />
+        <InspectionRow label="Provenance observed" value={detail.source?.observedAt ?? "unavailable"} />
+        <InspectionRow label="Requested product mode" value={mode?.requestedProductMode ?? "unavailable"} />
+        <InspectionRow label="Effective product mode" value={mode?.effectiveProductMode ?? "unavailable"} />
+        <InspectionRow label="Operational mode" value={mode?.operationalMode ?? "unavailable"} />
+        <InspectionRow label="Readiness" value={mode ? `${mode.readinessState}; ready ${mode.ready}` : "unavailable"} />
+        <InspectionRow label="Capability" value={mode?.capabilityState ?? "unavailable"} />
+        <InspectionRow label="Freshness" value={mode?.freshnessState ?? "unavailable"} />
+        <InspectionRow label="Blocked reasons" value={mode?.blockedReasons.length ? mode.blockedReasons.join(", ") : mode ? "none" : "unavailable"} />
+        <InspectionRow label="Authority" value={detail.authority ? "metadata only; source, provider, worker, GitHub, and raw-payload authority all prohibited" : "unavailable"} />
+      </dl>
+      <CanonicalReadinessList components={detail.readinessComponents} />
+      <CanonicalQualityGateList gates={detail.qualityGates} />
+      <CanonicalDeliveryList entries={detail.deliveryEvidence} />
+      <RefList title="Canonical provenance evidence" values={detail.source?.evidenceRefs ?? []} empty="No canonical provenance evidence refs." />
+    </section>
+  );
+}
+
+function CanonicalReadinessList({ components }: { components: PipelineCanonicalPacketDetail["readinessComponents"] }) {
+  return (
+    <section aria-label="Canonical readiness components">
+      <h4 className="text-xs font-semibold text-[var(--foreground)]">Readiness components</h4>
+      {components.length ? (
+        <ul className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+          {components.map((component) => (
+            <li key={component.componentId} className="break-words">
+              {component.componentId}: {component.state}; {component.requirement}; evidence {component.evidenceRefs.join(", ") || "none"}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="mt-2 text-xs text-[var(--muted)]">Canonical readiness unavailable.</p>}
+    </section>
+  );
+}
+
+function CanonicalQualityGateList({ gates }: { gates: PipelineCanonicalPacketDetail["qualityGates"] }) {
+  return (
+    <section aria-label="Canonical quality gates">
+      <h4 className="text-xs font-semibold text-[var(--foreground)]">Quality gates</h4>
+      {gates.length ? (
+        <ul className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+          {gates.map((gate, index) => (
+            <li key={`${gate.gateId}:${index}`} className="break-words">
+              {gate.gateId}: {gate.kind}; state {gate.state ?? "group"}; evidence {gate.evidenceRefs.join(", ") || "none"}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="mt-2 text-xs text-[var(--muted)]">Canonical quality evidence unavailable.</p>}
+    </section>
+  );
+}
+
+function CanonicalDeliveryList({ entries }: { entries: PipelineCanonicalPacketDetail["deliveryEvidence"] }) {
+  return (
+    <section aria-label="Canonical delivery and retention evidence">
+      <h4 className="text-xs font-semibold text-[var(--foreground)]">Delivery and retention</h4>
+      {entries.length ? (
+        <ul className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+          {entries.map((entry) => (
+            <li key={entry.deliveryId} className="break-words">
+              {entry.action}: {entry.status}; {entry.target.repository}; retention {entry.evidence.disposition}; evidence {entry.evidence.evidenceRefs.join(", ") || "none"}; delivery authority false
+            </li>
+          ))}
+        </ul>
+      ) : <p className="mt-2 text-xs text-[var(--muted)]">No canonical delivery evidence recorded.</p>}
+    </section>
   );
 }
 

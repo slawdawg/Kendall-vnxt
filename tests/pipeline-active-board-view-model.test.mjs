@@ -243,6 +243,7 @@ test("active board view model separates active work, stale history, ready-to-tes
     "attention",
     "attentionKind",
     "attentionReasonLabel",
+    "canonicalPostureLabel",
     "nextActionLabel",
     "nextOperatorActionLabel",
     "packetId",
@@ -668,6 +669,88 @@ test("packet detail why diagnostics contract explains placement without retainin
   }
 });
 
+test("canonical packet posture consumes supervisor source, readiness, quality, retention, delivery, and capability truth", async () => {
+  const { buildPipelineActiveBoardViewModel } = await loadActiveBoardViewModelModule();
+  const contract = canonicalContractFixture({
+    productMode: "bounded_write",
+    readinessComponents: canonicalReadinessFixture({
+      quality_gates: {
+        componentId: "quality_gates",
+        requirement: "required",
+        state: "blocked",
+        evidenceRefs: ["evidence:quality-blocked"],
+      },
+    }),
+  });
+  const mapping = productModeMappingFixture({
+    requestedProductMode: "bounded_write",
+    effectiveProductMode: "blocked",
+    operationalMode: "unavailable",
+    readinessState: "blocked",
+    capabilityState: "gated",
+    ready: false,
+    blockedReasons: ["canonical_contract_does_not_grant_write_authority"],
+  });
+  const projection = projectionFixture({
+    workPackets: [
+      packetFixture({
+        packetId: "packet-canonical-blocked",
+        sourceRef: {
+          refId: "legacy:contradictory",
+          sourceType: "operator_input",
+          pathOrUrl: null,
+          title: "Legacy fallback must not win",
+        },
+        canonicalContract: contract,
+        productModeMapping: mapping,
+        nextAction: "Continue bounded write automatically.",
+      }),
+      packetFixture({ packetId: "packet-canonical-unavailable" }),
+    ],
+    selectedPacketDetails: [
+      detailFixture({
+        packetId: "packet-canonical-blocked",
+        sourceRefs: [{ refId: "legacy:selected-detail", sourceType: "operator_input", pathOrUrl: null, title: null }],
+        canonicalContract: contract,
+        productModeMapping: mapping,
+      }),
+    ],
+  });
+
+  const model = buildPipelineActiveBoardViewModel(projection);
+  const card = model.activeBoard.stageLanes.flatMap((lane) => lane.packetCards).find((item) => item.packetId === "packet-canonical-blocked");
+  assert.ok(card);
+  assert.equal(card.canonicalPostureLabel, "blocked · blocked · gated");
+  assert.equal(JSON.stringify(card).includes("legacy:contradictory"), false);
+  assert.equal(JSON.stringify(card).includes("evidence:quality-blocked"), false);
+
+  const detail = model.packetDetails.byPacketId["packet-canonical-blocked"].canonical;
+  assert.equal(detail.availability, "available");
+  assert.equal(detail.source.sourceId, "source:canonical-prd");
+  assert.equal(detail.source.role, "canonical");
+  assert.equal(detail.source.trust, "authoritative");
+  assert.equal(detail.source.sourceRef.refId, "prd:canonical");
+  assert.equal(detail.source.sourceRef.refId.includes("legacy"), false);
+  assert.equal(detail.productMode.effectiveProductMode, "blocked");
+  assert.equal(detail.productMode.operationalMode, "unavailable");
+  assert.equal(detail.productMode.capabilityState, "gated");
+  assert.equal(detail.readinessComponents.find((component) => component.componentId === "quality_gates").state, "blocked");
+  assert.equal(detail.qualityGates.find((gate) => gate.gateId === "quality:dashboard").state, "blocked");
+  assert.equal(detail.deliveryEvidence[0].status, "blocked");
+  assert.equal(detail.retentionEvidence[0].disposition, "metadata_only");
+  assert.equal(detail.authority.githubMutationAllowed, false);
+  assert.equal(detail.metadataOnly, true);
+  assert.equal(detail.rawPayloadRetained, false);
+
+  const unavailable = model.packetDetails.byPacketId["packet-canonical-unavailable"].canonical;
+  assert.equal(unavailable.availability, "unavailable");
+  assert.equal(unavailable.source, null);
+  assert.equal(unavailable.productMode, null);
+  assert.equal(unavailable.readinessComponents.length, 0);
+  assert.equal(unavailable.deliveryEvidence.length, 0);
+  assert.equal(model.activeBoard.stageLanes.flatMap((lane) => lane.packetCards).find((item) => item.packetId === "packet-canonical-unavailable").canonicalPostureLabel, "canonical posture unavailable");
+});
+
 test("backpressure prefers backend Execute admission truth and keeps legacy metadata signals conservative", async () => {
   const {
     buildPipelineActiveBoardViewModel,
@@ -692,6 +775,28 @@ test("backpressure prefers backend Execute admission truth and keeps legacy meta
   assert.equal(enforcedBackpressure.severity, "high");
   assert.equal(enforcedBackpressure.nextSafeAction, enforcedProjection.executeAdmission.nextSafeAction);
   assert.equal(JSON.stringify(enforcedBackpressure.affectedStages), "[\"review\"]");
+  assert.equal(enforcedBackpressure.backendWip.typedReason, "review_wip_limit_reached");
+  assert.equal(enforcedBackpressure.backendWip.observed.review, 1);
+  assert.equal(enforcedBackpressure.backendWip.limits.review, 1);
+  assert.equal(enforcedBackpressure.backendWip.evidenceRefs[1], "evidence:wip-review-1-of-1");
+
+  const unavailableAdmission = deriveBackpressureState(projectionFixture({
+    executeAdmission: executeAdmissionFixture({
+      state: "unavailable",
+      capacityAvailable: false,
+      typedReason: "runtime_unavailable",
+      source: "unavailable",
+      limits: null,
+      observed: null,
+      nextSafeAction: "Restore supervisor admission truth.",
+      evidenceRefs: ["evidence:wip-admission-unavailable"],
+    }),
+    workPackets: [packetFixture({ currentStage: "review", status: "blocked" })],
+  }));
+  assert.equal(unavailableAdmission.reason, "readiness_blocked");
+  assert.equal(unavailableAdmission.source, "executeAdmission");
+  assert.equal(unavailableAdmission.backendWip.state, "unavailable");
+  assert.equal(unavailableAdmission.summary, "Backend Execute admission capability is unavailable.");
 
   const blockedQueueProjection = projectionFixture({
     queueSummary: {
@@ -707,6 +812,7 @@ test("backpressure prefers backend Execute admission truth and keeps legacy meta
   assert.equal(blockedBackpressure.source, "queueSummary");
   assert.equal(blockedBackpressure.metadataOnly, true);
   assert.equal(blockedBackpressure.rawPayloadRetained, false);
+  assert.equal(blockedBackpressure.backendWip, null);
   assert.match(blockedBackpressure.nextSafeAction, /Inspect blockers/);
 
   const blockedDispatchState = isDispatchAffectingManagerState(
@@ -736,9 +842,8 @@ test("backpressure prefers backend Execute admission truth and keeps legacy meta
     ],
   });
   const readyToTestModel = buildPipelineActiveBoardViewModel(readyToTestProjection);
-  assert.equal(readyToTestModel.summary.backpressure.reason, "operator_testing_overloaded");
-  assert.equal(JSON.stringify(readyToTestModel.summary.backpressure.affectedStages), "[\"review\"]");
-  assert.equal(readyToTestModel.packetDetails.byPacketId["packet-ready-pressure"].backpressure.reason, "operator_testing_overloaded");
+  assert.equal(readyToTestModel.summary.backpressure, null, "packet and stage counts cannot override ready backend Execute admission");
+  assert.equal(readyToTestModel.packetDetails.byPacketId["packet-ready-pressure"].backpressure, null);
 
   const unrelatedPacketPressureModel = buildPipelineActiveBoardViewModel(projectionFixture({
     workPackets: [
@@ -779,7 +884,7 @@ test("backpressure prefers backend Execute admission truth and keeps legacy meta
       }),
     ],
   });
-  assert.equal(deriveBackpressureState(reviewBlockedProjection).reason, "review_overloaded");
+  assert.equal(deriveBackpressureState(reviewBlockedProjection), null, "review cards cannot synthesize backend WIP pressure");
 
   const deliveryBlockedProjection = projectionFixture({
     workPackets: [
@@ -790,7 +895,7 @@ test("backpressure prefers backend Execute admission truth and keeps legacy meta
       }),
     ],
   });
-  assert.equal(deriveBackpressureState(deliveryBlockedProjection).reason, "delivery_overloaded");
+  assert.equal(deriveBackpressureState(deliveryBlockedProjection), null, "delivery cards cannot synthesize backend WIP pressure");
 
   const resourceLimitedProjection = projectionFixture({
     managerSummary: {
@@ -1963,6 +2068,112 @@ function sourceStateFixture(overrides = {}) {
   };
 }
 
+function authorityProhibitionsFixture() {
+  return {
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+    rawPayloadRetentionAllowed: false,
+  };
+}
+
+function canonicalReadinessFixture(overrides = {}) {
+  return Object.fromEntries([
+    "source_provenance",
+    "trust_boundary",
+    "authority_boundary",
+    "evidence_retention",
+    "quality_gates",
+    "delivery_evidence",
+  ].map((componentId) => [componentId, overrides[componentId] ?? {
+    componentId,
+    requirement: "required",
+    state: "pass",
+    evidenceRefs: [`evidence:${componentId}`],
+  }]));
+}
+
+function canonicalContractFixture(overrides = {}) {
+  return {
+    schemaVersion: "pipeline-canonical-contract/v1",
+    productMode: "read_only",
+    canonicalSource: {
+      sourceId: "source:canonical-prd",
+      role: "canonical",
+      trust: "authoritative",
+      provenance: {
+        sourceRef: {
+          refId: "prd:canonical",
+          sourceType: "prd",
+          pathOrUrl: "docs/product/canonical-prd.md",
+          title: "Canonical PRD",
+        },
+        observedAt: "2026-07-12T18:00:00.000Z",
+        evidenceRefs: ["evidence:canonical-source"],
+      },
+      authority: authorityProhibitionsFixture(),
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    qualityGates: {
+      kind: "all_of",
+      gateId: "quality:all",
+      children: [{
+        kind: "gate",
+        gateId: "quality:dashboard",
+        requirement: "required",
+        state: "blocked",
+        evidenceRefs: ["evidence:quality-blocked"],
+      }],
+    },
+    readinessComponents: canonicalReadinessFixture(),
+    deliveryEvidence: [{
+      deliveryId: "delivery:pr",
+      action: "pull_request",
+      status: "blocked",
+      target: { repository: "slawdawg/Kendall-vnxt", baseBranch: "dev" },
+      evidence: {
+        evidenceId: "evidence:delivery-pr",
+        disposition: "metadata_only",
+        evidenceRefs: ["evidence:delivery-blocked"],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      authority: authorityProhibitionsFixture(),
+      deliveryAuthorityGranted: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    }],
+    authority: authorityProhibitionsFixture(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...overrides,
+  };
+}
+
+function productModeMappingFixture(overrides = {}) {
+  return {
+    requestedProductMode: "read_only",
+    effectiveProductMode: "read_only",
+    operationalMode: "read_only",
+    readinessState: "ready",
+    freshnessState: "live",
+    capabilityState: "gated",
+    checkedAt: "2026-07-12T18:00:00.000Z",
+    expiresAt: "2026-07-12T18:05:00.000Z",
+    ready: true,
+    blockedReasons: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+    ...overrides,
+  };
+}
+
 function packetFixture(overrides = {}) {
   return {
     packetId: "packet-base",
@@ -1976,6 +2187,8 @@ function packetFixture(overrides = {}) {
       pathOrUrl: "_bmad-output/implementation-artifacts/1-1-build-the-active-board-view-model.md",
       title: "Story 1.1",
     },
+    canonicalContract: null,
+    productModeMapping: null,
     blocker: null,
     nextAction: "Continue.",
     evidenceRefs: ["story:1-1"],
@@ -1989,6 +2202,8 @@ function detailFixture(overrides = {}) {
   return {
     packetId: "packet-base",
     sourceRefs: [],
+    canonicalContract: null,
+    productModeMapping: null,
     evidenceRefs: [],
     currentStage: "execute",
     status: "active",

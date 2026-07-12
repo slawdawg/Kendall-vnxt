@@ -3,9 +3,12 @@ import type {
   PipelineDashboardProjectionV0,
   PipelineDashboardWorkPacketV0,
   PipelineGatedControlV0,
+  PipelineCanonicalContractV1,
   PipelineOperationalActionCapabilityV0,
   PipelineManagerSummaryV0,
+  PipelineProductModeMappingV0,
   PipelineProjectionSourceLabelV0,
+  PipelineQualityGateNodeV0,
   PipelineQueueSummaryV0,
 } from "@kendall/contracts";
 
@@ -80,6 +83,36 @@ export type PipelineCompactPacketCard = {
   readyToTest: boolean;
   nextActionLabel: string | null;
   nextOperatorActionLabel: string | null;
+  canonicalPostureLabel: string;
+};
+
+export type PipelineCanonicalPacketDetail = {
+  availability: "available" | "unavailable";
+  source: {
+    sourceId: string;
+    role: PipelineCanonicalContractV1["canonicalSource"]["role"];
+    trust: PipelineCanonicalContractV1["canonicalSource"]["trust"];
+    sourceRef: PipelineCanonicalContractV1["canonicalSource"]["provenance"]["sourceRef"];
+    observedAt: string;
+    evidenceRefs: string[];
+  } | null;
+  productMode: PipelineProductModeMappingV0 | null;
+  readinessComponents: Array<PipelineCanonicalContractV1["readinessComponents"][keyof PipelineCanonicalContractV1["readinessComponents"]]>;
+  qualityGates: PipelineCanonicalQualityGateSummary[];
+  deliveryEvidence: PipelineCanonicalContractV1["deliveryEvidence"];
+  retentionEvidence: Array<PipelineCanonicalContractV1["deliveryEvidence"][number]["evidence"]>;
+  authority: PipelineCanonicalContractV1["authority"] | null;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+};
+
+export type PipelineCanonicalQualityGateSummary = {
+  gateId: string;
+  kind: PipelineQualityGateNodeV0["kind"];
+  requirement: "required" | "not_applicable" | null;
+  state: "pass" | "fail" | "blocked" | "not_applicable" | null;
+  notApplicableReason: string | null;
+  evidenceRefs: string[];
 };
 
 export type PipelineAttentionKind =
@@ -161,6 +194,7 @@ export type PipelinePacketDetailWhyDiagnostics = {
     retentionClass: "metadata_only";
     rawPayloadRetained: false;
   };
+  canonical: PipelineCanonicalPacketDetail;
   metadataOnly: true;
 };
 
@@ -199,10 +233,21 @@ export type PipelineBackpressureState = {
   visible: true;
   reason: PipelineBackpressureReason;
   severity: "low" | "medium" | "high";
-  source: "queueSummary" | "managerSummary" | "backendReachability" | "truthSummary" | "stageSummaries" | "executeAdmission";
+  source: "queueSummary" | "managerSummary" | "backendReachability" | "truthSummary" | "executeAdmission";
   summary: string;
   nextSafeAction: string;
   affectedStages: AuthoritativePacketStage[];
+  backendWip: {
+    policyVersion: "supervisor-wip/v0";
+    state: PipelineDashboardProjectionV0["executeAdmission"]["state"];
+    typedReason: PipelineDashboardProjectionV0["executeAdmission"]["typedReason"];
+    limits: PipelineDashboardProjectionV0["executeAdmission"]["limits"];
+    observed: PipelineDashboardProjectionV0["executeAdmission"]["observed"];
+    blockingDimensions: PipelineDashboardProjectionV0["executeAdmission"]["blockingDimensions"];
+    evidenceRefs: string[];
+    metadataOnly: true;
+    rawPayloadRetained: false;
+  } | null;
   metadataOnly: true;
   rawPayloadRetained: false;
 };
@@ -441,8 +486,72 @@ export function buildPacketDetailWhyDiagnosticsForPacket(
       retentionClass: "metadata_only",
       rawPayloadRetained: false,
     },
+    canonical: buildCanonicalPacketDetail(
+      detail ? detail.canonicalContract : packet.canonicalContract,
+      detail ? detail.productModeMapping : packet.productModeMapping
+    ),
     metadataOnly: true,
   };
+}
+
+export function buildCanonicalPacketDetail(
+  contract: PipelineCanonicalContractV1 | null,
+  productMode: PipelineProductModeMappingV0 | null
+): PipelineCanonicalPacketDetail {
+  if (!contract) {
+    return {
+      availability: "unavailable",
+      source: null,
+      productMode: null,
+      readinessComponents: [],
+      qualityGates: [],
+      deliveryEvidence: [],
+      retentionEvidence: [],
+      authority: null,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  return {
+    availability: "available",
+    source: {
+      sourceId: contract.canonicalSource.sourceId,
+      role: contract.canonicalSource.role,
+      trust: contract.canonicalSource.trust,
+      sourceRef: contract.canonicalSource.provenance.sourceRef,
+      observedAt: contract.canonicalSource.provenance.observedAt,
+      evidenceRefs: [...contract.canonicalSource.provenance.evidenceRefs],
+    },
+    productMode,
+    readinessComponents: Object.values(contract.readinessComponents),
+    qualityGates: flattenCanonicalQualityGates(contract.qualityGates),
+    deliveryEvidence: [...contract.deliveryEvidence],
+    retentionEvidence: contract.deliveryEvidence.map((entry) => entry.evidence),
+    authority: contract.authority,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function flattenCanonicalQualityGates(node: PipelineQualityGateNodeV0): PipelineCanonicalQualityGateSummary[] {
+  if (node.kind === "gate") {
+    return [{
+      gateId: node.gateId,
+      kind: node.kind,
+      requirement: node.requirement,
+      state: node.state,
+      notApplicableReason: node.requirement === "not_applicable" ? node.notApplicableReason : null,
+      evidenceRefs: [...node.evidenceRefs],
+    }];
+  }
+  return [{
+    gateId: node.gateId,
+    kind: node.kind,
+    requirement: null,
+    state: null,
+    notApplicableReason: null,
+    evidenceRefs: [],
+  }, ...node.children.flatMap(flattenCanonicalQualityGates)];
 }
 
 function packetPlacementReason(
@@ -861,7 +970,15 @@ export function buildCompactPacketCard(
         ? "Ready to test"
       : safeCompactActionLabel(packet.nextAction),
     nextOperatorActionLabel: attentionMetadata.nextOperatorActionLabel,
+    canonicalPostureLabel: canonicalPostureLabel(packet.productModeMapping),
   };
+}
+
+function canonicalPostureLabel(productMode: PipelineProductModeMappingV0 | null) {
+  if (!productMode) {
+    return "canonical posture unavailable";
+  }
+  return `${productMode.effectiveProductMode.replace(/_/g, " ")} · ${productMode.readinessState.replace(/_/g, " ")} · ${productMode.capabilityState.replace(/_/g, " ")}`;
 }
 
 function buildActionNeededMetadata(
@@ -1116,6 +1233,17 @@ export function deriveBackpressureState(projection: PipelineDashboardProjectionV
   if (!projectionCanShowLiveActiveWork(projection)) {
     return null;
   }
+  if (projection.executeAdmission.state === "unavailable") {
+    return backpressureState(
+      "readiness_blocked",
+      "high",
+      "executeAdmission",
+      "Backend Execute admission capability is unavailable.",
+      projection.executeAdmission.nextSafeAction,
+      [],
+      projection.executeAdmission
+    );
+  }
   if (projection.executeAdmission?.state === "blocked") {
     const reason: PipelineBackpressureReason = projection.executeAdmission.typedReason === "review_wip_limit_reached"
       ? "review_overloaded"
@@ -1138,7 +1266,8 @@ export function deriveBackpressureState(projection: PipelineDashboardProjectionV
       "executeAdmission",
       `Backend Execute admission is blocked by ${projection.executeAdmission.blockingDimensions.join(", ")} WIP capacity.`,
       projection.executeAdmission.nextSafeAction,
-      [...new Set(affectedStages)]
+      [...new Set(affectedStages)],
+      projection.executeAdmission
     );
   }
   if (projection.managerSummary.inactivityReason === "usage_limited" || projection.queueSummary.emptyReason === "usage_limited") {
@@ -1211,10 +1340,6 @@ export function deriveBackpressureState(projection: PipelineDashboardProjectionV
       affectedStagesFromProjection(projection, ["execute", "review"])
     );
   }
-  const stagePressure = deriveStageBackpressure(projection);
-  if (stagePressure) {
-    return stagePressure;
-  }
   return null;
 }
 
@@ -1232,58 +1357,14 @@ export function derivePacketBackpressureState(
   return null;
 }
 
-function deriveStageBackpressure(projection: PipelineDashboardProjectionV0): PipelineBackpressureState | null {
-  const activeStages = new Set(projection.workPackets.map((packet) => packet.currentStage));
-  if (activeStages.has("review") && projection.workPackets.some((packet) => packet.currentStage === "review" && (packet.status === "blocked" || packet.status === "failed"))) {
-    return backpressureState(
-      "review_overloaded",
-      "medium",
-      "stageSummaries",
-      "Review has blocked or failed packets.",
-      "Clear Review blockers before routing more Execute work.",
-      ["review"]
-    );
-  }
-  if (activeStages.has("deliver") && projection.workPackets.some((packet) => packet.currentStage === "deliver" && (packet.status === "blocked" || packet.status === "failed"))) {
-    return backpressureState(
-      "delivery_overloaded",
-      "medium",
-      "stageSummaries",
-      "Deliver has blocked or failed packets.",
-      "Clear delivery blockers before routing more Execute work.",
-      ["deliver"]
-    );
-  }
-  if (projection.workPackets.some((packet) => (packet.currentStage === "promote" || packet.currentStage === "review") && packet.status === "failed")) {
-    return backpressureState(
-      "verification_overloaded",
-      "medium",
-      "stageSummaries",
-      "Verification or quality review has failed packets.",
-      "Inspect failed checks and recover or defer before starting more Execute work.",
-      affectedStagesFromProjection(projection, ["promote", "review"])
-    );
-  }
-  if (projection.workPackets.some((packet) => isReadyToTestPacket(packet, projection))) {
-    return backpressureState(
-      "operator_testing_overloaded",
-      "medium",
-      "stageSummaries",
-      "Ready To Test packets are waiting for operator testing.",
-      "Record pass, fail, note, or rework decision before starting more Execute work.",
-      affectedStagesFromProjection(projection, ["review", "promote"])
-    );
-  }
-  return null;
-}
-
 function backpressureState(
   reason: PipelineBackpressureReason,
   severity: PipelineBackpressureState["severity"],
   source: PipelineBackpressureState["source"],
   summary: string,
   nextSafeAction: string,
-  affectedStages: AuthoritativePacketStage[]
+  affectedStages: AuthoritativePacketStage[],
+  executeAdmission: PipelineDashboardProjectionV0["executeAdmission"] | null = null
 ): PipelineBackpressureState {
   return {
     visible: true,
@@ -1293,6 +1374,17 @@ function backpressureState(
     summary,
     nextSafeAction,
     affectedStages,
+    backendWip: executeAdmission ? {
+      policyVersion: executeAdmission.policyVersion,
+      state: executeAdmission.state,
+      typedReason: executeAdmission.typedReason,
+      limits: executeAdmission.limits,
+      observed: executeAdmission.observed,
+      blockingDimensions: [...executeAdmission.blockingDimensions],
+      evidenceRefs: [...executeAdmission.evidenceRefs],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    } : null,
     metadataOnly: true,
     rawPayloadRetained: false,
   };
