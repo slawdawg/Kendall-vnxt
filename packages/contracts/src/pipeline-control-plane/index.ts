@@ -1387,7 +1387,7 @@ const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$
 const EPIC_25_RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 const EPIC_25_HIGH_ENTROPY_OR_PEM = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?:^|:)[A-Za-z0-9+/]{48,}={0,2}$/i;
 const EPIC_25_EXACT_TARGET_REVISION = /^[a-f0-9]{40}$/;
-const EPIC_25_EXECUTABLE_POLICY_TEXT = /\b(?:tmux\s+(?:kill|send|capture|new|attach)|git(?:hub)?\s+(?:add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)|gh\s+(?:pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(?:call|request|payload))\b/i;
+const EPIC_25_EXECUTABLE_POLICY_TEXT = /(?<![A-Za-z0-9_])(?:tmux\s+(?:kill|send|capture|new|attach)\b|git(?:hub)?(?:\s+\S+){0,4}\s+(?:add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)\b|gh\s+(?:pr|repo|api)\b|curl(?:\s|$)|bash(?:\s|$)|sh(?:\s|$)|python(?:3(?:\.\d+)?)?(?:\s|$)|node(?:\s|$)|npm\s+run(?:\s|$)|pnpm(?:\s|$)|uv\s+run(?:\s|$)|provider\s+(?:call|request|payload)\b)/i;
 const OPERATIONAL_ACTION_MERGE_HEAD_SHA_EVIDENCE = /^evidence:merge-head-sha-[a-f0-9]{40}$/;
 const OPERATIONAL_ACTION_MERGE_BASE_EVIDENCE = /^evidence:merge-base-[a-z0-9._/@:-]{1,120}$/;
 const OPERATIONAL_ACTION_MERGE_PR_EVIDENCE = /^evidence:merge-pr-[0-9]{1,10}$/;
@@ -2951,7 +2951,8 @@ function isSafeOperationalMetadataText(value: string): boolean {
     trimmed.length <= 500 &&
     !/[\u0000-\u001F\u007F]/.test(trimmed) &&
     !FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(trimmed) &&
-    !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(trimmed)
+    !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(trimmed) &&
+    !EPIC_25_EXECUTABLE_POLICY_TEXT.test(trimmed)
   );
 }
 

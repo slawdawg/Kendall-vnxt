@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -120,6 +121,17 @@ test("Epic 25 policy profile rejects missing gates, unexplained skips, stale tar
 
   for (const [label, candidate] of cases) {
     assert.ok(validatePipelineEpic25EvidenceChainV1(candidate, now).length > 0, label);
+  }
+});
+
+test("Epic 25 Python and TypeScript policy-text filters share conservative executable and control-character vectors", () => {
+  const cases = JSON.parse(readFileSync(new URL("./fixtures/epic25-policy-text-parity.json", import.meta.url), "utf8")) as Array<{ value: string; safe: boolean }>;
+  for (const candidate of cases) {
+    const profileCandidate = chain();
+    profileCandidate.policyProfile.retentionPolicy.policyReason = candidate.value;
+    const hasPolicyReasonIssue = validatePipelineEpic25EvidenceChainV1(profileCandidate, now)
+      .some((issue) => issue.field === "policyProfile.retentionPolicy.policyReason");
+    assert.equal(hasPolicyReasonIssue, !candidate.safe, candidate.value);
   }
 });
 

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
         default="contract_only",
         alias="SUPERVISOR_PIPELINE_PRODUCT_MODE",
     )
+    pipeline_epic_25_source_revision: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{40}$",
+        alias="SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION",
+    )
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")

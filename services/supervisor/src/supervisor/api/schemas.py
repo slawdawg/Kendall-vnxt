@@ -39,9 +39,10 @@ MAX_METADATA_DEPTH = 64
 MAX_METADATA_NODES = 1000
 MAX_METADATA_AGGREGATE_BYTES = 64 * 1024
 EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
-    r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
+    r"(?<![A-Za-z0-9_])(?:tmux\s+(?:kill|send|capture|new|attach)\b|git(?:hub)?(?:\s+\S+){0,4}\s+(?:add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)\b|gh\s+(?:pr|repo|api)\b|curl(?:\s|$)|bash(?:\s|$)|sh(?:\s|$)|python(?:3(?:\.\d+)?)?(?:\s|$)|node(?:\s|$)|npm\s+run(?:\s|$)|pnpm(?:\s|$)|uv\s+run(?:\s|$)|provider\s+(?:call|request|payload)\b)",
     re.IGNORECASE,
 )
+PIPELINE_METADATA_CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
 EPIC_25_EVIDENCE_REF_RE = re.compile(
     r"^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$"
 )
@@ -59,8 +60,10 @@ def _is_safe_pipeline_evidence_ref(value: str) -> bool:
 def _is_safe_pipeline_control_text(value: str) -> bool:
     text = value.strip()
     return (
-        bool(text)
+        text == value
+        and bool(text)
         and len(text) <= 500
+        and not PIPELINE_METADATA_CONTROL_CHARACTER_RE.search(text)
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
         and not EXECUTABLE_PIPELINE_CONTROL_TEXT_RE.search(text)
     )

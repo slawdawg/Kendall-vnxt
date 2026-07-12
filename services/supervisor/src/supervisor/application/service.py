@@ -51,6 +51,8 @@ LOCAL_PROOF_TEST_CAPABILITY = object()
 LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
 PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
 PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY = "pipelineEpic25EvidenceChain"
+PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY = "pipelineEpic25SourceRevisionAttestation"
+PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_TYPE = "server-owned-git-source-revision/v0"
 
 
 from supervisor.api.schemas import (
@@ -601,6 +603,7 @@ class SupervisorService:
         self.bus = bus
         self._local_proof_capability = local_proof_capability
         self._local_proof_attestation: tuple[Path, str] | None = None
+        self._server_owned_epic_25_source_revision = settings.pipeline_epic_25_source_revision
         self._loop_lock = asyncio.Lock()
         self._execute_admission_lock = asyncio.Lock()
         self.utility_worker = UtilityWorkerAdapter()
@@ -785,20 +788,24 @@ class SupervisorService:
         original_metadata = dict(packet.source_ref_json or {})
         if isinstance(evidence_chain, PipelineEpic25EvidenceChainV1View):
             policy_profile = evidence_chain.policyProfile
-            source_event_result = await session.execute(
-                select(AuthoritativeWorkPacketLifecycleEvent).where(
-                    AuthoritativeWorkPacketLifecycleEvent.packet_id == packet_id,
-                    AuthoritativeWorkPacketLifecycleEvent.event_type == "packet.created",
+            source_revision_attestation = self._build_server_owned_source_revision_attestation()
+            if source_revision_attestation is None:
+                raise ValueError(
+                    "Epic 25 v1 policy ingestion is held/upgrade-required: a server-owned source revision attestation "
+                    "must be configured by the supervisor; "
+                    "caller-supplied packet evidence refs cannot authorize a policy profile. "
+                    "Hold v1 until the source is re-ingested with a trusted revision attestation, or use legacy v0."
                 )
-            )
-            source_event = source_event_result.scalars().first()
-            trusted_revision_ref = f"source:revision-{policy_profile.targetRevision}"
-            if source_event is None or trusted_revision_ref not in (source_event.evidence_refs_json or []):
-                raise ValueError("Epic 25 policy targetRevision must match the authoritative packet source revision evidence ref.")
+            trusted_revision = source_revision_attestation["sourceRevision"]
+            if policy_profile.targetRevision != trusted_revision:
+                raise ValueError(
+                    "Epic 25 policy targetRevision must match the server-owned source revision attestation; "
+                    "caller-supplied evidence refs are not authoritative."
+                )
             if policy_profile.checkedAt > now + timedelta(minutes=1) or policy_profile.expiresAt < now:
                 raise ValueError("Epic 25 policy profile is stale, expired, or future-dated.")
-            if any(gate.expiresAt < policy_profile.checkedAt for gate in policy_profile.qualityGates):
-                raise ValueError("Epic 25 policy profile contains a gate stale at the profile check time.")
+            if any(gate.expiresAt < now for gate in policy_profile.qualityGates):
+                raise ValueError("Epic 25 policy profile contains a gate expired at ingestion time.")
             if policy_profile.retentionPolicy.expiresAt < now:
                 raise ValueError("Epic 25 retention policy is expired.")
         for slot in ("readiness", "canary", "ramp", "recovery", "hardening", "decision"):
@@ -810,7 +817,12 @@ class SupervisorService:
         current_raw = original_metadata.get(PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY)
         if current_raw == serialized:
             current_chain = self._validate_epic_25_evidence_chain(current_raw)
-            return self._epic_25_evidence_chain_read_view(current_chain, now)
+            return self._epic_25_evidence_chain_read_view(
+                current_chain,
+                now,
+                source_revision_attested=not isinstance(current_chain, PipelineEpic25EvidenceChainV1View)
+                or self._server_owned_source_revision_attestation_from_metadata(original_metadata) is not None,
+            )
         if current_raw is None:
             if payload.expectedCurrentDigestSha256 is not None:
                 raise ValueError("Initial Epic 25 evidence ingestion must not claim an existing chain digest.")
@@ -826,6 +838,8 @@ class SupervisorService:
             if isinstance(current_chain, PipelineEpic25EvidenceChainV1View) and isinstance(evidence_chain, PipelineEpic25EvidenceChainV0View):
                 raise ValueError("Epic 25 evidence-chain replacement cannot downgrade a canonical v1 policy chain to legacy v0.")
         stored_metadata = dict(original_metadata)
+        if isinstance(evidence_chain, PipelineEpic25EvidenceChainV1View):
+            stored_metadata[PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY] = source_revision_attestation
         stored_metadata[PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY] = serialized
         update_result = await session.execute(
             update(AuthoritativeWorkPacket)
@@ -844,7 +858,12 @@ class SupervisorService:
         except SQLAlchemyError:
             await session.rollback()
             raise
-        return self._epic_25_evidence_chain_read_view(evidence_chain, now)
+        return self._epic_25_evidence_chain_read_view(
+            evidence_chain,
+            now,
+            source_revision_attested=not isinstance(evidence_chain, PipelineEpic25EvidenceChainV1View)
+            or self._server_owned_source_revision_attestation_from_metadata(stored_metadata) is not None,
+        )
 
     async def transition_authoritative_work_packet(
         self,
@@ -1808,8 +1827,8 @@ class SupervisorService:
         except ValidationError:
             return None
 
-    @staticmethod
     def _epic_25_evidence_chain_from_packet_metadata(
+        self,
         stored_payload: object,
         read_at: datetime,
     ) -> PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View | None:
@@ -1820,9 +1839,32 @@ class SupervisorService:
             return None
         try:
             chain = SupervisorService._validate_epic_25_evidence_chain(raw_chain)
-            return SupervisorService._epic_25_evidence_chain_read_view(chain, read_at)
+            return self._epic_25_evidence_chain_read_view(
+                chain,
+                read_at,
+                source_revision_attested=(
+                    not isinstance(chain, PipelineEpic25EvidenceChainV1View)
+                    or self._server_owned_source_revision_attestation_from_metadata(stored_payload) is not None
+                ),
+            )
         except ValidationError:
             return None
+
+    def _build_server_owned_source_revision_attestation(self) -> dict[str, str] | None:
+        revision = self._server_owned_epic_25_source_revision
+        if revision is None:
+            return None
+        return {
+            "attestationType": PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_TYPE,
+            "sourceRevision": revision,
+        }
+
+    def _server_owned_source_revision_attestation_from_metadata(self, stored_payload: object) -> dict[str, str] | None:
+        expected = self._build_server_owned_source_revision_attestation()
+        if expected is None or not isinstance(stored_payload, dict):
+            return None
+        stored = stored_payload.get(PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY)
+        return stored if stored == expected else None
 
     @staticmethod
     def _epic_25_evidence_chain_digest(serialized: object) -> str:
@@ -1839,6 +1881,8 @@ class SupervisorService:
     def _epic_25_evidence_chain_read_view(
         chain: PipelineEpic25EvidenceChainV0View | PipelineEpic25EvidenceChainV1View,
         read_at: datetime,
+        *,
+        source_revision_attested: bool = True,
     ) -> PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View:
         serialized = chain.model_dump(mode="json")
         stale = chain.expiresAt < read_at or any(
@@ -1860,6 +1904,8 @@ class SupervisorService:
                 typedBlockers=blockers,
             )
         policy_profile = chain.policyProfile
+        if not source_revision_attested:
+            blockers.append("source_revision_attestation_required")
         policy_stale = policy_profile.expiresAt < read_at or any(gate.expiresAt < read_at for gate in policy_profile.qualityGates)
         retention_expired = policy_profile.retentionPolicy.expiresAt < read_at
         if policy_stale:

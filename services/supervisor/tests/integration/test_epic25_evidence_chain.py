@@ -33,15 +33,19 @@ def _reset_supervisor_modules() -> None:
             sys.modules.pop(module_name, None)
 
 
-def _configure(tmp_path, monkeypatch, db_name: str) -> None:
+def _configure(tmp_path, monkeypatch, db_name: str, *, source_revision: str | None = TARGET_REVISION) -> None:
     db_path = (tmp_path / db_name).as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    if source_revision is None:
+        monkeypatch.delenv("SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION", raising=False)
+    else:
+        monkeypatch.setenv("SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION", source_revision)
     _reset_supervisor_modules()
 
 
-def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
-    _configure(tmp_path, monkeypatch, db_name)
+def _client(tmp_path, monkeypatch, db_name: str, *, source_revision: str | None = TARGET_REVISION) -> TestClient:
+    _configure(tmp_path, monkeypatch, db_name, source_revision=source_revision)
     from supervisor.api.main import app
 
     return TestClient(app, client=("127.0.0.1", 50000))
@@ -99,7 +103,11 @@ def _request(base_url: str, path: str, method: str, payload: dict | None = None)
         return exc.code, json.loads(exc.read().decode("utf8"))
 
 
-def _create_packet(client: TestClient, packet_id: str = "packet-epic-25") -> None:
+def _create_packet(
+    client: TestClient,
+    packet_id: str = "packet-epic-25",
+    evidence_refs: list[str] | None = None,
+) -> None:
     response = client.post(
         "/pipeline-control-plane/work-packets",
         json={
@@ -108,7 +116,7 @@ def _create_packet(client: TestClient, packet_id: str = "packet-epic-25") -> Non
             "sourceRef": {"refId": "repo-doc:epic-25", "sourceType": "repo_doc", "pathOrUrl": "docs/workflows/epic-25-retrospective-and-next-authority.md"},
             "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
             "idempotencyKey": f"create-{packet_id}",
-            "evidenceRefs": ["evidence:epic-25-source", f"source:revision-{TARGET_REVISION}"],
+            "evidenceRefs": evidence_refs or ["evidence:epic-25-source", f"source:revision-{TARGET_REVISION}"],
         },
     )
     assert response.status_code == 200, response.text
@@ -410,7 +418,38 @@ def test_v1_target_revision_must_match_authoritative_packet_source_revision(tmp_
             json=_ingest_payload(unrelated),
         )
         assert rejected.status_code == 400, rejected.text
-        assert "authoritative packet source revision evidence ref" in rejected.text
+        assert "server-owned source revision attestation" in rejected.text
+
+
+def test_v1_forged_packet_created_revision_ref_cannot_authorize_arbitrary_target(tmp_path, monkeypatch) -> None:
+    forged_revision = "b" * 40
+    with _client(tmp_path, monkeypatch, "epic-25-forged-revision.db") as client:
+        _create_packet(client, evidence_refs=[f"source:revision-{forged_revision}"])
+        forged = _chain()
+        forged["policyProfile"]["targetRevision"] = forged_revision
+        for gate in forged["policyProfile"]["qualityGates"]:
+            gate["targetRevision"] = forged_revision
+
+        rejected = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(forged),
+        )
+
+        assert rejected.status_code == 400, rejected.text
+        assert "server-owned source revision attestation" in rejected.text
+
+
+def test_v1_without_server_owned_revision_is_held_even_when_caller_ref_matches(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-missing-revision-attestation.db", source_revision=None) as client:
+        _create_packet(client)
+        held = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(_chain()),
+        )
+
+        assert held.status_code == 400, held.text
+        assert "held/upgrade-required" in held.text
+        assert "legacy v0" in held.text
 
 
 def test_policy_profile_failures_are_retained_as_non_authorizing_readback_blockers(tmp_path, monkeypatch) -> None:
@@ -478,6 +517,25 @@ def test_policy_expiry_alone_marks_chain_readback_stale(tmp_path, monkeypatch) -
         assert projected["freshnessState"] == "stale"
         assert projected["typedBlockers"] == ["policy_profile_stale"]
         assert projected["effectiveDecision"] == "hold"
+
+
+def test_ingestion_rejects_gate_expired_now_even_when_policy_check_was_fresh(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-gate-expiry-at-ingestion.db") as client:
+        _create_packet(client)
+        checked_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=30)
+        expired_gate_chain = _chain(now=checked_at)
+        telemetry_gate = next(
+            gate for gate in expired_gate_chain["policyProfile"]["qualityGates"] if gate["family"] == "telemetry"
+        )
+        telemetry_gate["expiresAt"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+
+        rejected = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(expired_gate_chain),
+        )
+
+        assert rejected.status_code == 400, rejected.text
+        assert "expired at ingestion time" in rejected.text
 
 
 def test_chain_rejects_partial_unsafe_stale_mismatched_and_non_live_go_without_overwrite(tmp_path, monkeypatch) -> None:
