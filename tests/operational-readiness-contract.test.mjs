@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -37,6 +38,38 @@ const thresholds = Object.fromEntries([
   ["latency", "milliseconds"],
   ["cost", "cents"],
 ].map(([name, unit]) => [name, { name, operator: "lte", value: 1, unit }]));
+
+const packetSchemas = {
+  canary: "pipeline-one-worker-live-canary/v0",
+  ramp: "pipeline-live-capacity-ramp/v0",
+  recovery: "pipeline-resilience-recovery-validation/v0",
+  hardening: "pipeline-operational-hardening-runbooks/v0",
+  decision: "pipeline-production-readiness-decision/v0",
+};
+
+function observedAttestation(packetSchemaVersion, overrides = {}) {
+  const { receipt: receiptOverrides = {}, ...attestationOverrides } = overrides;
+  return {
+    schemaVersion: "pipeline-observed-evidence-attestation/v0",
+    attestationId: `attestation-${packetSchemaVersion.split("/")[0]}`,
+    evidenceClass: "live_observed",
+    observer: { observerType: "independent_runtime", observerId: "independent-observer-1" },
+    subject: { packetSchemaVersion, targetRef: "manager-20260710/codex-1" },
+    receipt: {
+      receiptId: `receipt-${packetSchemaVersion.split("/")[0]}`,
+      observedAt: "2026-07-10T01:00:00.000Z",
+      issuedAt: "2026-07-10T01:00:00.000Z",
+      expiresAt: "2026-07-10T01:05:00.000Z",
+      evidenceDigestSha256: `sha256:${"a".repeat(64)}`,
+      sourceRefs: ["prd:epic-25-production-hardening"],
+      evidenceRefs: ["evidence:canary-observation"],
+      ...receiptOverrides,
+    },
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...attestationOverrides,
+  };
+}
 
 function passingContext(overrides = {}) {
   return {
@@ -143,6 +176,7 @@ test("one-worker canary evidence passes only with live proof and bounded measure
     readinessContract,
     backendTruth: "live",
     backendTruthProven: true,
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary),
     canaryAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:canary-authority"] },
     telemetry: passingContext().telemetry,
     lease: { state: "pass", proofRef: "evidence:lease-proof" },
@@ -192,6 +226,80 @@ test("one-worker canary stops and requires rollback on timeout", () => {
   assert.deepEqual(validateOneWorkerLiveCanaryEvidence(evidence), []);
 });
 
+test("caller live booleans alone remain integrated-local and cannot promote", () => {
+  const evidence = buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    target,
+    readinessContract: buildOperationalReadinessContract({}, passingContext()),
+    backendTruth: "live",
+    backendTruthProven: true,
+    canaryAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:canary-authority"] },
+    telemetry: passingContext().telemetry,
+    lease: { state: "pass", proofRef: "evidence:lease-proof" },
+    checkpoint: { state: "pass", proofRef: "evidence:checkpoint-proof" },
+    measurements: { latencyMs: 1, errorCount: 0, cpuPercent: 1, memoryPercent: 1, diskPercent: 1, costCents: 1, timedOut: false },
+    recovery: passingContext().recovery,
+    evidenceRefs: ["evidence:caller-asserted-live"],
+  });
+  assert.equal(evidence.evidenceClass, "integrated_local");
+  assert.equal(evidence.outcome, "hold");
+  assert.equal(evidence.rampAllowed, false);
+  assert.ok(evidence.typedBlockers.some((blocker) => blocker.reason === "evidence_attestation_invalid"));
+  assert.deepEqual(validateOneWorkerLiveCanaryEvidence(evidence), []);
+});
+
+test("forged live provenance and missing or invalid attestations fail closed", () => {
+  const local = buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    target,
+    backendTruth: "live",
+    backendTruthProven: true,
+    observedEvidenceAttestation: { evidenceClass: "live_observed", observer: { observerType: "independent_runtime" } },
+    evidenceRefs: ["evidence:forged-live"],
+  });
+  assert.equal(local.evidenceClass, "integrated_local");
+  assert.equal(local.observedEvidenceAttestation, null);
+
+  const forged = {
+    ...passingCanaryEvidence(),
+    evidenceClass: "live_observed",
+    observedEvidenceAttestation: null,
+  };
+  assert.ok(validateOneWorkerLiveCanaryEvidence(forged).some((blocker) => blocker.code === "evidence_attestation_invalid"));
+
+  const unrelatedReceipt = buildOneWorkerLiveCanaryEvidence({}, {
+    ...passingContext(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary, {
+      receipt: { sourceRefs: ["source:unrelated"], evidenceRefs: ["evidence:unrelated"] },
+    }),
+  });
+  assert.equal(unrelatedReceipt.evidenceClass, "integrated_local");
+  assert.equal(unrelatedReceipt.outcome, "hold");
+
+  const fixture = buildOneWorkerLiveCanaryEvidence({}, {
+    ...passingContext(),
+    fixtureEvidence: true,
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary),
+  });
+  assert.equal(fixture.evidenceClass, "fixture");
+  assert.equal(fixture.observedEvidenceAttestation, null);
+  assert.deepEqual(validateOneWorkerLiveCanaryEvidence(fixture), []);
+});
+
+test("stale independent observation receipts cannot produce promotion-grade evidence", () => {
+  const stale = buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:10:00.000Z",
+    target,
+    backendTruth: "live",
+    backendTruthProven: true,
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary),
+    evidenceRefs: ["evidence:stale-receipt"],
+  });
+  assert.equal(stale.evidenceClass, "integrated_local");
+  assert.equal(stale.outcome, "hold");
+  assert.equal(stale.observedEvidenceAttestation, null);
+});
+
 test("continuous runtime readiness projects canary evidence without enabling live mutation", () => {
   const runtime = buildRuntimeReadinessPlan(
     { runtimeMode: "continuous_dry_run" },
@@ -218,6 +326,7 @@ function passingCanaryEvidence() {
     readinessContract,
     backendTruth: "live",
     backendTruthProven: true,
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary),
     canaryAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:canary-authority"] },
     telemetry: context.telemetry,
     lease: { state: "pass", proofRef: "evidence:lease-proof" },
@@ -263,6 +372,7 @@ test("capacity ramp records ordered per-stage evidence and never enables rollout
   const ramp = buildLiveCapacityRampEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     canaryEvidence: passingCanaryEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.ramp),
     stages: [1, 2, 4, 6].map(passingRampStage),
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:ramp-observation"],
@@ -282,6 +392,7 @@ test("capacity ramp stops on a stage threshold breach and blocks later stages", 
   const ramp = buildLiveCapacityRampEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     canaryEvidence: passingCanaryEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.ramp),
     stages,
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:ramp-breach"],
@@ -309,6 +420,7 @@ function passingRampEvidence() {
   return buildLiveCapacityRampEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     canaryEvidence: passingCanaryEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.ramp),
     stages: [1, 2, 4, 6].map(passingRampStage),
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:ramp-observation"],
@@ -345,6 +457,7 @@ test("resilience validation records ordered recovery drills without enabling rol
   const recovery = buildResilienceRecoveryEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     rampEvidence: passingRampEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.recovery),
     drills: ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"].map(passingRecoveryDrill),
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:recovery-validation"],
@@ -363,6 +476,7 @@ test("resilience validation stops on ambiguous ownership and blocks later drills
   const recovery = buildResilienceRecoveryEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     rampEvidence: passingRampEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.recovery),
     drills,
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:recovery-ambiguity"],
@@ -389,6 +503,7 @@ function passingRecoveryEvidence() {
   return buildResilienceRecoveryEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     rampEvidence: passingRampEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.recovery),
     drills: ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"].map(passingRecoveryDrill),
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:recovery-validation"],
@@ -415,6 +530,7 @@ test("operational hardening records all runbook domains and hands off without ro
   const hardening = buildOperationalHardeningRunbookEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     recoveryEvidence: passingRecoveryEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.hardening),
     domains,
     sourceRefs: ["prd:epic-25-production-hardening"],
     evidenceRefs: ["evidence:hardening-handoff"],
@@ -478,6 +594,7 @@ function passingHardeningEvidence() {
   return buildOperationalHardeningRunbookEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     recoveryEvidence: passingRecoveryEvidence(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.hardening),
     domains: ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"]
       .map(passingHardeningDomain),
     sourceRefs: ["prd:epic-25-production-hardening"],
@@ -499,6 +616,7 @@ test("production readiness decision produces go only from fresh passing predeces
   const decision = buildProductionReadinessDecisionEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     ...passingDecisionPackets(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.decision),
     finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:final-readiness-authority"] },
     owner: "manager-20260710",
     scope: { name: "bounded-production-readiness", boundaries: ["metadata-only-manager-scope"] },
@@ -552,6 +670,7 @@ test("production readiness decision can record an explicitly bounded limited rol
   const limited = buildProductionReadinessDecisionEvidence({}, {
     now: "2026-07-10T01:00:00.000Z",
     ...packets,
+    observedEvidenceAttestation: observedAttestation(packetSchemas.decision),
     finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:limited-readiness-authority"] },
     limitedRollout: { requested: true, boundaries: ["one-worker-only", "metadata-only-monitoring"] },
   });
@@ -580,10 +699,34 @@ test("production readiness decision refuses missing provenance even when predece
     now: "2026-07-10T01:00:00.000Z",
     ...packets,
     rampEvidence: { ...packets.rampEvidence, evidenceClass: undefined },
+    observedEvidenceAttestation: observedAttestation(packetSchemas.decision),
     finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:provenance-authority"] },
   });
   assert.equal(decision.decision, "hold");
-  assert.equal(decision.evidenceClass, "unknown");
+  assert.equal(decision.evidenceClass, "integrated_local");
+  assert.equal(decision.observedEvidenceAttestation, null);
   assert.ok(decision.typedBlockers.some((blocker) => blocker.code === "decision_evidence_provenance_missing"));
   assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
+});
+
+test("Epic 25 TypeScript and runtime provenance schemas stay aligned", async () => {
+  const [types, runtime] = await Promise.all([
+    readFile(new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/lib/manager-control-plane/operational-readiness.mjs", import.meta.url), "utf8"),
+  ]);
+  for (const packetType of [
+    "PipelineOneWorkerLiveCanaryEvidenceV0",
+    "PipelineLiveCapacityRampEvidenceV0",
+    "PipelineResilienceRecoveryEvidenceV0",
+    "PipelineOperationalHardeningEvidenceV0",
+    "PipelineProductionReadinessDecisionEvidenceV0",
+  ]) {
+    const body = types.match(new RegExp(`export interface ${packetType} \\{([\\s\\S]*?)\\n\\}`))?.[1] || "";
+    assert.match(body, /evidenceClass: PipelineOperationalEvidenceClassV0;/);
+    assert.match(body, /observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 \| null;/);
+  }
+  for (const token of ["fixture", "integrated_local", "live_observed", "pipeline-observed-evidence-attestation/v0"]) {
+    assert.ok(types.includes(token), `TypeScript contract must include ${token}`);
+    assert.ok(runtime.includes(token), `runtime contract must include ${token}`);
+  }
 });

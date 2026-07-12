@@ -4,6 +4,7 @@ const RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0";
 const RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0";
 const HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0";
 const PRODUCTION_DECISION_SCHEMA_VERSION = "pipeline-production-readiness-decision/v0";
+const OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION = "pipeline-observed-evidence-attestation/v0";
 const GATE_STATES = new Set(["pass", "fail", "blocked", "not_applicable"]);
 const BACKEND_TRUTHS = new Set(["live", "simulated", "dry_run"]);
 const OUTCOMES = new Set(["go", "no_go"]);
@@ -12,6 +13,7 @@ const RAMP_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const RECOVERY_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const HARDENING_OUTCOMES = new Set(["pass", "hold", "stop"]);
 const PRODUCTION_DECISIONS = new Set(["go", "hold", "limited_rollout"]);
+const EVIDENCE_CLASSES = new Set(["fixture", "integrated_local", "live_observed"]);
 const DEFAULT_RAMP_WORKER_COUNTS = [1, 2, 4, 6];
 const RECOVERY_DRILL_KINDS = ["restart", "worker_death", "stale_lease", "timeout", "verification_failure", "pause_drain", "handoff", "recovery"];
 const HARDENING_DOMAINS = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"];
@@ -99,6 +101,7 @@ function reasonFor(code, fallback = "unknown") {
     "canary_not_passed", "stage_plan_invalid", "capacity_missing", "stage_threshold_exceeded",
     "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
     "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed", "fixture_evidence",
+    "evidence_provenance_missing", "evidence_attestation_invalid", "evidence_receipt_stale",
     "runbook_gap", "high_risk_gap", "runbook_owner_missing", "runbook_trigger_missing", "runbook_gate_missing", "runbook_recovery_missing",
     "canonical_contract_missing", "canonical_contract_invalid", "canonical_contract_contradictory",
   ]);
@@ -107,6 +110,78 @@ function reasonFor(code, fallback = "unknown") {
 
 function own(record, key) {
   return Boolean(record && typeof record === "object" && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function sha256Ref(value) {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value) ? value : "";
+}
+
+function observedEvidenceAttestation(value, packetSchemaVersion, checkedAtMs) {
+  if (!plainRecord(value) || value.schemaVersion !== OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION ||
+      value.evidenceClass !== "live_observed" || value.metadataOnly !== true || value.rawPayloadRetained !== false) return null;
+  const observer = plainRecord(value.observer) ? value.observer : {};
+  const subject = plainRecord(value.subject) ? value.subject : {};
+  const receipt = plainRecord(value.receipt) ? value.receipt : {};
+  const observedAtMs = Date.parse(receipt.observedAt || "");
+  const issuedAtMs = Date.parse(receipt.issuedAt || "");
+  const expiresAtMs = Date.parse(receipt.expiresAt || "");
+  const valid = Boolean(
+    safeId(value.attestationId) && observer.observerType === "independent_runtime" && safeId(observer.observerId) &&
+    subject.packetSchemaVersion === packetSchemaVersion && safeId(subject.targetRef) && safeId(receipt.receiptId) &&
+    sha256Ref(receipt.evidenceDigestSha256) && refs(receipt.sourceRefs).length === receipt.sourceRefs?.length && receipt.sourceRefs.length > 0 &&
+    refs(receipt.evidenceRefs).length === receipt.evidenceRefs?.length && receipt.evidenceRefs.length > 0 &&
+    Number.isFinite(observedAtMs) && Number.isFinite(issuedAtMs) && Number.isFinite(expiresAtMs) &&
+    observedAtMs <= issuedAtMs && issuedAtMs <= checkedAtMs + FUTURE_SKEW_MS && expiresAtMs >= checkedAtMs &&
+    checkedAtMs - observedAtMs <= FRESHNESS_TTL_MS && expiresAtMs - issuedAtMs <= FRESHNESS_TTL_MS
+  );
+  if (!valid) return null;
+  return {
+    schemaVersion: OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION,
+    attestationId: safeId(value.attestationId),
+    evidenceClass: "live_observed",
+    observer: { observerType: "independent_runtime", observerId: safeId(observer.observerId) },
+    subject: { packetSchemaVersion, targetRef: safeId(subject.targetRef) },
+    receipt: {
+      receiptId: safeId(receipt.receiptId),
+      observedAt: new Date(observedAtMs).toISOString(),
+      issuedAt: new Date(issuedAtMs).toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      evidenceDigestSha256: receipt.evidenceDigestSha256,
+      sourceRefs: refs(receipt.sourceRefs),
+      evidenceRefs: refs(receipt.evidenceRefs),
+    },
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function evidenceClassFor({ fixtureEvidence, attestation }) {
+  return fixtureEvidence ? "fixture" : attestation ? "live_observed" : "integrated_local";
+}
+
+function attestationBindsPacket(attestation, sourceRefs, evidenceRefs) {
+  return Boolean(attestation &&
+    attestation.receipt.sourceRefs.some((ref) => sourceRefs.includes(ref)) &&
+    attestation.receipt.evidenceRefs.some((ref) => evidenceRefs.includes(ref)));
+}
+
+function validateEvidenceProvenance(evidence, packetSchemaVersion, checkedAtMs) {
+  const blockers = [];
+  if (!EVIDENCE_CLASSES.has(evidence?.evidenceClass)) {
+    blockers.push({ code: "evidence_provenance_missing", message: "Evidence requires an explicit provenance class." });
+    return blockers;
+  }
+  const attestation = observedEvidenceAttestation(evidence?.observedEvidenceAttestation, packetSchemaVersion, checkedAtMs);
+  if (evidence.evidenceClass === "live_observed" && !attestation) {
+    blockers.push({ code: "evidence_attestation_invalid", message: "Live-observed evidence requires a fresh independently issued observation receipt bound to this packet schema." });
+  }
+  if (attestation && !attestationBindsPacket(attestation, refs(evidence?.sourceRefs), refs(evidence?.evidenceRefs))) {
+    blockers.push({ code: "evidence_attestation_invalid", message: "The independent observation receipt is not bound to this packet's source and evidence refs." });
+  }
+  if (evidence.evidenceClass !== "live_observed" && evidence?.observedEvidenceAttestation != null) {
+    blockers.push({ code: "evidence_attestation_invalid", message: "Fixture and integrated-local packets cannot carry promotion-grade observation attestations." });
+  }
+  return blockers;
 }
 
 function plainRecord(value) {
@@ -572,11 +647,20 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
   const readinessContract = context.readinessContract || options.readinessContract || {};
   const backendTruth = BACKEND_TRUTHS.has(context.backendTruth || options.backendTruth) ? (context.backendTruth || options.backendTruth) : "dry_run";
   const fixtureEvidence = context.fixtureEvidence === true;
+  const observationAttestation = observedEvidenceAttestation(
+    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
+    CANARY_SCHEMA_VERSION,
+    checkedAtMs,
+  );
   const authority = context.canaryAuthority || context.authority || {};
   const authorityAllowed = (authority.state || context.authorityState || options.authorityState) === "allowed" &&
     (authority.proven === true || context.authorityProven === true || options.authorityProven === true);
   const evidenceRefs = refs([...target.evidenceRefs, ...(context.evidenceRefs || [])]);
   const sourceRefs = refs(target.sourceRefs);
+  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+    ? observationAttestation
+    : null;
+  const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
   const telemetryInput = context.telemetry || {};
   const telemetry = {
     source: safeId(telemetryInput.source),
@@ -646,7 +730,7 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
   addGate("exact_canary_scope", exactTarget && oneWorker, "target_not_exact", "Provide exactly one worker, assignment, owner, and run identity.");
   addGate("predecessor_readiness", readinessReady, "predecessor_gate_not_passed", "Verify the passing 25-1 readiness contract before running the canary.");
   addGate("canary_authority", authorityAllowed, "canary_authority_missing", "Record explicit bounded canary authority before live execution.");
-  addGate("live_truth", backendTruth === "live" && context.backendTruthProven === true && !fixtureEvidence, fixtureEvidence ? "fixture_evidence" : "backend_truth_unproven", fixtureEvidence ? "Replace fixture evidence with an independently observed canary before allowing ramp." : "Hold the canary until live backend truth is explicitly proven.");
+  addGate("live_truth", backendTruth === "live" && context.backendTruthProven === true && evidenceClass === "live_observed", fixtureEvidence ? "fixture_evidence" : "evidence_attestation_invalid", fixtureEvidence ? "Replace fixture evidence with an independently observed canary before allowing ramp." : "Attach a fresh independent observation receipt bound to the canary packet before allowing ramp.");
   addGate("telemetry", telemetryReady, "telemetry_missing", "Provide fresh telemetry coverage and alert threshold metadata.");
   addGate("lease", leaseReady, "lease_missing", "Provide exact dispatcher lease proof for the canary worker.", refs([...evidenceRefs, lease.proofRef].filter(Boolean)));
   addGate("checkpoint", checkpointReady, "checkpoint_missing", "Provide a checkpoint or receipt proof for the canary worker.", refs([...evidenceRefs, checkpoint.proofRef].filter(Boolean)));
@@ -667,7 +751,8 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
       : "Repair the typed canary blockers and rerun the bounded readiness/canary evidence gate.";
   return {
     schemaVersion: CANARY_SCHEMA_VERSION,
-    evidenceClass: fixtureEvidence ? "fixture" : backendTruth === "live" ? "live_observed" : "simulated",
+    evidenceClass,
+    observedEvidenceAttestation: boundObservationAttestation,
     target,
     workerCount: oneWorker ? 1 : Number(context.workerCount),
     backendTruth,
@@ -700,7 +785,6 @@ export function validateOneWorkerLiveCanaryEvidence(evidence = {}) {
   if (!CANARY_OUTCOMES.has(evidence?.outcome)) blockers.push({ code: "unknown", message: "Canary outcome is missing or malformed." });
   if (evidence?.workerCount !== 1) blockers.push({ code: "target_not_exact", message: "Canary evidence must cover exactly one worker." });
   if (BACKEND_TRUTHS.has(evidence?.backendTruth) === false) blockers.push({ code: "backend_truth_unproven", message: "Canary truth label is missing or malformed." });
-  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Canary evidence requires an explicit provenance class." });
   if (!Array.isArray(evidence?.sourceRefs) || refs(evidence.sourceRefs).length !== evidence.sourceRefs.length || evidence.sourceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Canary evidence requires safe source refs." });
   if (!Array.isArray(evidence?.evidenceRefs) || refs(evidence.evidenceRefs).length !== evidence.evidenceRefs.length || evidence.evidenceRefs.length === 0) blockers.push({ code: "evidence_missing", message: "Canary evidence requires safe evidence refs." });
   if (!Array.isArray(evidence?.gates) || evidence.gates.length < 10) blockers.push({ code: "evidence_missing", message: "Canary evidence requires the bounded gate set." });
@@ -708,6 +792,7 @@ export function validateOneWorkerLiveCanaryEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Canary evidence timestamps must be fresh and bounded." });
+  blockers.push(...validateEvidenceProvenance(evidence, CANARY_SCHEMA_VERSION, checkedAtMs));
   if (evidence?.outcome === "pass" && (evidence.backendTruth !== "live" || evidence.evidenceClass !== "live_observed" || evidence.rampAllowed !== true || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "A passing canary requires independently observed live truth, ramp permission, and no blockers." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped canary requires rollback metadata." });
   return blockers;
@@ -777,8 +862,17 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
   const checkedAt = new Date(checkedAtMs).toISOString();
   const canaryEvidence = context.canaryEvidence || options.canaryEvidence || {};
   const fixtureEvidence = context.fixtureEvidence === true || canaryEvidence.evidenceClass === "fixture";
+  const observationAttestation = observedEvidenceAttestation(
+    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
+    RAMP_SCHEMA_VERSION,
+    checkedAtMs,
+  );
   const sourceRefs = refs([...(canaryEvidence.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(canaryEvidence.evidenceRefs || []), ...(context.evidenceRefs || [])]);
+  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+    ? observationAttestation
+    : null;
+  const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
   const requestedStages = Array.isArray(context.stages || options.stages) ? (context.stages || options.stages) : DEFAULT_RAMP_WORKER_COUNTS.map((workerCount) => ({ workerCount }));
   const expectedWorkerCounts = Array.isArray(context.stageWorkerCounts || options.stageWorkerCounts)
     ? (context.stageWorkerCounts || options.stageWorkerCounts).map(Number).filter((value) => Number.isInteger(value) && value > 0).slice(0, 8)
@@ -794,6 +888,7 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
     canaryEvidence.outcome === "pass" && canaryEvidence.backendTruth === "live" && canaryEvidence.evidenceClass === "live_observed" && canaryEvidence.rampAllowed === true &&
     validateOneWorkerLiveCanaryEvidence(canaryEvidence).length === 0;
   if (!canaryPass) blockers.push({ gateId: "canary_predecessor", reason: reasonFor("canary_not_passed"), nextAction: "Complete and preserve a passing live 25-2 canary evidence packet before ramp." });
+  if (evidenceClass !== "live_observed") blockers.push({ gateId: "ramp_observation", reason: reasonFor(fixtureEvidence ? "fixture_evidence" : "evidence_attestation_invalid"), nextAction: "Attach a fresh independent observation receipt bound to the ramp packet before promotion." });
   const planValid = expectedWorkerCounts.length > 0 && (expectedWorkerCounts.every((value, index) => index === 0 || value > expectedWorkerCounts[index - 1])) &&
     (!changedPlan || Boolean(planRationale && planAuthorityProven));
   if (!planValid) blockers.push({ gateId: "stage_plan", reason: reasonFor("stage_plan_invalid"), nextAction: "Use the default 1, 2, 4, 6 stage sequence or provide rationale, authority, and replacement thresholds." });
@@ -812,7 +907,7 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
     const stageReady = stage.workerCount === expectedWorkerCount && stage.capacityReady && (stage.durationSeconds || 0) > 0 && Boolean(stage.owner) && (stage.budgetCents || 0) > 0 &&
       thresholdReady && stage.authority.state === "allowed" && stage.authority.proven === true && stage.evidenceRefs.length > 0 && measurementsPass && lifecycleReady;
     const thresholdBreached = stage.lifecycleAmbiguous === true || !measurementsPass && stage.observed.queueDepth !== null;
-    const stageOutcome = thresholdBreached ? "stop" : stageReady && canaryPass && planValid ? "pass" : "hold";
+    const stageOutcome = thresholdBreached ? "stop" : stageReady && canaryPass && planValid && evidenceClass === "live_observed" ? "pass" : "hold";
     const stageBlockers = [];
     if (stage.workerCount !== expectedWorkerCount || !stage.capacityReady || !stage.owner || !stage.durationSeconds || !stage.budgetCents) stageBlockers.push({ code: "capacity_missing", message: "Stage capacity, duration, owner, or budget metadata is incomplete." });
     if (!thresholdReady) stageBlockers.push({ code: "stage_threshold_missing", message: "Stage rollback thresholds are incomplete." });
@@ -843,7 +938,8 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
       : "Repair the canary, stage plan, authority, threshold, or lifecycle blockers before any ramp attempt.";
   return {
     schemaVersion: RAMP_SCHEMA_VERSION,
-    evidenceClass: fixtureEvidence ? "fixture" : canaryEvidence.evidenceClass || "unknown",
+    evidenceClass,
+    observedEvidenceAttestation: boundObservationAttestation,
     canaryEvidenceRef: evidenceRefs.find((ref) => ref.startsWith("evidence:")) || null,
     canaryOutcome: canaryEvidence.outcome || "unknown",
     defaultStageWorkerCounts: DEFAULT_RAMP_WORKER_COUNTS,
@@ -880,7 +976,7 @@ export function validateLiveCapacityRampEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Ramp evidence timestamps must be fresh and bounded." });
-  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Ramp evidence requires an explicit provenance class." });
+  blockers.push(...validateEvidenceProvenance(evidence, RAMP_SCHEMA_VERSION, checkedAtMs));
   if (evidence?.outcome === "pass" && (evidence.evidenceClass !== "live_observed" || evidence.scaleEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0 || evidence.canaryOutcome !== "pass")) blockers.push({ code: "inconsistent_result", message: "A passing ramp requires independently observed canary evidence, complete stage evidence, and rollout disabled." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped ramp requires rollback metadata." });
   return blockers;
@@ -919,13 +1015,23 @@ export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
   const checkedAt = new Date(checkedAtMs).toISOString();
   const predecessor = context.rampEvidence || context.canaryEvidence || options.rampEvidence || options.canaryEvidence || {};
   const fixtureEvidence = context.fixtureEvidence === true || predecessor.evidenceClass === "fixture";
+  const observationAttestation = observedEvidenceAttestation(
+    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
+    RECOVERY_SCHEMA_VERSION,
+    checkedAtMs,
+  );
   const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
+  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+    ? observationAttestation
+    : null;
+  const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
   const predecessorReady = !fixtureEvidence && predecessor.outcome === "pass" && (predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true);
   const requestedDrills = Array.isArray(context.drills || options.drills) ? (context.drills || options.drills) : RECOVERY_DRILL_KINDS.map((kind) => ({ kind }));
   const drills = requestedDrills.map(normalizeRecoveryDrill);
   const blockers = [];
   if (!predecessorReady) blockers.push({ drillId: "predecessor", reason: reasonFor("evidence_missing"), nextAction: "Preserve canary or ramp evidence before running recovery validation." });
+  if (evidenceClass !== "live_observed") blockers.push({ drillId: "recovery_observation", reason: reasonFor(fixtureEvidence ? "fixture_evidence" : "evidence_attestation_invalid"), nextAction: "Attach a fresh independent observation receipt bound to the recovery packet before promotion." });
   let priorPassed = true;
   const results = [];
   for (const [index, drill] of drills.entries()) {
@@ -934,7 +1040,7 @@ export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
     const safetyReady = drill.authority.state === "allowed" && drill.authority.proven === true && drill.evidenceRefs.length > 0 && drill.expectedRecoveryAction && drill.nextAction;
     const recoveryReady = observed.evidenceRetained === true && ["proven", "preserved"].includes(observed.idempotencyState) && observed.ambiguous !== true && observed.silentRetry !== true && priorPassed;
     const boundaryBreached = observed.ambiguous === true || observed.silentRetry === true || observed.idempotencyState === "ambiguous";
-    const outcome = boundaryBreached ? "stop" : predecessorReady && identityReady && safetyReady && recoveryReady ? "pass" : "hold";
+    const outcome = boundaryBreached ? "stop" : predecessorReady && identityReady && safetyReady && recoveryReady && evidenceClass === "live_observed" ? "pass" : "hold";
     const typedBlockers = [];
     if (!identityReady) typedBlockers.push({ code: "drill_evidence_missing", message: "Drill state, ownership, or lease identity evidence is incomplete." });
     if (!safetyReady) typedBlockers.push({ code: "stage_authority_missing", message: "Drill authority, expected recovery action, or evidence refs are incomplete." });
@@ -959,7 +1065,8 @@ export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
   };
   return {
     schemaVersion: RECOVERY_SCHEMA_VERSION,
-    evidenceClass: fixtureEvidence ? "fixture" : predecessor.evidenceClass || "unknown",
+    evidenceClass,
+    observedEvidenceAttestation: boundObservationAttestation,
     predecessorOutcome: predecessor.outcome || "unknown",
     predecessorReady,
     drillKinds: RECOVERY_DRILL_KINDS,
@@ -997,7 +1104,7 @@ export function validateResilienceRecoveryEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Recovery evidence timestamps must be fresh and bounded." });
-  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Recovery evidence requires an explicit provenance class." });
+  blockers.push(...validateEvidenceProvenance(evidence, RECOVERY_SCHEMA_VERSION, checkedAtMs));
   if (evidence?.outcome === "pass" && (evidence.evidenceClass !== "live_observed" || evidence.reliabilityEvidenceReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing recovery evidence requires independently observed drills, no blockers, and rollout disabled." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "A stopped recovery validation requires rollback metadata." });
   return blockers;
@@ -1025,13 +1132,23 @@ export function buildOperationalHardeningRunbookEvidence(options = {}, context =
   const checkedAt = new Date(checkedAtMs).toISOString();
   const predecessor = context.recoveryEvidence || context.rampEvidence || context.canaryEvidence || options.recoveryEvidence || options.rampEvidence || {};
   const fixtureEvidence = context.fixtureEvidence === true || predecessor.evidenceClass === "fixture";
+  const observationAttestation = observedEvidenceAttestation(
+    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
+    HARDENING_SCHEMA_VERSION,
+    checkedAtMs,
+  );
   const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
+  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+    ? observationAttestation
+    : null;
+  const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
   const predecessorReady = !fixtureEvidence && predecessor.outcome === "pass" && (predecessor.reliabilityEvidenceReady === true || predecessor.scaleEvidenceReady === true || predecessor.rampAllowed === true);
   const requestedDomains = Array.isArray(context.domains || options.domains) ? (context.domains || options.domains) : HARDENING_DOMAINS.map((domain) => ({ domain }));
   const domains = HARDENING_DOMAINS.map((domain, index) => normalizeHardeningDomain(requestedDomains.find((candidate) => candidate?.domain === domain) || {}, index));
   const blockers = [];
   if (!predecessorReady) blockers.push({ domain: "predecessor", reason: reasonFor("evidence_missing"), nextAction: "Preserve scale and resilience evidence before hardening handoff." });
+  if (evidenceClass !== "live_observed") blockers.push({ domain: "hardening_observation", reason: reasonFor(fixtureEvidence ? "fixture_evidence" : "evidence_attestation_invalid"), nextAction: "Attach a fresh independent observation receipt bound to the hardening packet before promotion." });
   for (const item of domains) {
     const complete = Boolean(item.owner && item.trigger && item.evidenceGate && item.recoveryAction && item.evidenceRefs.length > 0);
     const highRisk = item.unresolvedHighRiskGap || (item.riskTier === "high" || item.riskTier === "extreme") && item.status !== "pass";
@@ -1050,7 +1167,8 @@ export function buildOperationalHardeningRunbookEvidence(options = {}, context =
   };
   return {
     schemaVersion: HARDENING_SCHEMA_VERSION,
-    evidenceClass: fixtureEvidence ? "fixture" : predecessor.evidenceClass || "unknown",
+    evidenceClass,
+    observedEvidenceAttestation: boundObservationAttestation,
     predecessorOutcome: predecessor.outcome || "unknown",
     predecessorReady,
     domains,
@@ -1086,7 +1204,7 @@ export function validateOperationalHardeningRunbookEvidence(evidence = {}) {
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
   const expiresAtMs = Date.parse(evidence?.expiresAt || "");
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS) blockers.push({ code: "evidence_stale", message: "Hardening evidence timestamps must be fresh and bounded." });
-  if (!["fixture", "simulated", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Hardening evidence requires an explicit provenance class." });
+  blockers.push(...validateEvidenceProvenance(evidence, HARDENING_SCHEMA_VERSION, checkedAtMs));
   if (evidence?.outcome === "pass" && (evidence.evidenceClass !== "live_observed" || evidence.readinessHandoffReady !== true || evidence.rolloutAllowed !== false || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Passing hardening evidence requires independently observed predecessors, complete domains, no blockers, and rollout disabled." });
   if (evidence?.outcome === "stop" && evidence?.recovery?.required !== true) blockers.push({ code: "recovery_missing", message: "Stopped hardening requires recovery metadata." });
   return blockers;
@@ -1165,6 +1283,11 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
   const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
   const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
+  const observationAttestation = observedEvidenceAttestation(
+    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
+    PRODUCTION_DECISION_SCHEMA_VERSION,
+    checkedAtMs,
+  );
   const canaryEvidence = context.canaryEvidence || context.oneWorkerLiveCanary || context.canary || options.canaryEvidence || {};
   const rampEvidence = context.rampEvidence || context.liveCapacityRamp || context.capacityRamp || options.rampEvidence || {};
   const recoveryEvidence = context.recoveryEvidence || context.resilienceRecovery || context.recoveryValidation || options.recoveryEvidence || {};
@@ -1175,6 +1298,11 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
     { id: "recovery", packet: recoveryEvidence },
     { id: "hardening", packet: hardeningEvidence },
   ];
+  const observationSourceRefs = decisionRefs(context.sourceRefs, ...packetEntries.map((entry) => decisionPacketSources(entry.packet)));
+  const observationEvidenceRefs = decisionRefs(context.evidenceRefs, ...packetEntries.map((entry) => decisionPacketEvidence(entry.packet)));
+  const boundObservationAttestation = context.fixtureEvidence !== true && attestationBindsPacket(observationAttestation, observationSourceRefs, observationEvidenceRefs)
+    ? observationAttestation
+    : null;
   const typedBlockers = [];
   let structurallyReady = true;
   let simulatedEvidence = false;
@@ -1221,6 +1349,11 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
     if (!decisionPacketOutcome(entry.id, packet)) {
       typedBlockers.push(decisionBlocker("decision_predecessor_not_passed", `${entry.id} evidence did not pass.`, `Hold ${entry.id} promotion and follow its recovery or remediation action.`));
     }
+  }
+  if (!fixtureEvidence && !boundObservationAttestation) {
+    structurallyReady = false;
+    unknownEvidence = true;
+    typedBlockers.push(decisionBlocker("decision_evidence_attestation_invalid", "The decision packet has no fresh independent observation receipt.", "Hold until a decision receipt is independently issued and bound to this packet schema."));
   }
   if (fixtureEvidence && !typedBlockers.some((blocker) => blocker.code === "decision_fixture_evidence")) {
     structurallyReady = false;
@@ -1285,9 +1418,11 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
     : decision === "limited_rollout"
       ? "Predecessor evidence supports only the explicitly bounded limited scope; preserve stop-lines and keep mutation authority disabled."
       : "Hold production readiness until predecessor evidence, freshness, scope, and final authority blockers are resolved.";
+  const evidenceClass = fixtureEvidence ? "fixture" : boundObservationAttestation && !simulatedEvidence && !unknownEvidence ? "live_observed" : "integrated_local";
   return {
     schemaVersion: PRODUCTION_DECISION_SCHEMA_VERSION,
-    evidenceClass: fixtureEvidence ? "fixture" : simulatedEvidence ? "simulated" : unknownEvidence ? "unknown" : "live_observed",
+    evidenceClass,
+    observedEvidenceAttestation: evidenceClass === "live_observed" ? boundObservationAttestation : null,
     decision,
     rationale,
     scope,
@@ -1349,7 +1484,7 @@ export function validateProductionReadinessDecisionEvidence(evidence = {}) {
   const predecessorOutcomes = evidence?.predecessorOutcomes;
   if (!predecessorOutcomes || typeof predecessorOutcomes !== "object" || Array.isArray(predecessorOutcomes) || !["canary", "ramp", "recovery", "hardening"].every((id) => safeId(predecessorOutcomes[id]))) blockers.push({ code: "evidence_missing", message: "Production decision requires all predecessor outcomes." });
   if (evidence?.decision === "go" && (evidence.scope?.limited === true || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] !== "pass") || (evidence.typedBlockers || []).length > 0)) blockers.push({ code: "inconsistent_result", message: "Go requires all predecessor outcomes to pass with no blockers." });
-  if (!["fixture", "simulated", "unknown", "live_observed"].includes(evidence?.evidenceClass)) blockers.push({ code: "evidence_provenance_missing", message: "Production readiness decisions require an explicit provenance class." });
+  blockers.push(...validateEvidenceProvenance(evidence, PRODUCTION_DECISION_SCHEMA_VERSION, Date.parse(evidence?.checkedAt || "")));
   if (["go", "limited_rollout"].includes(evidence?.decision) && evidence.evidenceClass !== "live_observed") blockers.push({ code: "decision_non_live_evidence", message: "Production readiness decisions cannot promote non-live evidence." });
   if (evidence?.decision === "limited_rollout" && (evidence.scope?.limited !== true || !Array.isArray(evidence.scope.boundaries) || evidence.scope.boundaries.length === 0 || ["canary", "ramp", "recovery", "hardening"].some((id) => predecessorOutcomes?.[id] !== "pass"))) blockers.push({ code: "inconsistent_result", message: "Limited rollout requires bounded scope and all predecessors to pass." });
   const checkedAtMs = Date.parse(evidence?.checkedAt || "");
@@ -1366,4 +1501,5 @@ export {
   RECOVERY_SCHEMA_VERSION as PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
   HARDENING_SCHEMA_VERSION as PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
   PRODUCTION_DECISION_SCHEMA_VERSION as PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION,
+  OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION as PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION,
 };
