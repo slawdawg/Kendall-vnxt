@@ -250,6 +250,302 @@ export interface TransitionAuthoritativeWorkPacketRequest {
   evidenceRefs?: string[];
 }
 
+/**
+ * The canonical-contract vocabulary is deliberately data-only.  It gives
+ * every product mode the same source, evidence, gate, and readiness language
+ * without granting an adapter permission to perform the represented action.
+ */
+export const PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION = "pipeline-canonical-contract/v1" as const;
+
+export const PIPELINE_CANONICAL_SOURCE_ROLES = ["canonical", "supporting", "derived"] as const;
+export type PipelineCanonicalSourceRoleV0 = (typeof PIPELINE_CANONICAL_SOURCE_ROLES)[number];
+
+export const PIPELINE_CANONICAL_SOURCE_TRUST_STATES = ["authoritative", "attested", "derived", "untrusted"] as const;
+export type PipelineCanonicalSourceTrustStateV0 = (typeof PIPELINE_CANONICAL_SOURCE_TRUST_STATES)[number];
+
+export const PIPELINE_EVIDENCE_RETENTION_DISPOSITIONS = ["metadata_only", "summary_only", "fixture_only"] as const;
+export type PipelineEvidenceRetentionDispositionV0 = (typeof PIPELINE_EVIDENCE_RETENTION_DISPOSITIONS)[number];
+
+export const PIPELINE_QUALITY_GATE_STATES = ["pass", "fail", "blocked", "not_applicable"] as const;
+export type PipelineQualityGateStateV0 = (typeof PIPELINE_QUALITY_GATE_STATES)[number];
+
+export const PIPELINE_READINESS_COMPONENT_IDS = [
+  "source_provenance",
+  "trust_boundary",
+  "authority_boundary",
+  "evidence_retention",
+  "quality_gates",
+  "delivery_evidence",
+] as const;
+export type PipelineReadinessComponentIdV0 = (typeof PIPELINE_READINESS_COMPONENT_IDS)[number];
+
+export const PIPELINE_PRODUCT_MODES = ["contract_only", "operator_review", "local_proof", "read_only", "bounded_write"] as const;
+export type PipelineProductModeV0 = (typeof PIPELINE_PRODUCT_MODES)[number];
+
+export const PIPELINE_NORMALIZED_DELIVERY_ACTIONS = ["branch_push", "pull_request", "merge", "cleanup"] as const;
+export type PipelineNormalizedDeliveryActionV0 = (typeof PIPELINE_NORMALIZED_DELIVERY_ACTIONS)[number];
+
+export interface PipelineAuthorityProhibitionsV0 {
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubMutationAllowed: false;
+  rawPayloadRetentionAllowed: false;
+}
+
+export interface PipelineCanonicalSourceProvenanceV0 {
+  sourceRef: AuthoritativePacketSourceRef;
+  observedAt: string;
+  evidenceRefs: string[];
+}
+
+export interface PipelineCanonicalSourceV0 {
+  sourceId: string;
+  role: PipelineCanonicalSourceRoleV0;
+  trust: PipelineCanonicalSourceTrustStateV0;
+  provenance: PipelineCanonicalSourceProvenanceV0;
+  authority: PipelineAuthorityProhibitionsV0;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface PipelineEvidenceRetentionV0 {
+  evidenceId: string;
+  disposition: PipelineEvidenceRetentionDispositionV0;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export type PipelineQualityGateV0 =
+  | {
+      kind: "gate";
+      gateId: string;
+      requirement: "required";
+      state: Exclude<PipelineQualityGateStateV0, "not_applicable">;
+      evidenceRefs: string[];
+    }
+  | {
+      kind: "gate";
+      gateId: string;
+      requirement: "not_applicable";
+      state: "not_applicable";
+      notApplicableReason: string;
+      evidenceRefs: string[];
+    };
+
+export interface PipelineQualityGateGroupV0 {
+  kind: "all_of" | "any_of";
+  gateId: string;
+  children: [PipelineQualityGateNodeV0, ...PipelineQualityGateNodeV0[]];
+}
+
+export type PipelineQualityGateNodeV0 = PipelineQualityGateV0 | PipelineQualityGateGroupV0;
+
+export type PipelineReadinessComponentV0 =
+  | {
+      componentId: PipelineReadinessComponentIdV0;
+      requirement: "required";
+      state: "pass" | "fail" | "blocked";
+      evidenceRefs: string[];
+    }
+  | {
+      componentId: PipelineReadinessComponentIdV0;
+      requirement: "not_applicable";
+      state: "not_applicable";
+      notApplicableReason: string;
+      evidenceRefs: string[];
+    };
+
+export type PipelineReadinessComponentsV0 = {
+  [ComponentId in PipelineReadinessComponentIdV0]: PipelineReadinessComponentV0 & { componentId: ComponentId };
+};
+
+export interface PipelineNormalizedDeliveryEvidenceV0 {
+  deliveryId: string;
+  action: PipelineNormalizedDeliveryActionV0;
+  status: "recorded" | "blocked" | "not_applicable";
+  target: {
+    repository: string;
+    baseBranch?: string | null;
+    headRevision?: string | null;
+    pullRequestUrl?: string | null;
+  };
+  evidence: PipelineEvidenceRetentionV0;
+  authority: PipelineAuthorityProhibitionsV0;
+  deliveryAuthorityGranted: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+/** Inputs only: mapping this object to product behavior remains a separate, authority-gated concern. */
+export interface PipelineProductModeMappingInputsV0 {
+  schemaVersion: typeof PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION;
+  productMode: PipelineProductModeV0;
+  canonicalSource: PipelineCanonicalSourceV0;
+  qualityGates: PipelineQualityGateNodeV0;
+  readinessComponents: PipelineReadinessComponentsV0;
+  deliveryEvidence: PipelineNormalizedDeliveryEvidenceV0[];
+  authority: PipelineAuthorityProhibitionsV0;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export type PipelineCanonicalContractValidationCodeV0 =
+  | "invalid_object"
+  | "invalid_enum"
+  | "blank_identifier"
+  | "invalid_timestamp"
+  | "invalid_evidence_refs"
+  | "invalid_readiness_semantics"
+  | "invalid_quality_gate"
+  | "authority_violation"
+  | "bad_retention_flag"
+  | "bad_schema_version"
+  | "forbidden_field";
+
+export interface PipelineCanonicalContractValidationIssueV0 {
+  field: string;
+  code: PipelineCanonicalContractValidationCodeV0;
+  summary: string;
+}
+
+const PIPELINE_CANONICAL_FORBIDDEN_KEYS = /^(?:rawPrompt|rawCompletion|rawPayload|providerPayload|reasoningTrace|secret|credential|password|apiKey|accessToken|terminalOutput|stdout|stderr|transcript)$/i;
+
+function canonicalContractRecord(value: unknown, issues: PipelineCanonicalContractValidationIssueV0[], field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    issues.push({ field, code: "invalid_object", summary: "Canonical contract values must be objects." });
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function canonicalContractText(value: unknown): value is string {
+  return typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= 240 && !PIPELINE_CANONICAL_FORBIDDEN_KEYS.test(value);
+}
+
+function canonicalContractRefs(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(canonicalContractText);
+}
+
+function pushCanonicalAuthorityIssues(
+  issues: PipelineCanonicalContractValidationIssueV0[],
+  value: unknown,
+  field: string,
+): void {
+  const authority = canonicalContractRecord(value, issues, field);
+  for (const key of ["sourceMutationAllowed", "providerCallsAllowed", "workerLaunchAllowed", "githubMutationAllowed", "rawPayloadRetentionAllowed"] as const) {
+    if (authority[key] !== false) {
+      issues.push({ field: `${field}.${key}`, code: "authority_violation", summary: "Canonical contract data cannot grant execution or retention authority." });
+    }
+  }
+}
+
+function pushCanonicalRetentionIssues(
+  issues: PipelineCanonicalContractValidationIssueV0[],
+  record: Record<string, unknown>,
+  field: string,
+): void {
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false) {
+    issues.push({ field, code: "bad_retention_flag", summary: "Canonical contract data is metadata-only and must not retain raw payloads." });
+  }
+  for (const key of Object.keys(record)) {
+    if (PIPELINE_CANONICAL_FORBIDDEN_KEYS.test(key)) {
+      issues.push({ field: `${field}.${key}`, code: "forbidden_field", summary: "Canonical contract data must not contain raw payload or secret fields." });
+    }
+  }
+}
+
+export function validatePipelineCanonicalSourceV0(source: unknown): PipelineCanonicalContractValidationIssueV0[] {
+  const issues: PipelineCanonicalContractValidationIssueV0[] = [];
+  const record = canonicalContractRecord(source, issues, "source");
+  if (!canonicalContractText(record.sourceId)) issues.push({ field: "source.sourceId", code: "blank_identifier", summary: "Canonical sources require a bounded source id." });
+  if (!(PIPELINE_CANONICAL_SOURCE_ROLES as readonly string[]).includes(record.role as string)) issues.push({ field: "source.role", code: "invalid_enum", summary: "Canonical source role is not recognized." });
+  if (!(PIPELINE_CANONICAL_SOURCE_TRUST_STATES as readonly string[]).includes(record.trust as string)) issues.push({ field: "source.trust", code: "invalid_enum", summary: "Canonical source trust state is not recognized." });
+  if (record.role === "canonical" && !["authoritative", "attested"].includes(record.trust as string)) issues.push({ field: "source.trust", code: "invalid_readiness_semantics", summary: "Canonical sources must be authoritative or attested." });
+  if (record.role === "derived" && record.trust !== "derived") issues.push({ field: "source.trust", code: "invalid_readiness_semantics", summary: "Derived sources must remain typed as derived trust." });
+  const provenance = canonicalContractRecord(record.provenance, issues, "source.provenance");
+  if (!isAuthoritativePacketSourceRef(provenance.sourceRef)) issues.push({ field: "source.provenance.sourceRef", code: "invalid_object", summary: "Canonical source provenance requires an authoritative source reference." });
+  if (typeof provenance.observedAt !== "string" || !Number.isFinite(Date.parse(provenance.observedAt))) issues.push({ field: "source.provenance.observedAt", code: "invalid_timestamp", summary: "Canonical source provenance requires a parseable observation timestamp." });
+  if (!canonicalContractRefs(provenance.evidenceRefs)) issues.push({ field: "source.provenance.evidenceRefs", code: "invalid_evidence_refs", summary: "Canonical source provenance requires bounded metadata evidence refs." });
+  pushCanonicalAuthorityIssues(issues, record.authority, "source.authority");
+  pushCanonicalRetentionIssues(issues, record, "source");
+  return issues;
+}
+
+export function validatePipelineQualityGateNodeV0(gate: unknown): PipelineCanonicalContractValidationIssueV0[] {
+  const issues: PipelineCanonicalContractValidationIssueV0[] = [];
+  const validate = (value: unknown, field: string, depth: number): void => {
+    const record = canonicalContractRecord(value, issues, field);
+    if (depth > 8) {
+      issues.push({ field, code: "invalid_quality_gate", summary: "Composable quality gates may not exceed eight nested groups." });
+      return;
+    }
+    if (!canonicalContractText(record.gateId)) issues.push({ field: `${field}.gateId`, code: "blank_identifier", summary: "Quality gates require bounded ids." });
+    if (record.kind === "gate") {
+      if (record.requirement === "required" && !["pass", "fail", "blocked"].includes(record.state as string)) issues.push({ field: `${field}.state`, code: "invalid_readiness_semantics", summary: "Required quality gates cannot be not applicable." });
+      if (record.requirement === "not_applicable" && (record.state !== "not_applicable" || !canonicalContractText(record.notApplicableReason))) issues.push({ field: `${field}.state`, code: "invalid_readiness_semantics", summary: "Not-applicable quality gates require the not_applicable state and a reason." });
+      if (record.requirement !== "required" && record.requirement !== "not_applicable") issues.push({ field: `${field}.requirement`, code: "invalid_enum", summary: "Quality gate requirement is not recognized." });
+      if (!canonicalContractRefs(record.evidenceRefs)) issues.push({ field: `${field}.evidenceRefs`, code: "invalid_evidence_refs", summary: "Quality gates require bounded metadata evidence refs." });
+      return;
+    }
+    if (record.kind !== "all_of" && record.kind !== "any_of") {
+      issues.push({ field: `${field}.kind`, code: "invalid_quality_gate", summary: "Quality gates must be a leaf, all_of, or any_of group." });
+      return;
+    }
+    if (!Array.isArray(record.children) || record.children.length === 0) {
+      issues.push({ field: `${field}.children`, code: "invalid_quality_gate", summary: "Composable quality gate groups require at least one child." });
+      return;
+    }
+    record.children.forEach((child, index) => validate(child, `${field}.children.${index}`, depth + 1));
+  };
+  validate(gate, "qualityGates", 0);
+  return issues;
+}
+
+export function validatePipelineReadinessComponentsV0(components: unknown): PipelineCanonicalContractValidationIssueV0[] {
+  const issues: PipelineCanonicalContractValidationIssueV0[] = [];
+  const record = canonicalContractRecord(components, issues, "readinessComponents");
+  for (const componentId of PIPELINE_READINESS_COMPONENT_IDS) {
+    const component = canonicalContractRecord(record[componentId], issues, `readinessComponents.${componentId}`);
+    if (component.componentId !== componentId) issues.push({ field: `readinessComponents.${componentId}.componentId`, code: "invalid_readiness_semantics", summary: "Readiness component id must match its canonical component slot." });
+    if (component.requirement === "required" && !["pass", "fail", "blocked"].includes(component.state as string)) issues.push({ field: `readinessComponents.${componentId}.state`, code: "invalid_readiness_semantics", summary: "Required readiness components cannot be not applicable." });
+    if (component.requirement === "not_applicable" && (component.state !== "not_applicable" || !canonicalContractText(component.notApplicableReason))) issues.push({ field: `readinessComponents.${componentId}.state`, code: "invalid_readiness_semantics", summary: "Not-applicable readiness components require the not_applicable state and a reason." });
+    if (component.requirement !== "required" && component.requirement !== "not_applicable") issues.push({ field: `readinessComponents.${componentId}.requirement`, code: "invalid_enum", summary: "Readiness component requirement is not recognized." });
+    if (!canonicalContractRefs(component.evidenceRefs)) issues.push({ field: `readinessComponents.${componentId}.evidenceRefs`, code: "invalid_evidence_refs", summary: "Readiness components require bounded metadata evidence refs." });
+  }
+  return issues;
+}
+
+export function validatePipelineProductModeMappingInputsV0(inputs: unknown): PipelineCanonicalContractValidationIssueV0[] {
+  const issues: PipelineCanonicalContractValidationIssueV0[] = [];
+  const record = canonicalContractRecord(inputs, issues, "inputs");
+  if (record.schemaVersion !== PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION) issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Product-mode mapping inputs use an unsupported canonical contract version." });
+  if (!(PIPELINE_PRODUCT_MODES as readonly string[]).includes(record.productMode as string)) issues.push({ field: "productMode", code: "invalid_enum", summary: "Product-mode mapping inputs require a known product mode." });
+  issues.push(...validatePipelineCanonicalSourceV0(record.canonicalSource));
+  issues.push(...validatePipelineQualityGateNodeV0(record.qualityGates));
+  issues.push(...validatePipelineReadinessComponentsV0(record.readinessComponents));
+  if (!Array.isArray(record.deliveryEvidence)) {
+    issues.push({ field: "deliveryEvidence", code: "invalid_object", summary: "Product-mode mapping inputs require normalized delivery evidence entries." });
+  } else {
+    record.deliveryEvidence.forEach((entry, index) => {
+      const delivery = canonicalContractRecord(entry, issues, `deliveryEvidence.${index}`);
+      if (!canonicalContractText(delivery.deliveryId)) issues.push({ field: `deliveryEvidence.${index}.deliveryId`, code: "blank_identifier", summary: "Normalized delivery evidence requires an id." });
+      if (!(PIPELINE_NORMALIZED_DELIVERY_ACTIONS as readonly string[]).includes(delivery.action as string)) issues.push({ field: `deliveryEvidence.${index}.action`, code: "invalid_enum", summary: "Normalized delivery evidence action is not recognized." });
+      if (!["recorded", "blocked", "not_applicable"].includes(delivery.status as string)) issues.push({ field: `deliveryEvidence.${index}.status`, code: "invalid_enum", summary: "Normalized delivery evidence status is not recognized." });
+      if (delivery.deliveryAuthorityGranted !== false) issues.push({ field: `deliveryEvidence.${index}.deliveryAuthorityGranted`, code: "authority_violation", summary: "Delivery evidence never grants delivery authority." });
+      const evidence = canonicalContractRecord(delivery.evidence, issues, `deliveryEvidence.${index}.evidence`);
+      if (!(PIPELINE_EVIDENCE_RETENTION_DISPOSITIONS as readonly string[]).includes(evidence.disposition as string) || !canonicalContractText(evidence.evidenceId) || !canonicalContractRefs(evidence.evidenceRefs)) issues.push({ field: `deliveryEvidence.${index}.evidence`, code: "invalid_evidence_refs", summary: "Normalized delivery evidence requires a typed retention disposition and metadata refs." });
+      pushCanonicalRetentionIssues(issues, evidence, `deliveryEvidence.${index}.evidence`);
+      pushCanonicalAuthorityIssues(issues, delivery.authority, `deliveryEvidence.${index}.authority`);
+      pushCanonicalRetentionIssues(issues, delivery, `deliveryEvidence.${index}`);
+    });
+  }
+  pushCanonicalAuthorityIssues(issues, record.authority, "authority");
+  pushCanonicalRetentionIssues(issues, record, "inputs");
+  return issues;
+}
+
 export const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0" as const;
 export const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0" as const;
 export const PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0" as const;

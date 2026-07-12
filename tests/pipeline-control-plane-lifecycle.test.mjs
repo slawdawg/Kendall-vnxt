@@ -168,6 +168,112 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(workflowCoreIndex, /export \* from "\.\/pipeline-control-plane";/);
 });
 
+test("canonical contract inputs fail closed across source, retention, gate, readiness, and product-mode boundaries", async () => {
+  const {
+    PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION,
+    PIPELINE_READINESS_COMPONENT_IDS,
+    validatePipelineCanonicalSourceV0,
+    validatePipelineQualityGateNodeV0,
+    validatePipelineReadinessComponentsV0,
+    validatePipelineProductModeMappingInputsV0,
+  } = await loadCompiledContractModule();
+
+  const authority = {
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+    rawPayloadRetentionAllowed: false,
+  };
+  const source = {
+    sourceId: "source:canonical-contract",
+    role: "canonical",
+    trust: "authoritative",
+    provenance: {
+      sourceRef: { refId: "repo_doc:contracts", sourceType: "repo_doc", pathOrUrl: "packages/contracts/src/pipeline-control-plane/index.ts" },
+      observedAt: "2026-07-12T00:00:00.000Z",
+      evidenceRefs: ["evidence:canonical-contract"],
+    },
+    authority,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const qualityGates = {
+    kind: "all_of",
+    gateId: "gate:canonical-contract",
+    children: [
+      { kind: "gate", gateId: "gate:contracts", requirement: "required", state: "pass", evidenceRefs: ["evidence:contracts"] },
+      { kind: "gate", gateId: "gate:live-provider", requirement: "not_applicable", state: "not_applicable", notApplicableReason: "Phase 1 is contract-only.", evidenceRefs: [] },
+    ],
+  };
+  const readinessComponents = Object.fromEntries(
+    PIPELINE_READINESS_COMPONENT_IDS.map((componentId) => [
+      componentId,
+      { componentId, requirement: "required", state: "pass", evidenceRefs: [`evidence:${componentId}`] },
+    ]),
+  );
+  const inputs = {
+    schemaVersion: PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION,
+    productMode: "contract_only",
+    canonicalSource: source,
+    qualityGates,
+    readinessComponents,
+    deliveryEvidence: [{
+      deliveryId: "delivery:contract",
+      action: "pull_request",
+      status: "not_applicable",
+      target: { repository: "slawdawg/Kendall_Nxt", baseBranch: "dev" },
+      evidence: { evidenceId: "evidence:delivery", disposition: "metadata_only", evidenceRefs: ["evidence:delivery"], metadataOnly: true, rawPayloadRetained: false },
+      authority,
+      deliveryAuthorityGranted: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    }],
+    authority,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+
+  assert.deepEqual(validatePipelineCanonicalSourceV0(source), []);
+  assert.deepEqual(validatePipelineQualityGateNodeV0(qualityGates), []);
+  assert.deepEqual(validatePipelineReadinessComponentsV0(readinessComponents), []);
+  assert.deepEqual(validatePipelineProductModeMappingInputsV0(inputs), []);
+
+  const derivedCanonicalSourceIssues = validatePipelineCanonicalSourceV0({ ...source, trust: "derived" }).map((issue) => issue.code);
+  assert.ok(derivedCanonicalSourceIssues.includes("invalid_readiness_semantics"));
+
+  const authorityViolationIssues = validatePipelineProductModeMappingInputsV0({
+    ...inputs,
+    authority: { ...authority, githubMutationAllowed: true },
+  }).map((issue) => issue.code);
+  assert.ok(authorityViolationIssues.includes("authority_violation"));
+
+  const rawPayloadIssues = validatePipelineProductModeMappingInputsV0({
+    ...inputs,
+    deliveryEvidence: [{ ...inputs.deliveryEvidence[0], rawPayloadRetained: true, rawPayload: "must-not-retain" }],
+  }).map((issue) => issue.code);
+  assert.ok(rawPayloadIssues.includes("bad_retention_flag"));
+  assert.ok(rawPayloadIssues.includes("forbidden_field"));
+
+  const requiredGateNotApplicableIssues = validatePipelineQualityGateNodeV0({
+    kind: "gate",
+    gateId: "gate:required",
+    requirement: "required",
+    state: "not_applicable",
+    evidenceRefs: [],
+  }).map((issue) => issue.code);
+  assert.ok(requiredGateNotApplicableIssues.includes("invalid_readiness_semantics"));
+
+  const requiredReadinessNotApplicableIssues = validatePipelineReadinessComponentsV0({
+    ...readinessComponents,
+    quality_gates: { componentId: "quality_gates", requirement: "required", state: "not_applicable", evidenceRefs: [] },
+  }).map((issue) => issue.code);
+  assert.ok(requiredReadinessNotApplicableIssues.includes("invalid_readiness_semantics"));
+
+  const unknownProductModeIssues = validatePipelineProductModeMappingInputsV0({ ...inputs, productMode: "live_everything" }).map((issue) => issue.code);
+  assert.ok(unknownProductModeIssues.includes("invalid_enum"));
+});
+
 test("operational action contracts define capability-gated metadata-only requests and results", async () => {
   const contractSource = await readFile(contractPath, "utf8");
 
