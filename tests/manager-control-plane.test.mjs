@@ -9494,6 +9494,38 @@ test("manager refill CLI args emit source slice and candidate lanes from fixture
   }
 });
 
+test("manager-refill-plan treats a discovered exhausted matching PRD as an authoritative source binding", () => {
+  const { result } = runManagerRefillPlan(["--summary-json", "--run-id", "run-manager-refill-plan-discovered-exhausted"], {
+    sourcePlanningBySourceKey: latestPrdSourcePlanningBySourceKey({
+      sprintStatus: {
+        backlogStories: 0,
+        readyStories: 0,
+        reviewReadyStories: 0,
+        readyForDevStories: 0,
+        activeStories: 0,
+        doneStories: 201,
+        nextBacklogStoryKey: null,
+        storyStatuses: {},
+      },
+    }),
+    assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+    dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.blockers[0].code, "authoritative-backlog-exhaustion-evidence-required");
+  assert.equal(result.summary.sourceSlice.type, "prd");
+  assert.equal(result.summary.sourcePlanning.sprintStatus.backlogStories, 0);
+  assert.equal(result.summary.sourcePlanning.sprintStatus.doneStories, 201);
+  assert.deepEqual(result.summary.candidateLanes, []);
+  assert.equal(result.summary.refillJob ?? null, null);
+  assert.equal(result.summary.workCreationStep, null);
+  assert.equal(result.summary.materializationGate, null);
+  assert.equal(result.summary.noNewEpic, true);
+  assert.equal(result.summary.noPostSliceWork, true);
+  assert.doesNotMatch(JSON.stringify(result), /bmad-correct-course|Epic 26|epic-26|successor/i);
+});
+
 test("classifies story 1.1 auto-apply posture without mutating external systems", () => {
   const proof = {
     resourceState: "normal",
@@ -28674,8 +28706,12 @@ test("preflight is read-only and reports workspace, usage, resource, runway, wor
       },
     );
     assert.equal(previewBacked.summary.runway.dispatchableLanes, 0);
-    assert.equal(previewBacked.summary.runway.refillNeeded, 6);
+    assert.equal(previewBacked.summary.runway.refillNeeded, false);
     assert.equal(previewBacked.summary.runway.sourceSlice.type, "prd");
+    assert.deepEqual(previewBacked.summary.runway.candidateLanes, []);
+    assert.equal(previewBacked.summary.runway.workCreationStep, null);
+    assert.equal(previewBacked.summary.runway.materializationGate, null);
+    assert.ok(previewBacked.blockers.some((blocker) => blocker.code === "authoritative-backlog-exhaustion-evidence-required"));
     assert.equal(previewBacked.summary.dispatcher.status, "blocked");
     assert.equal(previewBacked.summary.dispatcher.dispatcherSummaryState, "dispatch_preview_live");
     assert.equal(previewBacked.summary.dispatcher.freshness, "fresh");
