@@ -98,6 +98,7 @@ test("Epic 25 validator rejects naive time, duplicate identity, unsafe refs, mal
   const naive = chain(); naive.checkedAt = "2026-07-12T12:00:00"; cases.push(naive);
   const duplicate = chain(); duplicate.packets.ramp.packetId = duplicate.packets.canary.packetId; cases.push(duplicate);
   const secret = chain(); secret.packets.readiness.evidenceRefs = [`evidence:${"A".repeat(64)}`]; cases.push(secret);
+  const awsSecretRef = chain(); awsSecretRef.packets.readiness.evidenceRefs = ["evidence:AKIA1234567890ABCDEF"]; cases.push(awsSecretRef);
   const malformed = chain(); malformed.packets.ramp.details.stageWorkerCounts = [1, 2, 6, 8]; cases.push(malformed);
   const go = chain(); go.packets.decision.outcome = "go"; cases.push(go);
   for (const candidate of cases) assert.ok(validatePipelineEpic25EvidenceChainV1(candidate, now).length > 0);
@@ -109,6 +110,7 @@ test("Epic 25 policy profile rejects missing gates, unexplained skips, stale tar
   const notApplicableWithoutReason = chain(); notApplicableWithoutReason.policyProfile.qualityGates.find((gate: any) => gate.family === "runbook").notApplicableReason = null; cases.push(["not-applicable reason", notApplicableWithoutReason]);
   const staleTarget = chain(); staleTarget.policyProfile.qualityGates.find((gate: any) => gate.family === "telemetry").targetRevision = "b".repeat(40); cases.push(["stale target", staleTarget]);
   const unsafeRef = chain(); unsafeRef.policyProfile.qualityGates.find((gate: any) => gate.family === "security").evidenceRefs = ["evidence:sk-proj-12345678901234567890"]; cases.push(["unsafe ref", unsafeRef]);
+  const awsRef = chain(); awsRef.policyProfile.qualityGates.find((gate: any) => gate.family === "security").evidenceRefs = ["evidence:AKIA1234567890ABCDEF"]; cases.push(["AWS-shaped ref", awsRef]);
   const expiredRetention = chain(); expiredRetention.policyProfile.retentionPolicy.expiresAt = "2026-07-11T12:00:00Z"; cases.push(["expired retention", expiredRetention]);
   const missingRetention = chain(); delete missingRetention.policyProfile.retentionPolicy; cases.push(["missing retention", missingRetention]);
   const rawPayload = chain(); rawPayload.policyProfile.retentionPolicy.rawPayloadRetained = true; cases.push(["raw payload", rawPayload]);
@@ -129,10 +131,35 @@ test("Epic 25 Python and TypeScript policy-text filters share conservative execu
   for (const candidate of cases) {
     const profileCandidate = chain();
     profileCandidate.policyProfile.retentionPolicy.policyReason = candidate.value;
-    const hasPolicyReasonIssue = validatePipelineEpic25EvidenceChainV1(profileCandidate, now)
-      .some((issue) => issue.field === "policyProfile.retentionPolicy.policyReason");
-    assert.equal(hasPolicyReasonIssue, !candidate.safe, candidate.value);
+    profileCandidate.policyProfile.qualityGates.find((gate: any) => gate.family === "runbook").notApplicableReason = candidate.value;
+    const issues = validatePipelineEpic25EvidenceChainV1(profileCandidate, now);
+    assert.equal(issues.some((issue) => issue.field === "policyProfile.retentionPolicy.policyReason"), !candidate.safe, candidate.value);
+    assert.equal(issues.some((issue) => issue.field === "policyProfile.qualityGates.3.notApplicableReason"), !candidate.safe, candidate.value);
   }
+});
+
+test("Epic 25 packet expiry is evaluated at chain.checkedAt", () => {
+  const candidate = chain();
+  candidate.checkedAt = "2026-07-12T12:00:30Z";
+  candidate.expiresAt = "2026-07-12T12:04:30Z";
+  for (const packet of Object.values(candidate.packets) as any[]) {
+    packet.checkedAt = "2026-07-12T12:00:00Z";
+    packet.expiresAt = "2026-07-12T12:00:15Z";
+  }
+  assert.ok(validatePipelineEpic25EvidenceChainV1(candidate, now)
+    .some((issue) => issue.field === "packets.readiness.checkedAt"));
+});
+
+test("Epic 25 gate freshness rejects windows longer than five minutes", () => {
+  const candidate = chain();
+  candidate.policyProfile.checkedAt = "2026-07-12T12:01:00Z";
+  candidate.policyProfile.expiresAt = "2026-07-12T12:06:00Z";
+  candidate.policyProfile.retentionPolicy.expiresAt = "2026-08-11T12:01:00Z";
+  const gate = candidate.policyProfile.qualityGates[0];
+  gate.checkedAt = "2026-07-12T11:59:00Z";
+  gate.expiresAt = "2026-07-12T12:05:30Z";
+  assert.ok(validatePipelineEpic25EvidenceChainV1(candidate, now)
+    .some((issue) => issue.field === "policyProfile.qualityGates.0.checkedAt"));
 });
 
 test("Epic 25 legacy v0 remains explicitly validatable without a policy profile", () => {

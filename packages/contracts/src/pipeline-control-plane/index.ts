@@ -1232,14 +1232,14 @@ export interface PipelineEpic25EvidenceChainReadV0 extends PipelineEpic25Evidenc
   chainDigestSha256: `sha256:${string}`;
   freshnessState: "fresh" | "stale";
   effectiveDecision: PipelineProductionReadinessDecisionV0;
-  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable" | "policy_profile_upgrade_required">;
+  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable" | "policy_profile_upgrade_required" | "legacy_upgrade_unavailable">;
 }
 
 export interface PipelineEpic25EvidenceChainReadV1 extends PipelineEpic25EvidenceChainV1 {
   chainDigestSha256: `sha256:${string}`;
   freshnessState: "fresh" | "stale";
   effectiveDecision: PipelineProductionReadinessDecisionV0;
-  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable" | "policy_profile_stale" | "retention_policy_expired" | "retention_policy_unverified" | "quality_gate_not_passed">;
+  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable" | "source_revision_attestation_required" | "policy_profile_stale" | "retention_policy_expired" | "retention_policy_unverified" | "quality_gate_not_passed">;
 }
 
 export interface PipelineOperationalActionValidationIssueV0 {
@@ -1385,7 +1385,8 @@ const OPERATIONAL_ACTION_IDENTIFIER =
 const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
 const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
 const EPIC_25_RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
-const EPIC_25_HIGH_ENTROPY_OR_PEM = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?:^|:)[A-Za-z0-9+/]{48,}={0,2}$/i;
+const EPIC_25_HIGH_ENTROPY_OR_PEM = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?<![A-Za-z0-9])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])/i;
+const EPIC_25_TOKEN_LIKE_METADATA_VALUE = /(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])[A-Za-z]{2,12}[-_](?=(?:[A-Za-z0-9]*\d){2})[A-Za-z0-9]{20,}(?![A-Za-z0-9])|^(?=[A-Za-z0-9+/]{48,}={0,2}$)(?=.*[0-9+/=])[A-Za-z0-9+/]+={0,2}$|^(?=[a-f0-9]{40,}$)(?=.*[0-9])[a-f0-9]+$/i;
 const EPIC_25_EXACT_TARGET_REVISION = /^[a-f0-9]{40}$/;
 const EPIC_25_EXECUTABLE_POLICY_TEXT = /(?<![A-Za-z0-9_])(?:tmux\s+(?:kill|send|capture|new|attach)\b|git(?:hub)?(?:\s+\S+){0,4}\s+(?:add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)\b|gh\s+(?:pr|repo|api)\b|curl(?:\s|$)|bash(?:\s|$)|sh(?:\s|$)|python(?:3(?:\.\d+)?)?(?:\s|$)|node(?:\s|$)|npm\s+run(?:\s|$)|pnpm(?:\s|$)|uv\s+run(?:\s|$)|provider\s+(?:call|request|payload)\b)/i;
 const OPERATIONAL_ACTION_MERGE_HEAD_SHA_EVIDENCE = /^evidence:merge-head-sha-[a-f0-9]{40}$/;
@@ -2315,8 +2316,8 @@ function validatePipelineEpic25EvidenceChain(
       issues.push({ field: `packets.${slot}.evidenceClass`, code: "inconsistent_result", summary: "Every Epic 25 packet must use the chain evidence class." });
     }
     if (!isPipelineOperationalActionEvidenceRefsV0(packet.sourceRefs) || !isPipelineOperationalActionEvidenceRefsV0(packet.evidenceRefs) ||
-        (packet.sourceRefs as unknown[]).some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref)) ||
-        (packet.evidenceRefs as unknown[]).some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref))) {
+        (packet.sourceRefs as unknown[]).some((ref) => typeof ref === "string" && isUnsafeEpic25MetadataValue(ref)) ||
+        (packet.evidenceRefs as unknown[]).some((ref) => typeof ref === "string" && isUnsafeEpic25MetadataValue(ref))) {
       issues.push({ field: `packets.${slot}.evidenceRefs`, code: "evidence_required", summary: `Epic 25 ${slot} evidence requires bounded source and evidence refs.` });
     }
     if (packet.metadataOnly !== true || packet.rawPayloadRetained !== false) {
@@ -2325,7 +2326,7 @@ function validatePipelineEpic25EvidenceChain(
     const checkedAtMs = epic25TimestampMs(packet.checkedAt);
     const expiresAtMs = epic25TimestampMs(packet.expiresAt);
     if (typeof packet.checkedAt !== "string" || typeof packet.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(packet.checkedAt) ||
-        !EPIC_25_RFC3339_TIMESTAMP.test(packet.expiresAt) || !Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || checkedAtMs > chainCheckedAtMs || expiresAtMs < nowMs ||
+        !EPIC_25_RFC3339_TIMESTAMP.test(packet.expiresAt) || !Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || checkedAtMs > chainCheckedAtMs || expiresAtMs < chainCheckedAtMs ||
         expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
       issues.push({ field: `packets.${slot}.checkedAt`, code: "stale_or_unparseable_readiness", summary: `Epic 25 ${slot} evidence is stale, future-dated, expired, or malformed.` });
     }
@@ -2462,11 +2463,12 @@ export function validatePipelineEpic25PolicyProfileV0(
       const gateExpiresAtMs = epic25TimestampMs(gate.expiresAt);
       if (typeof gate.checkedAt !== "string" || typeof gate.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(gate.checkedAt) ||
           !EPIC_25_RFC3339_TIMESTAMP.test(gate.expiresAt) || !Number.isFinite(gateCheckedAtMs) || !Number.isFinite(gateExpiresAtMs) ||
-          gateCheckedAtMs > checkedAtMs || gateExpiresAtMs < nowMs || gateExpiresAtMs < checkedAtMs || gateExpiresAtMs <= gateCheckedAtMs || gateExpiresAtMs > expiresAtMs) {
+          gateCheckedAtMs > checkedAtMs || gateExpiresAtMs < nowMs || gateExpiresAtMs < checkedAtMs || gateExpiresAtMs <= gateCheckedAtMs ||
+          gateExpiresAtMs - gateCheckedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS || gateExpiresAtMs > expiresAtMs) {
         issues.push({ field: `qualityGates.${index}.checkedAt`, code: "stale_or_unparseable_readiness", summary: "Every Epic 25 gate must be fresh within the policy-profile window." });
       }
       if (!isPipelineOperationalActionEvidenceRefsV0(gate.evidenceRefs) ||
-          (gate.evidenceRefs as unknown[] | undefined)?.some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref))) {
+          (gate.evidenceRefs as unknown[] | undefined)?.some((ref) => typeof ref === "string" && isUnsafeEpic25MetadataValue(ref))) {
         issues.push({ field: `qualityGates.${index}.evidenceRefs`, code: "evidence_required", summary: "Every Epic 25 gate requires safe metadata-only evidence refs." });
       }
     }
@@ -2500,7 +2502,7 @@ export function validatePipelineEpic25PolicyProfileV0(
     issues.push({ field: "retentionPolicy.policyReason", code: "unsafe_metadata_retention", summary: "Epic 25 retention requires a safe metadata-only policy reason." });
   }
   if (!isPipelineOperationalActionEvidenceRefsV0(retention.evidenceRefs) ||
-      (retention.evidenceRefs as unknown[] | undefined)?.some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref))) {
+      (retention.evidenceRefs as unknown[] | undefined)?.some((ref) => typeof ref === "string" && isUnsafeEpic25MetadataValue(ref))) {
     issues.push({ field: "retentionPolicy.evidenceRefs", code: "evidence_required", summary: "Epic 25 retention requires safe policy evidence refs." });
   }
   return issues;
@@ -2513,7 +2515,11 @@ function sameStringSet(left: unknown, right: unknown): boolean {
 }
 
 function isSafeEpic25PolicyText(value: string): boolean {
-  return isSafeOperationalMetadataText(value) && !EPIC_25_HIGH_ENTROPY_OR_PEM.test(value) && !EPIC_25_EXECUTABLE_POLICY_TEXT.test(value);
+  return isSafeOperationalMetadataText(value) && !isUnsafeEpic25MetadataValue(value) && !EPIC_25_EXECUTABLE_POLICY_TEXT.test(value);
+}
+
+function isUnsafeEpic25MetadataValue(value: string): boolean {
+  return EPIC_25_HIGH_ENTROPY_OR_PEM.test(value) || EPIC_25_TOKEN_LIKE_METADATA_VALUE.test(value);
 }
 
 function epic25TimestampMs(value: unknown): number {

@@ -379,7 +379,8 @@ def test_fixture_chain_is_accepted_only_as_metadata_only_hold_without_live_attes
 
 def test_legacy_v0_chain_reads_as_stale_upgrade_required_and_upgrades_by_digest(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "epic-25-legacy-upgrade.db") as client:
-        _create_packet(client)
+        # This models a pre-policy packet.created event: no source:revision ref exists.
+        _create_packet(client, evidence_refs=["evidence:epic-25-source"])
         base_time = datetime.now(timezone.utc).replace(microsecond=0)
         legacy = _chain(now=base_time)
         legacy["schemaVersion"] = "pipeline-epic-25-evidence-chain/v0"
@@ -404,6 +405,30 @@ def test_legacy_v0_chain_reads_as_stale_upgrade_required_and_upgrades_by_digest(
         assert upgraded_response.status_code == 200, upgraded_response.text
         assert upgraded_response.json()["data"]["schemaVersion"] == "pipeline-epic-25-evidence-chain/v1"
         assert "policy_profile_upgrade_required" not in upgraded_response.json()["data"]["typedBlockers"]
+
+
+def test_legacy_v0_without_server_revision_is_explicitly_held_not_upgradeable(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-legacy-unavailable.db", source_revision=None) as client:
+        _create_packet(client, evidence_refs=["evidence:epic-25-source"])
+        legacy = _chain()
+        legacy["schemaVersion"] = "pipeline-epic-25-evidence-chain/v0"
+        del legacy["policyProfile"]
+
+        accepted = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(legacy),
+        )
+        assert accepted.status_code == 200, accepted.text
+        legacy_read = accepted.json()["data"]
+        assert legacy_read["effectiveDecision"] == "hold"
+        assert legacy_read["typedBlockers"] == ["legacy_upgrade_unavailable"]
+
+        attempted_upgrade = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(_chain(now=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=10)), legacy_read["chainDigestSha256"]),
+        )
+        assert attempted_upgrade.status_code == 400, attempted_upgrade.text
+        assert "server-owned source revision attestation" in attempted_upgrade.text
 
 
 def test_v1_target_revision_must_match_authoritative_packet_source_revision(tmp_path, monkeypatch) -> None:

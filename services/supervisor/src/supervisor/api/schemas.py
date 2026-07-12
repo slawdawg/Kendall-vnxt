@@ -2147,6 +2147,7 @@ class PipelineEpic25EvidenceChainReadV0View(PipelineEpic25EvidenceChainV0View):
             "evidence_chain_stale",
             "live_evidence_unavailable",
             "policy_profile_upgrade_required",
+            "legacy_upgrade_unavailable",
         ]
     ] = Field(default_factory=list)
 
@@ -2160,6 +2161,7 @@ class PipelineEpic25EvidenceChainReadV1View(PipelineEpic25EvidenceChainV1View):
             "evidence_chain_stale",
             "live_evidence_unavailable",
             "policy_profile_stale",
+            "source_revision_attestation_required",
             "retention_policy_expired",
             "retention_policy_unverified",
             "quality_gate_not_passed",

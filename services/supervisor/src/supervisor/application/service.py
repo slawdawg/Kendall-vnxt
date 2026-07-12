@@ -822,6 +822,7 @@ class SupervisorService:
                 now,
                 source_revision_attested=not isinstance(current_chain, PipelineEpic25EvidenceChainV1View)
                 or self._server_owned_source_revision_attestation_from_metadata(original_metadata) is not None,
+                legacy_upgrade_available=self._build_server_owned_source_revision_attestation() is not None,
             )
         if current_raw is None:
             if payload.expectedCurrentDigestSha256 is not None:
@@ -863,6 +864,7 @@ class SupervisorService:
             now,
             source_revision_attested=not isinstance(evidence_chain, PipelineEpic25EvidenceChainV1View)
             or self._server_owned_source_revision_attestation_from_metadata(stored_metadata) is not None,
+            legacy_upgrade_available=self._build_server_owned_source_revision_attestation() is not None,
         )
 
     async def transition_authoritative_work_packet(
@@ -1846,6 +1848,7 @@ class SupervisorService:
                     not isinstance(chain, PipelineEpic25EvidenceChainV1View)
                     or self._server_owned_source_revision_attestation_from_metadata(stored_payload) is not None
                 ),
+                legacy_upgrade_available=self._build_server_owned_source_revision_attestation() is not None,
             )
         except ValidationError:
             return None
@@ -1883,6 +1886,7 @@ class SupervisorService:
         read_at: datetime,
         *,
         source_revision_attested: bool = True,
+        legacy_upgrade_available: bool = True,
     ) -> PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View:
         serialized = chain.model_dump(mode="json")
         stale = chain.expiresAt < read_at or any(
@@ -1895,7 +1899,7 @@ class SupervisorService:
         if chain.evidenceClass == "live_observed":
             blockers.append("live_evidence_unavailable")
         if isinstance(chain, PipelineEpic25EvidenceChainV0View):
-            blockers.append("policy_profile_upgrade_required")
+            blockers.append("policy_profile_upgrade_required" if legacy_upgrade_available else "legacy_upgrade_unavailable")
             return PipelineEpic25EvidenceChainReadV0View(
                 **serialized,
                 chainDigestSha256=SupervisorService._epic_25_evidence_chain_digest(serialized),
