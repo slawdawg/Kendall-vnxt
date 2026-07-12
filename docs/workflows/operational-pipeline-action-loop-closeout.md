@@ -241,7 +241,9 @@ pnpm run test:manager-control-plane:focused
 ## Gate 4 named bounded source-intake path closeout
 
 Status: `integrated_local` is accepted only for the named path below. Full Gate
-4 remains open.
+4 remains open: the ADR's honest integrated MVP loop still lacks a proven real
+worker-result path, so this closeout does not claim worker execution or
+simulated completion as acceptance.
 
 The named path is: default local BMAD story-and-bundle resolution in the
 manager, metadata-only manager intake of one eligible seed through the loopback
@@ -258,20 +260,28 @@ dashboard `/pipeline` list and packet-detail projection.
 - PR #526 merged as `86418bae99b2bc41c438ccd1ffe47dbe90278ecd` from reviewed
   head `14423d4e11483fb051978366b63cc737c758f2df`. It makes the
   supervisor-owned authoritative `WorkPacketV0` visible with identical list
-  and detail identities, then proves the joined manager → supervisor →
-  dashboard path against disposable local SQLite and loopback processes. The
-  dashboard proof renders both `/pipeline` and the authoritative packet detail;
-  it is a bounded local process proof, not production or unattended execution.
-- CI run #1012 was green for that exact reviewed head.
+  and detail identities.
+- PR #528 merged as `43f1309004f683a9c68db3878bd68e7402942eed` from reviewed
+  head `4452cc4e1ceff9fa305c34ae655c0205c4af1b01`; its CI run
+  `29191400049` was green. It reconciles the full metadata-only local BMAD
+  hierarchy required before default intake may contribute a candidate.
+- PR #529 merged as `e4bd044f59bde7864155c88cb553a2a76915924d` from reviewed
+  head `c5b65ba941514ad074e4c0385d0880e4cc2cc849`; its CI run
+  `29192291676` was green. It proves the reconciled manager → supervisor →
+  dashboard path through disposable SQLite and real loopback processes.
+- This restart-persistence successor extends that proof: it stops the first
+  real supervisor and dashboard, restarts a fresh supervisor against the same
+  disposable SQLite, reads the same authoritative lifecycle history and
+  `WorkPacketV0` projection by exact packet ID, and reruns the real dashboard
+  `/pipeline` list and packet-detail assertions without fixture substitution.
 
-The accepted `integrated_local` label applies only to this named path. It does
-not mean that full Gate 4 is integrated or that every BMAD source shape is
-validated. Remaining work, in order, is: validate the full BMAD hierarchy and
-source-bundle selection rules beyond the one default local story-plus-bundle
-case; retain or extend real dashboard process/E2E evidence whenever a successor
-changes that path; and obtain the broader ADR-defined Gate 4 acceptance. No
-provider, worker, dispatch, source mutation, credential, shell, external
-network, or unattended execution is proven or enabled by this closeout.
+The accepted `integrated_local` label applies only to the reconciled
+BMAD → manager → supervisor → dashboard path above. It does not mean that full
+Gate 4 is integrated: the precise remaining ADR blocker is an honest local
+worker-result loop bound to the canonical supervisor lifecycle, with no split
+truth or simulated completion. No provider, worker, dispatch, source mutation,
+credential, shell, external network, or unattended execution is proven or
+enabled by this closeout.
 
 Queue leases, attempts, evidence, and workflow/lifecycle events remain durable
 metadata-only lineage; replay rebuilds the packet and linked WorkItem

@@ -108,6 +108,38 @@ def _stop_process(process: subprocess.Popen[str] | None) -> None:
         process.wait(timeout=5)
 
 
+def _start_supervisor(port: int):
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="error",
+            access_log=False,
+            lifespan="on",
+        )
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert server.started, "loopback supervisor failed to start"
+    return server, thread
+
+
+def _stop_supervisor(server: uvicorn.Server | None, thread: threading.Thread | None) -> None:
+    if server is None or thread is None:
+        return
+    server.should_exit = True
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "loopback supervisor failed to stop"
+
+
 def _table_count(db_path: Path, table_name: str) -> int:
     with sqlite3.connect(db_path) as connection:
         return int(connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
@@ -207,33 +239,16 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
     db_path = tmp_path / "manager-source-intake.db"
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
-    _reset_supervisor_modules()
-
-    from supervisor.api.main import app
-
     port = _free_loopback_port()
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="error",
-            access_log=False,
-            lifespan="on",
-        )
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
     source_digest_before = hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest()
     raw_bmad_marker = "RAW_BMAD_STORY_BODY_MUST_NOT_BE_RETAINED_7f9c"
     dashboard_process = None
+    server = None
+    thread = None
     dashboard_log = (tmp_path / "dashboard.log").open("w+", encoding="utf8")
     original_bmad_hierarchy = _write_default_bmad_hierarchy()
 
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started and thread.is_alive() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert server.started, "loopback supervisor failed to start"
+    server, thread = _start_supervisor(port)
 
     try:
         cycle_args = _default_manager_intake_command(
@@ -344,6 +359,63 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert "supervisor WorkPacketV0 projection" in detail_html
         assert "Fixture/non-live packet" not in detail_html
 
+        _stop_process(dashboard_process)
+        dashboard_process = None
+        _stop_supervisor(server, thread)
+        server = None
+        thread = None
+
+        server, thread = _start_supervisor(port)
+        restarted_lifecycle = _json_get(
+            f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets/{packet_id}"
+        )["data"]
+        assert restarted_lifecycle == lifecycle
+        assert len(restarted_lifecycle["history"]) == 1  # type: ignore[arg-type,index]
+        assert restarted_lifecycle["history"][0]["eventType"] == "packet.created"  # type: ignore[index]
+
+        restarted_projection = _json_get(
+            f"http://127.0.0.1:{port}/pipeline-control-plane/projection"
+        )["data"]
+        restarted_projected = next(
+            packet
+            for packet in restarted_projection["workPackets"]  # type: ignore[index,union-attr]
+            if packet["packetId"] == packet_id
+        )
+        assert restarted_projected == projected
+
+        restarted_work_packet_list = _json_get(f"http://127.0.0.1:{port}/work-packets")["data"]
+        restarted_listed_work_packet = next(
+            packet
+            for packet in restarted_work_packet_list  # type: ignore[union-attr]
+            if packet["packetId"] == packet_id
+        )
+        restarted_detail_work_packet = _json_get(
+            f"http://127.0.0.1:{port}/work-packets/{packet_id}"
+        )["data"]
+        assert restarted_detail_work_packet == detail_work_packet
+        assert restarted_listed_work_packet == restarted_detail_work_packet
+
+        dashboard_process = _start_dashboard(
+            f"http://127.0.0.1:{port}",
+            dashboard_port,
+            dashboard_log,
+        )
+        restarted_pipeline_html = _text_get(f"{dashboard_base_url}/pipeline")
+        restarted_detail_html = _text_get(
+            f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
+        )
+        assert "Supervisor packets" in restarted_pipeline_html
+        assert quote(packet_id, safe="") in restarted_pipeline_html
+        for html in (restarted_pipeline_html, restarted_detail_html):
+            assert "gate 4 real dashboard process proof" in html
+            assert "capture" in html and "waiting" in html
+            assert packet_id in html
+            assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in html
+            assert "supervisor WorkPacketV0 projection" in html
+            assert "Fixture/non-live packet" not in html
+            for evidence_ref in authoritative_evidence_refs:
+                assert evidence_ref in html
+
         assert _table_count(db_path, "authoritative_work_packets") == 1
         assert _table_count(db_path, "authoritative_work_packet_lifecycle_events") == 1
         for forbidden_table in (
@@ -361,6 +433,4 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         _stop_process(dashboard_process)
         dashboard_log.close()
         _remove_default_bmad_hierarchy(original_bmad_hierarchy)
-        server.should_exit = True
-        thread.join(timeout=10)
-        assert not thread.is_alive(), "loopback supervisor failed to stop"
+        _stop_supervisor(server, thread)
