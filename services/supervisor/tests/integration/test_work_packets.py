@@ -2375,6 +2375,8 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
                 "status": "waiting",
                 "truthLabel": "live",
                 "sourceRef": None,
+                "canonicalContract": None,
+                "productModeMapping": None,
                 "blocker": None,
                 "nextAction": "Advance toward Classify.",
                 "unblocker": "unknown",
@@ -2385,6 +2387,8 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
             }
         ]
         assert projection["selectedPacketDetails"][0]["sourceRefs"] == []
+        assert projection["selectedPacketDetails"][0]["canonicalContract"] is None
+        assert projection["selectedPacketDetails"][0]["productModeMapping"] is None
         assert projection["selectedPacketDetails"][0]["latestTransitionEventRef"] is None
         assert projection["selectedPacketDetails"][0]["recentTransitionEventRefs"] == []
         assert projection["selectedPacketDetails"][0]["latestMovementSummary"] is None
