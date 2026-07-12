@@ -1,12 +1,20 @@
 import json
 import os
+import socket
 import sqlite3
 import sys
+import threading
+import time
+import urllib.request
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from asyncio import run as asyncio_run
 from concurrent.futures import ThreadPoolExecutor
+from urllib.error import HTTPError
 
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -26,6 +34,89 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     from supervisor.api.main import app
 
     return TestClient(app, client=("127.0.0.1", 50000))
+
+
+@dataclass(frozen=True)
+class _HttpResponse:
+    status_code: int
+    payload: dict[str, object]
+    text: str
+
+    def json(self) -> dict[str, object]:
+        return self.payload
+
+
+def _free_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+@contextmanager
+def _running_http_supervisor(tmp_path, monkeypatch, db_name: str):
+    db_path = tmp_path / db_name
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    from supervisor.api import main
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            main.app,
+            host="127.0.0.1",
+            port=_free_loopback_port(),
+            log_level="error",
+            access_log=False,
+            lifespan="on",
+        )
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert server.started, "loopback supervisor failed to start within 10 seconds"
+    try:
+        yield main, f"http://127.0.0.1:{server.config.port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "loopback supervisor failed to stop within 10 seconds"
+
+
+def _http_request(
+    base_url: str,
+    path: str,
+    *,
+    method: str,
+    payload: dict[str, object] | None = None,
+) -> _HttpResponse:
+    data = json.dumps(payload).encode("utf8") if payload is not None else None
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        data=data,
+        headers={
+            "accept": "application/json",
+            **({"content-type": "application/json"} if payload is not None else {}),
+        },
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed loopback URL
+            text = response.read().decode("utf8")
+            return _HttpResponse(response.status, json.loads(text), text)
+    except HTTPError as exc:
+        text = exc.read().decode("utf8")
+        return _HttpResponse(exc.code, json.loads(text), text)
+
+
+def _http_get(base_url: str, path: str) -> _HttpResponse:
+    return _http_request(base_url, path, method="GET")
+
+
+def _http_post(base_url: str, path: str, payload: dict[str, object]) -> _HttpResponse:
+    return _http_request(base_url, path, method="POST", payload=payload)
 
 
 def _db_path(tmp_path, db_name: str) -> str:
@@ -4492,6 +4583,181 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
         assert child["status"] == "waiting"
 
 
+def test_operational_authority_matrix_exposes_only_requeue_as_supported(tmp_path, monkeypatch) -> None:
+    with _running_http_supervisor(tmp_path, monkeypatch, "operational-authority-matrix.db") as (main, base_url):
+        original_idempotency_lookup = main.service._operational_action_by_idempotency
+
+        async def fail_if_unavailable_action_reaches_replay_lookup(session, idempotency_key):
+            assert not idempotency_key.startswith("unsupported:"), "unavailable actions must fail before replay lookup"
+            return await original_idempotency_lookup(session, idempotency_key)
+
+        monkeypatch.setattr(main.service, "_operational_action_by_idempotency", fail_if_unavailable_action_reaches_replay_lookup)
+        create_response = _http_post(
+            base_url,
+            "/pipeline-control-plane/work-packets",
+            {
+                "packetId": "packet-operational-authority-matrix",
+                "title": "Operational authority matrix packet",
+                "initialStage": "review",
+                "status": "blocked",
+                "sourceRef": {
+                    "refId": "workflow:operational-authority-matrix",
+                    "sourceType": "workflow",
+                    "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+                    "title": "Operational authority matrix",
+                },
+                "idempotencyKey": "create-operational-authority-matrix",
+                "readyToTest": {
+                    "readyId": "ready:operational-authority-matrix",
+                    "userFacingSummary": "Existing operator test actions remain available.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:operational-authority-matrix"],
+                },
+            },
+        )
+        assert create_response.status_code == 200
+        packet = create_response.json()["data"]
+
+        projection = _http_get(base_url, "/pipeline-control-plane/projection").json()["data"]
+        detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet["packetId"])
+        packet_capabilities = {item["actionId"]: item for item in detail["actionCapabilities"]}
+        runtime_capabilities = {item["actionId"]: item for item in projection["runtimeReadiness"]["actionCapabilities"]}
+
+        requeue_capability = packet_capabilities["requeue"]
+        assert requeue_capability["capabilityState"] == "gated"
+        assert requeue_capability["authorityState"] == "needs_authority_approval"
+        assert requeue_capability["typedReason"] == "blocked_by_approval"
+        assert requeue_capability["targetType"] == "work_packet"
+        runtime_requeue_capability = runtime_capabilities["requeue"]
+        assert runtime_requeue_capability["capabilityState"] == "unavailable"
+        assert runtime_requeue_capability["authorityState"] == "blocked"
+        assert runtime_requeue_capability["typedReason"] == "no_eligible_work"
+        assert runtime_requeue_capability["targetId"] is None
+        for action_id in ("mark_tested", "request_rework"):
+            capability = packet_capabilities[action_id]
+            assert capability["capabilityState"] == "available"
+            assert capability["authorityState"] == "needs_product_approval"
+            assert capability["typedReason"] == "blocked_by_approval"
+
+        for action_id, target_type, capabilities in (
+            ("retry_verification", "work_packet", packet_capabilities),
+            ("pause", "runtime", runtime_capabilities),
+            ("drain", "runtime", runtime_capabilities),
+            ("reassign", "work_packet", packet_capabilities),
+        ):
+            capability = capabilities[action_id]
+            assert capability["capabilityState"] == "unavailable"
+            assert capability["authorityState"] == "blocked"
+            assert capability["typedReason"] == "unsupported_action"
+            assert capability["targetType"] == target_type
+
+            action_response = _http_post(
+                base_url,
+                "/pipeline-control-plane/actions",
+                {
+                    "actionId": action_id,
+                    "targetType": target_type,
+                    "targetId": packet["packetId"] if target_type == "work_packet" else "runtime",
+                    "idempotencyKey": f"unsupported:{action_id}",
+                    "correlationId": f"corr:unsupported:{action_id}",
+                    "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
+                    "requestedAuthorityState": "needs_authority_approval",
+                    "requestedRiskTier": "low" if action_id == "pause" else "medium",
+                    "evidenceRefs": [f"evidence:unsupported-{action_id}"],
+                },
+            )
+            assert action_response.status_code == 400
+            assert "not available" in action_response.text
+
+            approval_response = _http_post(
+                base_url,
+                "/pipeline-control-plane/approvals",
+                {
+                    "actionId": action_id,
+                    "targetType": "work_packet",
+                    "targetId": packet["packetId"],
+                    "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
+                    "requestedAuthorityState": "needs_authority_approval",
+                    "requestedRiskTier": "medium",
+                },
+            )
+            assert approval_response.status_code == 422
+
+        approval_response = _http_post(
+            base_url,
+            "/pipeline-control-plane/approvals",
+            {
+                "actionId": "requeue",
+                "targetType": "work_packet",
+                "targetId": packet["packetId"],
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
+                "requestedAuthorityState": "needs_authority_approval",
+                "requestedRiskTier": "medium",
+            },
+        )
+        assert approval_response.status_code == 200
+        approval = approval_response.json()["data"]
+        assert approval["expectedCurrentEventId"] == packet["currentEventId"]
+
+        other_packet_response = _http_post(
+            base_url,
+            "/pipeline-control-plane/work-packets",
+            {
+                "packetId": "packet-operational-authority-other",
+                "title": "Other blocked packet",
+                "initialStage": "review",
+                "status": "blocked",
+                "sourceRef": {
+                    "refId": "workflow:operational-authority-other",
+                    "sourceType": "workflow",
+                    "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+                    "title": "Other operational authority target",
+                },
+                "idempotencyKey": "create-operational-authority-other",
+            },
+        )
+        assert other_packet_response.status_code == 200
+        other_packet = other_packet_response.json()["data"]
+
+        action_payload = {
+            "actionId": "requeue",
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "idempotencyKey": "apply-supported-requeue",
+            "correlationId": "corr:apply-supported-requeue",
+            "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
+            "requestedAuthorityState": "needs_authority_approval",
+            "requestedRiskTier": "medium",
+            "approvalId": approval["approvalId"],
+            "expectedCurrentEventId": approval["expectedCurrentEventId"],
+            "evidenceRefs": ["evidence:supported-requeue"],
+        }
+        mismatched_target_response = _http_post(
+            base_url,
+            "/pipeline-control-plane/actions",
+            {
+                **action_payload,
+                "targetId": other_packet["packetId"],
+                "expectedCurrentEventId": other_packet["currentEventId"],
+                "idempotencyKey": "reject-mismatched-requeue-target",
+                "correlationId": "corr:reject-mismatched-requeue-target",
+            },
+        )
+        assert mismatched_target_response.status_code == 400
+        assert "does not match the requested action target" in mismatched_target_response.text
+
+        action_response = _http_post(base_url, "/pipeline-control-plane/actions", action_payload)
+        assert action_response.status_code == 200
+        action_result = action_response.json()["data"]
+        assert action_result["outcome"] == "succeeded"
+        assert action_result["authorityState"] == "allowed"
+        assert action_result["resultingStatus"] == "waiting"
+
+        replay_response = _http_post(base_url, "/pipeline-control-plane/actions", action_payload)
+        assert replay_response.status_code == 200
+        assert replay_response.json()["data"]["actionRecordId"] == action_result["actionRecordId"]
+
+
 def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "operational-action-failed-test.db") as client:
         source_ref = {
@@ -4819,28 +5085,32 @@ def test_server_owned_local_operator_and_loopback_boundary_reject_spoofing(tmp_p
             assert remote_projection["runtimeReadiness"]["operationalMode"] == "read_only"
             assert remote_projection["runtimeReadiness"]["typedReason"] == "authenticated_session_required"
             assert "authenticated server-bound session identity" in remote_projection["runtimeReadiness"]["summary"]
-            mutating_action_ids = {
+            supported_mutating_action_ids = {
                 "mark_tested",
                 "request_rework",
-                "retry_verification",
                 "requeue",
-                "pause",
-                "drain",
-                "reassign",
                 "reject",
             }
+            unavailable_action_ids = {"retry_verification", "pause", "drain", "reassign"}
             for capability in remote_projection["actionCapabilities"]:
-                if capability["actionId"] in mutating_action_ids:
+                if capability["actionId"] in supported_mutating_action_ids:
                     assert capability["capabilityState"] == "unavailable"
                     assert capability["authorityState"] == "blocked"
                     assert capability["typedReason"] == "authenticated_session_required"
+                elif capability["actionId"] in unavailable_action_ids:
+                    assert capability["capabilityState"] == "unavailable"
+                    assert capability["authorityState"] == "blocked"
+                    assert capability["typedReason"] == "unsupported_action"
             remote_detail = next(
                 detail for detail in remote_projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"]
             )
             for capability in remote_detail["actionCapabilities"]:
-                if capability["actionId"] in mutating_action_ids:
+                if capability["actionId"] in supported_mutating_action_ids:
                     assert capability["capabilityState"] == "unavailable"
                     assert capability["typedReason"] == "authenticated_session_required"
+                elif capability["actionId"] in unavailable_action_ids:
+                    assert capability["capabilityState"] == "unavailable"
+                    assert capability["typedReason"] == "unsupported_action"
 
 
 def test_server_bound_approval_rejects_ineligible_actions_and_preserves_read_only_actions(tmp_path, monkeypatch) -> None:

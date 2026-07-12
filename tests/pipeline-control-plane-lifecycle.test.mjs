@@ -665,6 +665,21 @@ test("operational action contracts validate runtime objects without throwing", a
   assert.ok(nonAllowedAvailableCapabilityIssues.includes("inconsistent_result"));
 
   for (const capability of [
+    { actionId: "retry_verification", targetType: "execution_attempt", riskTier: "medium" },
+    { actionId: "pause", targetType: "runtime", riskTier: "low" },
+    { actionId: "drain", targetType: "runtime", riskTier: "medium" },
+    { actionId: "reassign", targetType: "work_packet", riskTier: "medium" },
+  ]) {
+    assert.deepEqual(validatePipelineOperationalActionCapabilityV0({
+      ...validCapability,
+      ...capability,
+      capabilityState: "unavailable",
+      authorityState: "blocked",
+      typedReason: "unsupported_action",
+    }), [], `unavailable capability should remain contract-valid for ${capability.actionId}`);
+  }
+
+  for (const capability of [
     { actionId: "merge", targetType: "branch", riskTier: "extreme", authorityState: "needs_authority_approval" },
     { actionId: "delete_branch", targetType: "branch", riskTier: "extreme", authorityState: "needs_authority_approval" },
     { actionId: "cleanup", targetType: "workspace", riskTier: "extreme", authorityState: "needs_authority_approval" },
