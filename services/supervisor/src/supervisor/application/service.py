@@ -151,6 +151,8 @@ from supervisor.api.schemas import (
     PipelineBackendReachabilityV0View,
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
+    PipelineExecuteAdmissionCountsV0View,
+    PipelineExecuteAdmissionV0View,
     PipelineExecutionAttemptLineageV0View,
     PipelineQueueLeaseV0View,
     PipelineSelectedPacketDetailV0View,
@@ -590,6 +592,7 @@ class SupervisorService:
         self._local_proof_capability = local_proof_capability
         self._local_proof_attestation: tuple[Path, str] | None = None
         self._loop_lock = asyncio.Lock()
+        self._execute_admission_lock = asyncio.Lock()
         self.utility_worker = UtilityWorkerAdapter()
         self.worker_registry = StaticWorkerRegistry()
         self.local_readonly_worker = MockLocalReadonlyWorkerAdapter()
@@ -3045,6 +3048,114 @@ class SupervisorService:
             }
         return lineage
 
+    async def _evaluate_execute_admission(self, session: AsyncSession) -> PipelineExecuteAdmissionV0View:
+        packet_rows = await session.execute(select(AuthoritativeWorkPacket))
+        packets = list(packet_rows.scalars())
+        item_rows = await session.execute(select(WorkItem))
+        items = list(item_rows.scalars())
+        open_statuses = {"active", "waiting", "blocked", "failed"}
+        observed = PipelineExecuteAdmissionCountsV0View(
+            review=sum(1 for packet in packets if packet.current_stage == "review" and packet.status in open_statuses),
+            deliver=sum(1 for packet in packets if packet.current_stage == "deliver" and packet.status in open_statuses),
+            verification=sum(1 for item in items if item.state == WorkflowState.VALIDATING.value),
+            operatorTesting=sum(
+                1
+                for packet in packets
+                if packet.status in open_statuses and packet.operator_test_state == "ready"
+            ),
+        )
+        limits = PipelineExecuteAdmissionCountsV0View(
+            review=self.settings.review_wip_limit,
+            deliver=self.settings.deliver_wip_limit,
+            verification=self.settings.verification_wip_limit,
+            operatorTesting=self.settings.operator_testing_wip_limit,
+        )
+        dimensions = ("review", "deliver", "verification", "operatorTesting")
+        blocking_dimensions = [
+            dimension
+            for dimension in dimensions
+            if getattr(observed, dimension) >= getattr(limits, dimension)
+        ]
+        reason_by_dimension = {
+            "review": "review_wip_limit_reached",
+            "deliver": "deliver_wip_limit_reached",
+            "verification": "verification_wip_limit_reached",
+            "operatorTesting": "operator_testing_wip_limit_reached",
+        }
+        next_action_by_dimension = {
+            "review": "Complete or move Review work below its configured WIP limit, then retry Execute admission.",
+            "deliver": "Complete or move Deliver work below its configured WIP limit, then retry Execute admission.",
+            "verification": "Complete or release verification work below its configured WIP limit, then retry Execute admission.",
+            "operatorTesting": "Resolve Ready To Test operator work below its configured WIP limit, then retry Execute admission.",
+        }
+        if blocking_dimensions:
+            primary_dimension = blocking_dimensions[0]
+            evidence_refs = ["evidence:wip-policy-supervisor-wip-v0"] + [
+                f"evidence:wip-{self._execute_admission_dimension_slug(dimension)}-"
+                f"{getattr(observed, dimension)}-of-{getattr(limits, dimension)}"
+                for dimension in blocking_dimensions
+            ]
+            return PipelineExecuteAdmissionV0View(
+                state="blocked",
+                capacityAvailable=False,
+                typedReason=reason_by_dimension[primary_dimension],
+                source="supervisor_settings",
+                limits=limits,
+                observed=observed,
+                blockingDimensions=blocking_dimensions,
+                nextSafeAction=next_action_by_dimension[primary_dimension],
+                evidenceRefs=evidence_refs,
+                metadataOnly=True,
+                rawPayloadRetained=False,
+            )
+        return PipelineExecuteAdmissionV0View(
+            state="ready",
+            capacityAvailable=True,
+            typedReason="capacity_available",
+            source="supervisor_settings",
+            limits=limits,
+            observed=observed,
+            blockingDimensions=[],
+            nextSafeAction="New Execute work may be admitted while all downstream WIP counts remain below their configured limits.",
+            evidenceRefs=["evidence:wip-policy-supervisor-wip-v0", "evidence:wip-capacity-available"],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    def _execute_admission_dimension_slug(self, dimension: str) -> str:
+        return "operator-testing" if dimension == "operatorTesting" else dimension
+
+    def _unavailable_execute_admission(self) -> PipelineExecuteAdmissionV0View:
+        return PipelineExecuteAdmissionV0View(
+            state="unavailable",
+            capacityAvailable=False,
+            typedReason="runtime_unavailable",
+            source="unavailable",
+            limits=None,
+            observed=None,
+            blockingDimensions=[],
+            nextSafeAction="Restore the supervisor database projection before admitting new Execute work.",
+            evidenceRefs=["evidence:wip-admission-unavailable"],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    def _raise_execute_admission_blocked(self, admission: PipelineExecuteAdmissionV0View) -> None:
+        if admission.capacityAvailable:
+            return
+        raise ValueError(f"Execute admission blocked: {admission.typedReason}. {admission.nextSafeAction}")
+
+    async def _has_active_execute_lease(self, session: AsyncSession, item: WorkItem) -> bool:
+        now = datetime.now(timezone.utc)
+        lease = await session.scalar(
+            select(QueueLease.id).where(
+                QueueLease.work_item_id == item.id,
+                QueueLease.active.is_(True),
+                QueueLease.lease_expires_at > now,
+            )
+        )
+        return lease is not None
+
     async def get_pipeline_dashboard_projection(
         self,
         session: AsyncSession,
@@ -3066,6 +3177,7 @@ class SupervisorService:
                 generated_at,
                 mutation_access=mutation_access,
             )
+            execute_admission = await self._evaluate_execute_admission(session)
             action_result_rows = await session.execute(
                 select(OperationalActionRecord).order_by(OperationalActionRecord.created_at.asc())
             )
@@ -3564,6 +3676,7 @@ class SupervisorService:
             gatedControls=gated_controls,
             runtimeReadiness=runtime_readiness,
             actionCapabilities=runtime_readiness.actionCapabilities,
+            executeAdmission=execute_admission,
             queueSummary=PipelineQueueSummaryV0View(
                 activeCount=active_count,
                 dispatchableCount=dispatchable_count,
@@ -3689,6 +3802,7 @@ class SupervisorService:
                 rawPayloadRetained=False,
             ),
             actionCapabilities=[],
+            executeAdmission=self._unavailable_execute_admission(),
             queueSummary=PipelineQueueSummaryV0View(
                 activeCount=None,
                 dispatchableCount=None,
@@ -25222,6 +25336,10 @@ class SupervisorService:
         if current == WorkflowState.READY:
             if mode in {RunMode.PAUSED, RunMode.DRAINING}:
                 return
+            if not await self._has_active_execute_lease(session, item):
+                admission = await self._evaluate_execute_admission(session)
+                if not admission.capacityAvailable:
+                    return
             if self._repo_is_dirty():
                 item.blocked_reason = "Repository is dirty. Clean the working tree before new work starts."
                 await self._transition(session, item, WorkflowState.BLOCKED, "repo.blocked", default_status_summary(WorkflowState.BLOCKED))
@@ -25672,6 +25790,8 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.RESTART_IMPLEMENTATION and current == WorkflowState.NEEDS_REWORK:
+            if not await self._has_active_execute_lease(session, item):
+                self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
             if self._repo_is_dirty():
                 item.blocked_reason = "Repository is dirty. Clean the working tree before implementation restarts."
                 await self._transition(session, item, WorkflowState.BLOCKED, "repo.blocked", default_status_summary(WorkflowState.BLOCKED))
@@ -25929,27 +26049,34 @@ class SupervisorService:
         )
 
     async def _create_or_refresh_lease(self, session: AsyncSession, item: WorkItem) -> None:
-        now = datetime.now(timezone.utc)
-        result = await session.execute(
-            select(QueueLease).where(QueueLease.work_item_id == item.id, QueueLease.active.is_(True))
-        )
-        lease = result.scalars().first()
-        if lease:
-            lease.heartbeat_at = now
-            lease.lease_expires_at = now + timedelta(seconds=self.settings.lease_ttl_seconds)
-            lease.fencing_token += 1
-            lease.attempt_count += 1
-            return
-        session.add(
-            QueueLease(
-                work_item_id=item.id,
-                heartbeat_at=now,
-                lease_expires_at=now + timedelta(seconds=self.settings.lease_ttl_seconds),
-                fencing_token=1,
-                attempt_count=1,
-                active=True,
+        async with self._execute_admission_lock:
+            now = datetime.now(timezone.utc)
+            result = await session.execute(
+                select(QueueLease).where(
+                    QueueLease.work_item_id == item.id,
+                    QueueLease.active.is_(True),
+                    QueueLease.lease_expires_at > now,
+                )
             )
-        )
+            lease = result.scalars().first()
+            if lease:
+                lease.heartbeat_at = now
+                lease.lease_expires_at = now + timedelta(seconds=self.settings.lease_ttl_seconds)
+                lease.fencing_token += 1
+                lease.attempt_count += 1
+                return
+            self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
+            session.add(
+                QueueLease(
+                    work_item_id=item.id,
+                    heartbeat_at=now,
+                    lease_expires_at=now + timedelta(seconds=self.settings.lease_ttl_seconds),
+                    fencing_token=1,
+                    attempt_count=1,
+                    active=True,
+                )
+            )
+            await session.flush()
 
     async def _transition(
         self,

@@ -1908,6 +1908,43 @@ class PipelineQueueSummaryV0View(BaseModel):
     summary: str
 
 
+class PipelineExecuteAdmissionCountsV0View(BaseModel):
+    review: int = Field(ge=0)
+    deliver: int = Field(ge=0)
+    verification: int = Field(ge=0)
+    operatorTesting: int = Field(ge=0)
+
+
+class PipelineExecuteAdmissionV0View(BaseModel):
+    schemaVersion: Literal["pipeline-execute-admission/v0"] = "pipeline-execute-admission/v0"
+    policyVersion: Literal["supervisor-wip/v0"] = "supervisor-wip/v0"
+    state: Literal["ready", "blocked", "unavailable"]
+    capacityAvailable: bool
+    typedReason: Literal[
+        "capacity_available",
+        "review_wip_limit_reached",
+        "deliver_wip_limit_reached",
+        "verification_wip_limit_reached",
+        "operator_testing_wip_limit_reached",
+        "runtime_unavailable",
+    ]
+    source: Literal["supervisor_settings", "unavailable"]
+    limits: PipelineExecuteAdmissionCountsV0View | None = None
+    observed: PipelineExecuteAdmissionCountsV0View | None = None
+    blockingDimensions: list[Literal["review", "deliver", "verification", "operatorTesting"]] = Field(default_factory=list)
+    nextSafeAction: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Execute admission evidence refs must be safe metadata refs.")
+        return refs
+
+
 class PipelineWorkerSummaryV0View(BaseModel):
     stateSource: Literal["supervisor_projection", "manager_summary", "unavailable", "unknown"]
     freshnessState: PipelineProjectionFreshnessStateV0
@@ -2036,6 +2073,7 @@ class PipelineDashboardProjectionV0View(BaseModel):
     gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)
     runtimeReadiness: PipelineRuntimeReadinessV0View
     actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    executeAdmission: PipelineExecuteAdmissionV0View
     queueSummary: PipelineQueueSummaryV0View
     evidenceRefs: list[str] = Field(default_factory=list)
 

@@ -668,12 +668,30 @@ test("packet detail why diagnostics contract explains placement without retainin
   }
 });
 
-test("backpressure summary is metadata-only and separate from dispatch-affecting state", async () => {
+test("backpressure prefers backend Execute admission truth and keeps legacy metadata signals conservative", async () => {
   const {
     buildPipelineActiveBoardViewModel,
     deriveBackpressureState,
     isDispatchAffectingManagerState,
   } = await loadActiveBoardViewModelModule();
+
+  const enforcedProjection = projectionFixture({
+    executeAdmission: executeAdmissionFixture({
+      state: "blocked",
+      capacityAvailable: false,
+      typedReason: "review_wip_limit_reached",
+      observed: { review: 1, deliver: 0, verification: 0, operatorTesting: 0 },
+      blockingDimensions: ["review"],
+      nextSafeAction: "Complete Review work before retrying Execute admission.",
+      evidenceRefs: ["evidence:wip-policy-supervisor-wip-v0", "evidence:wip-review-1-of-1"],
+    }),
+  });
+  const enforcedBackpressure = deriveBackpressureState(enforcedProjection);
+  assert.equal(enforcedBackpressure.reason, "review_overloaded");
+  assert.equal(enforcedBackpressure.source, "executeAdmission");
+  assert.equal(enforcedBackpressure.severity, "high");
+  assert.equal(enforcedBackpressure.nextSafeAction, enforcedProjection.executeAdmission.nextSafeAction);
+  assert.equal(JSON.stringify(enforcedBackpressure.affectedStages), "[\"review\"]");
 
   const blockedQueueProjection = projectionFixture({
     queueSummary: {
@@ -1807,10 +1825,30 @@ function projectionFixture(overrides = {}) {
     workerSummary: workerSummaryFixture(),
     reliabilityProblems: [],
     gatedControls: [],
+    executeAdmission: executeAdmissionFixture(),
     queueSummary: queueSummaryFixture(),
     evidenceRefs: [],
   };
   return { ...base, ...overrides };
+}
+
+function executeAdmissionFixture(overrides = {}) {
+  return {
+    schemaVersion: "pipeline-execute-admission/v0",
+    policyVersion: "supervisor-wip/v0",
+    state: "ready",
+    capacityAvailable: true,
+    typedReason: "capacity_available",
+    source: "supervisor_settings",
+    limits: { review: 1, deliver: 1, verification: 1, operatorTesting: 1 },
+    observed: { review: 0, deliver: 0, verification: 0, operatorTesting: 0 },
+    blockingDimensions: [],
+    nextSafeAction: "New Execute work may be admitted.",
+    evidenceRefs: ["evidence:wip-policy-supervisor-wip-v0", "evidence:wip-capacity-available"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...overrides,
+  };
 }
 
 function projectionStageSummariesFixture(overrides = {}) {

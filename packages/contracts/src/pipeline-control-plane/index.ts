@@ -2732,6 +2732,35 @@ export interface PipelineQueueSummaryV0 {
   summary: string;
 }
 
+export interface PipelineExecuteAdmissionCountsV0 {
+  review: number;
+  deliver: number;
+  verification: number;
+  operatorTesting: number;
+}
+
+export interface PipelineExecuteAdmissionV0 {
+  schemaVersion: "pipeline-execute-admission/v0";
+  policyVersion: "supervisor-wip/v0";
+  state: "ready" | "blocked" | "unavailable";
+  capacityAvailable: boolean;
+  typedReason:
+    | "capacity_available"
+    | "review_wip_limit_reached"
+    | "deliver_wip_limit_reached"
+    | "verification_wip_limit_reached"
+    | "operator_testing_wip_limit_reached"
+    | "runtime_unavailable";
+  source: "supervisor_settings" | "unavailable";
+  limits: PipelineExecuteAdmissionCountsV0 | null;
+  observed: PipelineExecuteAdmissionCountsV0 | null;
+  blockingDimensions: Array<"review" | "deliver" | "verification" | "operatorTesting">;
+  nextSafeAction: string;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
 export interface PipelineDashboardProjectionV0 {
   schemaVersion: "pipeline-dashboard-projection/v0";
   projectionId: string;
@@ -2753,6 +2782,7 @@ export interface PipelineDashboardProjectionV0 {
   gatedControls: PipelineGatedControlV0[];
   runtimeReadiness?: PipelineOperationalRuntimeReadinessV0;
   actionCapabilities?: PipelineOperationalActionCapabilityV0[];
+  executeAdmission: PipelineExecuteAdmissionV0;
   queueSummary: PipelineQueueSummaryV0;
   evidenceRefs: string[];
 }

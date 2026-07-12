@@ -199,7 +199,7 @@ export type PipelineBackpressureState = {
   visible: true;
   reason: PipelineBackpressureReason;
   severity: "low" | "medium" | "high";
-  source: "queueSummary" | "managerSummary" | "backendReachability" | "truthSummary" | "stageSummaries";
+  source: "queueSummary" | "managerSummary" | "backendReachability" | "truthSummary" | "stageSummaries" | "executeAdmission";
   summary: string;
   nextSafeAction: string;
   affectedStages: AuthoritativePacketStage[];
@@ -1115,6 +1115,31 @@ export function deriveBackpressureState(projection: PipelineDashboardProjectionV
   }
   if (!projectionCanShowLiveActiveWork(projection)) {
     return null;
+  }
+  if (projection.executeAdmission?.state === "blocked") {
+    const reason: PipelineBackpressureReason = projection.executeAdmission.typedReason === "review_wip_limit_reached"
+      ? "review_overloaded"
+      : projection.executeAdmission.typedReason === "deliver_wip_limit_reached"
+        ? "delivery_overloaded"
+        : projection.executeAdmission.typedReason === "verification_wip_limit_reached"
+          ? "verification_overloaded"
+          : projection.executeAdmission.typedReason === "operator_testing_wip_limit_reached"
+            ? "operator_testing_overloaded"
+            : "unknown";
+    const affectedStages = projection.executeAdmission.blockingDimensions.flatMap((dimension) => ({
+      review: ["review"],
+      deliver: ["deliver"],
+      verification: ["review", "promote"],
+      operatorTesting: ["review", "promote"],
+    }[dimension] as AuthoritativePacketStage[]));
+    return backpressureState(
+      reason,
+      "high",
+      "executeAdmission",
+      `Backend Execute admission is blocked by ${projection.executeAdmission.blockingDimensions.join(", ")} WIP capacity.`,
+      projection.executeAdmission.nextSafeAction,
+      [...new Set(affectedStages)]
+    );
   }
   if (projection.managerSummary.inactivityReason === "usage_limited" || projection.queueSummary.emptyReason === "usage_limited") {
     return backpressureState(
