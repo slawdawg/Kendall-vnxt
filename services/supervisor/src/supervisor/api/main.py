@@ -51,7 +51,10 @@ from supervisor.api.schemas import (
     WorkItemSubscriptionHandoffRequest,
     WorkItemVerificationEvidenceRequest,
 )
-from supervisor.application.manager_terminal_events import persist_manager_terminal_event
+from supervisor.application.manager_terminal_events import (
+    get_manager_terminal_event,
+    persist_manager_terminal_event,
+)
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
 from supervisor.domain.bmad_import import BmadImportError
@@ -295,6 +298,26 @@ async def record_manager_terminal_event(
             status_code=409,
             detail=error_response(str(exc), "manager_terminal_event_conflict").model_dump(),
         ) from exc
+    return ApiEnvelope(data=event)
+
+
+@app.get(
+    "/manager-control-plane/terminal-events/{event_id}", response_model=ApiEnvelope
+)
+async def read_manager_terminal_event(
+    event_id: str,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    event = await get_manager_terminal_event(session, event_id)
+    if event is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response(
+                "Manager terminal event not found.",
+                "manager_terminal_event_not_found",
+            ).model_dump(),
+        )
     return ApiEnvelope(data=event)
 
 

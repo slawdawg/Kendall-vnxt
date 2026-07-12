@@ -28,11 +28,22 @@ export interface ManagerUnresolvedApprovalGatedWork {
   evidenceRefs: readonly EvidenceRefId[];
 }
 
-export interface ManagerSupervisorCanonicalEventMetadata {
-  eventId: string;
-  evidenceRef: EvidenceRefId;
+declare const managerTerminalEventIdBrand: unique symbol;
+
+/** Runtime-validated as exactly `manager-terminal-event:<40 lowercase hex>`. */
+export type ManagerTerminalEventId = `manager-terminal-event:${string}` & {
+  readonly [managerTerminalEventIdBrand]: true;
+};
+
+export interface ManagerSupervisorCanonicalEventMetadata<
+  TEventId extends ManagerTerminalEventId = ManagerTerminalEventId,
+> {
+  eventId: TEventId;
+  evidenceRef: `supervisor-event:${TEventId}` & EvidenceRefId;
   status: "persisted";
   persistedAt: string;
+  metadataOnly: true;
+  rawPayloadRetained: false;
 }
 
 export interface AuthoritativeBacklogExhaustedDisposition {
