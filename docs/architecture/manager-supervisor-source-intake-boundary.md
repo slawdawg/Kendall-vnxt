@@ -105,11 +105,23 @@ lease, worker process, dispatch action, provider call, or source mutation. The
 supervisor owns the authoritative WorkPacket and `packet.created` lifecycle
 event after the POST succeeds.
 
-Default local BMAD resolution contributes only story, sprint-status, source-key,
-and matching-bundle references to the allowlisted metadata-only provenance.
-Story bodies, acceptance criteria, verification commands, prompts, completions,
-raw bundle content, provider payloads, and secrets remain outside the request
-and are not retained.
+Default local BMAD resolution now reconciles the complete planning hierarchy
+before it may contribute a candidate. Existing explicit candidates and
+precomputed eligibility retain precedence. Within default local resolution, an
+explicit canonical local PRD bundle ref has precedence; otherwise the canonical
+`_bmad-output/implementation-artifacts/sprint-status.yaml` `source_key` must
+identify exactly one local PRD bundle. That PRD must be final and not
+superseded, with exactly one completed matching architecture, completed
+epics/stories artifact, completed implementation-readiness artifact, and
+exactly one `ready-for-dev` tracker story whose artifact status agrees.
+
+The allowlisted provenance contains only member refs, statuses, the source key,
+and SHA-256 digests calculated from parsed metadata. Missing, duplicate,
+conflicting, superseded, mismatched, unreadable, ambiguous, or unready members
+fail closed before source-intake projection. Story and planning bodies,
+body-derived acceptance criteria or verification commands, prompts,
+completions, raw bundle content, provider payloads, and secrets remain outside
+the request and are not retained.
 
 ## Fail-Closed Commit Point
 
@@ -142,8 +154,9 @@ BMAD marker from persisted database bytes. Environments that deny loopback
 sockets identify that sandbox boundary and require the exact command outside
 the sandbox.
 
-PR #525 (`d3a27aa9e588ca23118ab984ec0ea979963d1cd9`) supplies the default
-local story-and-bundle resolver. PR #526
+PR #525 (`d3a27aa9e588ca23118ab984ec0ea979963d1cd9`) supplied the initial default
+local story-and-bundle resolver. The next bounded prerequisite extends that
+resolver to the full metadata-only hierarchy above. PR #526
 (`86418bae99b2bc41c438ccd1ffe47dbe90278ecd`, reviewed head
 `14423d4e11483fb051978366b63cc737c758f2df`) adds authoritative
 `WorkPacketV0` list/detail parity and exercises the manager → supervisor →
@@ -152,4 +165,7 @@ dashboard list/detail path through a real loopback dashboard process. CI run
 for the named default-local-story-and-bundle → manager intake → authoritative
 supervisor → dashboard path. It does not validate the full BMAD hierarchy or
 all source bundles, grant provider/worker/dispatch execution, or close the
-broader ADR-defined Gate 4 acceptance.
+broader ADR-defined Gate 4 acceptance. Full Gate 4 still requires a real
+dashboard process/E2E run that observes this reconciled full-hierarchy source
+path through manager intake, authoritative supervisor persistence, and
+dashboard list/detail projection without fixture substitution.

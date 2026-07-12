@@ -16358,7 +16358,8 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
       "Restore readable local sprint metadata before retrying default source intake.",
     );
   }
-  const sourceKeys = [...sprintContent.matchAll(/^source_key:\s*([^#\r\n]+?)\s*$/gim)].map((match) => match[1].trim());
+  const sprintMetadata = bmadSprintMetadata(sprintContent);
+  const sourceKeys = sprintMetadata.sourceKeys;
   if (sourceKeys.length !== 1 || !sourceKeys[0]) {
     return blocked(
       sourceKeys.length > 1 ? "default-bmad-source-key-ambiguous" : "default-bmad-source-key-missing",
@@ -16367,7 +16368,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
     );
   }
   const sourceKey = sanitizeLedgerField(sourceKeys[0], "", 160);
-  const storyRows = defaultBmadSprintStoryRows(sprintContent);
+  const storyRows = sprintMetadata.storyRows;
   if (storyRows.length === 0) {
     return blocked(
       "default-bmad-source-story-missing",
@@ -16385,24 +16386,24 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
       { sourceKey, storyKey: duplicateStoryKey },
     );
   }
-  const preferredStatuses = ["in-progress", "ready-for-dev", "review", "backlog"];
-  const selectedStory = preferredStatuses.map((status) => storyRows.find((row) => row.status === status)).find(Boolean) || null;
-  if (!selectedStory) {
+  const readyStories = storyRows.filter((row) => row.status === "ready-for-dev");
+  if (readyStories.length === 0) {
     return blocked(
-      "default-bmad-source-story-missing",
-      "Default BMAD source intake found no active or pending source story.",
-      "Create or restore one source-bound pending BMAD story before retrying.",
+      "default-bmad-source-story-not-ready",
+      "Default BMAD source intake requires exactly one ready-for-dev story in the canonical sprint tracker.",
+      "Complete BMAD readiness for exactly one source-bound story before retrying default intake.",
       { sourceKey },
     );
   }
-  if (selectedStory.status !== "ready-for-dev") {
+  if (readyStories.length !== 1) {
     return blocked(
-      "default-bmad-source-story-not-ready",
-      `Default BMAD source intake selected ${selectedStory.key} at status ${selectedStory.status}, not ready-for-dev.`,
-      "Complete the required BMAD readiness transition or use an explicit candidate; do not intake an unready default story.",
-      { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status },
+      "default-bmad-source-story-ambiguous",
+      "Default BMAD source intake found multiple ready-for-dev stories in the canonical sprint tracker.",
+      "Reconcile the sprint tracker so exactly one story is ready-for-dev before retrying.",
+      { sourceKey, readyStoryKeys: readyStories.map((row) => row.key).slice(0, 8) },
     );
   }
+  const selectedStory = readyStories[0];
   const storyRef = `story:_bmad-output/implementation-artifacts/${selectedStory.key}.md`;
   const storyPath = join(repoRoot, storyRef.slice("story:".length));
   if (!existsSync(storyPath)) {
@@ -16431,7 +16432,25 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
       { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status, artifactStatus: artifactStatus || "missing" },
     );
   }
-  const bundleRefs = defaultBmadBundleRefs(sourceKey);
+  const explicitBundleInput = options.sourceBundleRef || context.sourceBundleRef || context.source_bundle_ref || "";
+  const explicitBundleRef = normalizeDefaultBmadPrdRef(explicitBundleInput);
+  if (explicitBundleInput && !explicitBundleRef) {
+    return blocked(
+      "default-bmad-source-explicit-bundle-invalid",
+      "The explicit source bundle ref is not a canonical local BMAD PRD ref.",
+      "Provide a prd:_bmad-output/planning-artifacts/prds/<bundle>/prd.md ref before retrying.",
+      { sourceKey },
+    );
+  }
+  const bundleRefs = explicitBundleRef ? [explicitBundleRef] : defaultBmadBundleRefs(sourceKey);
+  if (explicitBundleRef && (sourcePlanningKey(explicitBundleRef.slice("prd:".length)) !== sourceKey || !existsSync(join(repoRoot, explicitBundleRef.slice("prd:".length))))) {
+    return blocked(
+      "default-bmad-source-explicit-bundle-mismatch",
+      "The explicit local PRD bundle does not exist or does not match the canonical sprint source_key.",
+      "Provide the exact local PRD bundle for the sprint source_key or repair the canonical sprint tracker.",
+      { sourceKey, bundleRef: explicitBundleRef },
+    );
+  }
   if (bundleRefs.length !== 1) {
     return blocked(
       bundleRefs.length > 1 ? "default-bmad-source-bundle-ambiguous" : "default-bmad-source-bundle-missing",
@@ -16443,15 +16462,26 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
     );
   }
   const bundleRef = bundleRefs[0];
-  const title = bmadStoryTitle(storyContent, selectedStory.key);
+  const hierarchy = reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, storyContent, storyRef });
+  if (!hierarchy.ok) {
+    return blocked(hierarchy.code, hierarchy.message, hierarchy.nextAction, {
+      sourceKey,
+      storyKey: selectedStory.key,
+      storyStatus: selectedStory.status,
+      ...hierarchy.details,
+    });
+  }
+  const title = selectedStory.key.replace(/^\d+-\d+-/, "").replace(/-/g, " ");
   const sourceProvenance = {
     mode: "default_local_bmad",
+    bundleSelection: explicitBundleRef ? "explicit_source_bundle" : "canonical_sprint_source_key",
     storyRef,
     storyKey: selectedStory.key,
     storyStatus: selectedStory.status,
     sprintStatusRef,
     sourceKey,
     bundleRef,
+    ...hierarchy.provenance,
     metadataOnly: true,
     rawPayloadRetained: false,
   };
@@ -16480,7 +16510,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
 function defaultBmadSprintStoryRows(content = "") {
   const rows = [];
   for (const line of String(content).split(/\r?\n/)) {
-    const match = line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*([a-z-]+)\s*(?:#.*)?$/i);
+    const match = line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*["']?([a-z-]+)["']?\s*(?:#.*)?$/i);
     if (match) rows.push({ key: match[1], status: match[2].toLowerCase() });
   }
   return rows;
@@ -16493,9 +16523,135 @@ function bmadStoryStatus(content = "") {
   return section ? section[1].toLowerCase() : "";
 }
 
-function bmadStoryTitle(content = "", storyKey = "") {
-  const heading = String(content).match(/^#\s+Story(?:\s+[^:]+)?:\s*(.+?)\s*$/im);
-  return sanitizeLedgerField(heading?.[1] || storyKey.replace(/^\d+-\d+-/, "").replace(/-/g, " "), "Source-backed BMAD story", 180);
+function normalizeDefaultBmadPrdRef(value = "") {
+  const raw = String(value || "").trim().replace(/\\/g, "/");
+  if (!raw) return "";
+  const relativePath = raw.replace(/^prd:/i, "").replace(/^\.\//, "");
+  if (!/^_bmad-output\/planning-artifacts\/prds\/[^/]+\/prd\.md$/i.test(relativePath) || relativePath.includes("..")) return "";
+  return `prd:${relativePath}`;
+}
+
+function bmadFrontmatterMetadata(path) {
+  const content = readLocalBmadMetadata(path);
+  if (content === null) return null;
+  const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return { fields: {}, duplicates: [], metadataDigest: metadataDigest({}) };
+  const fields = {};
+  const duplicates = [];
+  let listKey = "";
+  for (const line of match[1].split(/\r?\n/)) {
+    const scalar = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/);
+    if (scalar) {
+      const key = scalar[1];
+      if (Object.hasOwn(fields, key)) duplicates.push(key);
+      const value = unquoteBmadScalar(scalar[2]);
+      fields[key] = value;
+      listKey = value === "" ? key : "";
+      continue;
+    }
+    const listItem = line.match(/^\s+-\s+(.+?)\s*$/);
+    if (listItem && listKey) {
+      if (!Array.isArray(fields[listKey])) fields[listKey] = [];
+      fields[listKey].push(unquoteBmadScalar(listItem[1]));
+    }
+  }
+  return { fields, duplicates: [...new Set(duplicates)].sort(), metadataDigest: metadataDigest(fields) };
+}
+
+function unquoteBmadScalar(value = "") {
+  const raw = String(value || "").trim();
+  const text = raw.startsWith('"') || raw.startsWith("'") ? raw : raw.replace(/\s+#.*$/, "").trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) return text.slice(1, -1);
+  return text;
+}
+
+function metadataDigest(value) {
+  return `sha256:${createHash("sha256").update(JSON.stringify(stableMetadataValue(value))).digest("hex")}`;
+}
+
+function stableMetadataValue(value) {
+  if (Array.isArray(value)) return value.map(stableMetadataValue);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableMetadataValue(value[key])]));
+}
+
+function bmadSprintMetadata(content = "") {
+  const sourceKeys = [...String(content).matchAll(/^source_key:\s*([^#\r\n]+?)\s*$/gim)].map((match) => unquoteBmadScalar(match[1]));
+  const storyRows = defaultBmadSprintStoryRows(content);
+  return {
+    sourceKeys,
+    storyRows,
+    metadataDigest: metadataDigest({ sourceKeys, storyRows }),
+  };
+}
+
+function planningMetadataArtifacts() {
+  const planningRoot = join(repoRoot, "_bmad-output", "planning-artifacts");
+  if (!existsSync(planningRoot)) return [];
+  try {
+    return readdirSync(planningRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+      .map((entry) => {
+        const ref = `_bmad-output/planning-artifacts/${entry.name}`;
+        return { ref, metadata: bmadFrontmatterMetadata(join(repoRoot, ref)) };
+      })
+      .filter((entry) => entry.metadata !== null);
+  } catch {
+    return [];
+  }
+}
+
+function reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, storyContent, storyRef }) {
+  const fail = (code, message, nextAction, details = {}) => ({ ok: false, code, message, nextAction, details });
+  const prdRef = bundleRef.slice("prd:".length);
+  const prd = bmadFrontmatterMetadata(join(repoRoot, prdRef));
+  if (!prd) return fail("default-bmad-source-prd-unreadable", "The selected authoritative PRD metadata is unreadable.", "Restore readable PRD frontmatter before retrying.");
+  if (prd.duplicates.length > 0) return fail("default-bmad-source-prd-conflicting", "The selected PRD contains conflicting metadata keys.", "Reconcile duplicate PRD frontmatter keys before retrying.", { conflictingKeys: prd.duplicates });
+  const prdStatus = String(prd.fields.status || "").toLowerCase();
+  const supersededBy = Array.isArray(prd.fields.superseded_by) ? prd.fields.superseded_by.filter(Boolean) : String(prd.fields.superseded_by || "").trim();
+  if (prdStatus === "superseded" || (Array.isArray(supersededBy) ? supersededBy.length > 0 : Boolean(supersededBy) && supersededBy !== "[]")) return fail("default-bmad-source-prd-superseded", "The selected PRD is superseded and cannot authorize default intake.", "Select the superseding final PRD bundle and matching sprint tracker.");
+  if (prdStatus !== "final") return fail("default-bmad-source-prd-not-ready", "The selected PRD is not final.", "Finalize exactly one PRD before retrying default intake.", { prdStatus: prdStatus || "missing" });
+  const authoritativeFor = Array.isArray(prd.fields.authoritative_for) ? prd.fields.authoritative_for.filter(Boolean) : [];
+  if (String(prd.fields.authoritative || "").toLowerCase() !== "true" && authoritativeFor.length === 0) return fail("default-bmad-source-prd-not-authoritative", "The selected final PRD is not marked as an authoritative planning input.", "Mark exactly one final PRD authoritative for this scope before retrying.");
+
+  const artifacts = planningMetadataArtifacts();
+  const select = (kind, workflowType, primaryField, primaryRef) => {
+    const candidates = artifacts.filter((entry) => String(entry.metadata.fields.workflowType || "").toLowerCase() === workflowType && entry.metadata.fields[primaryField] === primaryRef);
+    if (candidates.length === 0) return fail(`default-bmad-source-${kind}-missing`, `No matching ${kind.replaceAll("-", " ")} metadata artifact was found.`, `Create or restore exactly one matching ${kind.replaceAll("-", " ")} artifact before retrying.`);
+    if (candidates.length > 1) return fail(`default-bmad-source-${kind}-ambiguous`, `Multiple matching ${kind.replaceAll("-", " ")} artifacts were found.`, `Reconcile the bundle to exactly one matching ${kind.replaceAll("-", " ")} artifact.`, { refs: candidates.map((entry) => entry.ref).slice(0, 8) });
+    const selected = candidates[0];
+    if (selected.metadata.duplicates.length > 0) return fail(`default-bmad-source-${kind}-conflicting`, `The matching ${kind.replaceAll("-", " ")} artifact contains conflicting metadata keys.`, `Reconcile duplicate ${kind.replaceAll("-", " ")} frontmatter keys before retrying.`, { conflictingKeys: selected.metadata.duplicates });
+    const status = String(selected.metadata.fields.status || "").toLowerCase();
+    if (status !== "complete") return fail(`default-bmad-source-${kind}-not-ready`, `The matching ${kind.replaceAll("-", " ")} artifact is not complete.`, `Complete the matching ${kind.replaceAll("-", " ")} workflow before retrying.`, { status: status || "missing" });
+    return { ok: true, selected, status };
+  };
+
+  const architecture = select("architecture", "architecture", "authoritative_prd", prdRef);
+  if (!architecture.ok) return architecture;
+  const epics = select("epics", "epics-and-stories", "authoritative_prd", prdRef);
+  if (!epics.ok) return epics;
+  if (epics.selected.metadata.fields.authoritative_architecture !== architecture.selected.ref) {
+    return fail("default-bmad-source-epics-mismatch", "The epics/stories artifact does not bind the selected architecture.", "Reconcile epics/stories metadata to the selected PRD and architecture.");
+  }
+  const readiness = select("readiness", "implementation-readiness", "authoritative_prd", prdRef);
+  if (!readiness.ok) return readiness;
+  if (readiness.selected.metadata.fields.authoritative_architecture !== architecture.selected.ref || readiness.selected.metadata.fields.authoritative_epics !== epics.selected.ref) {
+    return fail("default-bmad-source-readiness-mismatch", "Implementation-readiness metadata does not bind the selected architecture and epics/stories artifacts.", "Regenerate readiness evidence for the exact selected hierarchy.");
+  }
+  const story = bmadFrontmatterMetadata(join(repoRoot, storyRef.slice("story:".length)));
+  if (!story) return fail("default-bmad-source-story-unreadable", "The selected story metadata is unreadable.", "Restore readable story frontmatter before retrying.");
+  const storyStatus = bmadStoryStatus(storyContent);
+  return {
+    ok: true,
+    provenance: {
+      prd: { ref: prdRef, status: prdStatus, metadataDigest: prd.metadataDigest },
+      architecture: { ref: architecture.selected.ref, status: architecture.status, metadataDigest: architecture.selected.metadata.metadataDigest },
+      epics: { ref: epics.selected.ref, status: epics.status, metadataDigest: epics.selected.metadata.metadataDigest },
+      implementationReadiness: { ref: readiness.selected.ref, status: readiness.status, metadataDigest: readiness.selected.metadata.metadataDigest },
+      sprint: { ref: "_bmad-output/implementation-artifacts/sprint-status.yaml", sourceKey, metadataDigest: sprintMetadata.metadataDigest },
+      story: { ref: storyRef.slice("story:".length), key: storyRef.split("/").at(-1).replace(/\.md$/i, ""), status: storyStatus, metadataDigest: metadataDigest({ ...story.fields, status: storyStatus }) },
+    },
+  };
 }
 
 function defaultBmadBundleRefs(sourceKey = "") {
@@ -16524,8 +16680,9 @@ function readLocalBmadMetadata(path) {
 function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
   if (value === undefined || value === null) return { provenance: null, errors: [] };
   if (!isPlainObject(value)) return { provenance: null, errors: ["sourceProvenance must be an object"] };
-  const provenance = {
+  const supplied = {
     mode: sanitizeLedgerField(value.mode, "", 80),
+    bundleSelection: sanitizeLedgerField(value.bundleSelection || value.bundle_selection, "", 80),
     storyRef: sanitizeLedgerField(value.storyRef || value.story_ref, "", 180),
     storyKey: sanitizeLedgerField(value.storyKey || value.story_key, "", 120),
     storyStatus: sanitizeLedgerField(value.storyStatus || value.story_status, "", 40),
@@ -16536,15 +16693,16 @@ function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
     rawPayloadRetained: false,
   };
   const errors = [];
-  if (provenance.mode !== "default_local_bmad") errors.push("mode must be default_local_bmad");
-  if (provenance.storyStatus !== "ready-for-dev") errors.push("story status must be ready-for-dev");
-  if (provenance.metadataOnly !== true || value.rawPayloadRetained !== false) errors.push("provenance must be metadata-only");
-  if (!/^\d+-\d+-[a-z0-9-]+$/i.test(provenance.storyKey)) errors.push("story key is invalid");
-  if (provenance.storyRef !== `story:_bmad-output/implementation-artifacts/${provenance.storyKey}.md`) errors.push("story ref does not match story key");
-  if (sourceRefs.length !== 1 || sourceRefs[0] !== provenance.storyRef) errors.push("story ref does not match the selected source");
-  if (provenance.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml") errors.push("sprint status ref is not canonical");
-  const sprintPath = join(repoRoot, provenance.sprintStatusRef);
-  const storyPath = join(repoRoot, provenance.storyRef.replace(/^story:/, ""));
+  if (supplied.mode !== "default_local_bmad") errors.push("mode must be default_local_bmad");
+  if (supplied.storyStatus !== "ready-for-dev") errors.push("story status must be ready-for-dev");
+  if (supplied.metadataOnly !== true || value.rawPayloadRetained !== false) errors.push("provenance must be metadata-only");
+  if (!/^\d+-\d+-[a-z0-9-]+$/i.test(supplied.storyKey)) errors.push("story key is invalid");
+  if (supplied.storyRef !== `story:_bmad-output/implementation-artifacts/${supplied.storyKey}.md`) errors.push("story ref does not match story key");
+  if (sourceRefs.length !== 1 || sourceRefs[0] !== supplied.storyRef) errors.push("story ref does not match the selected source");
+  if (supplied.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml") errors.push("sprint status ref is not canonical");
+  const sprintPath = join(repoRoot, supplied.sprintStatusRef);
+  const storyPath = join(repoRoot, supplied.storyRef.replace(/^story:/, ""));
+  let hierarchy = null;
   if (!existsSync(sprintPath) || !existsSync(storyPath)) {
     errors.push("local BMAD provenance artifact is missing");
   } else {
@@ -16552,16 +16710,35 @@ function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
     const storyContent = readLocalBmadMetadata(storyPath);
     if (sprintContent === null || storyContent === null) {
       errors.push("local BMAD provenance artifact is unreadable");
-      return { provenance, errors: [...new Set(errors)].slice(0, 8) };
+      return { provenance: supplied, errors: [...new Set(errors)].slice(0, 8) };
     }
-    const sourceKeys = [...sprintContent.matchAll(/^source_key:\s*([^#\r\n]+?)\s*$/gim)].map((match) => match[1].trim());
-    const storyRows = defaultBmadSprintStoryRows(sprintContent).filter((row) => row.key === provenance.storyKey);
-    if (sourceKeys.length !== 1 || sourceKeys[0] !== provenance.sourceKey) errors.push("sprint source key does not match provenance");
-    if (storyRows.length !== 1 || storyRows[0].status !== provenance.storyStatus) errors.push("sprint story readiness does not match provenance");
-    if (bmadStoryStatus(storyContent) !== provenance.storyStatus) errors.push("story artifact readiness does not match provenance");
+    const currentSprintMetadata = bmadSprintMetadata(sprintContent);
+    const sourceKeys = currentSprintMetadata.sourceKeys;
+    const readyRows = defaultBmadSprintStoryRows(sprintContent).filter((row) => row.status === "ready-for-dev");
+    if (sourceKeys.length !== 1 || sourceKeys[0] !== supplied.sourceKey) errors.push("sprint source key does not match provenance");
+    if (readyRows.length !== 1 || readyRows[0].key !== supplied.storyKey || readyRows[0].status !== supplied.storyStatus) errors.push("sprint story readiness does not match provenance");
+    if (bmadStoryStatus(storyContent) !== supplied.storyStatus) errors.push("story artifact readiness does not match provenance");
+    hierarchy = reconcileDefaultBmadHierarchy({
+      bundleRef: supplied.bundleRef,
+      sourceKey: supplied.sourceKey,
+      sprintMetadata: currentSprintMetadata,
+      storyContent,
+      storyRef: supplied.storyRef,
+    });
+    if (!hierarchy.ok) errors.push(`full hierarchy revalidation failed: ${hierarchy.code}`);
   }
-  const bundleRefs = defaultBmadBundleRefs(provenance.sourceKey);
-  if (bundleRefs.length !== 1 || bundleRefs[0] !== provenance.bundleRef) errors.push("authoritative bundle does not match provenance");
+  const bundleRefs = defaultBmadBundleRefs(supplied.sourceKey);
+  if (!bundleRefs.includes(supplied.bundleRef)) errors.push("authoritative bundle does not match provenance");
+  const provenance = hierarchy?.ok
+    ? {
+        ...supplied,
+        bundleSelection: supplied.bundleSelection || "explicit_source_bundle",
+        ...hierarchy.provenance,
+      }
+    : supplied;
+  for (const key of ["prd", "architecture", "epics", "implementationReadiness", "sprint", "story"]) {
+    if (value[key] !== undefined && hierarchy?.ok && JSON.stringify(value[key]) !== JSON.stringify(hierarchy.provenance[key])) errors.push(`${key} provenance does not match current metadata`);
+  }
   return { provenance, errors: [...new Set(errors)].slice(0, 8) };
 }
 

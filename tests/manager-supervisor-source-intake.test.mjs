@@ -102,14 +102,26 @@ test("manager source intake allowlists eligible source metadata and validates ex
 
 test("manager source intake derives deterministic bounded identities and maps a contract-valid BMAD story fixture", () => {
   const storyRef = "story:_bmad-output/implementation-artifacts/4-1-gate-4-manager-intake.md";
+  const metadataDigest = `sha256:${"a".repeat(64)}`;
+  const prdRef = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const architectureRef = "_bmad-output/planning-artifacts/architecture-operational-pipeline-action-loop-2026-07-04.md";
+  const epicsRef = "_bmad-output/planning-artifacts/epics.md";
+  const readinessRef = "_bmad-output/planning-artifacts/implementation-readiness-report-2026-07-04.md";
   const sourceProvenance = {
     mode: "default_local_bmad",
+    bundleSelection: "canonical_sprint_source_key",
     storyRef,
     storyKey: "4-1-gate-4-manager-intake",
     storyStatus: "ready-for-dev",
     sprintStatusRef: "_bmad-output/implementation-artifacts/sprint-status.yaml",
     sourceKey: "2026-07-04-operational-pipeline-action-loop",
-    bundleRef: "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+    bundleRef: `prd:${prdRef}`,
+    prd: { ref: prdRef, status: "final", metadataDigest },
+    architecture: { ref: architectureRef, status: "complete", metadataDigest },
+    epics: { ref: epicsRef, status: "complete", metadataDigest },
+    implementationReadiness: { ref: readinessRef, status: "complete", metadataDigest },
+    sprint: { ref: "_bmad-output/implementation-artifacts/sprint-status.yaml", sourceKey: "2026-07-04-operational-pipeline-action-loop", metadataDigest },
+    story: { ref: storyRef.slice("story:".length), key: "4-1-gate-4-manager-intake", status: "ready-for-dev", metadataDigest },
     metadataOnly: true,
     rawPayloadRetained: false,
   };
@@ -138,6 +150,9 @@ test("manager source intake derives deterministic bounded identities and maps a 
   assert.ok(request.evidenceRefs.includes("manager-bmad-story:4-1-gate-4-manager-intake"));
   assert.ok(request.evidenceRefs.includes(`manager-bmad-bundle:${sourceProvenance.bundleRef}`));
   assert.ok(request.evidenceRefs.includes("manager-bmad-sprint-status:_bmad-output/implementation-artifacts/sprint-status.yaml"));
+  assert.ok(request.evidenceRefs.includes(`manager-bmad-architecture:${architectureRef}`));
+  assert.ok(request.evidenceRefs.includes(`manager-bmad-readiness:${readinessRef}`));
+  assert.ok(request.evidenceRefs.includes(`manager-bmad-story-metadata-${metadataDigest}`));
   assert.equal(JSON.stringify(request).includes("BMAD story metadata reaches"), false);
   assert.equal(JSON.stringify(request).includes("node --test"), false);
 });
