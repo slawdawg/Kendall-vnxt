@@ -68,7 +68,9 @@ approval id and its server-returned expected event id.
 
 ## BMAD Gate 4B canonical integrated-local closeout
 
-Status: review. Evidence level: `integrated_local`.
+Status: accepted for the bounded integrated-local slice; full Gate 4 integrated MVP remains open. Evidence level: `integrated_local`.
+
+Completion note (2026-07-12): PR #515 merged at `c82f290b46bccb0fd335038738497175fa3b0802`. The post-merge smoke passed with `status=passed`, `evidenceLevel=integrated_local`, `runtimeMode=local_proof`, `missingApprovalRejected=true`, `staleApprovalRejected=true`, `happyLocalProofVerified=true`, `canonicalPacketWorkItemStateAgreementVerified=true`, `engineSessionReloadVerified=true`, `eventReconstructionReplayVerified=true`, `serverBoundLocalProofAuthorityVerified=true`, `trustedDeliveryReadinessBlockedForPublicForgery=true`, and `rawPayloadRetained=false`; focused tests: `4 passed, 45 deselected`.
 
 The bounded proof uses the tracked source authority
 `docs/workflows/latest-prd-autonomous-bmad-loop-goal.md`, verifies its Git index
@@ -125,9 +127,11 @@ exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetaine
 
 This closeout does not claim live, bounded-live, production-observed, external
 provider/worker/process/shell/network/credential/GitHub/tmux/source-mutation
-authority, or full Gate 4 coverage. Queue leases, attempts, evidence, and
-workflow/lifecycle events remain durable metadata-only lineage; replay rebuilds
-the packet and linked WorkItem materialized projections from preserved events.
+authority, or full Gate 4 coverage. Remaining limitations are manager/BMAD
+intake-to-supervisor integration and broader integrated MVP acceptance; full
+Gate 4 remains unproven. Queue leases, attempts, evidence, and workflow/
+lifecycle events remain durable metadata-only lineage; replay rebuilds the
+packet and linked WorkItem materialized projections from preserved events.
 
 Final repair verification:
 
