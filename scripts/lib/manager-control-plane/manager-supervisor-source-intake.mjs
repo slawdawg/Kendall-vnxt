@@ -188,16 +188,19 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   }
 
   const integrated = structuredClone(sourcePacket);
-  integrated.summary.seedPacket.supervisorIntake = {
-    status: "persisted",
-    packetId: lifecycle.packetId,
-    currentStage: lifecycle.currentStage,
-    lifecycleStatus: lifecycle.status,
-    currentEventId: lifecycle.currentEventId,
-    persistedAt: new Date(lifecycle.updatedAt).toISOString(),
-    evidenceRef: `supervisor-work-packet:${lifecycle.packetId}`,
-    metadataOnly: true,
-    rawPayloadRetained: false,
+  integrated.summary.seedPacket = {
+    ...structuredClone(integrated.summary.seedPacket),
+    supervisorIntake: {
+      status: "persisted",
+      packetId: lifecycle.packetId,
+      currentStage: lifecycle.currentStage,
+      lifecycleStatus: lifecycle.status,
+      currentEventId: lifecycle.currentEventId,
+      persistedAt: new Date(lifecycle.updatedAt).toISOString(),
+      evidenceRef: `supervisor-work-packet:${lifecycle.packetId}`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
   };
   integrated.summary.supervisorPersistence = "persisted; supervisor authoritative WorkPacket lifecycle recorded";
   return integrated;
