@@ -11502,6 +11502,14 @@ const REFILL_STOP_LINES = [
   "no_durable_queue_infrastructure",
   "no_delivery_or_cleanup_apply",
 ];
+const AUTHORITATIVE_TERMINAL_DISPATCH_STOP_LINES = [
+  ...REFILL_STOP_LINES,
+  "no_dispatch_apply",
+  "no_refill",
+  "no_worker_launch",
+  "no_epic_26_or_filler",
+  "new_accepted_source_bundle_required",
+];
 
 export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
   const lowWatermark = nonNegativeInteger(options.lowWatermark ?? context.lowWatermark) ?? DEFAULT_REFILL_LOW_WATERMARK;
@@ -22195,9 +22203,9 @@ export function buildPreflight(options = {}, context = {}) {
   const resource = buildResourceStatus(context.resourceContext || {});
   const usage = buildUsageStatus(context.usageContext || {});
   const dispatchPreview = context.dispatchPreview ? normalizeDispatchPreviewContext(context.dispatchPreview) : buildDispatchPreview(runOptions, context);
-  const dispatcher = buildDispatcherPreflightStatus(dispatchPreview, ledger);
-  const workers = buildWorkerStatus(runOptions, { ...context, usageContext: usage, resourceContext: resource, dispatchPreview });
   const refill = buildRefillPlan(runOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
+  const dispatcher = buildDispatcherPreflightStatus(dispatchPreview, ledger, refill);
+  const workers = buildWorkerStatus(runOptions, { ...context, usageContext: usage, resourceContext: resource, dispatchPreview, refillPlan: refill });
   const cleanup = buildCleanupPlan(runOptions, context);
   const blockerList = [];
   if (!workspace.ok) {
@@ -22384,7 +22392,7 @@ function buildWorkspaceProtocolPreflightStatus(workspace = {}) {
   };
 }
 
-function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
+function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}, refill = {}) {
   const summary = dispatchPreview.summary || dispatchPreview;
   const counts = summary.counts || {};
   const dispatch = summary.dispatch || {};
@@ -22398,11 +22406,17 @@ function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
   const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
   const dispatchableLanes = Number(counts.dispatchable ?? summary.dispatchableLanes ?? 0) || 0;
   const activeLanes = Number(counts.active ?? candidateStateCounts.active ?? summary.activeLanes ?? 0) || 0;
+  const terminalProjection = validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview, refill);
   const noNewDispatchButActive =
+    !terminalProjection &&
     activeLanes > 0 &&
     dispatchBlockers.length > 0 &&
     dispatchBlockers.every((blocker) => isNoDispatchableLaneBlocker(blocker));
-  const effectiveDispatchBlockers = noNewDispatchButActive ? [] : dispatchBlockers;
+  const effectiveDispatchBlockers = terminalProjection
+    ? dispatchBlockers.filter((blocker) => !isTerminalEmptyDispatcherBlocker(blocker))
+    : noNewDispatchButActive
+      ? []
+      : dispatchBlockers;
   const previewHasDispatcherTruth = Boolean(
     isPlainObject(summary) &&
     (
@@ -22448,6 +22462,8 @@ function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
     freshness: sanitizeLedgerField(previewBacked ? "fresh" : ledgerDispatcher.freshness || "unknown", "unknown", 40),
     ...(generatedAt ? { generatedAt: sanitizeLedgerField(generatedAt, "", 80) || null } : {}),
     blockers,
+    terminalState: terminalProjection,
+    stopLines: terminalProjection ? AUTHORITATIVE_TERMINAL_DISPATCH_STOP_LINES : [],
     mutation: "none; dispatcher readiness summary only",
     warnings,
     nextActions,
@@ -22458,6 +22474,64 @@ function buildDispatcherPreflightStatus(dispatchPreview = {}, ledger = {}) {
 function isNoDispatchableLaneBlocker(blocker = "") {
   const text = String(blocker?.message || blocker?.code || blocker || "").toLowerCase();
   return /no dispatchable|no .*safe backlog|no .*ready.*preview|no generated lane/.test(text);
+}
+
+function isTerminalEmptyDispatcherBlocker(blocker = "") {
+  const text = String(blocker?.message || blocker || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.!]+$/, "");
+  return text === "no dispatchable safe backlog lane found" ||
+    text === "no dispatchable safe backlog lane is ready to preview";
+}
+
+function validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview = {}, refill = {}) {
+  const disposition = refill?.summary?.terminalDisposition;
+  if (
+    refill?.status !== "authoritative_backlog_exhausted" ||
+    !isValidAuthoritativeBacklogExhaustedDisposition(disposition) ||
+    disposition.canonicalEventIntegration !== "supervisor_canonical_event" ||
+    !normalizeSupervisorCanonicalEventMetadata(disposition.canonicalEventIntegration, disposition.supervisorEvent)
+  ) return null;
+  const summary = dispatchPreview.summary || dispatchPreview;
+  const counts = summary.counts || {};
+  const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
+  const eligibleCount = nonNegativeInteger(
+    counts.dispatchable ??
+    counts.assignable ??
+    candidateStateCounts.dispatchable ??
+    candidateStateCounts.assignable,
+  );
+  const queuedCount = nonNegativeInteger(counts.queued ?? candidateStateCounts.queued ?? eligibleCount);
+  const activeCount = dispatchPreviewActiveLeaseCount(summary);
+  const refillEligibleCount = nonNegativeInteger(refill.summary?.dispatchableLanes ?? refill.summary?.refillWatermark?.currentEligibleQueueDepth);
+  const refillActiveCount = nonNegativeInteger(refill.summary?.activeLanes ?? refill.summary?.refillWatermark?.activeLeaseCount);
+  if (
+    eligibleCount !== 0 ||
+    queuedCount !== 0 ||
+    activeCount !== 0 ||
+    refillEligibleCount !== 0 ||
+    refillActiveCount !== 0 ||
+    (Array.isArray(refill.summary?.candidateLanes) && refill.summary.candidateLanes.length > 0)
+  ) return null;
+  return {
+    status: "authoritative_backlog_exhausted",
+    sourceIdentity: disposition.sourceIdentity,
+    sourceRevision: disposition.sourceRevision,
+    canonicalEventIntegration: "supervisor_canonical_event",
+    supervisorEvent: normalizeSupervisorCanonicalEventMetadata(disposition.canonicalEventIntegration, disposition.supervisorEvent),
+    supervisorPersistence: "persisted; supervisor canonical terminal event recorded",
+    noActiveWork: true,
+    noQueuedWork: true,
+    noEligibleWork: true,
+    noNewEpic: true,
+    noFillerWork: true,
+    resumeRequirement: disposition.resumeRequirement,
+    nextManagerAction: disposition.nextManagerAction,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function buildRecoveryNotRequestedPlan(options = {}, context = {}) {
@@ -23520,7 +23594,7 @@ export function buildCyclePacket(options = {}, context = {}) {
     cleanup,
     context,
   });
-  const dispatcherState = buildCycleDispatcherState(dispatchPreview);
+  const dispatcherState = buildCycleDispatcherState(dispatchPreview, preflight.summary?.dispatcher, runway);
   const dispatchTrustProof = bindTrustedOperationalDispatchAuthority(operationalActions, dispatchPreview);
   markTrustedOperationalReadiness(operationalActions, { dispatchApply: dispatchTrustProof });
   const summaryOperationalActions = sanitizeCyclePacketValue(operationalActions);
@@ -26939,23 +27013,30 @@ function cycleParkedLaneSummaries({ recovery = {} } = {}) {
     .slice(0, 8);
 }
 
-function buildCycleDispatcherState(dispatchPreview = {}) {
+function buildCycleDispatcherState(dispatchPreview = {}, preflightDispatcher = {}, runway = {}) {
   const summary = dispatchPreview.summary || {};
   const counts = summary.counts || {};
   const candidateStateCounts = summary.candidateStateCounts || summary.candidate_state_counts || {};
   const queueAvailable = nonNegativeInteger(counts.dispatchable ?? counts.assignable ?? counts.queued ?? candidateStateCounts.assignable ?? candidateStateCounts.queued);
   const activeLeases = dispatchPreviewActiveLeaseCount(summary);
+  const independentlyValidatedTerminalState = validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview, runway);
+  const terminalState = independentlyValidatedTerminalState && preflightDispatcher?.terminalState?.status === "authoritative_backlog_exhausted"
+    ? independentlyValidatedTerminalState
+    : null;
+  const terminalReady = terminalState && preflightDispatcher.status === "ready" && (!Array.isArray(preflightDispatcher.blockers) || preflightDispatcher.blockers.length === 0);
   return {
     dispatcher: {
-      status: dispatchPreview.status || "unknown",
-      allowed: summary.allowed ?? null,
+      status: terminalReady ? "authoritative_backlog_exhausted" : dispatchPreview.status || "unknown",
+      allowed: terminalReady ? false : summary.allowed ?? null,
       selectedLane: sanitizeLedgerField(summary.selectedLane || "", "", 120) || null,
       selectedBranch: sanitizeLedgerField(summary.selectedBranch || "", "", 160) || null,
       baseBranch: sanitizeLedgerField(summary.baseBranch || summary.base_branch || "", "", 120) || null,
       mutation: sanitizeLedgerField(summary.mutation || "none; dispatcher summary only", "none; dispatcher summary only", 120),
       recoveryPath: sanitizeLedgerField(summary.recoveryPath || summary.recovery_path || "", "", 220) || null,
-      blockerCount: Array.isArray(dispatchPreview.blockers) ? dispatchPreview.blockers.length : 0,
+      blockerCount: terminalReady ? 0 : Array.isArray(dispatchPreview.blockers) ? dispatchPreview.blockers.length : 0,
       warningCount: Array.isArray(dispatchPreview.warnings) ? dispatchPreview.warnings.length : 0,
+      terminalState: terminalReady ? terminalState : null,
+      stopLines: terminalReady ? AUTHORITATIVE_TERMINAL_DISPATCH_STOP_LINES : [],
       rawPayloadRetained: false,
     },
     queue: {
