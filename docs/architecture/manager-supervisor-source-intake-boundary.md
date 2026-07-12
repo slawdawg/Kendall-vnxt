@@ -147,7 +147,11 @@ pnpm run test:manager-source-intake
 The test starts with `manager-source-packet-seed`, starts a real loopback
 supervisor using a temporary SQLite database, proves cycle dry-run performs no
 fetch, applies the exact cycle target, and reads both the authoritative
-lifecycle route and live pipeline projection.
+lifecycle route and live pipeline projection. It then cleanly stops the
+supervisor and dashboard, starts a fresh supervisor process against the same
+SQLite database, reads the same lifecycle history and `WorkPacketV0` projection
+by exact packet ID, and reruns the real dashboard list/detail assertions with
+no fixture fallback.
 It also proves zero CandidateWork, WorkItem, workflow event, execution attempt,
 or queue-lease rows; unchanged source bytes; and absence of an injected raw
 BMAD marker from persisted database bytes. Environments that deny loopback
@@ -155,17 +159,20 @@ sockets identify that sandbox boundary and require the exact command outside
 the sandbox.
 
 PR #525 (`d3a27aa9e588ca23118ab984ec0ea979963d1cd9`) supplied the initial default
-local story-and-bundle resolver. The next bounded prerequisite extends that
-resolver to the full metadata-only hierarchy above. PR #526
+local story-and-bundle resolver. PR #526
 (`86418bae99b2bc41c438ccd1ffe47dbe90278ecd`, reviewed head
 `14423d4e11483fb051978366b63cc737c758f2df`) adds authoritative
-`WorkPacketV0` list/detail parity and exercises the manager → supervisor →
-dashboard list/detail path through a real loopback dashboard process. CI run
-#1012 is green for that reviewed head. This is `integrated_local` evidence only
-for the named default-local-story-and-bundle → manager intake → authoritative
-supervisor → dashboard path. It does not validate the full BMAD hierarchy or
-all source bundles, grant provider/worker/dispatch execution, or close the
-broader ADR-defined Gate 4 acceptance. Full Gate 4 still requires a real
-dashboard process/E2E run that observes this reconciled full-hierarchy source
-path through manager intake, authoritative supervisor persistence, and
-dashboard list/detail projection without fixture substitution.
+`WorkPacketV0` list/detail parity. PR #528 (`43f1309004f683a9c68db3878bd68e7402942eed`,
+reviewed head `4452cc4e1ceff9fa305c34ae655c0205c4af1b01`) reconciles the full
+metadata-only local BMAD hierarchy; CI run `29191400049` was green for that
+reviewed head. PR #529 (`e4bd044f59bde7864155c88cb553a2a76915924d`, reviewed
+head `c5b65ba941514ad074e4c0385d0880e4cc2cc849`) proves the reconciled manager
+→ supervisor → dashboard list/detail path through real loopback processes;
+CI run `29192291676` was green for that reviewed head. The restart-persistence
+successor extends this same evidence by restarting the supervisor against the
+same disposable SQLite before the repeated dashboard assertions. The resulting
+`integrated_local` claim is limited to the named reconciled BMAD → manager →
+supervisor → dashboard path. It grants no provider, worker, dispatch,
+source-mutation, or production claim. Broader ADR Gate 4 remains open until
+the honest integrated MVP loop also proves the required real worker result path
+without split truth or simulated completion.
