@@ -98,6 +98,8 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
     "PipelineStageSummaryV0",
     "PipelinePacketUnblockerV0",
     "PipelineDashboardWorkPacketV0",
+    "PipelineCanonicalContractV1",
+    "PipelineProductModeMappingV0",
     "PipelineManagerSummaryV0",
     "PipelineQueueSummaryV0",
     "PipelineExecuteAdmissionCountsV0",
@@ -157,6 +159,8 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(contractSource, /unknownCount:\s*number \| null;/);
   assert.match(contractSource, /needs_approval:\s*"Needs Approval"/);
   assert.match(contractSource, /metadataOnly:\s*true;/);
+  assert.match(contractSource, /canonicalContract:\s*PipelineCanonicalContractV1 \| null;/);
+  assert.match(contractSource, /productModeMapping:\s*PipelineProductModeMappingV0 \| null;/);
   assert.match(coreSource, /LEGACY_TO_AUTHORITATIVE_STAGE/);
   assert.match(coreSource, /human_gate:\s*"needs_approval"/);
   assert.match(coreSource, /createWorkPacketCreatedEvent/);
@@ -176,6 +180,8 @@ test("canonical contract inputs fail closed across source, retention, gate, read
     validatePipelineQualityGateNodeV0,
     validatePipelineReadinessComponentsV0,
     validatePipelineProductModeMappingInputsV0,
+    isPipelineCanonicalContractV1,
+    isPipelineProductModeMappingV0,
   } = await loadCompiledContractModule();
 
   const authority = {
@@ -238,6 +244,7 @@ test("canonical contract inputs fail closed across source, retention, gate, read
   assert.deepEqual(validatePipelineQualityGateNodeV0(qualityGates), []);
   assert.deepEqual(validatePipelineReadinessComponentsV0(readinessComponents), []);
   assert.deepEqual(validatePipelineProductModeMappingInputsV0(inputs), []);
+  assert.equal(isPipelineCanonicalContractV1(inputs), true);
 
   const derivedCanonicalSourceIssues = validatePipelineCanonicalSourceV0({ ...source, trust: "derived" }).map((issue) => issue.code);
   assert.ok(derivedCanonicalSourceIssues.includes("invalid_readiness_semantics"));
@@ -272,6 +279,39 @@ test("canonical contract inputs fail closed across source, retention, gate, read
 
   const unknownProductModeIssues = validatePipelineProductModeMappingInputsV0({ ...inputs, productMode: "live_everything" }).map((issue) => issue.code);
   assert.ok(unknownProductModeIssues.includes("invalid_enum"));
+
+  const nonCanonicalSlotIssues = validatePipelineProductModeMappingInputsV0({
+    ...inputs,
+    canonicalSource: { ...source, role: "supporting" },
+  }).map((issue) => issue.code);
+  assert.ok(nonCanonicalSlotIssues.includes("invalid_readiness_semantics"));
+
+  let deepGate = { kind: "gate", gateId: "gate:leaf", requirement: "required", state: "pass", evidenceRefs: [] };
+  for (let index = 0; index < 9; index += 1) {
+    deepGate = { kind: "all_of", gateId: `gate:depth-${index}`, children: [deepGate] };
+  }
+  assert.ok(validatePipelineQualityGateNodeV0(deepGate).some((issue) => issue.code === "invalid_quality_gate"));
+
+  const mapping = {
+    requestedProductMode: "contract_only",
+    effectiveProductMode: "contract_only",
+    operationalMode: "disabled",
+    readinessState: "ready",
+    freshnessState: "live",
+    capabilityState: "simulated",
+    checkedAt: "2026-07-12T00:00:00.000Z",
+    expiresAt: "2026-07-12T00:05:00.000Z",
+    ready: true,
+    blockedReasons: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+  };
+  assert.equal(isPipelineProductModeMappingV0(mapping), true);
+  assert.equal(isPipelineProductModeMappingV0({ ...mapping, githubMutationAllowed: true }), false);
 });
 
 test("operational action contracts define capability-gated metadata-only requests and results", async () => {
@@ -2616,6 +2656,8 @@ function projectionContractFixture(overrides = {}) {
           pathOrUrl: "_bmad-output/implementation-artifacts/3-2-projection-state-test-coverage.md",
           title: "Story 3.2",
         },
+        canonicalContract: null,
+        productModeMapping: null,
         blocker: null,
         nextAction: "Advance toward Review.",
         unblocker: "unknown",
@@ -2635,6 +2677,8 @@ function projectionContractFixture(overrides = {}) {
             title: "Story 3.2",
           },
         ],
+        canonicalContract: null,
+        productModeMapping: null,
         evidenceRefs: ["story:3-2"],
         currentStage: "execute",
         status: "active",
@@ -2834,6 +2878,8 @@ function loadDashboardSupervisorModule(source) {
             "deliver",
             "learn",
           ],
+          isPipelineCanonicalContractV1: (value) => value === null || (typeof value === "object" && !Array.isArray(value)),
+          isPipelineProductModeMappingV0: (value) => value === null || (typeof value === "object" && !Array.isArray(value)),
         };
       }
       throw new Error(`Unexpected dashboard supervisor import: ${specifier}`);

@@ -199,6 +199,8 @@ function projectionFixture(overrides = {}) {
     },
     blocker: null,
     nextAction: "Run fixture-as-live regression checks.",
+    canonicalContract: null,
+    productModeMapping: null,
     evidenceRefs: ["story:3-1"],
     truthLabel: "live",
     updatedAt: now,
@@ -1289,6 +1291,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(supervisorLibSource, /\["healthy_empty", "blocked", "refilling"\]\.includes\(projection\.truthSummary\.emptyReason \|\| ""\)/);
   assert.match(supervisorLibSource, /projection\.queueSummary\?\.emptyReason === projection\.truthSummary\.emptyReason/);
   assert.match(supervisorLibSource, /isProjectionStage\(packet\.currentStage\)/);
+  assert.match(supervisorLibSource, /isPipelineCanonicalContractV1\(packet\.canonicalContract\)/);
+  assert.match(supervisorLibSource, /isPipelineProductModeMappingV0\(packet\.productModeMapping\)/);
   assert.match(supervisorLibSource, /Array\.isArray\(packet\.evidenceRefs\)/);
   assert.match(supervisorLibSource, /packet\.metadataOnly === true/);
   assert.match(supervisorLibSource, /isFixtureMode\(projection\.fixtureMode\)/);

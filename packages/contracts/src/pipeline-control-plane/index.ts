@@ -391,6 +391,29 @@ export interface PipelineProductModeMappingInputsV0 {
   rawPayloadRetained: false;
 }
 
+/** Canonical contract data as persisted and projected by the supervisor. */
+export type PipelineCanonicalContractV1 = PipelineProductModeMappingInputsV0;
+
+/** Read-time product posture; this describes capability and never grants authority. */
+export interface PipelineProductModeMappingV0 {
+  requestedProductMode: PipelineProductModeV0;
+  effectiveProductMode: PipelineProductModeV0 | "blocked";
+  operationalMode: "disabled" | "local_proof" | "read_only" | "bounded_write" | "unavailable" | "unknown";
+  readinessState: "ready" | "degraded" | "blocked" | "unavailable" | "unknown";
+  freshnessState: "live" | "stale" | "unavailable" | "unknown";
+  capabilityState: "available" | "gated" | "unavailable" | "simulated" | "unknown";
+  checkedAt: string;
+  expiresAt: string;
+  ready: boolean;
+  blockedReasons: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubMutationAllowed: false;
+}
+
 export type PipelineCanonicalContractValidationCodeV0 =
   | "invalid_object"
   | "invalid_enum"
@@ -523,6 +546,9 @@ export function validatePipelineProductModeMappingInputsV0(inputs: unknown): Pip
   if (record.schemaVersion !== PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION) issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Product-mode mapping inputs use an unsupported canonical contract version." });
   if (!(PIPELINE_PRODUCT_MODES as readonly string[]).includes(record.productMode as string)) issues.push({ field: "productMode", code: "invalid_enum", summary: "Product-mode mapping inputs require a known product mode." });
   issues.push(...validatePipelineCanonicalSourceV0(record.canonicalSource));
+  if (canonicalContractRecord(record.canonicalSource, issues, "canonicalSource").role !== "canonical") {
+    issues.push({ field: "canonicalSource.role", code: "invalid_readiness_semantics", summary: "The canonical source slot requires the canonical role." });
+  }
   issues.push(...validatePipelineQualityGateNodeV0(record.qualityGates));
   issues.push(...validatePipelineReadinessComponentsV0(record.readinessComponents));
   if (!Array.isArray(record.deliveryEvidence)) {
@@ -544,6 +570,34 @@ export function validatePipelineProductModeMappingInputsV0(inputs: unknown): Pip
   pushCanonicalAuthorityIssues(issues, record.authority, "authority");
   pushCanonicalRetentionIssues(issues, record, "inputs");
   return issues;
+}
+
+export function isPipelineCanonicalContractV1(value: unknown): value is PipelineCanonicalContractV1 {
+  return validatePipelineProductModeMappingInputsV0(value).length === 0;
+}
+
+export function isPipelineProductModeMappingV0(value: unknown): value is PipelineProductModeMappingV0 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const mapping = value as Record<string, unknown>;
+  return (
+    (PIPELINE_PRODUCT_MODES as readonly string[]).includes(mapping.requestedProductMode as string) &&
+    ([...PIPELINE_PRODUCT_MODES, "blocked"] as readonly string[]).includes(mapping.effectiveProductMode as string) &&
+    ["disabled", "local_proof", "read_only", "bounded_write", "unavailable", "unknown"].includes(mapping.operationalMode as string) &&
+    ["ready", "degraded", "blocked", "unavailable", "unknown"].includes(mapping.readinessState as string) &&
+    ["live", "stale", "unavailable", "unknown"].includes(mapping.freshnessState as string) &&
+    ["available", "gated", "unavailable", "simulated", "unknown"].includes(mapping.capabilityState as string) &&
+    typeof mapping.checkedAt === "string" && Number.isFinite(Date.parse(mapping.checkedAt)) &&
+    typeof mapping.expiresAt === "string" && Number.isFinite(Date.parse(mapping.expiresAt)) &&
+    Date.parse(mapping.expiresAt) >= Date.parse(mapping.checkedAt) &&
+    typeof mapping.ready === "boolean" &&
+    Array.isArray(mapping.blockedReasons) && mapping.blockedReasons.every(canonicalContractText) &&
+    mapping.metadataOnly === true &&
+    mapping.rawPayloadRetained === false &&
+    mapping.sourceMutationAllowed === false &&
+    mapping.providerCallsAllowed === false &&
+    mapping.workerLaunchAllowed === false &&
+    mapping.githubMutationAllowed === false
+  );
 }
 
 export const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0" as const;
@@ -2875,6 +2929,8 @@ export interface PipelineDashboardWorkPacketV0 {
   status: AuthoritativePacketStatus;
   truthLabel: PipelineProjectionSourceLabelV0;
   sourceRef: AuthoritativePacketSourceRef | null;
+  canonicalContract: PipelineCanonicalContractV1 | null;
+  productModeMapping: PipelineProductModeMappingV0 | null;
   blocker: string | null;
   nextAction: string | null;
   unblocker: PipelinePacketUnblockerV0;
@@ -2891,6 +2947,8 @@ export interface PipelineDashboardWorkPacketV0 {
 export interface PipelineSelectedPacketDetailV0 {
   packetId: string;
   sourceRefs: AuthoritativePacketSourceRef[];
+  canonicalContract: PipelineCanonicalContractV1 | null;
+  productModeMapping: PipelineProductModeMappingV0 | null;
   evidenceRefs: string[];
   currentStage: AuthoritativePacketStage;
   status: AuthoritativePacketStatus;

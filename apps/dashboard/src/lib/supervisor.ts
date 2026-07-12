@@ -1,4 +1,8 @@
-import { AUTHORITATIVE_PACKET_STAGES } from "@kendall/contracts";
+import {
+  AUTHORITATIVE_PACKET_STAGES,
+  isPipelineCanonicalContractV1,
+  isPipelineProductModeMappingV0,
+} from "@kendall/contracts";
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
@@ -810,6 +814,8 @@ function selectedPacketDetailsMatchWorkPackets(
       detail.currentStage !== packet.currentStage ||
       detail.status !== packet.status ||
       detail.truthLabel !== packet.truthLabel ||
+      JSON.stringify(detail.canonicalContract) !== JSON.stringify(packet.canonicalContract) ||
+      JSON.stringify(detail.productModeMapping) !== JSON.stringify(packet.productModeMapping) ||
       detail.blocker !== packet.blocker ||
       detail.nextAction !== packet.nextAction ||
       JSON.stringify(detail.readyToTest ?? null) !== JSON.stringify(packet.readyToTest ?? null)
@@ -1052,6 +1058,8 @@ function isProjectionWorkPacket(value: unknown) {
     isProjectionStatus(packet.status) &&
     isProjectionSourceLabel(packet.truthLabel) &&
     (packet.sourceRef === null || isProjectionSourceRef(packet.sourceRef)) &&
+    (packet.canonicalContract === null || isPipelineCanonicalContractV1(packet.canonicalContract)) &&
+    (packet.productModeMapping === null || isPipelineProductModeMappingV0(packet.productModeMapping)) &&
     (packet.blocker === null || typeof packet.blocker === "string") &&
     (packet.nextAction === null || typeof packet.nextAction === "string") &&
     (packet.readyToTest === undefined || packet.readyToTest === null || isProjectionReadyToTest(packet.readyToTest)) &&
@@ -1132,6 +1140,8 @@ function isProjectionSelectedPacketDetail(value: unknown) {
     typeof detail.packetId === "string" &&
     Array.isArray(detail.sourceRefs) &&
     detail.sourceRefs.every(isProjectionSourceRef) &&
+    (detail.canonicalContract === null || isPipelineCanonicalContractV1(detail.canonicalContract)) &&
+    (detail.productModeMapping === null || isPipelineProductModeMappingV0(detail.productModeMapping)) &&
     Array.isArray(detail.evidenceRefs) &&
     detail.evidenceRefs.every(isSafeEvidenceRef) &&
     isProjectionStage(detail.currentStage) &&

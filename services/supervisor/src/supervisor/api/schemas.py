@@ -1430,6 +1430,15 @@ class PipelineQualityGateGroupV0View(BaseModel):
 
 
 PipelineQualityGateNodeV0View = PipelineQualityGateV0View | PipelineQualityGateGroupV0View
+PIPELINE_QUALITY_GATE_MAX_DEPTH = 8
+
+
+def _validate_pipeline_quality_gate_depth(node: PipelineQualityGateNodeV0View, depth: int = 0) -> None:
+    if depth > PIPELINE_QUALITY_GATE_MAX_DEPTH:
+        raise ValueError("Composable quality gates may not exceed eight nested groups.")
+    if isinstance(node, PipelineQualityGateGroupV0View):
+        for child in node.children:
+            _validate_pipeline_quality_gate_depth(child, depth + 1)
 
 
 class PipelineReadinessComponentV0View(BaseModel):
@@ -1501,6 +1510,13 @@ class PipelineNormalizedDeliveryTargetV0View(BaseModel):
     headRevision: str | None = Field(default=None, max_length=240)
     pullRequestUrl: str | None = Field(default=None, max_length=500)
 
+    @field_validator("repository", "baseBranch", "headRevision", "pullRequestUrl")
+    @classmethod
+    def _target_strings_must_be_safe_metadata(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _validate_authoritative_metadata_text(value, path=f"deliveryEvidence.target.{info.field_name}")
+
     @model_serializer(mode="wrap")
     def _omit_unset_delivery_target_fields(self, handler):
         serialized = handler(self)
@@ -1536,6 +1552,13 @@ class PipelineCanonicalContractV1View(BaseModel):
     authority: PipelineAuthorityProhibitionsV0View = Field(default_factory=PipelineAuthorityProhibitionsV0View)
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _canonical_slot_must_be_canonical_and_bounded(self):
+        if self.canonicalSource.role != "canonical":
+            raise ValueError("canonicalSource must use the canonical role.")
+        _validate_pipeline_quality_gate_depth(self.qualityGates)
+        return self
 
 
 class PipelineProductModeMappingV0View(BaseModel):

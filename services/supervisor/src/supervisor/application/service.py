@@ -1634,6 +1634,8 @@ class SupervisorService:
         events = list(event_result.scalars())
         latest_event = events[-1] if events else None
         current_event = next((event for event in events if event.id == packet.current_event_id), None)
+        read_at = datetime.now(timezone.utc)
+        canonical_contract = self._canonical_contract_from_packet_metadata(packet.source_ref_json)
         return AuthoritativeWorkPacketLifecycleView(
             packetId=packet.id,
             title=packet.title,
@@ -1641,11 +1643,8 @@ class SupervisorService:
             status=packet.status if current_event else latest_event.status if latest_event else packet.status,
             truthLabel=packet.truth_label if current_event else latest_event.truth_label if latest_event else packet.truth_label,
             sourceRef=self._packet_source_ref_payload(packet.source_ref_json),
-            canonicalContract=self._canonical_contract_from_packet_metadata(packet.source_ref_json),
-            productModeMapping=self._product_mode_mapping(
-                self._canonical_contract_from_packet_metadata(packet.source_ref_json),
-                packet.updated_at,
-            ),
+            canonicalContract=canonical_contract,
+            productModeMapping=self._product_mode_mapping(canonical_contract, read_at),
             createdAt=packet.created_at,
             updatedAt=packet.updated_at,
             currentEventId=latest_event.id if latest_event else packet.current_event_id,
@@ -1732,6 +1731,11 @@ class SupervisorService:
         capability_state = "simulated"
         blocked_reasons: list[str] = []
 
+        for component_id in type(canonical_contract.readinessComponents).model_fields:
+            component = getattr(canonical_contract.readinessComponents, component_id)
+            if component.requirement == "required" and component.state in {"fail", "blocked"}:
+                blocked_reasons.append(f"required_readiness_component_{component.state}:{component_id}")
+
         if configured != requested:
             effective = "blocked"
             operational_mode = "unavailable"
@@ -1759,6 +1763,12 @@ class SupervisorService:
             readiness_state = "blocked"
             capability_state = "gated"
             blocked_reasons.append("canonical_contract_does_not_grant_write_authority")
+
+        if any(reason.startswith("required_readiness_component_") for reason in blocked_reasons):
+            effective = "blocked"
+            operational_mode = "unavailable"
+            readiness_state = "blocked"
+            capability_state = "gated"
 
         return PipelineProductModeMappingV0View(
             requestedProductMode=requested,
