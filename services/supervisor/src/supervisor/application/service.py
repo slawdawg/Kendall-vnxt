@@ -401,6 +401,21 @@ OPERATIONAL_ACTION_POLICIES = {
     "reassign": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Reassign ownership after explicit authority approval."},
     "reject": {"risk": "medium", "authority": "needs_product_approval", "targets": {"work_packet"}, "summary": "Reject the packet with an auditable operator decision."},
 }
+SERVER_APPROVABLE_OPERATIONAL_ACTIONS = {"mark_tested", "request_rework", "requeue", "reject"}
+SERVER_APPLICABLE_OPERATIONAL_ACTIONS = {
+    "inspect",
+    "refresh_projection",
+    "mark_tested",
+    "request_rework",
+    "requeue",
+    "reject",
+}
+SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS = {
+    "retry_verification",
+    "pause",
+    "drain",
+    "reassign",
+}
 SERVER_OWNED_LOCAL_OPERATOR = {
     "actorType": "operator",
     "actorId": "pipeline-operator",
@@ -864,7 +879,7 @@ class SupervisorService:
     ) -> OperationalActionApprovalView:
         self._validate_server_owned_local_operator(payload.requestedBy)
         policy = OPERATIONAL_ACTION_POLICIES.get(payload.actionId)
-        if policy is None or policy["authority"] == "not_required" or payload.actionId not in {"mark_tested", "request_rework", "requeue", "reject"}:
+        if policy is None or policy["authority"] == "not_required" or payload.actionId not in SERVER_APPROVABLE_OPERATIONAL_ACTIONS:
             raise ValueError("Operational action is not eligible for a server-issued approval.")
         if payload.targetType not in policy["targets"]:
             raise ValueError("Operational action target type is not allowed by policy.")
@@ -872,6 +887,8 @@ class SupervisorService:
             raise ValueError("Operational action risk tier does not match policy.")
         if payload.requestedAuthorityState != policy["authority"]:
             raise ValueError("Operational action authority family does not match policy.")
+        if payload.actionId not in SERVER_APPLICABLE_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not available in the bounded local supervisor runtime.")
 
         packet = await session.get(AuthoritativeWorkPacket, payload.targetId)
         if not packet:
@@ -906,12 +923,6 @@ class SupervisorService:
         payload: OperationalActionRequest,
     ) -> OperationalActionResultView:
         self._validate_server_owned_local_operator(payload.requestedBy)
-        existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
-        if existing:
-            if not self._operational_action_matches(existing, payload):
-                raise ValueError("Operational action idempotency key already belongs to different action metadata.")
-            return self._operational_action_result_view(existing)
-
         policy = OPERATIONAL_ACTION_POLICIES.get(payload.actionId)
         if policy is None:
             raise ValueError("Unsupported operational action.")
@@ -921,6 +932,15 @@ class SupervisorService:
             raise ValueError("Operational action risk tier does not match policy.")
         if payload.requestedAuthorityState != policy["authority"]:
             raise ValueError("Operational action authority family does not match policy.")
+
+        if payload.actionId not in SERVER_APPLICABLE_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not available in the bounded local supervisor runtime.")
+
+        existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+        if existing:
+            if not self._operational_action_matches(existing, payload):
+                raise ValueError("Operational action idempotency key already belongs to different action metadata.")
+            return self._operational_action_result_view(existing)
 
         packet: AuthoritativeWorkPacket | None = None
         if payload.targetType == "work_packet":
@@ -1078,25 +1098,8 @@ class SupervisorService:
             )
             packet.updated_at = datetime.now(timezone.utc)
             outcome = "succeeded"
-        elif payload.actionId in {"pause", "drain"}:
-            control = await self.ensure_control(session)
-            control.mode = RunMode.PAUSED.value if payload.actionId == "pause" else RunMode.DRAINING.value
-            outcome = "succeeded"
         else:
-            record = self._new_operational_action_record(
-                payload,
-                packet=packet,
-                outcome="blocked",
-                resulting_stage=packet.current_stage if packet else "unknown",
-                resulting_status=packet.status if packet else "unknown",
-                capability_state="gated",
-                authority_state=policy["authority"],
-                typed_reason="unsupported_action",
-                evidence_refs=evidence_refs,
-            )
-            session.add(record)
-            await session.commit()
-            return self._operational_action_result_view(record)
+            raise ValueError("Operational action is not available in the bounded local supervisor runtime.")
 
         if packet:
             await self._sync_authoritative_local_proof_item_metadata(session, packet)
@@ -1395,7 +1398,11 @@ class SupervisorService:
         typed_reason = None
         capability_state = "gated"
         authority_state = policy["authority"]
-        if not mutation_access and action_id not in {"inspect", "refresh_projection"}:
+        if action_id in SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS:
+            capability_state = "unavailable"
+            authority_state = "blocked"
+            typed_reason = "unsupported_action"
+        elif not mutation_access and action_id not in {"inspect", "refresh_projection"}:
             capability_state = "unavailable"
             authority_state = "blocked"
             typed_reason = "authenticated_session_required"
@@ -1412,13 +1419,21 @@ class SupervisorService:
             capability_state = "available"
         elif action_id in {"mark_tested", "request_rework"}:
             typed_reason = "test_not_ready"
+        elif action_id == "requeue" and packet is None:
+            capability_state = "unavailable"
+            authority_state = "blocked"
+            typed_reason = "no_eligible_work"
+        elif action_id == "requeue" and packet and packet.status != "blocked":
+            capability_state = "unavailable"
+            authority_state = "blocked"
+            typed_reason = "invalid_transition"
         else:
             typed_reason = "blocked_by_approval"
         return OperationalActionCapabilityView(
             actionId=action_id,
             targetType=(
                 "work_packet"
-                if packet or action_id in {"mark_tested", "request_rework", "requeue", "retry_verification", "reject"}
+                if packet or action_id in {"mark_tested", "request_rework", "requeue", "retry_verification", "reassign", "reject"}
                 else "projection"
                 if action_id == "refresh_projection"
                 else "runtime"
