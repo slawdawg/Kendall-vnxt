@@ -50,6 +50,12 @@ def _text_get(url: str) -> str:
 
 
 def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Popen[str]:
+    dashboard_binary = REPO_ROOT / "apps" / "dashboard" / "node_modules" / ".bin" / "next"
+    if not dashboard_binary.is_file():
+        pytest.skip(
+            "Joined dashboard proof requires dashboard JavaScript dependencies; "
+            "run the focused source-intake proof after `pnpm install`."
+        )
     env = os.environ.copy()
     env.update(
         {
@@ -60,7 +66,7 @@ def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Pop
     )
     process = subprocess.Popen(
         [
-            str(REPO_ROOT / "apps" / "dashboard" / "node_modules" / ".bin" / "next"),
+            str(dashboard_binary),
             "dev",
             "apps/dashboard",
             "--hostname",

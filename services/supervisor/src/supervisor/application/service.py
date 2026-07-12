@@ -2910,7 +2910,12 @@ class SupervisorService:
         result = await session.execute(select(CandidateWork).order_by(CandidateWork.sort_order.asc(), CandidateWork.created_at.desc()))
         return list(result.scalars())
 
-    async def list_work_packets(self, session: AsyncSession) -> list[WorkPacketV0View]:
+    async def list_work_packets(
+        self,
+        session: AsyncSession,
+        *,
+        include_authoritative_linked: bool = False,
+    ) -> list[WorkPacketV0View]:
         authoritative_packets = await self.list_authoritative_work_packets(session)
         candidates = await self.list_candidate_work(session)
         items = await self.list_work_items(session)
@@ -2925,7 +2930,7 @@ class SupervisorService:
             candidate = candidate_by_work_item_id.get(item.id)
             metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
             linked_authoritative_packet_id = item.authoritative_packet_id or metadata.get("authoritativePacketId")
-            if linked_authoritative_packet_id in authoritative_packet_ids:
+            if linked_authoritative_packet_id in authoritative_packet_ids and not include_authoritative_linked:
                 if candidate:
                     emitted_candidate_ids.add(candidate.id)
                 continue
@@ -3035,7 +3040,7 @@ class SupervisorService:
         stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
         try:
             authoritative_packets = await self.list_authoritative_work_packets(session)
-            legacy_packets = await self.list_work_packets(session)
+            legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
             legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
             candidates = await self.list_candidate_work(session)
             source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
@@ -3731,7 +3736,7 @@ class SupervisorService:
             WorkPacketStageTransitionEventV0View(
                 eventId=event.eventId,
                 eventType=event.eventType,
-                summary=event.payloadSummary,
+                summary=self._projection_safe_lifecycle_summary(event.payloadSummary),
                 createdAt=event.occurredAt,
                 sourceStage=(
                     self._authoritative_work_packet_v0_stage(event.previousStage)
@@ -3766,7 +3771,7 @@ class SupervisorService:
             packetId=packet.packetId,
             title=packet.title,
             requestedOutcome=(
-                current_event.payloadSummary
+                self._projection_safe_lifecycle_summary(current_event.payloadSummary)
                 if current_event is not None
                 else "Inspect the supervisor-owned metadata-only lifecycle packet."
             ),
