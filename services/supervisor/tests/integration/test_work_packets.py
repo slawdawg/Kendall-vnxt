@@ -123,6 +123,64 @@ def _db_path(tmp_path, db_name: str) -> str:
     return (tmp_path / db_name).as_posix()
 
 
+def _canonical_contract_payload(source_ref: dict[str, object], *, product_mode: str = "contract_only") -> dict[str, object]:
+    authority = {
+        "sourceMutationAllowed": False,
+        "providerCallsAllowed": False,
+        "workerLaunchAllowed": False,
+        "githubMutationAllowed": False,
+        "rawPayloadRetentionAllowed": False,
+    }
+    component_ids = (
+        "source_provenance",
+        "trust_boundary",
+        "authority_boundary",
+        "evidence_retention",
+        "quality_gates",
+        "delivery_evidence",
+    )
+    return {
+        "schemaVersion": "pipeline-canonical-contract/v1",
+        "productMode": product_mode,
+        "canonicalSource": {
+            "sourceId": "canonical-contract-source",
+            "role": "canonical",
+            "trust": "authoritative",
+            "provenance": {
+                "sourceRef": source_ref,
+                "observedAt": "2026-07-12T00:00:00Z",
+                "evidenceRefs": ["evidence:canonical-source"],
+            },
+            "authority": authority,
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        },
+        "qualityGates": {
+            "kind": "all_of",
+            "gateId": "delivery-readiness",
+            "children": [{"kind": "gate", "gateId": "metadata-retention", "requirement": "required", "state": "pass", "evidenceRefs": ["evidence:retention-pass"]}],
+        },
+        "readinessComponents": {
+            component_id: {"componentId": component_id, "requirement": "required", "state": "pass", "evidenceRefs": [f"evidence:{component_id}"]}
+            for component_id in component_ids
+        },
+        "deliveryEvidence": [{
+            "deliveryId": "delivery-evidence-1",
+            "action": "pull_request",
+            "status": "recorded",
+            "target": {"repository": "slawdawg/kendall-nxt", "baseBranch": "dev"},
+            "evidence": {"evidenceId": "delivery-metadata", "disposition": "metadata_only", "evidenceRefs": ["evidence:delivery"], "metadataOnly": True, "rawPayloadRetained": False},
+            "authority": authority,
+            "deliveryAuthorityGranted": False,
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }],
+        "authority": authority,
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
+
+
 def _update_work_item_fixture(db_path: str, work_item_id: str, **fields: object) -> None:
     assignments = []
     values = []
@@ -705,6 +763,225 @@ def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_
         assert restarted["currentEventId"] == restarted["history"][-1]["eventId"]
         assert len(restarted["history"]) == 11
         assert restarted["history"][4]["previousStage"] == "route"
+
+
+def test_authoritative_packet_projects_canonical_contract_without_granting_write_authority(tmp_path, monkeypatch) -> None:
+    db_name = "canonical-contract-projection.db"
+    db_path = _db_path(tmp_path, db_name)
+    monkeypatch.setenv("SUPERVISOR_PIPELINE_PRODUCT_MODE", "bounded_write")
+    source_ref = {
+        "refId": "prd:canonical-contract",
+        "sourceType": "prd",
+        "pathOrUrl": "docs/canonical-contract.md",
+        "title": "Canonical contract source",
+    }
+    component_ids = (
+        "source_provenance",
+        "trust_boundary",
+        "authority_boundary",
+        "evidence_retention",
+        "quality_gates",
+        "delivery_evidence",
+    )
+    canonical_contract = {
+        "schemaVersion": "pipeline-canonical-contract/v1",
+        "productMode": "bounded_write",
+        "canonicalSource": {
+            "sourceId": "canonical-contract-source",
+            "role": "canonical",
+            "trust": "authoritative",
+            "provenance": {
+                "sourceRef": source_ref,
+                "observedAt": "2026-07-12T00:00:00Z",
+                "evidenceRefs": ["evidence:canonical-source"],
+            },
+            "authority": {
+                "sourceMutationAllowed": False,
+                "providerCallsAllowed": False,
+                "workerLaunchAllowed": False,
+                "githubMutationAllowed": False,
+                "rawPayloadRetentionAllowed": False,
+            },
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        },
+        "qualityGates": {
+            "kind": "all_of",
+            "gateId": "delivery-readiness",
+            "children": [
+                {
+                    "kind": "gate",
+                    "gateId": "metadata-retention",
+                    "requirement": "required",
+                    "state": "pass",
+                    "evidenceRefs": ["evidence:retention-pass"],
+                }
+            ],
+        },
+        "readinessComponents": {
+            component_id: {
+                "componentId": component_id,
+                "requirement": "required",
+                "state": "pass",
+                "evidenceRefs": [f"evidence:{component_id}"],
+            }
+            for component_id in component_ids
+        },
+        "deliveryEvidence": [
+            {
+                "deliveryId": "delivery-evidence-1",
+                "action": "pull_request",
+                "status": "recorded",
+                "target": {"repository": "slawdawg/kendall-nxt", "baseBranch": "dev"},
+                "evidence": {
+                    "evidenceId": "delivery-metadata",
+                    "disposition": "metadata_only",
+                    "evidenceRefs": ["evidence:delivery"],
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+                "authority": {
+                    "sourceMutationAllowed": False,
+                    "providerCallsAllowed": False,
+                    "workerLaunchAllowed": False,
+                    "githubMutationAllowed": False,
+                    "rawPayloadRetentionAllowed": False,
+                },
+                "deliveryAuthorityGranted": False,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        ],
+        "authority": {
+            "sourceMutationAllowed": False,
+            "providerCallsAllowed": False,
+            "workerLaunchAllowed": False,
+            "githubMutationAllowed": False,
+            "rawPayloadRetentionAllowed": False,
+        },
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
+    payload = {
+        "packetId": "packet-canonical-contract",
+        "title": "Canonical contract projection",
+        "sourceRef": source_ref,
+        "canonicalContract": canonical_contract,
+        "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+        "idempotencyKey": "canonical-contract-create",
+        "payloadSummary": "Persist canonical source and delivery metadata only.",
+        "evidenceRefs": ["evidence:packet-created"],
+    }
+
+    with _running_http_supervisor(tmp_path, monkeypatch, db_name) as (_main, base_url):
+        created = _http_post(base_url, "/pipeline-control-plane/work-packets", payload)
+        assert created.status_code == 200
+        packet = created.json()["data"]
+        assert packet["canonicalContract"] == canonical_contract
+        assert packet["productModeMapping"]["effectiveProductMode"] == "blocked"
+        assert packet["productModeMapping"]["blockedReasons"] == ["canonical_contract_does_not_grant_write_authority"]
+        assert packet["productModeMapping"]["githubMutationAllowed"] is False
+
+        projection = _http_get(base_url, "/pipeline-control-plane/projection")
+        assert projection.status_code == 200
+        projected = next(item for item in projection.json()["data"]["workPackets"] if item["packetId"] == payload["packetId"])
+        detail = next(item for item in projection.json()["data"]["selectedPacketDetails"] if item["packetId"] == payload["packetId"])
+        assert projected["canonicalContract"] == canonical_contract
+        assert detail["productModeMapping"]["ready"] is False
+        assert "mutate_source" not in {capability["actionId"] for capability in detail["actionCapabilities"]}
+
+        raw_payload = json.loads(json.dumps(payload))
+        raw_payload["packetId"] = "packet-canonical-raw-payload"
+        raw_payload["idempotencyKey"] = "canonical-contract-raw-payload"
+        raw_payload["canonicalContract"]["deliveryEvidence"][0]["evidence"]["rawPayload"] = {"forbidden": "value"}
+        rejected_raw_payload = _http_post(base_url, "/pipeline-control-plane/work-packets", raw_payload)
+        assert rejected_raw_payload.status_code == 422
+
+        credentialed_target = json.loads(json.dumps(payload))
+        credentialed_target["packetId"] = "packet-canonical-credentialed-target"
+        credentialed_target["idempotencyKey"] = "canonical-contract-credentialed-target"
+        credentialed_target["canonicalContract"]["deliveryEvidence"][0]["target"]["pullRequestUrl"] = "https://github.example.test/pr/1?access_token=ghp_123456789012"
+        assert _http_post(base_url, "/pipeline-control-plane/work-packets", credentialed_target).status_code == 422
+
+        raw_target = json.loads(json.dumps(payload))
+        raw_target["packetId"] = "packet-canonical-raw-target"
+        raw_target["idempotencyKey"] = "canonical-contract-raw-target"
+        raw_target["canonicalContract"]["deliveryEvidence"][0]["target"]["pullRequestUrl"] = "https://github.example.test/raw_provider_payload"
+        assert _http_post(base_url, "/pipeline-control-plane/work-packets", raw_target).status_code == 422
+
+        mismatched_source = json.loads(json.dumps(payload))
+        mismatched_source["packetId"] = "packet-canonical-source-mismatch"
+        mismatched_source["idempotencyKey"] = "canonical-contract-source-mismatch"
+        mismatched_source["canonicalContract"]["canonicalSource"]["provenance"]["sourceRef"]["refId"] = "prd:mismatch"
+        rejected_source = _http_post(base_url, "/pipeline-control-plane/work-packets", mismatched_source)
+        assert rejected_source.status_code == 422
+
+        supporting_source = json.loads(json.dumps(payload))
+        supporting_source["packetId"] = "packet-canonical-supporting-source"
+        supporting_source["idempotencyKey"] = "canonical-contract-supporting-source"
+        supporting_source["canonicalContract"]["canonicalSource"]["role"] = "supporting"
+        assert _http_post(base_url, "/pipeline-control-plane/work-packets", supporting_source).status_code == 422
+
+        deep_quality_gate = {"kind": "gate", "gateId": "gate:leaf", "requirement": "required", "state": "pass", "evidenceRefs": []}
+        for index in range(9):
+            deep_quality_gate = {"kind": "all_of", "gateId": f"gate:depth-{index}", "children": [deep_quality_gate]}
+        deep_gates = json.loads(json.dumps(payload))
+        deep_gates["packetId"] = "packet-canonical-deep-gates"
+        deep_gates["idempotencyKey"] = "canonical-contract-deep-gates"
+        deep_gates["canonicalContract"]["qualityGates"] = deep_quality_gate
+        assert _http_post(base_url, "/pipeline-control-plane/work-packets", deep_gates).status_code == 422
+
+        blocked_readiness = json.loads(json.dumps(payload))
+        blocked_readiness["packetId"] = "packet-canonical-blocked-readiness"
+        blocked_readiness["idempotencyKey"] = "canonical-contract-blocked-readiness"
+        blocked_readiness["canonicalContract"]["readinessComponents"]["source_provenance"]["state"] = "blocked"
+        blocked = _http_post(base_url, "/pipeline-control-plane/work-packets", blocked_readiness)
+        assert blocked.status_code == 200
+        mapping = blocked.json()["data"]["productModeMapping"]
+        assert mapping["ready"] is False
+        assert mapping["readinessState"] == "blocked"
+        assert "required_readiness_component_blocked:source_provenance" in mapping["blockedReasons"]
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("select count(*) from authoritative_work_packets").fetchone()[0] == 2
+
+
+def test_product_mode_mapping_is_stamped_at_read_time_and_rechecks_settings_after_restart(tmp_path, monkeypatch) -> None:
+    db_name = "canonical-contract-read-time-mapping.db"
+    db_path = _db_path(tmp_path, db_name)
+    source_ref = {"refId": "prd:canonical-read-time", "sourceType": "prd", "pathOrUrl": "docs/canonical-read-time.md", "title": "Canonical read-time source"}
+    payload = {
+        "packetId": "packet-canonical-read-time",
+        "title": "Canonical read-time mapping",
+        "sourceRef": source_ref,
+        "canonicalContract": _canonical_contract_payload(source_ref),
+        "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+        "idempotencyKey": "canonical-read-time-create",
+        "payloadSummary": "Persist read-time product mapping metadata.",
+    }
+    monkeypatch.setenv("SUPERVISOR_PIPELINE_PRODUCT_MODE", "contract_only")
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        created = client.post("/pipeline-control-plane/work-packets", json=payload)
+        assert created.status_code == 200
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("update authoritative_work_packets set updated_at = ? where id = ?", ("2000-01-01 00:00:00", payload["packetId"]))
+        conn.commit()
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        read_time_mapping = client.get(f"/pipeline-control-plane/work-packets/{payload['packetId']}").json()["data"]["productModeMapping"]
+        assert read_time_mapping["checkedAt"] > "2000-01-01T00:00:00"
+        assert read_time_mapping["expiresAt"] > read_time_mapping["checkedAt"]
+        assert read_time_mapping["freshnessState"] == "live"
+        assert read_time_mapping["effectiveProductMode"] == "contract_only"
+
+    monkeypatch.setenv("SUPERVISOR_PIPELINE_PRODUCT_MODE", "read_only")
+    with _client(tmp_path, monkeypatch, db_name) as restarted_client:
+        restarted_mapping = restarted_client.get(f"/pipeline-control-plane/work-packets/{payload['packetId']}").json()["data"]["productModeMapping"]
+        assert restarted_mapping["checkedAt"] > "2000-01-01T00:00:00"
+        assert restarted_mapping["expiresAt"] > restarted_mapping["checkedAt"]
+        assert restarted_mapping["effectiveProductMode"] == "blocked"
+        assert restarted_mapping["blockedReasons"] == ["configured_product_mode_mismatch"]
 
 
 def test_authoritative_work_packet_multi_stage_movement_proves_live_projection(tmp_path, monkeypatch) -> None:
@@ -2233,6 +2510,8 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
                 "status": "waiting",
                 "truthLabel": "live",
                 "sourceRef": None,
+                "canonicalContract": None,
+                "productModeMapping": None,
                 "blocker": None,
                 "nextAction": "Advance toward Classify.",
                 "unblocker": "unknown",
@@ -2243,6 +2522,8 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
             }
         ]
         assert projection["selectedPacketDetails"][0]["sourceRefs"] == []
+        assert projection["selectedPacketDetails"][0]["canonicalContract"] is None
+        assert projection["selectedPacketDetails"][0]["productModeMapping"] is None
         assert projection["selectedPacketDetails"][0]["latestTransitionEventRef"] is None
         assert projection["selectedPacketDetails"][0]["recentTransitionEventRefs"] == []
         assert projection["selectedPacketDetails"][0]["latestMovementSummary"] is None

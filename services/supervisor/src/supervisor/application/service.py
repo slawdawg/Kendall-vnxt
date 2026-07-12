@@ -14,6 +14,7 @@ from pathlib import Path
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import ValidationError
 
 
 UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
@@ -48,6 +49,7 @@ class OperationalActionReplay(Exception):
 
 LOCAL_PROOF_TEST_CAPABILITY = object()
 LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
+PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
 
 
 from supervisor.api.schemas import (
@@ -149,6 +151,7 @@ from supervisor.api.schemas import (
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
     PipelineBackendReachabilityV0View,
+    PipelineCanonicalContractV1View,
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
     PipelineExecuteAdmissionCountsV0View,
@@ -166,6 +169,7 @@ from supervisor.api.schemas import (
     OperationalActionResultView,
     OperationalReadyToTestRequest,
     PipelineManagerSummaryV0View,
+    PipelineProductModeMappingV0View,
     PipelineQueueSummaryV0View,
     PipelineReliabilityProblemV0View,
     PipelineWorkerSummaryV0View,
@@ -643,7 +647,7 @@ class SupervisorService:
                     raise ValueError("Create idempotency key already belongs to a different authoritative WorkPacket.")
                 packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
                 if packet:
-                    source_ref = self._authoritative_source_ref_payload(payload.sourceRef)
+                    source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
                     payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
                     evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
                     if not self._authoritative_create_event_matches(
@@ -665,7 +669,7 @@ class SupervisorService:
 
         now = datetime.now(timezone.utc)
         event_id = f"event-{uuid.uuid4()}"
-        source_ref = self._authoritative_source_ref_payload(payload.sourceRef)
+        source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
         actor = payload.actor.model_dump()
         payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
         evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
@@ -1630,13 +1634,17 @@ class SupervisorService:
         events = list(event_result.scalars())
         latest_event = events[-1] if events else None
         current_event = next((event for event in events if event.id == packet.current_event_id), None)
+        read_at = datetime.now(timezone.utc)
+        canonical_contract = self._canonical_contract_from_packet_metadata(packet.source_ref_json)
         return AuthoritativeWorkPacketLifecycleView(
             packetId=packet.id,
             title=packet.title,
             currentStage=packet.current_stage if current_event else latest_event.target_stage if latest_event else packet.current_stage,
             status=packet.status if current_event else latest_event.status if latest_event else packet.status,
             truthLabel=packet.truth_label if current_event else latest_event.truth_label if latest_event else packet.truth_label,
-            sourceRef=packet.source_ref_json,
+            sourceRef=self._packet_source_ref_payload(packet.source_ref_json),
+            canonicalContract=canonical_contract,
+            productModeMapping=self._product_mode_mapping(canonical_contract, read_at),
             createdAt=packet.created_at,
             updatedAt=packet.updated_at,
             currentEventId=latest_event.id if latest_event else packet.current_event_id,
@@ -1667,7 +1675,11 @@ class SupervisorService:
         result = await session.execute(statement)
         return result.scalars().first()
 
-    def _authoritative_source_ref_payload(self, source_ref: AuthoritativePacketSourceRefView) -> dict:
+    def _authoritative_source_ref_payload(
+        self,
+        source_ref: AuthoritativePacketSourceRefView,
+        canonical_contract: PipelineCanonicalContractV1View | None = None,
+    ) -> dict:
         source_payload = source_ref.model_dump(exclude_none=True)
         if source_payload.get("title") is not None:
             _validate_authoritative_metadata_text(source_payload["title"], path="sourceRef.title")
@@ -1677,7 +1689,105 @@ class SupervisorService:
                 "Authoritative WorkPacket sourceRef uses a superseded planning PRD; "
                 f"use the authoritative PRD at {planning_authority['superseded_by']} or route this packet for source inspection."
             )
+        if canonical_contract is not None:
+            source_payload[PIPELINE_CANONICAL_CONTRACT_METADATA_KEY] = canonical_contract.model_dump(mode="json")
         return source_payload
+
+    @staticmethod
+    def _packet_source_ref_payload(stored_payload: object) -> dict:
+        if not isinstance(stored_payload, dict):
+            return {}
+        return {
+            key: stored_payload[key]
+            for key in ("refId", "sourceType", "pathOrUrl", "title", "contentSha256")
+            if key in stored_payload
+        }
+
+    @staticmethod
+    def _canonical_contract_from_packet_metadata(stored_payload: object) -> PipelineCanonicalContractV1View | None:
+        if not isinstance(stored_payload, dict):
+            return None
+        raw_contract = stored_payload.get(PIPELINE_CANONICAL_CONTRACT_METADATA_KEY)
+        if raw_contract is None:
+            return None
+        try:
+            return PipelineCanonicalContractV1View.model_validate(raw_contract)
+        except ValidationError:
+            return None
+
+    def _product_mode_mapping(
+        self,
+        canonical_contract: PipelineCanonicalContractV1View | None,
+        checked_at: datetime,
+    ) -> PipelineProductModeMappingV0View | None:
+        if canonical_contract is None:
+            return None
+
+        requested = canonical_contract.productMode
+        configured = self.settings.pipeline_product_mode
+        effective = requested
+        operational_mode = "disabled"
+        readiness_state = "ready"
+        capability_state = "simulated"
+        blocked_reasons: list[str] = []
+
+        for component_id in type(canonical_contract.readinessComponents).model_fields:
+            component = getattr(canonical_contract.readinessComponents, component_id)
+            if component.requirement == "required" and component.state in {"fail", "blocked"}:
+                blocked_reasons.append(f"required_readiness_component_{component.state}:{component_id}")
+
+        if configured != requested:
+            effective = "blocked"
+            operational_mode = "unavailable"
+            readiness_state = "blocked"
+            capability_state = "gated"
+            blocked_reasons.append("configured_product_mode_mismatch")
+        elif requested in {"operator_review", "read_only"}:
+            operational_mode = "read_only"
+            capability_state = "gated"
+        elif requested == "local_proof":
+            # This mapping never attests a local proof capability.  The
+            # separate server-bound disposable-SQLite proof flow remains the
+            # only path that can make that claim.
+            effective = "blocked"
+            operational_mode = "unavailable"
+            readiness_state = "blocked"
+            capability_state = "gated"
+            blocked_reasons.append("local_proof_requires_server_attestation")
+        elif requested == "bounded_write":
+            # Canonical contract data expressly carries prohibitions, not an
+            # execution grant.  Existing operational action approval remains
+            # authoritative for every mutation.
+            effective = "blocked"
+            operational_mode = "unavailable"
+            readiness_state = "blocked"
+            capability_state = "gated"
+            blocked_reasons.append("canonical_contract_does_not_grant_write_authority")
+
+        if any(reason.startswith("required_readiness_component_") for reason in blocked_reasons):
+            effective = "blocked"
+            operational_mode = "unavailable"
+            readiness_state = "blocked"
+            capability_state = "gated"
+
+        return PipelineProductModeMappingV0View(
+            requestedProductMode=requested,
+            effectiveProductMode=effective,
+            operationalMode=operational_mode,
+            readinessState=readiness_state,
+            freshnessState="live",
+            capabilityState=capability_state,
+            checkedAt=checked_at,
+            expiresAt=checked_at + timedelta(minutes=5),
+            ready=not blocked_reasons,
+            blockedReasons=blocked_reasons,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+            sourceMutationAllowed=False,
+            providerCallsAllowed=False,
+            workerLaunchAllowed=False,
+            githubMutationAllowed=False,
+        )
 
     def _authoritative_create_matches(
         self,
@@ -1689,7 +1799,7 @@ class SupervisorService:
             and packet.current_stage == payload.initialStage
             and packet.status == payload.status
             and packet.truth_label == payload.truthLabel
-            and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef)
+            and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
         )
 
     def _authoritative_create_event_matches(
@@ -1747,7 +1857,7 @@ class SupervisorService:
             targetStage=event.target_stage,
             status=event.status,
             truthLabel=event.truth_label,
-            sourceRef=event.source_ref_json,
+            sourceRef=self._packet_source_ref_payload(event.source_ref_json),
             actor=event.actor_json,
             occurredAt=event.occurred_at,
             correlationId=event.correlation_id,
@@ -3248,6 +3358,8 @@ class SupervisorService:
 
         for packet in authoritative_packets:
             packet_lineage = authoritative_lineage.get(packet.packetId, {})
+            canonical_contract = packet.canonicalContract
+            product_mode_mapping = self._product_mode_mapping(canonical_contract, generated_at)
             stage_counts[packet.currentStage] = stage_counts.get(packet.currentStage, 0) + 1
             packet_evidence = sorted(
                 {
@@ -3345,6 +3457,8 @@ class SupervisorService:
                     status=packet.status,
                     truthLabel=packet_source_label,
                     sourceRef=packet.sourceRef,
+                    canonicalContract=canonical_contract,
+                    productModeMapping=product_mode_mapping,
                     blocker=blocker,
                     nextAction=next_action,
                     unblocker=self._pipeline_projection_packet_unblocker(packet.currentStage, packet.status),
@@ -3362,6 +3476,8 @@ class SupervisorService:
                 PipelineSelectedPacketDetailV0View(
                     packetId=packet.packetId,
                     sourceRefs=[packet.sourceRef],
+                    canonicalContract=canonical_contract,
+                    productModeMapping=product_mode_mapping,
                     evidenceRefs=packet_evidence,
                     currentStage=packet.currentStage,
                     status=packet.status,
@@ -19580,7 +19696,7 @@ class SupervisorService:
         return bool(nonce) and resolved_database_path == attested_path and attested_path.parent.is_relative_to(LOCAL_PROOF_ATTESTATION_ROOT.resolve())
 
     async def _assert_local_proof_source(self, session: AsyncSession, packet: AuthoritativeWorkPacket) -> str:
-        source_ref = packet.source_ref_json if isinstance(packet.source_ref_json, dict) else {}
+        source_ref = self._packet_source_ref_payload(packet.source_ref_json)
         source_type = source_ref.get("sourceType")
         source_path = source_ref.get("pathOrUrl")
         if source_type == "bmad_story":
@@ -19658,7 +19774,7 @@ class SupervisorService:
             "manager-source-metadata:sha256:",
         )
         if (
-            creation.source_ref_json != source_ref
+            self._packet_source_ref_payload(creation.source_ref_json) != source_ref
             or actor != {"actorType": "manager", "actorId": "manager-source-intake", "actorLabel": "Manager source intake adapter"}
             or not all(any(isinstance(ref, str) and ref.startswith(prefix) for ref in evidence_refs) for prefix in required_prefixes)
         ):
@@ -19703,7 +19819,7 @@ class SupervisorService:
         if not packet:
             return None
         source_digest = await self._assert_local_proof_source(session, packet)
-        source_ref = packet.source_ref_json if isinstance(packet.source_ref_json, dict) else {}
+        source_ref = self._packet_source_ref_payload(packet.source_ref_json)
         source_type = source_ref.get("sourceType")
         source_path = source_ref.get("pathOrUrl")
         items = await self.list_work_items(session)

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 import re
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +58,10 @@ class Settings(BaseSettings):
     allow_worker_source_mutation: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_SOURCE_MUTATION")
     allow_worker_network: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_NETWORK")
     allow_worker_credentials: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_CREDENTIALS")
+    pipeline_product_mode: Literal["contract_only", "operator_review", "local_proof", "read_only", "bounded_write"] = Field(
+        default="contract_only",
+        alias="SUPERVISOR_PIPELINE_PRODUCT_MODE",
+    )
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")

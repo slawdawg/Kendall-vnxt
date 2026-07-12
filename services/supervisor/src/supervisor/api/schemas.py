@@ -1322,6 +1322,266 @@ AuthoritativePacketStatus = Literal["active", "waiting", "blocked", "failed", "c
 AuthoritativePacketTruthLabel = Literal["source_owned", "derived_projection", "operator_asserted"]
 
 
+class PipelineAuthorityProhibitionsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubMutationAllowed: Literal[False] = False
+    rawPayloadRetentionAllowed: Literal[False] = False
+
+
+class PipelineCanonicalSourceProvenanceV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceRef: "AuthoritativePacketSourceRefView"
+    observedAt: datetime
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _evidence_refs_must_be_metadata_only(cls, value: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in value):
+            raise ValueError("Canonical provenance evidence refs must be safe metadata-only references.")
+        return list(dict.fromkeys(ref.strip() for ref in value))
+
+
+class PipelineCanonicalSourceV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceId: str = Field(min_length=1, max_length=240)
+    role: Literal["canonical", "supporting", "derived"]
+    trust: Literal["authoritative", "attested", "derived", "untrusted"]
+    provenance: PipelineCanonicalSourceProvenanceV0View
+    authority: PipelineAuthorityProhibitionsV0View = Field(default_factory=PipelineAuthorityProhibitionsV0View)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _role_and_trust_must_agree(self):
+        if self.role == "canonical" and self.trust not in {"authoritative", "attested"}:
+            raise ValueError("Canonical sources must be authoritative or attested.")
+        if self.role == "derived" and self.trust != "derived":
+            raise ValueError("Derived sources must remain typed as derived trust.")
+        return self
+
+
+class PipelineEvidenceRetentionV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidenceId: str = Field(min_length=1, max_length=240)
+    disposition: Literal["metadata_only", "summary_only", "fixture_only"]
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _evidence_refs_must_be_metadata_only(cls, value: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in value):
+            raise ValueError("Retention evidence refs must be safe metadata-only references.")
+        return list(dict.fromkeys(ref.strip() for ref in value))
+
+
+class PipelineQualityGateV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["gate"]
+    gateId: str = Field(min_length=1, max_length=240)
+    requirement: Literal["required", "not_applicable"]
+    state: Literal["pass", "fail", "blocked", "not_applicable"]
+    notApplicableReason: str | None = Field(default=None, min_length=1, max_length=240)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _gate_semantics_must_agree(self):
+        if self.requirement == "required" and self.state == "not_applicable":
+            raise ValueError("Required quality gates cannot be skipped.")
+        if self.requirement == "not_applicable" and (
+            self.state != "not_applicable" or not self.notApplicableReason
+        ):
+            raise ValueError("Not-applicable quality gates require a reason.")
+        if self.requirement == "required" and self.notApplicableReason is not None:
+            raise ValueError("Required quality gates cannot carry a skip reason.")
+        return self
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _evidence_refs_must_be_metadata_only(cls, value: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in value):
+            raise ValueError("Quality gate evidence refs must be safe metadata-only references.")
+        return list(dict.fromkeys(ref.strip() for ref in value))
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_not_applicable_reason(self, handler):
+        serialized = handler(self)
+        if self.notApplicableReason is None:
+            serialized.pop("notApplicableReason", None)
+        return serialized
+
+
+class PipelineQualityGateGroupV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["all_of", "any_of"]
+    gateId: str = Field(min_length=1, max_length=240)
+    children: list["PipelineQualityGateNodeV0View"] = Field(min_length=1, max_length=32)
+
+
+PipelineQualityGateNodeV0View = PipelineQualityGateV0View | PipelineQualityGateGroupV0View
+PIPELINE_QUALITY_GATE_MAX_DEPTH = 8
+
+
+def _validate_pipeline_quality_gate_depth(node: PipelineQualityGateNodeV0View, depth: int = 0) -> None:
+    if depth > PIPELINE_QUALITY_GATE_MAX_DEPTH:
+        raise ValueError("Composable quality gates may not exceed eight nested groups.")
+    if isinstance(node, PipelineQualityGateGroupV0View):
+        for child in node.children:
+            _validate_pipeline_quality_gate_depth(child, depth + 1)
+
+
+class PipelineReadinessComponentV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    componentId: Literal[
+        "source_provenance",
+        "trust_boundary",
+        "authority_boundary",
+        "evidence_retention",
+        "quality_gates",
+        "delivery_evidence",
+    ]
+    requirement: Literal["required", "not_applicable"]
+    state: Literal["pass", "fail", "blocked", "not_applicable"]
+    notApplicableReason: str | None = Field(default=None, min_length=1, max_length=240)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def _readiness_semantics_must_agree(self):
+        if self.requirement == "required" and self.state == "not_applicable":
+            raise ValueError("Required readiness components cannot be skipped.")
+        if self.requirement == "not_applicable" and (
+            self.state != "not_applicable" or not self.notApplicableReason
+        ):
+            raise ValueError("Not-applicable readiness components require a reason.")
+        if self.requirement == "required" and self.notApplicableReason is not None:
+            raise ValueError("Required readiness components cannot carry a skip reason.")
+        return self
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _evidence_refs_must_be_metadata_only(cls, value: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in value):
+            raise ValueError("Readiness evidence refs must be safe metadata-only references.")
+        return list(dict.fromkeys(ref.strip() for ref in value))
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_not_applicable_reason(self, handler):
+        serialized = handler(self)
+        if self.notApplicableReason is None:
+            serialized.pop("notApplicableReason", None)
+        return serialized
+
+
+class PipelineReadinessComponentsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_provenance: PipelineReadinessComponentV0View
+    trust_boundary: PipelineReadinessComponentV0View
+    authority_boundary: PipelineReadinessComponentV0View
+    evidence_retention: PipelineReadinessComponentV0View
+    quality_gates: PipelineReadinessComponentV0View
+    delivery_evidence: PipelineReadinessComponentV0View
+
+    @model_validator(mode="after")
+    def _component_ids_must_match_slots(self):
+        for component_id in type(self).model_fields:
+            if getattr(self, component_id).componentId != component_id:
+                raise ValueError(f"Readiness component {component_id} must match its canonical slot.")
+        return self
+
+
+class PipelineNormalizedDeliveryTargetV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repository: str = Field(min_length=1, max_length=240)
+    baseBranch: str | None = Field(default=None, max_length=240)
+    headRevision: str | None = Field(default=None, max_length=240)
+    pullRequestUrl: str | None = Field(default=None, max_length=500)
+
+    @field_validator("repository", "baseBranch", "headRevision", "pullRequestUrl")
+    @classmethod
+    def _target_strings_must_be_safe_metadata(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _validate_authoritative_metadata_text(value, path=f"deliveryEvidence.target.{info.field_name}")
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_delivery_target_fields(self, handler):
+        serialized = handler(self)
+        for field_name in ("baseBranch", "headRevision", "pullRequestUrl"):
+            if getattr(self, field_name) is None:
+                serialized.pop(field_name, None)
+        return serialized
+
+
+class PipelineNormalizedDeliveryEvidenceV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deliveryId: str = Field(min_length=1, max_length=240)
+    action: Literal["branch_push", "pull_request", "merge", "cleanup"]
+    status: Literal["recorded", "blocked", "not_applicable"]
+    target: PipelineNormalizedDeliveryTargetV0View
+    evidence: PipelineEvidenceRetentionV0View
+    authority: PipelineAuthorityProhibitionsV0View = Field(default_factory=PipelineAuthorityProhibitionsV0View)
+    deliveryAuthorityGranted: Literal[False] = False
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class PipelineCanonicalContractV1View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["pipeline-canonical-contract/v1"]
+    productMode: Literal["contract_only", "operator_review", "local_proof", "read_only", "bounded_write"]
+    canonicalSource: PipelineCanonicalSourceV0View
+    qualityGates: PipelineQualityGateNodeV0View
+    readinessComponents: PipelineReadinessComponentsV0View
+    deliveryEvidence: list[PipelineNormalizedDeliveryEvidenceV0View] = Field(default_factory=list, max_length=25)
+    authority: PipelineAuthorityProhibitionsV0View = Field(default_factory=PipelineAuthorityProhibitionsV0View)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _canonical_slot_must_be_canonical_and_bounded(self):
+        if self.canonicalSource.role != "canonical":
+            raise ValueError("canonicalSource must use the canonical role.")
+        _validate_pipeline_quality_gate_depth(self.qualityGates)
+        return self
+
+
+class PipelineProductModeMappingV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requestedProductMode: Literal["contract_only", "operator_review", "local_proof", "read_only", "bounded_write"]
+    effectiveProductMode: Literal["contract_only", "operator_review", "local_proof", "read_only", "bounded_write", "blocked"]
+    operationalMode: Literal["disabled", "local_proof", "read_only", "bounded_write", "unavailable", "unknown"]
+    readinessState: Literal["ready", "degraded", "blocked", "unavailable", "unknown"]
+    freshnessState: Literal["live", "stale", "unavailable", "unknown"]
+    capabilityState: Literal["available", "gated", "unavailable", "simulated", "unknown"]
+    checkedAt: datetime
+    expiresAt: datetime
+    ready: bool
+    blockedReasons: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubMutationAllowed: Literal[False] = False
+
+
 class AuthoritativePacketActorView(BaseModel):
     actorType: Literal["system", "operator", "manager", "worker"] = "system"
     actorId: str | None = Field(default=None, max_length=100)
@@ -1383,6 +1643,7 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
     status: AuthoritativePacketStatus = "waiting"
     truthLabel: AuthoritativePacketTruthLabel = "source_owned"
     sourceRef: AuthoritativePacketSourceRefView
+    canonicalContract: PipelineCanonicalContractV1View | None = None
     actor: AuthoritativePacketActorView = Field(default_factory=AuthoritativePacketActorView)
     idempotencyKey: str | None = Field(default=None, max_length=120)
     correlationId: str | None = Field(default=None, max_length=80)
@@ -1407,6 +1668,12 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
     @classmethod
     def _packet_title_must_be_safe_metadata(cls, value: str) -> str:
         return _validate_authoritative_metadata_text(value, path="title")
+
+    @model_validator(mode="after")
+    def _canonical_source_must_match_packet_source(self):
+        if self.canonicalContract and self.canonicalContract.canonicalSource.provenance.sourceRef != self.sourceRef:
+            raise ValueError("Canonical source provenance must match the authoritative packet sourceRef.")
+        return self
 
 
 class AuthoritativeWorkPacketTransitionRequest(BaseModel):
@@ -1460,6 +1727,8 @@ class AuthoritativeWorkPacketLifecycleView(BaseModel):
     status: AuthoritativePacketStatus
     truthLabel: AuthoritativePacketTruthLabel
     sourceRef: AuthoritativePacketSourceRefView
+    canonicalContract: PipelineCanonicalContractV1View | None = None
+    productModeMapping: PipelineProductModeMappingV0View | None = None
     createdAt: datetime
     updatedAt: datetime
     currentEventId: str
@@ -1681,6 +1950,8 @@ class PipelineRuntimeReadinessV0View(BaseModel):
     rawPayloadRetained: Literal[False] = False
 
 
+PipelineQualityGateGroupV0View.model_rebuild()
+PipelineCanonicalContractV1View.model_rebuild()
 AuthoritativeWorkPacketCreateRequest.model_rebuild()
 AuthoritativeWorkPacketTransitionRequest.model_rebuild()
 
@@ -1801,6 +2072,8 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
     status: AuthoritativePacketStatus
     truthLabel: PipelineProjectionSourceLabelV0
     sourceRef: AuthoritativePacketSourceRefView | None = None
+    canonicalContract: PipelineCanonicalContractV1View | None = None
+    productModeMapping: PipelineProductModeMappingV0View | None = None
     blocker: str | None = None
     nextAction: str | None = None
     unblocker: PipelinePacketUnblockerV0 = "unknown"
@@ -1825,6 +2098,8 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
 class PipelineSelectedPacketDetailV0View(BaseModel):
     packetId: str
     sourceRefs: list[AuthoritativePacketSourceRefView] = Field(default_factory=list)
+    canonicalContract: PipelineCanonicalContractV1View | None = None
+    productModeMapping: PipelineProductModeMappingV0View | None = None
     evidenceRefs: list[str] = Field(default_factory=list)
     currentStage: AuthoritativePacketStage
     status: AuthoritativePacketStatus
