@@ -70,6 +70,26 @@ test("manager source intake cycle accepts seed inputs plus one required loopback
   assert.deepEqual(parsed.seedOptions.sourceRefs, ["doc:docs/workflows/current-session-runbook.md"]);
   assert.throws(() => parseManagerSourceIntakeCycleArgs(ELIGIBLE_ARGS.slice(0, -2)), /supervisor-url/);
   assert.throws(() => parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--supervisor-url=http://localhost:8000"]), /specified more than once/);
+  assert.equal(parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--dry-run"]).mode, "dry_run");
+  assert.equal(parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--apply"]).mode, "apply");
+  assert.throws(() => parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--dry-run", "--apply"]), /mode may only/);
+});
+
+test("manager source intake cycle dry-run validates the exact target without fetch", async () => {
+  let fetchCalls = 0;
+  const result = await runManagerSourceIntakeCycle([...ELIGIBLE_ARGS, "--dry-run"], {
+    fetchImpl: async () => { fetchCalls += 1; },
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.summary.sourceIntakePlan.mode, "dry_run");
+  assert.equal(result.summary.sourceIntakePlan.fetchPerformed, false);
+  assert.equal(result.summary.continuousSelection.code, "continuous-source-intake");
+  assert.equal(result.summary.continuousSelection.mutationClass, "source_backed_supervisor_intake");
+  assert.equal(result.summary.continuousSelection.allowed, true);
+  assert.equal(result.summary.continuousSelection.status, "ready");
+  assert.ok(result.summary.continuousSelection.targetComponents.includes("supervisor:http://127.0.0.1:8000/pipeline-control-plane/work-packets"));
+  assert.equal(result.summary.seedPacket.supervisorIntake, undefined);
 });
 
 test("manager source intake cycle plans first and refuses blocked work without fetch", async () => {
@@ -171,7 +191,7 @@ test("manager source intake cycle preserves adapter fail-closed response behavio
   );
 });
 
-test("existing seed refill cycle and run-loop commands remain detached from the networked intake cycle", async () => {
+test("default seed refill cycle and run-loop entrypoints contain no direct intake or fetch trigger", async () => {
   for (const path of [
     "scripts/manager-source-packet-seed.mjs",
     "scripts/manager-refill-plan.mjs",

@@ -6728,6 +6728,41 @@ test("explicit eligible source-backed packet seed feeds refill and continuous re
   assert.equal(continuous.summary.applySelectedAction, null);
 });
 
+test("cycle packet projects explicit loopback source intake without performing fetch", () => {
+  const cycle = buildFastCyclePacket(
+    {
+      runId: "manager-test",
+      desiredWorkers: 1,
+      candidateId: "cycle-source-intake-candidate",
+      title: "Cycle source intake candidate",
+      sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+      acceptanceCriteria: ["AC cycle projects one eligible source intake action"],
+      verificationTargets: ["node --test tests/manager-control-plane.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+      supervisorUrl: "http://127.0.0.1:8000",
+    },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: 0 },
+          laneAssignmentStatusCounts: { claimed: 0 },
+          workspaceAssignmentStatusCounts: { active: 0 },
+        },
+      },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0, blocked: 0 }, dispatch: { allowed: false } },
+    },
+  );
+
+  const action = cycle.nextActions.find((candidate) => candidate.code === "manager-source-intake-ready");
+  assert.ok(action, JSON.stringify({ runway: cycle.summary.runway, nextActions: cycle.nextActions, blockers: cycle.blockers }));
+  assert.equal(cycle.summary.continuation.sourceIntakeAllowed, true);
+  assert.match(action.dryRunCommand, /--dry-run$/);
+  assert.match(action.applyCommand, /--apply$/);
+  assert.equal(cycle.summary.runway.sourceBackedPacketSeed.packetState, "eligible");
+});
+
 test("source-backed packet seed keeps blocked packets visible with typed reason", () => {
   const blocked = buildSourceBackedPacketSeedPlan(
     {

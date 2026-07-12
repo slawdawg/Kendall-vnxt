@@ -9,6 +9,7 @@ import { assertWorkspaceStateStorage, workspaceState } from "../codex-workspace-
 import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-routing.mjs";
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
 import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
+import { planManagerSourcePacketIntake, resolveLoopbackSourceIntakeEndpoint } from "./manager-supervisor-source-intake.mjs";
 import {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
@@ -145,6 +146,7 @@ const CONTINUOUS_APPLY_MUTATION_GATES = Object.freeze({
   manager_runtime_review_request_packet: "reviewRequest",
   metadata_only_worker_recovery_inspection: "recoveryInspection",
   local_bmad_refill_artifacts: "refillApply",
+  source_backed_supervisor_intake: "sourceIntake",
 });
 const CONTINUOUS_APPLY_GATE_FIELDS = Object.freeze({
   workerMutation: "workerMutationAllowed",
@@ -153,6 +155,7 @@ const CONTINUOUS_APPLY_GATE_FIELDS = Object.freeze({
   reviewRequest: "reviewRequestAllowed",
   recoveryInspection: "recoveryInspectionAllowed",
   refillApply: "refillApplyAllowed",
+  sourceIntake: "sourceIntakeAllowed",
 });
 const RUNTIME_MODE_ALIASES = Object.freeze({
   backendproof: "backend_proof",
@@ -314,6 +317,7 @@ export function parseCommonArgs(argv = []) {
     capabilitySafeFallbacks: [],
     runtimeMode: "",
     preflightFile: "",
+    supervisorUrl: "",
   };
   const positionals = [];
   const singletonTargetFlags = new Set();
@@ -591,6 +595,12 @@ export function parseCommonArgs(argv = []) {
       options.preflightFile = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--preflight-file=")) {
       options.preflightFile = arg.slice("--preflight-file=".length);
+    } else if (arg === "--supervisor-url") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--supervisor-url");
+      options.supervisorUrl = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--supervisor-url=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--supervisor-url");
+      options.supervisorUrl = arg.slice("--supervisor-url=".length);
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -598,6 +608,7 @@ export function parseCommonArgs(argv = []) {
     }
   }
   options.command = positionals[0] || "";
+  if (options.supervisorUrl) resolveLoopbackSourceIntakeEndpoint(options.supervisorUrl);
   return options;
 }
 
@@ -13754,6 +13765,11 @@ export function buildRefillPlan(options = {}, context = {}) {
     refillJob: dispatcherRefill.summary?.refillJob || null,
     refillWatermark: dispatcherRefill.summary || null,
   });
+  const sourceIntakeAction = sourceBackedSupervisorIntakeAction({
+    runId: resolveManagerRunId(options, context),
+    supervisorUrl: options.supervisorUrl || context.supervisorUrl,
+    sourceBackedPacketSeed,
+  });
   if (apply) {
     if (workCreationStep && (requestPacketBlocked || bmadRequestPacketPlan?.summary?.validation?.status !== "ready")) {
       return packet({
@@ -13819,6 +13835,7 @@ export function buildRefillPlan(options = {}, context = {}) {
     blockers: [...(bmadPlanningGap?.blockers || []), ...(requestPacketBlocked ? bmadRequestPacketPlan.blockers || [] : [])],
     nextActions: starvation
       ? [
+          ...(sourceIntakeAction ? [sourceIntakeAction] : []),
           {
             code: "safe-backlog-starvation",
             summary: "Dispatchable safe backlog is below desired worker capacity.",
@@ -13829,6 +13846,55 @@ export function buildRefillPlan(options = {}, context = {}) {
         ]
       : [],
   });
+}
+
+function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", sourceBackedPacketSeed = null } = {}) {
+  if (!supervisorUrl || sourceBackedPacketSeed?.summary?.packetState !== "eligible") return null;
+  const seedPacket = sourceBackedPacketSeed.summary?.seedPacket;
+  if (!seedPacket || sourceBackedPacketSeed.summary?.sourceWorkEligibility?.eligibleCount !== 1) return null;
+  const exactSeedPlan = buildSourceBackedPacketSeedPlan({
+    runId,
+    candidateId: seedPacket.candidateWorkPacketId,
+    title: seedPacket.title,
+    sourceRefs: seedPacket.sourceRefs,
+    acceptanceCriteria: seedPacket.acceptanceCriteria,
+    verificationTargets: seedPacket.verificationTargets,
+    touchedSurfaceHint: seedPacket.touchedSurfaceHint,
+    riskClass: seedPacket.riskClass,
+    authorityClass: seedPacket.authorityClass,
+  });
+  if (exactSeedPlan.summary?.packetState !== "eligible") return null;
+  let intakePlan;
+  try {
+    intakePlan = planManagerSourcePacketIntake(exactSeedPlan, supervisorUrl);
+  } catch {
+    return null;
+  }
+  const args = [
+    ["--run-id", runId],
+    ["--candidate-id", seedPacket.candidateWorkPacketId],
+    ["--title", seedPacket.title],
+    ...sourceRefList(seedPacket.sourceRefs).map((value) => ["--source-ref", value]),
+    ...normalizeCandidateStringList(seedPacket.acceptanceCriteria).map((value) => ["--acceptance-criterion", value]),
+    ...normalizeCandidateStringList(seedPacket.verificationTargets).map((value) => ["--verification-target", value]),
+    ["--touched-surface", seedPacket.touchedSurfaceHint],
+    ["--risk-class", seedPacket.riskClass],
+    ["--authority-class", seedPacket.authorityClass],
+    ["--supervisor-url", supervisorUrl],
+  ].filter(([, value]) => Boolean(value));
+  const command = `node ./scripts/manager-source-intake-cycle.mjs --summary-json${args.map(([flag, value]) => ` ${flag} ${shellSingleQuote(value)}`).join("")}`;
+  return {
+    code: "manager-source-intake-ready",
+    summary: "Persist one eligible source-backed seed through the loopback supervisor WorkPacket route.",
+    nextAction: `${command} --dry-run`,
+    dryRunCommand: `${command} --dry-run`,
+    applyCommand: `${command} --apply`,
+    mutationClass: "source_backed_supervisor_intake",
+    authority: "loopback-supervisor-source-intake-existing-adapter-gate",
+    targetComponents: intakePlan.continuousSelection.targetComponents,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function sourceBackedDispatcherRefillAction({ runId = "", sourceRefs = [], refillJob = null, refillWatermark = null } = {}) {
@@ -23303,6 +23369,11 @@ export function buildManagerCapabilityPosture(options = {}, context = {}, cycle 
       reasonCodes: [],
       safeFallbacks: ["lane_advance_to_review_held", "active_worker_monitoring", "dispatch_or_refill_unrelated_lanes", "heartbeat_reporting"],
     },
+    sourceIntake: {
+      state: "enabled",
+      reasonCodes: [],
+      safeFallbacks: ["source_owned_refill_planning", "heartbeat_reporting"],
+    },
     cleanupApply: {
       state: "blocked",
       reasonCodes: ["cleanup_apply_requires_separate_gate"],
@@ -23554,6 +23625,7 @@ function safeActionArray(value = []) {
 
 function continuousActionCapability(action = {}) {
   const code = String(action.code || "");
+  if (code === "continuous-source-intake") return "sourceIntake";
   if (["continuous-dispatch-apply"].includes(code)) return "dispatchApply";
   if (["continuous-refill-apply"].includes(code)) return "refillApply";
   if (["continuous-bmad-code-review-request", "continuous-worker-code-review-request", "continuous-worker-code-review-request-prepared", "continuous-worker-review-feedback", "continuous-worker-review-feedback-no-target"].includes(code)) {
@@ -23588,7 +23660,7 @@ function mergeManagerCapabilityPosture(target = {}, input = null) {
       safeFallbacks: normalized.safeFallbacks.length > 0 ? normalized.safeFallbacks : target[capability].safeFallbacks,
     };
   }
-  for (const capability of ["tmuxWorkerMutation", "dispatchApply", "refillApply", "reviewDelegation", "cleanupApply"]) {
+  for (const capability of ["tmuxWorkerMutation", "dispatchApply", "refillApply", "reviewDelegation", "sourceIntake", "cleanupApply"]) {
     const stateFromArray = postureStateFromCapabilityArrays(input, capability);
     if (stateFromArray) {
       target[capability] = {
@@ -24334,9 +24406,10 @@ export function buildRuntimeReadinessPlan(options = {}, context = {}) {
         reviewRequest: continuousApplyReady && selectedGate === "reviewRequest" ? "existing_gate_only" : "blocked_or_not_requested",
         recoveryInspection: continuousApplyReady && selectedGate === "recoveryInspection" ? "existing_gate_only" : "blocked_or_not_requested",
         refillArtifactApply: continuousApplyReady && selectedGate === "refillApply" ? "existing_gate_only" : "blocked_or_not_requested",
+        sourceIntake: continuousApplyReady && selectedGate === "sourceIntake" ? "loopback_adapter_gate_only" : "blocked_or_not_requested",
         delivery: "blocked_or_not_requested",
         cleanup: "blocked",
-        externalServiceCalls: "blocked",
+        externalServiceCalls: continuousApplyReady && selectedGate === "sourceIntake" ? "loopback_supervisor_only" : "blocked",
         credentialAccess: "blocked",
       },
       mutationPolicy: continuousApplyReady ? "existing_manager_control_plane_gates_only" : "metadata_only_no_mutation",
@@ -24446,6 +24519,7 @@ function continuousActionPriority(action = {}) {
     ["continuous-worker-code-review-request", 27],
     ["continuous-worker-code-review-request-prepared", 28],
     ["continuous-lane-advance-apply", 29],
+    ["continuous-source-intake", 30],
     ["continuous-worker-warm", 30],
     ["continuous-worker-handoff", 31],
     ["continuous-worker-progress-signal", 32],
@@ -24917,6 +24991,23 @@ function buildReviewDeliveryQueueEvidence(action = {}, cycle = {}) {
 
 function buildContinuousAction(action = {}, cycle = {}) {
   const nextAction = String(action.nextAction || "").trim();
+  if (
+    action.code === "manager-source-intake-ready" &&
+    action.mutationClass === "source_backed_supervisor_intake" &&
+    String(action.dryRunCommand || "").startsWith("node ./scripts/manager-source-intake-cycle.mjs ") &&
+    String(action.applyCommand || "").startsWith("node ./scripts/manager-source-intake-cycle.mjs ") &&
+    Array.isArray(action.targetComponents) && action.targetComponents.length === 4
+  ) {
+    return {
+      code: "continuous-source-intake",
+      summary: action.summary,
+      dryRunCommand: action.dryRunCommand,
+      applyCommand: action.applyCommand,
+      authority: action.authority,
+      mutationClass: action.mutationClass,
+      targetComponents: action.targetComponents,
+    };
+  }
   if (action.code === "worker-prompt-probe-submit-ready" && nextAction.startsWith("node ./scripts/manager-worker-prompt-probe.mjs ")) {
     const dryRunCommand = nextAction.replace(/\s+--apply\b/g, "");
     return {
@@ -25359,6 +25450,9 @@ function buildContinuationPlan({ status, blockers = [], runway = {}, usage = {},
     exactAllowedActions.push("metadata_only_worker_recovery_inspection");
   }
   const runwayActions = Array.isArray(runway.nextActions) ? runway.nextActions : [];
+  if (subplanReadyForContinuousAction(runway) && runwayActions.some((action) => action.code === "manager-source-intake-ready")) {
+    exactAllowedActions.push("source_backed_supervisor_intake");
+  }
   if (subplanReadyForContinuousAction(runway) && runwayActions.some((action) => action.code === "safe-backlog-starvation" && /\bbmad-code-review\b/.test(String(action.nextAction || "")))) {
     exactAllowedActions.push("manager_runtime_review_request_packet");
   }
@@ -25753,6 +25847,7 @@ function withContinuationGateEvidence(plan = {}) {
     laneAdvanceAllowed: hasAllowedAction("lane_advance_existing_gates") && !actionBlocked("lane_advance"),
     reviewRequestAllowed: hasAllowedAction("manager_runtime_review_request_packet") && !actionBlocked("review_request"),
     recoveryInspectionAllowed: hasAllowedAction("metadata_only_worker_recovery_inspection") && !actionBlocked("read_only_inspection"),
+    sourceIntakeAllowed: hasAllowedAction("source_backed_supervisor_intake") && !actionBlocked("source_intake"),
   };
 }
 

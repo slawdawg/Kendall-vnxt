@@ -7,13 +7,19 @@ Status: bounded Gate 4 source-owned architecture contract
 
 The normal manager source-candidate path remains read-only and network-free.
 `manager:source-packet-seed`, refill planning, cycle planning, and the manager
-run loop do not contact the supervisor, including their dry-run paths. One
-explicit bounded manager cycle now composes the existing pure planner and
-loopback adapter. An eligible source-backed seed can cross into the
-supervisor-owned authoritative WorkPacket lifecycle only through that command:
+run loop do not contact the supervisor by default. Supplying an explicit
+loopback `--supervisor-url` lets refill/cycle planning project one source-intake
+action only when exactly one source-backed seed is eligible. The run loop still
+performs no network operation in `continuous_dry_run`; `continuous_apply` may
+cross the boundary only after its dry-run proof, exact target pairing,
+`sourceIntake` capability gate, and continuation gate all pass.
 
 ```text
-manager:source-intake-cycle (explicit bounded command)
+manager refill/cycle (pure action projection)
+  -> exactly one eligible source-backed seed + explicit loopback URL
+  -> manager:source-intake-cycle --dry-run (validation, no fetch)
+  -> exact command family / canonical target / sourceIntake gates
+  -> manager:source-intake-cycle --apply
   -> buildSourceBackedPacketSeedPlan (read-only eligibility first)
   -> refuse blocked / needs-review / dedupe / non-eligible states
   -> intakeManagerSourcePacket (eligible only)
@@ -22,10 +28,10 @@ manager:source-intake-cycle (explicit bounded command)
   -> supervisor persistence and live projection truth
 ```
 
-This is a bounded explicit manager cycle, not a long-lived manager cycle. It
-does not wire intake into `manager-cycle-packet`, `manager-refill-plan`, or
-`manager-run-loop`. Full Gate 4 still requires long-lived run-loop/refill
-orchestration to invoke the governed intake boundary.
+The standalone command remains compatible: no mode flag retains its prior
+explicit-apply behavior, while `--dry-run`/`--plan` and `--apply` make the gate
+visible for continuous orchestration. The dry-run returns the exact candidate,
+packet, source, and loopback endpoint target components without fetching.
 
 ## Explicit Command
 
@@ -42,8 +48,14 @@ pnpm run manager:source-intake-cycle -- \
   --touched-surface scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs \
   --risk-class low \
   --authority-class allowed_unattended \
-  --supervisor-url http://127.0.0.1:8000
+  --supervisor-url http://127.0.0.1:8000 \
+  --dry-run
 ```
+
+After reviewing the dry-run packet, rerun the exact command with `--apply` in
+place of `--dry-run`. For long-lived operation, the same seed flags and URL may
+be supplied to `manager-cycle-packet` or `manager-run-loop`; omitting the URL
+preserves the network-free default.
 
 The pre-existing `manager:source-packet-seed` remains available as a pure,
 network-free planning command. The lower-level
@@ -57,8 +69,8 @@ HTTP(S) base URLs. The packet must contain exactly one eligible
 `summary.seedPacket` and one explicit source reference. Supported mappings are
 `prd:` to `prd`, `story:` to `bmad_story`, `doc:` to `repo_doc`,
 `runway:`/`workflow:` to `workflow`, and `operator:` to `operator_input`.
-Input is capped at 256 KiB. Duplicate input or supervisor target flags are
-rejected, and network timeouts are bounded to 1-30 seconds.
+Input is capped at 256 KiB. Duplicate input, mode, or supervisor target flags
+are rejected, and network timeouts are bounded to 1-30 seconds.
 
 ## Data and Authority Boundary
 
@@ -78,6 +90,12 @@ single eligible candidate projection and single source-artifact discovery
 projection. Authority must remain `allowed_unattended`, risk must remain low or
 medium, every raw-retention marker must remain false, and unsafe or unbounded
 fields are rejected rather than reflected into failure output.
+
+Continuous apply additionally requires the selected mutation class to remain
+`source_backed_supervisor_intake`, the `sourceIntake` manager capability to be
+enabled, continuation evidence to set `sourceIntakeAllowed`, and dry-run/apply
+commands to match by command family and canonical target after mode flags are
+removed. Any mismatch stops before apply.
 
 The cycle creates no CandidateWork row, WorkItem, execution attempt, queue
 lease, worker process, dispatch action, provider call, or source mutation. The
@@ -106,8 +124,9 @@ pnpm run test:manager-source-intake
 ```
 
 The test starts with `manager-source-packet-seed`, starts a real loopback
-supervisor using a temporary SQLite database, runs the explicit intake command,
-and reads both the authoritative lifecycle route and live pipeline projection.
+supervisor using a temporary SQLite database, proves cycle dry-run performs no
+fetch, applies the exact cycle target, and reads both the authoritative
+lifecycle route and live pipeline projection.
 It also proves zero CandidateWork, WorkItem, workflow event, execution attempt,
 or queue-lease rows; unchanged source bytes; and absence of an injected raw
 BMAD marker from persisted database bytes. Environments that deny loopback
