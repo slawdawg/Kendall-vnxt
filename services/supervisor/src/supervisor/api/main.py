@@ -30,6 +30,7 @@ from supervisor.api.schemas import (
     DeliveryExecutionEvidencePayload,
     LlmWikiArtifactSearchResultView,
     LlmWikiDisposableRebuildWriteRequest,
+    ManagerTerminalEventRequest,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
@@ -50,6 +51,7 @@ from supervisor.api.schemas import (
     WorkItemSubscriptionHandoffRequest,
     WorkItemVerificationEvidenceRequest,
 )
+from supervisor.application.manager_terminal_events import persist_manager_terminal_event
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
 from supervisor.domain.bmad_import import BmadImportError
@@ -278,6 +280,22 @@ async def issue_pipeline_operational_approval(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_approval").model_dump()) from exc
     return ApiEnvelope(data=approval)
+
+
+@app.post("/manager-control-plane/terminal-events", response_model=ApiEnvelope)
+async def record_manager_terminal_event(
+    payload: ManagerTerminalEventRequest,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        event = await persist_manager_terminal_event(session, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "manager_terminal_event_conflict").model_dump(),
+        ) from exc
+    return ApiEnvelope(data=event)
 
 
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)

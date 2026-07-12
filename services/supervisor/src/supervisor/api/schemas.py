@@ -4331,3 +4331,137 @@ class OperatorViewResponse(BaseModel):
     isDefault: bool
     createdAt: datetime
     updatedAt: datetime
+
+
+class ManagerAuthoritativeBacklogReconciliationCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    totalItems: int = Field(ge=0)
+    reconciledItems: int = Field(ge=0)
+    eligible: int = Field(ge=0)
+    queued: int = Field(ge=0)
+    leased: int = Field(ge=0)
+    running: int = Field(ge=0)
+    reviewFix: int = Field(ge=0)
+    requiredRetrospective: int = Field(ge=0)
+    otherwiseRequired: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    closed: int = Field(ge=0)
+    approvalGated: int = Field(ge=0)
+
+
+class ManagerUnresolvedApprovalGatedWork(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    workId: str = Field(max_length=140)
+    title: str = Field(max_length=180)
+    reason: str = Field(max_length=240)
+    sourceRefs: list[str] = Field(min_length=1, max_length=8)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("workId", "title", "reason")
+    @classmethod
+    def _scalar_metadata_must_be_safe(cls, value: str, info) -> str:
+        return _validate_authoritative_metadata_text(value, path=info.field_name)
+
+    @field_validator("sourceRefs", "evidenceRefs")
+    @classmethod
+    def _refs_must_be_safe(cls, values: list[str], info) -> list[str]:
+        safe = [
+            _validate_authoritative_metadata_text(value, path=f"{info.field_name}[]")
+            for value in values
+        ]
+        if any(not _is_safe_pipeline_evidence_ref(value) for value in safe):
+            raise ValueError(f"{info.field_name} contains an unsafe metadata reference.")
+        if len(set(safe)) != len(safe):
+            raise ValueError(f"{info.field_name} must not contain duplicate references.")
+        return safe
+
+
+class ManagerTerminalEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    eventId: str = Field(max_length=120)
+    eventType: Literal["authoritative_backlog_exhausted"]
+    runId: str = Field(max_length=120)
+    sourceIdentity: str = Field(max_length=240)
+    sourceRevision: str = Field(max_length=160)
+    reconciliationCounts: ManagerAuthoritativeBacklogReconciliationCounts
+    unresolvedApprovalGatedWork: list[ManagerUnresolvedApprovalGatedWork] = Field(max_length=24)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=12)
+    resumeRequirement: str = Field(max_length=360)
+    nextManagerAction: str = Field(max_length=360)
+    idempotencyKey: str = Field(max_length=180)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("eventId", "runId", "sourceIdentity", "sourceRevision", "idempotencyKey")
+    @classmethod
+    def _identity_metadata_must_be_safe(cls, value: str, info) -> str:
+        return _validate_authoritative_metadata_text(value, path=info.field_name)
+
+    @field_validator("resumeRequirement", "nextManagerAction")
+    @classmethod
+    def _control_text_must_be_safe(cls, value: str, info) -> str:
+        text = _validate_authoritative_metadata_text(value, path=info.field_name)
+        shell_prefix = re.search(r"\b(?:curl|bash|sh|python|node|pnpm)\s+|\buv\s+run\b", text, re.IGNORECASE)
+        if not _is_safe_pipeline_control_text(text) or shell_prefix:
+            raise ValueError(f"{info.field_name} contains unsafe or executable control text.")
+        return text
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _evidence_refs_must_be_safe(cls, values: list[str]) -> list[str]:
+        safe = [
+            _validate_authoritative_metadata_text(value, path="evidenceRefs[]")
+            for value in values
+        ]
+        if any(not _is_safe_pipeline_evidence_ref(value) for value in safe):
+            raise ValueError("evidenceRefs contains an unsafe metadata reference.")
+        if len(set(safe)) != len(safe):
+            raise ValueError("evidenceRefs must not contain duplicate references.")
+        return safe
+
+    @model_validator(mode="after")
+    def _must_describe_exact_exhaustion(self) -> "ManagerTerminalEventRequest":
+        counts = self.reconciliationCounts
+        status_total = sum(
+            getattr(counts, field)
+            for field in (
+                "eligible",
+                "queued",
+                "leased",
+                "running",
+                "reviewFix",
+                "requiredRetrospective",
+                "otherwiseRequired",
+                "completed",
+                "closed",
+                "approvalGated",
+            )
+        )
+        if counts.totalItems != counts.reconciledItems or counts.totalItems != status_total:
+            raise ValueError("Reconciliation totals must equal reconciledItems and the exact status-count sum.")
+        if any(
+            getattr(counts, field) != 0
+            for field in (
+                "eligible",
+                "queued",
+                "leased",
+                "running",
+                "reviewFix",
+                "requiredRetrospective",
+                "otherwiseRequired",
+            )
+        ):
+            raise ValueError("authoritative_backlog_exhausted cannot retain required executable work.")
+        if counts.approvalGated != len(self.unresolvedApprovalGatedWork):
+            raise ValueError("approvalGated must equal the unresolvedApprovalGatedWork count.")
+        work_ids = [item.workId for item in self.unresolvedApprovalGatedWork]
+        if len(set(work_ids)) != len(work_ids):
+            raise ValueError("unresolvedApprovalGatedWork must not contain duplicate workId values.")
+        return self
+
+
+class ManagerTerminalEventView(ManagerTerminalEventRequest):
+    createdAt: datetime

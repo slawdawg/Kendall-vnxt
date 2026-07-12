@@ -303,6 +303,25 @@ class SupervisorControl(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class ManagerTerminalEvent(Base):
+    __tablename__ = "manager_terminal_events"
+
+    event_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(80))
+    run_id: Mapped[str] = mapped_column(String(120))
+    source_identity: Mapped[str] = mapped_column(String(240))
+    source_revision: Mapped[str] = mapped_column(String(160))
+    reconciliation_counts_json: Mapped[dict] = mapped_column(JSON)
+    unresolved_approval_gated_work_json: Mapped[list] = mapped_column(JSON)
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    resume_requirement: Mapped[str] = mapped_column(Text)
+    next_manager_action: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class OperatorView(Base):
     __tablename__ = "operator_views"
 
