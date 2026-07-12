@@ -25,7 +25,7 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
 
     from supervisor.api.main import app
 
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _db_path(tmp_path, db_name: str) -> str:
@@ -4377,7 +4377,7 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
             "targetId": packet["packetId"],
             "idempotencyKey": "test-action-operational-pass",
             "correlationId": "corr-operational-pass",
-            "requestedBy": {"actorType": "operator", "actorId": "operator-test", "actorLabel": "Operator test"},
+            "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator", "actorLabel": "Pipeline operator"},
             "requestedAuthorityState": "needs_product_approval",
             "requestedRiskTier": "medium",
             "expectedCurrentEventId": packet["currentEventId"],
@@ -4455,7 +4455,7 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
                 "actionId": "request_rework",
                 "targetType": "work_packet",
                 "targetId": rework_parent["packetId"],
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
             },
@@ -4470,7 +4470,7 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
                 "targetId": rework_parent["packetId"],
                 "idempotencyKey": "test-action-rework",
                 "correlationId": "corr-operational-rework",
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
                 "approvalId": rework_approval["approvalId"],
@@ -4525,7 +4525,7 @@ def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -
                 "actionId": "mark_tested",
                 "targetType": "work_packet",
                 "targetId": packet["packetId"],
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
             },
@@ -4540,7 +4540,7 @@ def test_mark_tested_fail_routes_parent_to_rework_child(tmp_path, monkeypatch) -
                 "targetId": packet["packetId"],
                 "idempotencyKey": "failed-test-routes-rework",
                 "correlationId": "corr-failed-test-routes-rework",
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
                 "approvalId": approval["approvalId"],
@@ -4590,12 +4590,12 @@ def test_server_bound_approval_requires_exact_fresh_unconsumed_binding(tmp_path,
         assert response.status_code == 200
         return response.json()["data"]
 
-    def approval_payload(packet: dict, *, action_id: str = "mark_tested", actor_id: str = "operator-test") -> dict:
+    def approval_payload(packet: dict, *, action_id: str = "mark_tested", actor_id: str = "pipeline-operator") -> dict:
         return {
             "actionId": action_id,
             "targetType": "work_packet",
             "targetId": packet["packetId"],
-            "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Operator test"},
+            "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Pipeline operator"},
             "requestedAuthorityState": "needs_product_approval",
             "requestedRiskTier": "medium",
             "metadataOnly": True,
@@ -4609,7 +4609,7 @@ def test_server_bound_approval_requires_exact_fresh_unconsumed_binding(tmp_path,
             "targetId": packet["packetId"],
             "idempotencyKey": idempotency_key,
             "correlationId": f"corr:{idempotency_key}",
-            "requestedBy": {"actorType": "operator", "actorId": "operator-test", "actorLabel": "Operator test"},
+            "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator", "actorLabel": "Pipeline operator"},
             "requestedAuthorityState": "needs_product_approval",
             "requestedRiskTier": "medium",
             "expectedCurrentEventId": approval["expectedCurrentEventId"],
@@ -4697,6 +4697,152 @@ def test_server_bound_approval_requires_exact_fresh_unconsumed_binding(tmp_path,
         assert "expired" in expired_response.text
 
 
+def test_server_owned_local_operator_and_loopback_boundary_reject_spoofing(tmp_path, monkeypatch) -> None:
+    db_name = "server-owned-local-operator.db"
+    source_ref = {
+        "refId": "workflow:server-owned-local-operator",
+        "sourceType": "workflow",
+        "pathOrUrl": "docs/workflows/execution-authority-boundary.md",
+        "title": "Server-owned local operator",
+    }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-server-owned-local-operator",
+                "title": "Server-owned local operator packet",
+                "initialStage": "review",
+                "status": "waiting",
+                "sourceRef": source_ref,
+                "readyToTest": {
+                    "readyId": "ready:server-owned-local-operator",
+                    "userFacingSummary": "The local operator binding is ready to test.",
+                    "testableSurface": "/pipeline packet detail",
+                    "evidenceRefs": ["evidence:server-owned-local-operator"],
+                },
+            },
+        )
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+
+        approval_request = {
+            "actionId": "mark_tested",
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
+            "requestedAuthorityState": "needs_product_approval",
+            "requestedRiskTier": "medium",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+        spoofed_approval = {**approval_request, "requestedBy": {"actorType": "operator", "actorId": "spoofed-operator"}}
+        spoofed_response = client.post("/pipeline-control-plane/approvals", json=spoofed_approval)
+        assert spoofed_response.status_code == 400
+        assert "server-owned local operator" in spoofed_response.text
+
+        approval_response = client.post("/pipeline-control-plane/approvals", json=approval_request)
+        assert approval_response.status_code == 200
+        approval = approval_response.json()["data"]
+        assert approval["requestedBy"] == {
+            "actorType": "operator",
+            "actorId": "pipeline-operator",
+            "actorLabel": "Pipeline operator",
+        }
+
+        action_payload = {
+            "actionId": "mark_tested",
+            "targetType": "work_packet",
+            "targetId": packet["packetId"],
+            "idempotencyKey": "server-owned-local-operator-action",
+            "correlationId": "corr:server-owned-local-operator-action",
+            "requestedBy": approval_request["requestedBy"],
+            "requestedAuthorityState": "needs_product_approval",
+            "requestedRiskTier": "medium",
+            "approvalId": approval["approvalId"],
+            "expectedCurrentEventId": approval["expectedCurrentEventId"],
+            "operatorIntentSummary": "Record a bounded local operator decision.",
+            "evidenceRefs": ["evidence:server-owned-local-operator-action"],
+            "testResult": "pass",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+        label_spoof_response = client.post(
+            "/pipeline-control-plane/actions",
+            json={**action_payload, "requestedBy": {**action_payload["requestedBy"], "actorLabel": "Spoofed operator"}},
+        )
+        assert label_spoof_response.status_code == 400
+        assert "server-owned local operator" in label_spoof_response.text
+
+        result_response = client.post("/pipeline-control-plane/actions", json=action_payload)
+        assert result_response.status_code == 200
+        result = result_response.json()["data"]
+        assert result["outcome"] == "succeeded"
+
+        packet_view = client.get(f"/pipeline-control-plane/work-packets/{packet['packetId']}").json()["data"]
+        assert packet_view["history"][-1]["actor"] == {
+            "actorType": "operator",
+            "actorId": "pipeline-operator",
+            "actorLabel": "Pipeline operator",
+        }
+
+        replay_response = client.post("/pipeline-control-plane/actions", json=action_payload)
+        assert replay_response.status_code == 200
+        assert replay_response.json()["data"]["actionRecordId"] == result["actionRecordId"]
+
+        from supervisor.api.main import app, service
+        from supervisor.application.service import LOCAL_PROOF_TEST_CAPABILITY
+
+        service._local_proof_capability = LOCAL_PROOF_TEST_CAPABILITY
+        monkeypatch.setattr(service, "_local_proof_database_attested", lambda: True)
+        monkeypatch.setattr(service, "_local_proof_settings_safe", lambda: True)
+
+        with TestClient(app, client=("192.0.2.10", 50001)) as remote_client:
+            remote_approval_response = remote_client.post(
+                "/pipeline-control-plane/approvals",
+                json=approval_request,
+                headers={"x-forwarded-for": "127.0.0.1"},
+            )
+            assert remote_approval_response.status_code == 403
+            assert "loopback" in remote_approval_response.text
+            remote_action_response = remote_client.post(
+                "/pipeline-control-plane/actions",
+                json=action_payload,
+                headers={"forwarded": "for=127.0.0.1"},
+            )
+            assert remote_action_response.status_code == 403
+            assert "loopback" in remote_action_response.text
+
+            remote_projection_response = remote_client.get("/pipeline-control-plane/projection")
+            assert remote_projection_response.status_code == 200
+            remote_projection = remote_projection_response.json()["data"]
+            assert remote_projection["runtimeReadiness"]["operationalMode"] == "read_only"
+            assert remote_projection["runtimeReadiness"]["typedReason"] == "authenticated_session_required"
+            assert "authenticated server-bound session identity" in remote_projection["runtimeReadiness"]["summary"]
+            mutating_action_ids = {
+                "mark_tested",
+                "request_rework",
+                "retry_verification",
+                "requeue",
+                "pause",
+                "drain",
+                "reassign",
+                "reject",
+            }
+            for capability in remote_projection["actionCapabilities"]:
+                if capability["actionId"] in mutating_action_ids:
+                    assert capability["capabilityState"] == "unavailable"
+                    assert capability["authorityState"] == "blocked"
+                    assert capability["typedReason"] == "authenticated_session_required"
+            remote_detail = next(
+                detail for detail in remote_projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"]
+            )
+            for capability in remote_detail["actionCapabilities"]:
+                if capability["actionId"] in mutating_action_ids:
+                    assert capability["capabilityState"] == "unavailable"
+                    assert capability["typedReason"] == "authenticated_session_required"
+
+
 def test_server_bound_approval_rejects_ineligible_actions_and_preserves_read_only_actions(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "server-bound-approval-eligibility.db") as client:
         source_ref = {
@@ -4732,7 +4878,7 @@ def test_server_bound_approval_rejects_ineligible_actions_and_preserves_read_onl
                 "targetId": packet["packetId"],
                 "idempotencyKey": "inspect-read-only",
                 "correlationId": "corr-inspect-read-only",
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "not_required",
                 "requestedRiskTier": "low",
                 "expectedCurrentEventId": initial_event_id,
@@ -4748,7 +4894,7 @@ def test_server_bound_approval_rejects_ineligible_actions_and_preserves_read_onl
                 "targetId": "projection",
                 "idempotencyKey": "refresh-read-only",
                 "correlationId": "corr-refresh-read-only",
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "not_required",
                 "requestedRiskTier": "low",
                 "evidenceRefs": ["evidence:read-only-refresh"],
@@ -4765,7 +4911,7 @@ def test_server_bound_approval_rejects_ineligible_actions_and_preserves_read_onl
                 "actionId": "inspect",
                 "targetType": "projection",
                 "targetId": "projection",
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "not_required",
                 "requestedRiskTier": "low",
                 "metadataOnly": True,
@@ -4812,7 +4958,7 @@ def test_gated_actions_record_same_stage_events_and_reject_second_approval_for_o
                 "actionId": action_id,
                 "targetType": "work_packet",
                 "targetId": packet["packetId"],
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
             },
@@ -4829,7 +4975,7 @@ def test_gated_actions_record_same_stage_events_and_reject_second_approval_for_o
                 "targetId": packet["packetId"],
                 "idempotencyKey": key,
                 "correlationId": f"corr:{key}",
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
                 "approvalId": approval["approvalId"],
@@ -4896,7 +5042,7 @@ def test_concurrent_distinct_approvals_allow_one_packet_mutation(tmp_path, monke
                     "actionId": "mark_tested",
                     "targetType": "work_packet",
                     "targetId": packet["packetId"],
-                    "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                    "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                     "requestedAuthorityState": "needs_product_approval",
                     "requestedRiskTier": "medium",
                 },
@@ -4913,7 +5059,7 @@ def test_concurrent_distinct_approvals_allow_one_packet_mutation(tmp_path, monke
                     "targetId": packet["packetId"],
                     "idempotencyKey": key,
                     "correlationId": f"corr:{key}",
-                    "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                    "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                     "requestedAuthorityState": "needs_product_approval",
                     "requestedRiskTier": "medium",
                     "approvalId": approval_record["approvalId"],
@@ -4961,7 +5107,7 @@ def test_concurrent_duplicate_approval_and_idempotency_returns_original_result(t
                 "actionId": "mark_tested",
                 "targetType": "work_packet",
                 "targetId": packet["packetId"],
-                "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+                "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
             },
@@ -4972,7 +5118,7 @@ def test_concurrent_duplicate_approval_and_idempotency_returns_original_result(t
             "targetId": packet["packetId"],
             "idempotencyKey": "concurrent-duplicate-key",
             "correlationId": "corr:concurrent-duplicate-key",
-            "requestedBy": {"actorType": "operator", "actorId": "operator-test"},
+            "requestedBy": {"actorType": "operator", "actorId": "pipeline-operator"},
             "requestedAuthorityState": "needs_product_approval",
             "requestedRiskTier": "medium",
             "approvalId": approval["approvalId"],

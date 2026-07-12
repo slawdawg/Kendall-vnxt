@@ -291,6 +291,7 @@ export const PIPELINE_OPERATIONAL_ACTION_TYPED_REASONS = [
   "projection_stale",
   "invalid_transition",
   "test_not_ready",
+  "authenticated_session_required",
   "unsupported_action",
   "unknown",
 ] as const;

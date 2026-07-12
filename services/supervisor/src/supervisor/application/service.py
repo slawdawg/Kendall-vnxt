@@ -52,6 +52,7 @@ LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proo
 
 from supervisor.api.schemas import (
     AuthoritativePacketSourceRefView,
+    AuthoritativePacketActorView,
     AuthoritativeWorkPacketCreateRequest,
     AuthoritativeWorkPacketLifecycleEventView,
     AuthoritativeWorkPacketLifecycleView,
@@ -399,6 +400,11 @@ OPERATIONAL_ACTION_POLICIES = {
     "drain": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"runtime", "manager_run"}, "summary": "Drain active work before entering paused mode."},
     "reassign": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Reassign ownership after explicit authority approval."},
     "reject": {"risk": "medium", "authority": "needs_product_approval", "targets": {"work_packet"}, "summary": "Reject the packet with an auditable operator decision."},
+}
+SERVER_OWNED_LOCAL_OPERATOR = {
+    "actorType": "operator",
+    "actorId": "pipeline-operator",
+    "actorLabel": "Pipeline operator",
 }
 OPERATIONAL_ACTION_TRUTH_REASONS = {
     "blocked_by_approval",
@@ -839,11 +845,24 @@ class SupervisorService:
         if target_index != current_index + 1:
             raise ValueError("Authoritative WorkPacket transitions must advance to the next canonical stage.")
 
+    @staticmethod
+    def _validate_server_owned_local_operator(actor: AuthoritativePacketActorView) -> None:
+        if (
+            actor.actorType != SERVER_OWNED_LOCAL_OPERATOR["actorType"]
+            or actor.actorId != SERVER_OWNED_LOCAL_OPERATOR["actorId"]
+            or actor.actorLabel not in {None, SERVER_OWNED_LOCAL_OPERATOR["actorLabel"]}
+        ):
+            raise ValueError(
+                "Requested actor must be the server-owned local operator "
+                "(actorType=operator, actorId=pipeline-operator, actorLabel=Pipeline operator)."
+            )
+
     async def issue_pipeline_operational_approval(
         self,
         session: AsyncSession,
         payload: OperationalActionApprovalRequest,
     ) -> OperationalActionApprovalView:
+        self._validate_server_owned_local_operator(payload.requestedBy)
         policy = OPERATIONAL_ACTION_POLICIES.get(payload.actionId)
         if policy is None or policy["authority"] == "not_required" or payload.actionId not in {"mark_tested", "request_rework", "requeue", "reject"}:
             raise ValueError("Operational action is not eligible for a server-issued approval.")
@@ -870,7 +889,7 @@ class SupervisorService:
             action_id=payload.actionId,
             target_type=payload.targetType,
             target_id=payload.targetId,
-            requested_actor_json=payload.requestedBy.model_dump(),
+            requested_actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
             requested_authority_family=payload.requestedAuthorityState,
             requested_risk_tier=payload.requestedRiskTier,
             expected_current_event_id=packet.current_event_id,
@@ -886,6 +905,7 @@ class SupervisorService:
         session: AsyncSession,
         payload: OperationalActionRequest,
     ) -> OperationalActionResultView:
+        self._validate_server_owned_local_operator(payload.requestedBy)
         existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
         if existing:
             if not self._operational_action_matches(existing, payload):
@@ -1143,7 +1163,7 @@ class SupervisorService:
             actionId=approval.action_id,
             targetType=approval.target_type,
             targetId=approval.target_id,
-            requestedBy=approval.requested_actor_json,
+            requestedBy=dict(SERVER_OWNED_LOCAL_OPERATOR),
             requestedAuthorityState=approval.requested_authority_family,
             requestedRiskTier=approval.requested_risk_tier,
             expectedCurrentEventId=approval.expected_current_event_id,
@@ -1180,7 +1200,7 @@ class SupervisorService:
             status=status,
             truth_label="source_owned",
             source_ref_json=packet.source_ref_json,
-            actor_json=payload.requestedBy.model_dump(),
+            actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
             correlation_id=payload.correlationId,
             causation_id=packet.current_event_id,
             idempotency_key=f"{payload.idempotencyKey}:operational-event",
@@ -1268,7 +1288,7 @@ class SupervisorService:
             status="waiting",
             truth_label="source_owned",
             source_ref_json=packet.source_ref_json,
-            actor_json=payload.requestedBy.model_dump(),
+            actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
             correlation_id=payload.correlationId,
             causation_id=packet.current_event_id,
             idempotency_key=f"child:{uuid.uuid5(uuid.NAMESPACE_URL, child_key).hex}",
@@ -1304,7 +1324,7 @@ class SupervisorService:
             raise ValueError("Operational action approval has already been consumed.")
         if approval.action_id != payload.actionId or approval.target_type != payload.targetType or approval.target_id != payload.targetId:
             raise ValueError("Operational action approval does not match the requested action target.")
-        if approval.requested_actor_json != payload.requestedBy.model_dump():
+        if approval.requested_actor_json != SERVER_OWNED_LOCAL_OPERATOR:
             raise ValueError("Operational action approval does not match the requested actor.")
         if approval.requested_authority_family != payload.requestedAuthorityState:
             raise ValueError("Operational action approval does not match the requested authority family.")
@@ -1369,12 +1389,17 @@ class SupervisorService:
         *,
         target_id: str | None = None,
         packet: AuthoritativeWorkPacket | None = None,
+        mutation_access: bool = True,
     ) -> OperationalActionCapabilityView:
         policy = OPERATIONAL_ACTION_POLICIES[action_id]
         typed_reason = None
         capability_state = "gated"
         authority_state = policy["authority"]
-        if action_id in {"inspect", "refresh_projection"}:
+        if not mutation_access and action_id not in {"inspect", "refresh_projection"}:
+            capability_state = "unavailable"
+            authority_state = "blocked"
+            typed_reason = "authenticated_session_required"
+        elif action_id in {"inspect", "refresh_projection"}:
             capability_state = "available"
             authority_state = "not_required"
         elif action_id in {"mark_tested", "request_rework"} and packet and (
@@ -1409,20 +1434,31 @@ class SupervisorService:
             rawPayloadRetained=False,
         )
 
-    def _packet_operational_capabilities(self, packet: AuthoritativeWorkPacket) -> list[OperationalActionCapabilityView]:
+    def _packet_operational_capabilities(
+        self,
+        packet: AuthoritativeWorkPacket,
+        *,
+        mutation_access: bool = True,
+    ) -> list[OperationalActionCapabilityView]:
         packet_id = getattr(packet, "id", None) or getattr(packet, "packetId")
         return [
-            self._operational_capability("inspect", target_id=packet_id, packet=packet),
-            self._operational_capability("refresh_projection", target_id=packet_id, packet=packet),
-            self._operational_capability("mark_tested", target_id=packet_id, packet=packet),
-            self._operational_capability("request_rework", target_id=packet_id, packet=packet),
-            self._operational_capability("retry_verification", target_id=packet_id, packet=packet),
-            self._operational_capability("requeue", target_id=packet_id, packet=packet),
-            self._operational_capability("reassign", target_id=packet_id, packet=packet),
-            self._operational_capability("reject", target_id=packet_id, packet=packet),
+            self._operational_capability("inspect", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("refresh_projection", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("mark_tested", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("request_rework", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("retry_verification", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("requeue", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("reassign", target_id=packet_id, packet=packet, mutation_access=mutation_access),
+            self._operational_capability("reject", target_id=packet_id, packet=packet, mutation_access=mutation_access),
         ]
 
-    async def _pipeline_runtime_readiness(self, session: AsyncSession, generated_at: datetime) -> PipelineRuntimeReadinessV0View:
+    async def _pipeline_runtime_readiness(
+        self,
+        session: AsyncSession,
+        generated_at: datetime,
+        *,
+        mutation_access: bool = True,
+    ) -> PipelineRuntimeReadinessV0View:
         control = await self.ensure_control(session)
         paused = control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}
         disabled = control.mode == RunMode.DISABLED.value
@@ -1431,10 +1467,12 @@ class SupervisorService:
             and self._local_proof_database_attested()
             and self._local_proof_settings_safe()
         )
-        mode = "read_only" if paused else "unavailable" if disabled or not local_proof_available else "local_proof"
-        readiness_state = "unavailable" if disabled or not local_proof_available else "ready"
-        capability_state = "unavailable" if disabled or not local_proof_available else "available"
-        typed_reason = "runtime_unavailable" if disabled or not local_proof_available else None
+        remote_mutation_blocked = not mutation_access and not disabled
+        remote_read_only = remote_mutation_blocked and local_proof_available
+        mode = "read_only" if paused or remote_read_only else "unavailable" if disabled or not local_proof_available else "local_proof"
+        readiness_state = "degraded" if remote_read_only else "unavailable" if disabled or not local_proof_available else "ready"
+        capability_state = "unavailable" if remote_read_only or disabled or not local_proof_available else "available"
+        typed_reason = "authenticated_session_required" if remote_read_only else "runtime_unavailable" if disabled or not local_proof_available else None
         return PipelineRuntimeReadinessV0View(
             readinessState=readiness_state,
             operationalMode=mode,
@@ -1444,6 +1482,9 @@ class SupervisorService:
             checkedAt=generated_at,
             expiresAt=generated_at + timedelta(minutes=5),
             summary=(
+                "Remote dashboard access cannot mutate pipeline operational endpoints; an authenticated server-bound session identity is required before remote mutation is available."
+                if remote_mutation_blocked
+                else
                 "Local proof runtime is ready; external provider and high-risk actions remain gated."
                 if not paused and not disabled and local_proof_available
                 else "Local proof capability is unavailable because server capability, disposable database, or external-authority safety checks failed; projection remains inspection-only."
@@ -1453,16 +1494,16 @@ class SupervisorService:
                 else "Supervisor runtime is disabled."
             ),
             actionCapabilities=[
-                self._operational_capability("inspect"),
-                self._operational_capability("refresh_projection"),
-                self._operational_capability("mark_tested"),
-                self._operational_capability("request_rework"),
-                self._operational_capability("retry_verification"),
-                self._operational_capability("requeue"),
-                self._operational_capability("pause"),
-                self._operational_capability("drain"),
-                self._operational_capability("reassign"),
-                self._operational_capability("reject"),
+                self._operational_capability("inspect", mutation_access=mutation_access),
+                self._operational_capability("refresh_projection", mutation_access=mutation_access),
+                self._operational_capability("mark_tested", mutation_access=mutation_access),
+                self._operational_capability("request_rework", mutation_access=mutation_access),
+                self._operational_capability("retry_verification", mutation_access=mutation_access),
+                self._operational_capability("requeue", mutation_access=mutation_access),
+                self._operational_capability("pause", mutation_access=mutation_access),
+                self._operational_capability("drain", mutation_access=mutation_access),
+                self._operational_capability("reassign", mutation_access=mutation_access),
+                self._operational_capability("reject", mutation_access=mutation_access),
             ],
             evidenceRefs=["runtime:database-reachable", "runtime:local-proof"],
             metadataOnly=True,
@@ -1475,7 +1516,7 @@ class SupervisorService:
             and record.target_type == payload.targetType
             and record.target_id == payload.targetId
             and record.correlation_id == payload.correlationId
-            and record.actor_json == payload.requestedBy.model_dump()
+            and record.actor_json == SERVER_OWNED_LOCAL_OPERATOR
             and record.requested_authority_state == payload.requestedAuthorityState
             and record.requested_risk_tier == payload.requestedRiskTier
             and record.approval_id == payload.approvalId
@@ -1518,7 +1559,7 @@ class SupervisorService:
             target_id=payload.targetId,
             idempotency_key=payload.idempotencyKey,
             correlation_id=payload.correlationId,
-            actor_json=payload.requestedBy.model_dump(),
+            actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
             requested_authority_state=payload.requestedAuthorityState,
             requested_risk_tier=payload.requestedRiskTier,
             expected_current_event_id=payload.expectedCurrentEventId,
@@ -2976,7 +3017,12 @@ class SupervisorService:
             }
         return lineage
 
-    async def get_pipeline_dashboard_projection(self, session: AsyncSession) -> PipelineDashboardProjectionV0View:
+    async def get_pipeline_dashboard_projection(
+        self,
+        session: AsyncSession,
+        *,
+        mutation_access: bool = True,
+    ) -> PipelineDashboardProjectionV0View:
         generated_at = datetime.now(timezone.utc)
         stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
         try:
@@ -2987,7 +3033,11 @@ class SupervisorService:
             source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
             worker_summary_records = self._pipeline_projection_worker_summary_records(candidates)
             gated_controls = self._pipeline_projection_gated_controls(candidates)
-            runtime_readiness = await self._pipeline_runtime_readiness(session, generated_at)
+            runtime_readiness = await self._pipeline_runtime_readiness(
+                session,
+                generated_at,
+                mutation_access=mutation_access,
+            )
             action_result_rows = await session.execute(
                 select(OperationalActionRecord).order_by(OperationalActionRecord.created_at.asc())
             )
@@ -3189,7 +3239,7 @@ class SupervisorService:
                     queueLease=packet_lineage.get("queueLease"),
                     executionAttempts=packet_lineage.get("executionAttempts", []),
                     correlationIds=packet_lineage.get("correlationIds", []),
-                    actionCapabilities=self._packet_operational_capabilities(packet),
+                    actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=mutation_access),
                     actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]],
                     metadataOnly=True,
                 )
