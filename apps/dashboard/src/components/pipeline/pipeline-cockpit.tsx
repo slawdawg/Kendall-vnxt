@@ -2150,6 +2150,9 @@ function PacketMiniCard({
         <span className="pipeline-mini-packet-meta">
           {packetCardNextLabel(packet)}
         </span>
+        <span className="pipeline-mini-packet-meta">
+          {authoritativePacketLine(packet)}
+        </span>
         {packet.activeBoardCard?.attention ? (
           <span className="pipeline-mini-packet-meta pipeline-mini-packet-action-needed-text">
             {packetCardAttentionReasonLabel(packet)}; {packetCardOperatorActionLabel(packet)}
@@ -2174,6 +2177,10 @@ function PacketMiniCard({
       ) : null}
     </button>
   );
+}
+
+function authoritativePacketLine(packet: ActiveBoardCockpitPacket): string {
+  return `authoritative ${packet.packetId}; origin ${packet.sourceRefs.map((ref) => ref.refId).join(", ") || "none"}; proof ${packet.evidenceRefs.map((ref) => ref.refId).join(", ") || "none"}`;
 }
 
 function StaleHistoryPanel({

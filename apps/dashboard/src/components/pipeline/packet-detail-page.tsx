@@ -66,8 +66,8 @@ export function PacketDetailPage({
         </DetailSection>
 
         <DetailSection title="Evidence and artifacts">
-          <RefList title="Sources" values={packet.sourceRefs.map((ref) => `${ref.label}; ${ref.sourceType}; ${ref.freshness}; ${ref.accessState}`)} />
-          <RefList title="Evidence" values={packet.evidenceRefs.map((ref) => `${ref.label}; ${ref.evidenceType}; retained ${String(ref.rawPayloadRetained)}`)} />
+          <RefList title="Sources" values={packet.sourceRefs.map((ref) => `${ref.refId}; ${ref.label}; ${ref.sourceType}; ${ref.freshness}; ${ref.accessState}`)} />
+          <RefList title="Evidence" values={packet.evidenceRefs.map((ref) => `${ref.refId}; ${ref.label}; ${ref.evidenceType}; retained ${String(ref.rawPayloadRetained)}`)} />
           <RefList title="Artifacts" values={packet.artifactRefs.map((ref) => `${ref.label}; ${ref.artifactType}; ${ref.status}`)} />
         </DetailSection>
 
