@@ -1,7 +1,7 @@
-import copy
 import hashlib
 import json
 import os
+import shlex
 import socket
 import sqlite3
 import subprocess
@@ -18,6 +18,10 @@ import uvicorn
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SOURCE_PATH = REPO_ROOT / "docs" / "workflows" / "current-session-runbook.md"
+DEFAULT_STORY_KEY = "91-1-gate-4-real-dashboard-process-proof"
+DEFAULT_SOURCE_KEY = "2099-01-01-gate-4-real-dashboard-process-proof"
+DEFAULT_ARTIFACT_DIR = REPO_ROOT / "_bmad-output" / "implementation-artifacts"
+DEFAULT_PLANNING_DIR = REPO_ROOT / "_bmad-output" / "planning-artifacts"
 
 
 def _reset_supervisor_modules() -> None:
@@ -52,9 +56,9 @@ def _text_get(url: str) -> str:
 def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Popen[str]:
     dashboard_binary = REPO_ROOT / "apps" / "dashboard" / "node_modules" / ".bin" / "next"
     if not dashboard_binary.is_file():
-        pytest.skip(
-            "Joined dashboard proof requires dashboard JavaScript dependencies; "
-            "run the focused source-intake proof after `pnpm install`."
+        raise AssertionError(
+            "Joined dashboard proof requires apps/dashboard/node_modules/.bin/next; "
+            "install dashboard JavaScript dependencies before running this required proof."
         )
     env = os.environ.copy()
     env.update(
@@ -109,13 +113,10 @@ def _table_count(db_path: Path, table_name: str) -> int:
         return int(connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
 
 
-def _run_node(
-    args: list[str], *, input_text: str | None = None, expected_returncode: int = 0
-) -> dict[str, object]:
+def _run_node(args: list[str], *, expected_returncode: int = 0) -> dict[str, object]:
     result = subprocess.run(
         ["node", *args],
         cwd=REPO_ROOT,
-        input=input_text,
         text=True,
         capture_output=True,
         check=False,
@@ -123,6 +124,81 @@ def _run_node(
     )
     assert result.returncode == expected_returncode, result.stderr or result.stdout
     return json.loads(result.stdout)
+
+
+def _write_default_bmad_hierarchy() -> dict[Path, bytes | None]:
+    bundle = DEFAULT_PLANNING_DIR / "prds" / f"prd-Kendall_Nxt-{DEFAULT_SOURCE_KEY}"
+    paths = (
+        DEFAULT_ARTIFACT_DIR / "sprint-status.yaml",
+        DEFAULT_ARTIFACT_DIR / f"{DEFAULT_STORY_KEY}.md",
+        bundle / "prd.md",
+        DEFAULT_PLANNING_DIR / f"architecture-{DEFAULT_SOURCE_KEY}.md",
+        DEFAULT_PLANNING_DIR / f"epics-{DEFAULT_SOURCE_KEY}.md",
+        DEFAULT_PLANNING_DIR / f"implementation-readiness-report-{DEFAULT_SOURCE_KEY}.md",
+    )
+    originals = {path: path.read_bytes() if path.exists() else None for path in paths}
+    DEFAULT_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    bundle.mkdir(parents=True, exist_ok=True)
+    (DEFAULT_ARTIFACT_DIR / "sprint-status.yaml").write_text(
+        f"source_key: {DEFAULT_SOURCE_KEY}\ndevelopment_status:\n  {DEFAULT_STORY_KEY}: ready-for-dev\n",
+        encoding="utf8",
+    )
+    (DEFAULT_ARTIFACT_DIR / f"{DEFAULT_STORY_KEY}.md").write_text(
+        f"# Story 91.1: Gate 4 real dashboard process proof\n\nStatus: ready-for-dev\n",
+        encoding="utf8",
+    )
+    (bundle / "prd.md").write_text("---\nstatus: final\nauthoritative: true\n---\n", encoding="utf8")
+    prd_ref = f"_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-{DEFAULT_SOURCE_KEY}/prd.md"
+    architecture_ref = f"_bmad-output/planning-artifacts/architecture-{DEFAULT_SOURCE_KEY}.md"
+    epics_ref = f"_bmad-output/planning-artifacts/epics-{DEFAULT_SOURCE_KEY}.md"
+    (DEFAULT_PLANNING_DIR / f"architecture-{DEFAULT_SOURCE_KEY}.md").write_text(
+        f"---\nworkflowType: architecture\nstatus: complete\nauthoritative_prd: {prd_ref}\n---\n", encoding="utf8"
+    )
+    (DEFAULT_PLANNING_DIR / f"epics-{DEFAULT_SOURCE_KEY}.md").write_text(
+        f"---\nworkflowType: epics-and-stories\nstatus: complete\nauthoritative_prd: {prd_ref}\nauthoritative_architecture: {architecture_ref}\n---\n", encoding="utf8"
+    )
+    (DEFAULT_PLANNING_DIR / f"implementation-readiness-report-{DEFAULT_SOURCE_KEY}.md").write_text(
+        f"---\nworkflowType: implementation-readiness\nstatus: complete\nauthoritative_prd: {prd_ref}\nauthoritative_architecture: {architecture_ref}\nauthoritative_epics: {epics_ref}\n---\n",
+        encoding="utf8",
+    )
+    return originals
+
+
+def _remove_default_bmad_hierarchy(originals: dict[Path, bytes | None]) -> None:
+    for path, original in originals.items():
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(original)
+    bundle = DEFAULT_PLANNING_DIR / "prds" / f"prd-Kendall_Nxt-{DEFAULT_SOURCE_KEY}"
+    if bundle.exists():
+        for child in bundle.iterdir():
+            child.unlink()
+        bundle.rmdir()
+
+
+def _default_manager_intake_command(supervisor_url: str, script_path: Path) -> list[str]:
+    script_path.write_text(
+        """
+import { buildRefillPlan } from '__CORE_MODULE__';
+const plan = buildRefillPlan(
+  { runId: 'gate-4-real-dashboard-process-proof', desiredWorkers: 1, supervisorUrl: process.argv[2] },
+  { assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 }, laneAssignmentStatusCounts: { claimed: 0 }, workspaceAssignmentStatusCounts: { active: 0 } } }, dispatchPreview: { counts: { dispatchable: 0, active: 0, blocked: 0 }, dispatch: { allowed: false } } },
+);
+const action = plan.nextActions.find((candidate) => candidate.code === 'manager-source-intake-ready');
+if (!action) throw new Error(JSON.stringify(plan));
+console.log(action.applyCommand);
+""".replace("__CORE_MODULE__", (REPO_ROOT / "scripts" / "lib" / "manager-control-plane" / "core.mjs").as_uri()).strip(),
+        encoding="utf8",
+    )
+    result = subprocess.run(
+        ["node", str(script_path), supervisor_url], cwd=REPO_ROOT, text=True, capture_output=True, check=False, timeout=20
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    command = shlex.split(result.stdout.strip())
+    assert command[:2] == ["node", "./scripts/manager-source-intake-cycle.mjs"]
+    return command[1:]
 
 
 def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_projection(
@@ -151,6 +227,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
     raw_bmad_marker = "RAW_BMAD_STORY_BODY_MUST_NOT_BE_RETAINED_7f9c"
     dashboard_process = None
     dashboard_log = (tmp_path / "dashboard.log").open("w+", encoding="utf8")
+    original_bmad_hierarchy = _write_default_bmad_hierarchy()
 
     thread.start()
     deadline = time.monotonic() + 10
@@ -159,84 +236,17 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
     assert server.started, "loopback supervisor failed to start"
 
     try:
-        manager_packet = _run_node(
-            [
-                "./scripts/manager-source-packet-seed.mjs",
-                "--summary-json",
-                "--run-id",
-                "gate-4-manager-source-intake-proof",
-                "--candidate-id",
-                "gate-4-source-backed-candidate",
-                "--title",
-                "Gate 4 source-backed manager candidate",
-                "--source-ref",
-                "doc:docs/workflows/current-session-runbook.md",
-                "--acceptance-criterion",
-                "Supervisor owns the persisted WorkPacket lifecycle truth.",
-                "--verification-target",
-                "pnpm run test:manager-source-intake",
-                "--touched-surface",
-                "scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs",
-                "--risk-class",
-                "low",
-                "--authority-class",
-                "allowed_unattended",
-            ]
+        cycle_args = _default_manager_intake_command(
+            f"http://127.0.0.1:{port}", tmp_path / "default-manager-intake.mjs"
         )
-        assert manager_packet["summary"]["packetState"] == "eligible"  # type: ignore[index]
-        assert manager_packet["summary"]["mutationMode"] == "none; read-only source-backed packet seed"  # type: ignore[index]
-        unsafe_packet = copy.deepcopy(manager_packet)
-        unsafe_packet["rawBmadPayload"] = raw_bmad_marker
-        rejected = _run_node(
-            [
-                "./scripts/manager-supervisor-source-intake.mjs",
-                "--input",
-                "-",
-                "--supervisor-url",
-                f"http://127.0.0.1:{port}",
-            ],
-            input_text=json.dumps(unsafe_packet),
-            expected_returncode=1,
-        )
-        assert rejected["status"] == "blocked"
-        assert rejected["blockers"][-1]["code"] == "manager_supervisor_source_intake_input_invalid"  # type: ignore[index]
-        assert _table_count(db_path, "authoritative_work_packets") == 0
-
-        cycle_args = [
-            "./scripts/manager-source-intake-cycle.mjs",
-            "--summary-json",
-            "--run-id",
-            "gate-4-manager-source-intake-proof",
-            "--candidate-id",
-            "gate-4-source-backed-candidate",
-            "--title",
-            "Gate 4 source-backed manager candidate",
-            "--source-ref",
-            "doc:docs/workflows/current-session-runbook.md",
-            "--acceptance-criterion",
-            "Supervisor owns the persisted WorkPacket lifecycle truth.",
-            "--verification-target",
-            "pnpm run test:manager-source-intake",
-            "--touched-surface",
-            "scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs",
-            "--risk-class",
-            "low",
-            "--authority-class",
-            "allowed_unattended",
-            "--supervisor-url",
-            f"http://127.0.0.1:{port}",
-        ]
-        dry_run = _run_node([*cycle_args, "--dry-run"])
+        assert "--source-story-key" in cycle_args
+        assert "--source-bundle-ref" in cycle_args
+        dry_run = _run_node([*cycle_args[:-1], "--dry-run"])
         assert dry_run["summary"]["sourceIntakePlan"]["fetchPerformed"] is False  # type: ignore[index]
         assert dry_run["summary"]["continuousSelection"]["status"] == "ready"  # type: ignore[index]
         assert _table_count(db_path, "authoritative_work_packets") == 0
 
-        integrated = _run_node(
-            [
-                *cycle_args,
-                "--apply",
-            ],
-        )
+        integrated = _run_node(cycle_args)
         assert integrated["summary"]["sourceIntakePlan"]["fetchPerformed"] is True  # type: ignore[index]
         assert integrated["summary"]["continuousSelection"] == dry_run["summary"]["continuousSelection"]  # type: ignore[index]
         intake = integrated["summary"]["seedPacket"]["supervisorIntake"]  # type: ignore[index]
@@ -254,10 +264,10 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert lifecycle["truthLabel"] == "source_owned"  # type: ignore[index]
         assert lifecycle["metadataOnly"] is True  # type: ignore[index]
         assert lifecycle["sourceRef"] == {  # type: ignore[index]
-            "refId": "doc:docs/workflows/current-session-runbook.md",
-            "sourceType": "repo_doc",
-            "pathOrUrl": "docs/workflows/current-session-runbook.md",
-            "title": None,
+            "refId": f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md",
+            "sourceType": "bmad_story",
+            "pathOrUrl": f"_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md",
+            "title": "gate 4 real dashboard process proof",
         }
         assert len(lifecycle["history"]) == 1  # type: ignore[arg-type,index]
         assert lifecycle["history"][0]["eventType"] == "packet.created"  # type: ignore[index]
@@ -293,10 +303,10 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert detail_work_packet["lifecycleState"]["metadataOnly"] is True  # type: ignore[index]
         assert detail_work_packet["sourceRefs"] == [  # type: ignore[index]
             {
-                "refId": "doc:docs/workflows/current-session-runbook.md",
-                "sourceType": "manual",
-                "label": "doc:docs/workflows/current-session-runbook.md",
-                "pathOrUrl": "docs/workflows/current-session-runbook.md",
+                "refId": f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md",
+                "sourceType": "bmad_artifact",
+                "label": "gate 4 real dashboard process proof",
+                "pathOrUrl": f"_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md",
                 "freshness": "unknown",
                 "accessState": "allowed",
                 "canonical": True,
@@ -304,6 +314,8 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
                 "blockedReason": None,
             }
         ]
+        authoritative_evidence_refs = [entry["refId"] for entry in detail_work_packet["evidenceRefs"]]  # type: ignore[index]
+        assert authoritative_evidence_refs
 
         dashboard_port = _free_loopback_port()
         dashboard_process = _start_dashboard(
@@ -313,16 +325,22 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         )
         dashboard_base_url = f"http://127.0.0.1:{dashboard_port}"
         pipeline_html = _text_get(f"{dashboard_base_url}/pipeline")
-        assert "Gate 4 source-backed manager candidate" in pipeline_html
+        assert "gate 4 real dashboard process proof" in pipeline_html
         assert "Supervisor packets" in pipeline_html
         assert quote(packet_id, safe="") in pipeline_html
 
         detail_html = _text_get(
             f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
         )
-        assert "Gate 4 source-backed manager candidate" in detail_html
-        assert "Eligible manager source candidate" in detail_html
+        assert "gate 4 real dashboard process proof" in detail_html
+        assert "capture" in pipeline_html and "waiting" in pipeline_html
+        assert "capture" in detail_html and "waiting" in detail_html
+        assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in detail_html
+        assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in pipeline_html
         assert packet_id in detail_html
+        for evidence_ref in authoritative_evidence_refs:
+            assert evidence_ref in pipeline_html
+            assert evidence_ref in detail_html
         assert "supervisor WorkPacketV0 projection" in detail_html
         assert "Fixture/non-live packet" not in detail_html
 
@@ -342,6 +360,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
     finally:
         _stop_process(dashboard_process)
         dashboard_log.close()
+        _remove_default_bmad_hierarchy(original_bmad_hierarchy)
         server.should_exit = True
         thread.join(timeout=10)
         assert not thread.is_alive(), "loopback supervisor failed to stop"

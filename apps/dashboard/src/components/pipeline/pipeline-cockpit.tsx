@@ -2150,6 +2150,9 @@ function PacketMiniCard({
         <span className="pipeline-mini-packet-meta">
           {packetCardNextLabel(packet)}
         </span>
+        <span className="pipeline-mini-packet-meta">
+          authoritative {packet.packetId}; source {packet.sourceRefs.map((ref) => ref.refId).join(", ") || "none"}; evidence {packet.evidenceRefs.map((ref) => ref.refId).join(", ") || "none"}
+        </span>
         {packet.activeBoardCard?.attention ? (
           <span className="pipeline-mini-packet-meta pipeline-mini-packet-action-needed-text">
             {packetCardAttentionReasonLabel(packet)}; {packetCardOperatorActionLabel(packet)}
