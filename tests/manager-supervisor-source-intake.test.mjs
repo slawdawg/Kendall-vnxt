@@ -102,6 +102,17 @@ test("manager source intake allowlists eligible source metadata and validates ex
 
 test("manager source intake derives deterministic bounded identities and maps a contract-valid BMAD story fixture", () => {
   const storyRef = "story:_bmad-output/implementation-artifacts/4-1-gate-4-manager-intake.md";
+  const sourceProvenance = {
+    mode: "default_local_bmad",
+    storyRef,
+    storyKey: "4-1-gate-4-manager-intake",
+    storyStatus: "ready-for-dev",
+    sprintStatusRef: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+    sourceKey: "2026-07-04-operational-pipeline-action-loop",
+    bundleRef: "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
   const docRef = "doc:docs/workflows/current-session-runbook.md";
   const replaceSourceRef = (value) => {
     if (Array.isArray(value)) return value.map(replaceSourceRef);
@@ -114,6 +125,8 @@ test("manager source intake derives deterministic bounded identities and maps a 
     discovery.artifacts[0].ownershipBoundary = "bmad_local_planning_state";
     discovery.artifacts[0].repoDeliverableAllowed = false;
   }
+  packet.summary.seedPacket.sourceProvenance = sourceProvenance;
+  packet.summary.sourceWorkEligibility.candidateWorkPackets[0].sourceProvenance = sourceProvenance;
   const request = buildManagerSourceIntakeRequest(packet);
 
   assert.equal(request.packetId, deriveAuthoritativePacketId("candidate-gate-4-manager-intake"));
@@ -121,6 +134,10 @@ test("manager source intake derives deterministic bounded identities and maps a 
   assert.equal(request.sourceRef.sourceType, "bmad_story");
   assert.equal(request.sourceRef.pathOrUrl, "_bmad-output/implementation-artifacts/4-1-gate-4-manager-intake.md");
   assert.equal(request.sourceRef.refId, storyRef);
+  assert.equal(request.sourceRef.title, "Gate 4 manager source intake");
+  assert.ok(request.evidenceRefs.includes("manager-bmad-story:4-1-gate-4-manager-intake"));
+  assert.ok(request.evidenceRefs.includes(`manager-bmad-bundle:${sourceProvenance.bundleRef}`));
+  assert.ok(request.evidenceRefs.includes("manager-bmad-sprint-status:_bmad-output/implementation-artifacts/sprint-status.yaml"));
   assert.equal(JSON.stringify(request).includes("BMAD story metadata reaches"), false);
   assert.equal(JSON.stringify(request).includes("node --test"), false);
 });
@@ -144,6 +161,20 @@ test("manager source intake is loopback-only and rejects ineligible ambiguous or
         ...packet.summary.sourceWorkEligibility.candidateWorkPackets[0],
         title: "Different candidate",
       };
+    }],
+    ["BMAD source provenance drift", (packet) => {
+      packet.summary.seedPacket.sourceProvenance = {
+        mode: "default_local_bmad",
+        storyRef: packet.summary.seedPacket.sourceRefs[0],
+        storyKey: "4-1-wrong-story",
+        storyStatus: "ready-for-dev",
+        sprintStatusRef: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        sourceKey: "wrong-source",
+        bundleRef: "doc:docs/workflows/current-session-runbook.md",
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      };
+      packet.summary.sourceWorkEligibility.candidateWorkPackets[0].sourceProvenance = packet.summary.seedPacket.sourceProvenance;
     }],
   ];
   for (const [name, mutate] of cases) {

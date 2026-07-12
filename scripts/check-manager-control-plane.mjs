@@ -163,7 +163,7 @@ for (const [name, command] of [
   ["test:manager-control-plane:contracts", "node ./scripts/run-manager-control-plane-fast-tests.mjs contracts"],
   ["test:manager-control-plane:focused", "node ./scripts/run-manager-control-plane-fast-tests.mjs focused"],
   ["test:manager-control-plane:verification", "node --test tests/manager-control-plane-verification.test.mjs"],
-  ["test:manager-source-intake", "node --test tests/manager-continuous-source-intake.test.mjs tests/manager-source-intake-cycle.test.mjs tests/manager-supervisor-source-intake.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_manager_source_intake_adapter.py -q"],
+  ["test:manager-source-intake", "node --test tests/manager-continuous-source-intake.test.mjs tests/manager-default-bmad-source-resolution.test.mjs tests/manager-source-intake-cycle.test.mjs tests/manager-supervisor-source-intake.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_manager_source_intake_adapter.py -q"],
   ["test:manager-control-plane:full", "node ./scripts/run-manager-control-plane-shards.mjs all --jobs 1"],
   ["test:manager-control-plane:shard:refill-source", "node ./scripts/run-manager-control-plane-shards.mjs refill-source"],
   ["test:manager-control-plane:shard:worker-review", "node ./scripts/run-manager-control-plane-shards.mjs worker-review"],

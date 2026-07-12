@@ -270,6 +270,11 @@ export function parseCommonArgs(argv = []) {
     authorityBasis: "",
     recoveryPath: "",
     sourceRefs: [],
+    sourceBundleRef: "",
+    sourceStoryKey: "",
+    sourceStoryStatus: "",
+    sourceSprintStatusRef: "",
+    sourceKey: "",
     evidenceRefs: [],
     candidateId: "",
     title: "",
@@ -385,6 +390,36 @@ export function parseCommonArgs(argv = []) {
       options.sourceRefs.push(...requiredValue(argv, ++index, arg).split(",").map((ref) => ref.trim()).filter(Boolean));
     } else if (arg.startsWith("--source-refs=")) {
       options.sourceRefs.push(...arg.slice("--source-refs=".length).split(",").map((ref) => ref.trim()).filter(Boolean));
+    } else if (arg === "--source-bundle-ref") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-bundle-ref");
+      options.sourceBundleRef = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--source-bundle-ref=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-bundle-ref");
+      options.sourceBundleRef = arg.slice("--source-bundle-ref=".length);
+    } else if (arg === "--source-story-key") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-story-key");
+      options.sourceStoryKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--source-story-key=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-story-key");
+      options.sourceStoryKey = arg.slice("--source-story-key=".length);
+    } else if (arg === "--source-story-status") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-story-status");
+      options.sourceStoryStatus = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--source-story-status=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-story-status");
+      options.sourceStoryStatus = arg.slice("--source-story-status=".length);
+    } else if (arg === "--source-sprint-status-ref") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-sprint-status-ref");
+      options.sourceSprintStatusRef = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--source-sprint-status-ref=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-sprint-status-ref");
+      options.sourceSprintStatusRef = arg.slice("--source-sprint-status-ref=".length);
+    } else if (arg === "--source-key") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-key");
+      options.sourceKey = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--source-key=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--source-key");
+      options.sourceKey = arg.slice("--source-key=".length);
     } else if (arg === "--candidate-id") {
       options.candidateId = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--candidate-id=")) {
@@ -11864,6 +11899,12 @@ export function buildSourceWorkEligibilityPlan(options = {}, context = {}) {
       blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "ambiguous_source"));
       continue;
     }
+    if (packetCandidate.sourceProvenanceErrors.length > 0) {
+      blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "source_provenance_invalid", {
+        sourceProvenanceErrors: packetCandidate.sourceProvenanceErrors,
+      }));
+      continue;
+    }
     const missingRequired = sourceWorkMissingFields(packetCandidate);
     if (missingRequired.length > 0) {
       blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "missing_required_fields", { missingRequired }));
@@ -12032,6 +12073,7 @@ function normalizeSourceBackedPacketSeedForRefill(options = {}, context = {}, so
       authorityClass: seedPacket.authorityClass,
       evidenceRefs: seedPacket.evidenceRefs,
       sourceOwnedRewriteRef: seedPacket.sourceOwnedRewriteRef,
+      sourceProvenance: seedPacket.sourceProvenance,
       repoDeliverable: seedPacket.repoDeliverable,
     },
   });
@@ -12040,6 +12082,7 @@ function normalizeSourceBackedPacketSeedForRefill(options = {}, context = {}, so
 function sourceBackedSeedCandidate(options = {}, context = {}, sourceRefs = []) {
   const firstRefKey = refillSourceKey(sourceRefs.length > 0 ? sourceRefs : ["source-backed-seed"]);
   const candidate = context.seedCandidate || options.seedCandidate || {};
+  const sourceProvenance = sourceBackedSeedProvenance(options, candidate);
   return {
     candidateWorkPacketId: sanitizeLedgerField(options.candidateId || candidate.candidateWorkPacketId || candidate.candidateId || `source-backed-seed-${firstRefKey}`, `source-backed-seed-${firstRefKey}`, 120),
     title: sanitizeLedgerField(options.title || candidate.title || "Source-backed operational packet seed", "Source-backed operational packet seed", 180),
@@ -12056,7 +12099,29 @@ function sourceBackedSeedCandidate(options = {}, context = {}, sourceRefs = []) 
     authorityClass: sanitizeLedgerField(options.authorityClass || candidate.authorityClass || "allowed_unattended", "allowed_unattended", 80),
     evidenceRefs: normalizeCandidateStringList(candidate.evidenceRefs || sourceRefs),
     sourceOwnedRewriteRef: candidate.sourceOwnedRewriteRef || "",
-    repoDeliverable: candidate.repoDeliverable !== false,
+    sourceProvenance,
+    repoDeliverable: sourceProvenance?.mode === "default_local_bmad" ? false : candidate.repoDeliverable !== false,
+    rawPayloadRetained: false,
+  };
+}
+
+function sourceBackedSeedProvenance(options = {}, candidate = {}) {
+  if (isPlainObject(candidate.sourceProvenance || candidate.source_provenance)) {
+    return candidate.sourceProvenance || candidate.source_provenance;
+  }
+  const supplied = {
+    bundleRef: options.sourceBundleRef,
+    storyKey: options.sourceStoryKey,
+    storyStatus: options.sourceStoryStatus,
+    sprintStatusRef: options.sourceSprintStatusRef,
+    sourceKey: options.sourceKey,
+  };
+  if (!Object.values(supplied).some(Boolean)) return null;
+  return {
+    mode: "default_local_bmad",
+    storyRef: sourceRefList(options.sourceRefs)[0] || "",
+    ...supplied,
+    metadataOnly: true,
     rawPayloadRetained: false,
   };
 }
@@ -13548,11 +13613,23 @@ export function buildRefillPlan(options = {}, context = {}) {
     : [];
   const shouldBuildSourceBackedSeed = hasSourceBackedSeedInputs(options, context);
   const suppliedSourceBackedPacketSeed = normalizeSourceBackedPacketSeedForRefill(options, context, sourceArtifactDiscovery);
+  const defaultBmadSourceResolution = starvation && !hasExplicitSourceWorkCandidates && !shouldBuildSourceBackedSeed
+    ? resolveDefaultBmadSourceSeed(options, context)
+    : { attempted: false, status: "not_requested", summary: null, blockers: [], seedCandidate: null };
+  const defaultBmadSourceBackedPacketSeed = defaultBmadSourceResolution.status === "ready"
+    ? buildSourceBackedPacketSeedPlan(
+      { runId: resolveManagerRunId(options, context) },
+      {
+        seedCandidate: defaultBmadSourceResolution.seedCandidate,
+        existingCandidateWorkPackets: context.existingCandidateWorkPackets,
+      },
+    )
+    : null;
   const sourceBackedPacketSeed =
     suppliedSourceBackedPacketSeed ||
     (starvation && shouldBuildSourceBackedSeed && !hasExplicitSourceWorkCandidates && eligibleSourceWorkPackets.length === 0
       ? buildSourceBackedPacketSeedPlan(options, context)
-      : null);
+      : defaultBmadSourceBackedPacketSeed);
   const eligibleSeedPackets = !hasExplicitSourceWorkCandidates && sourceBackedPacketSeed?.summary?.packetState === "eligible" && sourceBackedPacketSeed.summary.seedPacket
     ? [sourceBackedPacketSeed.summary.seedPacket]
     : [];
@@ -13598,7 +13675,40 @@ export function buildRefillPlan(options = {}, context = {}) {
           eligibilityReason: blocker.reason || sourceBackedPacketSeed.summary?.seedPacket?.eligibilityReason || null,
         })),
       ]
-      : [];
+    : [];
+  if (defaultBmadSourceResolution.attempted && defaultBmadSourceResolution.status !== "ready") {
+    return packet({
+      ok: false,
+      status: "blocked",
+      summary: {
+        desiredWorkers,
+        dispatchableLanes: dispatchable,
+        activeLanes: active,
+        activeLaneEvidence,
+        safeWorkSupply,
+        refillNeeded,
+        closedLanes: closed,
+        source: sourceSlice?.label || null,
+        sourceSlice,
+        defaultBmadSourceResolution: defaultBmadSourceResolution.summary,
+        sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
+        sourceWorkEligibility: sourceWorkEligibility?.summary || null,
+        sourceBackedPacketSeed: null,
+        candidateLanes: [],
+        closedEvidence,
+        workCreationStep: null,
+        splitPlan: null,
+        mutationMode: "blocked; default BMAD source resolution failed closed",
+      },
+      blockers: defaultBmadSourceResolution.blockers,
+      warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings],
+      nextActions: defaultBmadSourceResolution.blockers.map((entry) => ({
+        code: entry.code,
+        summary: entry.message,
+        nextAction: entry.nextAction,
+      })),
+    });
+  }
   const remainingCandidateResolution = authoritativeRemainingCandidatesFromEligibility(sourceWorkEligibility, sourceBackedPacketSeed, context);
   const sourcePlanningAuthoritativeBundle = sourcePlanning?.authoritativeSourceBundle ||
     sourcePlanning?.authoritative_source_bundle ||
@@ -13862,6 +13972,11 @@ function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", so
     touchedSurfaceHint: seedPacket.touchedSurfaceHint,
     riskClass: seedPacket.riskClass,
     authorityClass: seedPacket.authorityClass,
+    sourceBundleRef: seedPacket.sourceProvenance?.bundleRef,
+    sourceStoryKey: seedPacket.sourceProvenance?.storyKey,
+    sourceStoryStatus: seedPacket.sourceProvenance?.storyStatus,
+    sourceSprintStatusRef: seedPacket.sourceProvenance?.sprintStatusRef,
+    sourceKey: seedPacket.sourceProvenance?.sourceKey,
   });
   if (exactSeedPlan.summary?.packetState !== "eligible") return null;
   let intakePlan;
@@ -13880,6 +13995,11 @@ function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", so
     ["--touched-surface", seedPacket.touchedSurfaceHint],
     ["--risk-class", seedPacket.riskClass],
     ["--authority-class", seedPacket.authorityClass],
+    ["--source-bundle-ref", seedPacket.sourceProvenance?.bundleRef],
+    ["--source-story-key", seedPacket.sourceProvenance?.storyKey],
+    ["--source-story-status", seedPacket.sourceProvenance?.storyStatus],
+    ["--source-sprint-status-ref", seedPacket.sourceProvenance?.sprintStatusRef],
+    ["--source-key", seedPacket.sourceProvenance?.sourceKey],
     ["--supervisor-url", supervisorUrl],
   ].filter(([, value]) => Boolean(value));
   const command = `node ./scripts/manager-source-intake-cycle.mjs --summary-json${args.map(([flag, value]) => ` ${flag} ${shellSingleQuote(value)}`).join("")}`;
@@ -15999,6 +16119,7 @@ function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = n
   const dependencyHints = normalizeCandidateStringList(candidate.dependencyHints || candidate.dependency_hints || candidate.dependencies);
   const touchedSurfaceHint = sanitizeLedgerField(candidate.touchedSurfaceHint || candidate.touched_surface_hint || candidate.touchedSurface || "", "", 180);
   const sourceOwnedRewrite = normalizeSourceOwnedRewriteRef(candidate.sourceOwnedRewriteRef || candidate.source_owned_rewrite_ref || "");
+  const provenanceValidation = normalizeDefaultBmadSourceProvenance(candidate.sourceProvenance || candidate.source_provenance, sourceRefs);
   const sourceOwnedRewriteRef = sourceOwnedRewrite.ref;
   const requiredSourceOwnedArtifact = sanitizeLedgerField(candidate.requiredSourceOwnedArtifact || candidate.required_source_owned_artifact || sourceOwnedRewriteRef || touchedSurfaceHint, "source-owned docs, scripts, tests, or policy artifact", 180);
   const canonicalDedupeKey = sourceWorkDedupeKey(sourceRefs, acceptanceCriteria, touchedSurfaceHint);
@@ -16020,6 +16141,8 @@ function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = n
     ownershipBoundaries: [...ownershipBoundaries].sort(),
     sourceOwnedRewriteRef,
     sourceOwnedRewriteBoundary: sourceOwnedRewrite.boundary,
+    sourceProvenance: provenanceValidation.provenance,
+    sourceProvenanceErrors: provenanceValidation.errors,
     requiredSourceOwnedArtifact,
     repoDeliverable: candidate.repoDeliverable !== false && candidate.repo_deliverable !== false,
     rawPayloadRetained: false,
@@ -16056,6 +16179,7 @@ function markCandidateWork(candidate = {}, decision = "blocked", reason = "block
     touchedSurfaceHint: candidate.touchedSurfaceHint,
     authorityClass: candidate.authorityClass || null,
     evidenceRefs: candidate.evidenceRefs,
+    ...(candidate.sourceProvenance ? { sourceProvenance: candidate.sourceProvenance } : {}),
     eligibilityDecision: decision,
     eligibilityReason: reason,
     ...extras,
@@ -16183,6 +16307,246 @@ function defaultSourceBackedSeedRefs(context = {}) {
   const activeStoryAndSprintRefs = defaultBacklogSourceRefs({ ...context, discoverDefaultBacklogSources: true });
   if (activeStoryAndSprintRefs.length > 0) return activeStoryAndSprintRefs;
   return defaultSourceRefs({ ...context, discoverDefaultSources: true }).slice(0, 1);
+}
+
+function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
+  const attempted = Boolean(options.supervisorUrl || context.supervisorUrl);
+  if (!attempted) return { attempted: false, status: "not_requested", summary: null, blockers: [], seedCandidate: null };
+  const sprintStatusRef = "_bmad-output/implementation-artifacts/sprint-status.yaml";
+  const sprintStatusPath = join(repoRoot, sprintStatusRef);
+  const blocked = (code, message, nextAction, details = {}) => ({
+    attempted: true,
+    status: "blocked",
+    summary: {
+      mode: "default_local_bmad",
+      sprintStatusRef,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      ...details,
+    },
+    blockers: [{ code, message, nextAction }],
+    seedCandidate: null,
+  });
+  if (!existsSync(sprintStatusPath)) {
+    return blocked(
+      "default-bmad-source-sprint-status-missing",
+      "Default BMAD source intake requires the canonical local sprint tracker.",
+      "Create or restore the source-bound BMAD sprint tracker before retrying default source intake.",
+    );
+  }
+  const sprintContent = readLocalBmadMetadata(sprintStatusPath);
+  if (sprintContent === null) {
+    return blocked(
+      "default-bmad-source-sprint-status-unreadable",
+      "Default BMAD source intake could not read the canonical local sprint tracker.",
+      "Restore readable local sprint metadata before retrying default source intake.",
+    );
+  }
+  const sourceKeys = [...sprintContent.matchAll(/^source_key:\s*([^#\r\n]+?)\s*$/gim)].map((match) => match[1].trim());
+  if (sourceKeys.length !== 1 || !sourceKeys[0]) {
+    return blocked(
+      sourceKeys.length > 1 ? "default-bmad-source-key-ambiguous" : "default-bmad-source-key-missing",
+      "Default BMAD source intake requires exactly one sprint source_key binding.",
+      "Repair the canonical sprint tracker source_key before retrying.",
+    );
+  }
+  const sourceKey = sanitizeLedgerField(sourceKeys[0], "", 160);
+  const storyRows = defaultBmadSprintStoryRows(sprintContent);
+  if (storyRows.length === 0) {
+    return blocked(
+      "default-bmad-source-story-missing",
+      "Default BMAD source intake could not find a story row in the canonical sprint tracker.",
+      "Create one source-bound BMAD story and record its sprint status before retrying.",
+      { sourceKey },
+    );
+  }
+  const duplicateStoryKey = storyRows.find((row, index) => storyRows.findIndex((candidate) => candidate.key === row.key) !== index)?.key;
+  if (duplicateStoryKey) {
+    return blocked(
+      "default-bmad-source-story-ambiguous",
+      "Default BMAD source intake found duplicate story identity rows in the sprint tracker.",
+      "Reconcile duplicate story rows before retrying.",
+      { sourceKey, storyKey: duplicateStoryKey },
+    );
+  }
+  const preferredStatuses = ["in-progress", "ready-for-dev", "review", "backlog"];
+  const selectedStory = preferredStatuses.map((status) => storyRows.find((row) => row.status === status)).find(Boolean) || null;
+  if (!selectedStory) {
+    return blocked(
+      "default-bmad-source-story-missing",
+      "Default BMAD source intake found no active or pending source story.",
+      "Create or restore one source-bound pending BMAD story before retrying.",
+      { sourceKey },
+    );
+  }
+  if (selectedStory.status !== "ready-for-dev") {
+    return blocked(
+      "default-bmad-source-story-not-ready",
+      `Default BMAD source intake selected ${selectedStory.key} at status ${selectedStory.status}, not ready-for-dev.`,
+      "Complete the required BMAD readiness transition or use an explicit candidate; do not intake an unready default story.",
+      { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status },
+    );
+  }
+  const storyRef = `story:_bmad-output/implementation-artifacts/${selectedStory.key}.md`;
+  const storyPath = join(repoRoot, storyRef.slice("story:".length));
+  if (!existsSync(storyPath)) {
+    return blocked(
+      "default-bmad-source-story-missing",
+      "The sprint-selected ready story artifact is missing.",
+      "Restore the exact story artifact or reconcile the sprint tracker before retrying.",
+      { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status },
+    );
+  }
+  const storyContent = readLocalBmadMetadata(storyPath);
+  if (storyContent === null) {
+    return blocked(
+      "default-bmad-source-story-unreadable",
+      "The sprint-selected ready story artifact could not be read.",
+      "Restore readable story metadata or reconcile the sprint tracker before retrying.",
+      { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status },
+    );
+  }
+  const artifactStatus = bmadStoryStatus(storyContent);
+  if (artifactStatus !== selectedStory.status) {
+    return blocked(
+      "default-bmad-source-story-status-mismatch",
+      "The sprint tracker and selected story artifact disagree on readiness.",
+      "Reconcile the story artifact and sprint tracker to the same ready-for-dev status before retrying.",
+      { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status, artifactStatus: artifactStatus || "missing" },
+    );
+  }
+  const bundleRefs = defaultBmadBundleRefs(sourceKey);
+  if (bundleRefs.length !== 1) {
+    return blocked(
+      bundleRefs.length > 1 ? "default-bmad-source-bundle-ambiguous" : "default-bmad-source-bundle-missing",
+      bundleRefs.length > 1
+        ? "Multiple local PRD bundles match the sprint source_key."
+        : "No local PRD bundle matches the sprint source_key.",
+      "Reconcile the sprint source_key to exactly one authoritative local PRD bundle before retrying.",
+      { sourceKey, storyKey: selectedStory.key, storyStatus: selectedStory.status, bundleRefs },
+    );
+  }
+  const bundleRef = bundleRefs[0];
+  const title = bmadStoryTitle(storyContent, selectedStory.key);
+  const sourceProvenance = {
+    mode: "default_local_bmad",
+    storyRef,
+    storyKey: selectedStory.key,
+    storyStatus: selectedStory.status,
+    sprintStatusRef,
+    sourceKey,
+    bundleRef,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  return {
+    attempted: true,
+    status: "ready",
+    summary: sourceProvenance,
+    blockers: [],
+    seedCandidate: {
+      candidateWorkPacketId: `bmad-story-${selectedStory.key}`,
+      title,
+      sourceRefs: [storyRef],
+      acceptanceCriteria: ["Resolved local BMAD story and source bundle remain ready and identity-matched."],
+      verificationTargets: ["node --test tests/manager-default-bmad-source-resolution.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+      evidenceRefs: [storyRef, bundleRef],
+      sourceProvenance,
+      repoDeliverable: false,
+      rawPayloadRetained: false,
+    },
+  };
+}
+
+function defaultBmadSprintStoryRows(content = "") {
+  const rows = [];
+  for (const line of String(content).split(/\r?\n/)) {
+    const match = line.match(/^\s+(\d+-\d+-[a-z0-9-]+):\s*([a-z-]+)\s*(?:#.*)?$/i);
+    if (match) rows.push({ key: match[1], status: match[2].toLowerCase() });
+  }
+  return rows;
+}
+
+function bmadStoryStatus(content = "") {
+  const inline = String(content).match(/^Status:\s*([a-z-]+)\s*$/im);
+  if (inline) return inline[1].toLowerCase();
+  const section = String(content).match(/^##\s+Status\s*$\s*^([a-z-]+)\s*$/im);
+  return section ? section[1].toLowerCase() : "";
+}
+
+function bmadStoryTitle(content = "", storyKey = "") {
+  const heading = String(content).match(/^#\s+Story(?:\s+[^:]+)?:\s*(.+?)\s*$/im);
+  return sanitizeLedgerField(heading?.[1] || storyKey.replace(/^\d+-\d+-/, "").replace(/-/g, " "), "Source-backed BMAD story", 180);
+}
+
+function defaultBmadBundleRefs(sourceKey = "") {
+  const prdRoot = join(repoRoot, "_bmad-output", "planning-artifacts", "prds");
+  if (!sourceKey || !existsSync(prdRoot)) return [];
+  try {
+    return readdirSync(prdRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => `_bmad-output/planning-artifacts/prds/${entry.name}/prd.md`)
+      .filter((relativePath) => existsSync(join(repoRoot, relativePath)) && sourcePlanningKey(relativePath) === sourceKey)
+      .sort()
+      .map((relativePath) => `prd:${relativePath}`);
+  } catch {
+    return [];
+  }
+}
+
+function readLocalBmadMetadata(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
+  if (value === undefined || value === null) return { provenance: null, errors: [] };
+  if (!isPlainObject(value)) return { provenance: null, errors: ["sourceProvenance must be an object"] };
+  const provenance = {
+    mode: sanitizeLedgerField(value.mode, "", 80),
+    storyRef: sanitizeLedgerField(value.storyRef || value.story_ref, "", 180),
+    storyKey: sanitizeLedgerField(value.storyKey || value.story_key, "", 120),
+    storyStatus: sanitizeLedgerField(value.storyStatus || value.story_status, "", 40),
+    sprintStatusRef: sanitizeLedgerField(value.sprintStatusRef || value.sprint_status_ref, "", 180),
+    sourceKey: sanitizeLedgerField(value.sourceKey || value.source_key, "", 160),
+    bundleRef: sanitizeLedgerField(value.bundleRef || value.bundle_ref, "", 180),
+    metadataOnly: value.metadataOnly === true,
+    rawPayloadRetained: false,
+  };
+  const errors = [];
+  if (provenance.mode !== "default_local_bmad") errors.push("mode must be default_local_bmad");
+  if (provenance.storyStatus !== "ready-for-dev") errors.push("story status must be ready-for-dev");
+  if (provenance.metadataOnly !== true || value.rawPayloadRetained !== false) errors.push("provenance must be metadata-only");
+  if (!/^\d+-\d+-[a-z0-9-]+$/i.test(provenance.storyKey)) errors.push("story key is invalid");
+  if (provenance.storyRef !== `story:_bmad-output/implementation-artifacts/${provenance.storyKey}.md`) errors.push("story ref does not match story key");
+  if (sourceRefs.length !== 1 || sourceRefs[0] !== provenance.storyRef) errors.push("story ref does not match the selected source");
+  if (provenance.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml") errors.push("sprint status ref is not canonical");
+  const sprintPath = join(repoRoot, provenance.sprintStatusRef);
+  const storyPath = join(repoRoot, provenance.storyRef.replace(/^story:/, ""));
+  if (!existsSync(sprintPath) || !existsSync(storyPath)) {
+    errors.push("local BMAD provenance artifact is missing");
+  } else {
+    const sprintContent = readLocalBmadMetadata(sprintPath);
+    const storyContent = readLocalBmadMetadata(storyPath);
+    if (sprintContent === null || storyContent === null) {
+      errors.push("local BMAD provenance artifact is unreadable");
+      return { provenance, errors: [...new Set(errors)].slice(0, 8) };
+    }
+    const sourceKeys = [...sprintContent.matchAll(/^source_key:\s*([^#\r\n]+?)\s*$/gim)].map((match) => match[1].trim());
+    const storyRows = defaultBmadSprintStoryRows(sprintContent).filter((row) => row.key === provenance.storyKey);
+    if (sourceKeys.length !== 1 || sourceKeys[0] !== provenance.sourceKey) errors.push("sprint source key does not match provenance");
+    if (storyRows.length !== 1 || storyRows[0].status !== provenance.storyStatus) errors.push("sprint story readiness does not match provenance");
+    if (bmadStoryStatus(storyContent) !== provenance.storyStatus) errors.push("story artifact readiness does not match provenance");
+  }
+  const bundleRefs = defaultBmadBundleRefs(provenance.sourceKey);
+  if (bundleRefs.length !== 1 || bundleRefs[0] !== provenance.bundleRef) errors.push("authoritative bundle does not match provenance");
+  return { provenance, errors: [...new Set(errors)].slice(0, 8) };
 }
 
 function defaultBacklogSourceRefs(context = {}) {
