@@ -125,11 +125,63 @@ timeout 180s uv run --directory services/supervisor python scripts/pipeline_oper
 exit 0; emitted status=passed, evidenceLevel=integrated_local, rawPayloadRetained=false, canonicalSourcePacketLifecycleVerified=true, canonicalPacketWorkItemStateAgreementVerified=true, serverCapabilityBoundaryVerified=true, sourceAuthorityDigestVerified=true, sourceIndexDigestBoundaryVerified=true, metadataDepthAndSizeBoundsVerified=true, metadataNodeLimit=1000, metadataNodeLimitVerified=true, metadataAggregateSizeBytesLimit=65536, metadataAggregateSizeLimitVerified=true, metadataRejectionPersistenceVerified=true, workItemScalarMetadataSafetyVerified=true, workItemScalarRejectionPersistenceVerified=true, prefixedCredentialSignatureRejectionVerified=true, authoritativePacketTitleSafetyVerified=true, authoritativePacketSourceTitleSafetyVerified=true, authoritativePacketRejectionPersistenceVerified=true, localProofVerificationAttestationEnforced=true, publicLocalProofForgeryRejected=true, trustedDeliveryReadinessBlockedForPublicForgery=true, disabledLocalProofProjectionVerified=true, untrackedSourceFixtureIsolationVerified=true, leaseActionIdempotencyVerified=true, completionFencingRejected=true, eventReconstructionReplayVerified=true, eventReconstructionRowsAbsentBeforeRebuildVerified=true, eventReconstructionDatabaseLinkageVerified=true, authoritativePacketLinkUniquenessVerified=true, acceptedRequeueReplayVerified=true, acceptedRejectReplayVerified=true, replayedWorkItemSnapshotVerified=true, heldWorkItemReplaySnapshotVerified=true, engineSessionReloadVerified=true
 ```
 
+## Phase 2 manager-supervisor terminal-event sync
+
+Status: merged as PR #518 at
+`06527e7291b1ca716add302c7f9ca09251bf31b0`; bounded manager terminal-event
+persistence is implemented behind explicit loopback sync. Full Gate 4 integrated
+MVP remains open.
+
+Manager refill planning remains deterministic and network-free. A normal
+`buildRefillPlan` or `scripts/manager-refill-plan.mjs` invocation may emit an
+`authoritative_backlog_exhausted` terminal disposition, but it retains
+`canonicalEventIntegration=missing_supervisor_contract` and does not contact the
+supervisor or claim canonical persistence. Persistence requires a separate,
+explicit operator invocation with a previously built JSON packet:
+
+```bash
+pnpm run manager:supervisor-terminal-event-sync -- \
+  --input /path/to/refill-packet.json \
+  --supervisor-url http://127.0.0.1:8000
+```
+
+That command accepts only an uncredentialed loopback supervisor URL
+(`localhost`, `127.0.0.1`, or `::1`) and POSTs allowlisted
+`authoritative_backlog_exhausted` metadata to
+`/manager-control-plane/terminal-events`. It does not forward the enclosing
+packet, raw payloads, provider output, commands, or work-creation/dispatch
+instructions. The input packet is not mutated. Only a 2xx response with the
+exact expected event identity and a bounded persistence timestamp produces a
+cloned packet marked `supervisor_canonical_event`; network, HTTP, response, or
+identity failures retain or restore the missing-contract blocker and fail
+closed. Deterministic event identity makes replay idempotent at the supervisor
+contract boundary.
+
+The merged evidence covers the explicit command/contract boundary: exact
+metadata projection, success-only transformation, deterministic replay identity,
+loopback enforcement before fetch, fail-closed unavailable/malformed/conflicting
+supervisor responses, refill dry-run network isolation, and manager summary
+distinction between missing and integrated terminal events. It does not prove
+that the normal BMAD/source intake automatically reaches manager refill,
+invokes this side effect, and persists the resulting event through the
+supervisor on the real runtime path. That end-to-end
+intake-to-manager-to-supervisor integration and
+broader integrated MVP acceptance are still required before full Gate 4 can
+close.
+
+Post-merge focused verification for this closeout:
+
+```text
+pnpm run test:manager-control-plane:focused
+19 passed, 0 failed
+```
+
 This closeout does not claim live, bounded-live, production-observed, external
 provider/worker/process/shell/network/credential/GitHub/tmux/source-mutation
-authority, or full Gate 4 coverage. Remaining limitations are manager/BMAD
-intake-to-supervisor integration and broader integrated MVP acceptance; full
-Gate 4 remains unproven. Queue leases, attempts, evidence, and workflow/
+authority, or full Gate 4 coverage. Remaining limitations are the normal
+BMAD/source intake-to-manager-to-supervisor runtime integration and broader
+integrated MVP acceptance; full Gate 4 remains unproven. Queue leases, attempts,
+evidence, and workflow/
 lifecycle events remain durable metadata-only lineage; replay rebuilds the
 packet and linked WorkItem materialized projections from preserved events.
 
