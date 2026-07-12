@@ -17,7 +17,7 @@ export class ManagerSupervisorTerminalEventSyncError extends Error {
 
 export function deriveManagerTerminalEventId(idempotencyKey) {
   const key = requiredString(idempotencyKey, "terminalDisposition.idempotencyKey", 180);
-  return `manager-terminal-event-${createHash("sha256").update(key).digest("hex").slice(0, 40)}`;
+  return `manager-terminal-event:${createHash("sha256").update(key).digest("hex").slice(0, 40)}`;
 }
 
 export function resolveLoopbackSupervisorEndpoint(supervisorUrl) {
