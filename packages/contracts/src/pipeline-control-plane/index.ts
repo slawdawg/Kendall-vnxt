@@ -608,6 +608,7 @@ export const PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION = "pipeline-live-capacit
 export const PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION = "pipeline-resilience-recovery-validation/v0" as const;
 export const PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0" as const;
 export const PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION = "pipeline-production-readiness-decision/v0" as const;
+export const PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION = "pipeline-observed-evidence-attestation/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -704,6 +705,8 @@ export const PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS = ["live", "simulated
 export type PipelineOperationalReadinessBackendTruthV0 = (typeof PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS)[number];
 export const PIPELINE_OPERATIONAL_READINESS_OUTCOMES = ["go", "no_go"] as const;
 export type PipelineOperationalReadinessOutcomeV0 = (typeof PIPELINE_OPERATIONAL_READINESS_OUTCOMES)[number];
+export const PIPELINE_OPERATIONAL_EVIDENCE_CLASSES = ["fixture", "integrated_local", "live_observed"] as const;
+export type PipelineOperationalEvidenceClassV0 = (typeof PIPELINE_OPERATIONAL_EVIDENCE_CLASSES)[number];
 export const PIPELINE_OPERATIONAL_READINESS_REASONS = [
   "threshold_missing",
   "threshold_malformed",
@@ -725,6 +728,10 @@ export const PIPELINE_OPERATIONAL_READINESS_REASONS = [
   "preflight_blocked",
   "dispatcher_lease_unproven",
   "receipt_unproven",
+  "fixture_evidence",
+  "evidence_provenance_missing",
+  "evidence_attestation_invalid",
+  "evidence_receipt_stale",
   "predecessor_gate_not_passed",
   "safety_violation",
   "authority_violation",
@@ -815,6 +822,31 @@ export interface PipelineOperationalReadinessRecoveryV0 {
   expiryAt: string;
 }
 
+export interface PipelineObservedEvidenceAttestationV0 {
+  schemaVersion: typeof PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION;
+  attestationId: string;
+  evidenceClass: "live_observed";
+  observer: {
+    observerType: "independent_runtime";
+    observerId: string;
+  };
+  subject: {
+    packetSchemaVersion: string;
+    targetRef: string;
+  };
+  receipt: {
+    receiptId: string;
+    observedAt: string;
+    issuedAt: string;
+    expiresAt: string;
+    evidenceDigestSha256: `sha256:${string}`;
+    sourceRefs: PipelineOperationalActionEvidenceRefsV0;
+    evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  };
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
 export interface PipelineOperationalReadinessContractV0 {
   schemaVersion: typeof PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION;
   target: PipelineOperationalReadinessTargetV0;
@@ -868,6 +900,8 @@ export interface PipelineOneWorkerLiveCanaryMeasurementsV0 {
 
 export interface PipelineOneWorkerLiveCanaryEvidenceV0 {
   schemaVersion: typeof PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
   target: PipelineOperationalReadinessTargetV0;
   workerCount: 1;
   backendTruth: PipelineOperationalReadinessBackendTruthV0;
@@ -929,6 +963,8 @@ export interface PipelineLiveCapacityRampStageV0 {
 
 export interface PipelineLiveCapacityRampEvidenceV0 {
   schemaVersion: typeof PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
   canaryEvidenceRef: string | null;
   canaryOutcome: PipelineOneWorkerLiveCanaryOutcomeV0 | "unknown";
   defaultStageWorkerCounts: [1, 2, 4, 6];
@@ -983,6 +1019,8 @@ export interface PipelineResilienceRecoveryDrillV0 {
 
 export interface PipelineResilienceRecoveryEvidenceV0 {
   schemaVersion: typeof PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
   predecessorOutcome: PipelineLiveCapacityRampOutcomeV0 | PipelineOneWorkerLiveCanaryOutcomeV0 | "unknown";
   predecessorReady: boolean;
   drillKinds: string[];
@@ -1020,6 +1058,8 @@ export interface PipelineOperationalHardeningDomainV0 {
 
 export interface PipelineOperationalHardeningEvidenceV0 {
   schemaVersion: typeof PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
   predecessorOutcome: PipelineResilienceRecoveryOutcomeV0 | PipelineLiveCapacityRampOutcomeV0 | "unknown";
   predecessorReady: boolean;
   domains: PipelineOperationalHardeningDomainV0[];
@@ -1043,6 +1083,8 @@ export type PipelineProductionReadinessDecisionV0 = (typeof PIPELINE_PRODUCTION_
 
 export interface PipelineProductionReadinessDecisionEvidenceV0 {
   schemaVersion: typeof PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
   decision: PipelineProductionReadinessDecisionV0;
   rationale: string;
   scope: { name: string; boundaries: string[]; limited: boolean };
@@ -1792,6 +1834,56 @@ export function validatePipelineOperationalReadinessContractV0(contract: unknown
   return issues;
 }
 
+function validatePipelineObservedEvidenceProvenanceV0(
+  issues: PipelineOperationalActionValidationIssueV0[],
+  record: Record<string, unknown>,
+  packetSchemaVersion: string,
+  checkedAtMs: number,
+): void {
+  pushEnumIssue(issues, "evidenceClass", record.evidenceClass, PIPELINE_OPERATIONAL_EVIDENCE_CLASSES);
+  if (record.evidenceClass !== "live_observed") {
+    if (record.observedEvidenceAttestation != null) {
+      issues.push({ field: "observedEvidenceAttestation", code: "inconsistent_result", summary: "Fixture and integrated-local packets cannot carry promotion-grade observation attestations." });
+    }
+    return;
+  }
+  const value = record.observedEvidenceAttestation;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    issues.push({ field: "observedEvidenceAttestation", code: "evidence_required", summary: "Live-observed evidence requires an independent observation attestation." });
+    return;
+  }
+  const attestation = value as Record<string, unknown>;
+  const observer = attestation.observer as Record<string, unknown> | undefined;
+  const subject = attestation.subject as Record<string, unknown> | undefined;
+  const receipt = attestation.receipt as Record<string, unknown> | undefined;
+  if (attestation.schemaVersion !== PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION || attestation.evidenceClass !== "live_observed" ||
+      attestation.metadataOnly !== true || attestation.rawPayloadRetained !== false || typeof attestation.attestationId !== "string" ||
+      !isSafeOperationalIdentifierText(attestation.attestationId) || observer?.observerType !== "independent_runtime" ||
+      typeof observer?.observerId !== "string" || !isSafeOperationalIdentifierText(observer.observerId) ||
+      subject?.packetSchemaVersion !== packetSchemaVersion || typeof subject?.targetRef !== "string" || !isSafeOperationalIdentifierText(subject.targetRef) ||
+      typeof receipt?.receiptId !== "string" || !isSafeOperationalIdentifierText(receipt.receiptId) ||
+      typeof receipt?.evidenceDigestSha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(receipt.evidenceDigestSha256) ||
+      !isPipelineOperationalActionEvidenceRefsV0(receipt?.sourceRefs) || !isPipelineOperationalActionEvidenceRefsV0(receipt?.evidenceRefs)) {
+    issues.push({ field: "observedEvidenceAttestation", code: "inconsistent_result", summary: "The observation attestation must be metadata-only, independently issued, digest-bound, and bound to this packet schema." });
+    return;
+  }
+  const observedAtMs = typeof receipt.observedAt === "string" ? Date.parse(receipt.observedAt) : NaN;
+  const issuedAtMs = typeof receipt.issuedAt === "string" ? Date.parse(receipt.issuedAt) : NaN;
+  const expiresAtMs = typeof receipt.expiresAt === "string" ? Date.parse(receipt.expiresAt) : NaN;
+  if (!Number.isFinite(observedAtMs) || !Number.isFinite(issuedAtMs) || !Number.isFinite(expiresAtMs) || !Number.isFinite(checkedAtMs) ||
+      observedAtMs > issuedAtMs || issuedAtMs > checkedAtMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS ||
+      expiresAtMs < checkedAtMs || checkedAtMs - observedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS ||
+      expiresAtMs - issuedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
+    issues.push({ field: "observedEvidenceAttestation.receipt", code: "stale_or_unparseable_readiness", summary: "The independent observation receipt is stale, expired, future-dated, or malformed." });
+  }
+  const packetSourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : [];
+  const packetEvidenceRefs = Array.isArray(record.evidenceRefs) ? record.evidenceRefs : [];
+  if (!(receipt.sourceRefs as unknown[]).some((ref) => packetSourceRefs.includes(ref)) ||
+      !(receipt.evidenceRefs as unknown[]).some((ref) => packetEvidenceRefs.includes(ref))) {
+    issues.push({ field: "observedEvidenceAttestation.receipt", code: "inconsistent_result", summary: "The observation receipt must share source and evidence refs with the packet it attests." });
+  }
+}
+
 export function validatePipelineOneWorkerLiveCanaryEvidenceV0(evidence: unknown): PipelineOperationalActionValidationIssueV0[] {
   const issues: PipelineOperationalActionValidationIssueV0[] = [];
   const record = operationalActionRecord(evidence, issues);
@@ -1828,7 +1920,8 @@ export function validatePipelineOneWorkerLiveCanaryEvidenceV0(evidence: unknown)
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
     issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Canary evidence timestamps must be fresh and bounded." });
   }
-  if (record.outcome === "pass" && (record.backendTruth !== "live" || record.rampAllowed !== true || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) {
+  validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION, checkedAtMs);
+  if (record.outcome === "pass" && (record.backendTruth !== "live" || record.evidenceClass !== "live_observed" || record.rampAllowed !== true || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) {
     issues.push({ field: "outcome", code: "inconsistent_result", summary: "A passing canary requires live truth, ramp permission, and no blockers." });
   }
   const recovery = record.recovery as Record<string, unknown> | undefined;
@@ -1863,7 +1956,8 @@ export function validatePipelineLiveCapacityRampEvidenceV0(evidence: unknown): P
   const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
   const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Ramp evidence timestamps must be fresh and bounded." });
-  if (record.outcome === "pass" && (record.canaryOutcome !== "pass" || record.scaleEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "A passing ramp requires a passing canary, complete stage evidence, no blockers, and rollout disabled." });
+  validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION, checkedAtMs);
+  if (record.outcome === "pass" && (record.evidenceClass !== "live_observed" || record.canaryOutcome !== "pass" || record.scaleEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "A passing ramp requires a passing canary, independently observed stage evidence, no blockers, and rollout disabled." });
   const recovery = record.recovery as Record<string, unknown> | undefined;
   if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "A stopped ramp requires rollback metadata." });
   return issues;
@@ -1890,7 +1984,8 @@ export function validatePipelineResilienceRecoveryEvidenceV0(evidence: unknown):
   const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
   const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Recovery evidence timestamps must be fresh and bounded." });
-  if (record.outcome === "pass" && (record.reliabilityEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing recovery evidence requires complete drills, no blockers, and rollout disabled." });
+  validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION, checkedAtMs);
+  if (record.outcome === "pass" && (record.evidenceClass !== "live_observed" || record.reliabilityEvidenceReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing recovery evidence requires independently observed complete drills, no blockers, and rollout disabled." });
   const recovery = record.recovery as Record<string, unknown> | undefined;
   if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "A stopped recovery validation requires rollback metadata." });
   return issues;
@@ -1918,7 +2013,8 @@ export function validatePipelineOperationalHardeningEvidenceV0(evidence: unknown
   const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
   const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Hardening evidence timestamps must be fresh and bounded." });
-  if (record.outcome === "pass" && (record.readinessHandoffReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing hardening evidence requires complete domains, no blockers, and rollout disabled." });
+  validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION, checkedAtMs);
+  if (record.outcome === "pass" && (record.evidenceClass !== "live_observed" || record.readinessHandoffReady !== true || record.rolloutAllowed !== false || !Array.isArray(record.typedBlockers) || record.typedBlockers.length > 0)) issues.push({ field: "outcome", code: "inconsistent_result", summary: "Passing hardening evidence requires independently observed complete domains, no blockers, and rollout disabled." });
   const recovery = record.recovery as Record<string, unknown> | undefined;
   if (record.outcome === "stop" && recovery?.required !== true) issues.push({ field: "recovery", code: "policy_violation", summary: "Stopped hardening requires recovery metadata." });
   return issues;
@@ -1932,6 +2028,7 @@ export function validatePipelineProductionReadinessDecisionEvidenceV0(evidence: 
     "nextManagerAction", "predecessorOutcomes", "monitoring", "stopLines", "typedBlockers", "sourceRefs",
     "evidenceRefs", "checkedAt", "expiresAt", "rolloutAllowed", "automaticDeploymentAllowed", "providerCallsAllowed",
     "secretAccessAllowed", "mergeAllowed", "cleanupAllowed", "metadataOnly", "rawPayloadRetained", "decisionSignals",
+    "evidenceClass", "observedEvidenceAttestation",
   ]);
   pushUnknownFieldIssues(issues, record, allowed);
   if (record.schemaVersion !== PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION) issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Production readiness decision uses an unsupported schema version." });
@@ -1978,6 +2075,8 @@ export function validatePipelineProductionReadinessDecisionEvidenceV0(evidence: 
   const checkedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
   const expiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
   if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Production readiness decision timestamps must be fresh and bounded." });
+  validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION, checkedAtMs);
+  if (isOneOfString(record.decision, ["go", "limited_rollout"]) && record.evidenceClass !== "live_observed") issues.push({ field: "evidenceClass", code: "policy_violation", summary: "Go or limited rollout requires independently observed live provenance." });
   return issues;
 }
 
