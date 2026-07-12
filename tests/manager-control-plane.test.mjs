@@ -5548,6 +5548,239 @@ test("Gate 2 emits an idempotent authoritative exhaustion disposition and ignore
   assert.doesNotMatch(JSON.stringify(first), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*|successor/i);
 });
 
+function managerRefillPlanGate2Context(overrides = {}) {
+  const sourceRef = "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const sourceRevision = "prd-2026-07-04-final";
+  const authoritativeSourceBundle = {
+    sourceIdentity: sourceRef,
+    sourceRevision,
+    fullyReconciled: true,
+    noSeparatelyApprovedSource: true,
+    reconciliationCounts: {
+      totalItems: 201,
+      reconciledItems: 201,
+      eligible: 0,
+      queued: 0,
+      leased: 0,
+      running: 0,
+      reviewFix: 0,
+      requiredRetrospective: 0,
+      otherwiseRequired: 0,
+      completed: 201,
+      closed: 0,
+      approvalGated: 0,
+    },
+    evidenceRefs: ["evidence:prd-2026-07-04-exhausted"],
+    resumeRequirement: "Start a new source-bound manager run after a new source-owned outcome is accepted.",
+    nextManagerAction: "Stop refill and await a new source-bound manager run.",
+  };
+  return {
+    now: "2026-07-11T18:00:00.000Z",
+    activeSource: { sourceIdentity: sourceRef, sourceRevision, sourceRefs: [sourceRef] },
+    assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+    dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    sourcePlanningState: {
+      sourceKey: "2026-07-04-operational-pipeline-action-loop",
+      authoritativeSourceBundle,
+      sprintStatus: {
+        exists: true,
+        path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        backlogStories: 0,
+        readyStories: 0,
+        reviewReadyStories: 0,
+        activeStories: 0,
+        doneStories: 201,
+        nextBacklogStoryKey: null,
+      },
+    },
+    ...overrides,
+  };
+}
+
+test("manager-refill-plan blocks the real exhausted PRD path when no reconciled bundle is available", () => {
+  const sourceRef = "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const context = managerRefillPlanGate2Context();
+  delete context.sourcePlanningState.authoritativeSourceBundle;
+  const { result } = runManagerRefillPlan([
+    "--summary-json",
+    "--run-id",
+    "run-manager-refill-plan-no-bundle",
+    "--desired-workers",
+    "6",
+    "--source-ref",
+    sourceRef,
+  ], context);
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.blockers[0].code, "authoritative-backlog-exhaustion-evidence-required");
+  assert.equal(result.summary.sourcePlanning.sprintStatus.doneStories, 201);
+  assert.equal(result.summary.sourcePlanning.sprintStatus.backlogStories, 0);
+  assert.equal(result.summary.candidateLanes.length, 0);
+  assert.equal(result.summary.workCreationStep, null);
+  assert.equal(result.summary.materializationGate, null);
+  assert.equal(result.summary.noNewEpic, true);
+  assert.equal(result.summary.noPostSliceWork, true);
+  assert.doesNotMatch(JSON.stringify(result), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*|successor/i);
+});
+
+test("manager-refill-plan blocks malformed matching PRD backlog counts before correct-course", () => {
+  const sourceRef = "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const base = managerRefillPlanGate2Context();
+  const { result } = runManagerRefillPlan([
+    "--summary-json",
+    "--run-id",
+    "run-manager-refill-plan-malformed-backlog",
+    "--desired-workers",
+    "6",
+    "--source-ref",
+    sourceRef,
+  ], {
+    ...base,
+    sourcePlanningState: {
+      ...base.sourcePlanningState,
+      authoritativeSourceBundle: null,
+      sprintStatus: {
+        ...base.sourcePlanningState.sprintStatus,
+        backlogStories: -1,
+      },
+    },
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.blockers[0].code, "authoritative-backlog-exhaustion-evidence-required");
+  assert.equal(result.summary.workCreationStep, null);
+  assert.equal(result.summary.materializationGate, null);
+  assert.equal(result.summary.noNewEpic, true);
+  assert.doesNotMatch(JSON.stringify(result), /bmad-correct-course|Epic 26|epic-26|successor/i);
+});
+
+test("manager-refill-plan terminalizes the reconciled exhausted source-planning input", () => {
+  const sourceRef = "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const { result } = runManagerRefillPlan([
+    "--summary-json",
+    "--run-id",
+    "run-manager-refill-plan-gate2",
+    "--desired-workers",
+    "6",
+    "--source-ref",
+    sourceRef,
+  ], managerRefillPlanGate2Context());
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "authoritative_backlog_exhausted");
+  assert.equal(result.summary.sourcePlanning.sprintStatus.doneStories, 201);
+  assert.equal(result.summary.sourcePlanning.sprintStatus.backlogStories, 0);
+  assert.equal(result.summary.safeWorkSupply, 0);
+  assert.equal(result.summary.candidateLanes.length, 0);
+  assert.equal(result.summary.workCreationStep, null);
+  assert.equal(result.summary.materializationGate, null);
+  assert.equal(result.summary.bmadRequestPacket, null);
+  assert.equal(result.summary.noNewEpic, true);
+  assert.equal(result.summary.noPostSliceWork, true);
+  assert.equal(result.summary.terminalDisposition.reconciliationCounts.totalItems, 201);
+  assert.doesNotMatch(JSON.stringify(result), /Epic 26|epic-26|26-\d+-[a-z][a-z0-9-]*|successor/i);
+});
+
+test("manager-refill-plan keeps terminal classification fail-closed for live contradictions", () => {
+  const cases = [
+    {
+      name: "active work",
+      overrides: { dispatchPreview: { counts: { dispatchable: 0, active: 1 } } },
+      expected: "blocked",
+      blocker: "authoritative-reconciliation-work-remains",
+    },
+    {
+      name: "approval-gated work",
+      overrides: {
+        sourcePlanningState: {
+          ...managerRefillPlanGate2Context().sourcePlanningState,
+          authoritativeSourceBundle: {
+            ...managerRefillPlanGate2Context().sourcePlanningState.authoritativeSourceBundle,
+            reconciliationCounts: {
+              ...managerRefillPlanGate2Context().sourcePlanningState.authoritativeSourceBundle.reconciliationCounts,
+              totalItems: 202,
+              reconciledItems: 202,
+              approvalGated: 1,
+              completed: 201,
+            },
+            unresolvedApprovalGatedWork: [{
+              workId: "approval-gated-source-item",
+              title: "Needs exact approval",
+              reason: "operator approval is required",
+              sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md"],
+              evidenceRefs: ["evidence:approval-gated-source-item"],
+            }],
+          },
+        },
+      },
+      expected: "blocked",
+      blocker: "authoritative-reconciliation-approval-gated-work-remains",
+    },
+    {
+      name: "separately approved source",
+      overrides: {
+        sourcePlanningState: {
+          ...managerRefillPlanGate2Context().sourcePlanningState,
+          authoritativeSourceBundle: {
+            ...managerRefillPlanGate2Context().sourcePlanningState.authoritativeSourceBundle,
+            noSeparatelyApprovedSource: false,
+            separatelyApprovedSourceAvailable: true,
+          },
+        },
+      },
+      expected: "blocked",
+      blocker: "authoritative-source-attestation-missing",
+    },
+    {
+      name: "incomplete reconciliation",
+      overrides: {
+        sourcePlanningState: {
+          ...managerRefillPlanGate2Context().sourcePlanningState,
+          authoritativeSourceBundle: {
+            ...managerRefillPlanGate2Context().sourcePlanningState.authoritativeSourceBundle,
+            fullyReconciled: false,
+          },
+        },
+      },
+      expected: "blocked",
+      blocker: "authoritative-reconciliation-incomplete",
+    },
+    {
+      name: "contradictory arithmetic",
+      overrides: {
+        sourcePlanningState: {
+          ...managerRefillPlanGate2Context().sourcePlanningState,
+          authoritativeSourceBundle: {
+            ...managerRefillPlanGate2Context().sourcePlanningState.authoritativeSourceBundle,
+            reconciliationCounts: {
+              ...managerRefillPlanGate2Context().sourcePlanningState.authoritativeSourceBundle.reconciliationCounts,
+              reconciledItems: 200,
+            },
+          },
+        },
+      },
+      expected: "blocked",
+      blocker: "authoritative-reconciliation-arithmetic-invalid",
+    },
+  ];
+
+  for (const { name, overrides, expected, blocker } of cases) {
+    const { result } = runManagerRefillPlan([
+      "--summary-json",
+      "--run-id",
+      `run-manager-refill-plan-gate2-${name.replace(/\s+/g, "-")}`,
+      "--source-ref",
+      "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md",
+    ], managerRefillPlanGate2Context(overrides));
+    assert.equal(result.status, expected, name);
+    if (expected !== "authoritative_backlog_exhausted") {
+      assert.notEqual(result.status, "authoritative_backlog_exhausted", name);
+      assert.equal(result.summary.materializationGate ?? null, null, name);
+      assert.equal(result.blockers[0].code, blocker, name);
+    }
+  }
+});
+
 test("Gate 5 fail-closes source-owned exhausted sprint without inventing Epic 26", () => {
   const plan = buildRefillPlan(
     {
@@ -5627,7 +5860,7 @@ test("Gate 5 applies closed assignment evidence before routing a stale source ba
   ]);
 });
 
-test("Gate 2 stays open for incomplete source reconciliation with eligible work remaining", () => {
+test("Gate 2 blocks incomplete source reconciliation even when eligible work is reported", () => {
   const sourceRef = "doc:docs/architecture/adr-current-product-slice-and-authority.md";
   const plan = buildRefillPlan(
     { desiredWorkers: 1, sourceRefs: [sourceRef] },
@@ -5668,10 +5901,11 @@ test("Gate 2 stays open for incomplete source reconciliation with eligible work 
     },
   );
 
-  assert.notEqual(plan.status, "authoritative_backlog_exhausted");
-  assert.equal(plan.summary.refillJob.result, "queued_work");
-  assert.equal(plan.summary.refillJob.queuedCount, 1);
-  assert.equal(plan.summary.terminalDisposition, undefined);
+  assert.equal(plan.status, "blocked");
+  assert.equal(plan.blockers[0].code, "authoritative-reconciliation-incomplete");
+  assert.equal(plan.summary.terminalDisposition, null);
+  assert.equal(plan.summary.candidateLanes.length, 0);
+  assert.equal(plan.summary.materializationGate ?? null, null);
 });
 
 test("Gate 2 preserves approval-gated remaining work without converting it to backlog", () => {
@@ -5715,11 +5949,12 @@ test("Gate 2 preserves approval-gated remaining work without converting it to ba
     },
   );
 
-  assert.equal(plan.status, "authoritative_backlog_exhausted");
-  assert.equal(plan.summary.refillJob.queuedCount, 0);
-  assert.equal(plan.summary.terminalDisposition.unresolvedApprovalGatedWork[0].workId, "approval-gated-item");
-  assert.ok(plan.warnings.some((warning) => warning.code === "authoritative-backlog-approval-gated"));
-  assert.match(plan.summary.terminalDisposition.nextManagerAction, /Stop dispatch/);
+  assert.equal(plan.status, "blocked");
+  assert.equal(plan.blockers[0].code, "authoritative-reconciliation-approval-gated-work-remains");
+  assert.equal(plan.summary.refillJob, undefined);
+  assert.equal(plan.summary.terminalDisposition, null);
+  assert.equal(plan.summary.candidateLanes.length, 0);
+  assert.equal(plan.summary.materializationGate ?? null, null);
 });
 
 test("authoritative exhaustion helper fails closed when reconciliation metadata is incomplete or a new source is approved", () => {

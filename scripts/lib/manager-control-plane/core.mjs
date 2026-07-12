@@ -13589,8 +13589,20 @@ export function buildRefillPlan(options = {}, context = {}) {
       ]
       : [];
   const remainingCandidateResolution = authoritativeRemainingCandidatesFromEligibility(sourceWorkEligibility, sourceBackedPacketSeed, context);
+  const sourcePlanningAuthoritativeBundle = sourcePlanning?.authoritativeSourceBundle ||
+    sourcePlanning?.authoritative_source_bundle ||
+    sourcePlanning?.reconciliation?.authoritativeSourceBundle ||
+    sourcePlanning?.reconciliation?.authoritative_source_bundle ||
+    null;
+  const sourcePlanningActiveBinding = sourcePlanning?.activeSourceBinding ||
+    sourcePlanning?.active_source_binding ||
+    sourcePlanning?.activeSource ||
+    sourcePlanning?.active_source ||
+    null;
   const exhaustionEvaluation = evaluateAuthoritativeBacklogExhaustion({
     ...context,
+    authoritativeSourceBundle: context.authoritativeSourceBundle || context.authoritative_source_bundle || sourcePlanningAuthoritativeBundle,
+    activeSource: context.activeSource || context.active_source || context.activeSourceBinding || context.active_source_binding || sourcePlanningActiveBinding,
     runId: resolveManagerRunId(options, context),
     sourceRefs: sourceSlice ? [sourceSlice.ref] : explicitSourceRefs,
     remainingCandidates: remainingCandidateResolution.candidates,
@@ -13630,11 +13642,16 @@ export function buildRefillPlan(options = {}, context = {}) {
       sourceArtifactDiscovery,
       sourceWorkEligibility,
       sourceBackedPacketSeed,
+      sourcePlanning,
       closedEvidence,
       disposition: exhaustionEvaluation.disposition,
     });
   }
-  if (shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, context })) {
+  const sourceSelectionExplicit = sourceRefList(options.sourceRefs).length > 0 ||
+    sourceRefList(context.sourceRefs).length > 0 ||
+    sourceRefList(context.sourceEvidence).length > 0 ||
+    Boolean(context.sourceSlice?.ref);
+  if (shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, sourceSelectionExplicit, context })) {
     return buildSourceOwnedBacklogExhaustionAuditPacket({
       desiredWorkers,
       dispatchable,
@@ -13861,8 +13878,10 @@ function evaluateAuthoritativeBacklogExhaustion(input = {}) {
   const bundle = input.authoritativeSourceBundle || input.authoritative_source_bundle || input.sourceBundle || input.source_bundle;
   if (!isPlainObject(bundle)) return { disposition: null, blocker: null };
   if (input.candidateAggregationBlocker) return { disposition: null, blocker: input.candidateAggregationBlocker };
-  if (bundle.fullyReconciled !== true && bundle.fully_reconciled !== true) return { disposition: null, blocker: null };
   const blocker = (code, message, nextAction) => ({ code, message, nextAction });
+  if (bundle.fullyReconciled !== true && bundle.fully_reconciled !== true) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-incomplete", "Authoritative source reconciliation is incomplete; terminal exhaustion is not safe.", "Complete source reconciliation and preserve any remaining work in its existing gate before rerunning refill planning.") };
+  }
   const noSeparatelyApprovedSource = bundle.noSeparatelyApprovedSource === true || bundle.no_separately_approved_source === true || bundle.separatelyApprovedSourceAvailable === false || bundle.separately_approved_source_available === false;
   if (!noSeparatelyApprovedSource || bundle.separatelyApprovedSourceAvailable === true || bundle.separately_approved_source_available === true) {
     return { disposition: null, blocker: blocker("authoritative-source-attestation-missing", "Terminal exhaustion requires an explicit attestation that no separately approved authoritative source is available.", "Record noSeparatelyApprovedSource: true or resolve the separately approved source before continuing.") };
@@ -13919,6 +13938,9 @@ function evaluateAuthoritativeBacklogExhaustion(input = {}) {
   const unresolvedApprovalGatedWork = normalizeUnresolvedApprovalGatedWork(rawUnresolvedApprovalGatedWork);
   if (effectiveCounts.approvalGated !== unresolvedApprovalGatedWork.length) {
     return { disposition: null, blocker: blocker("authoritative-reconciliation-approval-gated-count-mismatch", "The approval-gated reconciliation count does not match unresolved approval-gated work metadata.", "Reconcile and surface every unresolved approval-gated item before terminal disposition.") };
+  }
+  if (effectiveCounts.approvalGated > 0) {
+    return { disposition: null, blocker: blocker("authoritative-reconciliation-approval-gated-work-remains", "Approval-gated work remains unresolved; it must stay in its approval gate and cannot be classified as terminal exhaustion.", "Resolve the exact approval gate or start a new source-bound run after approval; do not convert approval-gated work into backlog.") };
   }
   const statusTotal = AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + effectiveCounts[key], 0);
   if (effectiveCounts.totalItems !== effectiveCounts.reconciledItems || effectiveCounts.totalItems !== statusTotal) {
@@ -14159,6 +14181,7 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
   sourceArtifactDiscovery,
   sourceWorkEligibility,
   sourceBackedPacketSeed,
+  sourcePlanning,
   closedEvidence,
   disposition,
 } = {}) {
@@ -14206,6 +14229,7 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     closedLanes: closed,
     source: sourceSlice?.label || disposition.sourceIdentity,
     sourceSlice,
+    sourcePlanning,
     sourceArtifactDiscovery: sourceArtifactDiscovery?.summary || null,
     sourceWorkEligibility: sourceWorkEligibility?.summary || null,
     sourceBackedPacketSeed: sourceBackedPacketSeed?.summary || null,
@@ -14250,14 +14274,32 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
   });
 }
 
-function shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, context = {} } = {}) {
+function shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, sourceSelectionExplicit = false, context = {} } = {}) {
   const sourceRef = canonicalSourceWorkRef(sourceSlice?.ref || "");
+  const planningSourceKey = String(sourcePlanning?.sourceKey || "").trim().toLowerCase();
+  const activeSourcePlanningKey = sourceSlice?.type === "prd" ? sourcePlanningKey(sourceSlice.ref) : "";
+  const sourcePlanningMatchesSource = Boolean(planningSourceKey && activeSourcePlanningKey && planningSourceKey === activeSourcePlanningKey);
   const sourceOwnedTerminal = context.authoritativeBacklogExhaustion === true ||
-    sourceRef === "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md";
+    sourceRef === "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md" ||
+    (sourcePlanningMatchesSource && sourceSelectionExplicit);
   const sprintStatus = sourcePlanning?.sprintStatus || {};
+  const planningWorkCounts = [
+    "readyStories",
+    "reviewReadyStories",
+    "readyForDevStories",
+    "activeStories",
+  ].map((key) => nonNegativeInteger(sprintStatus[key]));
+  const planningBacklogCount = nonNegativeInteger(sprintStatus.backlogStories);
+  const planningBacklogAmbiguous = sourcePlanningMatchesSource && planningBacklogCount === null;
+  const planningCountsExhausted = planningWorkCounts.every((count) => count === 0);
+  const planningCountsAmbiguous = planningWorkCounts.some((count) => count === null);
+  const sourcePlanningUnavailable = sourcePlanningMatchesSource && sprintStatus.exists !== true;
+  const sourcePlanningExhaustedOrAmbiguous = sourcePlanningUnavailable || planningBacklogAmbiguous || planningCountsExhausted || (sourcePlanningMatchesSource && planningCountsAmbiguous);
+  const sourcePlanningGate = sourcePlanningMatchesSource ? sourcePlanningExhaustedOrAmbiguous : sourceOwnedTerminal;
   return sourceOwnedTerminal &&
-    sprintStatus.exists === true &&
-    (nonNegativeInteger(sprintStatus.backlogStories) ?? null) === 0 &&
+    (sourcePlanningMatchesSource || context.authoritativeBacklogExhaustion === true || sourceRef === "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md") &&
+    (sourcePlanningUnavailable || (sprintStatus.exists === true && (planningBacklogCount === 0 || planningBacklogAmbiguous))) &&
+    sourcePlanningGate &&
     dispatchable === 0 &&
     active === 0;
 }
