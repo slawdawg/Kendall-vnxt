@@ -3125,8 +3125,11 @@ class SupervisorService:
             packet_evidence = sorted(
                 {
                     evidence_ref
-                    for event in packet.history
-                    for evidence_ref in self._projection_safe_lifecycle_refs(event.evidenceRefs)
+                    for evidence_refs in [
+                        *[event.evidenceRefs for event in packet.history],
+                        packet.readyToTest.evidenceRefs if packet.readyToTest else [],
+                    ]
+                    for evidence_ref in self._projection_safe_lifecycle_refs(evidence_refs)
                 }
             )
             evidence_refs.extend(packet_evidence)
@@ -19447,10 +19450,12 @@ class SupervisorService:
         attested_path, nonce = self._local_proof_attestation
         return bool(nonce) and resolved_database_path == attested_path and attested_path.parent.is_relative_to(LOCAL_PROOF_ATTESTATION_ROOT.resolve())
 
-    def _assert_local_proof_source(self, packet: AuthoritativeWorkPacket) -> str:
+    async def _assert_local_proof_source(self, session: AsyncSession, packet: AuthoritativeWorkPacket) -> str:
         source_ref = packet.source_ref_json if isinstance(packet.source_ref_json, dict) else {}
         source_type = source_ref.get("sourceType")
         source_path = source_ref.get("pathOrUrl")
+        if source_type == "bmad_story":
+            return await self._assert_reconciled_manager_local_proof_source(session, packet, source_ref)
         if source_type not in {"prd", "repo_doc"} or not isinstance(source_path, str) or not source_path.strip():
             raise ValueError("Integrated local proof requires an existing PRD or repository source artifact.")
         source_path_object = Path(source_path)
@@ -19488,6 +19493,59 @@ class SupervisorService:
             raise ValueError("Local proof source authority digest does not match the Git index blob.")
         return digest
 
+    async def _assert_reconciled_manager_local_proof_source(
+        self,
+        session: AsyncSession,
+        packet: AuthoritativeWorkPacket,
+        source_ref: dict[str, object],
+    ) -> str:
+        source_path = source_ref.get("pathOrUrl")
+        if not isinstance(source_path, str) or not re.fullmatch(r"_bmad-output/implementation-artifacts/[A-Za-z0-9._-]+\.md", source_path):
+            raise ValueError("Manager local proof requires one bounded metadata-only BMAD story source reference.")
+        event_result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent)
+            .where(
+                AuthoritativeWorkPacketLifecycleEvent.packet_id == packet.id,
+                AuthoritativeWorkPacketLifecycleEvent.event_type == "packet.created",
+            )
+            .order_by(AuthoritativeWorkPacketLifecycleEvent.occurred_at.asc(), AuthoritativeWorkPacketLifecycleEvent.id.asc())
+        )
+        creation_events = list(event_result.scalars())
+        if len(creation_events) != 1:
+            raise ValueError("Manager local proof requires exactly one persisted supervisor packet.created event.")
+        creation = creation_events[0]
+        actor = creation.actor_json if isinstance(creation.actor_json, dict) else {}
+        evidence_refs = creation.evidence_refs_json if isinstance(creation.evidence_refs_json, list) else []
+        required_prefixes = (
+            "manager-candidate:",
+            "manager-eligibility:eligible",
+            "manager-bmad-story:",
+            "manager-bmad-source-key:",
+            "manager-bmad-bundle:",
+            "manager-bmad-prd-status:final",
+            "manager-bmad-architecture-status:complete",
+            "manager-bmad-epics-status:complete",
+            "manager-bmad-readiness-status:complete",
+            "manager-source-metadata:sha256:",
+        )
+        if (
+            creation.source_ref_json != source_ref
+            or actor != {"actorType": "manager", "actorId": "manager-source-intake", "actorLabel": "Manager source intake adapter"}
+            or not all(any(isinstance(ref, str) and ref.startswith(prefix) for ref in evidence_refs) for prefix in required_prefixes)
+        ):
+            raise ValueError("Manager local proof requires reconciled manager intake metadata from the persisted supervisor creation event.")
+        attestation = {
+            "packetId": packet.id,
+            "sourceRef": source_ref,
+            "creationEventId": creation.id,
+            "idempotencyKey": creation.idempotency_key,
+            "correlationId": creation.correlation_id,
+            "evidenceRefs": sorted(evidence_refs),
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+        return hashlib.sha256(json.dumps(attestation, sort_keys=True, separators=(",", ":")).encode("utf8")).hexdigest()
+
     def _assert_server_owned_local_proof_work_item(
         self,
         item: WorkItem,
@@ -19515,7 +19573,7 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             return None
-        source_digest = self._assert_local_proof_source(packet)
+        source_digest = await self._assert_local_proof_source(session, packet)
         source_ref = packet.source_ref_json if isinstance(packet.source_ref_json, dict) else {}
         source_type = source_ref.get("sourceType")
         source_path = source_ref.get("pathOrUrl")
@@ -19802,19 +19860,32 @@ class SupervisorService:
             "review": WorkflowState.REVIEWING.value,
             "promote": WorkflowState.REVIEWING.value,
         }.get(target_stage)
+        local_proof_state_sequence = (
+            (WorkflowState.QUEUED.value, WorkflowState.TRIAGED, "local_proof.triaged"),
+            (WorkflowState.TRIAGED.value, WorkflowState.READY, "local_proof.ready"),
+            (WorkflowState.READY.value, WorkflowState.IMPLEMENTING, "local_proof.implementing"),
+        )
         if expected_state in {WorkflowState.TRIAGED.value, WorkflowState.READY.value, WorkflowState.IMPLEMENTING.value}:
-            for _ in range(3):
-                if item.state == expected_state or item.state not in {
-                    WorkflowState.QUEUED.value,
-                    WorkflowState.TRIAGED.value,
-                    WorkflowState.READY.value,
-                }:
+            for current_state, next_state, event_type in local_proof_state_sequence:
+                if item.state == expected_state:
                     break
-                await self._advance_item(session, item, RunMode.RUNNING)
+                if item.state != current_state:
+                    continue
+                await self._transition(
+                    session,
+                    item,
+                    next_state,
+                    event_type,
+                    "Supervisor advanced the attested local-proof WorkItem without generic recipe execution.",
+                    payload_overrides={"localProofAuthority": "integrated_local", "metadataOnly": True, "rawPayloadRetained": False},
+                    lane_override=BmadLane.IMPLEMENTATION.value,
+                )
         if expected_state and item.state != expected_state:
             raise ValueError(
                 f"Authoritative local-proof packet stage {target_stage} diverged from WorkItem state {item.state}; expected {expected_state}."
             )
+        if expected_state == WorkflowState.IMPLEMENTING.value:
+            await self._create_or_refresh_lease(session, item)
         metadata = dict(item.metadata_json or {})
         metadata.update(
             {
@@ -19873,7 +19944,7 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, item.metadata_json["authoritativePacketId"])
         if not packet:
             raise ValueError("Local proof requires an existing authoritative source-backed packet.")
-        source_digest = self._assert_local_proof_source(packet)
+        source_digest = await self._assert_local_proof_source(session, packet)
         self._assert_server_owned_local_proof_work_item(item, packet.id, source_digest)
         events = await self.list_work_item_events(session, work_item_id)
         if any(
@@ -20249,7 +20320,7 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             return None
-        source_digest = self._assert_local_proof_source(packet)
+        source_digest = await self._assert_local_proof_source(session, packet)
         items = await self.list_work_items(session)
         item = next(
             (
@@ -20926,7 +20997,7 @@ class SupervisorService:
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             raise ValueError("Local-proof verification evidence requires an existing authoritative packet.")
-        self._assert_server_owned_local_proof_work_item(item, packet_id, self._assert_local_proof_source(packet))
+        self._assert_server_owned_local_proof_work_item(item, packet_id, await self._assert_local_proof_source(session, packet))
         lease = await session.get(QueueLease, attempt.queue_lease_id)
         if not lease or lease.work_item_id != attempt.work_item_id:
             raise ValueError("Local-proof verification evidence requires the server-created queue lease.")

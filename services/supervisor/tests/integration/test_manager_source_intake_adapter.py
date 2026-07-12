@@ -6,9 +6,11 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
+from urllib.error import HTTPError
 from urllib.parse import quote
 from pathlib import Path
 
@@ -46,6 +48,22 @@ def _free_loopback_port() -> int:
 def _json_get(url: str) -> dict[str, object]:
     with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 - fixed loopback URL
         return json.loads(response.read().decode("utf8"))
+
+
+def _json_post(url: str, payload: dict[str, object], *, expected_status: int = 200) -> dict[str, object]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf8"),
+        headers={"content-type": "application/json", "accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed loopback URL
+            assert response.status == expected_status
+            return json.loads(response.read().decode("utf8"))
+    except HTTPError as exc:
+        assert exc.code == expected_status
+        return json.loads(exc.read().decode("utf8"))
 
 
 def _text_get(url: str) -> str:
@@ -132,6 +150,13 @@ def _start_supervisor(port: int):
     return server, thread
 
 
+def _enable_attested_local_proof(db_path: Path) -> None:
+    from supervisor.api.main import service
+    from supervisor.application.service import LOCAL_PROOF_TEST_CAPABILITY
+
+    service.enable_local_proof_for_test(LOCAL_PROOF_TEST_CAPABILITY, db_path)
+
+
 def _stop_supervisor(server: uvicorn.Server | None, thread: threading.Thread | None) -> None:
     if server is None or thread is None:
         return
@@ -154,7 +179,7 @@ def _run_node(args: list[str], *, expected_returncode: int = 0) -> dict[str, obj
         check=False,
         timeout=20,
     )
-    assert result.returncode == expected_returncode, result.stderr or result.stdout
+    assert result.returncode == expected_returncode, f"{result.stderr}\n{result.stdout}"
     return json.loads(result.stdout)
 
 
@@ -204,9 +229,11 @@ def _remove_default_bmad_hierarchy(originals: dict[Path, bytes | None]) -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(original)
     bundle = DEFAULT_PLANNING_DIR / "prds" / f"prd-Kendall_Nxt-{DEFAULT_SOURCE_KEY}"
-    if bundle.exists():
-        for child in bundle.iterdir():
-            child.unlink()
+    bundle_had_original_content = any(
+        original is not None and path.is_relative_to(bundle)
+        for path, original in originals.items()
+    )
+    if bundle.exists() and not bundle_had_original_content:
         bundle.rmdir()
 
 
@@ -434,3 +461,110 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         dashboard_log.close()
         _remove_default_bmad_hierarchy(original_bmad_hierarchy)
         _stop_supervisor(server, thread)
+
+
+def test_worker_result_loop_continues_reconciled_manager_intake_through_supervisor_and_dashboard(
+    tmp_path, monkeypatch
+) -> None:
+    local_proof_root = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
+    local_proof_root.mkdir(parents=True, exist_ok=True)
+    db_path = local_proof_root / f"gate4-manager-worker-result-{os.getpid()}-{time.time_ns()}.db"
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    port = _free_loopback_port()
+    dashboard_port = _free_loopback_port()
+    source_digest_before = hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest()
+    raw_bmad_marker = "RAW_BMAD_STORY_BODY_MUST_NOT_BE_RETAINED_7f9c"
+    server = None
+    thread = None
+    dashboard_process = None
+    dashboard_log = (tmp_path / "worker-result-dashboard.log").open("w+", encoding="utf8")
+    original_bmad_hierarchy = _write_default_bmad_hierarchy()
+
+    try:
+        server, thread = _start_supervisor(port)
+        _enable_attested_local_proof(db_path)
+        cycle_args = _default_manager_intake_command(
+            f"http://127.0.0.1:{port}", tmp_path / "worker-result-manager-intake.mjs"
+        )
+        command = [
+            "./scripts/manager-source-intake-local-proof.mjs",
+            *cycle_args[1:],
+            "--local-proof-idempotency-key", "gate4-manager-worker-result-1",
+            "--local-proof-correlation-id", "gate4-manager-worker-result-correlation-1",
+        ]
+        integrated = _run_node(command)
+        proof = integrated["summary"]["workerResultLocalProof"]  # type: ignore[index]
+        packet_id = str(proof["packetId"])
+        assert proof["status"] == "persisted"
+        assert proof["attemptStatus"] == "completed"
+        assert proof["metadataOnly"] is True
+        assert proof["rawPayloadRetained"] is False
+
+        lifecycle = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets/{packet_id}")["data"]
+        assert lifecycle["currentStage"] == "review"  # type: ignore[index]
+        assert lifecycle["status"] == "waiting"  # type: ignore[index]
+        assert lifecycle["readyToTest"]["verificationRefs"] == [f"attempt:{proof['attemptId']}"]  # type: ignore[index]
+        assert f"evidence:local-proof:gate4-manager-worker-result-1" in lifecycle["readyToTest"]["evidenceRefs"]  # type: ignore[index]
+
+        projection = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/projection")["data"]
+        projected = next(packet for packet in projection["workPackets"] if packet["packetId"] == packet_id)  # type: ignore[index,union-attr]
+        assert projected["workItemId"] == proof["workItemId"]
+        assert projected["executionAttempts"] == [  # type: ignore[index]
+            {
+                "attemptId": proof["attemptId"], "workItemId": proof["workItemId"], "leaseId": proof["leaseId"],
+                "fencingToken": proof["fencingToken"], "routeDecisionId": projected["executionAttempts"][0]["routeDecisionId"],
+                "workerId": projected["executionAttempts"][0]["workerId"], "lane": projected["executionAttempts"][0]["lane"],
+                "status": "completed", "eventRefs": projected["executionAttempts"][0]["eventRefs"],
+                "evidenceRefs": projected["executionAttempts"][0]["evidenceRefs"], "metadataOnly": True,
+            }
+        ]
+
+        stale = _json_post(
+            f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets/{packet_id}/local-proof/lease",
+            {
+                "proofMode": "integrated_local", "idempotencyKey": "gate4-manager-stale-fence-1",
+                "correlationId": "gate4-manager-stale-fence-correlation", "operation": "stale_heartbeat",
+                "fencingToken": int(proof["fencingToken"]) - 1,
+            },
+            expected_status=409,
+        )
+        assert stale["detail"]["error"]["code"] == "invalid_local_proof_lease"  # type: ignore[index]
+        duplicate = _run_node(command, expected_returncode=1)
+        assert duplicate["blockers"][-1]["code"] == "manager_supervisor_local_proof_http_error"  # type: ignore[index]
+        assert _table_count(db_path, "execution_attempts") == 1
+
+        dashboard_process = _start_dashboard(f"http://127.0.0.1:{port}", dashboard_port, dashboard_log)
+        dashboard_base_url = f"http://127.0.0.1:{dashboard_port}"
+        for html in (_text_get(f"{dashboard_base_url}/pipeline"), _text_get(f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}")):
+            assert packet_id in html
+            assert "review" in html and "waiting" in html
+            assert "Fixture/non-live packet" not in html
+
+        _stop_process(dashboard_process)
+        dashboard_process = None
+        _stop_supervisor(server, thread)
+        server = None
+        thread = None
+        server, thread = _start_supervisor(port)
+        _enable_attested_local_proof(db_path)
+        restarted = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/projection")["data"]
+        restarted_packet = next(packet for packet in restarted["workPackets"] if packet["packetId"] == packet_id)  # type: ignore[index,union-attr]
+        for field in ("packetId", "currentStage", "status", "workItemId", "queueLease", "executionAttempts", "evidenceRefs"):
+            assert restarted_packet[field] == projected[field]
+        assert "gate4-manager-stale-fence-correlation" in restarted_packet["correlationIds"]
+        dashboard_process = _start_dashboard(f"http://127.0.0.1:{port}", dashboard_port, dashboard_log)
+
+        assert _table_count(db_path, "candidate_work") == 0
+        assert _table_count(db_path, "work_items") == 1
+        assert _table_count(db_path, "execution_attempts") == 1
+        assert _table_count(db_path, "queue_leases") == 1
+        assert _table_count(db_path, "queue_lease_actions") >= 1
+        assert raw_bmad_marker.encode() not in db_path.read_bytes()
+        assert hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest() == source_digest_before
+    finally:
+        _stop_process(dashboard_process)
+        dashboard_log.close()
+        _remove_default_bmad_hierarchy(original_bmad_hierarchy)
+        _stop_supervisor(server, thread)
+        db_path.unlink(missing_ok=True)

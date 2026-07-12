@@ -1030,7 +1030,8 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     : packet.sourceRef
       ? [projectionSourceRefForPacket(packet.sourceRef, sourceLabel, freshnessState)]
       : [];
-  const evidenceRefs = (detail?.evidenceRefs ?? packet.evidenceRefs).map((refId) => ({
+  const attemptEvidenceRefs = (detail?.executionAttempts ?? packet.executionAttempts ?? []).flatMap((attempt) => attempt.evidenceRefs);
+  const evidenceRefs = [...new Set([...(detail?.evidenceRefs ?? packet.evidenceRefs), ...attemptEvidenceRefs])].map((refId) => ({
     refId,
     evidenceType: "event" as const,
     label: refId,
@@ -2458,6 +2459,7 @@ function PacketInspection({
     ? packet.routeSummary.reasonCodes.join(", ")
     : "reason codes not present in projection detail";
   const routeSourceContext = packet.routeFork?.sourceContext || "five-whys context not present in projection detail";
+  const projectedExecutionAttempts = projectionDetail?.executionAttempts ?? [];
   return (
     <aside aria-label="Packet inspection panel" className="pipeline-inspection-panel rounded-[0.5rem] border p-3" data-pipeline-panel="packet-detail" id="pipeline-selected-packet-detail" ref={panelRef} tabIndex={-1}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
@@ -2545,13 +2547,13 @@ function PacketInspection({
           <RefList title="Evidence refs" values={detailEvidenceRefs} empty="No evidence refs in backend projection detail." />
         </section>
       ) : null}
-      {packet.executionAttempts.length > 0 ? (
+      {packet.executionAttempts.length > 0 || projectedExecutionAttempts.length > 0 ? (
         <section aria-label="Execution attempts" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
           <h3 className="text-sm font-semibold">Execution attempts</h3>
           <ul className="grid gap-2 text-xs leading-5 text-[var(--muted)]">
-            {packet.executionAttempts.map((attempt) => (
+            {[...packet.executionAttempts, ...projectedExecutionAttempts].map((attempt) => (
               <li className="break-words" key={attempt.attemptId}>
-                Attempt {attempt.attemptId}; worker {attempt.workerId}; status {attempt.status}; authority mode {attempt.authorityMode}; retention metadata_only; rawPayloadRetained false; evidence refs {attempt.evidenceRefs.join(", ")}
+                Attempt {attempt.attemptId}; worker {attempt.workerId}; status {attempt.status}; authority mode {"authorityMode" in attempt ? attempt.authorityMode : "integrated_local"}; retention metadata_only; rawPayloadRetained false; evidence refs {attempt.evidenceRefs.join(", ")}
               </li>
             ))}
           </ul>
