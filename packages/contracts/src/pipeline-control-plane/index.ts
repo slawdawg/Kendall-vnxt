@@ -2957,8 +2957,7 @@ function isSafeOperationalMetadataText(value: string): boolean {
     trimmed.length <= 500 &&
     !/[\u0000-\u001F\u007F]/.test(trimmed) &&
     !FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(trimmed) &&
-    !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(trimmed) &&
-    !EPIC_25_EXECUTABLE_POLICY_TEXT.test(trimmed)
+    !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(trimmed)
   );
 }
 

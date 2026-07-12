@@ -38,7 +38,7 @@ TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
 MAX_METADATA_DEPTH = 64
 MAX_METADATA_NODES = 1000
 MAX_METADATA_AGGREGATE_BYTES = 64 * 1024
-EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
+EPIC_25_EXECUTABLE_POLICY_TEXT_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:tmux\s+(?:kill|send|capture|new|attach)\b|git(?:hub)?(?:\s+\S+){0,4}\s+(?:add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)\b|gh\s+(?:pr|repo|api)\b|curl(?:\s|$)|bash(?:\s|$)|sh(?:\s|$)|python(?:3(?:\.\d+)?)?(?:\s|$)|node(?:\s|$)|npm\s+run(?:\s|$)|pnpm(?:\s|$)|uv\s+run(?:\s|$)|provider\s+(?:call|request|payload)\b)",
     re.IGNORECASE,
 )
@@ -65,7 +65,6 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
         and len(text) <= 500
         and not PIPELINE_METADATA_CONTROL_CHARACTER_RE.search(text)
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
-        and not EXECUTABLE_PIPELINE_CONTROL_TEXT_RE.search(text)
     )
 
 
@@ -84,6 +83,7 @@ def _is_safe_epic_25_evidence_ref(value: str) -> bool:
 def _is_safe_epic_25_policy_text(value: str) -> bool:
     return (
         _is_safe_pipeline_control_text(value)
+        and not EPIC_25_EXECUTABLE_POLICY_TEXT_RE.search(value)
         and not TOKEN_LIKE_METADATA_VALUE_RE.search(value)
         and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
     )

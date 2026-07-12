@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION,
   PIPELINE_EPIC_25_EVIDENCE_CHAIN_V1_SCHEMA_VERSION,
+  validatePipelineOperationalActionRequestV0,
   validatePipelineEpic25EvidenceChainV0,
   validatePipelineEpic25EvidenceChainV1,
 } from "../packages/contracts/src/pipeline-control-plane/index.js";
@@ -137,6 +138,27 @@ test("Epic 25 Python and TypeScript policy-text filters share conservative execu
     assert.equal(issues.some((issue) => issue.field === "policyProfile.retentionPolicy.policyReason"), !candidate.safe, candidate.value);
     assert.equal(issues.some((issue) => issue.field === "policyProfile.qualityGates.3.notApplicableReason"), !candidate.safe, candidate.value);
   }
+});
+
+test("General operational metadata accepts prose containing runtime names", () => {
+  const request = {
+    schemaVersion: "pipeline-operational-action/v0",
+    actionId: "inspect",
+    targetType: "work_packet",
+    targetId: "packet-epic-25",
+    idempotencyKey: "inspect-epic-25",
+    correlationId: "corr-epic-25",
+    requestedBy: { actorType: "operator", actorId: "pipeline-operator" },
+    requestedAuthorityState: "not_required",
+    requestedRiskTier: "low",
+    operatorIntentSummary: "worker node is healthy",
+    testNotes: "python worker is healthy",
+    evidenceRefs: ["evidence:epic-25-metadata"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+
+  assert.deepEqual(validatePipelineOperationalActionRequestV0(request), []);
 });
 
 test("Epic 25 packet expiry is evaluated at chain.checkedAt", () => {
