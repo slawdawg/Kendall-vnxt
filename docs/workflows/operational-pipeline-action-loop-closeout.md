@@ -216,12 +216,11 @@ actions, provider calls, or source mutations, and it does not automatically run
 the separate terminal-event sync.
 
 This is not evidence that arbitrary or broader BMAD source hierarchy is
-resolved, selected, or ingested end to end. It also does not exercise the
-dashboard UI as part of the source-intake path. Because the ADR definition of
-full `integrated_local` requires the real supervisor-owned lifecycle,
-manager/BMAD adapter, and dashboard projection to complete the named bounded
-path together, this evidence does not newly claim full Gate 4 `integrated_local`
-acceptance or full integrated MVP completion.
+resolved, selected, or ingested end to end. At this point the dashboard UI had
+not yet been exercised as part of the source-intake path, so this evidence did
+not claim `integrated_local` acceptance for that named path or full Gate 4
+integrated MVP completion. The later, explicitly scoped closeout below records
+the additional proof; it does not broaden the claim beyond that path.
 
 PR #521 post-merge focused verification for the bounded cycle:
 
@@ -239,14 +238,44 @@ pnpm run test:manager-control-plane:focused
 19 passed, 0 failed
 ```
 
-This closeout does not claim live, bounded-live, production-observed, external
-provider/worker/process/shell/network/credential/GitHub/tmux/source-mutation
-authority, or full Gate 4 coverage. Remaining limitations are the normal
-broader BMAD source resolution/intake path, dashboard end-to-end source-intake
-proof, and full ADR-defined integrated MVP acceptance; full Gate 4 remains
-unproven. Queue leases, attempts, evidence, and workflow/
-lifecycle events remain durable metadata-only lineage; replay rebuilds the
-packet and linked WorkItem materialized projections from preserved events.
+## Gate 4 named bounded source-intake path closeout
+
+Status: `integrated_local` is accepted only for the named path below. Full Gate
+4 remains open.
+
+The named path is: default local BMAD story-and-bundle resolution in the
+manager, metadata-only manager intake of one eligible seed through the loopback
+supervisor, authoritative `WorkPacketV0` list/detail parity, and the matching
+dashboard `/pipeline` list and packet-detail projection.
+
+- PR #525 merged as `d3a27aa9e588ca23118ab984ec0ea979963d1cd9`. Its default,
+  local-only resolver selects one ready BMAD story and its matching PRD bundle
+  only when there are no explicit refill or source-work candidates. The manager
+  preserves story, sprint-status, source-key, and bundle references as
+  metadata-only provenance (`rawPayloadRetained=false`); story bodies,
+  acceptance text, verification commands, prompts, and raw bundles do not
+  cross the manager-to-supervisor intake boundary.
+- PR #526 merged as `86418bae99b2bc41c438ccd1ffe47dbe90278ecd` from reviewed
+  head `14423d4e11483fb051978366b63cc737c758f2df`. It makes the
+  supervisor-owned authoritative `WorkPacketV0` visible with identical list
+  and detail identities, then proves the joined manager → supervisor →
+  dashboard path against disposable local SQLite and loopback processes. The
+  dashboard proof renders both `/pipeline` and the authoritative packet detail;
+  it is a bounded local process proof, not production or unattended execution.
+- CI run #1012 was green for that exact reviewed head.
+
+The accepted `integrated_local` label applies only to this named path. It does
+not mean that full Gate 4 is integrated or that every BMAD source shape is
+validated. Remaining work, in order, is: validate the full BMAD hierarchy and
+source-bundle selection rules beyond the one default local story-plus-bundle
+case; retain or extend real dashboard process/E2E evidence whenever a successor
+changes that path; and obtain the broader ADR-defined Gate 4 acceptance. No
+provider, worker, dispatch, source mutation, credential, shell, external
+network, or unattended execution is proven or enabled by this closeout.
+
+Queue leases, attempts, evidence, and workflow/lifecycle events remain durable
+metadata-only lineage; replay rebuilds the packet and linked WorkItem
+materialized projections from preserved events.
 
 Final repair verification:
 
