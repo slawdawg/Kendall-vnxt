@@ -17,33 +17,61 @@ const STORY_KEY = "91-1-default-bmad-source-resolution-fixture";
 const SOURCE_KEY = "2099-01-01-default-bmad-source-resolution-fixture";
 const STORY_REF = `story:${ARTIFACT_DIR}/${STORY_KEY}.md`;
 const BUNDLE_REF = `prd:${PRD_ROOT}/prd-Kendall_Nxt-${SOURCE_KEY}/prd.md`;
+const PRD_REF = BUNDLE_REF.slice("prd:".length);
+const ARCHITECTURE_REF = `_bmad-output/planning-artifacts/architecture-${SOURCE_KEY}.md`;
+const EPICS_REF = `_bmad-output/planning-artifacts/epics-${SOURCE_KEY}.md`;
+const READINESS_REF = `_bmad-output/planning-artifacts/implementation-readiness-report-${SOURCE_KEY}.md`;
 const SPRINT_STATUS_PATH = join(ARTIFACT_DIR, "sprint-status.yaml");
 const ORIGINAL_SPRINT_STATUS = existsSync(SPRINT_STATUS_PATH)
   ? readFileSync(SPRINT_STATUS_PATH, "utf8")
   : null;
 
-function writeFixture({ trackerStatus = "ready-for-dev", storyStatus = "ready-for-dev", sourceKey = SOURCE_KEY, bundleNames = [`prd-Kendall_Nxt-${SOURCE_KEY}`], story = true } = {}) {
+function writeFrontmatter(path, metadata, bodyMarker) {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, ["---", ...metadata, "---", "", `# ${bodyMarker}`, "", `RAW BODY ${bodyMarker} MUST NOT CROSS`, ""].join("\n"));
+}
+
+function writeFixture({
+  trackerStatus = "ready-for-dev",
+  storyStatus = "ready-for-dev",
+  sourceKey = SOURCE_KEY,
+  bundleNames = [`prd-Kendall_Nxt-${SOURCE_KEY}`],
+  story = true,
+  architecture = true,
+  epics = true,
+  readiness = true,
+  prdStatus = "final",
+  prdAuthoritative = true,
+  architectureStatus = "complete",
+  epicsStatus = "complete",
+  readinessStatus = "complete",
+  architecturePrdRef = PRD_REF,
+  epicsPrdRef = PRD_REF,
+  epicsArchitectureRef = ARCHITECTURE_REF,
+  readinessPrdRef = PRD_REF,
+  readinessArchitectureRef = ARCHITECTURE_REF,
+  readinessEpicsRef = EPICS_REF,
+  readyStoryKeys = [STORY_KEY],
+} = {}) {
   mkdirSync(ARTIFACT_DIR, { recursive: true });
   writeFileSync(SPRINT_STATUS_PATH, [
     `source_key: ${sourceKey}`,
-    `source_ref: _bmad-output/planning-artifacts/epics.md`,
+    `source_ref: ${EPICS_REF}`,
     "development_status:",
-    `  ${STORY_KEY}: ${trackerStatus}`,
+    ...readyStoryKeys.map((storyKey) => `  ${storyKey}: ${storyKey === STORY_KEY ? trackerStatus : "ready-for-dev"}`),
     "",
   ].join("\n"));
   if (story) {
-    writeFileSync(join(ARTIFACT_DIR, `${STORY_KEY}.md`), [
-      `# Story 91.1: Default BMAD Source Resolution Fixture`,
-      "",
-      `Status: ${storyStatus}`,
-      "",
-    ].join("\n"));
+    writeFrontmatter(join(ARTIFACT_DIR, `${STORY_KEY}.md`), [`status: ${storyStatus}`], "Story 91.1: Default BMAD Source Resolution Fixture");
   }
   for (const bundleName of bundleNames) {
     const bundleDir = join(PRD_ROOT, bundleName);
     mkdirSync(bundleDir, { recursive: true });
-    writeFileSync(join(bundleDir, "prd.md"), "# Fixture PRD\n");
+    writeFrontmatter(join(bundleDir, "prd.md"), [`status: ${prdStatus}`, ...(prdAuthoritative ? ["authoritative: true"] : [])], "Fixture PRD");
   }
+  if (architecture) writeFrontmatter(ARCHITECTURE_REF, ["workflowType: architecture", `status: ${architectureStatus}`, `authoritative_prd: ${architecturePrdRef}`], "Fixture Architecture");
+  if (epics) writeFrontmatter(EPICS_REF, ["workflowType: epics-and-stories", `status: ${epicsStatus}`, `authoritative_prd: ${epicsPrdRef}`, `authoritative_architecture: ${epicsArchitectureRef}`], "Fixture Epics");
+  if (readiness) writeFrontmatter(READINESS_REF, ["workflowType: implementation-readiness", `status: ${readinessStatus}`, `authoritative_prd: ${readinessPrdRef}`, `authoritative_architecture: ${readinessArchitectureRef}`, `authoritative_epics: ${readinessEpicsRef}`], "Fixture Readiness");
 }
 
 function cleanupFixture() {
@@ -53,6 +81,11 @@ function cleanupFixture() {
     writeFileSync(SPRINT_STATUS_PATH, ORIGINAL_SPRINT_STATUS);
   }
   rmSync(join(ARTIFACT_DIR, `${STORY_KEY}.md`), { force: true });
+  rmSync(join(ARTIFACT_DIR, "91-2-second-ready-story.md"), { force: true });
+  rmSync(ARCHITECTURE_REF, { force: true });
+  rmSync(EPICS_REF, { force: true });
+  rmSync(READINESS_REF, { force: true });
+  rmSync(`_bmad-output/planning-artifacts/architecture-${SOURCE_KEY}-duplicate.md`, { force: true });
   for (const name of [`prd-Kendall_Nxt-${SOURCE_KEY}`, `prd-${SOURCE_KEY}`]) {
     rmSync(join(PRD_ROOT, name), { recursive: true, force: true });
   }
@@ -115,15 +148,26 @@ test("default refill and cycle resolve one ready BMAD story with matching bundle
   assert.deepEqual(plan.summary.sourceBackedPacketSeed.seedPacket.sourceRefs, [STORY_REF]);
   assert.deepEqual(plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance, {
     mode: "default_local_bmad",
+    bundleSelection: "canonical_sprint_source_key",
     storyRef: STORY_REF,
     storyKey: STORY_KEY,
     storyStatus: "ready-for-dev",
     sprintStatusRef: `${ARTIFACT_DIR}/sprint-status.yaml`,
     sourceKey: SOURCE_KEY,
     bundleRef: BUNDLE_REF,
+    prd: { ref: PRD_REF, status: "final", metadataDigest: plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.prd.metadataDigest },
+    architecture: { ref: ARCHITECTURE_REF, status: "complete", metadataDigest: plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.architecture.metadataDigest },
+    epics: { ref: EPICS_REF, status: "complete", metadataDigest: plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.epics.metadataDigest },
+    implementationReadiness: { ref: READINESS_REF, status: "complete", metadataDigest: plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.implementationReadiness.metadataDigest },
+    sprint: { ref: `${ARTIFACT_DIR}/sprint-status.yaml`, sourceKey: SOURCE_KEY, metadataDigest: plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.sprint.metadataDigest },
+    story: { ref: `${ARTIFACT_DIR}/${STORY_KEY}.md`, key: STORY_KEY, status: "ready-for-dev", metadataDigest: plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.story.metadataDigest },
     metadataOnly: true,
     rawPayloadRetained: false,
   });
+  for (const member of ["prd", "architecture", "epics", "implementationReadiness", "sprint", "story"]) {
+    assert.match(plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance[member].metadataDigest, /^sha256:[0-9a-f]{64}$/);
+  }
+  assert.doesNotMatch(JSON.stringify(plan), /RAW BODY|Fixture Architecture|Fixture Epics|Fixture Readiness/);
   const intake = plan.nextActions.find((action) => action.code === "manager-source-intake-ready");
   assert.ok(intake);
   assert.match(intake.dryRunCommand, /--source-bundle-ref/);
@@ -162,11 +206,28 @@ test("default refill and cycle resolve one ready BMAD story with matching bundle
   assert.equal(continuous.summary.applySelectedAction, null);
 });
 
-test("default BMAD resolution fails closed for missing ambiguous unready and mismatched local state", async (t) => {
+test("default BMAD resolution fails closed for every missing ambiguity supersession mismatch and readiness case", async (t) => {
   const cases = [
     ["missing tracker", () => rmSync(SPRINT_STATUS_PATH, { force: true }), "default-bmad-source-sprint-status-missing"],
+    ["missing source key", () => { writeFixture(); writeFileSync(SPRINT_STATUS_PATH, readFileSync(SPRINT_STATUS_PATH, "utf8").replace(`source_key: ${SOURCE_KEY}\n`, "")); }, "default-bmad-source-key-missing"],
+    ["ambiguous source key", () => { writeFixture(); writeFileSync(SPRINT_STATUS_PATH, `${readFileSync(SPRINT_STATUS_PATH, "utf8")}source_key: conflicting-source\n`); }, "default-bmad-source-key-ambiguous"],
+    ["missing PRD", () => { writeFixture(); rmSync(join(PRD_ROOT, `prd-Kendall_Nxt-${SOURCE_KEY}`), { recursive: true, force: true }); }, "default-bmad-source-bundle-missing"],
+    ["superseded PRD", () => writeFixture({ prdStatus: "superseded" }), "default-bmad-source-prd-superseded"],
+    ["non-authoritative PRD", () => writeFixture({ prdAuthoritative: false }), "default-bmad-source-prd-not-authoritative"],
+    ["conflicting PRD metadata", () => { writeFixture(); writeFrontmatter(join(PRD_ROOT, `prd-Kendall_Nxt-${SOURCE_KEY}`, "prd.md"), ["status: final", "status: draft", "authoritative: true"], "Conflicting PRD"); }, "default-bmad-source-prd-conflicting"],
+    ["missing architecture", () => writeFixture({ architecture: false }), "default-bmad-source-architecture-missing"],
+    ["unready architecture", () => writeFixture({ architectureStatus: "draft" }), "default-bmad-source-architecture-not-ready"],
+    ["ambiguous architecture", () => { writeFixture(); writeFrontmatter(`_bmad-output/planning-artifacts/architecture-${SOURCE_KEY}-duplicate.md`, ["workflowType: architecture", "status: complete", `authoritative_prd: ${PRD_REF}`], "Duplicate Architecture"); }, "default-bmad-source-architecture-ambiguous"],
+    ["missing epics", () => writeFixture({ epics: false }), "default-bmad-source-epics-missing"],
+    ["unready epics", () => writeFixture({ epicsStatus: "in-progress" }), "default-bmad-source-epics-not-ready"],
+    ["epics architecture mismatch", () => writeFixture({ epicsArchitectureRef: "_bmad-output/planning-artifacts/architecture-wrong.md" }), "default-bmad-source-epics-mismatch"],
+    ["missing readiness", () => writeFixture({ readiness: false }), "default-bmad-source-readiness-missing"],
+    ["unready readiness", () => writeFixture({ readinessStatus: "in-progress" }), "default-bmad-source-readiness-not-ready"],
+    ["readiness epics mismatch", () => writeFixture({ readinessEpicsRef: "_bmad-output/planning-artifacts/epics-wrong.md" }), "default-bmad-source-readiness-mismatch"],
     ["missing story", () => writeFixture({ story: false }), "default-bmad-source-story-missing"],
     ["not ready", () => writeFixture({ trackerStatus: "backlog", storyStatus: "backlog" }), "default-bmad-source-story-not-ready"],
+    ["multiple ready stories", () => { writeFixture({ readyStoryKeys: [STORY_KEY, "91-2-second-ready-story"] }); writeFrontmatter(join(ARTIFACT_DIR, "91-2-second-ready-story.md"), ["status: ready-for-dev"], "Second Ready Story"); }, "default-bmad-source-story-ambiguous"],
+    ["duplicate story identity", () => { writeFixture(); writeFileSync(SPRINT_STATUS_PATH, `${readFileSync(SPRINT_STATUS_PATH, "utf8")}  ${STORY_KEY}: ready-for-dev\n`); }, "default-bmad-source-story-ambiguous"],
     ["tracker story mismatch", () => writeFixture({ storyStatus: "in-progress" }), "default-bmad-source-story-status-mismatch"],
     ["bundle mismatch", () => writeFixture({ sourceKey: "different-source-key" }), "default-bmad-source-bundle-missing"],
     ["ambiguous bundle", () => writeFixture({ bundleNames: [`prd-Kendall_Nxt-${SOURCE_KEY}`, `prd-${SOURCE_KEY}`] }), "default-bmad-source-bundle-ambiguous"],
@@ -183,6 +244,26 @@ test("default BMAD resolution fails closed for missing ambiguous unready and mis
       assert.doesNotMatch(JSON.stringify(plan), /Fixture PRD|acceptance criteria|verification command/i);
     });
   }
+});
+
+test("canonical sprint metadata accepts quoted source keys and ready statuses", () => {
+  writeFixture();
+  const quoted = readFileSync(SPRINT_STATUS_PATH, "utf8")
+    .replace(`source_key: ${SOURCE_KEY}`, `source_key: "${SOURCE_KEY}"`)
+    .replace(`${STORY_KEY}: ready-for-dev`, `${STORY_KEY}: "ready-for-dev" # canonical quoted status`);
+  writeFileSync(SPRINT_STATUS_PATH, quoted);
+  assert.equal(refill().summary.sourceBackedPacketSeed.packetState, "eligible");
+});
+
+test("an explicit local PRD bundle ref has selection precedence but must match the canonical sprint source key", () => {
+  writeFixture();
+  const selected = refill({ sourceBundleRef: BUNDLE_REF });
+  assert.equal(selected.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.bundleSelection, "explicit_source_bundle");
+  assert.equal(selected.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.bundleRef, BUNDLE_REF);
+
+  const mismatched = refill({ sourceBundleRef: "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-other-source/prd.md" });
+  assert.equal(mismatched.summary.sourceBackedPacketSeed, null);
+  assert.ok(mismatched.blockers.some((blocker) => blocker.code === "default-bmad-source-explicit-bundle-mismatch"));
 });
 
 test("explicit source-backed candidates keep precedence over default BMAD resolution", () => {

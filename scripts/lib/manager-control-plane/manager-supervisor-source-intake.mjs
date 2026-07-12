@@ -82,6 +82,21 @@ export function buildManagerSourceIntakeRequest(packet) {
         `manager-bmad-source-key:${sourceProvenance.sourceKey}`,
         `manager-bmad-bundle:${sourceProvenance.bundleRef}`,
         `manager-bmad-sprint-status:${sourceProvenance.sprintStatusRef}`,
+        `manager-bmad-prd-status:${sourceProvenance.prd.status}`,
+        `manager-bmad-architecture:${sourceProvenance.architecture.ref}`,
+        `manager-bmad-architecture-status:${sourceProvenance.architecture.status}`,
+        `manager-bmad-epics:${sourceProvenance.epics.ref}`,
+        `manager-bmad-epics-status:${sourceProvenance.epics.status}`,
+        `manager-bmad-readiness:${sourceProvenance.implementationReadiness.ref}`,
+        `manager-bmad-readiness-status:${sourceProvenance.implementationReadiness.status}`,
+        ...Object.entries({
+          prd: sourceProvenance.prd,
+          architecture: sourceProvenance.architecture,
+          epics: sourceProvenance.epics,
+          readiness: sourceProvenance.implementationReadiness,
+          sprint: sourceProvenance.sprint,
+          story: sourceProvenance.story,
+        }).map(([kind, member]) => `manager-bmad-${kind}-metadata-${member.metadataDigest}`),
       ]
     : [];
   return {
@@ -321,22 +336,35 @@ function managerBmadSourceProvenance(candidate = {}) {
   }
   const provenance = {
     mode: requiredSafeMetadata(value.mode, "sourceProvenance.mode", 80),
+    bundleSelection: requiredSafeMetadata(value.bundleSelection, "sourceProvenance.bundleSelection", 80),
     storyRef: requiredSafeMetadata(value.storyRef, "sourceProvenance.storyRef", 255),
     storyKey: requiredSafeMetadata(value.storyKey, "sourceProvenance.storyKey", 120),
     storyStatus: requiredSafeMetadata(value.storyStatus, "sourceProvenance.storyStatus", 40),
     sprintStatusRef: requiredSafeMetadata(value.sprintStatusRef, "sourceProvenance.sprintStatusRef", 220),
     sourceKey: requiredSafeMetadata(value.sourceKey, "sourceProvenance.sourceKey", 160),
     bundleRef: requiredSafeMetadata(value.bundleRef, "sourceProvenance.bundleRef", 220),
+    prd: bmadHierarchyMember(value.prd, "prd", "final"),
+    architecture: bmadHierarchyMember(value.architecture, "architecture", "complete"),
+    epics: bmadHierarchyMember(value.epics, "epics", "complete"),
+    implementationReadiness: bmadHierarchyMember(value.implementationReadiness, "implementationReadiness", "complete"),
+    sprint: bmadHierarchyMember(value.sprint, "sprint", null, { sourceKey: value.sourceKey }),
+    story: bmadHierarchyMember(value.story, "story", "ready-for-dev", { key: value.storyKey }),
   };
   if (
     provenance.mode !== "default_local_bmad" ||
+    !["explicit_source_bundle", "canonical_sprint_source_key"].includes(provenance.bundleSelection) ||
     provenance.storyStatus !== "ready-for-dev" ||
     value.metadataOnly !== true ||
     value.rawPayloadRetained !== false ||
     !/^\d+-\d+-[a-z0-9-]+$/i.test(provenance.storyKey) ||
     provenance.storyRef !== candidate.sourceRefs?.[0] ||
     provenance.storyRef !== `story:_bmad-output/implementation-artifacts/${provenance.storyKey}.md` ||
-    provenance.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml"
+    provenance.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml" ||
+    provenance.prd.ref !== provenance.bundleRef.slice("prd:".length) ||
+    provenance.sprint.ref !== provenance.sprintStatusRef ||
+    provenance.sprint.sourceKey !== provenance.sourceKey ||
+    provenance.story.ref !== provenance.storyRef.slice("story:".length) ||
+    provenance.story.key !== provenance.storyKey
   ) {
     throw new TypeError("Eligible manager seed sourceProvenance is not the exact ready local BMAD story binding.");
   }
@@ -346,6 +374,23 @@ function managerBmadSourceProvenance(candidate = {}) {
   }
   validateRelativeMetadataPath(provenance.sprintStatusRef);
   return provenance;
+}
+
+function bmadHierarchyMember(value, field, expectedStatus = null, identity = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`sourceProvenance.${field} must be metadata.`);
+  const member = {
+    ref: requiredSafeMetadata(value.ref, `sourceProvenance.${field}.ref`, 220),
+    ...(expectedStatus === null ? {} : { status: requiredSafeMetadata(value.status, `sourceProvenance.${field}.status`, 40) }),
+    ...Object.fromEntries(Object.keys(identity).map((key) => [key, requiredSafeMetadata(value[key], `sourceProvenance.${field}.${key}`, 160)])),
+    metadataDigest: requiredSafeMetadata(value.metadataDigest, `sourceProvenance.${field}.metadataDigest`, 80),
+  };
+  validateRelativeMetadataPath(member.ref);
+  if (expectedStatus !== null && member.status !== expectedStatus) throw new TypeError(`sourceProvenance.${field} is not ${expectedStatus}.`);
+  for (const [key, expected] of Object.entries(identity)) {
+    if (member[key] !== expected) throw new TypeError(`sourceProvenance.${field}.${key} does not match the hierarchy.`);
+  }
+  if (!/^sha256:[0-9a-f]{64}$/.test(member.metadataDigest)) throw new TypeError(`sourceProvenance.${field}.metadataDigest is invalid.`);
+  return member;
 }
 
 function validateLifecycleIdentity(lifecycle, request) {
