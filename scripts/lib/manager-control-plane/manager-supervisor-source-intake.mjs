@@ -66,14 +66,24 @@ export function buildManagerSourceIntakeRequest(packet) {
   if (!["low", "medium"].includes(candidate.riskClass)) {
     throw new TypeError("Eligible manager seed packet must retain a bounded low or medium risk class.");
   }
-  const sourceRef = authoritativeSourceRef(candidate.sourceRefs[0]);
+  const sourceProvenance = managerBmadSourceProvenance(candidate);
+  const sourceRef = authoritativeSourceRef(candidate.sourceRefs[0], sourceProvenance ? title : null);
   const packetId = deriveAuthoritativePacketId(candidateId);
   const identityDigest = digest(JSON.stringify({
     candidateId,
     sourceRef,
+    sourceProvenance,
     dedupeKey: requiredSafeMetadata(candidate.dedupeKey, "seedPacket.dedupeKey", 180),
     title,
   }), 40);
+  const provenanceEvidence = sourceProvenance
+    ? [
+        `manager-bmad-story:${sourceProvenance.storyKey}`,
+        `manager-bmad-source-key:${sourceProvenance.sourceKey}`,
+        `manager-bmad-bundle:${sourceProvenance.bundleRef}`,
+        `manager-bmad-sprint-status:${sourceProvenance.sprintStatusRef}`,
+      ]
+    : [];
   return {
     packetId,
     title,
@@ -92,6 +102,7 @@ export function buildManagerSourceIntakeRequest(packet) {
     evidenceRefs: [
       `manager-candidate:${candidateId}`,
       "manager-eligibility:eligible",
+      ...provenanceEvidence,
       `manager-source-metadata:sha256:${identityDigest}`,
     ],
   };
@@ -275,7 +286,7 @@ function eligibleSeedCandidate(packet) {
   return candidate;
 }
 
-function authoritativeSourceRef(value) {
+function authoritativeSourceRef(value, title = null) {
   const source = requiredSafeMetadata(value, "seedPacket.sourceRefs[0]", 255);
   const separator = source.indexOf(":");
   if (separator <= 0 || separator === source.length - 1) {
@@ -298,8 +309,43 @@ function authoritativeSourceRef(value) {
     refId: source,
     sourceType,
     pathOrUrl: pathBacked.has(prefix) ? pathOrIdentity : null,
-    title: null,
+    title: title ? requiredSafeMetadata(title, "sourceRef.title", 180) : null,
   };
+}
+
+function managerBmadSourceProvenance(candidate = {}) {
+  const value = candidate.sourceProvenance;
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Eligible manager seed sourceProvenance must be an object.");
+  }
+  const provenance = {
+    mode: requiredSafeMetadata(value.mode, "sourceProvenance.mode", 80),
+    storyRef: requiredSafeMetadata(value.storyRef, "sourceProvenance.storyRef", 255),
+    storyKey: requiredSafeMetadata(value.storyKey, "sourceProvenance.storyKey", 120),
+    storyStatus: requiredSafeMetadata(value.storyStatus, "sourceProvenance.storyStatus", 40),
+    sprintStatusRef: requiredSafeMetadata(value.sprintStatusRef, "sourceProvenance.sprintStatusRef", 220),
+    sourceKey: requiredSafeMetadata(value.sourceKey, "sourceProvenance.sourceKey", 160),
+    bundleRef: requiredSafeMetadata(value.bundleRef, "sourceProvenance.bundleRef", 220),
+  };
+  if (
+    provenance.mode !== "default_local_bmad" ||
+    provenance.storyStatus !== "ready-for-dev" ||
+    value.metadataOnly !== true ||
+    value.rawPayloadRetained !== false ||
+    !/^\d+-\d+-[a-z0-9-]+$/i.test(provenance.storyKey) ||
+    provenance.storyRef !== candidate.sourceRefs?.[0] ||
+    provenance.storyRef !== `story:_bmad-output/implementation-artifacts/${provenance.storyKey}.md` ||
+    provenance.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml"
+  ) {
+    throw new TypeError("Eligible manager seed sourceProvenance is not the exact ready local BMAD story binding.");
+  }
+  const bundle = authoritativeSourceRef(provenance.bundleRef);
+  if (bundle.sourceType !== "prd") {
+    throw new TypeError("Eligible manager seed sourceProvenance requires one PRD bundle ref.");
+  }
+  validateRelativeMetadataPath(provenance.sprintStatusRef);
+  return provenance;
 }
 
 function validateLifecycleIdentity(lifecycle, request) {
