@@ -155,7 +155,9 @@ from supervisor.api.schemas import (
     PipelineCanonicalContractV1View,
     PipelineEpic25EvidenceChainIngestRequest,
     PipelineEpic25EvidenceChainReadV0View,
+    PipelineEpic25EvidenceChainReadV1View,
     PipelineEpic25EvidenceChainV0View,
+    PipelineEpic25EvidenceChainV1View,
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
     PipelineExecuteAdmissionCountsV0View,
@@ -764,7 +766,7 @@ class SupervisorService:
         session: AsyncSession,
         packet_id: str,
         payload: PipelineEpic25EvidenceChainIngestRequest,
-    ) -> PipelineEpic25EvidenceChainReadV0View | None:
+    ) -> PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View | None:
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             return None
@@ -780,34 +782,49 @@ class SupervisorService:
         now = datetime.now(timezone.utc)
         if evidence_chain.checkedAt > now + timedelta(minutes=1) or evidence_chain.expiresAt < now:
             raise ValueError("Epic 25 evidence chain is stale, expired, or future-dated.")
-        policy_profile = evidence_chain.policyProfile
-        if policy_profile.checkedAt > now + timedelta(minutes=1) or policy_profile.expiresAt < now:
-            raise ValueError("Epic 25 policy profile is stale, expired, or future-dated.")
-        if any(gate.expiresAt < now for gate in policy_profile.qualityGates):
-            raise ValueError("Epic 25 policy profile contains a stale or expired quality gate.")
-        if policy_profile.retentionPolicy.expiresAt < now:
-            raise ValueError("Epic 25 retention policy is expired.")
+        original_metadata = dict(packet.source_ref_json or {})
+        if isinstance(evidence_chain, PipelineEpic25EvidenceChainV1View):
+            policy_profile = evidence_chain.policyProfile
+            source_event_result = await session.execute(
+                select(AuthoritativeWorkPacketLifecycleEvent).where(
+                    AuthoritativeWorkPacketLifecycleEvent.packet_id == packet_id,
+                    AuthoritativeWorkPacketLifecycleEvent.event_type == "packet.created",
+                )
+            )
+            source_event = source_event_result.scalars().first()
+            trusted_revision_ref = f"source:revision-{policy_profile.targetRevision}"
+            if source_event is None or trusted_revision_ref not in (source_event.evidence_refs_json or []):
+                raise ValueError("Epic 25 policy targetRevision must match the authoritative packet source revision evidence ref.")
+            if policy_profile.checkedAt > now + timedelta(minutes=1) or policy_profile.expiresAt < now:
+                raise ValueError("Epic 25 policy profile is stale, expired, or future-dated.")
+            if any(gate.expiresAt < policy_profile.checkedAt for gate in policy_profile.qualityGates):
+                raise ValueError("Epic 25 policy profile contains a gate stale at the profile check time.")
+            if policy_profile.retentionPolicy.expiresAt < now:
+                raise ValueError("Epic 25 retention policy is expired.")
         for slot in ("readiness", "canary", "ramp", "recovery", "hardening", "decision"):
             evidence_packet = getattr(evidence_chain.packets, slot)
             if evidence_packet.expiresAt < now:
                 raise ValueError(f"Epic 25 {slot} evidence packet is stale or expired.")
 
         serialized = evidence_chain.model_dump(mode="json")
-        original_metadata = dict(packet.source_ref_json or {})
         current_raw = original_metadata.get(PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY)
         if current_raw == serialized:
-            current_chain = PipelineEpic25EvidenceChainV0View.model_validate(current_raw)
+            current_chain = self._validate_epic_25_evidence_chain(current_raw)
             return self._epic_25_evidence_chain_read_view(current_chain, now)
         if current_raw is None:
             if payload.expectedCurrentDigestSha256 is not None:
                 raise ValueError("Initial Epic 25 evidence ingestion must not claim an existing chain digest.")
         else:
-            current_chain = PipelineEpic25EvidenceChainV0View.model_validate(current_raw)
+            current_chain = self._validate_epic_25_evidence_chain(current_raw)
             current_digest = self._epic_25_evidence_chain_digest(current_raw)
             if payload.expectedCurrentDigestSha256 != current_digest:
                 raise ValueError("Epic 25 evidence-chain replacement rejected because the expected current digest changed.")
             if evidence_chain.checkedAt <= current_chain.checkedAt:
                 raise ValueError("Epic 25 evidence-chain replacement must advance checkedAt monotonically.")
+            if isinstance(current_chain, PipelineEpic25EvidenceChainV0View) and isinstance(evidence_chain, PipelineEpic25EvidenceChainV0View):
+                raise ValueError("Legacy Epic 25 v0 chains may only replay exactly; replace them with a canonical v1 policy chain.")
+            if isinstance(current_chain, PipelineEpic25EvidenceChainV1View) and isinstance(evidence_chain, PipelineEpic25EvidenceChainV0View):
+                raise ValueError("Epic 25 evidence-chain replacement cannot downgrade a canonical v1 policy chain to legacy v0.")
         stored_metadata = dict(original_metadata)
         stored_metadata[PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY] = serialized
         update_result = await session.execute(
@@ -1795,14 +1812,14 @@ class SupervisorService:
     def _epic_25_evidence_chain_from_packet_metadata(
         stored_payload: object,
         read_at: datetime,
-    ) -> PipelineEpic25EvidenceChainReadV0View | None:
+    ) -> PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View | None:
         if not isinstance(stored_payload, dict):
             return None
         raw_chain = stored_payload.get(PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY)
         if raw_chain is None:
             return None
         try:
-            chain = PipelineEpic25EvidenceChainV0View.model_validate(raw_chain)
+            chain = SupervisorService._validate_epic_25_evidence_chain(raw_chain)
             return SupervisorService._epic_25_evidence_chain_read_view(chain, read_at)
         except ValidationError:
             return None
@@ -1813,10 +1830,16 @@ class SupervisorService:
         return f"sha256:{hashlib.sha256(canonical.encode('utf8')).hexdigest()}"
 
     @staticmethod
+    def _validate_epic_25_evidence_chain(raw_chain: object) -> PipelineEpic25EvidenceChainV0View | PipelineEpic25EvidenceChainV1View:
+        if isinstance(raw_chain, dict) and raw_chain.get("schemaVersion") == "pipeline-epic-25-evidence-chain/v1":
+            return PipelineEpic25EvidenceChainV1View.model_validate(raw_chain)
+        return PipelineEpic25EvidenceChainV0View.model_validate(raw_chain)
+
+    @staticmethod
     def _epic_25_evidence_chain_read_view(
-        chain: PipelineEpic25EvidenceChainV0View,
+        chain: PipelineEpic25EvidenceChainV0View | PipelineEpic25EvidenceChainV1View,
         read_at: datetime,
-    ) -> PipelineEpic25EvidenceChainReadV0View:
+    ) -> PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View:
         serialized = chain.model_dump(mode="json")
         stale = chain.expiresAt < read_at or any(
             getattr(chain.packets, slot).expiresAt < read_at
@@ -1827,24 +1850,35 @@ class SupervisorService:
             blockers.append("evidence_chain_stale")
         if chain.evidenceClass == "live_observed":
             blockers.append("live_evidence_unavailable")
+        if isinstance(chain, PipelineEpic25EvidenceChainV0View):
+            blockers.append("policy_profile_upgrade_required")
+            return PipelineEpic25EvidenceChainReadV0View(
+                **serialized,
+                chainDigestSha256=SupervisorService._epic_25_evidence_chain_digest(serialized),
+                freshnessState="stale",
+                effectiveDecision="hold",
+                typedBlockers=blockers,
+            )
         policy_profile = chain.policyProfile
-        if policy_profile.expiresAt < read_at or any(gate.expiresAt < read_at for gate in policy_profile.qualityGates):
+        policy_stale = policy_profile.expiresAt < read_at or any(gate.expiresAt < read_at for gate in policy_profile.qualityGates)
+        retention_expired = policy_profile.retentionPolicy.expiresAt < read_at
+        if policy_stale:
             blockers.append("policy_profile_stale")
-        if policy_profile.retentionPolicy.expiresAt < read_at:
+        if retention_expired:
             blockers.append("retention_policy_expired")
         if policy_profile.retentionPolicy.verificationStatus != "verified":
             blockers.append("retention_policy_unverified")
         if any(
-            gate.status == "fail" or (gate.requirement == "required" and gate.status != "pass")
+            gate.requirement == "required" and gate.state != "pass"
             for gate in policy_profile.qualityGates
         ):
             blockers.append("quality_gate_not_passed")
         stored_decision = chain.packets.decision.outcome
         effective_decision = "hold" if blockers else stored_decision
-        return PipelineEpic25EvidenceChainReadV0View(
+        return PipelineEpic25EvidenceChainReadV1View(
             **serialized,
             chainDigestSha256=SupervisorService._epic_25_evidence_chain_digest(serialized),
-            freshnessState="stale" if stale else "fresh",
+            freshnessState="stale" if stale or policy_stale or retention_expired else "fresh",
             effectiveDecision=effective_decision,
             typedBlockers=blockers,
         )

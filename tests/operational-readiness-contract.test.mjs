@@ -732,7 +732,10 @@ test("Epic 25 TypeScript and runtime provenance schemas stay aligned", async () 
   for (const token of [
     "PipelineEpic25EvidenceChainV0",
     "pipeline-epic-25-evidence-chain/v0",
+    "PipelineEpic25EvidenceChainV1",
+    "pipeline-epic-25-evidence-chain/v1",
     "validatePipelineEpic25EvidenceChainV0",
+    "validatePipelineEpic25EvidenceChainV1",
     "Final decision must hold whenever complete passing live predecessors are absent.",
     "PipelineEpic25PolicyProfileV0",
     "pipeline-epic-25-policy-profile/v0",
