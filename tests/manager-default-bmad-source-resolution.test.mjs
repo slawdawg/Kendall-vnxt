@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -16,10 +16,14 @@ const STORY_KEY = "91-1-default-bmad-source-resolution-fixture";
 const SOURCE_KEY = "2099-01-01-default-bmad-source-resolution-fixture";
 const STORY_REF = `story:${ARTIFACT_DIR}/${STORY_KEY}.md`;
 const BUNDLE_REF = `prd:${PRD_ROOT}/prd-Kendall_Nxt-${SOURCE_KEY}/prd.md`;
+const SPRINT_STATUS_PATH = join(ARTIFACT_DIR, "sprint-status.yaml");
+const ORIGINAL_SPRINT_STATUS = existsSync(SPRINT_STATUS_PATH)
+  ? readFileSync(SPRINT_STATUS_PATH, "utf8")
+  : null;
 
 function writeFixture({ trackerStatus = "ready-for-dev", storyStatus = "ready-for-dev", sourceKey = SOURCE_KEY, bundleNames = [`prd-Kendall_Nxt-${SOURCE_KEY}`], story = true } = {}) {
   mkdirSync(ARTIFACT_DIR, { recursive: true });
-  writeFileSync(join(ARTIFACT_DIR, "sprint-status.yaml"), [
+  writeFileSync(SPRINT_STATUS_PATH, [
     `source_key: ${sourceKey}`,
     `source_ref: _bmad-output/planning-artifacts/epics.md`,
     "development_status:",
@@ -42,7 +46,11 @@ function writeFixture({ trackerStatus = "ready-for-dev", storyStatus = "ready-fo
 }
 
 function cleanupFixture() {
-  rmSync(join(ARTIFACT_DIR, "sprint-status.yaml"), { force: true });
+  if (ORIGINAL_SPRINT_STATUS === null) {
+    rmSync(SPRINT_STATUS_PATH, { force: true });
+  } else {
+    writeFileSync(SPRINT_STATUS_PATH, ORIGINAL_SPRINT_STATUS);
+  }
   rmSync(join(ARTIFACT_DIR, `${STORY_KEY}.md`), { force: true });
   for (const name of [`prd-Kendall_Nxt-${SOURCE_KEY}`, `prd-${SOURCE_KEY}`]) {
     rmSync(join(PRD_ROOT, name), { recursive: true, force: true });
@@ -153,7 +161,7 @@ test("default refill and cycle resolve one ready BMAD story with matching bundle
 
 test("default BMAD resolution fails closed for missing ambiguous unready and mismatched local state", async (t) => {
   const cases = [
-    ["missing tracker", () => {}, "default-bmad-source-sprint-status-missing"],
+    ["missing tracker", () => rmSync(SPRINT_STATUS_PATH, { force: true }), "default-bmad-source-sprint-status-missing"],
     ["missing story", () => writeFixture({ story: false }), "default-bmad-source-story-missing"],
     ["not ready", () => writeFixture({ trackerStatus: "backlog", storyStatus: "backlog" }), "default-bmad-source-story-not-ready"],
     ["tracker story mismatch", () => writeFixture({ storyStatus: "in-progress" }), "default-bmad-source-story-status-mismatch"],
