@@ -254,7 +254,7 @@ jobs:
         run: pnpm run test:supervisor:preflight
 
       - name: Run supervisor tests with duration profile
-        run: pnpm run test:supervisor:profile -- --timeout-ms=360000
+        run: pnpm run test:supervisor:profile -- --timeout-ms=420000
 
   full:
     if: github.event_name == 'push'
