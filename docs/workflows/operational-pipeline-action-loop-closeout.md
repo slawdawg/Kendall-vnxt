@@ -162,12 +162,12 @@ metadata projection, success-only transformation, deterministic replay identity,
 loopback enforcement before fetch, fail-closed unavailable/malformed/conflicting
 supervisor responses, refill dry-run network isolation, and manager summary
 distinction between missing and integrated terminal events. It does not prove
-that the normal BMAD/source intake automatically reaches manager refill,
-invokes this side effect, and persists the resulting event through the
-supervisor on the real runtime path. That end-to-end
-intake-to-manager-to-supervisor integration and
-broader integrated MVP acceptance are still required before full Gate 4 can
-close.
+that source intake automatically invokes this terminal-event side effect: the
+terminal-event sync remains a separate explicit loopback command. The later PR
+#523 evidence below closes a different bounded gap by connecting one eligible
+source-backed seed from manager refill/cycle/run-loop selection to supervisor
+WorkPacket persistence. It does not turn terminal-event sync into an automatic
+side effect or prove broader BMAD source resolution/intake.
 
 Post-merge focused verification for this closeout:
 
@@ -176,12 +176,14 @@ pnpm run test:manager-control-plane:focused
 19 passed, 0 failed
 ```
 
-## Bounded manager source-intake cycle
+## Bounded continuous manager source-intake
 
-Status: merged as PR #521 at
-`2dabb26143ca95a0f57f3595bc8d7ff1490d142c`; one explicit bounded manager
-source-intake cycle now persists an eligible source-backed seed as a
-supervisor-owned WorkPacket. Full Gate 4 integrated MVP remains open.
+Status: the explicit cycle landed as PR #521 at
+`2dabb26143ca95a0f57f3595bc8d7ff1490d142c`; continuous manager integration
+then merged as PR #523 at
+`0dc2c2036edd80f23bea18d1c82033303414b449`. One bounded eligible
+source-backed seed can now flow from refill/cycle/run-loop action selection to
+a supervisor-owned WorkPacket. Full Gate 4 integrated MVP remains open.
 
 The exact proof boundary is planner eligibility first, then explicit loopback
 supervisor persistence. `manager:source-intake-cycle` calls the existing pure
@@ -193,20 +195,46 @@ Only then does it call the loopback-only adapter, POST allowlisted metadata to
 the persisted supervisor WorkPacket identity. Blocked, needs-review, and
 dedupe/skipped states fail closed as typed blocked evidence with no fetch.
 
-This bounded command does not create CandidateWork, WorkItems, attempts, queue
-leases, workers, dispatch actions, provider calls, or source mutations. It does
-not wire source intake into `manager-refill-plan`, `manager-cycle-packet`, or
-`manager-run-loop`; tests assert those commands remain detached from the
-networked intake path. Therefore long-lived manager refill/cycle/run-loop
-orchestration and broader BMAD intake are still not proven. Those remaining
-runtime integrations and broader integrated MVP acceptance are the full Gate 4
-gap; this merged slice does not close Gate 4.
+PR #523 wires that bounded action into the long-lived manager path without
+making the defaults networked. Refill and cycle planning project the action
+only when exactly one seed is eligible and an explicit uncredentialed loopback
+supervisor URL is supplied. `continuous_dry_run` validates and selects the
+canonical candidate/packet/source/supervisor target without fetching.
+`continuous_apply` may invoke the cycle dry-run and then apply only when the
+dry-run/apply command family and target pair agree and the distinct
+`sourceIntake` capability and continuation gates remain open. Omitted URLs and
+default seed/refill/cycle/run-loop operation remain network-free. Ineligible,
+ambiguous, needs-review, dedupe/skipped, blocked, non-loopback, malformed, and
+identity-conflicting states stop before fetch or fail closed.
 
-Post-merge focused verification for the bounded cycle:
+The persisted boundary remains deliberately narrow: allowlisted metadata for
+one source-backed seed is POSTed to the real loopback supervisor WorkPacket
+route, exact `packet.created` identity is checked, and supervisor lifecycle and
+pipeline projection truth are read back from disposable local SQLite. It does
+not create CandidateWork, WorkItems, attempts, queue leases, workers, dispatch
+actions, provider calls, or source mutations, and it does not automatically run
+the separate terminal-event sync.
+
+This is not evidence that arbitrary or broader BMAD source hierarchy is
+resolved, selected, or ingested end to end. It also does not exercise the
+dashboard UI as part of the source-intake path. Because the ADR definition of
+full `integrated_local` requires the real supervisor-owned lifecycle,
+manager/BMAD adapter, and dashboard projection to complete the named bounded
+path together, this evidence does not newly claim full Gate 4 `integrated_local`
+acceptance or full integrated MVP completion.
+
+PR #521 post-merge focused verification for the bounded cycle:
 
 ```text
 pnpm run test:manager-source-intake
 28 passed, 0 failed (Node); 1 passed (supervisor integration)
+```
+
+Current focused verification on PR #523 merge `0dc2c203`:
+
+```text
+pnpm run test:manager-source-intake
+33 passed, 0 failed, 0 skipped (Node); 1 passed (supervisor integration)
 pnpm run test:manager-control-plane:focused
 19 passed, 0 failed
 ```
@@ -214,9 +242,9 @@ pnpm run test:manager-control-plane:focused
 This closeout does not claim live, bounded-live, production-observed, external
 provider/worker/process/shell/network/credential/GitHub/tmux/source-mutation
 authority, or full Gate 4 coverage. Remaining limitations are the normal
-BMAD/source intake-to-manager-to-supervisor runtime integration and broader
-integrated MVP acceptance; full Gate 4 remains unproven. Queue leases, attempts,
-evidence, and workflow/
+broader BMAD source resolution/intake path, dashboard end-to-end source-intake
+proof, and full ADR-defined integrated MVP acceptance; full Gate 4 remains
+unproven. Queue leases, attempts, evidence, and workflow/
 lifecycle events remain durable metadata-only lineage; replay rebuilds the
 packet and linked WorkItem materialized projections from preserved events.
 
