@@ -609,6 +609,7 @@ export const PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION = "pipeline-resilience-
 export const PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION = "pipeline-operational-hardening-runbooks/v0" as const;
 export const PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION = "pipeline-production-readiness-decision/v0" as const;
 export const PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION = "pipeline-observed-evidence-attestation/v0" as const;
+export const PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION = "pipeline-epic-25-evidence-chain/v0" as const;
 
 export const PIPELINE_OPERATIONAL_ACTION_RISK_TIERS = ["low", "medium", "high", "extreme"] as const;
 export type PipelineOperationalActionRiskTierV0 = (typeof PIPELINE_OPERATIONAL_ACTION_RISK_TIERS)[number];
@@ -1118,6 +1119,68 @@ export interface PipelineProductionReadinessDecisionEvidenceV0 {
   };
 }
 
+export const PIPELINE_EPIC_25_EVIDENCE_CHAIN_SLOTS = ["readiness", "canary", "ramp", "recovery", "hardening", "decision"] as const;
+export type PipelineEpic25EvidenceChainSlotV0 = (typeof PIPELINE_EPIC_25_EVIDENCE_CHAIN_SLOTS)[number];
+
+export type PipelineEpic25EvidenceDetailsV0 =
+  | { kind: "readiness"; backendTruth: PipelineOperationalReadinessBackendTruthV0; authorityState: PipelineOperationalActionAuthorityStateV0; gateCount: number; thresholdsComplete: boolean; telemetryReady: boolean; rollbackReady: boolean; recoveryReady: boolean; configurationValid: boolean }
+  | { kind: "canary"; workerCount: 1; backendTruth: PipelineOperationalReadinessBackendTruthV0; leaseState: "pass" | "fail" | "blocked"; checkpointState: "pass" | "fail" | "blocked"; measurementsComplete: boolean; canaryAuthorityProven: boolean; rampAllowed: boolean }
+  | { kind: "ramp"; canaryPacketId: string; canaryOutcome: PipelineOneWorkerLiveCanaryOutcomeV0; stageWorkerCounts: [1, 2, 4, 6]; stageOutcomes: [PipelineLiveCapacityRampOutcomeV0, PipelineLiveCapacityRampOutcomeV0, PipelineLiveCapacityRampOutcomeV0, PipelineLiveCapacityRampOutcomeV0]; scaleEvidenceReady: boolean }
+  | { kind: "recovery"; rampPacketId: string; predecessorOutcome: PipelineLiveCapacityRampOutcomeV0; drillCount: number; allDrillsPassed: boolean; idempotencyProven: boolean; silentRetryObserved: false; reliabilityEvidenceReady: boolean }
+  | { kind: "hardening"; recoveryPacketId: string; predecessorOutcome: PipelineResilienceRecoveryOutcomeV0; domainCount: number; unresolvedHighRiskGap: boolean; readinessHandoffReady: boolean }
+  | { kind: "decision"; predecessorPacketIds: Record<"canary" | "ramp" | "recovery" | "hardening", string>; predecessorOutcomes: Record<"canary" | "ramp" | "recovery" | "hardening", "pass" | "hold" | "stop">; authorityReady: boolean; simulatedEvidence: boolean; staleEvidence: boolean; fixtureEvidence: boolean };
+
+export interface PipelineEpic25EvidenceChainPacketV0 {
+  slot: PipelineEpic25EvidenceChainSlotV0;
+  packetId: string;
+  packetSchemaVersion:
+    | typeof PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION
+    | typeof PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION
+    | typeof PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION
+    | typeof PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION
+    | typeof PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION
+    | typeof PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION;
+  predecessorPacketId: string | null;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  outcome: PipelineOperationalReadinessOutcomeV0 | PipelineOneWorkerLiveCanaryOutcomeV0 | PipelineProductionReadinessDecisionV0;
+  sourceRefs: PipelineOperationalActionEvidenceRefsV0;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  checkedAt: string;
+  expiresAt: string;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
+  details: PipelineEpic25EvidenceDetailsV0;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface PipelineEpic25EvidenceChainV0 {
+  schemaVersion: typeof PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION;
+  authoritativePacketId: string;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  packets: {
+    readiness: PipelineEpic25EvidenceChainPacketV0;
+    canary: PipelineEpic25EvidenceChainPacketV0;
+    ramp: PipelineEpic25EvidenceChainPacketV0;
+    recovery: PipelineEpic25EvidenceChainPacketV0;
+    hardening: PipelineEpic25EvidenceChainPacketV0;
+    decision: PipelineEpic25EvidenceChainPacketV0;
+  };
+  checkedAt: string;
+  expiresAt: string;
+  executionAllowed: false;
+  providerCallsAllowed: false;
+  mutationAllowed: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface PipelineEpic25EvidenceChainReadV0 extends PipelineEpic25EvidenceChainV0 {
+  chainDigestSha256: `sha256:${string}`;
+  freshnessState: "fresh" | "stale";
+  effectiveDecision: PipelineProductionReadinessDecisionV0;
+  typedBlockers: Array<"evidence_chain_stale" | "live_evidence_unavailable">;
+}
+
 export interface PipelineOperationalActionValidationIssueV0 {
   field: string;
   code:
@@ -1260,6 +1323,8 @@ const OPERATIONAL_ACTION_IDENTIFIER =
   /^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/;
 const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
 const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
+const EPIC_25_RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+const EPIC_25_HIGH_ENTROPY_OR_PEM = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?:^|:)[A-Za-z0-9+/]{48,}={0,2}$/i;
 const OPERATIONAL_ACTION_MERGE_HEAD_SHA_EVIDENCE = /^evidence:merge-head-sha-[a-f0-9]{40}$/;
 const OPERATIONAL_ACTION_MERGE_BASE_EVIDENCE = /^evidence:merge-base-[a-z0-9._/@:-]{1,120}$/;
 const OPERATIONAL_ACTION_MERGE_PR_EVIDENCE = /^evidence:merge-pr-[0-9]{1,10}$/;
@@ -2078,6 +2143,205 @@ export function validatePipelineProductionReadinessDecisionEvidenceV0(evidence: 
   validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION, checkedAtMs);
   if (isOneOfString(record.decision, ["go", "limited_rollout"]) && record.evidenceClass !== "live_observed") issues.push({ field: "evidenceClass", code: "policy_violation", summary: "Go or limited rollout requires independently observed live provenance." });
   return issues;
+}
+
+export function validatePipelineEpic25EvidenceChainV0(
+  evidence: unknown,
+  nowMs: number = Date.now(),
+): PipelineOperationalActionValidationIssueV0[] {
+  const issues: PipelineOperationalActionValidationIssueV0[] = [];
+  const record = operationalActionRecord(evidence, issues);
+  pushForbiddenObjectFieldIssues(issues, record);
+  pushUnknownFieldIssues(issues, record, new Set([
+    "schemaVersion", "authoritativePacketId", "evidenceClass", "packets", "checkedAt", "expiresAt",
+    "executionAllowed", "providerCallsAllowed", "mutationAllowed", "metadataOnly", "rawPayloadRetained",
+  ]));
+  if (record.schemaVersion !== PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION) {
+    issues.push({ field: "schemaVersion", code: "bad_schema_version", summary: "Epic 25 evidence chains use an unsupported schema version." });
+  }
+  if (typeof record.authoritativePacketId !== "string" || !isSafeOperationalIdentifierText(record.authoritativePacketId)) {
+    issues.push({ field: "authoritativePacketId", code: "blank_identifier", summary: "Epic 25 evidence chains require an exact safe authoritative packet id." });
+  }
+  pushEnumIssue(issues, "evidenceClass", record.evidenceClass, PIPELINE_OPERATIONAL_EVIDENCE_CLASSES);
+  if (record.metadataOnly !== true || record.rawPayloadRetained !== false || record.executionAllowed !== false ||
+      record.providerCallsAllowed !== false || record.mutationAllowed !== false) {
+    issues.push({ field: "metadataOnly", code: "bad_retention_flag", summary: "Epic 25 evidence chains are metadata-only and grant no execution, provider, or mutation authority." });
+  }
+  const chainCheckedAtMs = typeof record.checkedAt === "string" ? Date.parse(record.checkedAt) : NaN;
+  const chainExpiresAtMs = typeof record.expiresAt === "string" ? Date.parse(record.expiresAt) : NaN;
+  if (typeof record.checkedAt !== "string" || typeof record.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(record.checkedAt) ||
+      !EPIC_25_RFC3339_TIMESTAMP.test(record.expiresAt) || !Number.isFinite(chainCheckedAtMs) || !Number.isFinite(chainExpiresAtMs) || chainCheckedAtMs > nowMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS ||
+      chainExpiresAtMs < nowMs || chainExpiresAtMs <= chainCheckedAtMs || chainExpiresAtMs - chainCheckedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
+    issues.push({ field: "checkedAt", code: "stale_or_unparseable_readiness", summary: "Epic 25 evidence-chain timestamps must be current, unexpired, and bounded." });
+  }
+
+  const packets = operationalActionRecord(record.packets, issues, "packets");
+  pushUnknownFieldIssues(issues, packets, new Set(PIPELINE_EPIC_25_EVIDENCE_CHAIN_SLOTS));
+  const expectedSchemas: Record<PipelineEpic25EvidenceChainSlotV0, string> = {
+    readiness: PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION,
+    canary: PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION,
+    ramp: PIPELINE_LIVE_CAPACITY_RAMP_SCHEMA_VERSION,
+    recovery: PIPELINE_RESILIENCE_RECOVERY_SCHEMA_VERSION,
+    hardening: PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
+    decision: PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION,
+  };
+  const packetKeys = new Set([
+    "slot", "packetId", "packetSchemaVersion", "predecessorPacketId", "evidenceClass", "outcome", "sourceRefs",
+    "evidenceRefs", "checkedAt", "expiresAt", "observedEvidenceAttestation", "details", "metadataOnly", "rawPayloadRetained",
+  ]);
+  const validatedPackets: Partial<Record<PipelineEpic25EvidenceChainSlotV0, Record<string, unknown>>> = {};
+  const packetIds = new Set<string>();
+  const attestationIds = new Set<string>();
+  const receiptIds = new Set<string>();
+  let previousPacketId: string | null = null;
+  for (const slot of PIPELINE_EPIC_25_EVIDENCE_CHAIN_SLOTS) {
+    const value = packets[slot];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      issues.push({ field: `packets.${slot}`, code: "evidence_required", summary: `Epic 25 evidence chains require the ${slot} packet.` });
+      continue;
+    }
+    const packet = operationalActionRecord(value, issues, `packets.${slot}`);
+    validatedPackets[slot] = packet;
+    pushUnknownFieldIssues(issues, packet, packetKeys);
+    if (packet.slot !== slot || packet.packetSchemaVersion !== expectedSchemas[slot]) {
+      issues.push({ field: `packets.${slot}.packetSchemaVersion`, code: "bad_schema_version", summary: `Epic 25 ${slot} evidence must use its exact slot and packet schema.` });
+    }
+    if (typeof packet.packetId !== "string" || !isSafeOperationalIdentifierText(packet.packetId)) {
+      issues.push({ field: `packets.${slot}.packetId`, code: "blank_identifier", summary: `Epic 25 ${slot} evidence requires a safe packet id.` });
+    }
+    if (typeof packet.packetId === "string" && packetIds.has(packet.packetId)) issues.push({ field: `packets.${slot}.packetId`, code: "inconsistent_result", summary: "Epic 25 packet ids must be unique across all six slots." });
+    if (typeof packet.packetId === "string") packetIds.add(packet.packetId);
+    if (packet.predecessorPacketId !== previousPacketId) {
+      issues.push({ field: `packets.${slot}.predecessorPacketId`, code: "inconsistent_result", summary: `Epic 25 ${slot} evidence must identify the exact preceding packet.` });
+    }
+    previousPacketId = typeof packet.packetId === "string" ? packet.packetId : null;
+    if (packet.evidenceClass !== record.evidenceClass) {
+      issues.push({ field: `packets.${slot}.evidenceClass`, code: "inconsistent_result", summary: "Every Epic 25 packet must use the chain evidence class." });
+    }
+    if (!isPipelineOperationalActionEvidenceRefsV0(packet.sourceRefs) || !isPipelineOperationalActionEvidenceRefsV0(packet.evidenceRefs) ||
+        (packet.sourceRefs as unknown[]).some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref)) ||
+        (packet.evidenceRefs as unknown[]).some((ref) => typeof ref === "string" && EPIC_25_HIGH_ENTROPY_OR_PEM.test(ref))) {
+      issues.push({ field: `packets.${slot}.evidenceRefs`, code: "evidence_required", summary: `Epic 25 ${slot} evidence requires bounded source and evidence refs.` });
+    }
+    if (packet.metadataOnly !== true || packet.rawPayloadRetained !== false) {
+      issues.push({ field: `packets.${slot}.metadataOnly`, code: "bad_retention_flag", summary: `Epic 25 ${slot} evidence must be metadata-only.` });
+    }
+    const checkedAtMs = typeof packet.checkedAt === "string" ? Date.parse(packet.checkedAt) : NaN;
+    const expiresAtMs = typeof packet.expiresAt === "string" ? Date.parse(packet.expiresAt) : NaN;
+    if (typeof packet.checkedAt !== "string" || typeof packet.expiresAt !== "string" || !EPIC_25_RFC3339_TIMESTAMP.test(packet.checkedAt) ||
+        !EPIC_25_RFC3339_TIMESTAMP.test(packet.expiresAt) || !Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || checkedAtMs > chainCheckedAtMs || expiresAtMs < nowMs ||
+        expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
+      issues.push({ field: `packets.${slot}.checkedAt`, code: "stale_or_unparseable_readiness", summary: `Epic 25 ${slot} evidence is stale, future-dated, expired, or malformed.` });
+    }
+    validatePipelineObservedEvidenceProvenanceV0(issues, packet, expectedSchemas[slot], checkedAtMs);
+    const attestation = packet.observedEvidenceAttestation as Record<string, unknown> | null | undefined;
+    const subject = attestation && typeof attestation === "object" ? attestation.subject as Record<string, unknown> | undefined : undefined;
+    const receipt = attestation && typeof attestation === "object" ? attestation.receipt as Record<string, unknown> | undefined : undefined;
+    if (record.evidenceClass === "live_observed" && subject?.targetRef !== packet.packetId) {
+      issues.push({ field: `packets.${slot}.observedEvidenceAttestation.subject.targetRef`, code: "inconsistent_result", summary: "Live observation attestations must target the exact evidence packet id." });
+    }
+    if (attestation) {
+      if (typeof attestation.attestationId === "string" && attestationIds.has(attestation.attestationId)) issues.push({ field: `packets.${slot}.observedEvidenceAttestation.attestationId`, code: "inconsistent_result", summary: "Observation attestation ids must be unique across the chain." });
+      if (typeof attestation.attestationId === "string") attestationIds.add(attestation.attestationId);
+      if (typeof receipt?.receiptId === "string" && receiptIds.has(receipt.receiptId)) issues.push({ field: `packets.${slot}.observedEvidenceAttestation.receipt.receiptId`, code: "inconsistent_result", summary: "Observation receipt ids must be unique across the chain." });
+      if (typeof receipt?.receiptId === "string") receiptIds.add(receipt.receiptId);
+      const observedAtMs = typeof receipt?.observedAt === "string" ? Date.parse(receipt.observedAt) : NaN;
+      if (typeof receipt?.observedAt !== "string" || typeof receipt?.issuedAt !== "string" || typeof receipt?.expiresAt !== "string" ||
+          !EPIC_25_RFC3339_TIMESTAMP.test(receipt.observedAt) || !EPIC_25_RFC3339_TIMESTAMP.test(receipt.issuedAt) || !EPIC_25_RFC3339_TIMESTAMP.test(receipt.expiresAt) ||
+          !Number.isFinite(observedAtMs) || checkedAtMs - observedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS || observedAtMs > checkedAtMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS) {
+        issues.push({ field: `packets.${slot}.observedEvidenceAttestation.receipt.observedAt`, code: "stale_or_unparseable_readiness", summary: "Observation receipt timestamps must be timezone-bearing and fresh relative to packet checkedAt." });
+      }
+      const receiptSourceRefs = Array.isArray(receipt?.sourceRefs) ? receipt.sourceRefs : [];
+      const receiptEvidenceRefs = Array.isArray(receipt?.evidenceRefs) ? receipt.evidenceRefs : [];
+      if (!sameStringSet(receiptSourceRefs, packet.sourceRefs) || !sameStringSet(receiptEvidenceRefs, packet.evidenceRefs)) {
+        issues.push({ field: `packets.${slot}.observedEvidenceAttestation.receipt`, code: "inconsistent_result", summary: "Observation receipts must exactly bind packet source and evidence ref sets." });
+      }
+    }
+    validatePipelineEpic25PacketDetailsV0(issues, slot, packet.details, validatedPackets);
+  }
+
+  const readinessOutcome = validatedPackets.readiness?.outcome;
+  const canaryOutcome = validatedPackets.canary?.outcome;
+  const rampOutcome = validatedPackets.ramp?.outcome;
+  const recoveryOutcome = validatedPackets.recovery?.outcome;
+  const hardeningOutcome = validatedPackets.hardening?.outcome;
+  const decisionOutcome = validatedPackets.decision?.outcome;
+  if (!isOneOfString(readinessOutcome, ["go", "no_go"])) issues.push({ field: "packets.readiness.outcome", code: "invalid_enum", summary: "Readiness outcome must be go or no_go." });
+  for (const [slot, outcome] of [["canary", canaryOutcome], ["ramp", rampOutcome], ["recovery", recoveryOutcome], ["hardening", hardeningOutcome]] as const) {
+    if (!isOneOfString(outcome, ["pass", "hold", "stop"])) issues.push({ field: `packets.${slot}.outcome`, code: "invalid_enum", summary: `${slot} outcome must be pass, hold, or stop.` });
+  }
+  if (!isOneOfString(decisionOutcome, PIPELINE_PRODUCTION_READINESS_DECISIONS)) issues.push({ field: "packets.decision.outcome", code: "invalid_enum", summary: "Final decision must be go, hold, or limited_rollout." });
+  const livePredecessorsPresent = record.evidenceClass === "live_observed" && readinessOutcome === "go" && canaryOutcome === "pass" &&
+    rampOutcome === "pass" && recoveryOutcome === "pass" && hardeningOutcome === "pass";
+  if (!livePredecessorsPresent && decisionOutcome !== "hold") {
+    issues.push({ field: "packets.decision.outcome", code: "policy_violation", summary: "Final decision must hold whenever complete passing live predecessors are absent." });
+  }
+  const rampDetails = validatedPackets.ramp?.details as Record<string, unknown> | undefined;
+  const recoveryDetails = validatedPackets.recovery?.details as Record<string, unknown> | undefined;
+  const hardeningDetails = validatedPackets.hardening?.details as Record<string, unknown> | undefined;
+  const decisionDetails = validatedPackets.decision?.details as Record<string, unknown> | undefined;
+  if (rampDetails?.canaryPacketId !== validatedPackets.canary?.packetId || rampDetails?.canaryOutcome !== canaryOutcome) issues.push({ field: "packets.ramp.details", code: "inconsistent_result", summary: "Ramp details must bind the exact canary packet and outcome." });
+  if (recoveryDetails?.rampPacketId !== validatedPackets.ramp?.packetId || recoveryDetails?.predecessorOutcome !== rampOutcome) issues.push({ field: "packets.recovery.details", code: "inconsistent_result", summary: "Recovery details must bind the exact ramp packet and outcome." });
+  if (hardeningDetails?.recoveryPacketId !== validatedPackets.recovery?.packetId || hardeningDetails?.predecessorOutcome !== recoveryOutcome) issues.push({ field: "packets.hardening.details", code: "inconsistent_result", summary: "Hardening details must bind the exact recovery packet and outcome." });
+  const decisionIds = decisionDetails?.predecessorPacketIds as Record<string, unknown> | undefined;
+  const decisionOutcomes = decisionDetails?.predecessorOutcomes as Record<string, unknown> | undefined;
+  for (const slot of ["canary", "ramp", "recovery", "hardening"] as const) {
+    if (decisionIds?.[slot] !== validatedPackets[slot]?.packetId || decisionOutcomes?.[slot] !== validatedPackets[slot]?.outcome) issues.push({ field: "packets.decision.details", code: "inconsistent_result", summary: "Decision details must bind every exact predecessor packet and outcome." });
+  }
+  return issues;
+}
+
+function sameStringSet(left: unknown, right: unknown): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length ||
+      left.some((value) => typeof value !== "string") || right.some((value) => typeof value !== "string")) return false;
+  return new Set(left as string[]).size === left.length && (left as string[]).every((value) => (right as string[]).includes(value));
+}
+
+function validatePipelineEpic25PacketDetailsV0(
+  issues: PipelineOperationalActionValidationIssueV0[],
+  slot: PipelineEpic25EvidenceChainSlotV0,
+  value: unknown,
+  _packets: Partial<Record<PipelineEpic25EvidenceChainSlotV0, Record<string, unknown>>>,
+): void {
+  const details = operationalActionRecord(value, issues, `packets.${slot}.details`);
+  if (details.kind !== slot) {
+    issues.push({ field: `packets.${slot}.details.kind`, code: "inconsistent_result", summary: "Epic 25 packet details must use the slot-specific contract." });
+    return;
+  }
+  const positiveInteger = (candidate: unknown) => typeof candidate === "number" && Number.isInteger(candidate) && candidate > 0;
+  if (slot === "readiness") {
+    if (!isOneOfString(details.backendTruth, PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS) || !positiveInteger(details.gateCount) ||
+        ["thresholdsComplete", "telemetryReady", "rollbackReady", "recoveryReady", "configurationValid"].some((field) => typeof details[field] !== "boolean")) {
+      issues.push({ field: "packets.readiness.details", code: "evidence_required", summary: "Readiness details require backend truth, gates, thresholds, telemetry, rollback, recovery, and configuration state." });
+    }
+  } else if (slot === "canary") {
+    if (details.workerCount !== 1 || !isOneOfString(details.backendTruth, PIPELINE_OPERATIONAL_READINESS_BACKEND_TRUTHS) ||
+        !isOneOfString(details.leaseState, ["pass", "fail", "blocked"]) || !isOneOfString(details.checkpointState, ["pass", "fail", "blocked"]) ||
+        ["measurementsComplete", "canaryAuthorityProven", "rampAllowed"].some((field) => typeof details[field] !== "boolean")) {
+      issues.push({ field: "packets.canary.details", code: "evidence_required", summary: "Canary details require one-worker truth, lease, checkpoint, measurements, authority, and ramp state." });
+    }
+  } else if (slot === "ramp") {
+    if (!Array.isArray(details.stageWorkerCounts) || details.stageWorkerCounts.join(",") !== "1,2,4,6" || !Array.isArray(details.stageOutcomes) || details.stageOutcomes.length !== 4 ||
+        details.stageOutcomes.some((outcome) => !isOneOfString(outcome, ["pass", "hold", "stop"])) || typeof details.scaleEvidenceReady !== "boolean") {
+      issues.push({ field: "packets.ramp.details", code: "evidence_required", summary: "Ramp details require the exact 1-2-4-6 stage plan and four typed outcomes." });
+    }
+  } else if (slot === "recovery") {
+    if (!positiveInteger(details.drillCount) || details.silentRetryObserved !== false || ["allDrillsPassed", "idempotencyProven", "reliabilityEvidenceReady"].some((field) => typeof details[field] !== "boolean")) {
+      issues.push({ field: "packets.recovery.details", code: "evidence_required", summary: "Recovery details require drills, idempotency, retry, and reliability state." });
+    }
+  } else if (slot === "hardening") {
+    if (!positiveInteger(details.domainCount) || typeof details.unresolvedHighRiskGap !== "boolean" || typeof details.readinessHandoffReady !== "boolean") {
+      issues.push({ field: "packets.hardening.details", code: "evidence_required", summary: "Hardening details require domain, high-risk gap, and handoff state." });
+    }
+  } else {
+    const ids = details.predecessorPacketIds as Record<string, unknown> | undefined;
+    const outcomes = details.predecessorOutcomes as Record<string, unknown> | undefined;
+    const required = ["canary", "ramp", "recovery", "hardening"];
+    if (!ids || !outcomes || Object.keys(ids).sort().join(",") !== required.slice().sort().join(",") || Object.keys(outcomes).sort().join(",") !== required.slice().sort().join(",") ||
+        ["authorityReady", "simulatedEvidence", "staleEvidence", "fixtureEvidence"].some((field) => typeof details[field] !== "boolean")) {
+      issues.push({ field: "packets.decision.details", code: "evidence_required", summary: "Decision details require exact predecessor maps and explicit authority/evidence signals." });
+    }
+  }
 }
 
 function pushOperationalActionCommonIssues(

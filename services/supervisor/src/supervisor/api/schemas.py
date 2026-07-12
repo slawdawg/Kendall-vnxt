@@ -1,5 +1,5 @@
 ﻿import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
@@ -42,6 +42,13 @@ EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
 )
+EPIC_25_EVIDENCE_REF_RE = re.compile(
+    r"^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$"
+)
+PEM_OR_HIGH_ENTROPY_SECRET_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?<![A-Za-z0-9])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
 
 def _is_safe_pipeline_evidence_ref(value: str) -> bool:
@@ -57,6 +64,24 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
         and not EXECUTABLE_PIPELINE_CONTROL_TEXT_RE.search(text)
     )
+
+
+def _is_safe_epic_25_evidence_ref(value: str) -> bool:
+    ref = value.strip()
+    return (
+        ref == value
+        and bool(EPIC_25_EVIDENCE_REF_RE.fullmatch(ref))
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(ref)
+        and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(ref)
+        and _is_safe_pipeline_evidence_ref(ref)
+        and _is_safe_pipeline_control_text(ref)
+    )
+
+
+def _canonical_utc(value: datetime, *, label: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{label} must include an RFC3339 timezone.")
+    return value.astimezone(timezone.utc)
 
 
 def _is_safe_local_proof_text(value: str) -> bool:
@@ -1561,6 +1586,383 @@ class PipelineCanonicalContractV1View(BaseModel):
         return self
 
 
+PipelineOperationalEvidenceClass = Literal["fixture", "integrated_local", "live_observed"]
+PipelineEpic25EvidenceSlot = Literal["readiness", "canary", "ramp", "recovery", "hardening", "decision"]
+PipelineEpic25PacketSchemaVersion = Literal[
+    "pipeline-operational-readiness-contract/v0",
+    "pipeline-one-worker-live-canary/v0",
+    "pipeline-live-capacity-ramp/v0",
+    "pipeline-resilience-recovery-validation/v0",
+    "pipeline-operational-hardening-runbooks/v0",
+    "pipeline-production-readiness-decision/v0",
+]
+
+
+class PipelineObservedEvidenceObserverV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observerType: Literal["independent_runtime"]
+    observerId: str = Field(min_length=1, max_length=200)
+
+    @field_validator("observerId")
+    @classmethod
+    def _observer_id_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Observation observerId must be safe metadata.")
+        return value
+
+
+class PipelineObservedEvidenceSubjectV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    packetSchemaVersion: PipelineEpic25PacketSchemaVersion
+    targetRef: str = Field(min_length=1, max_length=200)
+
+    @field_validator("targetRef")
+    @classmethod
+    def _target_ref_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Observation targetRef must be safe metadata.")
+        return value
+
+
+class PipelineObservedEvidenceReceiptV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    receiptId: str = Field(min_length=1, max_length=200)
+    observedAt: datetime
+    issuedAt: datetime
+    expiresAt: datetime
+    evidenceDigestSha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    sourceRefs: list[str] = Field(min_length=1, max_length=24)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator("observedAt", "issuedAt", "expiresAt")
+    @classmethod
+    def _receipt_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Observation receipt timestamp")
+
+    @field_validator("receiptId")
+    @classmethod
+    def _receipt_id_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Observation receiptId must be safe metadata.")
+        return value
+
+    @field_validator("sourceRefs", "evidenceRefs")
+    @classmethod
+    def _receipt_refs_must_be_safe(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or not all(_is_safe_epic_25_evidence_ref(ref) for ref in refs):
+            raise ValueError("Observation receipt refs must be unique safe metadata refs.")
+        return sorted(refs)
+
+    @model_validator(mode="after")
+    def _receipt_window_must_be_ordered(self):
+        if self.observedAt > self.issuedAt or self.issuedAt > self.expiresAt:
+            raise ValueError("Observation receipt timestamps must be ordered.")
+        if (self.expiresAt - self.issuedAt).total_seconds() > 300:
+            raise ValueError("Observation receipt lifetime must not exceed five minutes.")
+        return self
+
+
+class PipelineObservedEvidenceAttestationV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["pipeline-observed-evidence-attestation/v0"]
+    attestationId: str = Field(min_length=1, max_length=200)
+    evidenceClass: Literal["live_observed"]
+    observer: PipelineObservedEvidenceObserverV0View
+    subject: PipelineObservedEvidenceSubjectV0View
+    receipt: PipelineObservedEvidenceReceiptV0View
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("attestationId")
+    @classmethod
+    def _attestation_id_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Observation attestationId must be safe metadata.")
+        return value
+
+
+class PipelineEpic25ReadinessDetailsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["readiness"]
+    backendTruth: Literal["live", "simulated", "dry_run"]
+    authorityState: Literal["allowed", "blocked", "unknown"]
+    gateCount: PositiveInt
+    thresholdsComplete: bool
+    telemetryReady: bool
+    rollbackReady: bool
+    recoveryReady: bool
+    configurationValid: bool
+
+
+class PipelineEpic25CanaryDetailsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["canary"]
+    workerCount: Literal[1]
+    backendTruth: Literal["live", "simulated", "dry_run"]
+    leaseState: Literal["pass", "fail", "blocked"]
+    checkpointState: Literal["pass", "fail", "blocked"]
+    measurementsComplete: bool
+    canaryAuthorityProven: bool
+    rampAllowed: bool
+
+
+class PipelineEpic25RampDetailsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["ramp"]
+    canaryPacketId: str = Field(min_length=1, max_length=200)
+    canaryOutcome: Literal["pass", "hold", "stop"]
+    stageWorkerCounts: tuple[Literal[1], Literal[2], Literal[4], Literal[6]]
+    stageOutcomes: tuple[
+        Literal["pass", "hold", "stop"],
+        Literal["pass", "hold", "stop"],
+        Literal["pass", "hold", "stop"],
+        Literal["pass", "hold", "stop"],
+    ]
+    scaleEvidenceReady: bool
+
+
+class PipelineEpic25RecoveryDetailsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["recovery"]
+    rampPacketId: str = Field(min_length=1, max_length=200)
+    predecessorOutcome: Literal["pass", "hold", "stop"]
+    drillCount: PositiveInt
+    allDrillsPassed: bool
+    idempotencyProven: bool
+    silentRetryObserved: Literal[False]
+    reliabilityEvidenceReady: bool
+
+
+class PipelineEpic25HardeningDetailsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["hardening"]
+    recoveryPacketId: str = Field(min_length=1, max_length=200)
+    predecessorOutcome: Literal["pass", "hold", "stop"]
+    domainCount: PositiveInt
+    unresolvedHighRiskGap: bool
+    readinessHandoffReady: bool
+
+
+class PipelineEpic25DecisionDetailsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["decision"]
+    predecessorPacketIds: dict[Literal["canary", "ramp", "recovery", "hardening"], str]
+    predecessorOutcomes: dict[Literal["canary", "ramp", "recovery", "hardening"], Literal["pass", "hold", "stop"]]
+    authorityReady: bool
+    simulatedEvidence: bool
+    staleEvidence: bool
+    fixtureEvidence: bool
+
+    @model_validator(mode="after")
+    def _decision_predecessor_sets_must_be_complete(self):
+        expected = {"canary", "ramp", "recovery", "hardening"}
+        if set(self.predecessorPacketIds) != expected or set(self.predecessorOutcomes) != expected:
+            raise ValueError("Decision details require all four exact predecessor identities and outcomes.")
+        return self
+
+
+PipelineEpic25EvidenceDetailsV0View = (
+    PipelineEpic25ReadinessDetailsV0View
+    | PipelineEpic25CanaryDetailsV0View
+    | PipelineEpic25RampDetailsV0View
+    | PipelineEpic25RecoveryDetailsV0View
+    | PipelineEpic25HardeningDetailsV0View
+    | PipelineEpic25DecisionDetailsV0View
+)
+
+
+class PipelineEpic25EvidenceChainPacketV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slot: PipelineEpic25EvidenceSlot
+    packetId: str = Field(min_length=1, max_length=200)
+    packetSchemaVersion: PipelineEpic25PacketSchemaVersion
+    predecessorPacketId: str | None = Field(default=None, max_length=200)
+    evidenceClass: PipelineOperationalEvidenceClass
+    outcome: Literal["go", "no_go", "pass", "hold", "stop", "limited_rollout"]
+    sourceRefs: list[str] = Field(min_length=1, max_length=24)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+    checkedAt: datetime
+    expiresAt: datetime
+    observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0View | None
+    details: PipelineEpic25EvidenceDetailsV0View = Field(discriminator="kind")
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("checkedAt", "expiresAt")
+    @classmethod
+    def _packet_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Evidence-chain packet timestamp")
+
+    @field_validator("packetId", "predecessorPacketId")
+    @classmethod
+    def _packet_ids_must_be_safe(cls, value: str | None) -> str | None:
+        if value is not None and not _is_safe_local_proof_text(value):
+            raise ValueError("Evidence-chain packet ids must be safe metadata.")
+        return value
+
+    @field_validator("sourceRefs", "evidenceRefs")
+    @classmethod
+    def _packet_refs_must_be_safe(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or not all(_is_safe_epic_25_evidence_ref(ref) for ref in refs):
+            raise ValueError("Evidence-chain packet refs must be unique safe metadata refs.")
+        return sorted(refs)
+
+    @model_validator(mode="after")
+    def _packet_provenance_must_match(self):
+        if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
+            raise ValueError("Evidence-chain packet timestamps must be ordered and bounded to five minutes.")
+        attestation = self.observedEvidenceAttestation
+        if self.evidenceClass == "live_observed":
+            if attestation is None:
+                raise ValueError("Live-observed evidence requires an independent observation attestation.")
+            if attestation.subject.packetSchemaVersion != self.packetSchemaVersion or attestation.subject.targetRef != self.packetId:
+                raise ValueError("Observation attestation must target the exact packet id and schema.")
+            if attestation.receipt.expiresAt < self.checkedAt or attestation.receipt.issuedAt > self.checkedAt:
+                raise ValueError("Observation receipt must be fresh at the packet check time.")
+            if self.checkedAt - attestation.receipt.observedAt > timedelta(minutes=5) or attestation.receipt.observedAt > self.checkedAt + timedelta(minutes=1):
+                raise ValueError("Observation receipt observedAt must be fresh and not future-dated relative to checkedAt.")
+            if set(attestation.receipt.sourceRefs) != set(self.sourceRefs) or set(attestation.receipt.evidenceRefs) != set(self.evidenceRefs):
+                raise ValueError("Observation receipt must exactly bind the packet source and evidence ref sets.")
+        elif attestation is not None:
+            raise ValueError("Fixture and integrated-local packets cannot carry live observation attestations.")
+        return self
+
+
+class PipelineEpic25EvidenceChainPacketsV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    readiness: PipelineEpic25EvidenceChainPacketV0View
+    canary: PipelineEpic25EvidenceChainPacketV0View
+    ramp: PipelineEpic25EvidenceChainPacketV0View
+    recovery: PipelineEpic25EvidenceChainPacketV0View
+    hardening: PipelineEpic25EvidenceChainPacketV0View
+    decision: PipelineEpic25EvidenceChainPacketV0View
+
+
+class PipelineEpic25EvidenceChainV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["pipeline-epic-25-evidence-chain/v0"]
+    authoritativePacketId: str = Field(min_length=1, max_length=80)
+    evidenceClass: PipelineOperationalEvidenceClass
+    packets: PipelineEpic25EvidenceChainPacketsV0View
+    checkedAt: datetime
+    expiresAt: datetime
+    executionAllowed: Literal[False]
+    providerCallsAllowed: Literal[False]
+    mutationAllowed: Literal[False]
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("checkedAt", "expiresAt")
+    @classmethod
+    def _chain_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Evidence-chain timestamp")
+
+    @field_validator("authoritativePacketId")
+    @classmethod
+    def _authoritative_packet_id_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_local_proof_text(value):
+            raise ValueError("Evidence chain requires a safe authoritative packet id.")
+        return value
+
+    @model_validator(mode="after")
+    def _chain_must_be_complete_and_fail_closed(self):
+        if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
+            raise ValueError("Evidence-chain timestamps must be ordered and bounded to five minutes.")
+        expected_schemas = {
+            "readiness": "pipeline-operational-readiness-contract/v0",
+            "canary": "pipeline-one-worker-live-canary/v0",
+            "ramp": "pipeline-live-capacity-ramp/v0",
+            "recovery": "pipeline-resilience-recovery-validation/v0",
+            "hardening": "pipeline-operational-hardening-runbooks/v0",
+            "decision": "pipeline-production-readiness-decision/v0",
+        }
+        previous_packet_id = None
+        ordered = [self.packets.readiness, self.packets.canary, self.packets.ramp, self.packets.recovery, self.packets.hardening, self.packets.decision]
+        packet_ids = [packet.packetId for packet in ordered]
+        if len(set(packet_ids)) != len(packet_ids):
+            raise ValueError("Evidence-chain packetIds must be unique across all six slots.")
+        attestations = [packet.observedEvidenceAttestation for packet in ordered if packet.observedEvidenceAttestation is not None]
+        if len({attestation.attestationId for attestation in attestations}) != len(attestations):
+            raise ValueError("Live observation attestationIds must be unique across the chain.")
+        if len({attestation.receipt.receiptId for attestation in attestations}) != len(attestations):
+            raise ValueError("Live observation receiptIds must be unique across the chain.")
+        for slot, packet in zip(expected_schemas, ordered, strict=True):
+            if packet.slot != slot or packet.packetSchemaVersion != expected_schemas[slot]:
+                raise ValueError(f"Evidence-chain {slot} slot uses a mismatched packet schema.")
+            if packet.predecessorPacketId != previous_packet_id:
+                raise ValueError(f"Evidence-chain {slot} slot must identify its exact predecessor packet.")
+            if packet.evidenceClass != self.evidenceClass:
+                raise ValueError("Every evidence-chain packet must use the chain evidenceClass.")
+            if packet.checkedAt > self.checkedAt or packet.expiresAt < self.checkedAt:
+                raise ValueError(f"Evidence-chain {slot} packet is stale or newer than the chain check.")
+            previous_packet_id = packet.packetId
+            if packet.details.kind != slot:
+                raise ValueError(f"Evidence-chain {slot} packet must use its slot-specific detail contract.")
+        if self.packets.readiness.outcome not in {"go", "no_go"}:
+            raise ValueError("Readiness packet outcome must be go or no_go.")
+        for packet in ordered[1:5]:
+            if packet.outcome not in {"pass", "hold", "stop"}:
+                raise ValueError(f"{packet.slot} packet outcome must be pass, hold, or stop.")
+        if self.packets.decision.outcome not in {"go", "hold", "limited_rollout"}:
+            raise ValueError("Final decision must be go, hold, or limited_rollout.")
+        live_predecessors = (
+            self.evidenceClass == "live_observed"
+            and self.packets.readiness.outcome == "go"
+            and all(packet.outcome == "pass" for packet in ordered[1:5])
+        )
+        if not live_predecessors and self.packets.decision.outcome != "hold":
+            raise ValueError("Final decision must hold whenever complete passing live predecessors are absent.")
+        if self.packets.ramp.details.canaryPacketId != self.packets.canary.packetId or self.packets.ramp.details.canaryOutcome != self.packets.canary.outcome:
+            raise ValueError("Ramp details must bind the exact canary packet and outcome.")
+        if self.packets.recovery.details.rampPacketId != self.packets.ramp.packetId or self.packets.recovery.details.predecessorOutcome != self.packets.ramp.outcome:
+            raise ValueError("Recovery details must bind the exact ramp packet and outcome.")
+        if self.packets.hardening.details.recoveryPacketId != self.packets.recovery.packetId or self.packets.hardening.details.predecessorOutcome != self.packets.recovery.outcome:
+            raise ValueError("Hardening details must bind the exact recovery packet and outcome.")
+        decision_ids = self.packets.decision.details.predecessorPacketIds
+        decision_outcomes = self.packets.decision.details.predecessorOutcomes
+        for slot in ("canary", "ramp", "recovery", "hardening"):
+            predecessor = getattr(self.packets, slot)
+            if decision_ids[slot] != predecessor.packetId or decision_outcomes[slot] != predecessor.outcome:
+                raise ValueError("Decision details must bind every exact predecessor identity and outcome.")
+        return self
+
+
+class PipelineEpic25ServerOwnedActorV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actorType: Literal["operator"]
+    actorId: Literal["pipeline-operator"]
+    actorLabel: Literal["Pipeline operator"]
+
+
+class PipelineEpic25EvidenceChainIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requestedBy: PipelineEpic25ServerOwnedActorV0View
+    expectedCurrentDigestSha256: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    evidenceChain: PipelineEpic25EvidenceChainV0View
+
+
+class PipelineEpic25EvidenceChainReadV0View(PipelineEpic25EvidenceChainV0View):
+    chainDigestSha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    freshnessState: Literal["fresh", "stale"]
+    effectiveDecision: Literal["go", "hold", "limited_rollout"]
+    typedBlockers: list[Literal["evidence_chain_stale", "live_evidence_unavailable"]] = Field(default_factory=list)
+
+
 class PipelineProductModeMappingV0View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1728,6 +2130,7 @@ class AuthoritativeWorkPacketLifecycleView(BaseModel):
     truthLabel: AuthoritativePacketTruthLabel
     sourceRef: AuthoritativePacketSourceRefView
     canonicalContract: PipelineCanonicalContractV1View | None = None
+    evidenceChain: PipelineEpic25EvidenceChainReadV0View | None = None
     productModeMapping: PipelineProductModeMappingV0View | None = None
     createdAt: datetime
     updatedAt: datetime

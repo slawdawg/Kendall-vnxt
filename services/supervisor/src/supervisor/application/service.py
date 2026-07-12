@@ -50,6 +50,7 @@ class OperationalActionReplay(Exception):
 LOCAL_PROOF_TEST_CAPABILITY = object()
 LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
 PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
+PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY = "pipelineEpic25EvidenceChain"
 
 
 from supervisor.api.schemas import (
@@ -152,6 +153,9 @@ from supervisor.api.schemas import (
     PremiumApprovalRequestView,
     PipelineBackendReachabilityV0View,
     PipelineCanonicalContractV1View,
+    PipelineEpic25EvidenceChainIngestRequest,
+    PipelineEpic25EvidenceChainReadV0View,
+    PipelineEpic25EvidenceChainV0View,
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
     PipelineExecuteAdmissionCountsV0View,
@@ -754,6 +758,69 @@ class SupervisorService:
         if not packet:
             return None
         return await self.to_authoritative_work_packet_view(session, packet)
+
+    async def ingest_pipeline_epic_25_evidence_chain(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+        payload: PipelineEpic25EvidenceChainIngestRequest,
+    ) -> PipelineEpic25EvidenceChainReadV0View | None:
+        packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if not packet:
+            return None
+        self._validate_server_owned_local_operator(payload.requestedBy)
+        evidence_chain = payload.evidenceChain
+        if evidence_chain.authoritativePacketId != packet_id:
+            raise ValueError("Epic 25 evidence chain must target the exact authoritative packet id.")
+        if evidence_chain.evidenceClass == "live_observed":
+            raise ValueError(
+                "Live-observed Epic 25 ingestion is unavailable until the server can resolve a trusted, "
+                "server-issued and cryptographically bound observer receipt. Caller assertions cannot create live or go evidence."
+            )
+        now = datetime.now(timezone.utc)
+        if evidence_chain.checkedAt > now + timedelta(minutes=1) or evidence_chain.expiresAt < now:
+            raise ValueError("Epic 25 evidence chain is stale, expired, or future-dated.")
+        for slot in ("readiness", "canary", "ramp", "recovery", "hardening", "decision"):
+            evidence_packet = getattr(evidence_chain.packets, slot)
+            if evidence_packet.expiresAt < now:
+                raise ValueError(f"Epic 25 {slot} evidence packet is stale or expired.")
+
+        serialized = evidence_chain.model_dump(mode="json")
+        original_metadata = dict(packet.source_ref_json or {})
+        current_raw = original_metadata.get(PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY)
+        if current_raw == serialized:
+            current_chain = PipelineEpic25EvidenceChainV0View.model_validate(current_raw)
+            return self._epic_25_evidence_chain_read_view(current_chain, now)
+        if current_raw is None:
+            if payload.expectedCurrentDigestSha256 is not None:
+                raise ValueError("Initial Epic 25 evidence ingestion must not claim an existing chain digest.")
+        else:
+            current_chain = PipelineEpic25EvidenceChainV0View.model_validate(current_raw)
+            current_digest = self._epic_25_evidence_chain_digest(current_raw)
+            if payload.expectedCurrentDigestSha256 != current_digest:
+                raise ValueError("Epic 25 evidence-chain replacement rejected because the expected current digest changed.")
+            if evidence_chain.checkedAt <= current_chain.checkedAt:
+                raise ValueError("Epic 25 evidence-chain replacement must advance checkedAt monotonically.")
+        stored_metadata = dict(original_metadata)
+        stored_metadata[PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY] = serialized
+        update_result = await session.execute(
+            update(AuthoritativeWorkPacket)
+            .where(
+                AuthoritativeWorkPacket.id == packet_id,
+                AuthoritativeWorkPacket.current_event_id == packet.current_event_id,
+                AuthoritativeWorkPacket.source_ref_json == original_metadata,
+            )
+            .values(source_ref_json=stored_metadata, updated_at=now)
+        )
+        if update_result.rowcount != 1:
+            await session.rollback()
+            raise ValueError("Epic 25 evidence-chain replacement rejected because packet metadata changed concurrently.")
+        try:
+            await session.commit()
+        except SQLAlchemyError:
+            await session.rollback()
+            raise
+        return self._epic_25_evidence_chain_read_view(evidence_chain, now)
 
     async def transition_authoritative_work_packet(
         self,
@@ -1636,6 +1703,7 @@ class SupervisorService:
         current_event = next((event for event in events if event.id == packet.current_event_id), None)
         read_at = datetime.now(timezone.utc)
         canonical_contract = self._canonical_contract_from_packet_metadata(packet.source_ref_json)
+        evidence_chain = self._epic_25_evidence_chain_from_packet_metadata(packet.source_ref_json, read_at)
         return AuthoritativeWorkPacketLifecycleView(
             packetId=packet.id,
             title=packet.title,
@@ -1644,6 +1712,7 @@ class SupervisorService:
             truthLabel=packet.truth_label if current_event else latest_event.truth_label if latest_event else packet.truth_label,
             sourceRef=self._packet_source_ref_payload(packet.source_ref_json),
             canonicalContract=canonical_contract,
+            evidenceChain=evidence_chain,
             productModeMapping=self._product_mode_mapping(canonical_contract, read_at),
             createdAt=packet.created_at,
             updatedAt=packet.updated_at,
@@ -1714,6 +1783,52 @@ class SupervisorService:
             return PipelineCanonicalContractV1View.model_validate(raw_contract)
         except ValidationError:
             return None
+
+    @staticmethod
+    def _epic_25_evidence_chain_from_packet_metadata(
+        stored_payload: object,
+        read_at: datetime,
+    ) -> PipelineEpic25EvidenceChainReadV0View | None:
+        if not isinstance(stored_payload, dict):
+            return None
+        raw_chain = stored_payload.get(PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY)
+        if raw_chain is None:
+            return None
+        try:
+            chain = PipelineEpic25EvidenceChainV0View.model_validate(raw_chain)
+            return SupervisorService._epic_25_evidence_chain_read_view(chain, read_at)
+        except ValidationError:
+            return None
+
+    @staticmethod
+    def _epic_25_evidence_chain_digest(serialized: object) -> str:
+        canonical = json.dumps(serialized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return f"sha256:{hashlib.sha256(canonical.encode('utf8')).hexdigest()}"
+
+    @staticmethod
+    def _epic_25_evidence_chain_read_view(
+        chain: PipelineEpic25EvidenceChainV0View,
+        read_at: datetime,
+    ) -> PipelineEpic25EvidenceChainReadV0View:
+        serialized = chain.model_dump(mode="json")
+        stale = chain.expiresAt < read_at or any(
+            getattr(chain.packets, slot).expiresAt < read_at
+            for slot in ("readiness", "canary", "ramp", "recovery", "hardening", "decision")
+        )
+        blockers: list[str] = []
+        if stale:
+            blockers.append("evidence_chain_stale")
+        if chain.evidenceClass == "live_observed":
+            blockers.append("live_evidence_unavailable")
+        stored_decision = chain.packets.decision.outcome
+        effective_decision = "hold" if blockers else stored_decision
+        return PipelineEpic25EvidenceChainReadV0View(
+            **serialized,
+            chainDigestSha256=SupervisorService._epic_25_evidence_chain_digest(serialized),
+            freshnessState="stale" if stale else "fresh",
+            effectiveDecision=effective_decision,
+            typedBlockers=blockers,
+        )
 
     def _product_mode_mapping(
         self,
