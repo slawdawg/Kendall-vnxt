@@ -283,6 +283,20 @@ truth or simulated completion. No provider, worker, dispatch, source mutation,
 credential, shell, external network, or unattended execution is proven or
 enabled by this closeout.
 
+## Gate 4 canonical worker-result continuation evidence
+
+The focused `pnpm run test:gate4-worker-result-loop` command proves the remaining
+bounded continuation through disposable loopback processes: reconciled manager
+intake persists one supervisor packet, the explicit manager local-proof
+continuation invokes only that packet's supervisor route, and the supervisor
+records one linked WorkItem, completed attempt, verification evidence, queue
+lease, and packet-ready-to-test evidence. The proof rejects stale lease fencing
+and duplicate local-proof idempotency without a second attempt, restarts the
+supervisor and dashboard against the same SQLite file, and reprojects the same
+review packet and attempt lineage. It retains metadata only and proves no
+provider, GitHub, Obsidian, source mutation, worker-process, or external-network
+side effect.
+
 Queue leases, attempts, evidence, and workflow/lifecycle events remain durable
 metadata-only lineage; replay rebuilds the packet and linked WorkItem
 materialized projections from preserved events.
