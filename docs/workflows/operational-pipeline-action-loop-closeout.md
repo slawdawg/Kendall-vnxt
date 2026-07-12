@@ -176,6 +176,41 @@ pnpm run test:manager-control-plane:focused
 19 passed, 0 failed
 ```
 
+## Bounded manager source-intake cycle
+
+Status: merged as PR #521 at
+`2dabb26143ca95a0f57f3595bc8d7ff1490d142c`; one explicit bounded manager
+source-intake cycle now persists an eligible source-backed seed as a
+supervisor-owned WorkPacket. Full Gate 4 integrated MVP remains open.
+
+The exact proof boundary is planner eligibility first, then explicit loopback
+supervisor persistence. `manager:source-intake-cycle` calls the existing pure
+source-backed seed planner before any adapter call and requires both the
+planner packet state and seed eligibility decision to be exactly `eligible`.
+Only then does it call the loopback-only adapter, POST allowlisted metadata to
+`/pipeline-control-plane/work-packets`, validate the exact packet and
+`packet.created` event identity, and annotate the cloned manager packet with
+the persisted supervisor WorkPacket identity. Blocked, needs-review, and
+dedupe/skipped states fail closed as typed blocked evidence with no fetch.
+
+This bounded command does not create CandidateWork, WorkItems, attempts, queue
+leases, workers, dispatch actions, provider calls, or source mutations. It does
+not wire source intake into `manager-refill-plan`, `manager-cycle-packet`, or
+`manager-run-loop`; tests assert those commands remain detached from the
+networked intake path. Therefore long-lived manager refill/cycle/run-loop
+orchestration and broader BMAD intake are still not proven. Those remaining
+runtime integrations and broader integrated MVP acceptance are the full Gate 4
+gap; this merged slice does not close Gate 4.
+
+Post-merge focused verification for the bounded cycle:
+
+```text
+pnpm run test:manager-source-intake
+28 passed, 0 failed (Node); 1 passed (supervisor integration)
+pnpm run test:manager-control-plane:focused
+19 passed, 0 failed
+```
+
 This closeout does not claim live, bounded-live, production-observed, external
 provider/worker/process/shell/network/credential/GitHub/tmux/source-mutation
 authority, or full Gate 4 coverage. Remaining limitations are the normal
