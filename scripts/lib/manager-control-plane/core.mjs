@@ -13647,11 +13647,7 @@ export function buildRefillPlan(options = {}, context = {}) {
       disposition: exhaustionEvaluation.disposition,
     });
   }
-  const sourceSelectionExplicit = sourceRefList(options.sourceRefs).length > 0 ||
-    sourceRefList(context.sourceRefs).length > 0 ||
-    sourceRefList(context.sourceEvidence).length > 0 ||
-    Boolean(context.sourceSlice?.ref);
-  if (shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, sourceSelectionExplicit, context })) {
+  if (refillEligibleSourceWorkPackets.length === 0 && shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, context })) {
     return buildSourceOwnedBacklogExhaustionAuditPacket({
       desiredWorkers,
       dispatchable,
@@ -14274,14 +14270,14 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
   });
 }
 
-function shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, sourceSelectionExplicit = false, context = {} } = {}) {
+function shouldRouteSourceOwnedBacklogExhaustion({ sourceSlice, sourcePlanning, dispatchable, active, context = {} } = {}) {
   const sourceRef = canonicalSourceWorkRef(sourceSlice?.ref || "");
   const planningSourceKey = String(sourcePlanning?.sourceKey || "").trim().toLowerCase();
   const activeSourcePlanningKey = sourceSlice?.type === "prd" ? sourcePlanningKey(sourceSlice.ref) : "";
   const sourcePlanningMatchesSource = Boolean(planningSourceKey && activeSourcePlanningKey && planningSourceKey === activeSourcePlanningKey);
   const sourceOwnedTerminal = context.authoritativeBacklogExhaustion === true ||
     sourceRef === "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md" ||
-    (sourcePlanningMatchesSource && sourceSelectionExplicit);
+    sourcePlanningMatchesSource;
   const sprintStatus = sourcePlanning?.sprintStatus || {};
   const planningWorkCounts = [
     "readyStories",
