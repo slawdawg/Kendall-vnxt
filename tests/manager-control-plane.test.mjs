@@ -7,6 +7,10 @@ import test from "node:test";
 
 import { executeContinuousSelectedAction, runManagerRunLoop } from "../scripts/manager-run-loop.mjs";
 import { runManagerRefillPlan } from "../scripts/manager-refill-plan.mjs";
+import {
+  deriveManagerTerminalEventId,
+  syncManagerSupervisorTerminalEvent,
+} from "../scripts/manager-supervisor-terminal-event-sync.mjs";
 import { runManagerSourcePacketSeed } from "../scripts/manager-source-packet-seed.mjs";
 import {
   buildCodexAdvisorClassificationPlan,
@@ -31733,3 +31737,193 @@ test("review feedback apply keeps sprint review state when transport fails", () 
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test("manager supervisor terminal sync posts exact metadata and transforms only after success", async () => {
+  const packet = managerSupervisorSyncPacket();
+  packet.summary.internalRawPayload = { mustNotCrossBoundary: true };
+  packet.warnings.push({ code: "authoritative-backlog-approval-gated", message: "approval remains required" });
+  packet.blockers.push({ code: "unrelated-stop-line", message: "preserve me", nextAction: "wait" });
+  const calls = [];
+  const result = await syncManagerSupervisorTerminalEvent(packet, "http://127.0.0.1:8000", {
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push({ url, options, body });
+      return managerSupervisorResponse(body);
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8000/manager-control-plane/terminal-events");
+  assert.deepEqual(Object.keys(calls[0].body).sort(), [
+    "eventId", "eventType", "evidenceRefs", "idempotencyKey", "metadataOnly", "nextManagerAction",
+    "rawPayloadRetained", "reconciliationCounts", "resumeRequirement", "runId", "sourceIdentity",
+    "sourceRevision", "unresolvedApprovalGatedWork",
+  ].sort());
+  assert.equal(JSON.stringify(calls[0].body).includes("mustNotCrossBoundary"), false);
+  assert.equal(calls[0].body.metadataOnly, true);
+  assert.equal(calls[0].body.rawPayloadRetained, false);
+  assert.equal(calls[0].options.redirect, "error");
+  assert.equal(packet.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract", "input must remain immutable");
+  assert.equal(result.summary.terminalDisposition.canonicalEventIntegration, "supervisor_canonical_event");
+  assert.deepEqual(result.summary.terminalDisposition.supervisorEvent, result.summary.refillJob.terminalDisposition.supervisorEvent);
+  assert.equal(result.summary.terminalDisposition.supervisorEvent.status, "persisted");
+  assert.match(result.summary.terminalDisposition.supervisorEvent.evidenceRef, /^supervisor-event:manager-terminal-event-[0-9a-f]{40}$/);
+  assert.equal(result.summary.supervisorPersistence, "persisted; supervisor canonical terminal event recorded");
+  assert.deepEqual(result.blockers.map((blocker) => blocker.code), ["unrelated-stop-line"]);
+  assert.equal(result.warnings.length, 1);
+  assert.deepEqual(result.summary.stopLines, packet.summary.stopLines);
+});
+
+test("manager supervisor terminal sync derives deterministic replay identity", async () => {
+  const packet = managerSupervisorSyncPacket();
+  const requests = [];
+  const fetchImpl = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    return managerSupervisorResponse(request, "2026-07-12T02:00:00.000Z");
+  };
+  const first = await syncManagerSupervisorTerminalEvent(packet, "http://localhost:8000/", { fetchImpl });
+  const replay = await syncManagerSupervisorTerminalEvent(packet, "http://localhost:8000/", { fetchImpl });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].eventId, requests[1].eventId);
+  assert.equal(requests[0].eventId, deriveManagerTerminalEventId(packet.summary.terminalDisposition.idempotencyKey));
+  assert.deepEqual(first, replay);
+});
+
+test("manager supervisor terminal sync rejects non-loopback URLs before fetch and fails closed", async () => {
+  let fetchCalls = 0;
+  await assert.rejects(
+    syncManagerSupervisorTerminalEvent(managerSupervisorSyncPacket(), "https://supervisor.example.com", { fetchImpl: async () => { fetchCalls += 1; } }),
+    (error) => {
+      assert.equal(error.code, "manager_supervisor_sync_non_loopback_url");
+      assert.equal(error.packet.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract");
+      assert.ok(error.packet.blockers.some((blocker) => blocker.code === "missing_supervisor_contract"));
+      assert.ok(error.packet.blockers.some((blocker) => blocker.code === "manager_supervisor_sync_non_loopback_url"));
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("manager supervisor terminal sync fails closed for unavailable malformed and conflicting supervisors", async (t) => {
+  const cases = [
+    {
+      name: "unavailable",
+      code: "manager_supervisor_sync_network_error",
+      fetchImpl: async () => { throw new Error("connection refused"); },
+    },
+    {
+      name: "non-2xx",
+      code: "manager_supervisor_sync_http_error",
+      fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+    },
+    {
+      name: "malformed",
+      code: "manager_supervisor_sync_response_malformed",
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ data: { createdAt: "invalid" } }) }),
+    },
+    {
+      name: "conflicting identity",
+      code: "manager_supervisor_sync_identity_conflict",
+      fetchImpl: async (_url, options) => {
+        const request = JSON.parse(options.body);
+        return managerSupervisorResponse({ ...request, sourceRevision: "conflicting-revision" });
+      },
+    },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, async () => {
+      await assert.rejects(
+        syncManagerSupervisorTerminalEvent(managerSupervisorSyncPacket(), "http://[::1]:8000", { fetchImpl: scenario.fetchImpl }),
+        (error) => {
+          assert.equal(error.code, scenario.code);
+          assert.equal(error.packet.ok, false);
+          assert.equal(error.packet.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract");
+          assert.ok(error.packet.blockers.some((blocker) => blocker.code === scenario.code));
+          return true;
+        },
+      );
+    });
+  }
+});
+
+test("manager refill dry runs never fetch supervisor state", () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("dry-run network access is forbidden");
+  };
+  try {
+    const result = runManagerRefillPlan(["--summary-json"], {
+      cwd: process.cwd(),
+      discoverDefaultSources: false,
+    });
+    assert.ok(result.result);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function managerSupervisorSyncPacket() {
+  const terminalDisposition = {
+    disposition: "authoritative_backlog_exhausted",
+    runId: "manager-sync-run",
+    sourceIdentity: "source:accepted-backlog",
+    sourceRevision: "git:b3eb3324",
+    reconciliationCounts: {
+      totalItems: 3,
+      reconciledItems: 3,
+      eligible: 0,
+      queued: 0,
+      leased: 0,
+      running: 0,
+      reviewFix: 0,
+      requiredRetrospective: 0,
+      otherwiseRequired: 0,
+      completed: 1,
+      closed: 1,
+      approvalGated: 1,
+    },
+    unresolvedApprovalGatedWork: [{
+      workId: "approval-1",
+      title: "Operator-gated source",
+      reason: "Explicit approval remains required",
+      sourceRefs: ["source:approval-1"],
+      evidenceRefs: ["evidence:approval-1"],
+    }],
+    evidenceRefs: ["evidence:reconciliation", "source:revision-b3eb3324"],
+    resumeRequirement: "Start a new source-bound manager run after accepted backlog changes.",
+    nextManagerAction: "Wait for newly accepted source-owned backlog.",
+    canonicalEventIntegration: "missing_supervisor_contract",
+    idempotencyKey: "authoritative-backlog-exhausted:manager-sync-run:9f8c",
+    rawPayloadRetained: false,
+  };
+  return {
+    ok: true,
+    status: "authoritative_backlog_exhausted",
+    summary: {
+      terminalDisposition: structuredClone(terminalDisposition),
+      refillJob: {
+        result: "authoritative_backlog_exhausted",
+        state: "completed",
+        terminalDisposition: structuredClone(terminalDisposition),
+      },
+      refillWatermark: { terminalDisposition: structuredClone(terminalDisposition) },
+      supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
+      stopLines: ["never_create_work", "never_dispatch"],
+    },
+    blockers: [{ code: "missing_supervisor_contract", message: "sync required", nextAction: "sync explicitly" }],
+    warnings: [],
+    nextActions: [],
+  };
+}
+
+function managerSupervisorResponse(request, createdAt = "2026-07-12T01:02:03.000Z") {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ data: { ...structuredClone(request), createdAt } }),
+  };
+}

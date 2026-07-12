@@ -14531,12 +14531,20 @@ function refillJobSummary({
 
 function isValidAuthoritativeBacklogExhaustedDisposition(disposition) {
   if (!isPlainObject(disposition) || disposition.disposition !== "authoritative_backlog_exhausted") return false;
-  if (!sanitizeLedgerField(disposition.runId || "", "", 120) || !sanitizeLedgerField(disposition.sourceIdentity || "", "", 240) || !sanitizeLedgerField(disposition.sourceRevision || "", "", 160) || disposition.canonicalEventIntegration !== "missing_supervisor_contract" || disposition.rawPayloadRetained !== false || !sanitizeLedgerField(disposition.idempotencyKey || "", "", 180) || !sanitizeLedgerField(disposition.resumeRequirement || "", "", 360) || !sanitizeLedgerField(disposition.nextManagerAction || "", "", 360) || !isPlainObject(disposition.reconciliationCounts) || !Array.isArray(disposition.unresolvedApprovalGatedWork) || !disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord) || !Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0) return false;
+  if (!sanitizeLedgerField(disposition.runId || "", "", 120) || !sanitizeLedgerField(disposition.sourceIdentity || "", "", 240) || !sanitizeLedgerField(disposition.sourceRevision || "", "", 160) || !["missing_supervisor_contract", "supervisor_canonical_event"].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false || !sanitizeLedgerField(disposition.idempotencyKey || "", "", 180) || !sanitizeLedgerField(disposition.resumeRequirement || "", "", 360) || !sanitizeLedgerField(disposition.nextManagerAction || "", "", 360) || !isPlainObject(disposition.reconciliationCounts) || !Array.isArray(disposition.unresolvedApprovalGatedWork) || !disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord) || !Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0) return false;
   const counts = disposition.reconciliationCounts;
   if (["totalItems", "reconciledItems", ...AUTHORITATIVE_RECONCILIATION_STATUS_KEYS].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
   if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + counts[key], 0)) return false;
   if (AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS.some((key) => counts[key] !== 0) || counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
-  return true;
+  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorCanonicalEventMetadata(disposition.supervisorEvent);
+}
+
+function isValidSupervisorCanonicalEventMetadata(event) {
+  return Boolean(isPlainObject(event) &&
+    typeof event.eventId === "string" && event.eventId.length <= 120 && sanitizeLedgerField(event.eventId, "", 120) &&
+    typeof event.evidenceRef === "string" && event.evidenceRef.length <= 220 && sanitizeLedgerField(event.evidenceRef, "", 220) &&
+    event.status === "persisted" &&
+    typeof event.persistedAt === "string" && event.persistedAt.length <= 64 && Number.isFinite(Date.parse(event.persistedAt)));
 }
 
 function normalizeRefillCandidates(candidates = [], fallbackSourceRefs = []) {
