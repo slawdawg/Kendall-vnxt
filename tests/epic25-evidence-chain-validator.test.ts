@@ -8,6 +8,7 @@ import {
   validatePipelineEpic25EvidenceChainV0,
   validatePipelineEpic25EvidenceChainV1,
 } from "../packages/contracts/src/pipeline-control-plane/index.js";
+import type { PipelineEpic25EvidenceChainReadV1 } from "../packages/contracts/src/pipeline-control-plane/index.js";
 
 const now = Date.parse("2026-07-12T12:00:00Z");
 const schemas = {
@@ -168,4 +169,12 @@ test("Epic 25 legacy v0 remains explicitly validatable without a policy profile"
   delete legacy.policyProfile;
   assert.deepEqual(validatePipelineEpic25EvidenceChainV0(legacy, now), []);
   assert.ok(validatePipelineEpic25EvidenceChainV1(legacy, now).some((issue) => issue.field.startsWith("policyProfile")));
+});
+
+test("Epic 25 TypeScript readback preserves the source-revision hold blocker", () => {
+  const readback = {
+    typedBlockers: ["source_revision_attestation_required"],
+  } satisfies Pick<PipelineEpic25EvidenceChainReadV1, "typedBlockers">;
+
+  assert.deepEqual(readback.typedBlockers, ["source_revision_attestation_required"]);
 });

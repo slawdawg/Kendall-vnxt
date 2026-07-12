@@ -477,6 +477,25 @@ def test_v1_without_server_owned_revision_is_held_even_when_caller_ref_matches(t
         assert "legacy v0" in held.text
 
 
+def test_source_revision_blocker_survives_python_readback_serialization() -> None:
+    from supervisor.api.schemas import PipelineEpic25EvidenceChainV1View
+    from supervisor.application.service import SupervisorService
+
+    raw_chain = _chain()
+    chain = PipelineEpic25EvidenceChainV1View.model_validate(raw_chain)
+    read_at = datetime.fromisoformat(raw_chain["checkedAt"])
+
+    projected = SupervisorService._epic_25_evidence_chain_read_view(
+        chain,
+        read_at,
+        source_revision_attested=False,
+    )
+    serialized = projected.model_dump(mode="json")
+
+    assert serialized["typedBlockers"] == ["source_revision_attestation_required"]
+    assert serialized["effectiveDecision"] == "hold"
+
+
 def test_policy_profile_failures_are_retained_as_non_authorizing_readback_blockers(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "epic-25-policy-blockers.db") as client:
         _create_packet(client)

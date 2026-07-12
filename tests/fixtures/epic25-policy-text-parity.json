@@ -8,6 +8,7 @@
   {"value": "pnpm -s run check", "safe": false},
   {"value": "provider call", "safe": false},
   {"value": "npm run check", "safe": false},
+  {"value": "Retain AKIA1234567890ABCDEF", "safe": false},
   {"value": "Retain AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "safe": false},
   {"value": "Documented BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "safe": false},
   {"value": "line\nbreak", "safe": false},
