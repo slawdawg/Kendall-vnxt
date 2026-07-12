@@ -24,6 +24,14 @@ def fail(message: str) -> None:
     raise RuntimeError(message)
 
 
+SERVER_OWNED_LOCAL_OPERATOR = {
+    "actorType": "operator",
+    "actorId": "pipeline-operator",
+    "actorLabel": "Pipeline operator",
+}
+LOOPBACK_CLIENT = ("127.0.0.1", 50000)
+
+
 def require(response, expected_status: int, label: str) -> dict:
     if response.status_code != expected_status:
         fail(f"{label} returned HTTP {response.status_code}: {response.text[:240]}")
@@ -94,14 +102,14 @@ def issue_approval(
     requested_authority_state: str = "needs_product_approval",
     requested_risk_tier: str = "medium",
 ) -> dict:
-    return require(
+    approval = require(
         client.post(
             "/pipeline-control-plane/approvals",
             json={
                 "actionId": action_id,
                 "targetType": "work_packet",
                 "targetId": packet["packetId"],
-                "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                "requestedBy": {**SERVER_OWNED_LOCAL_OPERATOR, "actorId": actor_id},
                 "requestedAuthorityState": requested_authority_state,
                 "requestedRiskTier": requested_risk_tier,
                 "metadataOnly": True,
@@ -111,6 +119,9 @@ def issue_approval(
         200,
         f"{key} approval",
     )
+    if approval["requestedBy"] != SERVER_OWNED_LOCAL_OPERATOR:
+        fail(f"{key} approval did not retain the canonical server-owned local operator identity")
+    return approval
 
 
 def apply_gated_action(
@@ -135,7 +146,7 @@ def apply_gated_action(
                 "targetId": packet["packetId"],
                 "idempotencyKey": idempotency_key,
                 "correlationId": f"corr:{idempotency_key}",
-                "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                "requestedBy": {**SERVER_OWNED_LOCAL_OPERATOR, "actorId": actor_id},
                 "requestedAuthorityState": requested_authority_state,
                 "requestedRiskTier": requested_risk_tier,
                 "approvalId": approval["approvalId"],
@@ -260,7 +271,7 @@ def main() -> int:
         from supervisor.api.main import app, service
         from supervisor.application.service import LOCAL_PROOF_TEST_CAPABILITY
 
-        client = TestClient(app)
+        client = TestClient(app, client=LOOPBACK_CLIENT)
         client.__enter__()
         client_closed = False
         try:
@@ -302,7 +313,7 @@ def main() -> int:
             if initial_detail["readyToTest"]["readyId"] != ready_to_test["readyId"]:
                 fail("ready-to-test metadata did not survive projection")
 
-            actor_id = "smoke-operator"
+            actor_id = SERVER_OWNED_LOCAL_OPERATOR["actorId"]
             first_approval = issue_approval(
                 client,
                 packet,
@@ -328,7 +339,7 @@ def main() -> int:
                 "targetId": packet["packetId"],
                 "idempotencyKey": "smoke-mark-tested-without-approval",
                 "correlationId": "corr:smoke-mark-tested-without-approval",
-                "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                "requestedBy": {**SERVER_OWNED_LOCAL_OPERATOR},
                 "requestedAuthorityState": "needs_product_approval",
                 "requestedRiskTier": "medium",
                 "expectedCurrentEventId": packet["currentEventId"],
@@ -367,6 +378,13 @@ def main() -> int:
                 fail("mark_tested result did not retain the server-issued approval id")
             if duplicate["actionRecordId"] != action["actionRecordId"]:
                 fail("idempotent action replay returned a different action record")
+            post_action_packet = require(
+                client.get(f"/pipeline-control-plane/work-packets/{packet['packetId']}"),
+                200,
+                "post-action authoritative packet",
+            )
+            if post_action_packet["history"][-1]["actor"] != SERVER_OWNED_LOCAL_OPERATOR:
+                fail("approved mark_tested did not persist the canonical server-owned local operator identity")
 
             stale_response = client.post(
                 "/pipeline-control-plane/actions",
@@ -376,7 +394,7 @@ def main() -> int:
                     "targetId": packet["packetId"],
                     "idempotencyKey": "smoke-mark-tested-stale-second-approval",
                     "correlationId": "corr:smoke-mark-tested-stale-second-approval",
-                    "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                    "requestedBy": {**SERVER_OWNED_LOCAL_OPERATOR},
                     "requestedAuthorityState": "needs_product_approval",
                     "requestedRiskTier": "medium",
                     "approvalId": second_approval["approvalId"],
@@ -485,7 +503,7 @@ def main() -> int:
                     "actionId": "requeue",
                     "targetType": "work_packet",
                     "targetId": rework_packet["packetId"],
-                    "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                    "requestedBy": {**SERVER_OWNED_LOCAL_OPERATOR},
                     "requestedAuthorityState": "needs_authority_approval",
                     "requestedRiskTier": "medium",
                     "metadataOnly": True,
@@ -580,7 +598,7 @@ def main() -> int:
                     "targetId": requeue_apply_guard_packet["packetId"],
                     "idempotencyKey": "non-blocked-requeue-apply",
                     "correlationId": "corr:non-blocked-requeue-apply",
-                    "requestedBy": {"actorType": "operator", "actorId": actor_id, "actorLabel": "Smoke operator"},
+                    "requestedBy": {**SERVER_OWNED_LOCAL_OPERATOR},
                     "requestedAuthorityState": "needs_authority_approval",
                     "requestedRiskTier": "medium",
                     "approvalId": requeue_apply_guard_approval["approvalId"],
@@ -1267,13 +1285,13 @@ def main() -> int:
                 fail("happy local proof did not retain the verified tracked source digest")
             if happy_proof["authoritativePacket"]["currentStage"] != "review" or not happy_proof["authoritativePacket"]["readyToTest"]:
                 fail("happy local proof did not drive the authoritative packet to review/ReadyToTest")
-            local_approval = issue_approval(client, happy_proof["authoritativePacket"], action_id="mark_tested", actor_id="smoke-operator", key="gate-4b-local-pass")
+            local_approval = issue_approval(client, happy_proof["authoritativePacket"], action_id="mark_tested", actor_id=actor_id, key="gate-4b-local-pass")
             local_action = apply_gated_action(
                 client,
                 happy_proof["authoritativePacket"],
                 local_approval,
                 action_id="mark_tested",
-                actor_id="smoke-operator",
+                actor_id=actor_id,
                 idempotency_key="gate-4b-local-pass",
                 evidence_ref="evidence:local-proof:gate-4b-happy-local-proof",
                 test_result="pass",
@@ -1509,7 +1527,7 @@ def main() -> int:
                     client,
                     replay_proof["authoritativePacket"],
                     action_id="mark_tested",
-                    actor_id="smoke-operator",
+                    actor_id=actor_id,
                     key=f"gate-4b-{item_id}-pass-approval",
                 )
                 pass_action = apply_gated_action(
@@ -1517,7 +1535,7 @@ def main() -> int:
                     replay_proof["authoritativePacket"],
                     pass_approval,
                     action_id="mark_tested",
-                    actor_id="smoke-operator",
+                    actor_id=actor_id,
                     idempotency_key=f"gate-4b-{item_id}-pass",
                     evidence_ref=f"evidence:{item_id}:pass",
                     test_result="pass",
@@ -1533,7 +1551,7 @@ def main() -> int:
                     client,
                     post_pass_replay_packet,
                     action_id=action_id,
-                    actor_id="smoke-operator",
+                    actor_id=actor_id,
                     key=f"gate-4b-{item_id}-action-approval",
                     requested_authority_state=authority_state,
                 )
@@ -1542,7 +1560,7 @@ def main() -> int:
                     post_pass_replay_packet,
                     action_approval,
                     action_id=action_id,
-                    actor_id="smoke-operator",
+                    actor_id=actor_id,
                     idempotency_key=f"gate-4b-{item_id}-action",
                     evidence_ref=f"evidence:{item_id}:action",
                     requested_authority_state=authority_state,
@@ -1567,7 +1585,7 @@ def main() -> int:
 
             asyncio.run(database.engine.dispose())
             importlib.reload(database)
-            with TestClient(app) as reloaded_client:
+            with TestClient(app, client=LOOPBACK_CLIENT) as reloaded_client:
                 reload_attempt_response = reloaded_client.get(f"/work-items/{happy_item['id']}/execution-attempts")
                 if reload_attempt_response.status_code != 200:
                     fail(f"reloaded happy attempts returned HTTP {reload_attempt_response.status_code}: {reload_attempt_response.text[:500]}")
