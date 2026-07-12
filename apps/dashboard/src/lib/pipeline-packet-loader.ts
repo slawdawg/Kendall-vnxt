@@ -12,7 +12,7 @@ import {
   projectSupervisorWorkPacketsToCockpitPackets,
   type PipelineFixturePacket,
 } from "./pipeline-fixtures";
-import { getPipelineDashboardProjection, getWorkPackets } from "./supervisor";
+import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./supervisor";
 import {
   applyPipelineOperationalAction as applySupervisorPipelineOperationalAction,
   issuePipelineOperationalApproval as issueSupervisorPipelineOperationalApproval,
@@ -35,6 +35,11 @@ export type PipelineCockpitPacketLoad = {
   packets: PipelineFixturePacket[];
   projection: PipelineDashboardProjectionV0 | null;
   projectionError: string | null;
+};
+
+export type PipelineCockpitPacketDetailLoad = {
+  fixtureMode: typeof pipelineFixtureMode;
+  packet: PipelineFixturePacket | null;
 };
 
 export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacketLoad> {
@@ -76,6 +81,65 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       projectionError: projectionResult.error,
     };
   }
+}
+
+export async function loadPipelineCockpitPacket(packetId: string): Promise<PipelineCockpitPacketDetailLoad> {
+  const fixturePacket = pipelineCockpitPackets.find((packet) => packet.packetId === packetId) ?? null;
+  try {
+    const [supervisorPacket] = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(packetId)]);
+    if (!supervisorPacket || supervisorPacket.packetId !== packetId) {
+      return fixturePacketDetailFallback(
+        fixturePacket,
+        "Supervisor packet unreadable",
+        "Supervisor returned a WorkPacketV0 row that could not be safely projected for this packet identity; the matching static fixture is shown only when available.",
+      );
+    }
+    return {
+      fixtureMode: {
+        ...pipelineFixtureMode,
+        label: "Supervisor packet",
+        summary: "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity. No provider, worker, GitHub, or Obsidian calls are made by this route.",
+      },
+      packet: supervisorPacket,
+    };
+  } catch (error) {
+    if (fixturePacket) {
+      return fixturePacketDetailFallback(
+        fixturePacket,
+        "Fixture fallback",
+        "Supervisor packet detail was unavailable; showing the matching static fixture without provider, worker, GitHub, or Obsidian calls.",
+      );
+    }
+    const errorMessage = error && typeof error === "object" && "message" in error
+      ? String(error.message)
+      : String(error);
+    const missing = /\(404\)/.test(errorMessage);
+    return {
+      fixtureMode: {
+        ...pipelineFixtureMode,
+        label: missing ? "Supervisor packet missing" : "Supervisor unavailable",
+        summary: missing
+          ? "Supervisor has no WorkPacketV0 detail for this packet identity; no fixture was substituted."
+          : "Supervisor WorkPacketV0 detail could not be read; no fixture matched this packet identity.",
+      },
+      packet: null,
+    };
+  }
+}
+
+function fixturePacketDetailFallback(
+  packet: PipelineFixturePacket | null,
+  label: string,
+  summary: string,
+): PipelineCockpitPacketDetailLoad {
+  return {
+    fixtureMode: {
+      ...pipelineFixtureMode,
+      label,
+      summary,
+    },
+    packet,
+  };
 }
 
 function mergePipelinePackets(

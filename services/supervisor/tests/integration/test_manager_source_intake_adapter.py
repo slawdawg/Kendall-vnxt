@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import os
 import socket
 import sqlite3
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import threading
 import time
 import urllib.request
+from urllib.parse import quote
 from pathlib import Path
 
 import pytest
@@ -40,6 +42,60 @@ def _free_loopback_port() -> int:
 def _json_get(url: str) -> dict[str, object]:
     with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 - fixed loopback URL
         return json.loads(response.read().decode("utf8"))
+
+
+def _text_get(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=15) as response:  # noqa: S310 - fixed loopback URL
+        return response.read().decode("utf8")
+
+
+def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Popen[str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEXT_TELEMETRY_DISABLED": "1",
+            "SUPERVISOR_INTERNAL_URL": supervisor_url,
+            "NEXT_PUBLIC_SUPERVISOR_URL": supervisor_url,
+        }
+    )
+    process = subprocess.Popen(
+        [
+            str(REPO_ROOT / "apps" / "dashboard" / "node_modules" / ".bin" / "next"),
+            "dev",
+            "apps/dashboard",
+            "--hostname",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    deadline = time.monotonic() + 45
+    while process.poll() is None and time.monotonic() < deadline:
+        try:
+            _text_get(f"http://127.0.0.1:{port}/pipeline")
+            return process
+        except Exception:  # noqa: BLE001 - readiness retries retain the final dashboard log
+            time.sleep(0.1)
+    _stop_process(process)
+    log_file.flush()
+    log_file.seek(0)
+    raise AssertionError(f"dashboard failed to become ready:\n{log_file.read()}")
+
+
+def _stop_process(process: subprocess.Popen[str] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
 
 
 def _table_count(db_path: Path, table_name: str) -> int:
@@ -87,6 +143,8 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
     thread = threading.Thread(target=server.run, daemon=True)
     source_digest_before = hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest()
     raw_bmad_marker = "RAW_BMAD_STORY_BODY_MUST_NOT_BE_RETAINED_7f9c"
+    dashboard_process = None
+    dashboard_log = (tmp_path / "dashboard.log").open("w+", encoding="utf8")
 
     thread.start()
     deadline = time.monotonic() + 10
@@ -210,6 +268,58 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert projected["truthLabel"] == "live"
         assert projected["metadataOnly"] is True
 
+        work_packet_list = _json_get(f"http://127.0.0.1:{port}/work-packets")["data"]
+        listed_work_packet = next(
+            packet for packet in work_packet_list if packet["packetId"] == packet_id  # type: ignore[union-attr]
+        )
+        detail_work_packet = _json_get(
+            f"http://127.0.0.1:{port}/work-packets/{packet_id}"
+        )["data"]
+        assert detail_work_packet == listed_work_packet
+        assert detail_work_packet["packetId"] == packet_id  # type: ignore[index]
+        assert detail_work_packet["currentStage"] == "capture"  # type: ignore[index]
+        assert detail_work_packet["currentOwner"] == "kendall"  # type: ignore[index]
+        assert detail_work_packet["status"] == "waiting"  # type: ignore[index]
+        assert detail_work_packet["riskLevel"] == "medium"  # type: ignore[index]
+        assert detail_work_packet["candidateWork"] is None  # type: ignore[index]
+        assert detail_work_packet["workItem"] is None  # type: ignore[index]
+        assert detail_work_packet["lifecycleState"]["authoritativeRef"] == f"authoritative_work_packet:{packet_id}"  # type: ignore[index]
+        assert detail_work_packet["lifecycleState"]["metadataOnly"] is True  # type: ignore[index]
+        assert detail_work_packet["sourceRefs"] == [  # type: ignore[index]
+            {
+                "refId": "doc:docs/workflows/current-session-runbook.md",
+                "sourceType": "manual",
+                "label": "doc:docs/workflows/current-session-runbook.md",
+                "pathOrUrl": "docs/workflows/current-session-runbook.md",
+                "freshness": "unknown",
+                "accessState": "allowed",
+                "canonical": True,
+                "summaryOnly": True,
+                "blockedReason": None,
+            }
+        ]
+
+        dashboard_port = _free_loopback_port()
+        dashboard_process = _start_dashboard(
+            f"http://127.0.0.1:{port}",
+            dashboard_port,
+            dashboard_log,
+        )
+        dashboard_base_url = f"http://127.0.0.1:{dashboard_port}"
+        pipeline_html = _text_get(f"{dashboard_base_url}/pipeline")
+        assert "Gate 4 source-backed manager candidate" in pipeline_html
+        assert "Supervisor packets" in pipeline_html
+        assert quote(packet_id, safe="") in pipeline_html
+
+        detail_html = _text_get(
+            f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
+        )
+        assert "Gate 4 source-backed manager candidate" in detail_html
+        assert "Eligible manager source candidate" in detail_html
+        assert packet_id in detail_html
+        assert "supervisor WorkPacketV0 projection" in detail_html
+        assert "Fixture/non-live packet" not in detail_html
+
         assert _table_count(db_path, "authoritative_work_packets") == 1
         assert _table_count(db_path, "authoritative_work_packet_lifecycle_events") == 1
         for forbidden_table in (
@@ -224,6 +334,8 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert raw_bmad_marker.encode() not in db_path.read_bytes()
         assert hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest() == source_digest_before
     finally:
+        _stop_process(dashboard_process)
+        dashboard_log.close()
         server.should_exit = True
         thread.join(timeout=10)
         assert not thread.is_alive(), "loopback supervisor failed to stop"
