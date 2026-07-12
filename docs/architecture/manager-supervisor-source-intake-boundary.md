@@ -6,13 +6,16 @@ Status: bounded Gate 4 source-owned architecture contract
 ## Decision
 
 The normal manager source-candidate path remains read-only and network-free.
-`manager:source-packet-seed`, refill planning, cycle planning, and the manager
-run loop do not contact the supervisor by default. Supplying an explicit
-loopback `--supervisor-url` lets refill/cycle planning project one source-intake
-action only when exactly one source-backed seed is eligible. The run loop still
-performs no network operation in `continuous_dry_run`; `continuous_apply` may
-cross the boundary only after its dry-run proof, exact target pairing,
-`sourceIntake` capability gate, and continuation gate all pass.
+When starvation has no explicit refill or source-work candidates, its default
+local resolver may select exactly one ready BMAD story and a matching PRD bundle
+as metadata-only provenance. `manager:source-packet-seed`, refill planning,
+cycle planning, and the manager run loop do not contact the supervisor by
+default. Supplying an explicit loopback `--supervisor-url` lets refill/cycle
+planning project one source-intake action only when exactly one source-backed
+seed is eligible. The run loop still performs no network operation in
+`continuous_dry_run`; `continuous_apply` may cross the boundary only after its
+dry-run proof, exact target pairing, `sourceIntake` capability gate, and
+continuation gate all pass.
 
 ```text
 manager refill/cycle (pure action projection)
@@ -102,6 +105,12 @@ lease, worker process, dispatch action, provider call, or source mutation. The
 supervisor owns the authoritative WorkPacket and `packet.created` lifecycle
 event after the POST succeeds.
 
+Default local BMAD resolution contributes only story, sprint-status, source-key,
+and matching-bundle references to the allowlisted metadata-only provenance.
+Story bodies, acceptance criteria, verification commands, prompts, completions,
+raw bundle content, provider payloads, and secrets remain outside the request
+and are not retained.
+
 ## Fail-Closed Commit Point
 
 Non-loopback URLs, ineligible or ambiguous candidates, multiple source refs,
@@ -132,3 +141,15 @@ or queue-lease rows; unchanged source bytes; and absence of an injected raw
 BMAD marker from persisted database bytes. Environments that deny loopback
 sockets identify that sandbox boundary and require the exact command outside
 the sandbox.
+
+PR #525 (`d3a27aa9e588ca23118ab984ec0ea979963d1cd9`) supplies the default
+local story-and-bundle resolver. PR #526
+(`86418bae99b2bc41c438ccd1ffe47dbe90278ecd`, reviewed head
+`14423d4e11483fb051978366b63cc737c758f2df`) adds authoritative
+`WorkPacketV0` list/detail parity and exercises the manager → supervisor →
+dashboard list/detail path through a real loopback dashboard process. CI run
+#1012 is green for that reviewed head. This is `integrated_local` evidence only
+for the named default-local-story-and-bundle → manager intake → authoritative
+supervisor → dashboard path. It does not validate the full BMAD hierarchy or
+all source bundles, grant provider/worker/dispatch execution, or close the
+broader ADR-defined Gate 4 acceptance.
