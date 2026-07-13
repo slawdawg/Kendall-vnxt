@@ -131,6 +131,7 @@ const automationAuthorityChangeStatuses = new Set(["not_requested", "blocked", "
 const learnFollowUpStatuses = new Set(["proposed", "approved", "rejected", "deferred", "not_created"]);
 const learnFollowUpOrigins = new Set(["failure", "approval", "rejection", "quality", "operator_feedback"]);
 const learnReentryPaths = new Set(["reenter_capture", "human_gate", "learn_review", "none"]);
+const workPacketReferenceProvenances = new Set(["candidate_work", "work_item"]);
 const refillSourceStates = new Set(["healthy", "source_exhausted", "blocked", "refilling", "unknown"]);
 const housekeepingStatuses = new Set(["not_applicable", "complete", "blocked", "running", "unknown"]);
 export function projectSupervisorWorkPacketsToCockpitPackets(
@@ -216,7 +217,7 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     isAbsentOr(packet.routeSummary, isWorkPacketRouteSummaryV0) &&
     isAbsentOr(packet.deliveryEvidence, isWorkPacketDeliveryEvidenceV0) &&
     isAbsentOr(packet.learnOutcome, isWorkPacketLearnOutcomeV0) &&
-    isAbsentOr(packet.learnRefill, (refill) => isWorkPacketLearnRefillProjectionV0(refill, packet.packetId as string)) &&
+    isAbsentOr(packet.learnRefill, isWorkPacketLearnRefillProjectionV0) &&
     isAbsentOr(packet.alphaMemorySourceStatus, isAlphaMemorySourceStatusV0) &&
     isAbsentOr(packet.gateStateValidation, isWorkPacketGateStateValidationV0) &&
     lifecycleState !== null &&
@@ -573,14 +574,14 @@ function isWorkPacketLearnDecisionRecordV0(value: unknown): boolean {
     hasExactBooleanFields(value, ["canonicalMutationAllowed", "durableWriteAllowed"], false);
 }
 
-function isWorkPacketLearnRefillProjectionV0(value: unknown, packetId: string): boolean {
+function isWorkPacketLearnRefillProjectionV0(value: unknown): boolean {
   return isRecord(value) &&
     isNonEmptyString(value.projectionId) &&
     value.retentionClass === "metadata_only" &&
     Array.isArray(value.followUpCandidates) &&
-    value.followUpCandidates.every((candidate) => isWorkPacketLearnFollowUpCandidateV0(candidate, packetId)) &&
+    value.followUpCandidates.every(isWorkPacketLearnFollowUpCandidateV0) &&
     Array.isArray(value.operatorOwnedExits) &&
-    value.operatorOwnedExits.every((exit) => isWorkPacketOperatorOwnedExitV0(exit, packetId)) &&
+    value.operatorOwnedExits.every(isWorkPacketOperatorOwnedExitV0) &&
     isWorkPacketRefillSourceStateV0(value.refillSourceState) &&
     isWorkPacketHousekeepingV0(value.housekeeping) &&
     isWorkPacketSourceExhaustionV0(value.sourceExhaustion) &&
@@ -590,10 +591,20 @@ function isWorkPacketLearnRefillProjectionV0(value: unknown, packetId: string): 
     hasExactBooleanFields(value, ["sourceMutationAllowed", "providerCallsAllowed", "workerLaunchAllowed", "githubMutationAllowed"], false);
 }
 
-function isWorkPacketLearnFollowUpCandidateV0(value: unknown, packetId: string): boolean {
+function isWorkPacketReferenceV0(value: unknown): boolean {
+  if (!isNonEmptyString(value) || value !== value.trim() || value.length > 200 || /[\s/\\\0]/.test(value) || isSyntheticRuntimeIdentity(value)) {
+    return false;
+  }
+  const separatorIndex = value.indexOf(":");
+  return separatorIndex > 0 &&
+    workPacketReferenceProvenances.has(value.slice(0, separatorIndex)) &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value.slice(separatorIndex + 1));
+}
+
+function isWorkPacketLearnFollowUpCandidateV0(value: unknown): boolean {
   return isRecord(value) &&
     ["followUpId", "candidateWorkId", "label", "reason"].every((field) => isNonEmptyString(value[field])) &&
-    value.sourcePacketId === packetId &&
+    isWorkPacketReferenceV0(value.sourcePacketId) &&
     isEnumValue(value.status, learnFollowUpStatuses) &&
     isEnumValue(value.origin, learnFollowUpOrigins) &&
     isEnumValue(value.reentryPath, learnReentryPaths) &&
@@ -602,10 +613,10 @@ function isWorkPacketLearnFollowUpCandidateV0(value: unknown, packetId: string):
     value.rawPayloadRetained === false;
 }
 
-function isWorkPacketOperatorOwnedExitV0(value: unknown, packetId: string): boolean {
+function isWorkPacketOperatorOwnedExitV0(value: unknown): boolean {
   return isRecord(value) &&
     isNonEmptyString(value.exitId) &&
-    value.sourcePacketId === packetId &&
+    isWorkPacketReferenceV0(value.sourcePacketId) &&
     value.state === "operator_owned" &&
     isNonEmptyString(value.reason) &&
     (value.stopStateKind === "operator_owned_exit" || isEnumValue(value.stopStateKind, loopStopKinds)) &&

@@ -414,6 +414,60 @@ test("malformed nested projection detail structures fail closed before UI derefe
   }
 });
 
+test("learn refill accepts safe cross-packet candidate-work provenance without fixture leakage", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const learnRefill = authoritativeLearnRefill();
+  const crossPacketLearnRefill = {
+    ...learnRefill,
+    followUpCandidates: [{
+      ...learnRefill.followUpCandidates[0],
+      sourcePacketId: "candidate_work:source-packet-123",
+    }],
+    operatorOwnedExits: [{
+      exitId: "operator-owned-exit:source-packet-123",
+      sourcePacketId: "candidate_work:source-packet-123",
+      state: "operator_owned",
+      reason: "Operator review owns the next safe step.",
+      stopStateKind: "operator_owned_exit",
+      reentryPath: "reenter_capture",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    }],
+  };
+
+  const validLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, learnRefill: crossPacketLearnRefill }],
+  });
+  const valid = await validLoader.loadPipelineCockpitPackets();
+  assert.equal(valid.fixtureMode.kind, "runtime");
+  assert.equal(valid.packets.length, 1);
+
+  for (const [label, sourcePacketId] of [
+    ["blank", ""],
+    ["whitespace", "candidate_work: source-packet-123"],
+    ["unsafe path", "candidate_work:../source-packet-123"],
+    ["unsupported provenance", "other_packet:source-packet-123"],
+    ["fixture provenance", "fixture:source-packet-123"],
+  ]) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{
+        ...packet,
+        learnRefill: {
+          ...crossPacketLearnRefill,
+          followUpCandidates: [{ ...crossPacketLearnRefill.followUpCandidates[0], sourcePacketId }],
+        },
+      }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
 test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
   const fixtures = populatedFixtureCatalog();
   const packet = authoritativeWorkPacket();
@@ -1121,7 +1175,7 @@ function authoritativeLearnRefill() {
       followUpId: "follow-up:authoritative",
       candidateWorkId: "candidate:authoritative",
       label: "Authoritative follow-up",
-      sourcePacketId: "manager-source-authoritative-only",
+      sourcePacketId: "candidate_work:source-manager-authoritative-only",
       reason: "Quality follow-up.",
       status: "not_created",
       origin: "quality",
