@@ -292,6 +292,31 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
         refStates: [{ ...authoritativeGateStateValidation().refStates[0], refId: "fixture:nested-gate-ref" }],
       },
     }],
+    ["nested fixture id discriminator", {
+      routeSummary: {
+        recommendation: "capture",
+        reasonCodes: ["route.capture"],
+        detail: { fixtureId: "ordinary-looking-value" },
+      },
+    }],
+    ["nested fixture kind discriminator", {
+      reviewSummaries: [{ ...reviewSummary, detail: { fixtureKind: "future-real-source" } }],
+    }],
+    ["nested fixture label discriminator", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), detail: { fixtureLabel: "Demo source" } },
+    }],
+    ["nested demo source kind discriminator", {
+      learnOutcome: { ...learnOutcome, detail: { sourceKind: "demo-fixture" } },
+    }],
+    ["nested fixture evidence type discriminator", {
+      learnRefill: { ...learnRefill, detail: { evidenceType: "fixture" } },
+    }],
+    ["nested fixture retention discriminator", {
+      gateStateValidation: { ...authoritativeGateStateValidation(), detail: { retentionClass: "fixture" } },
+    }],
+    ["nested fixture artifact type discriminator", {
+      humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { artifactType: "fixture" } }],
+    }],
   ];
 
   for (const [label, overrides] of nestedFixtureCases) {
@@ -309,12 +334,84 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
     getWorkPackets: async () => [{
       ...packet,
       reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
+      humanGateActions: [{ ...authoritativeHumanGateAction(), label: "Discuss fixture:legacy wording" }],
       learnRefill: { ...learnRefill, nextSafeAction: "Document fixture:legacy as ordinary text." },
     }],
   });
   const ordinaryText = await ordinaryTextLoader.loadPipelineCockpitPackets();
   assert.equal(ordinaryText.fixtureMode.kind, "runtime");
   assert.equal(ordinaryText.packets.length, 1);
+});
+
+test("runtime-reachable nested WorkPacket collection members fail closed before rendering", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const nested = authoritativeNestedWorkPacketCollections(packet.packetId);
+  const validLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, ...nested }],
+  });
+  const valid = await validLoader.loadPipelineCockpitPackets();
+  assert.equal(valid.fixtureMode.kind, "runtime");
+  assert.equal(valid.packets.length, 1);
+
+  const malformedCases = [
+    ["humanGateActions null member", { humanGateActions: [null] }],
+    ["humanGateActions contradictory packet identity", {
+      humanGateActions: [{
+        ...nested.humanGateActions[0],
+        payload: { ...nested.humanGateActions[0].payload, packetId: "packet:other" },
+      }],
+    }],
+    ["humanGateActionRequests null member", { humanGateActionRequests: [null] }],
+    ["humanGateActionRequests contradictory packet identity", {
+      humanGateActionRequests: [{ ...nested.humanGateActionRequests[0], packetId: "packet:other" }],
+    }],
+    ["laneCards wrong enum", { laneCards: [{ ...nested.laneCards[0], status: "live" }] }],
+    ["memoryProposals missing required field", { memoryProposals: [{ ...nested.memoryProposals[0], proposalId: undefined }] }],
+    ["memoryProposals contradictory packet identity", { memoryProposals: [{ ...nested.memoryProposals[0], packetId: "packet:other" }] }],
+    ["reviewSummaries null member", { reviewSummaries: [null] }],
+    ["recoveryActions wrong enum", { recoveryActions: [{ ...nested.recoveryActions[0], actionType: "retry_forever" }] }],
+    ["executionAttempts missing required field", { executionAttempts: [{ ...nested.executionAttempts[0], attemptId: undefined }] }],
+    ["transitionEvents wrong enum", { transitionEvents: [{ ...nested.transitionEvents[0], targetStage: "archive" }] }],
+    ["loopStopStates contradictory authority", { loopStopStates: [{ ...nested.loopStopStates[0], cleanupAllowed: true }] }],
+  ];
+
+  for (const [label, overrides] of malformedCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
+test("malformed nested projection detail structures fail closed before UI dereference", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const learnOutcome = authoritativeLearnOutcome();
+  const learnRefill = authoritativeLearnRefill();
+  const malformedCases = [
+    ["route summary reason codes", { routeSummary: { recommendation: "capture", reasonCodes: null } }],
+    ["delivery evidence refs", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), evidenceRefs: [null] } }],
+    ["learn decision record", { learnOutcome: { ...learnOutcome, decisionRecords: [null] } }],
+    ["learn refill follow-up", { learnRefill: { ...learnRefill, followUpCandidates: [null] } }],
+    ["gate replay detail", {
+      gateStateValidation: { ...authoritativeGateStateValidation(), refStates: [null] },
+    }],
+  ];
+
+  for (const [label, overrides] of malformedCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
 });
 
 test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
@@ -823,6 +920,164 @@ function authoritativeHumanGateAction() {
     resultingOwner: "kendall",
     auditEventType: "route_approved",
     reasonCodes: ["route.approved"],
+  };
+}
+
+function authoritativeNestedWorkPacketCollections(packetId) {
+  const humanGateAction = authoritativeHumanGateAction();
+  return {
+    humanGateActions: [humanGateAction],
+    humanGateActionRequests: [{
+      requestId: "request:approve-route",
+      packetId,
+      actionId: humanGateAction.actionId,
+      decisionId: humanGateAction.payload.decisionId,
+      requestedActionType: humanGateAction.type,
+      requestDisplayLabel: "Approve route",
+      requestedByLabel: "Operator",
+      requestedAt: "2026-07-13T12:00:00.000Z",
+      status: "recorded",
+      auditEventType: "route_approval_requested",
+      evidenceRefs: ["event:created"],
+      retentionClass: "metadata_only",
+      rawPayloadRetained: false,
+      executionStarted: false,
+      resultingStateApplied: false,
+      stopLines: ["Stop before execution."],
+      rollbackPath: "Return to route review.",
+    }],
+    laneCards: [{
+      laneId: "lane:local-readonly",
+      laneType: "local_readonly",
+      label: "Local read-only",
+      status: "available",
+      summary: "Read-only inspection is available.",
+      currentOwner: "kendall",
+      routeConfidence: 0.82,
+      reasonCodes: ["lane.readonly"],
+      evidenceRefs: ["event:created"],
+      artifactRefs: [],
+    }],
+    memoryProposals: [{
+      proposalId: "memory-proposal:authoritative",
+      packetId,
+      label: "Review authoritative memory proposal",
+      status: "pending_human_approval",
+      summary: "Metadata-only proposal for operator review.",
+      sourceRefs: ["doc:source"],
+      evidenceRefs: ["event:created"],
+      targetRef: null,
+      targetVaultPath: null,
+      targetVaultFolder: "Kendall/Decisions",
+      proposalType: "decision_record",
+      suggestedContentSummary: "Record the bounded source decision.",
+      patchSummary: null,
+      sensitivity: "low",
+      freshness: "fresh",
+      contradictionStatus: "none",
+      confidence: "high",
+      operatorAction: "approve",
+      decisionNeededContext: null,
+      backupRecoveryPath: "Discard the proposal without mutating memory.",
+      writeBackStatus: "review_gated",
+      writeBackAllowed: false,
+    }],
+    reviewSummaries: [{
+      reviewer: "claude_reviewer",
+      status: "complete",
+      summary: "Read-only review complete.",
+      evidenceRefs: ["review:complete"],
+      artifactRefs: ["artifact:review"],
+    }],
+    recoveryActions: [{
+      actionId: "action:retry-smaller",
+      actionType: "retry_smaller",
+      label: "Retry smaller",
+      availability: "available",
+      consequence: "Return to a smaller bounded packet.",
+      resultingStage: "shape",
+      resultingOwner: "kendall",
+      evidenceRefs: ["event:created"],
+    }],
+    executionAttempts: [{
+      attemptId: "attempt:authoritative",
+      workItemId: "work-item:authoritative",
+      leaseId: null,
+      fencingToken: null,
+      routeDecisionId: "decision:approve-route",
+      workerId: "worker:none",
+      lane: "local_readonly",
+      authorityMode: "none",
+      status: "planned",
+      requestedById: null,
+      requestedByLabel: "Operator",
+      createdAt: "2026-07-13T12:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+      heartbeatAt: null,
+      timeoutAt: null,
+      cancelRequestedAt: null,
+      cancelReason: null,
+      rejectionReason: null,
+      failureReason: null,
+      evidenceRefs: ["event:created"],
+      artifactRefs: [],
+    }],
+    transitionEvents: [{
+      eventId: "transition:created",
+      eventType: "packet_created",
+      summary: "Packet entered capture.",
+      createdAt: "2026-07-13T12:00:00.000Z",
+      sourceStage: null,
+      targetStage: "capture",
+      sourceOwner: null,
+      targetOwner: "kendall",
+      sourceStatus: null,
+      targetStatus: "waiting",
+      reasonCodes: ["packet.created"],
+      evidenceRefs: ["event:created"],
+      durable: true,
+      sourceEventId: null,
+      actorLabel: "Supervisor",
+    }],
+    loopStopStates: [{
+      stopStateId: "stop:scope-boundary",
+      kind: "scope_boundary",
+      label: "Scope boundary",
+      phase: "capture",
+      severity: "info",
+      summary: "The packet remains bounded.",
+      stopLine: "Do not expand execution authority.",
+      nextSafeAction: "Continue read-only review.",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      sourceMutationAllowed: false,
+      providerCallsAllowed: false,
+      workerLaunchAllowed: false,
+      githubMutationAllowed: false,
+      cleanupAllowed: false,
+    }],
+  };
+}
+
+function authoritativeDeliveryEvidence() {
+  return {
+    evidenceId: "delivery:authoritative",
+    mode: "metadata_only",
+    status: "ready",
+    readyForApproval: false,
+    hasDeliveryExecutionEvidence: false,
+    evidenceRefs: ["event:created"],
+    artifactRefs: [],
+    retainedEvidence: ["event:created"],
+    blockedReasons: [],
+    recoveryPath: "Return to delivery review.",
+    deliveryRailsGrantAuthority: false,
+    rawPayloadRetained: false,
+    remoteMutationApproved: false,
+    mergeApproved: false,
+    cleanupApproved: false,
   };
 }
 
