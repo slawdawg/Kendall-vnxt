@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
@@ -17,13 +13,13 @@ const demoRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/page.tsx"
 const demoDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx", import.meta.url);
 
 test("authoritative-only WorkPacketV0 is listed and loaded by the same detail identity", async () => {
-  const fixtures = {};
+  const fixtures = populatedFixtureCatalog();
   const authoritativePacket = authoritativeWorkPacket();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
     getPipelineDashboardProjection: async () => {
       calls.push("projection");
-      return {};
+      return runtimeProjection([authoritativePacket.packetId]);
     },
     getWorkPackets: async () => {
       calls.push("list");
@@ -49,14 +45,21 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   assert.equal(detailed.packet.sourceId, authoritativePacket.packetId);
   assert.equal(detailed.packet.fixtureId, undefined);
   assert.equal(detailed.packet.fixtureKind, undefined);
-  assert.deepEqual(calls, ["projection", "list", `detail:${authoritativePacket.packetId}`]);
+  assert.deepEqual(calls, ["projection", "list", "projection", `detail:${authoritativePacket.packetId}`]);
 });
 
 test("empty, malformed, missing, and unavailable states fail closed without fixture substitution", async () => {
-  const fixtures = {};
+  const fixtures = populatedFixtureCatalog();
   let detailError = new Error("Request failed for /work-packets/missing-authoritative (404)");
+  const emptyProjection = runtimeProjection([], {
+    truthSummary: {
+      backendEmpty: true,
+      emptyReason: "healthy_empty",
+      summary: "Supervisor returned zero persisted WorkPacketV0 rows.",
+    },
+  });
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({}),
+    getPipelineDashboardProjection: async () => emptyProjection,
     getWorkPackets: async () => [],
     getWorkPacket: async () => { throw detailError; },
   });
@@ -64,10 +67,10 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   const empty = await loader.loadPipelineCockpitPackets();
   assert.equal(empty.fixtureMode.kind, "empty");
   assert.equal(empty.packets.length, 0);
-  assert.equal(empty.projection, null);
+  assert.equal(empty.projection, emptyProjection);
 
   const malformedLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({}),
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => [authoritativeWorkPacket(), { packetId: "malformed-runtime-row" }],
   });
   const malformed = await malformedLoader.loadPipelineCockpitPackets();
@@ -76,7 +79,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   assert.match(malformed.fixtureMode.summary, /malformed WorkPacketV0 row/);
 
   const unreadableLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({}),
+    getPipelineDashboardProjection: async () => runtimeProjection(["requested-runtime-packet"]),
     getWorkPackets: async () => [],
     getWorkPacket: async () => ({ ...authoritativeWorkPacket(), packetId: "different-supervisor-packet" }),
   });
@@ -95,12 +98,11 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
 });
 
 test("stale and fixture-shaped supervisor data fail closed without runtime or fixture packets", async () => {
-  const fixtures = {};
+  const fixtures = populatedFixtureCatalog();
   const staleLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({
-      sourceLabel: "live",
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       freshnessState: "stale",
-      truthSummary: { stale: true },
+      truthSummary: { stale: true, summary: "Stale supervisor projection." },
     }),
     getWorkPackets: async () => [authoritativeWorkPacket()],
   });
@@ -111,8 +113,23 @@ test("stale and fixture-shaped supervisor data fail closed without runtime or fi
   assert.equal(stale.projection, null);
   assert.match(stale.fixtureMode.summary, /stale/i);
 
+  const staleTimestampLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+      generatedAt: new Date().toISOString(),
+      sourceUpdatedAt: new Date(Date.now() - 86_400_000).toISOString(),
+      sourceLabel: "live",
+      freshnessState: "live",
+      truthSummary: { label: "live", stale: false, summary: "Flags claim live but timestamp is stale." },
+    }),
+    getWorkPackets: async () => [authoritativeWorkPacket()],
+  });
+  const staleTimestamp = await staleTimestampLoader.loadPipelineCockpitPackets();
+  assert.equal(staleTimestamp.fixtureMode.kind, "invalid");
+  assert.equal(staleTimestamp.packets.length, 0);
+  assert.match(staleTimestamp.fixtureMode.summary, /timestamps are stale/);
+
   const fixtureShapedLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({}),
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => [{
       ...authoritativeWorkPacket(),
       fixtureId: "fixture:leaked-runtime",
@@ -126,20 +143,126 @@ test("stale and fixture-shaped supervisor data fail closed without runtime or fi
   assert.equal(fixtureShaped.packets.length, 0);
   assert.equal(fixtureShaped.projection, null);
   assert.match(fixtureShaped.fixtureMode.summary, /fixture-shaped|fixture-only/i);
+
+  const fixturePrefixedLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["fixture:leaked-runtime"]),
+    getWorkPackets: async () => [{ ...authoritativeWorkPacket(), packetId: "fixture:leaked-runtime" }],
+  });
+  const fixturePrefixed = await fixturePrefixedLoader.loadPipelineCockpitPackets();
+  assert.equal(fixturePrefixed.fixtureMode.kind, "invalid");
+  assert.equal(fixturePrefixed.packets.length, 0);
+  assert.match(fixturePrefixed.fixtureMode.summary, /fixture-shaped|fixture-only/i);
+});
+
+test("typed fixture provenance is rejected without arbitrary-string false positives", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const fixtureRefCases = [
+    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "fixture:source-ref" }] },
+    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "fixture" }] },
+    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "fixture" }] },
+    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "fixture:evidence-artifact" }] },
+    { artifactRefs: [{ refId: "artifact:normal", artifactType: "fixture", label: "Fixture artifact", status: "available" }] },
+    { artifactRefs: [{ refId: "fixture:artifact-ref", artifactType: "report", label: "Fixture artifact", status: "available" }] },
+  ];
+  for (const [index, overrides] of fixtureRefCases.entries()) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", `fixture ref case ${index} must fail closed`);
+    assert.equal(result.packets.length, 0);
+  }
+
+  const labelOnlyLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getWorkPackets: async () => [{
+      ...authoritativeWorkPacket(),
+      evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], label: "Operator note mentions fixture:legacy text" }],
+    }],
+  });
+  const labelOnly = await labelOnlyLoader.loadPipelineCockpitPackets();
+  assert.equal(labelOnly.fixtureMode.kind, "runtime");
+  assert.equal(labelOnly.packets.length, 1);
+});
+
+test("malformed nested evidence and artifact references fail closed before rendering", async () => {
+  const fixtures = populatedFixtureCatalog();
+  for (const overrides of [
+    { evidenceRefs: ["event:created"] },
+    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], rawPayloadRetained: true }] },
+    { artifactRefs: ["artifact:report"] },
+    { artifactRefs: [{ refId: "artifact:report", artifactType: "report", label: "Report" }] },
+  ]) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid");
+    assert.equal(result.packets.length, 0);
+  }
+});
+
+test("detail lookup fails closed when supervisor projection is stale, unavailable, or omits the identity", async () => {
+  const fixtures = populatedFixtureCatalog();
+  let detailCalls = 0;
+  const staleLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+      sourceLabel: "stale",
+      freshnessState: "stale",
+      truthSummary: { label: "stale", stale: true, summary: "Stale projection." },
+    }),
+    getWorkPacket: async () => {
+      detailCalls += 1;
+      return authoritativeWorkPacket();
+    },
+  });
+  const stale = await staleLoader.loadPipelineCockpitPacket("manager-source-authoritative-only");
+  assert.equal(stale.fixtureMode.kind, "invalid");
+  assert.equal(stale.packet, null);
+
+  const unavailableLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+      sourceLabel: "unavailable",
+      freshnessState: "unavailable",
+      backendReachability: { state: "unavailable" },
+      truthSummary: { label: "unavailable", backendUnavailable: true, summary: "Unavailable projection." },
+    }),
+    getWorkPacket: async () => {
+      detailCalls += 1;
+      return authoritativeWorkPacket();
+    },
+  });
+  const unavailable = await unavailableLoader.loadPipelineCockpitPacket("manager-source-authoritative-only");
+  assert.equal(unavailable.fixtureMode.kind, "unavailable");
+  assert.equal(unavailable.packet, null);
+
+  const omittedIdentityLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([]),
+    getWorkPacket: async () => {
+      detailCalls += 1;
+      return authoritativeWorkPacket();
+    },
+  });
+  const omittedIdentity = await omittedIdentityLoader.loadPipelineCockpitPacket("manager-source-authoritative-only");
+  assert.equal(omittedIdentity.fixtureMode.kind, "invalid");
+  assert.equal(omittedIdentity.packet, null);
+  assert.equal(detailCalls, 1, "only a valid projection may reach detail lookup");
 });
 
 test("malformed detail packet IDs fail closed before supervisor lookup", async () => {
-  const fixtures = {};
+  const fixtures = populatedFixtureCatalog();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({}),
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPacket: async (packetId) => {
       calls.push(packetId);
       return authoritativeWorkPacket();
     },
   });
 
-  for (const packetId of ["", "   ", "fixture:legacy detail", "packet/with/slash", "packet\\with\\slash"]) {
+  for (const packetId of ["", "   ", "fixture:legacy-detail", "fixture:legacy detail", "packet/with/slash", "packet\\with\\slash", 42, null, { packetId: "manager-source-authoritative-only" }]) {
     const result = await loader.loadPipelineCockpitPacket(packetId);
     assert.equal(result.fixtureMode.kind, "invalid");
     assert.equal(result.packet, null);
@@ -148,9 +271,9 @@ test("malformed detail packet IDs fail closed before supervisor lookup", async (
 });
 
 test("WorkPacket list failure clears a successful projection and reports the read error", async () => {
-  const fixtures = {};
+  const fixtures = populatedFixtureCatalog();
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({ sourceLabel: "live" }),
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => { throw new Error("Supervisor WorkPacket list unavailable"); },
   });
 
@@ -161,6 +284,27 @@ test("WorkPacket list failure clears a successful projection and reports the rea
   assert.equal(unavailable.packets.length, 0);
   assert.equal(unavailable.projection, null);
   assert.equal(unavailable.projectionError, "Supervisor WorkPacket list unavailable");
+});
+
+test("contradictory projection empty and populated states fail closed", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const emptyContradictionLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+      truthSummary: { backendEmpty: true, emptyReason: "healthy_empty", summary: "Contradictory empty projection." },
+    }),
+    getWorkPackets: async () => [],
+  });
+  const emptyContradiction = await emptyContradictionLoader.loadPipelineCockpitPackets();
+  assert.equal(emptyContradiction.fixtureMode.kind, "invalid");
+  assert.match(emptyContradiction.fixtureMode.summary, /zero rows while projection still contains packet identities/);
+
+  const populatedContradictionLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([]),
+    getWorkPackets: async () => [authoritativeWorkPacket()],
+  });
+  const populatedContradiction = await populatedContradictionLoader.loadPipelineCockpitPackets();
+  assert.equal(populatedContradiction.fixtureMode.kind, "invalid");
+  assert.match(populatedContradiction.fixtureMode.summary, /omitted runtime packet identity/);
 });
 
 test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
@@ -191,6 +335,104 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoDetailRouteSource, /sourceKind: "demo-fixture"/);
   assert.match(demoDetailRouteSource, /cannot satisfy live proof or invoke supervisor authority/);
 });
+
+function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {
+  const now = new Date().toISOString();
+  const workPackets = packetIds.map((packetId) => ({
+    packetId,
+    title: `Projection packet ${packetId}`,
+    currentStage: "capture",
+    status: "waiting",
+    truthLabel: "live",
+    sourceRef: null,
+    canonicalContract: null,
+    productModeMapping: null,
+    blocker: null,
+    nextAction: "Inspect runtime packet.",
+    unblocker: { state: "not_blocked", reason: null, actionLabel: null },
+    evidenceRefs: [`event:${packetId}`],
+    updatedAt: now,
+    metadataOnly: true,
+  }));
+  const truthSummary = {
+    label: "live",
+    emptyReason: null,
+    backendEmpty: false,
+    backendUnavailable: false,
+    fixtureBacked: false,
+    stale: false,
+    summary: "Live supervisor projection.",
+    ...(overrides.truthSummary ?? {}),
+  };
+  return {
+    schemaVersion: "pipeline-dashboard-projection/v0",
+    projectionId: "projection-story-4-6-loader-test",
+    generatedAt: now,
+    sourceUpdatedAt: now,
+    sourceLabel: "live",
+    freshnessState: "live",
+    staleAfterSeconds: 3600,
+    backendReachability: {
+      state: "reachable",
+      checkedAt: now,
+      reason: null,
+      summary: "Supervisor reachable.",
+      ...(overrides.backendReachability ?? {}),
+    },
+    fixtureMode: {
+      enabled: false,
+      reason: null,
+      allowedForEnvironment: false,
+      visibleLabelRequired: true,
+      canSatisfyLiveProof: false,
+      ...(overrides.fixtureMode ?? {}),
+    },
+    truthSummary,
+    stageSummaries: [],
+    sourceStates: [],
+    workPackets,
+    selectedPacketDetails: [],
+    managerSummary: { freshnessState: "live" },
+    workerSummary: { freshnessState: "live" },
+    reliabilityProblems: [],
+    gatedControls: [],
+    executeAdmission: {},
+    queueSummary: { emptyReason: truthSummary.emptyReason },
+    evidenceRefs: [],
+    ...overrides,
+    backendReachability: {
+      state: "reachable",
+      checkedAt: now,
+      reason: null,
+      summary: "Supervisor reachable.",
+      ...(overrides.backendReachability ?? {}),
+    },
+    fixtureMode: {
+      enabled: false,
+      reason: null,
+      allowedForEnvironment: false,
+      visibleLabelRequired: true,
+      canSatisfyLiveProof: false,
+      ...(overrides.fixtureMode ?? {}),
+    },
+    truthSummary,
+    workPackets: overrides.workPackets ?? workPackets,
+    selectedPacketDetails: overrides.selectedPacketDetails ?? [],
+  };
+}
+
+function populatedFixtureCatalog() {
+  return {
+    pipelineCockpitPackets: [
+      {
+        packetId: "fixture:happy-path",
+        fixtureId: "fixture:happy-path",
+        fixtureKind: "future-real-source",
+        title: "Shape cockpit route from Work Packet matrix",
+      },
+    ],
+  };
+}
 
 function authoritativeWorkPacket() {
   return {
@@ -302,37 +544,4 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides) {
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-packet-loader.ts" });
   return context.module.exports;
-}
-
-async function loadCompiledDashboardFixtures() {
-  const outDir = await mkdtemp(join(tmpdir(), "dashboard-authority-fixtures-"));
-  await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
-  const result = spawnSync(
-    "apps/dashboard/node_modules/.bin/tsc",
-    [
-      "--target", "ES2022",
-      "--module", "ESNext",
-      "--moduleResolution", "Bundler",
-      "--strict",
-      "--types", "node",
-      "--typeRoots", "apps/dashboard/node_modules/@types",
-      "--verbatimModuleSyntax",
-      "--rootDir", ".",
-      "--outDir", outDir,
-      "apps/dashboard/src/lib/pipeline-fixtures.ts",
-      "packages/workflow-core/src/pipeline-state-fixture-matrix.ts",
-    ],
-    { encoding: "utf8" },
-  );
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  const compiledFixturePath = join(outDir, "apps/dashboard/src/lib/pipeline-fixtures.js");
-  const compiledFixtureSource = await readFile(compiledFixturePath, "utf8");
-  await writeFile(
-    compiledFixturePath,
-    compiledFixtureSource.replace(
-      'from "@kendall/workflow-core"',
-      'from "../../../../packages/workflow-core/src/pipeline-state-fixture-matrix.js"',
-    ),
-  );
-  return import(pathToFileURL(compiledFixturePath).href);
 }

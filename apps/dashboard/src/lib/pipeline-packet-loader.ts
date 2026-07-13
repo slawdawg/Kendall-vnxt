@@ -53,13 +53,13 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
   const projectionResult = await loadPipelineDashboardProjection();
   if (projectionResult.error) {
     return {
-      fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor projection could not be read; no runtime or demo packets are shown."),
+      fixtureMode: projectionReadErrorSourceState(projectionResult.error),
       packets: [],
       projection: null,
       projectionError: projectionResult.error,
     };
   }
-  const projectionRuntimeError = runtimeProjectionError(projectionResult.projection);
+  const projectionRuntimeError = runtimeProjectionError(projectionResult.projection, "list");
   if (projectionRuntimeError) {
     return {
       fixtureMode: runtimeSourceState(
@@ -75,10 +75,19 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
   try {
     const projection = projectSupervisorWorkPacketsToCockpitPackets(await getWorkPackets());
     if (projection.kind === "empty") {
+      const emptyContradiction = emptyRuntimeContradiction(projectionResult.projection);
+      if (emptyContradiction) {
+        return {
+          fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${emptyContradiction} No runtime or demo packets are shown.`),
+          packets: [],
+          projection: null,
+          projectionError: emptyContradiction,
+        };
+      }
       return {
-        fixtureMode: runtimeSourceState("empty", "Supervisor empty", "Supervisor is reachable but has no persisted WorkPacketV0 rows; no demo packets are substituted."),
+        fixtureMode: runtimeSourceState("empty", "Supervisor empty", "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted."),
         packets: [],
-        projection: null,
+        projection: projectionResult.projection,
         projectionError: projectionResult.error,
       };
     }
@@ -88,6 +97,15 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         packets: [],
         projection: null,
         projectionError: projection.error,
+      };
+    }
+    const packetContradiction = populatedRuntimeContradiction(projectionResult.projection, projection.packets.map((packet) => packet.packetId));
+    if (packetContradiction) {
+      return {
+        fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${packetContradiction} No runtime or demo packets are shown.`),
+        packets: [],
+        projection: null,
+        projectionError: packetContradiction,
       };
     }
     return {
@@ -109,21 +127,40 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
   }
 }
 
-export async function loadPipelineCockpitPacket(packetId: string): Promise<PipelineCockpitPacketDetailLoad> {
-  if (!isValidRuntimePacketId(packetId)) {
+export async function loadPipelineCockpitPacket(packetId: unknown): Promise<PipelineCockpitPacketDetailLoad> {
+  const canonicalPacketId = toCanonicalRuntimePacketId(packetId);
+  if (!canonicalPacketId) {
     return {
       fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Malformed runtime packet identity; no supervisor lookup or demo packet substitution was attempted."),
       packet: null,
     };
   }
+  const projectionResult = await loadPipelineDashboardProjection();
+  if (projectionResult.error) {
+    return { fixtureMode: projectionReadErrorSourceState(projectionResult.error), packet: null };
+  }
+  const projectionRuntimeError = runtimeProjectionError(projectionResult.projection, "detail");
+  if (projectionRuntimeError) {
+    return {
+      fixtureMode: runtimeSourceState(
+        projectionRuntimeError.kind,
+        projectionRuntimeError.kind === "invalid" ? "Supervisor packet invalid" : "Supervisor unavailable",
+        `${projectionRuntimeError.summary} No demo packet was substituted.`,
+      ),
+      packet: null,
+    };
+  }
   try {
-    const projection = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(packetId)]);
+    const projection = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(canonicalPacketId)]);
     if (projection.kind === "invalid") {
       return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", projection.error + " No demo packet was substituted."), packet: null };
     }
     const [supervisorPacket] = projection.kind === "runtime" ? projection.packets : [];
-    if (!supervisorPacket || supervisorPacket.packetId !== packetId) {
+    if (!supervisorPacket || supervisorPacket.packetId !== canonicalPacketId) {
       return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), packet: null };
+    }
+    if (!projectionContainsPacketIdentity(projectionResult.projection, canonicalPacketId)) {
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor projection did not contain the requested runtime identity; no demo packet was substituted."), packet: null };
     }
     return {
       fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity."),
@@ -147,16 +184,39 @@ function runtimeSourceState(kind: PipelineRuntimeSourceState["kind"], label: str
   return { kind, label, summary, matrixRows: 0, fixtureCatalogEntries: 0, canSatisfyLiveProof: false };
 }
 
-function isValidRuntimePacketId(packetId: string): boolean {
+function projectionReadErrorSourceState(error: string): PipelineRuntimeSourceState {
+  const invalid = /invalid|malformed/i.test(error);
+  return runtimeSourceState(
+    invalid ? "invalid" : "unavailable",
+    invalid ? "Supervisor invalid" : "Supervisor unavailable",
+    `Supervisor projection could not be read; ${invalid ? "the returned state was invalid" : "the supervisor may be unavailable"}. No runtime or demo packets are shown.`,
+  );
+}
+
+type CanonicalRuntimePacketId = string & { readonly __canonicalRuntimePacketId: unique symbol };
+
+function toCanonicalRuntimePacketId(packetId: unknown): CanonicalRuntimePacketId | null {
+  if (typeof packetId !== "string") {
+    return null;
+  }
+  if (packetId.startsWith("fixture:")) {
+    return null;
+  }
   return packetId.trim() === packetId &&
     packetId.length > 0 &&
     packetId.length <= 200 &&
-    !/[\s/\\\0]/.test(packetId);
+    !/[\s/\\\0]/.test(packetId)
+    ? packetId as CanonicalRuntimePacketId
+    : null;
 }
 
-function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null): { kind: "invalid" | "unavailable"; summary: string } | null {
+function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null, mode: "list" | "detail"): { kind: "invalid" | "unavailable"; summary: string } | null {
   if (!projection) {
     return null;
+  }
+  const freshnessError = projectionFreshnessError(projection);
+  if (freshnessError) {
+    return { kind: "invalid", summary: freshnessError };
   }
   if (projection.fixtureMode?.enabled === true || projection.truthSummary?.fixtureBacked === true || projection.sourceLabel === "fixture") {
     return { kind: "invalid", summary: "Supervisor projection is fixture-backed; normal runtime mode refuses fixture truth." };
@@ -167,7 +227,85 @@ function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null
   if (projection.backendReachability?.state === "unavailable" || projection.truthSummary?.backendUnavailable === true) {
     return { kind: "unavailable", summary: "Supervisor projection reports unavailable runtime state; no packets are shown." };
   }
+  if (projection.backendReachability?.state !== "reachable") {
+    return { kind: "unavailable", summary: "Supervisor projection reachability is not proven reachable; no packets are shown." };
+  }
+  if (mode === "detail" && !canonicalLiveProjectionTruth(projection)) {
+    return { kind: "invalid", summary: "Supervisor detail requires canonical live projection truth and proven reachability." };
+  }
   return null;
+}
+
+function projectionFreshnessError(projection: PipelineDashboardProjectionV0): string | null {
+  const generatedAt = Date.parse(projection.generatedAt);
+  const sourceUpdatedAt = Date.parse(projection.sourceUpdatedAt);
+  if (!Number.isFinite(generatedAt) || !Number.isFinite(sourceUpdatedAt) || !Number.isFinite(projection.staleAfterSeconds) || projection.staleAfterSeconds <= 0) {
+    return "Supervisor projection freshness timestamps are malformed; normal runtime mode refuses stale packet truth.";
+  }
+  if (sourceUpdatedAt - generatedAt > 1000) {
+    return "Supervisor projection source timestamp is newer than the projection timestamp; normal runtime mode refuses contradictory packet truth.";
+  }
+  if (Date.now() - sourceUpdatedAt > projection.staleAfterSeconds * 1000) {
+    return "Supervisor projection timestamps are stale; normal runtime mode refuses stale packet truth even when flags claim live.";
+  }
+  return null;
+}
+
+function canonicalLiveProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
+  return projection.sourceLabel === "live" &&
+    projection.freshnessState === "live" &&
+    projection.truthSummary.label === "live" &&
+    projection.truthSummary.fixtureBacked === false &&
+    projection.truthSummary.stale === false &&
+    projection.truthSummary.backendUnavailable === false &&
+    projection.backendReachability.state === "reachable" &&
+    projection.fixtureMode.enabled === false &&
+    projection.fixtureMode.canSatisfyLiveProof === false;
+}
+
+function emptyRuntimeContradiction(projection: PipelineDashboardProjectionV0 | null): string | null {
+  if (!projection) {
+    return null;
+  }
+  if (projection.workPackets.length > 0 || projection.selectedPacketDetails.length > 0) {
+    return "Supervisor WorkPacket list returned zero rows while projection still contains packet identities.";
+  }
+  if (projection.truthSummary.backendUnavailable === true || projection.backendReachability.state !== "reachable") {
+    return "Supervisor WorkPacket list returned zero rows but projection reachability is unavailable.";
+  }
+  if (projection.truthSummary.backendEmpty !== true) {
+    return "Supervisor WorkPacket list returned zero rows but projection did not prove an empty runtime.";
+  }
+  return null;
+}
+
+function populatedRuntimeContradiction(projection: PipelineDashboardProjectionV0 | null, packetIds: readonly string[]): string | null {
+  if (!projection) {
+    return "Supervisor returned packets without a canonical live projection.";
+  }
+  if (!canonicalLiveProjectionTruth(projection)) {
+    return "Supervisor returned packets without canonical live projection truth and proven reachability.";
+  }
+  if (projection.truthSummary.backendEmpty === true) {
+    return "Supervisor returned packets while projection claims the backend is empty.";
+  }
+  const invalidPacketId = packetIds.find((packetId) => !toCanonicalRuntimePacketId(packetId));
+  if (invalidPacketId) {
+    return `Supervisor returned malformed runtime packet identity ${invalidPacketId}.`;
+  }
+  const projectionPacketIds = new Set(projection.workPackets.map((packet) => packet.packetId).filter((value): value is string => typeof value === "string"));
+  const missingPacketId = packetIds.find((packetId) => !projectionPacketIds.has(packetId));
+  if (missingPacketId) {
+    return `Supervisor projection omitted runtime packet identity ${missingPacketId}.`;
+  }
+  return null;
+}
+
+function projectionContainsPacketIdentity(projection: PipelineDashboardProjectionV0 | null, packetId: CanonicalRuntimePacketId): boolean {
+  return Boolean(projection && (
+    projection.workPackets.some((packet) => packet.packetId === packetId) ||
+    projection.selectedPacketDetails.some((detail) => detail.packetId === packetId)
+  ));
 }
 
 async function loadPipelineDashboardProjection(): Promise<{ projection: PipelineDashboardProjectionV0 | null; error: string | null }> {

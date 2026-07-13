@@ -755,8 +755,9 @@ function ProjectionTruthSummary({
   const proofFreshnessState = projectionError ? "unavailable" : effectiveFreshnessState ?? "unavailable";
   const liveProofState = projectionLiveProofState(projection, proofSourceLabel, proofFreshnessState);
   const displayLabels = projectionDisplayLabels(projection, proofSourceLabel, proofFreshnessState, Boolean(projectionError), liveProofState);
-  const sourceLabel = displayLabels.sourceLabel;
-  const statusNeedsAnnouncement = sourceLabel === "unavailable" || displayLabels.freshnessState === "stale" || Boolean(projectionError);
+  const sourceLabel = sourceState.kind === "empty" ? "empty" : displayLabels.sourceLabel;
+  const freshnessState = sourceState.kind === "empty" ? "empty" : displayLabels.freshnessState;
+  const statusNeedsAnnouncement = sourceLabel === "unavailable" || displayLabels.freshnessState === "stale" || Boolean(projectionError) || ["empty", "invalid", "demo"].includes(sourceState.kind);
   const backendState = projectionError
     ? "unavailable"
     : sourceState.kind === "empty"
@@ -766,7 +767,7 @@ function ProjectionTruthSummary({
     ? "live"
     : projectionError
       ? "refresh unavailable"
-      : displayLabels.freshnessState === "stale" || sourceLabel === "stale"
+      : freshnessState === "stale" || sourceLabel === "stale"
         ? "stale"
         : projection
           ? "limited"
@@ -783,7 +784,9 @@ function ProjectionTruthSummary({
   const backpressure = activeBoardViewModel?.summary.backpressure ?? null;
   const recoveryText = projectionError
     ? `Projection fetch failed: ${projectionError}. No runtime packets are shown until supervisor state is readable.`
-    : projection?.truthSummary.summary ?? sourceState.summary;
+    : sourceState.kind === "empty"
+      ? sourceState.summary
+      : projection?.truthSummary.summary ?? sourceState.summary;
 
   return (
     <section
@@ -794,6 +797,7 @@ function ProjectionTruthSummary({
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <ProjectionTruthChip label="Projection" value={projectionState} />
         <ProjectionTruthChip label="Backend" value={backendState} />
+        <ProjectionTruthChip label="Source" value={sourceLabel} />
       </div>
       <dl className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <ProjectionTruthMetric label="Last updated" value={lastUpdated} />
@@ -3291,11 +3295,17 @@ function normalizeStageEmptyReason(
   sourceLabel: CockpitStageSummary["sourceLabel"],
   freshnessState: CockpitStageSummary["freshnessState"]
 ) {
+  if (sourceLabel === "invalid" || freshnessState === "invalid") {
+    return "unknown";
+  }
   if (sourceLabel === "unavailable" || freshnessState === "unavailable") {
     return "backend_unavailable";
   }
   if (sourceLabel === "stale" || freshnessState === "stale") {
     return "projection_stale";
+  }
+  if (reason && reason !== "healthy_empty") {
+    return reason;
   }
   if (sourceLabel === "empty" || freshnessState === "empty") {
     return "healthy_empty";
@@ -3385,14 +3395,14 @@ function stageNextActionLabel(
   if (sourceLabel === "invalid" || freshnessState === "invalid") {
     return "Inspect invalid supervisor state before trusting this stage.";
   }
-  if (sourceLabel === "empty" || freshnessState === "empty" || reason === "healthy_empty") {
-    return "Supervisor is reachable with no persisted WorkPacket rows.";
-  }
   if (renderedPacketCount > 0) {
     return "Open a packet for details.";
   }
   if (totalPacketCount > 0) {
     return "Packet details unavailable in projection.";
+  }
+  if (sourceLabel === "empty" || freshnessState === "empty" || reason === "healthy_empty") {
+    return "Supervisor returned zero persisted WorkPacket rows.";
   }
   if (sourceLabel === "unavailable" || reason === "backend_unavailable") {
     return "Check supervisor projection.";
