@@ -85,7 +85,6 @@ const evidenceRefTypes = new Set(["route", "event", "attempt", "local_model", "r
 const evidenceRetentionClasses = new Set(["metadata_only", "summary", "fixture"]);
 const artifactRefTypes = new Set(["plan", "progress", "report", "pull_request", "check", "memory_proposal", "fixture"]);
 const artifactRefStatuses = new Set(["available", "missing", "blocked", "deferred"]);
-
 export function projectSupervisorWorkPacketsToCockpitPackets(
   packets: readonly WorkPacketV0View[] | unknown,
 ): PipelineSupervisorProjectionResult {
@@ -160,7 +159,7 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.loopStopStates) &&
     lifecycleState !== null &&
     typeof lifecycleState === "object" &&
-    isEnumValue((lifecycleState as unknown as Record<string, unknown>).source, lifecycleSources) &&
+    isEnumValue(lifecycleState.source, lifecycleSources) &&
     isEnumValue(lifecycleState.stage, pipelineStages) &&
     isEnumValue(lifecycleState.owner, workPacketOwners) &&
     isEnumValue(lifecycleState.status, workPacketStatuses) &&
@@ -246,7 +245,6 @@ function isSourceRefV0(value: unknown): boolean {
     return ref.blockedReason === null || typeof ref.blockedReason === "undefined";
   }
   return ref.summaryOnly === true &&
-    ref.canonical === false &&
     (ref.pathOrUrl === null || typeof ref.pathOrUrl === "undefined") &&
     typeof ref.blockedReason === "string" &&
     ref.blockedReason.trim().length > 0;
@@ -303,56 +301,41 @@ function reachableNestedWorkPacketFieldsAreSafe(packet: Partial<WorkPacketV0View
 }
 
 function hasFixtureMarkersInReachableNestedFields(packet: Partial<WorkPacketV0View> | Record<string, unknown>): boolean {
-  const values = [
-    ...nestedRefValues(packet.lifecycleState, ["authoritativeRef", "derivedFromRefs", "transitionEventRefs", "latestTransitionEventRef", "attemptRef"]),
-    ...nestedRefValues(packet.candidateWork, ["candidateWorkPacketId", "sourceRefs", "acceptanceCriteriaRefs"]),
-    ...nestedRefValues(packet.workItem, ["workItemId", "sourceRefs", "evidenceRefs"]),
-    ...nestedRefValues(packet.taskPacket, ["packetId", "sourceRefs", "evidenceRefs"]),
-    ...nestedRefValues(packet.routingPreview, ["sourceRefs", "evidenceRefs"]),
-    ...nestedRefValues(packet.deliveryEvidence, ["evidenceRefs", "artifactRefs", "retainedEvidence"]),
-    ...nestedRefValues(packet.learnOutcome, ["evidenceRefs", "sourceRefs"]),
-    ...nestedRefValues(packet.learnRefill, ["evidenceRefs", "sourceRefs", "memoryProposalRefs"]),
-    ...nestedRefValues(packet.alphaMemorySourceStatus, ["sourceRefs", "evidenceRefs"]),
-    ...nestedRefValues(packet.gateStateValidation, ["refId"]),
-    ...nestedArrayRefValues(packet.executionAttempts, ["attemptId", "workItemId", "leaseId", "routeDecisionId", "evidenceRefs", "artifactRefs"]),
-    ...nestedArrayRefValues(packet.transitionEvents, ["eventId", "evidenceRefs", "sourceEventId"]),
-    ...nestedArrayRefValues(packet.humanGateActions, ["actionId", "expectedActionId", "actualActionId", "evidenceRefs"]),
-    ...nestedArrayRefValues(packet.humanGateActionRequests, ["requestId", "actionId", "targetId", "evidenceRefs"]),
-    ...nestedArrayRefValues(packet.laneCards, ["laneId", "evidenceRefs", "artifactRefs"]),
-    ...nestedArrayRefValues(packet.memoryProposals, ["proposalId", "packetId", "sourceRefs", "evidenceRefs", "memoryProposalRefs"]),
-    ...nestedArrayRefValues(packet.loopStopStates, ["stopStateId", "evidenceRefs"]),
-    ...nestedArrayRefValues(packet.reviewSummaries, ["evidenceRefs", "artifactRefs"]),
-    ...nestedArrayRefValues(packet.recoveryActions, ["actionId", "evidenceRefs"]),
-  ];
-  return values.some(isSyntheticRuntimeIdentity);
+  const ancestors = new Set<object>();
+
+  function visit(value: unknown, fieldName?: string): boolean {
+    if (typeof value === "string") {
+      return fieldName !== undefined && isReferenceBearingField(fieldName) && isSyntheticRuntimeIdentity(value);
+    }
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    if (ancestors.has(value)) {
+      return false;
+    }
+    ancestors.add(value);
+    const hasFixtureMarker = Array.isArray(value)
+      ? value.some((item) => visit(item, fieldName))
+      : Object.entries(value as Record<string, unknown>).some(([key, nestedValue]) => visit(nestedValue, key));
+    ancestors.delete(value);
+    return hasFixtureMarker;
+  }
+
+  return Object.entries(packet).some(([key, value]) =>
+    key !== "packetId" && key !== "fixtureId" && visit(value, key)
+  );
 }
 
-function nestedArrayRefValues(value: unknown, keys: readonly string[]): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => nestedRefValues(item, keys));
-}
-
-function nestedRefValues(value: unknown, keys: readonly string[]): string[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  const record = value as Record<string, unknown>;
-  return keys.flatMap((key) => refStrings(record[key]));
-}
-
-function refStrings(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap(refStrings);
-  }
-  if (value && typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).flatMap(refStrings);
-  }
-  return [];
+function isReferenceBearingField(fieldName: string): boolean {
+  return fieldName !== "fixtureId" && (
+    fieldName === "pathOrUrl" ||
+    fieldName === "artifactPath" ||
+    fieldName === "targetVaultPath" ||
+    fieldName.endsWith("Ref") ||
+    fieldName.endsWith("Refs") ||
+    fieldName.endsWith("Id") ||
+    fieldName.endsWith("Ids")
+  );
 }
 
 function isEnumValue(value: unknown, allowedValues: ReadonlySet<string>): value is string {
