@@ -10,6 +10,7 @@ import vm from "node:vm";
 
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 const loaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
+const runtimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
 const detailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
 const detailComponentPath = new URL("../apps/dashboard/src/components/pipeline/packet-detail-page.tsx", import.meta.url);
 const normalRoutePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
@@ -994,6 +995,49 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoDetailRouteSource, /cannot satisfy live proof or invoke supervisor authority/);
 });
 
+test("dedicated runtime aborts a stalled supervisor read", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+    clearTimeout() {},
+    AbortController,
+    fetch: async (_url, options) => {
+      assert.equal(options.cache, "no-store");
+      assert.equal(options.signal.aborted, true);
+      throw new Error("aborted");
+    },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return {
+          normalizePipelineDashboardProjection: (projection) => projection,
+          isPipelineDashboardProjection: () => true,
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Request timed out for \/work-packets/,
+  );
+});
+
 function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {
   const now = new Date().toISOString();
   const workPackets = packetIds.map((packetId) => ({
@@ -1711,7 +1755,6 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides) {
         return projectorContext.module.exports;
       }
       if (specifier === "./pipeline-supervisor-runtime") return supervisor;
-      if (specifier === "./supervisor") return supervisor;
       throw new Error(`Unexpected loader import: ${specifier}`);
     },
   };

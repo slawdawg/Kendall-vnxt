@@ -2844,13 +2844,26 @@ function loadDashboardSupervisorModule(source) {
   }).outputText;
   let projectionPayload = projectionContractFixture();
   let projectionEnvelope = { data: projectionPayload };
+  let workPacketsPayload = [];
   let responseOk = true;
   const runtimeRequestJson = async (path) => {
-    assert.equal(`http://supervisor.test${path}`, "http://supervisor.test/pipeline-control-plane/projection");
+    const expectedUrl = path === "/pipeline-control-plane/projection"
+      ? "http://supervisor.test/pipeline-control-plane/projection"
+      : path === "/work-packets"
+        ? "http://supervisor.test/work-packets"
+        : /^\/work-packets\/[^/]+$/.test(path)
+          ? `http://supervisor.test${path}`
+          : null;
+    assert.ok(expectedUrl, `unexpected runtime read path ${path}`);
+    const envelope = path === "/pipeline-control-plane/projection"
+      ? projectionEnvelope
+      : path === "/work-packets"
+        ? { data: workPacketsPayload }
+        : { data: workPacketsPayload[0] ?? null };
     const response = {
       ok: responseOk,
       async json() {
-        return projectionEnvelope;
+        return envelope;
       },
     };
     if (!response.ok) {
@@ -2883,10 +2896,8 @@ function loadDashboardSupervisorModule(source) {
     require: (specifier) => {
       if (specifier === "./pipeline-supervisor-runtime") {
         return {
-          getSupervisorBaseUrl: () => "http://supervisor.test",
-          requestJson: runtimeRequestJson,
           getPipelineDashboardProjection: () => runtimeRequestJson("/pipeline-control-plane/projection"),
-          getWorkPacket: () => runtimeRequestJson("/work-packets"),
+          getWorkPacket: (packetId) => runtimeRequestJson(`/work-packets/${encodeURIComponent(packetId)}`),
           getWorkPackets: () => runtimeRequestJson("/work-packets"),
         };
       }
@@ -2921,6 +2932,7 @@ function loadDashboardSupervisorModule(source) {
     setProjectionPayload(nextProjectionPayload) {
       projectionPayload = nextProjectionPayload;
       projectionEnvelope = { data: projectionPayload };
+      workPacketsPayload = Array.isArray(nextProjectionPayload.workPackets) ? nextProjectionPayload.workPackets : [];
       responseOk = true;
     },
     setResponseOk(nextResponseOk) {

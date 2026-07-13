@@ -109,10 +109,10 @@ while (pendingFiles.length > 0) {
   scannedFiles.push(displayPath);
   const specifiers = checkImports(displayPath, source);
   checkForbiddenCalls(displayPath, source);
-  if (isClientModule(source)) {
-    continue;
-  }
   for (const specifier of specifiers) {
+    if (isGatedSupervisorImport(displayPath, specifier)) {
+      continue;
+    }
     const resolvedImport = await resolveLocalImport(filePath, specifier);
     if (resolvedImport) {
       queueFile(resolvedImport);
@@ -190,10 +190,10 @@ async function collectRouteGraph(entryFiles) {
     files.push(displayPath);
     checkImports(displayPath, source);
     checkForbiddenCalls(displayPath, source);
-    if (isClientModule(source)) {
-      continue;
-    }
     for (const specifier of extractRuntimeImportSpecifiers(source)) {
+      if (isGatedSupervisorImport(displayPath, specifier)) {
+        continue;
+      }
       const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
       if (resolvedImport && !visited.has(resolvedImport)) {
         pending.push(resolvedImport);
@@ -298,6 +298,13 @@ function checkForbiddenCalls(displayPath, source) {
 }
 
 function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
+  const exportedFunctions = [...source.matchAll(/\bexport\s+async\s+function\s+(\w+)\b/g)].map((match) => match[1]);
+  if (
+    exportedFunctions.length !== readOnlyPipelineRuntimeFunctions.length ||
+    exportedFunctions.some((functionName) => !readOnlyPipelineRuntimeFunctions.includes(functionName))
+  ) {
+    failures.push(`${displayPath}: only the approved read-only runtime functions may be exported`);
+  }
   const requestJsonSource = extractFunctionSource(source, "requestJson");
   if (!requestJsonSource) {
     failures.push(`${displayPath}: missing audited read-only helper requestJson`);
@@ -308,7 +315,7 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
     countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 1 ||
     countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
     /\bmethod\s*:/.test(executableRequestJsonSource) ||
-    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*\}\s*\)/.test(executableRequestJsonSource)
+    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*(?:,[\s\S]*?)?\}\s*\)/.test(executableRequestJsonSource)
   ) {
     failures.push(`${displayPath}: forbidden call boundary network-fetch`);
   }
@@ -486,10 +493,17 @@ function isPipelineBoundaryPath(filePath) {
 
 function isAllowedPipelineSupervisorImport(displayPath, specifier) {
   return (
-    displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" && specifier === "../lib/supervisor"
+    (displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" && specifier === "../lib/supervisor") ||
+    isGatedSupervisorImport(displayPath, specifier)
   );
 }
 
-function isClientModule(source) {
-  return /^\s*["']use client["'];/.test(source);
+function isGatedSupervisorImport(displayPath, specifier) {
+  return (
+    displayPath === "apps/dashboard/src/lib/pipeline-supervisor-actions.ts" &&
+    specifier === "./supervisor"
+  ) || (
+    displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" &&
+    specifier === "../lib/supervisor"
+  );
 }

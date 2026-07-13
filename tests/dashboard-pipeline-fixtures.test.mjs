@@ -1083,6 +1083,9 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   );
   assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
   assert.doesNotMatch(pipelineSupervisorRuntimeSource, /method\s*:\s*["'](?:POST|PATCH|PUT|DELETE)["']/);
+  assert.doesNotMatch(pipelineSupervisorRuntimeSource, /export\s+(?:async\s+)?function\s+requestJson/);
+  assert.match(pipelineSupervisorRuntimeSource, /normalizePipelineDashboardProjection/);
+  assert.match(pipelineSupervisorRuntimeSource, /Invalid projection payload/);
   assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 1);
   assert.match(cockpitSource, /ProjectionTruthSummary/);
   for (const bannedDefaultSurfacePattern of [
@@ -2455,7 +2458,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "",
     ].join("\n"),
     "apps/dashboard/src/components/static-module.ts": "export const staticModule = true;\n",
-    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
+    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": '"use client";\nimport "../../lib/pipeline-supervisor-actions";\nexport function PipelineCockpit() {}\n',
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
     "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
@@ -2467,6 +2470,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "",
     ].join("\n"),
     "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
+    "apps/dashboard/src/lib/pipeline-supervisor-actions.ts": 'import { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
     "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
     "apps/dashboard/src/lib/supervisor.ts": 'export async function mutate(path) { return fetch(path, { method: "POST" }); }\n',
   };
@@ -2497,6 +2501,30 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     assert.equal(report.demoFixtureCatalogReachable, true);
     assert.equal(report.normalSupervisorModuleReachable, false);
     assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),
+      'import "node:fs";\nimport { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
+      "utf8",
+    );
+    const actionImportRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(actionImportRun.status, 1);
+    assert.match(actionImportRun.stderr, /pipeline-supervisor-actions\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),
+      'import { applyPipelineOperationalAction } from "./supervisor";\nexport function unsafeAction() { return fetch("/forbidden"); }\nexport { applyPipelineOperationalAction };\n',
+      "utf8",
+    );
+    const actionCallRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(actionCallRun.status, 1);
+    assert.match(actionCallRun.stderr, /pipeline-supervisor-actions\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),
+      'import { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
+      "utf8",
+    );
 
     const mutationSupervisorRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
     assert.equal(mutationSupervisorRun.status, 0, mutationSupervisorRun.stderr);
