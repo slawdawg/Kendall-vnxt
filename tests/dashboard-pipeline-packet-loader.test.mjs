@@ -300,6 +300,13 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
         detail: { fixtureId: "ordinary-looking-value" },
       },
     }],
+    ["nested case-variant fixture id discriminator", {
+      routeSummary: {
+        recommendation: "capture",
+        reasonCodes: ["route.capture"],
+        detail: { FixtureID: "ordinary-looking-value" },
+      },
+    }],
     ["nested fixture kind discriminator", {
       reviewSummaries: [{ ...reviewSummary, detail: { fixtureKind: "future-real-source" } }],
     }],
@@ -487,6 +494,9 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
 
   const nestedPacketCollections = authoritativeNestedWorkPacketCollections(packet.packetId);
   const nestedSyntheticProvenanceCases = [
+    ["allowed inputs", {
+      routingPreview: { ...optionalSources.routingPreview, detail: { allowedInputs: ["fixture:nested-input"] } },
+    }],
     ["targetVaultFolder", {
       memoryProposals: [{ ...nestedPacketCollections.memoryProposals[0], targetVaultFolder: "fixture:nested-folder" }],
     }],
@@ -506,6 +516,62 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
       deliveryEvidence: {
         ...authoritativeDeliveryEvidence(),
         cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedWorktree: "fixture:nested-worktree" }),
+      },
+    }],
+    ["expectedOwner", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedOwner: "fixture:nested-owner" }),
+      },
+    }],
+    ["expectedLocalBranch", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedLocalBranch: "fixture:nested-local-branch" }),
+      },
+    }],
+    ["expectedRemoteBranch", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedRemoteBranch: "fixture:nested-remote-branch" }),
+      },
+    }],
+    ["expectedHeadRevision", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedHeadRevision: "fixture:nested-head-revision" }),
+      },
+    }],
+    ["delivery target branch", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), targetBranch: "fixture:nested-target-branch" },
+    }],
+    ["delivery base branch", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), baseBranch: "fixture:nested-base-branch" },
+    }],
+    ["delivery pull request head revision", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestHeadRevision: "fixture:nested-pr-head" },
+    }],
+    ["delivery evidence identity", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), evidenceId: "fixture:nested-delivery-id" },
+    }],
+    ["delivery gate evidence", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        mergeGate: {
+          status: "blocked",
+          lowRiskReady: false,
+          criteria: [{
+            criterionId: "criterion:delivery",
+            label: "Delivery criterion",
+            status: "blocked",
+            evidence: ["fixture:nested-gate-evidence"],
+            blockedReason: null,
+          }],
+          blockedReasons: [],
+          recoveryPath: "Return to delivery review.",
+          metadataOnly: true,
+          mergeApproved: false,
+        },
       },
     }],
     ["cleanupTarget", {

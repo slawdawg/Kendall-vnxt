@@ -231,8 +231,9 @@ function checkImports(displayPath, source) {
 }
 
 function checkUnresolvedDynamicModuleBoundaries(displayPath, source) {
+  const executableSource = stripCommentsAndStringsForModuleDetection(source);
   const unresolvedDynamicImportPattern = /\b(?:import|require)\s*\(\s*(?!["'][^"']*["']\s*\))[^)]*\)/g;
-  for (const match of source.matchAll(unresolvedDynamicImportPattern)) {
+  for (const match of executableSource.matchAll(unresolvedDynamicImportPattern)) {
     failures.push(`${displayPath}: unresolved dynamic module boundary: ${match[0]}`);
   }
 }
@@ -264,10 +265,83 @@ function checkForbiddenCalls(displayPath, source) {
         : [],
   );
   for (const { id, pattern } of forbiddenCallPatterns) {
+    if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/supervisor.ts" && pattern.test(executableSource)) {
+      if (!isAllowedReadOnlySupervisorProjectionFetch(source)) {
+        failures.push(`${displayPath}: forbidden call boundary ${id}`);
+      }
+      continue;
+    }
     if (!allowedCallIds.has(id) && pattern.test(executableSource)) {
       failures.push(`${displayPath}: forbidden call boundary ${id}`);
     }
   }
+}
+
+function isAllowedReadOnlySupervisorProjectionFetch(source) {
+  const requestJsonSource = extractFunctionSource(source, "requestJson");
+  if (!requestJsonSource) {
+    return false;
+  }
+  const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
+  return countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) === 1 &&
+    !/\bmethod\s*:/.test(executableRequestJsonSource) &&
+    /\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*\}\s*\)/.test(executableRequestJsonSource);
+}
+
+function extractFunctionSource(source, functionName) {
+  const declaration = new RegExp(`(?:async\\s+)?function\\s+${functionName}\\b`).exec(source);
+  if (!declaration) {
+    return null;
+  }
+  const bodyStart = source.indexOf("{", declaration.index + declaration[0].length);
+  if (bodyStart < 0) {
+    return null;
+  }
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(declaration.index, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function countMatches(source, pattern) {
+  return [...source.matchAll(pattern)].length;
+}
+
+function stripCommentsAndStringsForModuleDetection(source) {
+  return source
+    .replace(/`(?:\\.|[^`\\])*`/g, (templateSource) => {
+      const expressions = extractTemplateExpressions(templateSource);
+      return expressions.length > 0 ? expressions : "\"\"";
+    })
+    .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
 }
 
 function stripCommentsAndStrings(source) {

@@ -153,6 +153,31 @@ const lifecycleSources = new Set<WorkPacketLifecycleSourceV0>([
   "delivery_evidence",
   "source_missing",
 ]);
+const referenceBearingFieldNames = new Set([
+  "allowedinputs",
+  "basebranch",
+  "branch",
+  "branchname",
+  "cleanuptarget",
+  "evidence",
+  "expectedheadrevision",
+  "expectedlocalbranch",
+  "expectedowner",
+  "expectedpr",
+  "expectedremotebranch",
+  "expectedworktree",
+  "headrevision",
+  "localbranch",
+  "owner",
+  "pullrequestheadrevision",
+  "pullrequesturl",
+  "remotebranch",
+  "revision",
+  "source",
+  "targetbranch",
+  "targetvaultfolder",
+  "worktree",
+]);
 
 export function projectSupervisorWorkPacketsToCockpitPackets(
   packets: readonly WorkPacketV0View[] | unknown,
@@ -1012,26 +1037,21 @@ function hasFixtureMarkersInReachableNestedFields(packet: Partial<WorkPacketV0Vi
 }
 
 function isFixtureDiscriminator(fieldName: string, value: unknown): boolean {
-  return fieldName === "fixtureId" ||
-    fieldName === "fixtureKind" ||
-    fieldName === "fixtureLabel" ||
-    (fieldName === "sourceKind" && value === "demo-fixture") ||
-    (fieldName === "evidenceType" && value === "fixture") ||
-    (fieldName === "retentionClass" && value === "fixture") ||
-    (fieldName === "artifactType" && value === "fixture");
+  const normalizedFieldName = fieldName.toLowerCase();
+  return normalizedFieldName === "fixtureid" ||
+    normalizedFieldName === "fixturekind" ||
+    normalizedFieldName === "fixturelabel" ||
+    (normalizedFieldName === "sourcekind" && value === "demo-fixture") ||
+    (normalizedFieldName === "evidencetype" && value === "fixture") ||
+    (normalizedFieldName === "retentionclass" && value === "fixture") ||
+    (normalizedFieldName === "artifacttype" && value === "fixture");
 }
 
 function isReferenceBearingField(fieldName: string): boolean {
   const normalizedFieldName = fieldName.toLowerCase();
-  return normalizedFieldName !== "fixtureid" && (
-    normalizedFieldName === "source" ||
+  return referenceBearingFieldNames.has(normalizedFieldName) ||
     normalizedFieldName === "retainedevidence" ||
-    normalizedFieldName === "targetvaultfolder" ||
-    normalizedFieldName === "expectedpr" ||
-    normalizedFieldName === "expectedworktree" ||
-    normalizedFieldName === "cleanuptarget" ||
-    /(?:paths?|urls?|uris?|hrefs?|refs?|ids?)$/.test(normalizedFieldName)
-  );
+    /(?:paths?|urls?|uris?|hrefs?|refs?|ids?)$/.test(normalizedFieldName);
 }
 
 function isEnumValue(value: unknown, allowedValues: ReadonlySet<string>): value is string {
