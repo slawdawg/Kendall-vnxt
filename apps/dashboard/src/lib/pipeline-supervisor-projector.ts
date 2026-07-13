@@ -89,6 +89,14 @@ export function projectSupervisorWorkPacketsToCockpitPackets(
       error: "Supervisor returned malformed WorkPacketV0 row at index " + invalidIndex + ".",
     };
   }
+  const fixtureShapedIndex = packets.findIndex((packet) => hasFixtureOnlyRuntimeShape(packet));
+  if (fixtureShapedIndex >= 0) {
+    return {
+      kind: "invalid",
+      packets: [],
+      error: "Supervisor returned fixture-shaped WorkPacketV0 row at index " + fixtureShapedIndex + ".",
+    };
+  }
   try {
     return {
       kind: "runtime",
@@ -113,8 +121,11 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     typeof packet.riskLevel === "string" &&
     typeof packet.priority === "string" &&
     Array.isArray(packet.sourceRefs) &&
+    packet.sourceRefs.every(isSourceRefV0) &&
     Array.isArray(packet.evidenceRefs) &&
+    packet.evidenceRefs.every(isEvidenceRefV0) &&
     Array.isArray(packet.artifactRefs) &&
+    packet.artifactRefs.every(isArtifactRefV0) &&
     Array.isArray(packet.humanGateActions) &&
     Array.isArray(packet.humanGateActionRequests) &&
     Array.isArray(packet.laneCards) &&
@@ -126,6 +137,101 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.loopStopStates) &&
     packet.lifecycleState !== null &&
     typeof packet.lifecycleState === "object";
+}
+
+function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const packet = value as Record<string, unknown>;
+  if (
+    (typeof packet.packetId === "string" && packet.packetId.startsWith("fixture:")) ||
+    "fixtureId" in packet ||
+    "fixtureKind" in packet ||
+    "fixtureLabel" in packet ||
+    packet.sourceKind === "demo-fixture"
+  ) {
+    return true;
+  }
+  return hasFixtureOnlyRefs(packet.sourceRefs) ||
+    hasFixtureOnlyRefs(packet.evidenceRefs) ||
+    hasFixtureOnlyRefs(packet.artifactRefs);
+}
+
+function hasFixtureOnlyRefs(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((ref) => {
+    if (!ref || typeof ref !== "object") {
+      return false;
+    }
+    const typedRef = ref as Record<string, unknown>;
+    return isFixtureRefIdentity(typedRef.refId) ||
+      isFixtureRefIdentity(typedRef.sourceRef) ||
+      isFixtureRefIdentity(typedRef.pathOrUrl) ||
+      isFixtureRefIdentity(typedRef.artifactPath) ||
+      typedRef.evidenceType === "fixture" ||
+      typedRef.retentionClass === "fixture" ||
+      typedRef.artifactType === "fixture";
+  });
+}
+
+function isFixtureRefIdentity(value: unknown): boolean {
+  return typeof value === "string" && value.startsWith("fixture:");
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string" || typeof value === "undefined";
+}
+
+function isSourceRefV0(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const ref = value as Record<string, unknown>;
+  if (
+    typeof ref.refId !== "string" ||
+    typeof ref.sourceType !== "string" ||
+    typeof ref.label !== "string" ||
+    typeof ref.freshness !== "string" ||
+    typeof ref.accessState !== "string" ||
+    typeof ref.canonical !== "boolean" ||
+    typeof ref.summaryOnly !== "boolean" ||
+    !isNullableString(ref.pathOrUrl) ||
+    !isNullableString(ref.blockedReason)
+  ) {
+    return false;
+  }
+  if (ref.accessState === "allowed") {
+    return true;
+  }
+  return ref.summaryOnly === true && typeof ref.blockedReason === "string";
+}
+
+function isEvidenceRefV0(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const ref = value as Record<string, unknown>;
+  return typeof ref.refId === "string" &&
+    typeof ref.evidenceType === "string" &&
+    typeof ref.label === "string" &&
+    isNullableString(ref.artifactPath) &&
+    typeof ref.retentionClass === "string" &&
+    ref.rawPayloadRetained === false;
+}
+
+function isArtifactRefV0(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const ref = value as Record<string, unknown>;
+  return typeof ref.refId === "string" &&
+    typeof ref.artifactType === "string" &&
+    typeof ref.label === "string" &&
+    isNullableString(ref.pathOrUrl) &&
+    typeof ref.status === "string";
 }
 
 function projectSupervisorWorkPacketToCockpitPacket(packet: WorkPacketV0View): PipelineRuntimePacket {

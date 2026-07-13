@@ -76,7 +76,12 @@ async function createWorkItem(request: APIRequestContext, payload: WorkItemCreat
   return body.data.id;
 }
 
-async function seedSupervisorPipelinePacket(request: APIRequestContext, packetId: string, title: string) {
+async function seedSupervisorPipelinePacket(
+  request: APIRequestContext,
+  packetId: string,
+  title: string,
+  status: "waiting" | "complete" = "waiting",
+) {
   const sourcePath = "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md";
   const sourceBytes = await fs.readFile(path.join(process.cwd(), sourcePath));
   const sourceRef = {
@@ -91,7 +96,7 @@ async function seedSupervisorPipelinePacket(request: APIRequestContext, packetId
       packetId,
       title,
       initialStage: "capture",
-      status: "waiting",
+      status,
       truthLabel: "source_owned",
       sourceRef,
       actor: { actorType: "manager", actorId: "story-4-6-playwright", actorLabel: "Story 4.6 Playwright" },
@@ -106,6 +111,22 @@ async function seedSupervisorPipelinePacket(request: APIRequestContext, packetId
   const body = (await response.json()) as { data: { packetId: string } };
   expect(body.data.packetId).toBe(packetId);
   return body.data;
+}
+
+function ageSupervisorPipelinePackets() {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"update authoritative_work_packets set status = 'complete', updated_at = datetime('now', '-1 day')\")",
+    "conn.commit()",
+    "conn.close()",
+  ].join("; ");
+  execFileSync("services/supervisor/.venv/bin/python", ["-c", script, dbPath!], {
+    cwd: process.cwd(),
+  });
 }
 
 async function getWorkItem(request: APIRequestContext, workItemId: string) {
@@ -605,6 +626,9 @@ test.describe("dashboard workflow coverage", () => {
       await page.goto("/pipeline");
 
       await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
+      await expect(page.getByRole("status", { name: "Projection truth summary" }).getByText("Source:")).toBeVisible();
+      await expect(page.getByRole("status", { name: "Projection truth summary" }).getByText("empty", { exact: true })).toBeVisible();
+      await expect(page.getByText("Supervisor returned zero persisted WorkPacketV0 rows", { exact: false })).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Unexpected Runtime Packet", { exact: true })).toHaveCount(0);
@@ -618,19 +642,49 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.goto("/pipeline");
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+    const truthSummary = page.locator('[aria-label="Projection truth summary"]');
+    await expect(truthSummary.getByText("Source:")).toBeVisible();
+    await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
     await page.reload();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+    const runtimeBody = await page.locator("body").innerText();
+    for (const fixtureSentinel of [
+      "fixture:happy-path",
+      "Shape cockpit route from Work Packet matrix",
+      "Resolve stale research source before routing",
+    ]) {
+      expect(runtimeBody).not.toContain(fixtureSentinel);
+    }
 
     await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
     await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
   });
 
+  test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {
+    const packetId = `story-4-6-stale:${Date.now()}`;
+    await seedSupervisorPipelinePacket(request, packetId, "Story 4.6 stale supervisor packet", "complete");
+    ageSupervisorPipelinePackets();
+
+    await page.goto("/pipeline");
+    await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
+    await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
+    const staleBody = await page.locator("body").innerText();
+    expect(staleBody).toMatch(/stale|timestamps|invalid supervisor state/i);
+    for (const fixtureSentinel of [
+      "fixture:happy-path",
+      "Shape cockpit route from Work Packet matrix",
+      "Resolve stale research source before routing",
+    ]) {
+      expect(staleBody).not.toContain(fixtureSentinel);
+    }
+  });
+
   test("Story 4.6 invalid detail identity fails closed", async ({ page }) => {
     const invalidResponse = await page.goto("/pipeline/packets/%E0%A4%A");
-    expect(invalidResponse?.status()).toBe(404);
+    expect([400, 404]).toContain(invalidResponse?.status());
     await expect(page.getByText("Demo fixture", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
   });

@@ -24,6 +24,7 @@ const suites = {
     "test:dashboard-e2e-runner",
     "test:gate4-bmad-dashboard-contract",
     "check:dashboard-pipeline-boundary",
+    "test:dashboard-pipeline-loader",
     "test:dashboard-pipeline-fixtures",
   ],
 };
