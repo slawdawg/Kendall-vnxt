@@ -238,6 +238,25 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
   const learnRefill = authoritativeLearnRefill();
   const nestedFixtureCases = [
     ["review evidence", { reviewSummaries: [{ ...reviewSummary, evidenceRefs: ["fixture:nested-review"] }] }],
+    ["delivery retained evidence", {
+      deliveryEvidence: {
+        evidenceId: "delivery:authoritative",
+        mode: "metadata_only",
+        status: "ready",
+        readyForApproval: false,
+        hasDeliveryExecutionEvidence: false,
+        evidenceRefs: ["event:created"],
+        artifactRefs: [],
+        retainedEvidence: ["fixture:nested-delivery-retained"],
+        blockedReasons: [],
+        recoveryPath: "Return to delivery review.",
+        deliveryRailsGrantAuthority: false,
+        rawPayloadRetained: false,
+        remoteMutationApproved: false,
+        mergeApproved: false,
+        cleanupApproved: false,
+      },
+    }],
     ["learn evidence", { learnOutcome: { ...learnOutcome, evidenceRefs: ["fixture:nested-learn-evidence"] } }],
     ["learn source", { learnOutcome: { ...learnOutcome, sourceRefs: ["fixture:nested-learn-source"] } }],
     ["learn decision evidence", {

@@ -1,4 +1,4 @@
-import type { PipelineStage, WorkPacketV0View } from "@kendall/contracts";
+import type { PipelineStage, WorkPacketLifecycleSourceV0, WorkPacketV0View } from "@kendall/contracts";
 
 export type PipelineSourceTrustState =
   | "included"
@@ -85,6 +85,15 @@ const evidenceRefTypes = new Set(["route", "event", "attempt", "local_model", "r
 const evidenceRetentionClasses = new Set(["metadata_only", "summary", "fixture"]);
 const artifactRefTypes = new Set(["plan", "progress", "report", "pull_request", "check", "memory_proposal", "fixture"]);
 const artifactRefStatuses = new Set(["available", "missing", "blocked", "deferred"]);
+const lifecycleSources = new Set<WorkPacketLifecycleSourceV0>([
+  "candidate_work",
+  "work_item",
+  "execution_attempt",
+  "workflow_event",
+  "memory_proposal",
+  "delivery_evidence",
+  "source_missing",
+]);
 export function projectSupervisorWorkPacketsToCockpitPackets(
   packets: readonly WorkPacketV0View[] | unknown,
 ): PipelineSupervisorProjectionResult {
@@ -331,6 +340,7 @@ function isReferenceBearingField(fieldName: string): boolean {
     fieldName === "pathOrUrl" ||
     fieldName === "artifactPath" ||
     fieldName === "targetVaultPath" ||
+    fieldName === "retainedEvidence" ||
     fieldName.endsWith("Ref") ||
     fieldName.endsWith("Refs") ||
     fieldName.endsWith("Id") ||
