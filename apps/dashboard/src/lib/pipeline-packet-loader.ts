@@ -85,7 +85,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         };
       }
       return {
-        fixtureMode: runtimeSourceState("empty", "Supervisor empty", "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted."),
+        fixtureMode: runtimeSourceState("empty", "Supervisor empty", emptyRuntimeSummary(projectionResult.projection)),
         packets: [],
         projection: projectionResult.projection,
         projectionError: projectionResult.error,
@@ -159,8 +159,9 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
     if (!supervisorPacket || supervisorPacket.packetId !== canonicalPacketId) {
       return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), packet: null };
     }
-    if (!projectionContainsPacketIdentity(projectionResult.projection, canonicalPacketId)) {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor projection did not contain the requested runtime identity; no demo packet was substituted."), packet: null };
+    const detailProjectionContradictionMessage = detailProjectionContradiction(projectionResult.projection, canonicalPacketId, supervisorPacket);
+    if (detailProjectionContradictionMessage) {
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), packet: null };
     }
     return {
       fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity."),
@@ -199,7 +200,8 @@ function toCanonicalRuntimePacketId(packetId: unknown): CanonicalRuntimePacketId
   if (typeof packetId !== "string") {
     return null;
   }
-  if (packetId.startsWith("fixture:")) {
+  const normalizedPacketId = packetId.trim().toLowerCase();
+  if (normalizedPacketId.startsWith("fixture:") || normalizedPacketId.startsWith("demo:")) {
     return null;
   }
   return packetId.trim() === packetId &&
@@ -280,8 +282,20 @@ function emptyRuntimeContradiction(projection: PipelineDashboardProjectionV0 | n
   if (!canonicalEmptyProjectionTruth(projection)) {
     return "Supervisor WorkPacket list returned zero rows without canonical live empty-runtime truth and proven reachability.";
   }
+  const emptyReasonContradiction = emptyRuntimeReasonContradiction(projection);
+  if (emptyReasonContradiction) {
+    return emptyReasonContradiction;
+  }
   if (projection.workPackets.length > 0 || projection.selectedPacketDetails.length > 0) {
     return "Supervisor WorkPacket list returned zero rows while projection still contains packet identities.";
+  }
+  const stagePacketCount = projection.stageSummaries.reduce((sum, summary) => sum + summary.packetCount, 0);
+  if (stagePacketCount > 0) {
+    return "Supervisor WorkPacket list returned zero rows while projection stage summaries still count runtime packets.";
+  }
+  const queuePacketCount = projectionQueuePacketCount(projection);
+  if (queuePacketCount > 0) {
+    return "Supervisor WorkPacket list returned zero rows while queue summary still counts runtime packets.";
   }
   if (projection.truthSummary.backendUnavailable === true || projection.backendReachability.state !== "reachable") {
     return "Supervisor WorkPacket list returned zero rows but projection reachability is unavailable.";
@@ -290,6 +304,31 @@ function emptyRuntimeContradiction(projection: PipelineDashboardProjectionV0 | n
     return "Supervisor WorkPacket list returned zero rows but projection did not prove an empty runtime.";
   }
   return null;
+}
+
+function emptyRuntimeSummary(projection: PipelineDashboardProjectionV0): string {
+  const reason = canonicalEmptyReason(projection.truthSummary.emptyReason ?? projection.queueSummary.emptyReason);
+  if (reason === "healthy_empty") {
+    return projection.truthSummary.summary || projection.queueSummary.summary || "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted.";
+  }
+  return "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted.";
+}
+
+function emptyRuntimeReasonContradiction(projection: PipelineDashboardProjectionV0): string | null {
+  const truthReason = canonicalEmptyReason(projection.truthSummary.emptyReason);
+  const queueReason = canonicalEmptyReason(projection.queueSummary.emptyReason);
+  const effectiveReason = truthReason ?? queueReason;
+  if (effectiveReason !== "healthy_empty") {
+    return `Supervisor WorkPacket list returned zero rows but projection empty reason was ${effectiveReason ?? "missing"} instead of healthy_empty.`;
+  }
+  if (truthReason && queueReason && truthReason !== queueReason) {
+    return `Supervisor WorkPacket list returned zero rows but projection empty reasons disagreed (${truthReason} vs ${queueReason}).`;
+  }
+  return null;
+}
+
+function canonicalEmptyReason(value: PipelineDashboardProjectionV0["truthSummary"]["emptyReason"]): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 function canonicalEmptyProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
@@ -323,12 +362,48 @@ function populatedRuntimeContradiction(projection: PipelineDashboardProjectionV0
   if (duplicatePacketId) {
     return `Supervisor returned duplicate runtime packet identity ${duplicatePacketId}.`;
   }
-  const projectionPacketIds = new Set(projection.workPackets.map((packet) => packet.packetId).filter((value): value is string => typeof value === "string"));
+  const rawProjectionPacketIds = projection.workPackets.map((packet) => packet.packetId);
+  const invalidProjectionPacketId = rawProjectionPacketIds.find((packetId) => !toCanonicalRuntimePacketId(packetId));
+  if (invalidProjectionPacketId) {
+    return `Supervisor projection contains malformed runtime packet identity ${invalidProjectionPacketId}.`;
+  }
+  const duplicateProjectionPacketId = firstDuplicate(rawProjectionPacketIds);
+  if (duplicateProjectionPacketId) {
+    return `Supervisor projection contains duplicate runtime packet identity ${duplicateProjectionPacketId}.`;
+  }
+  const duplicateProjectionDetailId = firstDuplicate(projection.selectedPacketDetails.map((detail) => detail.packetId));
+  if (duplicateProjectionDetailId) {
+    return `Supervisor projection contains duplicate detail identity ${duplicateProjectionDetailId}.`;
+  }
+  const projectionPacketIds = new Set(rawProjectionPacketIds);
+  const packetIdSet = new Set(packetIds);
   const missingPacketId = packetIds.find((packetId) => !projectionPacketIds.has(packetId));
   if (missingPacketId) {
     return `Supervisor projection omitted runtime packet identity ${missingPacketId}.`;
   }
+  const extraProjectionPacketId = rawProjectionPacketIds.find((packetId) => !packetIdSet.has(packetId));
+  if (extraProjectionPacketId) {
+    return `Supervisor projection included runtime packet identity ${extraProjectionPacketId} that was absent from the WorkPacket list.`;
+  }
+  const extraProjectionDetailId = projection.selectedPacketDetails.find((detail) => !packetIdSet.has(detail.packetId))?.packetId;
+  if (extraProjectionDetailId) {
+    return `Supervisor projection included detail identity ${extraProjectionDetailId} that was absent from the WorkPacket list.`;
+  }
   return null;
+}
+
+function projectionQueuePacketCount(projection: PipelineDashboardProjectionV0): number {
+  const queueCounts = [
+    projection.queueSummary.activeCount,
+    projection.queueSummary.dispatchableCount,
+    projection.queueSummary.blockedCount,
+    projection.queueSummary.gatedCount,
+    projection.queueSummary.closedCount,
+    projection.queueSummary.staleCount,
+    projection.queueSummary.refillingCount,
+    projection.queueSummary.unknownCount,
+  ];
+  return queueCounts.reduce((sum, count) => sum + (typeof count === "number" && count > 0 ? count : 0), 0);
 }
 
 function firstDuplicate(values: readonly string[]): string | null {
@@ -342,11 +417,40 @@ function firstDuplicate(values: readonly string[]): string | null {
   return null;
 }
 
-function projectionContainsPacketIdentity(projection: PipelineDashboardProjectionV0 | null, packetId: CanonicalRuntimePacketId): boolean {
-  return Boolean(projection && (
-    projection.workPackets.some((packet) => packet.packetId === packetId) ||
-    projection.selectedPacketDetails.some((detail) => detail.packetId === packetId)
-  ));
+function detailProjectionContradiction(
+  projection: PipelineDashboardProjectionV0 | null,
+  packetId: CanonicalRuntimePacketId,
+  supervisorPacket: PipelineRuntimePacket,
+): string | null {
+  if (!projection) {
+    return "Supervisor detail projection is missing.";
+  }
+  const projectionPackets = projection.workPackets.filter((packet) => packet.packetId === packetId);
+  if (projectionPackets.length !== 1) {
+    return "Supervisor projection did not contain exactly one matching runtime packet identity.";
+  }
+  const projectionPacket = projectionPackets[0];
+  if (projectionPacket.currentStage !== supervisorPacket.currentStage || projectionPacket.status !== supervisorPacket.status) {
+    return "Supervisor detail disagrees with the verified projection stage or status for the requested runtime identity.";
+  }
+  const details = projection.selectedPacketDetails.filter((detail) => detail.packetId === packetId);
+  if (details.length > 1) {
+    return "Supervisor projection contained duplicate selected detail identities.";
+  }
+  const [detail] = details;
+  if (!detail) {
+    return null;
+  }
+  if (detail.currentStage !== projectionPacket.currentStage || detail.status !== projectionPacket.status || detail.truthLabel !== projectionPacket.truthLabel) {
+    return "Supervisor selected detail disagrees with the verified projection packet for the requested runtime identity.";
+  }
+  if (detail.parentPacketId && detail.parentPacketId !== packetId) {
+    return "Supervisor selected detail references a different parent packet identity.";
+  }
+  if (!Array.isArray(detail.sourceRefs) || !Array.isArray(detail.evidenceRefs)) {
+    return "Supervisor selected detail is incomplete.";
+  }
+  return null;
 }
 
 async function loadPipelineDashboardProjection(): Promise<{ projection: PipelineDashboardProjectionV0 | null; error: string | null }> {
