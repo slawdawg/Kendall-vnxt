@@ -21,6 +21,7 @@ const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
 const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
 const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
+const pipelineSupervisorRuntimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
 const pipelineContractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 const projectionTruthPath = new URL("../apps/dashboard/src/lib/pipeline/projection-truth.ts", import.meta.url);
 const activeBoardViewModelPath = new URL("../apps/dashboard/src/lib/pipeline/active-board-view-model.ts", import.meta.url);
@@ -131,10 +132,13 @@ function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardVie
           },
         };
       }
-      if (specifier === "../../lib/pipeline-packet-loader") {
+      if (specifier === "../../lib/pipeline-supervisor-actions") {
         return {
           applyPipelineOperationalAction: async () => {
             throw new Error("server-render test does not apply operational actions");
+          },
+          requestPipelineOperationalApproval: async () => {
+            throw new Error("server-render test does not request operational approvals");
           },
         };
       }
@@ -353,6 +357,9 @@ async function collectRelativeImportGraph(entryUrl, options = {}) {
     }
     visited.set(currentPath, source);
     if (terminalPaths.has(currentPath)) {
+      continue;
+    }
+    if (/^\s*["']use client["'];/.test(source)) {
       continue;
     }
     for (const specifier of extractImportSpecifiers(source)) {
@@ -999,6 +1006,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   const cockpitSource = await readFile(cockpitPath, "utf8");
   const fixtureSource = await readFile(fixturesPath, "utf8");
   const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
+  const pipelineSupervisorRuntimeSource = await readFile(pipelineSupervisorRuntimePath, "utf8");
   const contractSource = await readFile(pipelineContractPath, "utf8");
   const projectionTruthSource = await readFile(projectionTruthPath, "utf8");
   const activeBoardViewModelSource = await readFile(activeBoardViewModelPath, "utf8");
@@ -1057,7 +1065,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/app/pipeline/page.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/shell.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx"));
-  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/supervisor.ts"));
+  assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/supervisor.ts"));
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"));
   assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
   assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline-fixtures.ts"));
   assert.ok(demoPipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
@@ -1073,6 +1082,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
     "/pipeline import graph should only use the supervisor projection read path and avoid runtime transports"
   );
   assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.doesNotMatch(pipelineSupervisorRuntimeSource, /method\s*:\s*["'](?:POST|PATCH|PUT|DELETE)["']/);
+  assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 1);
   assert.match(cockpitSource, /ProjectionTruthSummary/);
   for (const bannedDefaultSurfacePattern of [
     /route id/i,
@@ -1392,7 +1403,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
   assert.doesNotMatch(packetDetailRouteSource, /generateStaticParams/);
   assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
-  assert.match(supervisorLibSource, /Malformed response for \$\{path\}/);
+  assert.match(pipelineSupervisorRuntimeSource, /Malformed response for \$\{path\}/);
   assert.match(supervisorLibSource, /Invalid projection payload/);
   assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
   assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);
@@ -2447,18 +2458,17 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
-    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./supervisor";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
-    "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
-    "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
-    "apps/dashboard/src/lib/supervisor.ts": [
-      'import "../components/shared-pipeline-runtime";',
+    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
+    "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts": [
       'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
       'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
       'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
       'export async function getWorkPackets() { return requestJson("/work-packets"); }',
-      'export async function mutate(path) { return fetch(path, { method: "POST" }); }',
       "",
     ].join("\n"),
+    "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
+    "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
+    "apps/dashboard/src/lib/supervisor.ts": 'export async function mutate(path) { return fetch(path, { method: "POST" }); }\n',
   };
 
   try {
@@ -2485,14 +2495,16 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     const report = JSON.parse(cleanRun.stdout);
     assert.equal(report.normalFixtureCatalogReachable, false);
     assert.equal(report.demoFixtureCatalogReachable, true);
+    assert.equal(report.normalSupervisorModuleReachable, false);
     assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
 
+    const mutationSupervisorRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(mutationSupervisorRun.status, 0, mutationSupervisorRun.stderr);
+
     await writeFile(
-      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
-        'async function requestJson(path) {',
-        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
-        '}',
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
         'export async function getWorkPackets() { return requestJson("/work-packets"); }',
@@ -2501,49 +2513,14 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const allowedSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
-    assert.equal(allowedSupervisorFetchRun.status, 0, allowedSupervisorFetchRun.stderr);
+    const mutationRuntimeRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(mutationRuntimeRun.status, 1);
+    assert.match(mutationRuntimeRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
 
     await writeFile(
-      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
-        'async function requestJson(path) {',
-        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
-        '}',
-        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
-        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
-        'export async function getWorkPackets() { return [requestJson("/work-packets"), fetch(path, { cache: "no-store" })]; }',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    const extraSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
-    assert.equal(extraSupervisorFetchRun.status, 1);
-    assert.match(extraSupervisorFetchRun.stderr, /supervisor\.ts: forbidden call boundary network-fetch/);
-
-    await writeFile(
-      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
-      [
-        'async function requestJson(path) {',
-        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
-        '}',
-        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
-        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
-        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
-        'export async function mutate(path) { return fetch(path, { method: "POST", cache: "no-store" }); }',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    const extraMutationSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
-    assert.equal(extraMutationSupervisorFetchRun.status, 0, extraMutationSupervisorFetchRun.stderr);
-
-    await writeFile(
-      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
-      [
-        'async function requestJson(path) {',
-        '  return fetch(`${baseUrl}${path}`, { method: "POST", cache: "no-store" });',
-        '}',
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
         'export async function getWorkPackets() { return requestJson("/work-packets"); }',
@@ -2551,9 +2528,6 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const mutationSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
-    assert.equal(mutationSupervisorFetchRun.status, 1);
-    assert.match(mutationSupervisorFetchRun.stderr, /supervisor\.ts: forbidden call boundary network-fetch/);
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),

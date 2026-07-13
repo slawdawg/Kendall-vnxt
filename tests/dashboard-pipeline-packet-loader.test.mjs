@@ -1710,6 +1710,7 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides) {
         vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
         return projectorContext.module.exports;
       }
+      if (specifier === "./pipeline-supervisor-runtime") return supervisor;
       if (specifier === "./supervisor") return supervisor;
       throw new Error(`Unexpected loader import: ${specifier}`);
     },

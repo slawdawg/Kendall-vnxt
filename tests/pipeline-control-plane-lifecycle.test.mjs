@@ -2845,6 +2845,23 @@ function loadDashboardSupervisorModule(source) {
   let projectionPayload = projectionContractFixture();
   let projectionEnvelope = { data: projectionPayload };
   let responseOk = true;
+  const runtimeRequestJson = async (path) => {
+    assert.equal(`http://supervisor.test${path}`, "http://supervisor.test/pipeline-control-plane/projection");
+    const response = {
+      ok: responseOk,
+      async json() {
+        return projectionEnvelope;
+      },
+    };
+    if (!response.ok) {
+      throw new Error(`Request failed for ${path} (${response.status})`);
+    }
+    const payload = await response.json();
+    if (!payload || !("data" in payload)) {
+      throw new Error(`Malformed response for ${path}`);
+    }
+    return payload.data;
+  };
   const context = {
     exports: {},
     module: { exports: {} },
@@ -2864,6 +2881,15 @@ function loadDashboardSupervisorModule(source) {
       };
     },
     require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-runtime") {
+        return {
+          getSupervisorBaseUrl: () => "http://supervisor.test",
+          requestJson: runtimeRequestJson,
+          getPipelineDashboardProjection: () => runtimeRequestJson("/pipeline-control-plane/projection"),
+          getWorkPacket: () => runtimeRequestJson("/work-packets"),
+          getWorkPackets: () => runtimeRequestJson("/work-packets"),
+        };
+      }
       if (specifier === "@kendall/contracts") {
         return {
           AUTHORITATIVE_PACKET_STAGES: [

@@ -3,6 +3,12 @@ import {
   isPipelineCanonicalContractV1,
   isPipelineProductModeMappingV0,
 } from "@kendall/contracts";
+import {
+  getPipelineDashboardProjection as getRuntimePipelineDashboardProjection,
+  getSupervisorBaseUrl,
+  requestJson,
+} from "./pipeline-supervisor-runtime";
+export { getSupervisorBaseUrl, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
@@ -62,41 +68,11 @@ import type {
   WorkItemManagedActionPayload,
   WorkItemRecipeGateAuditView,
   WorkPacketLearnFollowUpCandidateWorkPayload,
-  WorkPacketV0View,
   VerificationReadinessReportView,
   WorkflowEventView,
   WorkItemView,
   WorkerRegistryEntryView,
 } from "@kendall/contracts";
-
-const configuredPublicBaseUrl = process.env.NEXT_PUBLIC_SUPERVISOR_URL;
-const publicBaseUrl = configuredPublicBaseUrl ?? "http://localhost:8000";
-const internalBaseUrl = process.env.SUPERVISOR_INTERNAL_URL ?? publicBaseUrl;
-
-export function getSupervisorBaseUrl(): string {
-  if (typeof window === "undefined") {
-    return publicBaseUrl;
-  }
-
-  if (!configuredPublicBaseUrl) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
-  }
-
-  return configuredPublicBaseUrl;
-}
-
-async function requestJson<T>(path: string): Promise<T> {
-  const baseUrl = typeof window === "undefined" ? internalBaseUrl : getSupervisorBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Request failed for ${path} (${response.status})`);
-  }
-  const payload = (await response.json()) as ApiEnvelope<T>;
-  if (!payload || !("data" in payload)) {
-    throw new Error(`Malformed response for ${path}`);
-  }
-  return payload.data;
-}
 
 export async function getRunStatus(): Promise<RunStatusView> {
   return requestJson<RunStatusView>("/supervisor/status");
@@ -175,10 +151,6 @@ export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]
   return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`);
 }
 
-export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {
-  return requestJson<WorkPacketV0View>(`/work-packets/${encodeURIComponent(packetId)}`);
-}
-
 export async function createLearnFollowUpCandidateWork(
   packetId: string,
   payload: WorkPacketLearnFollowUpCandidateWorkPayload,
@@ -196,13 +168,9 @@ export async function createLearnFollowUpCandidateWork(
   return envelope.data;
 }
 
-export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
-  return requestJson<WorkPacketV0View[]>("/work-packets");
-}
-
 export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {
   const projection = normalizePipelineDashboardProjection(
-    await requestJson<Partial<PipelineDashboardProjectionV0>>("/pipeline-control-plane/projection"),
+    await getRuntimePipelineDashboardProjection(),
   );
   if (!isPipelineDashboardProjection(projection)) {
     throw new Error("Invalid projection payload");

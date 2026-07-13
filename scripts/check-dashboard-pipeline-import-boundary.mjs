@@ -42,7 +42,7 @@ const forbiddenCallPatterns = [
   { id: "cleanup-mutation", pattern: /\b(?:cleanupCurrent|cleanupMerged|cleanupOrphans|deleteWorktree|removeWorktree|deleteRemoteBranch)\s*\(/ },
 ];
 
-const readOnlySupervisorProjectionFunctions = [
+const readOnlyPipelineRuntimeFunctions = [
   "getPipelineDashboardProjection",
   "getWorkPacket",
   "getWorkPackets",
@@ -54,6 +54,7 @@ const requiredSourceFiles = [
   "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
   "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
+  "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts",
 ];
 
 const failures = [];
@@ -83,6 +84,7 @@ if (!demoRouteGraph.includes("apps/dashboard/src/lib/pipeline/manager-execution-
 }
 for (const runtimeBoundaryFile of [
   "apps/dashboard/src/lib/pipeline-packet-loader.ts",
+  "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts",
   "apps/dashboard/src/lib/pipeline-supervisor-projector.ts",
 ]) {
   const runtimeBoundarySource = await readFile(join(rootDir, runtimeBoundaryFile), "utf8");
@@ -107,6 +109,9 @@ while (pendingFiles.length > 0) {
   scannedFiles.push(displayPath);
   const specifiers = checkImports(displayPath, source);
   checkForbiddenCalls(displayPath, source);
+  if (isClientModule(source)) {
+    continue;
+  }
   for (const specifier of specifiers) {
     const resolvedImport = await resolveLocalImport(filePath, specifier);
     if (resolvedImport) {
@@ -140,8 +145,9 @@ console.log(
       demoFixtureCatalogReachable: true,
       normalManagerFixtureSummaryReachable: false,
       demoManagerFixtureSummaryReachable: true,
+      normalSupervisorModuleReachable: normalRouteGraph.includes("apps/dashboard/src/lib/supervisor.ts"),
       boundary:
-        "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from /pipeline dashboard code outside the read-only supervisor WorkPacketV0 projection loader.",
+        "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from the /pipeline read graph outside the dedicated read-only supervisor runtime module.",
     },
     null,
     2
@@ -184,6 +190,9 @@ async function collectRouteGraph(entryFiles) {
     files.push(displayPath);
     checkImports(displayPath, source);
     checkForbiddenCalls(displayPath, source);
+    if (isClientModule(source)) {
+      continue;
+    }
     for (const specifier of extractRuntimeImportSpecifiers(source)) {
       const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
       if (resolvedImport && !visited.has(resolvedImport)) {
@@ -212,7 +221,7 @@ function checkImports(displayPath, source) {
   for (const typeOnlyImportPattern of typeOnlyImportPatterns) {
     for (const importMatch of source.matchAll(typeOnlyImportPattern)) {
       for (const { id, pattern } of forbiddenImportPatterns) {
-        if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, importMatch[1])) {
+        if (id === "supervisor-client" && isAllowedPipelineSupervisorImport(displayPath, importMatch[1])) {
           continue;
         }
         if (pattern.test(importMatch[1])) {
@@ -224,7 +233,7 @@ function checkImports(displayPath, source) {
   const specifiers = extractRuntimeImportSpecifiers(source);
   for (const specifier of specifiers) {
     for (const { id, pattern } of forbiddenImportPatterns) {
-      if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, specifier)) {
+      if (id === "supervisor-client" && isAllowedPipelineSupervisorImport(displayPath, specifier)) {
         continue;
       }
       if (pattern.test(specifier)) {
@@ -271,15 +280,15 @@ function checkForbiddenCalls(displayPath, source) {
   const allowedCallIds = new Set(
     displayPath === "apps/dashboard/src/components/realtime-refresh.tsx"
       ? ["network-eventsource"]
-      : displayPath === "apps/dashboard/src/lib/supervisor.ts"
+      : displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"
         ? ["network-fetch"]
         : [],
   );
-  if (displayPath === "apps/dashboard/src/lib/supervisor.ts") {
-    checkReadOnlySupervisorProjectionFunctions(displayPath, source);
+  if (displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {
+    checkReadOnlyPipelineRuntimeFunctions(displayPath, source);
   }
   for (const { id, pattern } of forbiddenCallPatterns) {
-    if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/supervisor.ts") {
+    if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {
       continue;
     }
     if (!allowedCallIds.has(id) && pattern.test(executableSource)) {
@@ -288,7 +297,7 @@ function checkForbiddenCalls(displayPath, source) {
   }
 }
 
-function checkReadOnlySupervisorProjectionFunctions(displayPath, source) {
+function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
   const requestJsonSource = extractFunctionSource(source, "requestJson");
   if (!requestJsonSource) {
     failures.push(`${displayPath}: missing audited read-only helper requestJson`);
@@ -296,6 +305,7 @@ function checkReadOnlySupervisorProjectionFunctions(displayPath, source) {
   }
   const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
   if (
+    countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 1 ||
     countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
     /\bmethod\s*:/.test(executableRequestJsonSource) ||
     !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*\}\s*\)/.test(executableRequestJsonSource)
@@ -303,7 +313,7 @@ function checkReadOnlySupervisorProjectionFunctions(displayPath, source) {
     failures.push(`${displayPath}: forbidden call boundary network-fetch`);
   }
 
-  for (const functionName of readOnlySupervisorProjectionFunctions) {
+  for (const functionName of readOnlyPipelineRuntimeFunctions) {
     const functionSource = extractFunctionSource(source, functionName);
     if (!functionSource) {
       failures.push(`${displayPath}: missing audited read-only export ${functionName}`);
@@ -474,10 +484,12 @@ function isPipelineBoundaryPath(filePath) {
   );
 }
 
-function isAllowedReadOnlySupervisorProjection(displayPath, specifier) {
+function isAllowedPipelineSupervisorImport(displayPath, specifier) {
   return (
-    displayPath === "apps/dashboard/src/lib/pipeline-packet-loader.ts" && specifier === "./supervisor"
-  ) || (
     displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" && specifier === "../lib/supervisor"
   );
+}
+
+function isClientModule(source) {
+  return /^\s*["']use client["'];/.test(source);
 }
