@@ -255,6 +255,9 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
         cleanupApproved: false,
       },
     }],
+    ["delivery pull request URL", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestUrl: "fixture:pr" },
+    }],
     ["learn evidence", { learnOutcome: { ...learnOutcome, evidenceRefs: ["fixture:nested-learn-evidence"] } }],
     ["learn source", { learnOutcome: { ...learnOutcome, sourceRefs: ["fixture:nested-learn-source"] } }],
     ["learn decision evidence", {
@@ -333,6 +336,10 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
       ...packet,
       reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
       humanGateActions: [{ ...authoritativeHumanGateAction(), label: "Discuss fixture:legacy wording" }],
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        detail: { label: "Operator label mentions fixture:legacy text" },
+      },
       learnRefill: { ...learnRefill, nextSafeAction: "Document fixture:legacy as ordinary text." },
     }],
   });

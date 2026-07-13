@@ -1030,6 +1030,7 @@ function isReferenceBearingField(fieldName: string): boolean {
     fieldName === "allowedPaths" ||
     fieldName === "targetVaultPath" ||
     fieldName === "retainedEvidence" ||
+    fieldName.endsWith("Url") ||
     fieldName.endsWith("Ref") ||
     fieldName.endsWith("Refs") ||
     fieldName.endsWith("Id") ||
