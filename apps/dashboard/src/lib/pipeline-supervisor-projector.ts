@@ -89,6 +89,14 @@ export function projectSupervisorWorkPacketsToCockpitPackets(
       error: "Supervisor returned malformed WorkPacketV0 row at index " + invalidIndex + ".",
     };
   }
+  const fixtureShapedIndex = packets.findIndex((packet) => hasFixtureOnlyRuntimeShape(packet));
+  if (fixtureShapedIndex >= 0) {
+    return {
+      kind: "invalid",
+      packets: [],
+      error: "Supervisor returned fixture-shaped WorkPacketV0 row at index " + fixtureShapedIndex + ".",
+    };
+  }
   try {
     return {
       kind: "runtime",
@@ -126,6 +134,36 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.loopStopStates) &&
     packet.lifecycleState !== null &&
     typeof packet.lifecycleState === "object";
+}
+
+function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const packet = value as Record<string, unknown>;
+  if (
+    "fixtureId" in packet ||
+    "fixtureKind" in packet ||
+    "fixtureLabel" in packet ||
+    packet.sourceKind === "demo-fixture"
+  ) {
+    return true;
+  }
+  return hasFixtureOnlyRefs(packet.sourceRefs) ||
+    hasFixtureOnlyRefs(packet.evidenceRefs) ||
+    hasFixtureOnlyRefs(packet.artifactRefs);
+}
+
+function hasFixtureOnlyRefs(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((ref) => {
+    if (!ref || typeof ref !== "object") {
+      return false;
+    }
+    return Object.values(ref).some((entry) => typeof entry === "string" && /\bfixture:/.test(entry));
+  });
 }
 
 function projectSupervisorWorkPacketToCockpitPacket(packet: WorkPacketV0View): PipelineRuntimePacket {

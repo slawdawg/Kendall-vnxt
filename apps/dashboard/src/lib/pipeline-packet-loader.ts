@@ -78,7 +78,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       return {
         fixtureMode: runtimeSourceState("empty", "Supervisor empty", "Supervisor is reachable but has no persisted WorkPacketV0 rows; no demo packets are substituted."),
         packets: [],
-        projection: projectionResult.projection,
+        projection: null,
         projectionError: projectionResult.error,
       };
     }
@@ -110,6 +110,12 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
 }
 
 export async function loadPipelineCockpitPacket(packetId: string): Promise<PipelineCockpitPacketDetailLoad> {
+  if (!isValidRuntimePacketId(packetId)) {
+    return {
+      fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Malformed runtime packet identity; no supervisor lookup or demo packet substitution was attempted."),
+      packet: null,
+    };
+  }
   try {
     const projection = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(packetId)]);
     if (projection.kind === "invalid") {
@@ -141,12 +147,22 @@ function runtimeSourceState(kind: PipelineRuntimeSourceState["kind"], label: str
   return { kind, label, summary, matrixRows: 0, fixtureCatalogEntries: 0, canSatisfyLiveProof: false };
 }
 
+function isValidRuntimePacketId(packetId: string): boolean {
+  return packetId.trim() === packetId &&
+    packetId.length > 0 &&
+    packetId.length <= 200 &&
+    !/[\s/\\\0]/.test(packetId);
+}
+
 function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null): { kind: "invalid" | "unavailable"; summary: string } | null {
   if (!projection) {
     return null;
   }
   if (projection.fixtureMode?.enabled === true || projection.truthSummary?.fixtureBacked === true || projection.sourceLabel === "fixture") {
     return { kind: "invalid", summary: "Supervisor projection is fixture-backed; normal runtime mode refuses fixture truth." };
+  }
+  if (projection.truthSummary?.stale === true || projection.freshnessState === "stale" || projection.sourceLabel === "stale") {
+    return { kind: "invalid", summary: "Supervisor projection is stale; normal runtime mode refuses stale packet truth." };
   }
   if (projection.backendReachability?.state === "unavailable" || projection.truthSummary?.backendUnavailable === true) {
     return { kind: "unavailable", summary: "Supervisor projection reports unavailable runtime state; no packets are shown." };

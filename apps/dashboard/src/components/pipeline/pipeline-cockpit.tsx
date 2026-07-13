@@ -87,10 +87,10 @@ type ConnectorPath = {
 
 type CockpitStageSummary = {
   emptyReason: PipelineDashboardProjectionV0["stageSummaries"][number]["emptyReason"];
-  freshnessState: PipelineDashboardProjectionV0["stageSummaries"][number]["freshnessState"] | "demo" | "invalid";
+  freshnessState: PipelineDashboardProjectionV0["stageSummaries"][number]["freshnessState"] | "demo" | "empty" | "invalid";
   label: string;
   packetCount: number;
-  sourceLabel: PipelineDashboardProjectionV0["stageSummaries"][number]["sourceLabel"] | "demo" | "invalid";
+  sourceLabel: PipelineDashboardProjectionV0["stageSummaries"][number]["sourceLabel"] | "demo" | "empty" | "invalid";
 };
 
 type ProjectionSelectedPacketDetail = PipelineDashboardProjectionV0["selectedPacketDetails"][number];
@@ -581,6 +581,7 @@ export function PipelineCockpit({
             activeBoardViewModel={activeBoardViewModel}
             projection={currentProjection}
             projectionError={currentProjectionError}
+            sourceState={fixtureMode}
           />
 
           <section
@@ -740,10 +741,12 @@ function ProjectionTruthSummary({
   activeBoardViewModel,
   projection,
   projectionError,
+  sourceState,
 }: {
   activeBoardViewModel: PipelineActiveBoardViewModel | null;
   projection: PipelineDashboardProjectionV0 | null;
   projectionError: string | null;
+  sourceState: PipelineRuntimeSourceState;
 }) {
   const projectionTooOld = projection ? isProjectionTooOld(projection) : false;
   const effectiveSourceLabel = projectionTooOld && projection?.sourceLabel === "live" ? "stale" : projection?.sourceLabel;
@@ -754,23 +757,33 @@ function ProjectionTruthSummary({
   const displayLabels = projectionDisplayLabels(projection, proofSourceLabel, proofFreshnessState, Boolean(projectionError), liveProofState);
   const sourceLabel = displayLabels.sourceLabel;
   const statusNeedsAnnouncement = sourceLabel === "unavailable" || displayLabels.freshnessState === "stale" || Boolean(projectionError);
-  const backendState = projectionError ? "unavailable" : projection?.backendReachability.state ?? "unavailable";
+  const backendState = projectionError
+    ? "unavailable"
+    : sourceState.kind === "empty"
+      ? "reachable"
+      : projection?.backendReachability.state ?? "unavailable";
   const projectionState = liveProofState.canSatisfyLiveProof
     ? "live"
     : projectionError
       ? "refresh unavailable"
       : displayLabels.freshnessState === "stale" || sourceLabel === "stale"
         ? "stale"
-        : projection ? "limited" : "unavailable";
+        : projection
+          ? "limited"
+          : sourceState.kind === "empty"
+            ? "empty"
+            : sourceState.kind === "invalid"
+              ? "invalid"
+              : "unavailable";
   const lastUpdated = projection?.sourceUpdatedAt ?? "not available";
-  const activePacketCount = activeBoardViewModel ? String(activeBoardViewModel.summary.activePacketCount) : "unknown";
-  const staleHistoryCount = activeBoardViewModel ? String(activeBoardViewModel.summary.staleHistoryCount) : "unknown";
-  const readyToTestCount = activeBoardViewModel ? String(activeBoardViewModel.summary.readyToTestCount) : "unknown";
+  const activePacketCount = activeBoardViewModel ? String(activeBoardViewModel.summary.activePacketCount) : sourceState.kind === "empty" ? "0" : "unknown";
+  const staleHistoryCount = activeBoardViewModel ? String(activeBoardViewModel.summary.staleHistoryCount) : sourceState.kind === "empty" ? "0" : "unknown";
+  const readyToTestCount = activeBoardViewModel ? String(activeBoardViewModel.summary.readyToTestCount) : sourceState.kind === "empty" ? "0" : "unknown";
   const dispatchState = activeBoardViewModel?.summary.dispatchAffectingManagerState;
   const backpressure = activeBoardViewModel?.summary.backpressure ?? null;
   const recoveryText = projectionError
     ? `Projection fetch failed: ${projectionError}. No runtime packets are shown until supervisor state is readable.`
-    : projection?.truthSummary.summary ?? "Backend projection unavailable. No runtime packets are shown until supervisor state is readable.";
+    : projection?.truthSummary.summary ?? sourceState.summary;
 
   return (
     <section
@@ -2107,9 +2120,25 @@ function RouteStation({
   const stageCountLabel = stageSummary === null && projectionAvailable
     ? "unknown packets"
     : `${stageKnownTotalCount} ${stageKnownTotalCount === 1 ? "packet" : "packets"}`;
-  const stageSourceLabel = stageSummary?.sourceLabel ?? (projectionAvailable ? "unknown" : sourceKind === "demo" ? "demo" : sourceKind === "invalid" ? "invalid" : "unavailable");
-  const stageFreshnessLabel = stageSummary?.freshnessState ?? (projectionAvailable ? "unknown" : sourceKind === "demo" ? "demo" : sourceKind === "invalid" ? "invalid" : "unavailable");
-  const stageEmptyReason = stageSummary?.emptyReason ?? (stageKnownTotalCount === 0 ? (projectionAvailable ? "unknown" : "backend_unavailable") : null);
+  const stageSourceLabel = stageSummary?.sourceLabel ?? (projectionAvailable
+    ? "unknown"
+    : sourceKind === "demo"
+      ? "demo"
+      : sourceKind === "empty"
+        ? "empty"
+        : sourceKind === "invalid"
+          ? "invalid"
+          : "unavailable");
+  const stageFreshnessLabel = stageSummary?.freshnessState ?? (projectionAvailable
+    ? "unknown"
+    : sourceKind === "demo"
+      ? "demo"
+      : sourceKind === "empty"
+        ? "empty"
+        : sourceKind === "invalid"
+          ? "invalid"
+          : "unavailable");
+  const stageEmptyReason = stageSummary?.emptyReason ?? (stageKnownTotalCount === 0 ? (sourceKind === "empty" ? "healthy_empty" : projectionAvailable ? "unknown" : "backend_unavailable") : null);
   const stageEmptyState = stageHealthStateLabel(stageEmptyReason, stageSourceLabel, stageFreshnessLabel, stageKnownTotalCount);
   const stageNextAction = stageNextActionLabel(stageEmptyReason, stageSourceLabel, stageFreshnessLabel, stageRenderedCount, stageKnownTotalCount);
   const stageHealthSummary = searchActive && stageRenderedCount === 0 && totalPacketCount > 0
@@ -3268,6 +3297,9 @@ function normalizeStageEmptyReason(
   if (sourceLabel === "stale" || freshnessState === "stale") {
     return "projection_stale";
   }
+  if (sourceLabel === "empty" || freshnessState === "empty") {
+    return "healthy_empty";
+  }
   return reason;
 }
 
@@ -3286,6 +3318,9 @@ function stageHealthStateLabel(
     }
     if (sourceLabel === "demo") {
       return "demo fixtures";
+    }
+    if (sourceLabel === "empty") {
+      return "supervisor empty";
     }
     if (sourceLabel === "invalid") {
       return "invalid supervisor state";
@@ -3349,6 +3384,9 @@ function stageNextActionLabel(
   }
   if (sourceLabel === "invalid" || freshnessState === "invalid") {
     return "Inspect invalid supervisor state before trusting this stage.";
+  }
+  if (sourceLabel === "empty" || freshnessState === "empty" || reason === "healthy_empty") {
+    return "Supervisor is reachable with no persisted WorkPacket rows.";
   }
   if (renderedPacketCount > 0) {
     return "Open a packet for details.";

@@ -17,7 +17,7 @@ const demoRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/page.tsx"
 const demoDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx", import.meta.url);
 
 test("authoritative-only WorkPacketV0 is listed and loaded by the same detail identity", async () => {
-  const fixtures = await loadCompiledDashboardFixtures();
+  const fixtures = {};
   const authoritativePacket = authoritativeWorkPacket();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
@@ -53,7 +53,7 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
 });
 
 test("empty, malformed, missing, and unavailable states fail closed without fixture substitution", async () => {
-  const fixtures = await loadCompiledDashboardFixtures();
+  const fixtures = {};
   let detailError = new Error("Request failed for /work-packets/missing-authoritative (404)");
   const loader = await loadPipelinePacketLoader(fixtures, {
     getPipelineDashboardProjection: async () => ({}),
@@ -64,6 +64,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   const empty = await loader.loadPipelineCockpitPackets();
   assert.equal(empty.fixtureMode.kind, "empty");
   assert.equal(empty.packets.length, 0);
+  assert.equal(empty.projection, null);
 
   const malformedLoader = await loadPipelinePacketLoader(fixtures, {
     getPipelineDashboardProjection: async () => ({}),
@@ -93,8 +94,61 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   assert.equal(unavailable.packet, null);
 });
 
+test("stale and fixture-shaped supervisor data fail closed without runtime or fixture packets", async () => {
+  const fixtures = {};
+  const staleLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => ({
+      sourceLabel: "live",
+      freshnessState: "stale",
+      truthSummary: { stale: true },
+    }),
+    getWorkPackets: async () => [authoritativeWorkPacket()],
+  });
+
+  const stale = await staleLoader.loadPipelineCockpitPackets();
+  assert.equal(stale.fixtureMode.kind, "invalid");
+  assert.equal(stale.packets.length, 0);
+  assert.equal(stale.projection, null);
+  assert.match(stale.fixtureMode.summary, /stale/i);
+
+  const fixtureShapedLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => ({}),
+    getWorkPackets: async () => [{
+      ...authoritativeWorkPacket(),
+      fixtureId: "fixture:leaked-runtime",
+      fixtureKind: "future-real-source",
+      fixtureLabel: "Future real-source boundary",
+    }],
+  });
+
+  const fixtureShaped = await fixtureShapedLoader.loadPipelineCockpitPackets();
+  assert.equal(fixtureShaped.fixtureMode.kind, "invalid");
+  assert.equal(fixtureShaped.packets.length, 0);
+  assert.equal(fixtureShaped.projection, null);
+  assert.match(fixtureShaped.fixtureMode.summary, /fixture-shaped|fixture-only/i);
+});
+
+test("malformed detail packet IDs fail closed before supervisor lookup", async () => {
+  const fixtures = {};
+  const calls = [];
+  const loader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => ({}),
+    getWorkPacket: async (packetId) => {
+      calls.push(packetId);
+      return authoritativeWorkPacket();
+    },
+  });
+
+  for (const packetId of ["", "   ", "fixture:legacy detail", "packet/with/slash", "packet\\with\\slash"]) {
+    const result = await loader.loadPipelineCockpitPacket(packetId);
+    assert.equal(result.fixtureMode.kind, "invalid");
+    assert.equal(result.packet, null);
+  }
+  assert.deepEqual(calls, []);
+});
+
 test("WorkPacket list failure clears a successful projection and reports the read error", async () => {
-  const fixtures = await loadCompiledDashboardFixtures();
+  const fixtures = {};
   const loader = await loadPipelinePacketLoader(fixtures, {
     getPipelineDashboardProjection: async () => ({ sourceLabel: "live" }),
     getWorkPackets: async () => { throw new Error("Supervisor WorkPacket list unavailable"); },
