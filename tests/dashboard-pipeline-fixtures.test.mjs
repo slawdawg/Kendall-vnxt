@@ -1193,7 +1193,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /Stage health/);
   assert.match(cockpitSource, /stageHealthStateLabel/);
   assert.match(cockpitSource, /normalizeStageEmptyReason/);
-  assert.match(cockpitSource, /healthy empty/);
+  assert.match(cockpitSource, /healthy-empty/);
   assert.match(cockpitSource, /source exhausted/);
   assert.match(cockpitSource, /blocked/);
   assert.match(cockpitSource, /refilling/);
@@ -1214,7 +1214,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.doesNotMatch(cockpitSource, /fixtureKind: "future-real-source"/);
   assert.match(cockpitSource, /fixtureLabel:\s+packetIsLive\s+\?\s+"backend projection: packet truth live"/);
   assert.match(cockpitSource, /: `backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}`/);
-  assert.match(cockpitSource, /packet\.sourceKind !== "demo-fixture"/);
+  assert.match(cockpitSource, /packet\.sourceKind === "demo-fixture" \? "\/pipeline\/demo\/packets" : "\/pipeline\/packets"/);
+  assert.doesNotMatch(cockpitSource, /packet\.sourceKind !== "demo-fixture"/);
   assert.match(cockpitSource, /managerExecutionLane\?\.operatorAttentionRequired \? <ManagerAttentionSummary lane=\{managerExecutionLane\} \/> : null/);
   assert.match(cockpitSource, /managerExecutionLane \? \([\s\S]*<ManagerExecutionLane lane=\{managerExecutionLane\} \/>/);
   assert.match(cockpitSource, /aria-label="Projection truth summary"/);
