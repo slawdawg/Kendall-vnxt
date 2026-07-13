@@ -186,6 +186,23 @@ function restoreSupervisorPipelinePacket(packetId: string, snapshot: SupervisorP
   execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], { cwd: process.cwd(), encoding: "utf8" });
 }
 
+function deleteSupervisorPipelinePacket(packetId: string) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"delete from authoritative_work_packets where id = ?\", (packet_id,))",
+    "conn.commit()",
+    "remaining = conn.execute(\"select 1 from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert remaining is None",
+    "conn.close()",
+  ].join("; ");
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], { cwd: process.cwd(), encoding: "utf8" });
+}
+
 async function getWorkItem(request: APIRequestContext, workItemId: string) {
   const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
   expect(response.ok()).toBeTruthy();
@@ -696,32 +713,35 @@ test.describe("dashboard workflow coverage", () => {
     const packetId = `story-4-6-runtime:${Date.now()}`;
     const title = "Story 4.6 persisted supervisor runtime packet";
     await seedSupervisorPipelinePacket(request, packetId, title);
+    try {
+      await page.goto("/pipeline");
+      await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+      const truthSummary = page.locator('[aria-label="Projection truth summary"]');
+      await expect(truthSummary.getByText("Source:")).toBeVisible();
+      await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
+      await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+      await page.getByRole("button", { name: `Inspect packet: ${title}` }).click();
+      await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      await page.reload();
+      await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+      const runtimeBody = await page.locator("body").innerText();
+      for (const fixtureSentinel of [
+        "fixture:happy-path",
+        "Shape cockpit route from Work Packet matrix",
+        "Resolve stale research source before routing",
+      ]) {
+        expect(runtimeBody).not.toContain(fixtureSentinel);
+      }
 
-    await page.goto("/pipeline");
-    await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
-    const truthSummary = page.locator('[aria-label="Projection truth summary"]');
-    await expect(truthSummary.getByText("Source:")).toBeVisible();
-    await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
-    await page.getByRole("button", { name: `Inspect packet: ${title}` }).click();
-    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
-    await page.reload();
-    await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
-    const runtimeBody = await page.locator("body").innerText();
-    for (const fixtureSentinel of [
-      "fixture:happy-path",
-      "Shape cockpit route from Work Packet matrix",
-      "Resolve stale research source before routing",
-    ]) {
-      expect(runtimeBody).not.toContain(fixtureSentinel);
+      await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
+      const encodedPacketId = encodeURIComponent(packetId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      await expect(page).toHaveURL(new RegExp(`/pipeline/packets/${encodedPacketId}$`));
+      await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
+    } finally {
+      deleteSupervisorPipelinePacket(packetId);
     }
-
-    await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
-    const encodedPacketId = encodeURIComponent(packetId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    await expect(page).toHaveURL(new RegExp(`/pipeline/packets/${encodedPacketId}$`));
-    await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
   });
 
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {
