@@ -23,6 +23,8 @@ SCHEMAS = {
     "hardening": "pipeline-operational-hardening-runbooks/v0",
     "decision": "pipeline-production-readiness-decision/v0",
 }
+GATE_FAMILIES = ("security", "retention", "rollback", "runbook", "telemetry", "recovery")
+TARGET_REVISION = "a" * 40
 
 
 def _reset_supervisor_modules() -> None:
@@ -31,15 +33,19 @@ def _reset_supervisor_modules() -> None:
             sys.modules.pop(module_name, None)
 
 
-def _configure(tmp_path, monkeypatch, db_name: str) -> None:
+def _configure(tmp_path, monkeypatch, db_name: str, *, source_revision: str | None = TARGET_REVISION) -> None:
     db_path = (tmp_path / db_name).as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    if source_revision is None:
+        monkeypatch.delenv("SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION", raising=False)
+    else:
+        monkeypatch.setenv("SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION", source_revision)
     _reset_supervisor_modules()
 
 
-def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
-    _configure(tmp_path, monkeypatch, db_name)
+def _client(tmp_path, monkeypatch, db_name: str, *, source_revision: str | None = TARGET_REVISION) -> TestClient:
+    _configure(tmp_path, monkeypatch, db_name, source_revision=source_revision)
     from supervisor.api.main import app
 
     return TestClient(app, client=("127.0.0.1", 50000))
@@ -97,7 +103,11 @@ def _request(base_url: str, path: str, method: str, payload: dict | None = None)
         return exc.code, json.loads(exc.read().decode("utf8"))
 
 
-def _create_packet(client: TestClient, packet_id: str = "packet-epic-25") -> None:
+def _create_packet(
+    client: TestClient,
+    packet_id: str = "packet-epic-25",
+    evidence_refs: list[str] | None = None,
+) -> None:
     response = client.post(
         "/pipeline-control-plane/work-packets",
         json={
@@ -106,7 +116,7 @@ def _create_packet(client: TestClient, packet_id: str = "packet-epic-25") -> Non
             "sourceRef": {"refId": "repo-doc:epic-25", "sourceType": "repo_doc", "pathOrUrl": "docs/workflows/epic-25-retrospective-and-next-authority.md"},
             "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
             "idempotencyKey": f"create-{packet_id}",
-            "evidenceRefs": ["evidence:epic-25-source"],
+            "evidenceRefs": evidence_refs or ["evidence:epic-25-source", f"source:revision-{TARGET_REVISION}"],
         },
     )
     assert response.status_code == 200, response.text
@@ -138,9 +148,51 @@ def _chain(
     packet_id: str = "packet-epic-25",
     now: datetime | None = None,
     ttl: timedelta = timedelta(minutes=4),
+    policy_ttl: timedelta | None = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc).replace(microsecond=0)
     expires_at = (now + ttl).isoformat()
+    policy_expires_at = (now + (policy_ttl or ttl)).isoformat()
+    policy_profile = {
+        "schemaVersion": "pipeline-epic-25-policy-profile/v0",
+        "targetRevision": TARGET_REVISION,
+        "checkedAt": now.isoformat(),
+        "expiresAt": policy_expires_at,
+        "qualityGates": [
+            {
+                "family": family,
+                "requirement": "not_applicable" if family == "runbook" else "required",
+                "state": "not_applicable" if family == "runbook" else "pass",
+                "typedReason": None,
+                "nextSafeAction": "No action is required." if family == "runbook" else "Preserve passing evidence and continue review.",
+                "notApplicableReason": "Runbook publication is outside this validation target." if family == "runbook" else None,
+                "targetRevision": TARGET_REVISION,
+                "checkedAt": now.isoformat(),
+                "expiresAt": policy_expires_at,
+                "evidenceRefs": [f"evidence:{family}-gate"],
+            }
+            for family in GATE_FAMILIES
+        ],
+        "retentionPolicy": {
+            "sourceOwner": "epic-25-source-owner",
+            "toolOwner": "supervisor",
+            "disposition": "metadata_only",
+            "redactionState": "verified_redacted",
+            "expiresAt": (now + timedelta(days=30)).isoformat(),
+            "retentionPeriodDays": 30,
+            "disposalAction": "delete_metadata",
+            "verificationStatus": "verified",
+            "policyReason": "Retain bounded validation metadata for audit and then dispose it.",
+            "evidenceRefs": ["evidence:retention-policy"],
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        },
+        "executionAllowed": False,
+        "providerCallsAllowed": False,
+        "mutationAllowed": False,
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
     packets = {}
     predecessor = None
     for slot in SLOTS:
@@ -206,9 +258,10 @@ def _chain(
         }
         predecessor = evidence_packet_id
     return {
-        "schemaVersion": "pipeline-epic-25-evidence-chain/v0",
+        "schemaVersion": "pipeline-epic-25-evidence-chain/v1",
         "authoritativePacketId": packet_id,
         "evidenceClass": evidence_class,
+        "policyProfile": policy_profile,
         "packets": packets,
         "checkedAt": now.isoformat(),
         "expiresAt": expires_at,
@@ -256,7 +309,7 @@ def test_integrated_local_chain_round_trips_over_loopback_and_restart(tmp_path, 
                 "sourceRef": {"refId": "repo-doc:epic-25", "sourceType": "repo_doc", "pathOrUrl": "docs/workflows/epic-25-retrospective-and-next-authority.md"},
                 "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
                 "idempotencyKey": "create-packet-epic-25",
-                "evidenceRefs": ["evidence:epic-25-source"],
+                "evidenceRefs": ["evidence:epic-25-source", f"source:revision-{TARGET_REVISION}"],
             },
         )
         assert status == 200, created
@@ -324,6 +377,211 @@ def test_fixture_chain_is_accepted_only_as_metadata_only_hold_without_live_attes
         assert client.post("/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain", json=_ingest_payload(forged_live_attestation)).status_code == 422
 
 
+def test_legacy_v0_chain_reads_as_stale_upgrade_required_and_upgrades_by_digest(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-legacy-upgrade.db") as client:
+        # This models a pre-policy packet.created event: no source:revision ref exists.
+        _create_packet(client, evidence_refs=["evidence:epic-25-source"])
+        base_time = datetime.now(timezone.utc).replace(microsecond=0)
+        legacy = _chain(now=base_time)
+        legacy["schemaVersion"] = "pipeline-epic-25-evidence-chain/v0"
+        del legacy["policyProfile"]
+
+        accepted = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(legacy),
+        )
+        assert accepted.status_code == 200, accepted.text
+        legacy_read = accepted.json()["data"]
+        assert legacy_read["freshnessState"] == "stale"
+        assert legacy_read["effectiveDecision"] == "hold"
+        assert legacy_read["typedBlockers"] == ["policy_profile_upgrade_required"]
+        assert "policyProfile" not in legacy_read
+
+        upgraded = _chain(now=base_time + timedelta(seconds=10))
+        upgraded_response = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(upgraded, legacy_read["chainDigestSha256"]),
+        )
+        assert upgraded_response.status_code == 200, upgraded_response.text
+        assert upgraded_response.json()["data"]["schemaVersion"] == "pipeline-epic-25-evidence-chain/v1"
+        assert "policy_profile_upgrade_required" not in upgraded_response.json()["data"]["typedBlockers"]
+
+
+def test_legacy_v0_without_server_revision_is_explicitly_held_not_upgradeable(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-legacy-unavailable.db", source_revision=None) as client:
+        _create_packet(client, evidence_refs=["evidence:epic-25-source"])
+        legacy = _chain()
+        legacy["schemaVersion"] = "pipeline-epic-25-evidence-chain/v0"
+        del legacy["policyProfile"]
+
+        accepted = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(legacy),
+        )
+        assert accepted.status_code == 200, accepted.text
+        legacy_read = accepted.json()["data"]
+        assert legacy_read["effectiveDecision"] == "hold"
+        assert legacy_read["typedBlockers"] == ["legacy_upgrade_unavailable"]
+
+        attempted_upgrade = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(_chain(now=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=10)), legacy_read["chainDigestSha256"]),
+        )
+        assert attempted_upgrade.status_code == 400, attempted_upgrade.text
+        assert "server-owned source revision attestation" in attempted_upgrade.text
+
+
+def test_v1_target_revision_must_match_authoritative_packet_source_revision(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-revision-binding.db") as client:
+        _create_packet(client)
+        unrelated = _chain()
+        unrelated["policyProfile"]["targetRevision"] = "b" * 40
+        for gate in unrelated["policyProfile"]["qualityGates"]:
+            gate["targetRevision"] = "b" * 40
+        rejected = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(unrelated),
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert "server-owned source revision attestation" in rejected.text
+
+
+def test_v1_forged_packet_created_revision_ref_cannot_authorize_arbitrary_target(tmp_path, monkeypatch) -> None:
+    forged_revision = "b" * 40
+    with _client(tmp_path, monkeypatch, "epic-25-forged-revision.db") as client:
+        _create_packet(client, evidence_refs=[f"source:revision-{forged_revision}"])
+        forged = _chain()
+        forged["policyProfile"]["targetRevision"] = forged_revision
+        for gate in forged["policyProfile"]["qualityGates"]:
+            gate["targetRevision"] = forged_revision
+
+        rejected = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(forged),
+        )
+
+        assert rejected.status_code == 400, rejected.text
+        assert "server-owned source revision attestation" in rejected.text
+
+
+def test_v1_without_server_owned_revision_is_held_even_when_caller_ref_matches(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-missing-revision-attestation.db", source_revision=None) as client:
+        _create_packet(client)
+        held = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(_chain()),
+        )
+
+        assert held.status_code == 400, held.text
+        assert "held/upgrade-required" in held.text
+        assert "legacy v0" in held.text
+
+
+def test_source_revision_blocker_survives_python_readback_serialization() -> None:
+    from supervisor.api.schemas import PipelineEpic25EvidenceChainV1View
+    from supervisor.application.service import SupervisorService
+
+    raw_chain = _chain()
+    chain = PipelineEpic25EvidenceChainV1View.model_validate(raw_chain)
+    read_at = datetime.fromisoformat(raw_chain["checkedAt"])
+
+    projected = SupervisorService._epic_25_evidence_chain_read_view(
+        chain,
+        read_at,
+        source_revision_attested=False,
+    )
+    serialized = projected.model_dump(mode="json")
+
+    assert serialized["typedBlockers"] == ["source_revision_attestation_required"]
+    assert serialized["effectiveDecision"] == "hold"
+
+
+def test_policy_profile_failures_are_retained_as_non_authorizing_readback_blockers(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-policy-blockers.db") as client:
+        _create_packet(client)
+        chain = _chain()
+        security_gate = next(gate for gate in chain["policyProfile"]["qualityGates"] if gate["family"] == "security")
+        security_gate["state"] = "blocked"
+        security_gate["typedReason"] = "safety_violation"
+        security_gate["nextSafeAction"] = "Hold and inspect the failed security evidence."
+        chain["policyProfile"]["retentionPolicy"]["verificationStatus"] = "pending"
+
+        accepted = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(chain),
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["data"]["effectiveDecision"] == "hold"
+        assert accepted.json()["data"]["typedBlockers"] == ["retention_policy_unverified", "quality_gate_not_passed"]
+
+
+def test_runbook_not_applicable_does_not_block_but_required_failure_does(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-runbook-semantics.db") as client:
+        _create_packet(client)
+        baseline = _chain()
+        accepted = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(baseline),
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["data"]["typedBlockers"] == []
+
+        replacement = _chain(now=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=10))
+        runbook_gate = next(gate for gate in replacement["policyProfile"]["qualityGates"] if gate["family"] == "runbook")
+        runbook_gate.update(
+            {
+                "requirement": "required",
+                "state": "fail",
+                "typedReason": "runbook_gap",
+                "nextSafeAction": "Hold and repair the runbook gap.",
+                "notApplicableReason": None,
+            }
+        )
+        failed = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(replacement, accepted.json()["data"]["chainDigestSha256"]),
+        )
+        assert failed.status_code == 200, failed.text
+        assert failed.json()["data"]["typedBlockers"] == ["quality_gate_not_passed"]
+        assert failed.json()["data"]["effectiveDecision"] == "hold"
+
+
+def test_policy_expiry_alone_marks_chain_readback_stale(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-policy-expiry.db") as client:
+        _create_packet(client)
+        short_policy = _chain(policy_ttl=timedelta(seconds=1))
+        posted = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(short_policy),
+        )
+        assert posted.status_code == 200, posted.text
+        assert posted.json()["data"]["freshnessState"] == "fresh"
+        time.sleep(1.2)
+        projected = client.get("/pipeline-control-plane/work-packets/packet-epic-25").json()["data"]["evidenceChain"]
+        assert projected["freshnessState"] == "stale"
+        assert projected["typedBlockers"] == ["policy_profile_stale"]
+        assert projected["effectiveDecision"] == "hold"
+
+
+def test_ingestion_rejects_gate_expired_now_even_when_policy_check_was_fresh(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "epic-25-gate-expiry-at-ingestion.db") as client:
+        _create_packet(client)
+        checked_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=30)
+        expired_gate_chain = _chain(now=checked_at)
+        telemetry_gate = next(
+            gate for gate in expired_gate_chain["policyProfile"]["qualityGates"] if gate["family"] == "telemetry"
+        )
+        telemetry_gate["expiresAt"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+
+        rejected = client.post(
+            "/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain",
+            json=_ingest_payload(expired_gate_chain),
+        )
+
+        assert rejected.status_code == 400, rejected.text
+        assert "expired at ingestion time" in rejected.text
+
+
 def test_chain_rejects_partial_unsafe_stale_mismatched_and_non_live_go_without_overwrite(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "epic-25-rejections.db") as client:
         _create_packet(client)
@@ -359,6 +617,59 @@ def test_chain_rejects_partial_unsafe_stale_mismatched_and_non_live_go_without_o
         non_live_go = copy.deepcopy(valid)
         non_live_go["packets"]["decision"]["outcome"] = "go"
         invalid_chains.append(non_live_go)
+        missing_gate_family = copy.deepcopy(valid)
+        missing_gate_family["policyProfile"]["qualityGates"] = [
+            gate for gate in missing_gate_family["policyProfile"]["qualityGates"] if gate["family"] != "security"
+        ]
+        invalid_chains.append(missing_gate_family)
+        not_applicable_without_reason = copy.deepcopy(valid)
+        next(gate for gate in not_applicable_without_reason["policyProfile"]["qualityGates"] if gate["family"] == "runbook")["notApplicableReason"] = None
+        invalid_chains.append(not_applicable_without_reason)
+        required_gate_downgrade = copy.deepcopy(valid)
+        security_gate = next(gate for gate in required_gate_downgrade["policyProfile"]["qualityGates"] if gate["family"] == "security")
+        security_gate.update({"requirement": "not_applicable", "state": "not_applicable", "notApplicableReason": "Caller downgrade.", "typedReason": None})
+        invalid_chains.append(required_gate_downgrade)
+        stale_target = copy.deepcopy(valid)
+        next(gate for gate in stale_target["policyProfile"]["qualityGates"] if gate["family"] == "telemetry")["targetRevision"] = "b" * 40
+        invalid_chains.append(stale_target)
+        unsafe_policy_ref = copy.deepcopy(valid)
+        next(gate for gate in unsafe_policy_ref["policyProfile"]["qualityGates"] if gate["family"] == "security")["evidenceRefs"] = [
+            "evidence:sk-proj-12345678901234567890"
+        ]
+        invalid_chains.append(unsafe_policy_ref)
+        expired_retention = copy.deepcopy(valid)
+        expired_retention["policyProfile"]["retentionPolicy"]["expiresAt"] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        invalid_chains.append(expired_retention)
+        missing_retention = copy.deepcopy(valid)
+        del missing_retention["policyProfile"]["retentionPolicy"]
+        invalid_chains.append(missing_retention)
+        retained_raw_payload = copy.deepcopy(valid)
+        retained_raw_payload["policyProfile"]["retentionPolicy"]["rawPayloadRetained"] = True
+        invalid_chains.append(retained_raw_payload)
+        executable_policy_reason = copy.deepcopy(valid)
+        executable_policy_reason["policyProfile"]["retentionPolicy"]["policyReason"] = "git commit -am update"
+        invalid_chains.append(executable_policy_reason)
+        token_policy_reason = copy.deepcopy(valid)
+        token_policy_reason["policyProfile"]["retentionPolicy"]["policyReason"] = "sk-proj-12345678901234567890"
+        invalid_chains.append(token_policy_reason)
+        token_not_applicable_reason = copy.deepcopy(valid)
+        next(gate for gate in token_not_applicable_reason["policyProfile"]["qualityGates"] if gate["family"] == "runbook")["notApplicableReason"] = "ghp_123456789012345678901234567890123456"
+        invalid_chains.append(token_not_applicable_reason)
+        duplicate_gate_refs = copy.deepcopy(valid)
+        next(gate for gate in duplicate_gate_refs["policyProfile"]["qualityGates"] if gate["family"] == "security")["evidenceRefs"] = ["evidence:security-gate", "evidence:security-gate"]
+        invalid_chains.append(duplicate_gate_refs)
+        boolean_retention_period = copy.deepcopy(valid)
+        boolean_retention_period["policyProfile"]["retentionPolicy"]["retentionPeriodDays"] = True
+        invalid_chains.append(boolean_retention_period)
+        invalid_24_hour_timestamp = copy.deepcopy(valid)
+        invalid_24_hour_timestamp["policyProfile"]["checkedAt"] = f"{valid['policyProfile']['checkedAt'][:10]}T24:00:00+00:00"
+        invalid_chains.append(invalid_24_hour_timestamp)
+        future_check = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=30)
+        gate_stale_at_profile_check = _chain(now=future_check)
+        stale_gate = next(gate for gate in gate_stale_at_profile_check["policyProfile"]["qualityGates"] if gate["family"] == "telemetry")
+        stale_gate["checkedAt"] = (future_check - timedelta(seconds=30)).isoformat()
+        stale_gate["expiresAt"] = (future_check - timedelta(seconds=10)).isoformat()
+        invalid_chains.append(gate_stale_at_profile_check)
 
         for invalid in invalid_chains:
             response = client.post("/pipeline-control-plane/work-packets/packet-epic-25/epic-25-evidence-chain", json=_ingest_payload(invalid))
@@ -439,7 +750,7 @@ def test_readback_revalidates_expiry_and_projects_auditable_stale_hold(tmp_path,
         projected = fetched.json()["data"]["evidenceChain"]
         assert projected["freshnessState"] == "stale"
         assert projected["effectiveDecision"] == "hold"
-        assert projected["typedBlockers"] == ["evidence_chain_stale"]
+        assert projected["typedBlockers"] == ["evidence_chain_stale", "policy_profile_stale"]
         assert projected["packets"]["readiness"]["packetId"] == "epic-25-readiness-packet"
 
 

@@ -38,10 +38,11 @@ TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
 MAX_METADATA_DEPTH = 64
 MAX_METADATA_NODES = 1000
 MAX_METADATA_AGGREGATE_BYTES = 64 * 1024
-EXECUTABLE_PIPELINE_CONTROL_TEXT_RE = re.compile(
-    r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
+EPIC_25_EXECUTABLE_POLICY_TEXT_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:tmux\s+(?:kill|send|capture|new|attach)\b|git(?:hub)?(?:\s+\S+){0,4}\s+(?:add|branch|checkout|cherry-pick|clean|commit|merge|pr|push|rebase|reset|restore|revert|switch|tag)\b|gh\s+(?:pr|repo|api)\b|curl(?:\s|$)|bash(?:\s|$)|sh(?:\s|$)|python(?:3(?:\.\d+)?)?(?:\s|$)|node(?:\s|$)|npm\s+run(?:\s|$)|pnpm(?:\s|$)|uv\s+run(?:\s|$)|provider\s+(?:call|request|payload)\b)",
     re.IGNORECASE,
 )
+PIPELINE_METADATA_CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
 EPIC_25_EVIDENCE_REF_RE = re.compile(
     r"^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$"
 )
@@ -59,10 +60,11 @@ def _is_safe_pipeline_evidence_ref(value: str) -> bool:
 def _is_safe_pipeline_control_text(value: str) -> bool:
     text = value.strip()
     return (
-        bool(text)
+        text == value
+        and bool(text)
         and len(text) <= 500
+        and not PIPELINE_METADATA_CONTROL_CHARACTER_RE.search(text)
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
-        and not EXECUTABLE_PIPELINE_CONTROL_TEXT_RE.search(text)
     )
 
 
@@ -75,6 +77,15 @@ def _is_safe_epic_25_evidence_ref(value: str) -> bool:
         and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(ref)
         and _is_safe_pipeline_evidence_ref(ref)
         and _is_safe_pipeline_control_text(ref)
+    )
+
+
+def _is_safe_epic_25_policy_text(value: str) -> bool:
+    return (
+        _is_safe_pipeline_control_text(value)
+        and not EPIC_25_EXECUTABLE_POLICY_TEXT_RE.search(value)
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(value)
+        and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
     )
 
 
@@ -1781,6 +1792,163 @@ PipelineEpic25EvidenceDetailsV0View = (
 )
 
 
+PipelineEpic25QualityGateFamily = Literal["security", "retention", "rollback", "runbook", "telemetry", "recovery"]
+EPIC_25_OPERATIONAL_READINESS_REASONS = {
+    "threshold_missing", "threshold_malformed", "telemetry_missing", "telemetry_stale", "telemetry_contradictory",
+    "alert_coverage_missing", "rollback_missing", "recovery_missing", "ownership_ambiguous", "target_not_exact",
+    "evidence_missing", "evidence_stale", "backend_truth_unproven", "configuration_invalid", "secret_like_metadata",
+    "resource_pressure", "usage_pressure", "preflight_blocked", "dispatcher_lease_unproven", "receipt_unproven",
+    "fixture_evidence", "evidence_provenance_missing", "evidence_attestation_invalid", "evidence_receipt_stale",
+    "predecessor_gate_not_passed", "safety_violation", "authority_violation", "canary_authority_missing",
+    "lease_missing", "checkpoint_missing", "latency_threshold_exceeded", "error_threshold_exceeded",
+    "resource_threshold_exceeded", "cost_threshold_exceeded", "timeout", "recovery_boundary_breached",
+    "canary_not_passed", "stage_plan_invalid", "capacity_missing", "stage_threshold_missing",
+    "stage_threshold_exceeded", "stage_lifecycle_ambiguous", "stage_authority_missing", "stage_evidence_missing",
+    "drill_evidence_missing", "recovery_ambiguity", "idempotency_unproven", "silent_retry", "recovery_drill_failed",
+    "runbook_gap", "high_risk_gap", "runbook_owner_missing", "runbook_trigger_missing", "runbook_gate_missing",
+    "runbook_recovery_missing", "unknown",
+}
+
+
+class PipelineEpic25QualityGateV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family: PipelineEpic25QualityGateFamily
+    requirement: Literal["required", "not_applicable"]
+    state: Literal["pass", "fail", "blocked", "not_applicable"]
+    typedReason: str | None = Field(default=None, max_length=80)
+    nextSafeAction: str = Field(min_length=1, max_length=500)
+    notApplicableReason: str | None = Field(default=None, max_length=500)
+    targetRevision: str = Field(pattern=r"^[a-f0-9]{40}$")
+    checkedAt: datetime
+    expiresAt: datetime
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator("checkedAt", "expiresAt")
+    @classmethod
+    def _gate_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Epic 25 quality-gate timestamp")
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _gate_refs_must_be_safe(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or not all(_is_safe_epic_25_evidence_ref(ref) for ref in refs):
+            raise ValueError("Epic 25 quality-gate refs must be unique safe metadata refs.")
+        return sorted(refs)
+
+    @field_validator("nextSafeAction", "notApplicableReason")
+    @classmethod
+    def _gate_policy_text_must_be_safe(cls, value: str | None) -> str | None:
+        if value is not None and not _is_safe_epic_25_policy_text(value):
+            raise ValueError("Epic 25 gate reasons and next actions must be safe metadata-only text.")
+        return value
+
+    @model_validator(mode="after")
+    def _gate_freshness_and_semantics_must_hold(self):
+        if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
+            raise ValueError("Epic 25 quality-gate freshness must be ordered and bounded to five minutes.")
+        if self.family != "runbook" and self.requirement != "required":
+            raise ValueError(f"Epic 25 {self.family} is a server-required gate family.")
+        if self.requirement == "required" and (self.state == "not_applicable" or self.notApplicableReason is not None):
+            raise ValueError("Required Epic 25 gates cannot be not_applicable or carry a not-applicable reason.")
+        if self.requirement == "not_applicable" and (
+            self.family != "runbook" or self.state != "not_applicable" or self.notApplicableReason is None
+        ):
+            raise ValueError("Only the runbook gate may be not_applicable and it requires a reason.")
+        if self.state in {"fail", "blocked"} and self.typedReason not in EPIC_25_OPERATIONAL_READINESS_REASONS:
+            raise ValueError("Failed or blocked Epic 25 gates require a typed readiness reason.")
+        if self.state in {"pass", "not_applicable"} and self.typedReason is not None:
+            raise ValueError("Passing or not-applicable Epic 25 gates cannot carry a typed failure reason.")
+        return self
+
+
+class PipelineEpic25RetentionPolicyV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceOwner: str = Field(min_length=1, max_length=200)
+    toolOwner: str = Field(min_length=1, max_length=200)
+    disposition: Literal["metadata_only"]
+    redactionState: Literal["verified_redacted", "not_applicable"]
+    expiresAt: datetime
+    retentionPeriodDays: int = Field(strict=True, ge=1, le=3650)
+    disposalAction: Literal["delete_metadata", "revalidate_before_expiry"]
+    verificationStatus: Literal["verified", "pending", "failed"]
+    policyReason: str = Field(min_length=1, max_length=500)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("expiresAt")
+    @classmethod
+    def _retention_expiry_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Epic 25 retention expiry")
+
+    @field_validator("sourceOwner", "toolOwner")
+    @classmethod
+    def _retention_owners_must_be_safe(cls, value: str) -> str:
+        if (
+            not _is_safe_local_proof_text(value)
+            or value != value.lower()
+            or re.fullmatch(r"[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?", value) is None
+            or re.search(r"[._/@:,-]{2,}", value)
+            or re.search(r"(?:^|[/\\])\.{1,2}(?:[/\\]|$)", value)
+        ):
+            raise ValueError("Epic 25 retention owners must be safe metadata-only identifiers.")
+        return value
+
+    @field_validator("policyReason")
+    @classmethod
+    def _retention_reason_must_be_safe(cls, value: str) -> str:
+        if not _is_safe_epic_25_policy_text(value):
+            raise ValueError("Epic 25 retention policy reasons must be safe metadata-only text.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _retention_refs_must_be_safe(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or not all(_is_safe_epic_25_evidence_ref(ref) for ref in refs):
+            raise ValueError("Epic 25 retention refs must be unique safe metadata refs.")
+        return sorted(refs)
+
+
+class PipelineEpic25PolicyProfileV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["pipeline-epic-25-policy-profile/v0"]
+    targetRevision: str = Field(pattern=r"^[a-f0-9]{40}$")
+    checkedAt: datetime
+    expiresAt: datetime
+    qualityGates: list[PipelineEpic25QualityGateV0View] = Field(min_length=6, max_length=6)
+    retentionPolicy: PipelineEpic25RetentionPolicyV0View
+    executionAllowed: Literal[False]
+    providerCallsAllowed: Literal[False]
+    mutationAllowed: Literal[False]
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("checkedAt", "expiresAt")
+    @classmethod
+    def _profile_timestamps_must_include_timezone(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="Epic 25 policy-profile timestamp")
+
+    @model_validator(mode="after")
+    def _profile_must_be_complete_exact_and_bounded(self):
+        if self.expiresAt <= self.checkedAt or (self.expiresAt - self.checkedAt).total_seconds() > 300:
+            raise ValueError("Epic 25 policy-profile freshness must be ordered and bounded to five minutes.")
+        expected_families = {"security", "retention", "rollback", "runbook", "telemetry", "recovery"}
+        if {gate.family for gate in self.qualityGates} != expected_families:
+            raise ValueError("Epic 25 policy profiles require every named quality-gate family exactly once.")
+        for gate in self.qualityGates:
+            if gate.targetRevision != self.targetRevision:
+                raise ValueError("Every Epic 25 quality gate must target the profile's exact Git revision.")
+            if gate.checkedAt > self.checkedAt or gate.expiresAt < self.checkedAt or gate.expiresAt > self.expiresAt:
+                raise ValueError("Every Epic 25 quality gate must be fresh within the policy-profile window.")
+        expected_retention_expiry = self.checkedAt + timedelta(days=self.retentionPolicy.retentionPeriodDays)
+        if self.retentionPolicy.expiresAt != expected_retention_expiry:
+            raise ValueError("Epic 25 retention expiry must exactly match its period from profile checkedAt.")
+        return self
+
+
 class PipelineEpic25EvidenceChainPacketV0View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1850,10 +2018,9 @@ class PipelineEpic25EvidenceChainPacketsV0View(BaseModel):
     decision: PipelineEpic25EvidenceChainPacketV0View
 
 
-class PipelineEpic25EvidenceChainV0View(BaseModel):
+class PipelineEpic25EvidenceChainBaseView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schemaVersion: Literal["pipeline-epic-25-evidence-chain/v0"]
     authoritativePacketId: str = Field(min_length=1, max_length=80)
     evidenceClass: PipelineOperationalEvidenceClass
     packets: PipelineEpic25EvidenceChainPacketsV0View
@@ -1940,6 +2107,21 @@ class PipelineEpic25EvidenceChainV0View(BaseModel):
         return self
 
 
+class PipelineEpic25EvidenceChainV0View(PipelineEpic25EvidenceChainBaseView):
+    schemaVersion: Literal["pipeline-epic-25-evidence-chain/v0"]
+
+
+class PipelineEpic25EvidenceChainV1View(PipelineEpic25EvidenceChainBaseView):
+    schemaVersion: Literal["pipeline-epic-25-evidence-chain/v1"]
+    policyProfile: PipelineEpic25PolicyProfileV0View
+
+    @model_validator(mode="after")
+    def _policy_profile_must_cover_chain_check(self):
+        if self.policyProfile.checkedAt > self.checkedAt or self.policyProfile.expiresAt < self.checkedAt:
+            raise ValueError("The Epic 25 policy profile must be fresh at the exact evidence-chain check time.")
+        return self
+
+
 class PipelineEpic25ServerOwnedActorV0View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1953,14 +2135,38 @@ class PipelineEpic25EvidenceChainIngestRequest(BaseModel):
 
     requestedBy: PipelineEpic25ServerOwnedActorV0View
     expectedCurrentDigestSha256: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
-    evidenceChain: PipelineEpic25EvidenceChainV0View
+    evidenceChain: PipelineEpic25EvidenceChainV0View | PipelineEpic25EvidenceChainV1View
 
 
 class PipelineEpic25EvidenceChainReadV0View(PipelineEpic25EvidenceChainV0View):
     chainDigestSha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     freshnessState: Literal["fresh", "stale"]
     effectiveDecision: Literal["go", "hold", "limited_rollout"]
-    typedBlockers: list[Literal["evidence_chain_stale", "live_evidence_unavailable"]] = Field(default_factory=list)
+    typedBlockers: list[
+        Literal[
+            "evidence_chain_stale",
+            "live_evidence_unavailable",
+            "policy_profile_upgrade_required",
+            "legacy_upgrade_unavailable",
+        ]
+    ] = Field(default_factory=list)
+
+
+class PipelineEpic25EvidenceChainReadV1View(PipelineEpic25EvidenceChainV1View):
+    chainDigestSha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    freshnessState: Literal["fresh", "stale"]
+    effectiveDecision: Literal["go", "hold", "limited_rollout"]
+    typedBlockers: list[
+        Literal[
+            "evidence_chain_stale",
+            "live_evidence_unavailable",
+            "policy_profile_stale",
+            "source_revision_attestation_required",
+            "retention_policy_expired",
+            "retention_policy_unverified",
+            "quality_gate_not_passed",
+        ]
+    ] = Field(default_factory=list)
 
 
 class PipelineProductModeMappingV0View(BaseModel):
@@ -2130,7 +2336,7 @@ class AuthoritativeWorkPacketLifecycleView(BaseModel):
     truthLabel: AuthoritativePacketTruthLabel
     sourceRef: AuthoritativePacketSourceRefView
     canonicalContract: PipelineCanonicalContractV1View | None = None
-    evidenceChain: PipelineEpic25EvidenceChainReadV0View | None = None
+    evidenceChain: PipelineEpic25EvidenceChainReadV0View | PipelineEpic25EvidenceChainReadV1View | None = None
     productModeMapping: PipelineProductModeMappingV0View | None = None
     createdAt: datetime
     updatedAt: datetime
