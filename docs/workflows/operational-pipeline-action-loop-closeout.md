@@ -257,19 +257,22 @@ The zero-skip joined proof command for the pre-worker source-intake boundary is
 hierarchy under an injectable disposable root that never overlays the canonical
 BMAD tree, executes the manager-generated
 source-intake dry-run and apply commands, starts the real SQLite supervisor and
-Next.js dashboard processes, verifies the named list/detail fields before and
+Next.js dashboard as labeled top-level processes, verifies the named list/detail fields before and
 after supervisor restart, observes that the requested packet uses the supervisor
 projection while static fallback packets remain in list rendering, removes and
-checks both disposable roots, and compares the observed bounded metadata with
+checks both disposable roots, and compares the bounded metadata with
 `tests/fixtures/pipeline/gate4-bmad-dashboard-e2e-proof-2026-07-12.json`.
 The artifact records its baseline revision, generator/command version, and
 runner digest. Missing binaries, loopback sockets, process readiness, parity,
-cleanup, configured execution denials, observed database counts, or tracked-byte
+cleanup, configured execution denials, database row counts, or tracked-byte
 stability fails the command; there is no skip or requested-packet fixture
 substitution success path. The structural contract runs in the normal
 `check:fast`/`check:static` chain; the expensive joined process proof remains the
-focused command above. This proof makes no observed-zero claim for external
-provider, GitHub, or Obsidian systems and makes no dispatch, delivery,
+focused command above. The process-label field records only the top-level
+processes launched directly by the proof runner; it is not process-tree or
+all-side-effect observation. Configured denials and bounded database/source
+checks are metadata-only evidence. This proof makes no zero-activity claim for
+external provider, GitHub, or Obsidian systems and makes no dispatch, delivery,
 `bounded_live`, or production claim.
 
 - PR #525 merged as `d3a27aa9e588ca23118ab984ec0ea979963d1cd9`. Its default,

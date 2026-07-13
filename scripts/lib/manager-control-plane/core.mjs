@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12164,7 +12164,9 @@ export function buildBmadPlanningGapPlan(options = {}, context = {}) {
   ];
   const sourceEvidence = normalizeSourceEvidence(explicitRefs.length > 0 ? explicitRefs : defaultSourceRefs(context));
   const sourceSlice = context.sourceSlice || sourceEvidence.valid[0] || null;
-  const sourcePlanning = context.sourcePlanning || (sourceSlice ? discoverSourcePlanningState(sourceSlice, context) : context.sourcePlanningState || null);
+  const sourcePlanning = context.sourcePlanning || (sourceSlice
+    ? discoverSourcePlanningState(sourceSlice, { ...context, bmadRoot: managerBmadRoot(options, context) })
+    : context.sourcePlanningState || null);
   const sourceRefs = sourceSlice ? [sourceSlice.ref] : sourceEvidence.valid.map((source) => source.ref);
   const prerequisites = normalizeBmadPlanningPrerequisites(sourcePlanning?.prerequisites || context.planningPrerequisites || options.planningPrerequisites, { sourceSlice, sourcePlanning });
   const missingPrerequisites = Object.entries(prerequisites)
@@ -13677,7 +13679,10 @@ export function buildRefillPlan(options = {}, context = {}) {
   const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
   const sourcePlanning = sourceSlice
     ? applyClosedStoryStatusOverlayToSourcePlanning(
-      context.sourcePlanning || context.sourcePlanningState || discoverSourcePlanningState(sourceSlice, context),
+      context.sourcePlanning || context.sourcePlanningState || discoverSourcePlanningState(sourceSlice, {
+        ...context,
+        bmadRoot: managerBmadRoot(options, context),
+      }),
       closedStoryStatuses,
     )
     : null;
@@ -16405,7 +16410,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
     blockers: [{ code, message, nextAction }],
     seedCandidate: null,
   });
-  if (!existsSync(sprintStatusPath)) {
+  if (!isContainedExistingPath(bmadRoot, sprintStatusRef)) {
     return blocked(
       "default-bmad-source-sprint-status-missing",
       "Default BMAD source intake requires the canonical local sprint tracker.",
@@ -16468,7 +16473,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
   const selectedStory = readyStories[0];
   const storyRef = `story:_bmad-output/implementation-artifacts/${selectedStory.key}.md`;
   const storyPath = join(bmadRoot, storyRef.slice("story:".length));
-  if (!existsSync(storyPath)) {
+  if (!isContainedExistingPath(bmadRoot, storyRef.slice("story:".length))) {
     return blocked(
       "default-bmad-source-story-missing",
       "The sprint-selected ready story artifact is missing.",
@@ -16505,7 +16510,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
     );
   }
   const bundleRefs = explicitBundleRef ? [explicitBundleRef] : defaultBmadBundleRefs(sourceKey, bmadRoot);
-  if (explicitBundleRef && (sourcePlanningKey(explicitBundleRef.slice("prd:".length)) !== sourceKey || !existsSync(join(bmadRoot, explicitBundleRef.slice("prd:".length))))) {
+  if (explicitBundleRef && (sourcePlanningKey(explicitBundleRef.slice("prd:".length)) !== sourceKey || !isContainedExistingPath(bmadRoot, explicitBundleRef.slice("prd:".length)))) {
     return blocked(
       "default-bmad-source-explicit-bundle-mismatch",
       "The explicit local PRD bundle does not exist or does not match the canonical sprint source_key.",
@@ -16657,7 +16662,7 @@ function planningMetadataArtifacts(root = repoRoot) {
         const ref = `_bmad-output/planning-artifacts/${entry.name}`;
         return { ref, metadata: bmadFrontmatterMetadata(join(root, ref)) };
       })
-      .filter((entry) => entry.metadata !== null);
+      .filter((entry) => isContainedExistingPath(root, entry.ref) && entry.metadata !== null);
   } catch {
     return [];
   }
@@ -16666,6 +16671,7 @@ function planningMetadataArtifacts(root = repoRoot) {
 function reconcileDefaultBmadHierarchy({ root = repoRoot, bundleRef, sourceKey, sprintMetadata, storyContent, storyRef }) {
   const fail = (code, message, nextAction, details = {}) => ({ ok: false, code, message, nextAction, details });
   const prdRef = bundleRef.slice("prd:".length);
+  if (!isContainedExistingPath(root, prdRef)) return fail("default-bmad-source-prd-unreadable", "The selected authoritative PRD metadata is unreadable.", "Restore readable PRD frontmatter before retrying.");
   const prd = bmadFrontmatterMetadata(join(root, prdRef));
   if (!prd) return fail("default-bmad-source-prd-unreadable", "The selected authoritative PRD metadata is unreadable.", "Restore readable PRD frontmatter before retrying.");
   if (prd.duplicates.length > 0) return fail("default-bmad-source-prd-conflicting", "The selected PRD contains conflicting metadata keys.", "Reconcile duplicate PRD frontmatter keys before retrying.", { conflictingKeys: prd.duplicates });
@@ -16700,7 +16706,9 @@ function reconcileDefaultBmadHierarchy({ root = repoRoot, bundleRef, sourceKey, 
   if (readiness.selected.metadata.fields.authoritative_architecture !== architecture.selected.ref || readiness.selected.metadata.fields.authoritative_epics !== epics.selected.ref) {
     return fail("default-bmad-source-readiness-mismatch", "Implementation-readiness metadata does not bind the selected architecture and epics/stories artifacts.", "Regenerate readiness evidence for the exact selected hierarchy.");
   }
-  const story = bmadFrontmatterMetadata(join(root, storyRef.slice("story:".length)));
+  const storyPath = storyRef.slice("story:".length);
+  if (!isContainedExistingPath(root, storyPath)) return fail("default-bmad-source-story-unreadable", "The selected story metadata is unreadable.", "Restore readable story frontmatter before retrying.");
+  const story = bmadFrontmatterMetadata(join(root, storyPath));
   if (!story) return fail("default-bmad-source-story-unreadable", "The selected story metadata is unreadable.", "Restore readable story frontmatter before retrying.");
   const storyStatus = bmadStoryStatus(storyContent);
   return {
@@ -16723,7 +16731,7 @@ function defaultBmadBundleRefs(sourceKey = "", root = repoRoot) {
     return readdirSync(prdRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => `_bmad-output/planning-artifacts/prds/${entry.name}/prd.md`)
-      .filter((relativePath) => existsSync(join(root, relativePath)) && sourcePlanningKey(relativePath) === sourceKey)
+      .filter((relativePath) => isContainedExistingPath(root, relativePath) && sourcePlanningKey(relativePath) === sourceKey)
       .sort()
       .map((relativePath) => `prd:${relativePath}`);
   } catch {
@@ -16765,7 +16773,7 @@ function normalizeDefaultBmadSourceProvenance(value, sourceRefs = [], root = rep
   const sprintPath = join(root, supplied.sprintStatusRef);
   const storyPath = join(root, supplied.storyRef.replace(/^story:/, ""));
   let hierarchy = null;
-  if (!existsSync(sprintPath) || !existsSync(storyPath)) {
+  if (!isContainedExistingPath(root, supplied.sprintStatusRef) || !isContainedExistingPath(root, supplied.storyRef.replace(/^story:/, ""))) {
     errors.push("local BMAD provenance artifact is missing");
   } else {
     const sprintContent = readLocalBmadMetadata(sprintPath);
@@ -16885,14 +16893,47 @@ function classifySourceRef(text, root = repoRoot) {
 
 function classifySourcePath(path, expectedType = "", originalRef = path, root = repoRoot) {
   const normalized = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
-  const sourceRoot = resolve(String(root || repoRoot));
-  if (!normalized || normalized.includes("..") || resolve(sourceRoot, normalized) === sourceRoot) return null;
-  const absolute = resolve(sourceRoot, normalized);
-  if (!isInsideOrSame(absolute, sourceRoot) || !existsSync(absolute)) return null;
+  if (!normalized || normalized.includes("..")) return null;
   const lower = normalized.toLowerCase();
   const inferredType = inferSourceType(lower);
   if (!inferredType || (expectedType && inferredType !== expectedType)) return null;
+  const localBmadSource = isCanonicalLocalBmadSourcePath(normalized, inferredType);
+  const sourceRoot = localBmadSource ? resolve(String(root || repoRoot)) : repoRoot;
+  if (!isContainedExistingPath(sourceRoot, normalized)) return null;
+  if (!localBmadSource && !isTrackedRepoSourcePath(normalized)) return null;
   return { type: inferredType, ref: originalRef, label: `${inferredType}:${normalized.slice(0, 120)}` };
+}
+
+function isCanonicalLocalBmadSourcePath(path = "", sourceType = "") {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (sourceType === "prd") return /^_bmad-output\/planning-artifacts\/prds\/[^/]+\/prd\.md$/i.test(normalized);
+  if (sourceType === "story") return /^_bmad-output\/implementation-artifacts\/[^/]+\.md$/i.test(normalized);
+  return false;
+}
+
+function isContainedExistingPath(root, relativePath = "") {
+  const normalized = String(relativePath || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  const sourceRoot = resolve(String(root || repoRoot));
+  if (!normalized || normalized.includes("..")) return false;
+  const absolute = resolve(sourceRoot, normalized);
+  if (absolute === sourceRoot || !isInsideOrSame(absolute, sourceRoot) || !existsSync(absolute)) return false;
+  try {
+    return isInsideOrSame(realpathSync(absolute), realpathSync(sourceRoot));
+  } catch {
+    return false;
+  }
+}
+
+function isTrackedRepoSourcePath(relativePath = "") {
+  const normalized = String(relativePath || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!normalized || normalized.includes("..")) return false;
+  const result = spawnSync("git", ["ls-files", "--error-unmatch", "--", normalized], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 5000,
+  });
+  return result.status === 0;
 }
 
 function inferSourceType(lowerPath) {
@@ -16921,8 +16962,11 @@ function discoverSourcePlanningState(sourceSlice, context = {}) {
       ...context.sourcePlanningBySourceKey[sourceKey],
     };
   }
-  const sprintStatus = findMatchingSprintStatus(sourceKey);
-  const terminalReconciliation = discoverTerminalReconciliationSourcePlanning(sourceSlice, sprintStatus);
+  const planningRoot = isCanonicalLocalBmadSourcePath(sourcePath, sourceSlice.type)
+    ? managerBmadRoot({}, context)
+    : repoRoot;
+  const sprintStatus = findMatchingSprintStatus(sourceKey, planningRoot);
+  const terminalReconciliation = discoverTerminalReconciliationSourcePlanning(sourceSlice, sprintStatus, planningRoot);
   return {
     sourceKey,
     sprintStatus,
@@ -17139,8 +17183,8 @@ function sourcePlanningKey(sourcePath) {
     .toLowerCase();
 }
 
-function findMatchingSprintStatus(sourceKey) {
-  const artifactDir = join(repoRoot, "_bmad-output", "implementation-artifacts");
+function findMatchingSprintStatus(sourceKey, root = repoRoot) {
+  const artifactDir = join(root, "_bmad-output", "implementation-artifacts");
   if (!sourceKey || !existsSync(artifactDir)) {
     return { exists: false, path: null, backlogStories: null, readyStories: null, activeStories: null, doneStories: null };
   }
@@ -17152,7 +17196,7 @@ function findMatchingSprintStatus(sourceKey) {
       const lowerName = entry.name.toLowerCase();
       const tokenMatches = sourceTokens.filter((token) => lowerName.includes(token)).length;
       const absolutePath = join(artifactDir, entry.name);
-      const content = readFileSync(absolutePath, "utf8");
+      const content = isContainedExistingPath(root, relativePath) ? readFileSync(absolutePath, "utf8") : "";
       const declaredSourceKey = sprintStatusSourceKey(content);
       const sourceKeyMatches = declaredSourceKey === sourceKey;
       return { relativePath, absolutePath, content, tokenMatches, sourceKeyMatches };

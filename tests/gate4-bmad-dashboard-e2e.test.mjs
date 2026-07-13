@@ -34,13 +34,13 @@ test("Gate 4 joined proof is wired as a zero-skip real-process command", async (
 test("Gate 4 proof artifact is metadata-only and records authoritative parity", async () => {
   const proof = JSON.parse(await readFile(proofPath, "utf8"));
 
-  assert.equal(proof.schemaVersion, "gate4-bmad-dashboard-e2e-proof/v2");
+  assert.equal(proof.schemaVersion, "gate4-bmad-dashboard-e2e-proof/v3");
   assert.equal(proof.status, "passed");
   assert.equal(proof.skipped, 0);
   assert.equal(proof.evidenceLevel, "integrated_local");
   assert.equal(proof.provenance.baselineRevision, "bfe5e44b0bee9c0f2424fccf0a3b4a462592ada1");
-  assert.equal(proof.provenance.generator, "gate4-bmad-dashboard-e2e/v2");
-  assert.equal(proof.provenance.commandVersion, 2);
+  assert.equal(proof.provenance.generator, "gate4-bmad-dashboard-e2e/v3");
+  assert.equal(proof.provenance.commandVersion, 3);
   assert.equal(
     proof.provenance.runnerSha256,
     `sha256:${createHash("sha256").update(await readFile(runnerPath)).digest("hex")}`,
@@ -75,7 +75,7 @@ test("Gate 4 proof artifact is metadata-only and records authoritative parity", 
     workerSourceMutation: false,
     backgroundExecution: false,
   });
-  assert.deepEqual(proof.executionBoundary.observedChildProcessKinds, ["dashboard", "manager-source-intake", "supervisor"]);
+  assert.deepEqual(proof.executionBoundary.launchedTopLevelProcessLabels, ["dashboard", "manager-source-intake", "supervisor"]);
   assert.equal(proof.retention.trackedSourceBytesUnchanged, true);
   assert.equal(proof.cleanup.disposableBmadRootRemoved, true);
   assert.equal(proof.cleanup.disposableRuntimeRootRemoved, true);

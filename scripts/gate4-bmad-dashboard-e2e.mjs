@@ -21,7 +21,7 @@ import { buildRefillPlan } from "./lib/manager-control-plane/core.mjs";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const proofPath = join(rootDir, "tests/fixtures/pipeline/gate4-bmad-dashboard-e2e-proof-2026-07-12.json");
 const baselineRevision = "bfe5e44b0bee9c0f2424fccf0a3b4a462592ada1";
-const generator = "gate4-bmad-dashboard-e2e/v2";
+const generator = "gate4-bmad-dashboard-e2e/v3";
 const nextBinaryRef = "apps/dashboard/node_modules/.bin/next";
 const nextBinary = join(rootDir, nextBinaryRef);
 const storyKey = "91-1-gate-4-reconciled-bmad-dashboard-proof";
@@ -48,7 +48,7 @@ const forbiddenTables = [
 ];
 
 const children = new Set();
-const observedChildProcessKinds = new Set();
+const launchedTopLevelProcessLabels = new Set();
 let tempRoot;
 let bmadRoot;
 
@@ -160,7 +160,7 @@ try {
   assertDisposableRootRemoved(tempRoot, "runtime");
 
   const observed = {
-    schemaVersion: "gate4-bmad-dashboard-e2e-proof/v2",
+    schemaVersion: "gate4-bmad-dashboard-e2e-proof/v3",
     status: "passed",
     skipped: 0,
     evidenceLevel: "integrated_local",
@@ -168,7 +168,7 @@ try {
     provenance: {
       baselineRevision,
       generator,
-      commandVersion: 2,
+      commandVersion: 3,
       runnerSha256: `sha256:${createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")}`,
     },
     manager: {
@@ -219,7 +219,7 @@ try {
         workerSourceMutation: false,
         backgroundExecution: false,
       },
-      observedChildProcessKinds: [...observedChildProcessKinds].sort(),
+      launchedTopLevelProcessLabels: [...launchedTopLevelProcessLabels].sort(),
     },
     retention: {
       metadataOnly: true,
@@ -334,7 +334,7 @@ function startProcess(command, args, { env, label }) {
     child.kendallSpawnError = error;
   });
   children.add(child);
-  observedChildProcessKinds.add(label.replace(/-restart$/, ""));
+  launchedTopLevelProcessLabels.add(label.replace(/-restart$/, ""));
   return child;
 }
 
