@@ -485,6 +485,46 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   assert.equal(proseOnly.fixtureMode.kind, "runtime");
   assert.equal(proseOnly.packets.length, 1);
 
+  const nestedPacketCollections = authoritativeNestedWorkPacketCollections(packet.packetId);
+  const nestedSyntheticProvenanceCases = [
+    ["targetVaultFolder", {
+      memoryProposals: [{ ...nestedPacketCollections.memoryProposals[0], targetVaultFolder: "fixture:nested-folder" }],
+    }],
+    ["backupPath", {
+      alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), backupPath: "demo:nested-backup" },
+    }],
+    ["rollbackPath", {
+      alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), rollbackPath: "fixture:nested-rollback" },
+    }],
+    ["expectedPr", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedPr: "demo:nested-pr" }),
+      },
+    }],
+    ["expectedWorktree", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedWorktree: "fixture:nested-worktree" }),
+      },
+    }],
+    ["cleanupTarget", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), cleanupTarget: "demo:nested-cleanup" },
+    }],
+    ["lowercase url", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { url: "fixture:nested-url" } } }],
+    ["uppercase URI", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { URI: "demo:nested-uri" } } }],
+    ["uppercase HREF", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { HREF: "fixture:nested-href" } } }],
+  ];
+  for (const [label, overrides] of nestedSyntheticProvenanceCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
   const lifecycleCases = [
     ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
     ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],
@@ -1354,6 +1394,48 @@ function authoritativeDeliveryEvidence() {
     remoteMutationApproved: false,
     mergeApproved: false,
     cleanupApproved: false,
+  };
+}
+
+function authoritativeCleanupDryRunGate(overrides = {}) {
+  return {
+    status: "blocked",
+    dryRunMatchesPolicy: false,
+    expectedPr: null,
+    expectedOwner: null,
+    expectedWorktree: null,
+    expectedLocalBranch: null,
+    expectedRemoteBranch: null,
+    expectedHeadRevision: null,
+    blockedReasons: [],
+    recoveryPath: "Return to cleanup review.",
+    metadataOnly: true,
+    cleanupApproved: false,
+    ...overrides,
+  };
+}
+
+function authoritativeAlphaMemorySourceStatus() {
+  return {
+    statusId: "memory-source-status:authoritative",
+    authorityFamily: "memory-writeback-and-source-mutation",
+    operationMode: "read_only",
+    decisionState: "ready",
+    retentionClass: "metadata_only",
+    sourceRefs: ["doc:source"],
+    targetMetadata: { label: "Operator memory target" },
+    backupPath: "docs/memory-backup.md",
+    rollbackPath: "docs/memory-rollback.md",
+    auditEventSummary: "Metadata-only memory source status.",
+    blockedReasons: [],
+    recoveryOptions: ["Return to memory review."],
+    evidenceRefs: ["event:created"],
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubCallsAllowed: false,
+    networkEgressAllowed: false,
   };
 }
 

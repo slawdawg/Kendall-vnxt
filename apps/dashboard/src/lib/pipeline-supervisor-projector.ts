@@ -1022,19 +1022,15 @@ function isFixtureDiscriminator(fieldName: string, value: unknown): boolean {
 }
 
 function isReferenceBearingField(fieldName: string): boolean {
-  return fieldName !== "fixtureId" && (
-    fieldName === "pathOrUrl" ||
-    fieldName === "artifactPath" ||
-    fieldName === "sourceArtifactPath" ||
-    fieldName === "source" ||
-    fieldName === "allowedPaths" ||
-    fieldName === "targetVaultPath" ||
-    fieldName === "retainedEvidence" ||
-    fieldName.endsWith("Url") ||
-    fieldName.endsWith("Ref") ||
-    fieldName.endsWith("Refs") ||
-    fieldName.endsWith("Id") ||
-    fieldName.endsWith("Ids")
+  const normalizedFieldName = fieldName.toLowerCase();
+  return normalizedFieldName !== "fixtureid" && (
+    normalizedFieldName === "source" ||
+    normalizedFieldName === "retainedevidence" ||
+    normalizedFieldName === "targetvaultfolder" ||
+    normalizedFieldName === "expectedpr" ||
+    normalizedFieldName === "expectedworktree" ||
+    normalizedFieldName === "cleanuptarget" ||
+    /(?:paths?|urls?|uris?|hrefs?|refs?|ids?)$/.test(normalizedFieldName)
   );
 }
 

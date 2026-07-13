@@ -50,11 +50,6 @@ const requiredSourceFiles = [
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
 ];
 
-const routeGraphTerminalFiles = [
-  join(rootDir, "apps/dashboard/src/components/shell.tsx"),
-  join(rootDir, "apps/dashboard/src/lib/supervisor.ts"),
-];
-
 const failures = [];
 const scannedFiles = [];
 const scannedFileSet = new Set();
@@ -63,11 +58,11 @@ const pendingFiles = [];
 const normalRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx"),
-], { terminalFiles: routeGraphTerminalFiles });
+]);
 const demoRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx"),
-], { terminalFiles: routeGraphTerminalFiles });
+]);
 if (normalRouteGraph.includes("apps/dashboard/src/lib/pipeline-fixtures.ts")) {
   failures.push("normal /pipeline route graph must not reach apps/dashboard/src/lib/pipeline-fixtures.ts");
 }
@@ -168,11 +163,10 @@ async function expandTarget(targetPath) {
   return files.sort();
 }
 
-async function collectRouteGraph(entryFiles, { terminalFiles = [] } = {}) {
+async function collectRouteGraph(entryFiles) {
   const files = [];
   const visited = new Set();
   const pending = [...entryFiles];
-  const terminalPathSet = new Set(terminalFiles.map((filePath) => normalize(filePath)));
   while (pending.length > 0) {
     const filePath = normalize(pending.shift());
     if (visited.has(filePath)) {
@@ -182,13 +176,8 @@ async function collectRouteGraph(entryFiles, { terminalFiles = [] } = {}) {
     const source = await readFile(filePath, "utf8");
     const displayPath = relative(rootDir, filePath).replaceAll("\\", "/");
     files.push(displayPath);
-    if (!terminalPathSet.has(filePath)) {
-      checkImports(displayPath, source);
-      checkForbiddenCalls(displayPath, source);
-    }
-    if (terminalPathSet.has(filePath)) {
-      continue;
-    }
+    checkImports(displayPath, source);
+    checkForbiddenCalls(displayPath, source);
     for (const specifier of extractRuntimeImportSpecifiers(source)) {
       const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
       if (resolvedImport && !visited.has(resolvedImport)) {
@@ -209,6 +198,7 @@ function queueFile(filePath) {
 }
 
 function checkImports(displayPath, source) {
+  checkUnresolvedDynamicModuleBoundaries(displayPath, source);
   const typeOnlyImportPatterns = [
     /^\s*import\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /^\s*export\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
@@ -240,6 +230,13 @@ function checkImports(displayPath, source) {
   return specifiers;
 }
 
+function checkUnresolvedDynamicModuleBoundaries(displayPath, source) {
+  const unresolvedDynamicImportPattern = /\b(?:import|require)\s*\(\s*(?!["'][^"']*["']\s*\))[^)]*\)/g;
+  for (const match of source.matchAll(unresolvedDynamicImportPattern)) {
+    failures.push(`${displayPath}: unresolved dynamic module boundary: ${match[0]}`);
+  }
+}
+
 function extractRuntimeImportSpecifiers(source) {
   const runtimeSource = source
     .replace(/^\s*import\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "")
@@ -259,8 +256,15 @@ function extractRuntimeImportSpecifiers(source) {
 
 function checkForbiddenCalls(displayPath, source) {
   const executableSource = stripCommentsAndStrings(source);
+  const allowedCallIds = new Set(
+    displayPath === "apps/dashboard/src/components/realtime-refresh.tsx"
+      ? ["network-eventsource"]
+      : displayPath === "apps/dashboard/src/lib/supervisor.ts"
+        ? ["network-fetch"]
+        : [],
+  );
   for (const { id, pattern } of forbiddenCallPatterns) {
-    if (pattern.test(executableSource)) {
+    if (!allowedCallIds.has(id) && pattern.test(executableSource)) {
       failures.push(`${displayPath}: forbidden call boundary ${id}`);
     }
   }
@@ -366,5 +370,9 @@ function isPipelineBoundaryPath(filePath) {
 }
 
 function isAllowedReadOnlySupervisorProjection(displayPath, specifier) {
-  return displayPath === "apps/dashboard/src/lib/pipeline-packet-loader.ts" && specifier === "./supervisor";
+  return (
+    displayPath === "apps/dashboard/src/lib/pipeline-packet-loader.ts" && specifier === "./supervisor"
+  ) || (
+    displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" && specifier === "../lib/supervisor"
+  );
 }

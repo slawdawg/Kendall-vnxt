@@ -2427,7 +2427,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
   const fixtureRoot = await mkdtemp(join(tmpdir(), "pipeline-import-boundary-"));
   const fixtureFiles = {
     "scripts/check-dashboard-pipeline-import-boundary.mjs": await readFile(pipelineImportBoundaryCheckPath, "utf8"),
-    "apps/dashboard/src/app/pipeline/page.tsx": 'import "../../components/shared-pipeline-runtime";\n',
+    "apps/dashboard/src/app/pipeline/page.tsx": 'import "../../components/shell";\n',
     "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx": "export default function Page() {}\n",
     "apps/dashboard/src/app/pipeline/demo/page.tsx": [
       'import "../../../lib/pipeline-fixtures";',
@@ -2436,6 +2436,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "",
     ].join("\n"),
     "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx": "export default function DemoDetailPage() {}\n",
+    "apps/dashboard/src/components/shell.tsx": 'import "./shared-pipeline-runtime";\nexport function Shell() {}\n',
     "apps/dashboard/src/components/shared-pipeline-runtime.ts": [
       'import "node:fs";',
       'import "../lib/pipeline-fixtures";',
@@ -2445,9 +2446,10 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
-    "apps/dashboard/src/lib/pipeline-packet-loader.ts": "export const loadPackets = () => [];\n",
+    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import "./supervisor";\nexport const loadPackets = () => [];\n',
     "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
     "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
+    "apps/dashboard/src/lib/supervisor.ts": 'import "../components/shared-pipeline-runtime";\nexport const supervisor = {};\n',
   };
 
   try {
@@ -2475,6 +2477,21 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     assert.equal(report.normalFixtureCatalogReachable, false);
     assert.equal(report.demoFixtureCatalogReachable, true);
     assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      [
+        'const runtimeModule = "./not-static";',
+        "void import(runtimeModule);",
+        "void require(runtimeModule);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const unresolvedDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(unresolvedDynamicRun.status, 1);
+    assert.match(unresolvedDynamicRun.stderr, /shared-pipeline-runtime\.ts: unresolved dynamic module boundary: import\(runtimeModule\)/);
+    assert.match(unresolvedDynamicRun.stderr, /shared-pipeline-runtime\.ts: unresolved dynamic module boundary: require\(runtimeModule\)/);
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }
