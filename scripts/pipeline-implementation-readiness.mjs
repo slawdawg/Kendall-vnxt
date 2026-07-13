@@ -158,7 +158,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
   {
     id: "epic2.dashboard-fixture-ui",
     categoryId: "dashboard-fixture-ui",
-    label: "Fixture-backed /pipeline cockpit",
+    label: "Supervisor-only /pipeline cockpit with isolated demo fixtures",
     ownerEpic: "epic-2",
     ownerStory: "2-7-demonstrate-golden-path-packet-lifecycle",
     status: "satisfied",
@@ -167,12 +167,12 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/lib/pipeline-packet-loader.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
-      { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["getWorkPackets", "pipelineCockpitPackets", "Supervisor packets"] },
+      { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["getWorkPackets", "Persisted supervisor WorkPacketV0 rows only", "no demo packets are substituted"] },
       { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
       { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Gate, memory, recovery"] },
-      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["supervisor WorkPacketV0 projections with fixture fallback", "fetch\\s*\\("] },
+      { file: "tests/dashboard-pipeline-packet-loader.test.mjs", tokens: ["explicit demo route is the only fixture catalog boundary", "pipeline-fixtures"] },
     ],
-    summary: "The dashboard exposes a cockpit route backed by read-only supervisor WorkPacketV0 projections with static fixture fallback and no provider, worker, GitHub, or Obsidian calls.",
+    summary: "The normal dashboard exposes only persisted supervisor WorkPacketV0 rows; static fixtures remain available through an explicit isolated demo route without provider, worker, GitHub, or Obsidian calls.",
   },
   {
     id: "epic2.accessibility-density",
@@ -187,7 +187,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     requiredTokens: [
       { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["pipelineDensityFixturePackets", "Array.from({ length: 15 }"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["density fixture clone count should be explicit", "pipeline cockpit should load at least 25 fixture packets"] },
-      { file: "tests/e2e/dashboard.spec.ts", tokens: ["opens fixture-backed pipeline cockpit", "page.keyboard.press", "viewport"] },
+      { file: "tests/e2e/dashboard.spec.ts", tokens: ["opens isolated demo pipeline cockpit", "page.keyboard.press", "viewport"] },
     ],
     summary: "Current cockpit foundation has keyboard, responsive, density, and browser-smoke evidence.",
   },
@@ -307,7 +307,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     requiredTokens: [
       { file: "scripts/check-dashboard-pipeline-import-boundary.mjs", tokens: ["PIPELINE_SOURCE_TARGETS", "forbiddenImportPatterns", "forbiddenCallPatterns"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["getWorkPackets", "writeObsidian", "provider execution from dashboard"] },
-      { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["Read-only supervisor WorkPacketV0 projections", "No provider, worker, GitHub, or Obsidian calls"] },
+      { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["Persisted supervisor WorkPacketV0 rows only", "No provider, worker, GitHub, or Obsidian calls"] },
       { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["No provider, worker, GitHub, or Obsidian calls"] },
     ],
     summary: "Static tests permit only the bounded read-only supervisor WorkPacketV0 read while denying provider, worker, GitHub, Obsidian, mutation, and process paths in the cockpit.",
@@ -359,7 +359,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       "test-results/pipeline-refined-900.png",
       "test-results/pipeline-refined-390.png",
     ],
-    browserProofCommand: "pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep \"opens fixture-backed pipeline cockpit without live execution framing\"",
+    browserProofCommand: "pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep \"opens isolated demo pipeline cockpit without live execution framing\"",
     proofSummary: "Story 6.1 adds a refined flow-only /pipeline surface, packet detail drill-down, browser visual-integrity checks, no-overlap checks, screenshots, and same-origin no-live-call instrumentation.",
     requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures", "pnpm run test:dashboard-e2e-runner", "pnpm run test:e2e:dashboard"],
     sourceFiles: [
@@ -380,7 +380,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       },
       {
         file: "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
-        tokens: ["generateStaticParams", "decodeURIComponent(packetId)", "PacketDetailPage"],
+        tokens: ["loadPipelineCockpitPacket", "decodeURIComponent(packetId)", "PacketDetailPage"],
       },
       {
         file: "tests/dashboard-pipeline-fixtures.test.mjs",

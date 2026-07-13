@@ -16,7 +16,7 @@ Useful checks:
 ```text
 pnpm run test:dashboard-pipeline-fixtures
 pnpm run build:dashboard
-pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep "opens fixture-backed pipeline cockpit without live execution framing"
+pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep "opens isolated demo pipeline cockpit without live execution framing"
 uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q
 ```
 
@@ -26,7 +26,7 @@ outside the sandbox and record that boundary.
 
 ## Daily Alpha Loop
 
-1. Open `/pipeline`.
+1. Open `/pipeline` for persisted supervisor state, or `/pipeline/demo` for the explicitly labeled fixture catalog.
 2. Select a packet with source, memory, or blocked-state context. Good fixtures
    include stale research, Obsidian memory proposal, or corrupted aggregate
    states.
