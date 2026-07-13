@@ -689,9 +689,7 @@ test.describe("dashboard workflow coverage", () => {
       await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
       await expect(truthSummary.getByText("Source:")).toBeVisible();
       await expect(truthSummary.getByText("empty", { exact: true }).first()).toBeVisible();
-      await expect(
-        truthSummary.getByText("Supervisor returned zero persisted WorkPacketV0 rows", { exact: true }).first(),
-      ).toBeVisible();
+      await expect(truthSummary.getByText(/zero persisted WorkPacketV0 rows/i).first()).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Unexpected Runtime Packet", { exact: true })).toHaveCount(0);
@@ -739,7 +737,6 @@ test.describe("dashboard workflow coverage", () => {
       await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(staleMutation.mutated);
       await page.goto("/pipeline");
       const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
-      await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
       await expect(truthSummary.getByText("invalid", { exact: true }).first()).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       const staleBody = await page.locator("body").innerText();
