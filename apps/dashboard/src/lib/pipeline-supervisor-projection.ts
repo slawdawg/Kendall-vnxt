@@ -919,4 +919,3 @@ function isProjectionSelectedPacketDetail(value: unknown) {
     detail.metadataOnly === true
   );
 }
-
