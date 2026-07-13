@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -136,6 +137,92 @@ function refill(overrides = {}, context = {}) {
 
 test.beforeEach(cleanupFixture);
 test.afterEach(cleanupFixture);
+
+test("default BMAD resolution can read a disposable injected root without overlaying canonical planning state", () => {
+  const root = mkdtempSync(join(tmpdir(), "kendall-default-bmad-root-"));
+  try {
+    const sprintPath = join(root, SPRINT_STATUS_PATH);
+    mkdirSync(join(sprintPath, ".."), { recursive: true });
+    writeFileSync(sprintPath, `source_key: ${SOURCE_KEY}\nsource_ref: ${EPICS_REF}\ndevelopment_status:\n  ${STORY_KEY}: ready-for-dev\n`);
+    writeFrontmatter(join(root, ARTIFACT_DIR, `${STORY_KEY}.md`), ["status: ready-for-dev"], "Isolated Story");
+    writeFrontmatter(join(root, PRD_REF), ["status: final", "authoritative: true"], "Isolated PRD");
+    writeFrontmatter(join(root, ARCHITECTURE_REF), ["workflowType: architecture", "status: complete", `authoritative_prd: ${PRD_REF}`], "Isolated Architecture");
+    writeFrontmatter(join(root, EPICS_REF), ["workflowType: epics-and-stories", "status: complete", `authoritative_prd: ${PRD_REF}`, `authoritative_architecture: ${ARCHITECTURE_REF}`], "Isolated Epics");
+    writeFrontmatter(join(root, READINESS_REF), ["workflowType: implementation-readiness", "status: complete", `authoritative_prd: ${PRD_REF}`, `authoritative_architecture: ${ARCHITECTURE_REF}`, `authoritative_epics: ${EPICS_REF}`], "Isolated Readiness");
+
+    const canonicalBefore = existsSync(SPRINT_STATUS_PATH) ? readFileSync(SPRINT_STATUS_PATH) : null;
+    const plan = refill({ sourceRefs: [BUNDLE_REF] }, { bmadRoot: root });
+    assert.equal(plan.summary.sourceBackedPacketSeed.packetState, "eligible", JSON.stringify(plan.blockers));
+    assert.equal(plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.storyKey, STORY_KEY);
+    assert.equal(plan.summary.sourcePlanning.sprintStatus.exists, true);
+    assert.equal(plan.summary.sourcePlanning.sprintStatus.path, SPRINT_STATUS_PATH);
+    assert.deepEqual(existsSync(SPRINT_STATUS_PATH) ? readFileSync(SPRINT_STATUS_PATH) : null, canonicalBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    assert.equal(existsSync(root), false);
+  }
+});
+
+test("an injected BMAD root cannot make external doc or runway refs source-owned", () => {
+  const root = mkdtempSync(join(tmpdir(), "kendall-external-source-root-"));
+  try {
+    const externalDoc = `docs/${root.split("/").at(-1)}.md`;
+    const externalRunway = `docs/${root.split("/").at(-1)}-development-runway.md`;
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, externalDoc), "# External doc\n");
+    writeFileSync(join(root, externalRunway), "# External runway\n");
+
+    for (const sourceRef of [`doc:${externalDoc}`, `runway:${externalRunway}`]) {
+      const seed = buildSourceBackedPacketSeedPlan({
+        runId: "external-source-authority-test",
+        candidateId: "external-source-candidate",
+        title: "External source candidate",
+        sourceRefs: [sourceRef],
+        acceptanceCriteria: ["External files remain ineligible."],
+        verificationTargets: ["node --test tests/manager-default-bmad-source-resolution.test.mjs"],
+        touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+        riskClass: "low",
+        authorityClass: "allowed_unattended",
+      }, { bmadRoot: root });
+      assert.equal(seed.summary.packetState, "blocked");
+      assert.deepEqual(seed.summary.seedPacket.sourceRefs, []);
+      assert.deepEqual(seed.summary.seedPacket.rejectedSourceRefs, undefined);
+      assert.ok(seed.blockers.some((blocker) => blocker.reason === "ambiguous_source"), JSON.stringify(seed.blockers));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an injected BMAD root rejects canonical source symlinks that escape its realpath", () => {
+  const root = mkdtempSync(join(tmpdir(), "kendall-bmad-symlink-root-"));
+  const outside = mkdtempSync(join(tmpdir(), "kendall-bmad-symlink-target-"));
+  try {
+    const prdRef = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-symlink-escape/prd.md";
+    const outsidePrd = join(outside, "prd.md");
+    writeFrontmatter(outsidePrd, ["status: final", "authoritative: true"], "Escaped PRD");
+    mkdirSync(join(root, prdRef, ".."), { recursive: true });
+    symlinkSync(outsidePrd, join(root, prdRef));
+
+    const seed = buildSourceBackedPacketSeedPlan({
+      runId: "bmad-symlink-containment-test",
+      candidateId: "bmad-symlink-candidate",
+      title: "BMAD symlink candidate",
+      sourceRefs: [`prd:${prdRef}`],
+      acceptanceCriteria: ["Symlink escapes remain ineligible."],
+      verificationTargets: ["node --test tests/manager-default-bmad-source-resolution.test.mjs"],
+      touchedSurfaceHint: "scripts/lib/manager-control-plane/core.mjs",
+      riskClass: "low",
+      authorityClass: "allowed_unattended",
+    }, { bmadRoot: root });
+    assert.equal(seed.summary.packetState, "blocked");
+    assert.deepEqual(seed.summary.seedPacket.sourceRefs, []);
+    assert.ok(seed.blockers.some((blocker) => blocker.reason === "ambiguous_source"), JSON.stringify(seed.blockers));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
 
 test("default refill and cycle resolve one ready BMAD story with matching bundle provenance", () => {
   writeFixture();
