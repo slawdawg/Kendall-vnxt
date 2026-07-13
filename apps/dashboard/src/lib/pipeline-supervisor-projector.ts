@@ -1025,6 +1025,9 @@ function isReferenceBearingField(fieldName: string): boolean {
   return fieldName !== "fixtureId" && (
     fieldName === "pathOrUrl" ||
     fieldName === "artifactPath" ||
+    fieldName === "sourceArtifactPath" ||
+    fieldName === "source" ||
+    fieldName === "allowedPaths" ||
     fieldName === "targetVaultPath" ||
     fieldName === "retainedEvidence" ||
     fieldName.endsWith("Ref") ||

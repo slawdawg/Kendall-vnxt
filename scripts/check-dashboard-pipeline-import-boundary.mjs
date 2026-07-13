@@ -175,8 +175,8 @@ async function collectRouteGraph(entryFiles) {
     visited.add(filePath);
     const source = await readFile(filePath, "utf8");
     files.push(relative(rootDir, filePath).replaceAll("\\", "/"));
-    for (const specifier of checkImports(relative(rootDir, filePath), source)) {
-      const resolvedImport = await resolveLocalImport(filePath, specifier);
+    for (const specifier of extractRuntimeImportSpecifiers(source)) {
+      const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
       if (resolvedImport && !visited.has(resolvedImport)) {
         pending.push(resolvedImport);
       }
@@ -195,7 +195,6 @@ function queueFile(filePath) {
 }
 
 function checkImports(displayPath, source) {
-  const specifiers = [];
   const typeOnlyImportPatterns = [
     /^\s*import\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /^\s*export\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
@@ -212,6 +211,22 @@ function checkImports(displayPath, source) {
       }
     }
   }
+  const specifiers = extractRuntimeImportSpecifiers(source);
+  for (const specifier of specifiers) {
+    for (const { id, pattern } of forbiddenImportPatterns) {
+      if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, specifier)) {
+        continue;
+      }
+      if (pattern.test(specifier)) {
+        failures.push(`${displayPath}: forbidden import boundary ${id}: ${specifier}`);
+      }
+    }
+  }
+
+  return specifiers;
+}
+
+function extractRuntimeImportSpecifiers(source) {
   const runtimeSource = source
     .replace(/^\s*import\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "")
     .replace(/^\s*export\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "");
@@ -223,22 +238,9 @@ function checkImports(displayPath, source) {
     /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
   ];
 
-  for (const importPattern of importPatterns) {
-    for (const importMatch of runtimeSource.matchAll(importPattern)) {
-      const specifier = importMatch[1];
-      specifiers.push(specifier);
-      for (const { id, pattern } of forbiddenImportPatterns) {
-        if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, specifier)) {
-          continue;
-        }
-        if (pattern.test(specifier)) {
-          failures.push(`${displayPath}: forbidden import boundary ${id}: ${specifier}`);
-        }
-      }
-    }
-  }
-
-  return specifiers;
+  return importPatterns.flatMap((importPattern) =>
+    [...runtimeSource.matchAll(importPattern)].map((importMatch) => importMatch[1])
+  );
 }
 
 function checkForbiddenCalls(displayPath, source) {
@@ -289,7 +291,7 @@ function extractTemplateExpressions(templateSource) {
   return expressions.join("\n");
 }
 
-async function resolveLocalImport(fromFile, specifier) {
+async function resolveLocalImport(fromFile, specifier, { allDashboardLocal = false } = {}) {
   if (!specifier.startsWith(".") && !specifier.startsWith("/")) {
     if (!specifier.startsWith("@/")) {
       return null;
@@ -301,7 +303,7 @@ async function resolveLocalImport(fromFile, specifier) {
     : specifier.startsWith("/")
       ? join(dashboardSrcDir, specifier.slice(1))
       : resolve(dirname(fromFile), specifier);
-  if (!isInsideDashboardSrc(basePath) || !isPipelineBoundaryPath(basePath)) {
+  if (!isInsideDashboardSrc(basePath) || (!allDashboardLocal && !isPipelineBoundaryPath(basePath))) {
     return null;
   }
 

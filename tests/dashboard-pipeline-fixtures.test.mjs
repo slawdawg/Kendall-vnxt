@@ -36,6 +36,7 @@ const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-
 const realtimeRefreshPath = new URL("../apps/dashboard/src/components/realtime-refresh.tsx", import.meta.url);
 const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", import.meta.url);
 const setupE2ePath = new URL("../scripts/setup-e2e.mjs", import.meta.url);
+const pipelineImportBoundaryCheckPath = new URL("../scripts/check-dashboard-pipeline-import-boundary.mjs", import.meta.url);
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 
 function loadManagerExecutionLaneSummaryModule(source) {
@@ -2420,6 +2421,56 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
     /from\s+["']node:child_process["']|require\(["']child_process["']\)|spawn\s*\(|exec\s*\(|from\s+["']node:worker_threads["']|from\s+["']node:http["']|from\s+["']node:https["']|from\s+["']node:fs["']|from\s+["']fs["']|writeFile\s*\(|appendFile\s*\(|mkdir\s*\(|rename\s*\(|unlink\s*\(|from\s+["']undici["']|from\s+["']axios["']|import\s*\(\s*["']openai["']|import\s*\(\s*["']@anthropic|new\s+Worker\s*\(|Dockerode|dockerode|@docker|createContainer|runHermes|launchHermes|HermesRuntime|runCodex|launchCodex|CodexRuntime|runClaude|launchClaude|ClaudeRuntime|writeObsidian|mutateObsidian|updateCanonicalMemory|canonicalMemoryUpdate|obsidianWriteBack|vaultWrite|from\s+["']@anthropic|from\s+["']openai|api\.anthropic|api\.openai|killSwitch\(\)/i
   );
   assert.match(navSource, /href:\s*"\/pipeline"/);
+});
+
+test("pipeline import boundary follows shared dashboard-local runtime intermediaries", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "pipeline-import-boundary-"));
+  const fixtureFiles = {
+    "scripts/check-dashboard-pipeline-import-boundary.mjs": await readFile(pipelineImportBoundaryCheckPath, "utf8"),
+    "apps/dashboard/src/app/pipeline/page.tsx": 'import "../../components/shared-pipeline-runtime";\n',
+    "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx": "export default function Page() {}\n",
+    "apps/dashboard/src/app/pipeline/demo/page.tsx": [
+      'import "../../../lib/pipeline-fixtures";',
+      'import "../../../lib/pipeline/manager-execution-lane-summary";',
+      "export default function DemoPage() {}",
+      "",
+    ].join("\n"),
+    "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx": "export default function DemoDetailPage() {}\n",
+    "apps/dashboard/src/components/shared-pipeline-runtime.ts": 'import "../lib/pipeline-fixtures";\n',
+    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
+    "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
+    "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
+    "apps/dashboard/src/lib/pipeline-packet-loader.ts": "export const loadPackets = () => [];\n",
+    "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
+    "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
+  };
+
+  try {
+    for (const [relativePath, source] of Object.entries(fixtureFiles)) {
+      const targetPath = join(fixtureRoot, relativePath);
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, source, "utf8");
+    }
+
+    const checkerPath = join(fixtureRoot, "scripts/check-dashboard-pipeline-import-boundary.mjs");
+    const leakingRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(leakingRun.status, 1);
+    assert.match(leakingRun.stderr, /normal \/pipeline route graph must not reach apps\/dashboard\/src\/lib\/pipeline-fixtures\.ts/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      "export const sharedPipelineRuntime = true;\n",
+      "utf8",
+    );
+    const cleanRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(cleanRun.status, 0, cleanRun.stderr);
+    const report = JSON.parse(cleanRun.stdout);
+    assert.equal(report.normalFixtureCatalogReachable, false);
+    assert.equal(report.demoFixtureCatalogReachable, true);
+    assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("pipeline local model health fixtures cover readiness states without direct provider probes", async () => {

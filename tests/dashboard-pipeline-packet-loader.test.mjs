@@ -465,6 +465,19 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   assert.equal(valid.fixtureMode.kind, "runtime");
   assert.equal(valid.packets.length, 1);
 
+  const proseOnlySources = structuredClone(optionalSources);
+  proseOnlySources.candidateWork.sourceSummary.label = "Operator label mentions fixture:legacy text";
+  proseOnlySources.workItem.executionRecipe.label = "Review fixture:legacy wording";
+  proseOnlySources.taskPacket.verificationSummary = "Document fixture:legacy as ordinary prose.";
+  proseOnlySources.routingPreview.decision.humanExplanation = "The label fixture:legacy is not provenance.";
+  const proseOnlyLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, ...proseOnlySources }],
+  });
+  const proseOnly = await proseOnlyLoader.loadPipelineCockpitPackets();
+  assert.equal(proseOnly.fixtureMode.kind, "runtime");
+  assert.equal(proseOnly.packets.length, 1);
+
   const lifecycleCases = [
     ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
     ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],
@@ -487,11 +500,19 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   const optionalSourceCases = [
     ["candidate required field", { candidateWork: { ...candidateWork, title: null } }],
     ["candidate source enum", { candidateWork: { ...candidateWork, source: "runtime_fixture" } }],
+    ["candidate source artifact path", { candidateWork: { ...candidateWork, sourceArtifactPath: "fixture:candidate-source" } }],
     ["candidate source summary", {
       candidateWork: { ...candidateWork, sourceSummary: { ...candidateWork.sourceSummary, evidenceRefs: [null] } },
     }],
+    ["candidate summary source artifact path", {
+      candidateWork: {
+        ...candidateWork,
+        sourceSummary: { ...candidateWork.sourceSummary, sourceArtifactPath: "demo:candidate-summary-source" },
+      },
+    }],
     ["candidate import metadata", { candidateWork: { ...candidateWork, importMetadata: [] } }],
     ["work item workflow state", { workItem: { ...workItem, state: "active" } }],
+    ["work item source", { workItem: { ...workItem, source: "fixture:work-item-source" } }],
     ["work item metadata value", { workItem: { ...workItem, metadata: { nested: { unsafe: true } } } }],
     ["work item recipe", {
       workItem: {
@@ -505,12 +526,34 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
     ["work item delivery readiness", {
       workItem: { ...workItem, deliveryReadiness: { ...workItem.deliveryReadiness, readyForApproval: "yes" } },
     }],
+    ["work item recipe allowed path", {
+      workItem: {
+        ...workItem,
+        executionRecipe: { ...workItem.executionRecipe, allowedPaths: ["demo:work-item-path"] },
+      },
+    }],
     ["task packet required field", { taskPacket: { ...taskPacket, verificationSummary: undefined } }],
+    ["task packet source", { taskPacket: { ...taskPacket, source: "fixture:task-packet-source" } }],
+    ["task packet source artifact path", {
+      taskPacket: { ...taskPacket, sourceArtifactPath: "demo:task-packet-source" },
+    }],
     ["routing profile paths", {
       routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: null } },
     }],
+    ["routing profile synthetic path", {
+      routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: ["fixture:routing-path"] } },
+    }],
     ["routing decision profile snapshot", {
       routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, profileSnapshot: null } },
+    }],
+    ["routing decision snapshot synthetic path", {
+      routingPreview: {
+        ...routingPreview,
+        decision: {
+          ...routingPreview.decision,
+          profileSnapshot: { ...routingPreview.decision.profileSnapshot, allowedPaths: ["demo:routing-snapshot-path"] },
+        },
+      },
     }],
     ["routing rejected lane", {
       routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, rejectedLanes: [null] } },
