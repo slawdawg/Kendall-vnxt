@@ -73,7 +73,6 @@ export type PipelineSupervisorProjectionResult =
   | { kind: "invalid"; packets: []; error: string };
 
 const pipelineStages = new Set(["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"]);
-const lifecycleSources = new Set(["candidate_work", "work_item", "execution_attempt", "workflow_event", "memory_proposal", "delivery_evidence", "source_missing"]);
 const workPacketOwners = new Set(["kendall", "operator", "local_model", "hermes_worker_mock", "codex_worker", "claude_reviewer", "github", "memory_review", "blocked"]);
 const workPacketStatuses = new Set(["active", "waiting", "blocked", "failed", "complete", "deferred"]);
 const riskLevels = new Set(["low", "medium", "high"]);
@@ -131,9 +130,18 @@ const automationAuthorityChangeStatuses = new Set(["not_requested", "blocked", "
 const learnFollowUpStatuses = new Set(["proposed", "approved", "rejected", "deferred", "not_created"]);
 const learnFollowUpOrigins = new Set(["failure", "approval", "rejection", "quality", "operator_feedback"]);
 const learnReentryPaths = new Set(["reenter_capture", "human_gate", "learn_review", "none"]);
-const workPacketReferenceProvenances = new Set(["candidate_work", "work_item"]);
 const refillSourceStates = new Set(["healthy", "source_exhausted", "blocked", "refilling", "unknown"]);
 const housekeepingStatuses = new Set(["not_applicable", "complete", "blocked", "running", "unknown"]);
+const lifecycleSources = new Set<WorkPacketLifecycleSourceV0>([
+  "candidate_work",
+  "work_item",
+  "execution_attempt",
+  "workflow_event",
+  "memory_proposal",
+  "delivery_evidence",
+  "source_missing",
+]);
+
 export function projectSupervisorWorkPacketsToCockpitPackets(
   packets: readonly WorkPacketV0View[] | unknown,
 ): PipelineSupervisorProjectionResult {
@@ -217,7 +225,7 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     isAbsentOr(packet.routeSummary, isWorkPacketRouteSummaryV0) &&
     isAbsentOr(packet.deliveryEvidence, isWorkPacketDeliveryEvidenceV0) &&
     isAbsentOr(packet.learnOutcome, isWorkPacketLearnOutcomeV0) &&
-    isAbsentOr(packet.learnRefill, isWorkPacketLearnRefillProjectionV0) &&
+    isAbsentOr(packet.learnRefill, (refill) => isWorkPacketLearnRefillProjectionV0(refill, packet.packetId as string)) &&
     isAbsentOr(packet.alphaMemorySourceStatus, isAlphaMemorySourceStatusV0) &&
     isAbsentOr(packet.gateStateValidation, isWorkPacketGateStateValidationV0) &&
     lifecycleState !== null &&
@@ -243,32 +251,29 @@ function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
   ) {
     return true;
   }
-  return hasFixtureOnlyRefs(packet) ||
+  return hasFixtureOnlyRefs(packet.sourceRefs) ||
+    hasFixtureOnlyRefs(packet.evidenceRefs) ||
+    hasFixtureOnlyRefs(packet.artifactRefs) ||
     hasFixtureMarkersInReachableNestedFields(packet);
 }
 
-function hasFixtureOnlyRefs(value: unknown, visited = new Set<object>()): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => hasFixtureOnlyRefs(item, visited));
-  }
-  if (!value || typeof value !== "object") {
+function hasFixtureOnlyRefs(value: unknown): boolean {
+  if (!Array.isArray(value)) {
     return false;
   }
-  if (visited.has(value)) {
-    return false;
-  }
-  visited.add(value);
-  const record = value as Record<string, unknown>;
-  if (isSyntheticRuntimeIdentity(record.refId) ||
-    isSyntheticRuntimeIdentity(record.sourceRef) ||
-    isSyntheticRuntimeIdentity(record.pathOrUrl) ||
-    isSyntheticRuntimeIdentity(record.artifactPath) ||
-    record.evidenceType === "fixture" ||
-    record.retentionClass === "fixture" ||
-    record.artifactType === "fixture") {
-    return true;
-  }
-  return Object.values(record).some((child) => hasFixtureOnlyRefs(child, visited));
+  return value.some((ref) => {
+    if (!ref || typeof ref !== "object") {
+      return false;
+    }
+    const typedRef = ref as Record<string, unknown>;
+    return isSyntheticRuntimeIdentity(typedRef.refId) ||
+      isSyntheticRuntimeIdentity(typedRef.sourceRef) ||
+      isSyntheticRuntimeIdentity(typedRef.pathOrUrl) ||
+      isSyntheticRuntimeIdentity(typedRef.artifactPath) ||
+      typedRef.evidenceType === "fixture" ||
+      typedRef.retentionClass === "fixture" ||
+      typedRef.artifactType === "fixture";
+  });
 }
 
 function isSyntheticRuntimeIdentity(value: unknown): boolean {
@@ -574,14 +579,14 @@ function isWorkPacketLearnDecisionRecordV0(value: unknown): boolean {
     hasExactBooleanFields(value, ["canonicalMutationAllowed", "durableWriteAllowed"], false);
 }
 
-function isWorkPacketLearnRefillProjectionV0(value: unknown): boolean {
+function isWorkPacketLearnRefillProjectionV0(value: unknown, packetId: string): boolean {
   return isRecord(value) &&
     isNonEmptyString(value.projectionId) &&
     value.retentionClass === "metadata_only" &&
     Array.isArray(value.followUpCandidates) &&
-    value.followUpCandidates.every(isWorkPacketLearnFollowUpCandidateV0) &&
+    value.followUpCandidates.every((candidate) => isWorkPacketLearnFollowUpCandidateV0(candidate, packetId)) &&
     Array.isArray(value.operatorOwnedExits) &&
-    value.operatorOwnedExits.every(isWorkPacketOperatorOwnedExitV0) &&
+    value.operatorOwnedExits.every((exit) => isWorkPacketOperatorOwnedExitV0(exit, packetId)) &&
     isWorkPacketRefillSourceStateV0(value.refillSourceState) &&
     isWorkPacketHousekeepingV0(value.housekeeping) &&
     isWorkPacketSourceExhaustionV0(value.sourceExhaustion) &&
@@ -591,20 +596,10 @@ function isWorkPacketLearnRefillProjectionV0(value: unknown): boolean {
     hasExactBooleanFields(value, ["sourceMutationAllowed", "providerCallsAllowed", "workerLaunchAllowed", "githubMutationAllowed"], false);
 }
 
-function isWorkPacketReferenceV0(value: unknown): boolean {
-  if (!isNonEmptyString(value) || value !== value.trim() || value.length > 200 || /[\s/\\\0]/.test(value) || isSyntheticRuntimeIdentity(value)) {
-    return false;
-  }
-  const separatorIndex = value.indexOf(":");
-  return separatorIndex > 0 &&
-    workPacketReferenceProvenances.has(value.slice(0, separatorIndex)) &&
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value.slice(separatorIndex + 1));
-}
-
-function isWorkPacketLearnFollowUpCandidateV0(value: unknown): boolean {
+function isWorkPacketLearnFollowUpCandidateV0(value: unknown, packetId: string): boolean {
   return isRecord(value) &&
     ["followUpId", "candidateWorkId", "label", "reason"].every((field) => isNonEmptyString(value[field])) &&
-    isWorkPacketReferenceV0(value.sourcePacketId) &&
+    value.sourcePacketId === packetId &&
     isEnumValue(value.status, learnFollowUpStatuses) &&
     isEnumValue(value.origin, learnFollowUpOrigins) &&
     isEnumValue(value.reentryPath, learnReentryPaths) &&
@@ -613,10 +608,10 @@ function isWorkPacketLearnFollowUpCandidateV0(value: unknown): boolean {
     value.rawPayloadRetained === false;
 }
 
-function isWorkPacketOperatorOwnedExitV0(value: unknown): boolean {
+function isWorkPacketOperatorOwnedExitV0(value: unknown, packetId: string): boolean {
   return isRecord(value) &&
     isNonEmptyString(value.exitId) &&
-    isWorkPacketReferenceV0(value.sourcePacketId) &&
+    value.sourcePacketId === packetId &&
     value.state === "operator_owned" &&
     isNonEmptyString(value.reason) &&
     (value.stopStateKind === "operator_owned_exit" || isEnumValue(value.stopStateKind, loopStopKinds)) &&

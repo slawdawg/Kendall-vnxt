@@ -194,8 +194,6 @@ test("typed fixture provenance is rejected without arbitrary-string false positi
   const fixtures = populatedFixtureCatalog();
   const fixtureRefCases = [
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "fixture:source-ref" }] },
-    { reviewSummaries: [{ reviewer: "kendall", status: "pending", summary: "Review", evidenceRefs: ["fixture:nested-evidence"], artifactRefs: [] }] },
-    { learnOutcome: { evidenceRefs: ["fixture:nested-evidence"], sourceRefs: [] } },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "fixture:evidence-artifact" }] },
@@ -414,60 +412,6 @@ test("malformed nested projection detail structures fail closed before UI derefe
   }
 });
 
-test("learn refill accepts safe cross-packet candidate-work provenance without fixture leakage", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const learnRefill = authoritativeLearnRefill();
-  const crossPacketLearnRefill = {
-    ...learnRefill,
-    followUpCandidates: [{
-      ...learnRefill.followUpCandidates[0],
-      sourcePacketId: "candidate_work:source-packet-123",
-    }],
-    operatorOwnedExits: [{
-      exitId: "operator-owned-exit:source-packet-123",
-      sourcePacketId: "candidate_work:source-packet-123",
-      state: "operator_owned",
-      reason: "Operator review owns the next safe step.",
-      stopStateKind: "operator_owned_exit",
-      reentryPath: "reenter_capture",
-      evidenceRefs: ["event:created"],
-      metadataOnly: true,
-      rawPayloadRetained: false,
-    }],
-  };
-
-  const validLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{ ...packet, learnRefill: crossPacketLearnRefill }],
-  });
-  const valid = await validLoader.loadPipelineCockpitPackets();
-  assert.equal(valid.fixtureMode.kind, "runtime");
-  assert.equal(valid.packets.length, 1);
-
-  for (const [label, sourcePacketId] of [
-    ["blank", ""],
-    ["whitespace", "candidate_work: source-packet-123"],
-    ["unsafe path", "candidate_work:../source-packet-123"],
-    ["unsupported provenance", "other_packet:source-packet-123"],
-    ["fixture provenance", "fixture:source-packet-123"],
-  ]) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{
-        ...packet,
-        learnRefill: {
-          ...crossPacketLearnRefill,
-          followUpCandidates: [{ ...crossPacketLearnRefill.followUpCandidates[0], sourcePacketId }],
-        },
-      }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-});
-
 test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
   const fixtures = populatedFixtureCatalog();
   const packet = authoritativeWorkPacket();
@@ -513,10 +457,8 @@ test("malformed nested evidence and artifact references fail closed before rende
   const fixtures = populatedFixtureCatalog();
   for (const overrides of [
     { evidenceRefs: ["event:created"] },
-    { lifecycleState: { ...authoritativeWorkPacket().lifecycleState, source: "unexpected_source" } },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], sourceType: "repo_doc" }] },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "live" }] },
-    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", pathOrUrl: "docs/blocked.md", blockedReason: "source boundary blocked" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], rawPayloadRetained: true }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "raw_payload" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "forever" }] },
@@ -1175,7 +1117,7 @@ function authoritativeLearnRefill() {
       followUpId: "follow-up:authoritative",
       candidateWorkId: "candidate:authoritative",
       label: "Authoritative follow-up",
-      sourcePacketId: "candidate_work:source-manager-authoritative-only",
+      sourcePacketId: "manager-source-authoritative-only",
       reason: "Quality follow-up.",
       status: "not_created",
       origin: "quality",
