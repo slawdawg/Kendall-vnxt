@@ -140,12 +140,12 @@ export function PipelineCockpit({
     [currentProjection]
   );
   const dashboardPackets = useMemo(
-    () => projectionToCockpitPackets(currentProjection, packets, currentProjectionError, activeBoardViewModel),
-    [activeBoardViewModel, currentProjection, currentProjectionError, packets]
+    () => projectionToCockpitPackets(currentProjection, packets, currentProjectionError, activeBoardViewModel, fixtureMode),
+    [activeBoardViewModel, currentProjection, currentProjectionError, fixtureMode, packets]
   );
   const stageSummaryByStage = useMemo(
-    () => buildStageSummaryByStage(currentProjection, currentProjectionError),
-    [currentProjection, currentProjectionError]
+    () => buildStageSummaryByStage(currentProjection, currentProjectionError, fixtureMode),
+    [currentProjection, currentProjectionError, fixtureMode]
   );
   const visiblePackets = useMemo(
     () =>
@@ -751,7 +751,7 @@ function ProjectionTruthSummary({
   const projectionTooOld = projection ? isProjectionTooOld(projection) : false;
   const effectiveSourceLabel = projectionTooOld && projection?.sourceLabel === "live" ? "stale" : projection?.sourceLabel;
   const effectiveFreshnessState = projectionTooOld && projection?.freshnessState === "live" ? "stale" : projection?.freshnessState;
-  const explicitNonRuntimeSource = sourceState.kind !== "runtime" ? sourceState.kind : null;
+  const explicitNonRuntimeSource = cockpitNonRuntimeSourceKind(sourceState);
   const proofSourceLabel = projectionError ? "unavailable" : effectiveSourceLabel ?? "unavailable";
   const proofFreshnessState = projectionError ? "unavailable" : effectiveFreshnessState ?? "unavailable";
   const liveProofState = projectionLiveProofState(projection, proofSourceLabel, proofFreshnessState);
@@ -768,17 +768,17 @@ function ProjectionTruthSummary({
     ? "live"
     : projectionError
       ? "refresh unavailable"
+      : explicitNonRuntimeSource === "invalid"
+        ? "invalid"
+        : explicitNonRuntimeSource === "empty"
+          ? "empty"
+          : explicitNonRuntimeSource === "demo"
+            ? "demo"
       : freshnessState === "stale" || sourceLabel === "stale"
         ? "stale"
         : projection
           ? "limited"
-          : sourceState.kind === "empty"
-            ? "empty"
-            : sourceState.kind === "demo"
-              ? "demo"
-            : sourceState.kind === "invalid"
-              ? "invalid"
-              : "unavailable";
+          : "unavailable";
   const lastUpdated = projection?.sourceUpdatedAt ?? "not available";
   const activePacketCount = activeBoardViewModel ? String(activeBoardViewModel.summary.activePacketCount) : sourceState.kind === "empty" ? "0" : "unknown";
   const staleHistoryCount = activeBoardViewModel ? String(activeBoardViewModel.summary.staleHistoryCount) : sourceState.kind === "empty" ? "0" : "unknown";
@@ -876,11 +876,16 @@ function ProjectionTruthMetric({ label, value }: { label: string; value: string 
   );
 }
 
-function buildStageSummaryByStage(projection: PipelineDashboardProjectionV0 | null, projectionError: string | null) {
+function buildStageSummaryByStage(
+  projection: PipelineDashboardProjectionV0 | null,
+  projectionError: string | null,
+  sourceState: PipelineRuntimeSourceState
+) {
   const summaries = new Map<PipelineStage, CockpitStageSummary>();
   if (!projection) {
     return summaries;
   }
+  const explicitNonRuntimeSource = cockpitNonRuntimeSourceKind(sourceState);
   const projectionTooOld = isProjectionTooOld(projection);
   for (const summary of projection.stageSummaries) {
     const stage = summary.stage === "needs_approval" ? "human_gate" : summary.stage;
@@ -892,8 +897,9 @@ function buildStageSummaryByStage(projection: PipelineDashboardProjectionV0 | nu
       proofFreshnessState,
       Boolean(projectionError)
     );
-    const sourceLabel = displayLabels.sourceLabel;
-    const freshnessState = displayLabels.freshnessState;
+    const stageLabels = applyNonRuntimeStageLabels(displayLabels, explicitNonRuntimeSource);
+    const sourceLabel = stageLabels.sourceLabel;
+    const freshnessState = stageLabels.freshnessState;
     const emptyReason = normalizeStageEmptyReason(summary.emptyReason, sourceLabel, freshnessState);
     summaries.set(stage, {
       emptyReason,
@@ -910,8 +916,12 @@ function projectionToCockpitPackets(
   projection: PipelineDashboardProjectionV0 | null,
   runtimePackets: PipelineFixturePacket[],
   projectionError: string | null,
-  activeBoardViewModel: PipelineActiveBoardViewModel | null
+  activeBoardViewModel: PipelineActiveBoardViewModel | null,
+  sourceState: PipelineRuntimeSourceState
 ) {
+  if (sourceState.kind !== "runtime") {
+    return sourceState.kind === "demo" ? runtimePackets : [];
+  }
   if (!projection) {
     return runtimePackets;
   }
@@ -1074,6 +1084,33 @@ function projectionToCockpitPackets(
       activeBoardCard: activeBoardCardByPacketId.get(card.packetId),
     } satisfies ActiveBoardCockpitPacket;
   });
+}
+
+function cockpitNonRuntimeSourceKind(
+  sourceState: PipelineRuntimeSourceState
+): Extract<PipelineRuntimeSourceState["kind"], "demo" | "empty" | "invalid"> | null {
+  return sourceState.kind === "demo" || sourceState.kind === "empty" || sourceState.kind === "invalid"
+    ? sourceState.kind
+    : null;
+}
+
+function applyNonRuntimeStageLabels(
+  displayLabels: Pick<CockpitStageSummary, "sourceLabel" | "freshnessState">,
+  explicitNonRuntimeSource: ReturnType<typeof cockpitNonRuntimeSourceKind>
+) {
+  if (!explicitNonRuntimeSource) {
+    return displayLabels;
+  }
+  if (displayLabels.sourceLabel === "invalid" || displayLabels.freshnessState === "invalid") {
+    return {
+      sourceLabel: "invalid" as const,
+      freshnessState: "invalid" as const,
+    };
+  }
+  return {
+    sourceLabel: explicitNonRuntimeSource,
+    freshnessState: explicitNonRuntimeSource,
+  };
 }
 
 function projectionWorkPacketToDetailOnlyCockpitPacket(

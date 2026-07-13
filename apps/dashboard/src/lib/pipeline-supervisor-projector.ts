@@ -159,10 +159,11 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.loopStopStates) &&
     packet.lifecycleState !== null &&
     typeof packet.lifecycleState === "object" &&
-    isEnumValue(packet.lifecycleState.source, lifecycleSources) &&
-    isEnumValue(packet.lifecycleState.stage, pipelineStages) &&
-    isEnumValue(packet.lifecycleState.owner, workPacketOwners) &&
-    isEnumValue(packet.lifecycleState.status, workPacketStatuses);
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).source, lifecycleSources) &&
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).stage, pipelineStages) &&
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).owner, workPacketOwners) &&
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).status, workPacketStatuses) &&
+    reachableNestedWorkPacketFieldsAreSafe(packet);
 }
 
 function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
@@ -171,7 +172,7 @@ function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
   }
   const packet = value as Record<string, unknown>;
   if (
-    (typeof packet.packetId === "string" && packet.packetId.startsWith("fixture:")) ||
+    isSyntheticRuntimeIdentity(packet.packetId) ||
     "fixtureId" in packet ||
     "fixtureKind" in packet ||
     "fixtureLabel" in packet ||
@@ -222,7 +223,15 @@ function containsFixtureReference(value: unknown, visited: Set<object>): boolean
 }
 
 function isFixtureRefIdentity(value: unknown): boolean {
-  return typeof value === "string" && value.startsWith("fixture:");
+  return isSyntheticRuntimeIdentity(value);
+}
+
+function isSyntheticRuntimeIdentity(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("fixture:") || normalized.startsWith("demo:");
 }
 
 function isNullableString(value: unknown): boolean {
@@ -247,11 +256,17 @@ function isSourceRefV0(value: unknown): boolean {
   ) {
     return false;
   }
-  if (ref.accessState === "allowed") {
-    return true;
+  if (isSyntheticRuntimeIdentity(ref.refId) || isSyntheticRuntimeIdentity(ref.pathOrUrl)) {
+    return false;
   }
-  return (ref.pathOrUrl === null || typeof ref.pathOrUrl === "undefined") &&
-    ref.summaryOnly === true && typeof ref.blockedReason === "string";
+  if (ref.accessState === "allowed") {
+    return ref.blockedReason === null || typeof ref.blockedReason === "undefined";
+  }
+  return ref.summaryOnly === true &&
+    ref.canonical === false &&
+    (ref.pathOrUrl === null || typeof ref.pathOrUrl === "undefined") &&
+    typeof ref.blockedReason === "string" &&
+    ref.blockedReason.trim().length > 0;
 }
 
 function isEvidenceRefV0(value: unknown): boolean {
@@ -260,6 +275,8 @@ function isEvidenceRefV0(value: unknown): boolean {
   }
   const ref = value as Record<string, unknown>;
   return typeof ref.refId === "string" &&
+    !isSyntheticRuntimeIdentity(ref.refId) &&
+    !isSyntheticRuntimeIdentity(ref.artifactPath) &&
     isEnumValue(ref.evidenceType, evidenceRefTypes) &&
     typeof ref.label === "string" &&
     isNullableString(ref.artifactPath) &&
@@ -273,10 +290,83 @@ function isArtifactRefV0(value: unknown): boolean {
   }
   const ref = value as Record<string, unknown>;
   return typeof ref.refId === "string" &&
+    !isSyntheticRuntimeIdentity(ref.refId) &&
+    !isSyntheticRuntimeIdentity(ref.pathOrUrl) &&
     isEnumValue(ref.artifactType, artifactRefTypes) &&
     typeof ref.label === "string" &&
     isNullableString(ref.pathOrUrl) &&
     isEnumValue(ref.status, artifactRefStatuses);
+}
+
+function reachableNestedWorkPacketFieldsAreSafe(packet: Partial<WorkPacketV0View>): boolean {
+  const lifecycleState = packet.lifecycleState as Record<string, unknown>;
+  if (
+    lifecycleState.stage !== packet.currentStage ||
+    lifecycleState.owner !== packet.currentOwner ||
+    lifecycleState.status !== packet.status ||
+    lifecycleState.metadataOnly !== true ||
+    lifecycleState.sourceMutationAllowed !== false ||
+    lifecycleState.providerCallsAllowed !== false ||
+    lifecycleState.workerLaunchAllowed !== false ||
+    lifecycleState.githubMutationAllowed !== false ||
+    lifecycleState.cleanupAllowed !== false
+  ) {
+    return false;
+  }
+  return !hasFixtureMarkersInReachableNestedFields(packet);
+}
+
+function hasFixtureMarkersInReachableNestedFields(packet: Partial<WorkPacketV0View> | Record<string, unknown>): boolean {
+  const values = [
+    ...nestedRefValues(packet.lifecycleState, ["authoritativeRef", "derivedFromRefs", "transitionEventRefs", "latestTransitionEventRef", "attemptRef"]),
+    ...nestedRefValues(packet.candidateWork, ["candidateWorkPacketId", "sourceRefs", "acceptanceCriteriaRefs"]),
+    ...nestedRefValues(packet.workItem, ["workItemId", "sourceRefs", "evidenceRefs"]),
+    ...nestedRefValues(packet.taskPacket, ["packetId", "sourceRefs", "evidenceRefs"]),
+    ...nestedRefValues(packet.routingPreview, ["sourceRefs", "evidenceRefs"]),
+    ...nestedRefValues(packet.deliveryEvidence, ["evidenceRefs", "artifactRefs", "retainedEvidence"]),
+    ...nestedRefValues(packet.learnOutcome, ["evidenceRefs", "sourceRefs"]),
+    ...nestedRefValues(packet.learnRefill, ["evidenceRefs", "sourceRefs", "memoryProposalRefs"]),
+    ...nestedRefValues(packet.alphaMemorySourceStatus, ["sourceRefs", "evidenceRefs"]),
+    ...nestedRefValues(packet.gateStateValidation, ["refId"]),
+    ...nestedArrayRefValues(packet.executionAttempts, ["attemptId", "workItemId", "leaseId", "routeDecisionId", "evidenceRefs", "artifactRefs"]),
+    ...nestedArrayRefValues(packet.transitionEvents, ["eventId", "evidenceRefs", "sourceEventId"]),
+    ...nestedArrayRefValues(packet.humanGateActions, ["actionId", "expectedActionId", "actualActionId", "evidenceRefs"]),
+    ...nestedArrayRefValues(packet.humanGateActionRequests, ["requestId", "actionId", "targetId", "evidenceRefs"]),
+    ...nestedArrayRefValues(packet.laneCards, ["laneId", "evidenceRefs", "artifactRefs"]),
+    ...nestedArrayRefValues(packet.memoryProposals, ["proposalId", "packetId", "sourceRefs", "evidenceRefs", "memoryProposalRefs"]),
+    ...nestedArrayRefValues(packet.loopStopStates, ["stopStateId", "evidenceRefs"]),
+    ...nestedArrayRefValues(packet.reviewSummaries, ["evidenceRefs", "artifactRefs"]),
+    ...nestedArrayRefValues(packet.recoveryActions, ["actionId", "evidenceRefs"]),
+  ];
+  return values.some(isSyntheticRuntimeIdentity);
+}
+
+function nestedArrayRefValues(value: unknown, keys: readonly string[]): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => nestedRefValues(item, keys));
+}
+
+function nestedRefValues(value: unknown, keys: readonly string[]): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  return keys.flatMap((key) => refStrings(record[key]));
+}
+
+function refStrings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(refStrings);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap(refStrings);
+  }
+  return [];
 }
 
 function isEnumValue(value: unknown, allowedValues: ReadonlySet<string>): value is string {
