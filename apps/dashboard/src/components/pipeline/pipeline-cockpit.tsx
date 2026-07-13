@@ -10,7 +10,7 @@ import type {
   PipelineOperationalActionRequestV0,
   PipelineStage,
 } from "@kendall/contracts";
-import type { PipelineFixturePacket } from "../../lib/pipeline-fixtures";
+import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
 import {
   projectionDisplayLabels,
   projectionHasRenderableBackendPackets,
@@ -40,6 +40,9 @@ import {
   applyPipelineOperationalAction,
   requestPipelineOperationalApproval,
 } from "../../lib/pipeline-packet-loader";
+import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
+
+type PipelineFixturePacket = PipelineDashboardPacket;
 
 const pipelineStages: PipelineStage[] = [
   "capture",
@@ -83,11 +86,11 @@ type ConnectorPath = {
 };
 
 type CockpitStageSummary = {
-  emptyReason: PipelineDashboardProjectionV0["stageSummaries"][number]["emptyReason"] | "fixture_fallback";
-  freshnessState: PipelineDashboardProjectionV0["stageSummaries"][number]["freshnessState"] | "fixture";
+  emptyReason: PipelineDashboardProjectionV0["stageSummaries"][number]["emptyReason"];
+  freshnessState: PipelineDashboardProjectionV0["stageSummaries"][number]["freshnessState"] | "demo" | "invalid";
   label: string;
   packetCount: number;
-  sourceLabel: PipelineDashboardProjectionV0["stageSummaries"][number]["sourceLabel"] | "fixture";
+  sourceLabel: PipelineDashboardProjectionV0["stageSummaries"][number]["sourceLabel"] | "demo" | "invalid";
 };
 
 type ProjectionSelectedPacketDetail = PipelineDashboardProjectionV0["selectedPacketDetails"][number];
@@ -103,7 +106,7 @@ export function PipelineCockpit({
   projectionError,
   selectedPacket,
 }: {
-  fixtureMode: { label: string; summary: string; matrixRows: number; fixtureCatalogEntries: number };
+  fixtureMode: PipelineRuntimeSourceState;
   managerExecutionLane?: PipelineManagerExecutionLaneState | null;
   packets: PipelineFixturePacket[];
   projection?: PipelineDashboardProjectionV0 | null;
@@ -224,6 +227,10 @@ export function PipelineCockpit({
     );
   }, []);
   const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
+    if (fixtureMode.kind !== "runtime") {
+      setActionFeedback("Operational actions are unavailable outside supervisor runtime mode.");
+      return;
+    }
     const gatedActionIds = ["mark_tested", "request_rework", "requeue", "reject"] as const satisfies readonly PipelineGatedOperationalActionIdV0[];
     if (action.state !== "available" || !gatedActionIds.includes(action.actionId as (typeof gatedActionIds)[number])) {
       return;
@@ -271,7 +278,7 @@ export function PipelineCockpit({
     } catch (error) {
       setActionFeedback(error instanceof Error ? error.message : "Operational action failed.");
     }
-  }, [currentProjection]);
+  }, [fixtureMode.kind]);
   const registerPacketButton = useCallback((packetId: string, node: HTMLButtonElement | null) => {
     if (node) {
       packetButtonRefs.current.set(packetId, node);
@@ -615,7 +622,7 @@ export function PipelineCockpit({
             <OperationalStrip packets={dashboardPackets} usageVisibility={usageVisibility} />
             {currentProjectionError ? (
               <p className="mb-2 rounded-[0.375rem] border border-[color-mix(in_srgb,var(--blocked)_38%,var(--line))] bg-[color-mix(in_srgb,var(--blocked)_10%,transparent)] p-2 text-sm text-[var(--foreground)]">
-                Backend projection refresh unavailable. The packet board below uses the last-known backend projection when available; otherwise it is labeled fixture fallback only and does not prove live backend work.
+                Backend projection refresh unavailable. No runtime packet fallback is shown; inspect supervisor state before trusting the board.
               </p>
             ) : null}
             <MissionControlStrip
@@ -678,6 +685,7 @@ export function PipelineCockpit({
                         onSelectPacket={handleSelectPacket}
                         packets={visibleStagePackets}
                         projectionAvailable={Boolean(currentProjection)}
+                        sourceKind={fixtureMode.kind}
                         registerPacketButton={registerPacketButton}
                         registerStageAnchor={registerStageAnchor}
                         registerStageButton={registerStageButton}
@@ -693,7 +701,7 @@ export function PipelineCockpit({
                   })}
                 </div>
               </section>
-              {selectedMapPacket?.fixtureId.startsWith("projection:") && !selectedProjectionDetail ? (
+              {selectedMapPacket && (selectedMapPacket.fixtureId ?? "").startsWith("projection:") && !selectedProjectionDetail ? (
                 <ProjectionDetailUnavailableInspection onClose={closeSelectedItem} packet={selectedMapPacket} />
               ) : selectedMapPacket ? (
                 <PacketInspection
@@ -753,7 +761,7 @@ function ProjectionTruthSummary({
       ? "refresh unavailable"
       : displayLabels.freshnessState === "stale" || sourceLabel === "stale"
         ? "stale"
-        : projection ? "limited" : "fallback only";
+        : projection ? "limited" : "unavailable";
   const lastUpdated = projection?.sourceUpdatedAt ?? "not available";
   const activePacketCount = activeBoardViewModel ? String(activeBoardViewModel.summary.activePacketCount) : "unknown";
   const staleHistoryCount = activeBoardViewModel ? String(activeBoardViewModel.summary.staleHistoryCount) : "unknown";
@@ -761,8 +769,8 @@ function ProjectionTruthSummary({
   const dispatchState = activeBoardViewModel?.summary.dispatchAffectingManagerState;
   const backpressure = activeBoardViewModel?.summary.backpressure ?? null;
   const recoveryText = projectionError
-    ? `Projection fetch failed: ${projectionError}. Fixture packets remain visible only as labeled fallback and cannot prove live work.`
-    : projection?.truthSummary.summary ?? "Backend projection unavailable. Fixture packets remain visible only as labeled fallback and cannot prove live work.";
+    ? `Projection fetch failed: ${projectionError}. No runtime packets are shown until supervisor state is readable.`
+    : projection?.truthSummary.summary ?? "Backend projection unavailable. No runtime packets are shown until supervisor state is readable.";
 
   return (
     <section
@@ -880,17 +888,18 @@ function buildStageSummaryByStage(projection: PipelineDashboardProjectionV0 | nu
 
 function projectionToCockpitPackets(
   projection: PipelineDashboardProjectionV0 | null,
-  fallbackPackets: PipelineFixturePacket[],
+  runtimePackets: PipelineFixturePacket[],
   projectionError: string | null,
   activeBoardViewModel: PipelineActiveBoardViewModel | null
 ) {
   if (!projection) {
-    return fallbackPackets;
+    return runtimePackets;
   }
   if (!projectionHasRenderableBackendPackets(projection) || !activeBoardViewModel) {
     return [];
   }
   const activeBoardCards = activeBoardViewModel.activeBoard.stageLanes.flatMap((lane) => lane.packetCards);
+  const runtimePacketIds = new Set(runtimePackets.map((packet) => packet.packetId));
   const activeBoardCardByPacketId = new Map(activeBoardCards.map((card) => [card.packetId, card]));
   const projectionPacketById = new Map(projection.workPackets.map((packet) => [packet.packetId, packet]));
   const selectedDetailByPacketId = new Map(projection.selectedPacketDetails.map((detail) => [detail.packetId, detail]));
@@ -907,6 +916,9 @@ function projectionToCockpitPackets(
   const effectiveSource = effectiveLabels.sourceLabel;
   const projectionIsLive = projectionLiveProof.canSatisfyLiveProof;
   return activeBoardCards.flatMap((card) => {
+    if (!runtimePacketIds.has(card.packetId)) {
+      return [];
+    }
     const packet = projectionPacketById.get(card.packetId);
     if (!packet) {
       return [];
@@ -1008,7 +1020,8 @@ function projectionToCockpitPackets(
       recoveryActions: [],
       loopStopStates: [],
       fixtureId: `projection:${packet.packetId}`,
-      fixtureKind: "future-real-source" as const,
+      sourceKind: "projection" as const,
+      sourceId: packet.packetId,
       fixtureLabel: packetIsLive
         ? "backend projection: packet truth live"
         : `backend projection: packet truth ${packet.truthLabel}; dashboard proof ${packetProofLabel}`,
@@ -1128,7 +1141,8 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     recoveryActions: [],
     loopStopStates: [],
     fixtureId: `projection-detail:${packet.packetId}`,
-    fixtureKind: "future-real-source" as const,
+    sourceKind: "projection" as const,
+    sourceId: packet.packetId,
     fixtureLabel: `backend projection detail-only: packet truth ${packet.truthLabel}`,
     summary: packet.blocker ?? packet.nextAction ?? projection?.truthSummary.summary ?? "Detail-only backend projection packet.",
     nextAction: packet.nextAction ?? packet.blocker ?? "Inspect packet detail.",
@@ -2057,6 +2071,7 @@ function RouteStation({
   onSelectStage,
   packets,
   projectionAvailable,
+  sourceKind,
   registerPacketButton,
   registerStageAnchor,
   registerStageButton,
@@ -2074,6 +2089,7 @@ function RouteStation({
   onSelectStage: () => void;
   packets: PipelineFixturePacket[];
   projectionAvailable: boolean;
+  sourceKind: PipelineRuntimeSourceState["kind"];
   registerPacketButton: (packetId: string, node: HTMLButtonElement | null) => void;
   registerStageAnchor: (stage: PipelineStage, node: HTMLSpanElement | null) => void;
   registerStageButton: (stage: PipelineStage, node: HTMLButtonElement | null) => void;
@@ -2091,9 +2107,9 @@ function RouteStation({
   const stageCountLabel = stageSummary === null && projectionAvailable
     ? "unknown packets"
     : `${stageKnownTotalCount} ${stageKnownTotalCount === 1 ? "packet" : "packets"}`;
-  const stageSourceLabel = stageSummary?.sourceLabel ?? (projectionAvailable ? "unknown" : "fixture");
-  const stageFreshnessLabel = stageSummary?.freshnessState ?? (projectionAvailable ? "unknown" : "fixture");
-  const stageEmptyReason = stageSummary?.emptyReason ?? (stageKnownTotalCount === 0 ? (projectionAvailable ? "unknown" : "fixture_fallback") : null);
+  const stageSourceLabel = stageSummary?.sourceLabel ?? (projectionAvailable ? "unknown" : sourceKind === "demo" ? "demo" : sourceKind === "invalid" ? "invalid" : "unavailable");
+  const stageFreshnessLabel = stageSummary?.freshnessState ?? (projectionAvailable ? "unknown" : sourceKind === "demo" ? "demo" : sourceKind === "invalid" ? "invalid" : "unavailable");
+  const stageEmptyReason = stageSummary?.emptyReason ?? (stageKnownTotalCount === 0 ? (projectionAvailable ? "unknown" : "backend_unavailable") : null);
   const stageEmptyState = stageHealthStateLabel(stageEmptyReason, stageSourceLabel, stageFreshnessLabel, stageKnownTotalCount);
   const stageNextAction = stageNextActionLabel(stageEmptyReason, stageSourceLabel, stageFreshnessLabel, stageRenderedCount, stageKnownTotalCount);
   const stageHealthSummary = searchActive && stageRenderedCount === 0 && totalPacketCount > 0
@@ -2216,9 +2232,9 @@ function PacketMiniCard({
       {packet.activeBoardCard?.readyToTest ? (
         <span aria-label={`Ready to test: ${packet.title}`} className="pipeline-mini-packet-ready">Test</span>
       ) : null}
-      {packet.fixtureId.startsWith("projection:") || packet.activeBoardCard ? null : (
+      {packet.sourceKind === "demo-fixture" ? (
         <span className="pipeline-mini-packet-proof">non-live fixture</span>
-      )}
+      ) : null}
       {packet.activeBoardCard?.attention || packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate" ? (
         packet.activeBoardCard?.attention ? (
           <span aria-label="Action needed packet" className="pipeline-mini-packet-alert pipeline-mini-packet-action-needed">
@@ -2321,7 +2337,7 @@ function DiagnosticsPanel({
   projection,
   projectionError,
 }: {
-  fixtureMode: { label: string; summary: string; matrixRows: number; fixtureCatalogEntries: number };
+  fixtureMode: PipelineRuntimeSourceState;
   items: PipelineDiagnosticsItem[];
   managerExecutionLane: PipelineManagerExecutionLaneState | null;
   onClose: () => void;
@@ -2479,7 +2495,7 @@ function PacketInspection({
   useEffect(() => {
     panelRef.current?.focus();
   }, [packet.packetId]);
-  const projectionBackedPacket = packet.fixtureId.startsWith("projection:") || packet.fixtureId.startsWith("projection-detail:");
+  const projectionBackedPacket = (packet.fixtureId ?? "").startsWith("projection:") || (packet.fixtureId ?? "").startsWith("projection-detail:");
   const projectionRefreshLabel = projectionError
     ? `refresh unavailable; last-known ${packet.freshnessLabel}`
     : packet.freshnessLabel;
@@ -2529,9 +2545,9 @@ function PacketInspection({
           Close
         </button>
       </div>
-      {projectionBackedPacket ? (
+      {projectionBackedPacket || packet.sourceKind === "supervisor-runtime" ? (
         <p className="mt-2 rounded-[0.375rem] border border-[var(--line)] px-3 py-1.5 text-sm text-[var(--muted)]">
-          projection detail from backend selectedPacketDetails
+          {projectionBackedPacket ? "projection detail from backend selectedPacketDetails" : "persisted supervisor runtime packet; read-only dashboard projection"}
         </p>
       ) : (
         <p className="mt-2 rounded-[0.375rem] border border-[var(--line)] px-3 py-1.5 text-sm text-[var(--muted)]">
@@ -2633,7 +2649,7 @@ function PacketInspection({
       {!projectionBackedPacket ? (
         <Link
           className="mt-3 inline-flex rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-1.5 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-          href={`/pipeline/packets/${encodeURIComponent(packet.packetId)}`}
+          href={`${packet.sourceKind === "demo-fixture" ? "/pipeline/demo/packets" : "/pipeline/packets"}/${encodeURIComponent(packet.packetId)}`}
         >
           Open full packet
         </Link>
@@ -3124,7 +3140,7 @@ function packetCardTruthLabel(packet: ActiveBoardCockpitPacket) {
   if (packet.activeBoardCard) {
     return packet.activeBoardCard.truthLabel ? `truth ${packet.activeBoardCard.truthLabel}` : "truth live";
   }
-  const truth = packet.fixtureId.startsWith("projection:")
+  const truth = (packet.fixtureId ?? "").startsWith("projection:")
     ? packet.fixtureLabel.replace(/^backend projection:\s*/, "")
     : packet.sourceTrustState;
   return `truth ${truth}; source ${packet.freshnessLabel}`;
@@ -3268,8 +3284,11 @@ function stageHealthStateLabel(
     if (sourceLabel === "stale" || freshnessState === "stale") {
       return "projection stale";
     }
-    if (sourceLabel === "fixture") {
-      return "fixture fallback";
+    if (sourceLabel === "demo") {
+      return "demo fixtures";
+    }
+    if (sourceLabel === "invalid") {
+      return "invalid supervisor state";
     }
     if (sourceLabel === "simulated") {
       return "simulated";
@@ -3305,8 +3324,6 @@ function stageHealthStateLabel(
       return "backend unavailable";
     case "projection_stale":
       return "projection stale";
-    case "fixture_fallback":
-      return "fixture fallback";
     case "unknown":
     case null:
     default:
@@ -3327,8 +3344,11 @@ function stageNextActionLabel(
   renderedPacketCount: number,
   totalPacketCount: number
 ) {
-  if (sourceLabel === "fixture" || freshnessState === "fixture" || reason === "fixture_fallback") {
-    return "Fixture fallback cannot prove live work.";
+  if (sourceLabel === "demo" || freshnessState === "demo") {
+    return "Demo fixtures cannot prove live work.";
+  }
+  if (sourceLabel === "invalid" || freshnessState === "invalid") {
+    return "Inspect invalid supervisor state before trusting this stage.";
   }
   if (renderedPacketCount > 0) {
     return "Open a packet for details.";
@@ -3386,6 +3406,15 @@ function plainNextStageLabel(packet: PipelineFixturePacket) {
 }
 
 function originLabel(packet: PipelineFixturePacket) {
+  if (packet.sourceKind === "supervisor-runtime") {
+    return "Supervisor runtime";
+  }
+  if (packet.sourceKind === "projection") {
+    return "Backend projection";
+  }
+  if (packet.sourceKind === "demo-fixture") {
+    return "Demo fixture";
+  }
   if (packet.sourceTrustStates.includes("stale")) {
     return "Research or source review";
   }
@@ -3399,10 +3428,16 @@ function originLabel(packet: PipelineFixturePacket) {
 }
 
 function arrivalLabel(packet: PipelineFixturePacket) {
-  if (packet.fixtureId.startsWith("projection:")) {
+  if (packet.sourceKind === "supervisor-runtime") {
+    return `From persisted supervisor state (${packet.freshnessLabel})`;
+  }
+  if (packet.sourceKind === "demo-fixture") {
+    return "From explicit demo mode";
+  }
+  if ((packet.fixtureId ?? "").startsWith("projection:")) {
     return `From backend projection metadata (${packet.freshnessLabel})`;
   }
-  return "From the current fixture state";
+  return "From dashboard source metadata";
 }
 
 function blockerLabel(packet: PipelineFixturePacket) {

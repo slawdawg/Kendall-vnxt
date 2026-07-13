@@ -404,7 +404,7 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
   assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
-  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens fixture-backed pipeline cockpit without live execution framing/);
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens isolated demo pipeline cockpit without live execution framing/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:windows"], /--project windows-11-chromium/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /--project ipad-pro-gen-2-safari-ios-26/);
@@ -630,7 +630,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
     "export function projectionIsLiveForProof"
   );
 
-  assert.match(packetProjectionMapper, /if \(!projection\)[\s\S]*return fallbackPackets;/);
+  assert.match(packetProjectionMapper, /if \(!projection\)[\s\S]*return runtimePackets;/);
   assert.match(packetProjectionMapper, /projectionHasRenderableBackendPackets\(projection\)/);
   assert.match(packetProjectionMapper, /refreshUnavailable \? "unavailable" : proofSource/);
   assert.match(packetProjectionMapper, /refreshUnavailable \? "unavailable" : proofFreshness/);
@@ -726,12 +726,14 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.equal(projectionLiveProofLabel(emptyProof), "not live proof: backend empty");
   const emptyProjectionHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: {
-      label: "fixture fallback",
-      summary: "fixture fallback available for tests",
+      kind: "empty",
+      label: "Supervisor empty",
+      summary: "Supervisor is reachable but has no persisted WorkPacketV0 rows.",
       matrixRows: 0,
-      fixtureCatalogEntries: 1,
+      fixtureCatalogEntries: 0,
+      canSatisfyLiveProof: false,
     },
-    packets: [{ packetId: "fallback-fixture", title: "Fallback Fixture Should Not Render" }],
+    packets: [{ packetId: "unexpected-runtime-packet", title: "Unexpected Runtime Packet" }],
     projection: emptyProjection,
     projectionError: null,
     selectedPacket: null,
@@ -739,7 +741,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.doesNotMatch(emptyProjectionHtml, /not live proof: backend empty/);
   assert.doesNotMatch(emptyProjectionHtml, /live backend proof/);
   assert.match(emptyProjectionHtml, /Open Diagnostics only when you need debug details/);
-  assert.doesNotMatch(emptyProjectionHtml, /Fallback Fixture Should Not Render/);
+  assert.doesNotMatch(emptyProjectionHtml, /Unexpected Runtime Packet/);
 
   const negativeCases = [
     {
@@ -878,14 +880,14 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
         backendReachability: { state: "unavailable", reason: "backend_unavailable" },
         fixtureMode: {
           enabled: true,
-          reason: "development fixture fallback",
+          reason: "development demo mode",
           allowedForEnvironment: true,
         },
         truthSummary: {
           label: "unavailable",
           backendUnavailable: true,
           emptyReason: "backend_unavailable",
-          summary: "Unavailable projection with fixture fallback enabled.",
+          summary: "Unavailable projection with explicit demo mode enabled.",
         },
       }),
       sourceLabel: "unavailable",
@@ -922,7 +924,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   );
 });
 
-test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fallback", async () => {
+test("/pipeline route uses supervisor WorkPacketV0 projections and isolates explicit demo fixtures", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
   const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
@@ -1056,6 +1058,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
   assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, packets, currentProjectionError, activeBoardViewModel\)/);
+  assert.match(cockpitSource, /runtimePacketIds = new Set\(runtimePackets\.map/);
+  assert.match(cockpitSource, /!runtimePacketIds\.has\(card\.packetId\)/);
   assert.match(cockpitSource, /selectedDetailByPacketId = new Map\(projection\.selectedPacketDetails\.map/);
   assert.match(cockpitSource, /selectedDetailByPacketId\.get\(packet\.packetId\)/);
   assert.match(cockpitSource, /projectionDetailSourceRefs = detail\?\.sourceRefs \?\? \[\]/);
@@ -1066,7 +1070,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /movementEventRefs = detail[\s\S]{0,80}\? projectionDetailMovementRefs[\s\S]{0,80}: lifecycleEvidenceRefs/);
   assert.match(cockpitSource, /detail\?\.latestTransitionEventRef \?\? movementEventRefs\.at\(-1\) \?\? null/);
   assert.match(cockpitSource, /lastEvent: detail\?\.latestMovementSummary \?\? `projection updated \$\{packet\.updatedAt\}`/);
-  assert.match(cockpitSource, /packet\.fixtureId\.startsWith\("projection:"\) \|\| packet\.fixtureId\.startsWith\("projection-detail:"\)/);
+  assert.match(cockpitSource, /selectedMapPacket\.fixtureId \?\? ""\)\.startsWith\("projection:"\)/);
   assert.doesNotMatch(cockpitSource, /latestTransitionEventRef: lifecycleEvidenceRefs\.at\(-1\) \?\? null/);
   assert.match(activeBoardViewModelSource, /derivePacketPlacement/);
   assert.match(activeBoardViewModelSource, /derivePacketActionability/);
@@ -1134,7 +1138,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /unknown/);
   assert.match(cockpitSource, /backend unavailable/);
   assert.match(cockpitSource, /projection stale/);
-  assert.match(cockpitSource, /fixture fallback/);
+  assert.doesNotMatch(cockpitSource, /fixture fallback/);
   assert.match(cockpitSource, /Stage source/);
   assert.match(cockpitSource, /Stage freshness/);
   assert.match(cockpitSource, /Stage count/);
@@ -1144,7 +1148,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /stageStationRefs\.current\.forEach\(\(node\) => observer\.observe\(node\)\)/);
   assert.match(cockpitSource, /className="pipeline-route-anchor"/);
   assert.doesNotMatch(cockpitSource, /\[updateConnectorPaths, visiblePackets\.length\]/);
-  assert.match(cockpitSource, /fixtureKind: "future-real-source"/);
+  assert.match(cockpitSource, /sourceKind: "projection"/);
+  assert.doesNotMatch(cockpitSource, /fixtureKind: "future-real-source"/);
   assert.match(cockpitSource, /fixtureLabel:\s+packetIsLive\s+\?\s+"backend projection: packet truth live"/);
   assert.match(cockpitSource, /: `backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}`/);
   assert.match(cockpitSource, /managerExecutionLane\?\.operatorAttentionRequired \? <ManagerAttentionSummary lane=\{managerExecutionLane\} \/> : null/);
@@ -1154,9 +1159,9 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /Backend/);
   assert.doesNotMatch(cockpitSource, /ProjectionTruthChip label="Fixture mode"/);
   assert.match(cockpitSource, /refresh unavailable; last-known/);
-  assert.match(cockpitSource, /last-known backend projection/);
+  assert.match(cockpitSource, /last-known \$\{packet\.freshnessLabel\}/);
   assert.match(cockpitSource, /Backend projection refresh unavailable/);
-  assert.match(cockpitSource, /fixture fallback only and does not prove live backend work/);
+  assert.doesNotMatch(cockpitSource, /fixture fallback only and does not prove live backend work/);
   assert.match(cockpitSource, /isProjectionTooOld/);
   assert.doesNotMatch(cockpitSource, /projectionRefreshAttemptAt|projectionRequestSequenceRef|requestSequence !== projectionRequestSequenceRef\.current/);
   assert.match(pipelinePacketLoaderSource, /loadPipelineDashboardProjection/);
@@ -1197,7 +1202,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /sourceLabel === "live" && freshnessState === "live"/);
   assert.match(cockpitSource, /arrivalLabel\(packet\)/);
   assert.match(cockpitSource, /From backend projection metadata/);
-  assert.match(cockpitSource, /packet\.fixtureId\.startsWith\("projection:"\)/);
+  assert.match(cockpitSource, /packet\.fixtureId \?\? ""\)\.startsWith\("projection:"\)/);
   assert.match(cockpitSource, /selectedProjectionDetail/);
   assert.match(cockpitSource, /currentProjection\?\.selectedPacketDetails\.find/);
   assert.match(cockpitSource, /projectionDetailSourceRefs/);
@@ -1211,7 +1216,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /Selected packet is no longer present in the latest projection/);
   assert.match(cockpitSource, /ProjectionDetailUnavailableInspection/);
   assert.match(cockpitSource, /Selected detail unavailable in latest projection/);
-  assert.match(cockpitSource, /selectedMapPacket\?\.fixtureId\.startsWith\("projection:"\) && !selectedProjectionDetail/);
+  assert.match(cockpitSource, /selectedMapPacket\.fixtureId \?\? ""\)\.startsWith\("projection:"\) && !selectedProjectionDetail/);
   assert.match(cockpitSource, /projectionDetailStageLabel\(projectionDetail, packet\)/);
   assert.match(cockpitSource, /projectionDetailTruthLabel\(projectionDetail, packet, projectionRefreshLabel\)/);
   assert.match(cockpitSource, /truth \$\{detail\.truthLabel\}; source \$\{freshnessLabel\}/);
@@ -1312,7 +1317,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(packetDetailRouteSource, /PacketDetailPage/);
   assert.match(packetDetailRouteSource, /<Shell\b[^>]*compactHeader[^>]*realtimeRefresh=\{false\}[^>]*wide/);
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
-  assert.match(packetDetailRouteSource, /generateStaticParams/);
+  assert.doesNotMatch(packetDetailRouteSource, /generateStaticParams/);
   assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
   assert.match(supervisorLibSource, /Malformed response for \$\{path\}/);
   assert.match(supervisorLibSource, /Invalid projection payload/);
@@ -1971,8 +1976,10 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     /export interface Pipeline(Read)?Packet(V0|View)?\s*\{/,
     "dashboard fixtures should not define a parallel dashboard model"
   );
-  assert.match(cockpitSource, /import type \{ PipelineFixturePacket \}/);
-  assert.match(packetDetailSource, /import type \{ PipelineFixturePacket, PipelineGoldenPathSnapshot, SourceBoundaryDeclarationV0 \}/);
+  assert.match(cockpitSource, /import type \{ PipelineDashboardPacket \} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
+  assert.match(cockpitSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
+  assert.match(packetDetailSource, /import type \{ PipelineDashboardPacket \} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
+  assert.match(packetDetailSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
   assert.match(fixtureSource, /type: "approve_execution"/);
   assert.match(fixtureSource, /type: "approve_delivery"/);
   assert.match(fixtureSource, /type: "request_clarification"/);
@@ -2088,7 +2095,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /onSelectStage/);
   assert.match(cockpitSource, /aria-label=\{packet\.activeBoardCard\?\.attention/);
   assert.match(cockpitSource, /: `Inspect packet: \$\{packet\.title\}`/);
-  assert.match(pipelineComponentSource, /\/pipeline\/packets\/\$\{encodeURIComponent\(packet\.packetId\)\}/);
+  assert.match(pipelineComponentSource, /packet\.sourceKind === "demo-fixture" \? "\/pipeline\/demo\/packets" : "\/pipeline\/packets"/);
+  assert.match(pipelineComponentSource, /encodeURIComponent\(packet\.packetId\)/);
   assert.match(packetDetailRouteSource, /decodeURIComponent\(packetId\)/);
   assert.match(pipelineComponentSource, /onSelectPacket/);
   assert.match(pipelineComponentSource, /Packet search/);
@@ -2195,9 +2203,9 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(globalsSource, /\.pipeline-mini-packet-proof/);
   assert.match(cockpitSource, /non-live fixture/);
   assert.match(cockpitSource, /Fixture\/non-live packet; cannot satisfy live proof/);
-  assert.match(packetDetailSource, /Fixture\/non-live packet; cannot satisfy live proof/);
+  assert.match(packetDetailSource, /Demo fixture; cannot satisfy live proof/);
   assert.match(packetDetailSource, /non-live fixture/);
-  assert.match(cockpitSource, /sourceLabel === "fixture" \|\| freshnessState === "fixture" \|\| reason === "fixture_fallback"/);
+  assert.doesNotMatch(cockpitSource, /sourceLabel === "fixture" \|\| freshnessState === "fixture" \|\| reason === "fixture_fallback"/);
   assert.match(cockpitSource, /stageCode/);
   assert.match(cockpitSource, /globalUsageItems/);
   assert.match(cockpitSource, /providerKey:\s*"codex"/);

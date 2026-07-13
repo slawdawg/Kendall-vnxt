@@ -368,7 +368,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         dashboard_base_url = f"http://127.0.0.1:{dashboard_port}"
         pipeline_html = _text_get(f"{dashboard_base_url}/pipeline")
         assert "gate 4 real dashboard process proof" in pipeline_html
-        assert "Supervisor packets" in pipeline_html
+        assert "Supervisor runtime" in pipeline_html
         assert quote(packet_id, safe="") in pipeline_html
 
         detail_html = _text_get(
@@ -383,7 +383,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         for evidence_ref in authoritative_evidence_refs:
             assert evidence_ref in pipeline_html
             assert evidence_ref in detail_html
-        assert "supervisor WorkPacketV0 projection" in detail_html
+        assert "Source: Supervisor runtime" in detail_html
         assert "Fixture/non-live packet" not in detail_html
 
         _stop_process(dashboard_process)
@@ -431,14 +431,14 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         restarted_detail_html = _text_get(
             f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
         )
-        assert "Supervisor packets" in restarted_pipeline_html
+        assert "Supervisor runtime" in restarted_pipeline_html
         assert quote(packet_id, safe="") in restarted_pipeline_html
         for html in (restarted_pipeline_html, restarted_detail_html):
             assert "gate 4 real dashboard process proof" in html
             assert "capture" in html and "waiting" in html
             assert packet_id in html
             assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in html
-            assert "supervisor WorkPacketV0 projection" in html
+            assert "Supervisor runtime" in html
             assert "Fixture/non-live packet" not in html
             for evidence_ref in authoritative_evidence_refs:
                 assert evidence_ref in html

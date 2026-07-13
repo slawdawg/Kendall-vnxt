@@ -34,7 +34,7 @@ test("pipeline implementation readiness evidence covers every required category"
         item.status === "satisfied" &&
         Array.isArray(item.visualProofs) &&
         item.visualProofs.includes("test-results/pipeline-refined-1440.png") &&
-        item.browserProofCommand === "pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep \"opens fixture-backed pipeline cockpit without live execution framing\""
+        item.browserProofCommand === "pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep \"opens isolated demo pipeline cockpit without live execution framing\""
     ),
     "refined UI readiness should be satisfied only with screenshot/browser proof metadata"
   );
