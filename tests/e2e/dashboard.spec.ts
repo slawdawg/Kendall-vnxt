@@ -735,8 +735,8 @@ test.describe("dashboard workflow coverage", () => {
       const staleMutation = ageSupervisorPipelinePacket(packetId, snapshot);
       await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(staleMutation.mutated);
       await page.goto("/pipeline");
-      await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
-      await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Inspect packet: Story 4.6 stale supervisor packet" })).toHaveCount(0);
+      await expect(page.getByText(/No stale packets are shown as live work/)).toBeVisible();
       const staleBody = await page.locator("body").innerText();
       expect(staleBody).toMatch(/stale|timestamps|invalid supervisor state/i);
       for (const fixtureSentinel of [
