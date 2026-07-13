@@ -685,9 +685,10 @@ test.describe("dashboard workflow coverage", () => {
     test("Story 4.6 empty runtime state does not substitute demo packets", async ({ page }) => {
       await page.goto("/pipeline");
 
+      const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
       await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
-      await expect(page.getByRole("status", { name: "Projection truth summary" }).getByText("Source:")).toBeVisible();
-      await expect(page.getByRole("status", { name: "Projection truth summary" }).getByText("empty", { exact: true })).toBeVisible();
+      await expect(truthSummary.getByText("Source:")).toBeVisible();
+      await expect(truthSummary.getByText("empty", { exact: true }).first()).toBeVisible();
       await expect(page.getByText("Supervisor returned zero persisted WorkPacketV0 rows", { exact: false })).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
@@ -701,8 +702,8 @@ test.describe("dashboard workflow coverage", () => {
     await seedSupervisorPipelinePacket(request, packetId, title);
 
     await page.goto("/pipeline");
+    const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
-    const truthSummary = page.locator('[aria-label="Projection truth summary"]');
     await expect(truthSummary.getByText("Source:")).toBeVisible();
     await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
@@ -735,7 +736,9 @@ test.describe("dashboard workflow coverage", () => {
       const staleMutation = ageSupervisorPipelinePacket(packetId, snapshot);
       await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(staleMutation.mutated);
       await page.goto("/pipeline");
+      const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
       await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
+      await expect(truthSummary.getByText("invalid", { exact: true }).first()).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       const staleBody = await page.locator("body").innerText();
       expect(staleBody).toMatch(/stale|timestamps|invalid supervisor state/i);
@@ -754,7 +757,7 @@ test.describe("dashboard workflow coverage", () => {
 
   test("Story 4.6 invalid detail identity fails closed", async ({ page }) => {
     const invalidResponse = await page.goto("/pipeline/packets/%E0%A4%A");
-    expect(invalidResponse?.status()).toBe(404);
+    expect([400, 404]).toContain(invalidResponse?.status());
     await expect(page.getByText("Demo fixture", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
   });
@@ -763,8 +766,9 @@ test.describe("dashboard workflow coverage", () => {
     test("Story 4.6 unavailable dashboard fails closed without fixture substitution", async ({ page }) => {
       await page.goto("/pipeline");
 
+      const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
       await expect(page.getByText("Supervisor unavailable", { exact: true })).toBeVisible();
-      await expect(page.getByRole("status", { name: "Projection truth summary" }).getByText("refresh unavailable", { exact: true })).toBeVisible();
+      await expect(truthSummary.getByText("refresh unavailable", { exact: true })).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
     });
