@@ -713,7 +713,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(packetInspector.getByRole("heading", { name: title })).toBeVisible();
     const runtimeDetailLink = packetInspector.getByRole("link", { name: "Open full packet" });
     await expect(runtimeDetailLink).toBeVisible();
-    await expect(runtimeDetailLink).toHaveAttribute("href", `/pipeline/packets/${encodeURIComponent(packetId)}`);
+    const runtimeDetailHref = `/pipeline/packets/${encodeURIComponent(packetId)}`;
+    await expect(runtimeDetailLink).toHaveAttribute("href", runtimeDetailHref);
+    const runtimeDetailUrl = new URL(runtimeDetailHref, page.url()).toString();
+    await runtimeDetailLink.click();
+    await expect(page).toHaveURL(runtimeDetailUrl);
+    const packetDetail = page.getByRole("main", { name: "Packet detail" });
+    await expect(packetDetail).toBeVisible();
+    await expect(packetDetail.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
+    await expect(packetDetail.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
+    await page.goto("/pipeline");
     await page.reload();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
@@ -725,12 +734,6 @@ test.describe("dashboard workflow coverage", () => {
     ]) {
       expect(runtimeBody).not.toContain(fixtureSentinel);
     }
-
-    await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
-    const encodedPacketId = encodeURIComponent(packetId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    await expect(page).toHaveURL(new RegExp(`/pipeline/packets/${encodedPacketId}$`));
-    await expect(page.getByRole("main", { name: "Packet detail" })).toBeVisible();
-    await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
   });
 
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {

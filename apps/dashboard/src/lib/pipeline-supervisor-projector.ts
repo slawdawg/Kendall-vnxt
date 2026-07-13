@@ -77,6 +77,18 @@ const workPacketOwners = new Set(["kendall", "operator", "local_model", "hermes_
 const workPacketStatuses = new Set(["active", "waiting", "blocked", "failed", "complete", "deferred"]);
 const riskLevels = new Set(["low", "medium", "high"]);
 const priorities = new Set(["low", "normal", "high", "urgent"]);
+const candidateWorkSources = new Set(["bmad", "chief_of_staff", "obsidian", "operator", "supervisor"]);
+const candidateWorkArtifactTypes = new Set([
+  "bmad_story", "bmad_research", "bmad_workflow_output", "chief_of_staff_request", "manual_note", "obsidian_metadata",
+]);
+const candidateWorkStatuses = new Set(["proposed", "approved", "rejected", "deferred"]);
+const workflowStates = new Set([
+  "queued", "triaged", "ready", "implementing", "validating", "reviewing", "awaiting_audit", "needs_rework",
+  "operator_owned", "blocked", "done",
+]);
+const bmadLanes = new Set(["intake", "implementation", "validation", "review", "corrective_loop"]);
+const workItemOrigins = new Set(["operator", "supervisor"]);
+const auditModes = new Set(["none", "advisory", "required"]);
 const sourceRefTypes = new Set(["candidate_work", "work_item", "bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual"]);
 const sourceFreshnessValues = new Set(["fresh", "stale", "unknown", "not_applicable"]);
 const sourceAccessStates = new Set(["allowed", "excluded", "missing", "blocked"]);
@@ -222,18 +234,17 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     packet.transitionEvents.every(isWorkPacketStageTransitionEventV0) &&
     Array.isArray(packet.loopStopStates) &&
     packet.loopStopStates.every(isWorkPacketLoopStopStateV0) &&
+    isAbsentOr(packet.candidateWork, isCandidateWorkView) &&
+    isAbsentOr(packet.workItem, isWorkItemView) &&
+    isAbsentOr(packet.taskPacket, isTaskPacketV0View) &&
+    isAbsentOr(packet.routingPreview, isRoutingPreviewView) &&
     isAbsentOr(packet.routeSummary, isWorkPacketRouteSummaryV0) &&
     isAbsentOr(packet.deliveryEvidence, isWorkPacketDeliveryEvidenceV0) &&
     isAbsentOr(packet.learnOutcome, isWorkPacketLearnOutcomeV0) &&
     isAbsentOr(packet.learnRefill, (refill) => isWorkPacketLearnRefillProjectionV0(refill, packet.packetId as string)) &&
     isAbsentOr(packet.alphaMemorySourceStatus, isAlphaMemorySourceStatusV0) &&
     isAbsentOr(packet.gateStateValidation, isWorkPacketGateStateValidationV0) &&
-    lifecycleState !== null &&
-    typeof lifecycleState === "object" &&
-    isEnumValue(lifecycleState.source, lifecycleSources) &&
-    isEnumValue(lifecycleState.stage, pipelineStages) &&
-    isEnumValue(lifecycleState.owner, workPacketOwners) &&
-    isEnumValue(lifecycleState.status, workPacketStatuses) &&
+    isWorkPacketLifecycleStateV0(lifecycleState) &&
     reachableNestedWorkPacketFieldsAreSafe(packet);
 }
 
@@ -316,12 +327,186 @@ function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
+function isRequiredNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isOptionalEnum(value: unknown, allowedValues: ReadonlySet<string>): boolean {
+  return value === undefined || isEnumValue(value, allowedValues);
+}
+
+function isRequiredNullableEnum(value: unknown, allowedValues: ReadonlySet<string>): boolean {
+  return value === null || isEnumValue(value, allowedValues);
+}
+
 function isAbsentOr(value: unknown, predicate: (candidate: unknown) => boolean): boolean {
   return value === undefined || value === null || predicate(value);
 }
 
 function hasExactBooleanFields(record: Record<string, unknown>, fields: readonly string[], expected: boolean): boolean {
   return fields.every((field) => record[field] === expected);
+}
+
+function isWorkPacketLifecycleStateV0(value: unknown): boolean {
+  return isRecord(value) &&
+    isEnumValue(value.source, lifecycleSources) &&
+    isEnumValue(value.stage, pipelineStages) &&
+    isEnumValue(value.owner, workPacketOwners) &&
+    isEnumValue(value.status, workPacketStatuses) &&
+    isStringArray(value.reasonCodes) &&
+    isNonEmptyString(value.authoritativeRef) &&
+    isStringArray(value.derivedFromRefs) &&
+    isStringArray(value.transitionEventRefs) &&
+    isNullableString(value.latestTransitionEventRef) &&
+    isNullableString(value.attemptRef) &&
+    value.metadataOnly === true &&
+    hasExactBooleanFields(
+      value,
+      ["sourceMutationAllowed", "providerCallsAllowed", "workerLaunchAllowed", "githubMutationAllowed", "cleanupAllowed"],
+      false,
+    );
+}
+
+function isCandidateWorkView(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return ["id", "title", "requestedOutcome", "sourceArtifactPath", "createdAt", "updatedAt"]
+    .every((field) => isNonEmptyString(value[field])) &&
+    isEnumValue(value.source, candidateWorkSources) &&
+    isEnumValue(value.sourceArtifactType, candidateWorkArtifactTypes) &&
+    isEnumValue(value.riskLevel, riskLevels) &&
+    isEnumValue(value.priority, priorities) &&
+    typeof value.sortOrder === "number" &&
+    Number.isFinite(value.sortOrder) &&
+    isEnumValue(value.status, candidateWorkStatuses) &&
+    isNullableString(value.approvedAt) &&
+    isNullableString(value.promotedWorkItemId) &&
+    isAbsentOr(value.sourceSummary, isCandidateWorkSourceSummaryView) &&
+    isRecord(value.importMetadata);
+}
+
+function isCandidateWorkSourceSummaryView(value: unknown): boolean {
+  return isRecord(value) &&
+    [
+      "label", "summary", "sourceRef", "sourceArtifactPath", "retentionPolicy", "boundarySummary", "approvalStatus",
+      "approvedBy", "approvedAt",
+    ].every((field) => isNonEmptyString(value[field])) &&
+    isEnumValue(value.sourceType, candidateWorkSources) &&
+    isEnumValue(value.freshness, sourceFreshnessValues) &&
+    isEnumValue(value.accessState, sourceAccessStates) &&
+    isStringArray(value.evidenceRefs);
+}
+
+function isWorkItemView(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return ["id", "title", "requestedOutcome", "source", "statusSummary", "createdAt", "updatedAt", "lastEventAt"]
+    .every((field) => isNonEmptyString(value[field])) &&
+    isEnumValue(value.origin, workItemOrigins) &&
+    isNullableString(value.details) &&
+    isOptionalEnum(value.riskLevel, riskLevels) &&
+    (value.metadata === undefined || isWorkItemMetadata(value.metadata)) &&
+    isEnumValue(value.state, workflowStates) &&
+    isRequiredNullableEnum(value.lane, bmadLanes) &&
+    ["assigneeId", "assigneeLabel", "attentionReason", "escalatedAt", "escalationReason", "escalatedByLabel", "selfDetectedIssueCategory"]
+      .every((field) => isNullableString(value[field])) &&
+    typeof value.ageMinutes === "number" &&
+    Number.isFinite(value.ageMinutes) &&
+    typeof value.needsAttention === "boolean" &&
+    isRequiredNullableString(value.blockedReason) &&
+    isRequiredNullableString(value.nextStep) &&
+    typeof value.selfDetectedIssue === "boolean" &&
+    isAbsentOr(value.executionRecipe, isWorkItemExecutionRecipeView) &&
+    isAbsentOr(value.deliveryReadiness, isWorkItemDeliveryReadinessView) &&
+    typeof value.requiresAudit === "boolean" &&
+    isEnumValue(value.auditMode, auditModes);
+}
+
+function isWorkItemMetadata(value: unknown): boolean {
+  return isRecord(value) && Object.values(value).every((entry) =>
+    entry === null || typeof entry === "string" || typeof entry === "boolean" ||
+      (typeof entry === "number" && Number.isFinite(entry))
+  );
+}
+
+function isWorkItemExecutionRecipeView(value: unknown): boolean {
+  return isRecord(value) &&
+    ["id", "label", "summary", "branchPrefix"].every((field) => isNonEmptyString(value[field])) &&
+    ["allowedPaths", "implementationCommands", "verificationCommands", "operatorCheckpoints", "autonomyNotes"]
+      .every((field) => isStringArray(value[field])) &&
+    Array.isArray(value.policyGates) &&
+    value.policyGates.every(isWorkItemPolicyGateView) &&
+    isWorkItemRemoteAutomationPolicyView(value.remoteAutomationPolicy);
+}
+
+function isWorkItemPolicyGateView(value: unknown): boolean {
+  return isRecord(value) &&
+    ["id", "label", "requiredBefore", "summary"].every((field) => isNonEmptyString(value[field])) &&
+    isStringArray(value.evidence);
+}
+
+function isWorkItemRemoteAutomationPolicyView(value: unknown): boolean {
+  return isRecord(value) &&
+    isNonEmptyString(value.status) &&
+    isNonEmptyString(value.summary) &&
+    ["allowedOperations", "blockedOperations", "approvalRequirements"].every((field) => isStringArray(value[field]));
+}
+
+function isWorkItemDeliveryReadinessView(value: unknown): boolean {
+  return isRecord(value) &&
+    ["pullRequestStatus", "ciStatus", "mergeStatus", "remoteOperationsPolicy"].every((field) => isNonEmptyString(value[field])) &&
+    isNullableString(value.pullRequestUrl) &&
+    typeof value.deliveryWaived === "boolean" &&
+    isNullableString(value.deliveryWaiverReason) &&
+    typeof value.remoteOperationsPerformed === "boolean" &&
+    typeof value.readyForApproval === "boolean";
+}
+
+function isTaskPacketV0View(value: unknown): boolean {
+  return isRecord(value) &&
+    [
+      "workItemId", "title", "requestedOutcome", "source", "sourceArtifactPath", "taskKind", "riskLevel", "priority",
+      "approvalMode", "verificationSummary",
+    ].every((field) => isNonEmptyString(value[field]));
+}
+
+function isRoutingPreviewView(value: unknown): boolean {
+  return isRecord(value) && isRoutingProfileView(value.profile) && isRoutingDecisionView(value.decision);
+}
+
+function isRoutingProfileView(value: unknown): boolean {
+  return isRecord(value) &&
+    ["workItemId", "stepId", "taskKind", "riskLevel", "privacyLevel", "writeScope", "contextNeed", "reasoningNeed", "determinismNeed"]
+      .every((field) => isNonEmptyString(value[field])) &&
+    isNullableString(value.phase) &&
+    ["allowedPaths", "validationExpectations", "preferredLanes", "forbiddenLanes", "escalationTriggers"]
+      .every((field) => isStringArray(value[field]));
+}
+
+function isRoutingDecisionView(value: unknown): boolean {
+  return isRecord(value) &&
+    [
+      "decisionId", "workItemId", "stepId", "createdAt", "selectedLane", "authorityMode", "confidenceBand",
+      "permissionSummary", "humanExplanation",
+    ].every((field) => isNonEmptyString(value[field])) &&
+    isRoutingProfileView(value.profileSnapshot) &&
+    isNullableString(value.selectedWorkerId) &&
+    typeof value.confidenceScore === "number" &&
+    Number.isFinite(value.confidenceScore) &&
+    isStringArray(value.reasonCodes) &&
+    Array.isArray(value.rejectedLanes) &&
+    value.rejectedLanes.every(isRejectedRoutingLaneView) &&
+    isStringArray(value.rejectedWorkers) &&
+    isStringArray(value.escalationPath);
+}
+
+function isRejectedRoutingLaneView(value: unknown): boolean {
+  return isRecord(value) &&
+    isNonEmptyString(value.lane) &&
+    isStringArray(value.rejectionCodes) &&
+    isNonEmptyString(value.explanation);
 }
 
 function isWorkPacketRouteSummaryV0(value: unknown): boolean {
