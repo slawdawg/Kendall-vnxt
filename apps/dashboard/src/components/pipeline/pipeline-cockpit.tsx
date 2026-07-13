@@ -3335,14 +3335,8 @@ function stageHealthStateLabel(
     if (sourceLabel === "stale" || freshnessState === "stale") {
       return "projection stale";
     }
-    if (sourceLabel === "demo") {
-      return "demo fixtures";
-    }
     if (sourceLabel === "empty") {
       return "supervisor empty";
-    }
-    if (sourceLabel === "invalid") {
-      return "invalid supervisor state";
     }
     if (sourceLabel === "simulated") {
       return "simulated";

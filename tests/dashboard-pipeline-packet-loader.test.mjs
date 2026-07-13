@@ -194,6 +194,8 @@ test("typed fixture provenance is rejected without arbitrary-string false positi
   const fixtures = populatedFixtureCatalog();
   const fixtureRefCases = [
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "fixture:source-ref" }] },
+    { reviewSummaries: [{ reviewer: "kendall", status: "pending", summary: "Review", evidenceRefs: ["fixture:nested-evidence"], artifactRefs: [] }] },
+    { learnOutcome: { evidenceRefs: ["fixture:nested-evidence"], sourceRefs: [] } },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "fixture:evidence-artifact" }] },
@@ -226,8 +228,10 @@ test("malformed nested evidence and artifact references fail closed before rende
   const fixtures = populatedFixtureCatalog();
   for (const overrides of [
     { evidenceRefs: ["event:created"] },
+    { lifecycleState: { ...authoritativeWorkPacket().lifecycleState, source: "unexpected_source" } },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], sourceType: "repo_doc" }] },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "live" }] },
+    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", pathOrUrl: "docs/blocked.md", blockedReason: "source boundary blocked" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], rawPayloadRetained: true }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "raw_payload" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "forever" }] },

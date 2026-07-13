@@ -73,6 +73,7 @@ export type PipelineSupervisorProjectionResult =
   | { kind: "invalid"; packets: []; error: string };
 
 const pipelineStages = new Set(["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"]);
+const lifecycleSources = new Set(["candidate_work", "work_item", "execution_attempt", "workflow_event", "memory_proposal", "delivery_evidence", "source_missing"]);
 const workPacketOwners = new Set(["kendall", "operator", "local_model", "hermes_worker_mock", "codex_worker", "claude_reviewer", "github", "memory_review", "blocked"]);
 const workPacketStatuses = new Set(["active", "waiting", "blocked", "failed", "complete", "deferred"]);
 const riskLevels = new Set(["low", "medium", "high"]);
@@ -158,9 +159,10 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.loopStopStates) &&
     packet.lifecycleState !== null &&
     typeof packet.lifecycleState === "object" &&
-    isEnumValue((packet.lifecycleState as Record<string, unknown>).stage, pipelineStages) &&
-    isEnumValue((packet.lifecycleState as Record<string, unknown>).owner, workPacketOwners) &&
-    isEnumValue((packet.lifecycleState as Record<string, unknown>).status, workPacketStatuses);
+    isEnumValue(packet.lifecycleState.source, lifecycleSources) &&
+    isEnumValue(packet.lifecycleState.stage, pipelineStages) &&
+    isEnumValue(packet.lifecycleState.owner, workPacketOwners) &&
+    isEnumValue(packet.lifecycleState.status, workPacketStatuses);
 }
 
 function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
@@ -177,28 +179,46 @@ function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
   ) {
     return true;
   }
-  return hasFixtureOnlyRefs(packet.sourceRefs) ||
-    hasFixtureOnlyRefs(packet.evidenceRefs) ||
-    hasFixtureOnlyRefs(packet.artifactRefs);
+  return hasFixtureOnlyRefs(packet);
 }
 
-function hasFixtureOnlyRefs(value: unknown): boolean {
-  if (!Array.isArray(value)) {
+function hasFixtureOnlyRefs(value: unknown, visited = new Set<object>()): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasFixtureOnlyRefs(item, visited));
+  }
+  if (!value || typeof value !== "object") {
     return false;
   }
-  return value.some((ref) => {
-    if (!ref || typeof ref !== "object") {
-      return false;
+  if (visited.has(value)) {
+    return false;
+  }
+  visited.add(value);
+  const record = value as Record<string, unknown>;
+  if (isFixtureRefIdentity(record.refId) ||
+    isFixtureRefIdentity(record.sourceRef) ||
+    isFixtureRefIdentity(record.pathOrUrl) ||
+    isFixtureRefIdentity(record.artifactPath) ||
+    record.evidenceType === "fixture" ||
+    record.retentionClass === "fixture" ||
+    record.artifactType === "fixture") {
+    return true;
+  }
+  return Object.entries(record).some(([key, child]) => {
+    if (["sourceRefs", "evidenceRefs", "artifactRefs", "verificationRefs", "retainedEvidence", "derivedFromRefs", "transitionEventRefs"].includes(key) && containsFixtureReference(child, visited)) {
+      return true;
     }
-    const typedRef = ref as Record<string, unknown>;
-    return isFixtureRefIdentity(typedRef.refId) ||
-      isFixtureRefIdentity(typedRef.sourceRef) ||
-      isFixtureRefIdentity(typedRef.pathOrUrl) ||
-      isFixtureRefIdentity(typedRef.artifactPath) ||
-      typedRef.evidenceType === "fixture" ||
-      typedRef.retentionClass === "fixture" ||
-      typedRef.artifactType === "fixture";
+    return hasFixtureOnlyRefs(child, visited);
   });
+}
+
+function containsFixtureReference(value: unknown, visited: Set<object>): boolean {
+  if (typeof value === "string") {
+    return isFixtureRefIdentity(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => containsFixtureReference(item, visited));
+  }
+  return hasFixtureOnlyRefs(value, visited);
 }
 
 function isFixtureRefIdentity(value: unknown): boolean {
@@ -230,7 +250,8 @@ function isSourceRefV0(value: unknown): boolean {
   if (ref.accessState === "allowed") {
     return true;
   }
-  return ref.summaryOnly === true && typeof ref.blockedReason === "string";
+  return (ref.pathOrUrl === null || typeof ref.pathOrUrl === "undefined") &&
+    ref.summaryOnly === true && typeof ref.blockedReason === "string";
 }
 
 function isEvidenceRefV0(value: unknown): boolean {
