@@ -55,6 +55,33 @@ const scannedFiles = [];
 const scannedFileSet = new Set();
 const pendingFiles = [];
 
+const normalRouteGraph = await collectRouteGraph([
+  join(rootDir, "apps/dashboard/src/app/pipeline/page.tsx"),
+  join(rootDir, "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx"),
+]);
+const demoRouteGraph = await collectRouteGraph([
+  join(rootDir, "apps/dashboard/src/app/pipeline/demo/page.tsx"),
+  join(rootDir, "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx"),
+]);
+if (normalRouteGraph.includes("apps/dashboard/src/lib/pipeline-fixtures.ts")) {
+  failures.push("normal /pipeline route graph must not reach apps/dashboard/src/lib/pipeline-fixtures.ts");
+}
+if (!demoRouteGraph.includes("apps/dashboard/src/lib/pipeline-fixtures.ts")) {
+  failures.push("explicit /pipeline/demo route graph must retain access to apps/dashboard/src/lib/pipeline-fixtures.ts");
+}
+for (const runtimeBoundaryFile of [
+  "apps/dashboard/src/lib/pipeline-packet-loader.ts",
+  "apps/dashboard/src/lib/pipeline-supervisor-projector.ts",
+]) {
+  const runtimeBoundarySource = await readFile(join(rootDir, runtimeBoundaryFile), "utf8");
+  if (/pipeline-fixtures/.test(runtimeBoundarySource)) {
+    failures.push(`${runtimeBoundaryFile}: runtime boundary must not import or reference the fixture catalog`);
+  }
+  if (/fixture fallback|fixture_fallback/i.test(runtimeBoundarySource)) {
+    failures.push(`${runtimeBoundaryFile}: stale fixture-fallback semantics remain in the runtime boundary`);
+  }
+}
+
 for (const target of PIPELINE_SOURCE_TARGETS) {
   for (const filePath of await expandTarget(join(rootDir, target))) {
     queueFile(filePath);
@@ -95,6 +122,10 @@ console.log(
     {
       status: "PASS",
       scannedFiles: scannedFiles.length,
+      normalRouteGraphFiles: normalRouteGraph.length,
+      demoRouteGraphFiles: demoRouteGraph.length,
+      normalFixtureCatalogReachable: false,
+      demoFixtureCatalogReachable: true,
       boundary:
         "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from /pipeline dashboard code outside the read-only supervisor WorkPacketV0 projection loader.",
     },
@@ -124,6 +155,28 @@ async function expandTarget(targetPath) {
   return files.sort();
 }
 
+async function collectRouteGraph(entryFiles) {
+  const files = [];
+  const visited = new Set();
+  const pending = [...entryFiles];
+  while (pending.length > 0) {
+    const filePath = normalize(pending.shift());
+    if (visited.has(filePath)) {
+      continue;
+    }
+    visited.add(filePath);
+    const source = await readFile(filePath, "utf8");
+    files.push(relative(rootDir, filePath).replaceAll("\\", "/"));
+    for (const specifier of checkImports(relative(rootDir, filePath), source)) {
+      const resolvedImport = await resolveLocalImport(filePath, specifier);
+      if (resolvedImport && !visited.has(resolvedImport)) {
+        pending.push(resolvedImport);
+      }
+    }
+  }
+  return files;
+}
+
 function queueFile(filePath) {
   const normalizedPath = normalize(filePath);
   if (scannedFileSet.has(normalizedPath)) {
@@ -135,16 +188,35 @@ function queueFile(filePath) {
 
 function checkImports(displayPath, source) {
   const specifiers = [];
+  const typeOnlyImportPatterns = [
+    /^\s*import\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
+    /^\s*export\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
+  ];
+  for (const typeOnlyImportPattern of typeOnlyImportPatterns) {
+    for (const importMatch of source.matchAll(typeOnlyImportPattern)) {
+      for (const { id, pattern } of forbiddenImportPatterns) {
+        if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, importMatch[1])) {
+          continue;
+        }
+        if (pattern.test(importMatch[1])) {
+          failures.push(`${displayPath}: forbidden type-only import boundary ${id}: ${importMatch[1]}`);
+        }
+      }
+    }
+  }
+  const runtimeSource = source
+    .replace(/^\s*import\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "")
+    .replace(/^\s*export\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "");
   const importPatterns = [
-    /^\s*import(?:\s+type)?[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
+    /^\s*import[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /^\s*import\s+["']([^"']+)["'];?/gm,
-    /^\s*export(?:\s+type)?[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
+    /^\s*export[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
     /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
   ];
 
   for (const importPattern of importPatterns) {
-    for (const importMatch of source.matchAll(importPattern)) {
+    for (const importMatch of runtimeSource.matchAll(importPattern)) {
       const specifier = importMatch[1];
       specifiers.push(specifier);
       for (const { id, pattern } of forbiddenImportPatterns) {

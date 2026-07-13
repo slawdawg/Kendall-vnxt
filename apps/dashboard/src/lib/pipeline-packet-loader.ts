@@ -6,13 +6,11 @@ import type {
   PipelineOperationalActionResultV0,
 } from "@kendall/contracts";
 
-import {
-  pipelineCockpitPackets,
-  pipelineFixtureMode,
-  projectSupervisorWorkPacketsToCockpitPackets,
-  type PipelineFixturePacket,
-} from "./pipeline-fixtures";
 import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./supervisor";
+import {
+  projectSupervisorWorkPacketsToCockpitPackets,
+  type PipelineRuntimePacket,
+} from "./pipeline-supervisor-projector";
 import {
   applyPipelineOperationalAction as applySupervisorPipelineOperationalAction,
   issuePipelineOperationalApproval as issueSupervisorPipelineOperationalApproval,
@@ -31,52 +29,77 @@ export async function applyPipelineOperationalAction(
 }
 
 export type PipelineCockpitPacketLoad = {
-  fixtureMode: typeof pipelineFixtureMode;
-  packets: PipelineFixturePacket[];
+  fixtureMode: PipelineRuntimeSourceState;
+  packets: PipelineRuntimePacket[];
   projection: PipelineDashboardProjectionV0 | null;
   projectionError: string | null;
 };
 
 export type PipelineCockpitPacketDetailLoad = {
-  fixtureMode: typeof pipelineFixtureMode;
-  packet: PipelineFixturePacket | null;
+  fixtureMode: PipelineRuntimeSourceState;
+  packet: PipelineRuntimePacket | null;
+};
+
+export type PipelineRuntimeSourceState = {
+  kind: "runtime" | "empty" | "unavailable" | "invalid" | "demo";
+  label: string;
+  summary: string;
+  matrixRows: number;
+  fixtureCatalogEntries: number;
+  canSatisfyLiveProof: boolean;
 };
 
 export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacketLoad> {
-  const fallbackPackets = pipelineCockpitPackets;
   const projectionResult = await loadPipelineDashboardProjection();
+  if (projectionResult.error) {
+    return {
+      fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor projection could not be read; no runtime or demo packets are shown."),
+      packets: [],
+      projection: null,
+      projectionError: projectionResult.error,
+    };
+  }
+  const projectionRuntimeError = runtimeProjectionError(projectionResult.projection);
+  if (projectionRuntimeError) {
+    return {
+      fixtureMode: runtimeSourceState(
+        projectionRuntimeError.kind,
+        projectionRuntimeError.kind === "invalid" ? "Supervisor invalid" : "Supervisor unavailable",
+        projectionRuntimeError.summary,
+      ),
+      packets: [],
+      projection: null,
+      projectionError: projectionRuntimeError.summary,
+    };
+  }
   try {
-    const supervisorPackets = projectSupervisorWorkPacketsToCockpitPackets(await getWorkPackets());
-    if (supervisorPackets.length === 0) {
+    const projection = projectSupervisorWorkPacketsToCockpitPackets(await getWorkPackets());
+    if (projection.kind === "empty") {
       return {
-        fixtureMode: {
-          ...pipelineFixtureMode,
-          label: "Supervisor empty",
-          summary: "Supervisor returned no WorkPacketV0 rows; showing static fixture fallback without provider, worker, GitHub, or Obsidian calls.",
-        },
-        packets: fallbackPackets,
+        fixtureMode: runtimeSourceState("empty", "Supervisor empty", "Supervisor is reachable but has no persisted WorkPacketV0 rows; no demo packets are substituted."),
+        packets: [],
         projection: projectionResult.projection,
         projectionError: projectionResult.error,
       };
     }
+    if (projection.kind === "invalid") {
+      return {
+        fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", projection.error + " No runtime or demo packets are shown."),
+        packets: [],
+        projection: null,
+        projectionError: projection.error,
+      };
+    }
     return {
-      fixtureMode: {
-        ...pipelineFixtureMode,
-        label: "Supervisor packets",
-        summary: "Read-only supervisor WorkPacketV0 projections are shown before the static fixture fallback. No provider, worker, GitHub, or Obsidian calls are made by this route.",
-      },
-      packets: mergePipelinePackets(supervisorPackets, fallbackPackets),
+      fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "Persisted supervisor WorkPacketV0 rows only. No provider, worker, GitHub, or Obsidian calls are made by this route."),
+      packets: projection.packets,
       projection: projectionResult.projection,
       projectionError: projectionResult.error,
     };
   } catch {
     return {
-      fixtureMode: {
-        ...pipelineFixtureMode,
-        label: "Supervisor unavailable",
-        summary: "Supervisor WorkPacketV0 read failed; showing static fixture fallback without provider, worker, GitHub, or Obsidian calls.",
-      },
-      packets: fallbackPackets,
+      fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor WorkPacketV0 state could not be read; no demo packets are substituted."),
+      packets: [],
       projection: projectionResult.projection,
       projectionError: projectionResult.error,
     };
@@ -84,75 +107,48 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
 }
 
 export async function loadPipelineCockpitPacket(packetId: string): Promise<PipelineCockpitPacketDetailLoad> {
-  const fixturePacket = pipelineCockpitPackets.find((packet) => packet.packetId === packetId) ?? null;
   try {
-    const [supervisorPacket] = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(packetId)]);
+    const projection = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(packetId)]);
+    if (projection.kind === "invalid") {
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", projection.error + " No demo packet was substituted."), packet: null };
+    }
+    const [supervisorPacket] = projection.kind === "runtime" ? projection.packets : [];
     if (!supervisorPacket || supervisorPacket.packetId !== packetId) {
-      return fixturePacketDetailFallback(
-        fixturePacket,
-        "Supervisor packet unreadable",
-        "Supervisor returned a WorkPacketV0 row that could not be safely projected for this packet identity; the matching static fixture is shown only when available.",
-      );
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), packet: null };
     }
     return {
-      fixtureMode: {
-        ...pipelineFixtureMode,
-        label: "Supervisor packet",
-        summary: "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity. No provider, worker, GitHub, or Obsidian calls are made by this route.",
-      },
+      fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity."),
       packet: supervisorPacket,
     };
   } catch (error) {
-    if (fixturePacket) {
-      return fixturePacketDetailFallback(
-        fixturePacket,
-        "Fixture fallback",
-        "Supervisor packet detail was unavailable; showing the matching static fixture without provider, worker, GitHub, or Obsidian calls.",
-      );
-    }
     const errorMessage = error && typeof error === "object" && "message" in error
       ? String(error.message)
       : String(error);
     const missing = /\(404\)/.test(errorMessage);
     return {
-      fixtureMode: {
-        ...pipelineFixtureMode,
-        label: missing ? "Supervisor packet missing" : "Supervisor unavailable",
-        summary: missing
-          ? "Supervisor has no WorkPacketV0 detail for this packet identity; no fixture was substituted."
-          : "Supervisor WorkPacketV0 detail could not be read; no fixture matched this packet identity.",
-      },
+      fixtureMode: runtimeSourceState(missing ? "invalid" : "unavailable", missing ? "Supervisor packet missing" : "Supervisor unavailable", missing
+        ? "Supervisor has no WorkPacketV0 detail for this packet identity; no demo packet was substituted."
+        : "Supervisor WorkPacketV0 detail could not be read; no demo packet was substituted."),
       packet: null,
     };
   }
 }
 
-function fixturePacketDetailFallback(
-  packet: PipelineFixturePacket | null,
-  label: string,
-  summary: string,
-): PipelineCockpitPacketDetailLoad {
-  return {
-    fixtureMode: {
-      ...pipelineFixtureMode,
-      label,
-      summary,
-    },
-    packet,
-  };
+function runtimeSourceState(kind: PipelineRuntimeSourceState["kind"], label: string, summary: string): PipelineRuntimeSourceState {
+  return { kind, label, summary, matrixRows: 0, fixtureCatalogEntries: 0, canSatisfyLiveProof: false };
 }
 
-function mergePipelinePackets(
-  primaryPackets: readonly PipelineFixturePacket[],
-  fallbackPackets: readonly PipelineFixturePacket[]
-): PipelineFixturePacket[] {
-  const packetById = new Map<string, PipelineFixturePacket>();
-  for (const packet of [...primaryPackets, ...fallbackPackets]) {
-    if (!packetById.has(packet.packetId)) {
-      packetById.set(packet.packetId, packet);
-    }
+function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null): { kind: "invalid" | "unavailable"; summary: string } | null {
+  if (!projection) {
+    return null;
   }
-  return Array.from(packetById.values());
+  if (projection.fixtureMode?.enabled === true || projection.truthSummary?.fixtureBacked === true || projection.sourceLabel === "fixture") {
+    return { kind: "invalid", summary: "Supervisor projection is fixture-backed; normal runtime mode refuses fixture truth." };
+  }
+  if (projection.backendReachability?.state === "unavailable" || projection.truthSummary?.backendUnavailable === true) {
+    return { kind: "unavailable", summary: "Supervisor projection reports unavailable runtime state; no packets are shown." };
+  }
+  return null;
 }
 
 async function loadPipelineDashboardProjection(): Promise<{ projection: PipelineDashboardProjectionV0 | null; error: string | null }> {

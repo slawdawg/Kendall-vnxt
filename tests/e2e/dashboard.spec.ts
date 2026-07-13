@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -73,6 +74,38 @@ async function createWorkItem(request: APIRequestContext, payload: WorkItemCreat
   expect(response.ok()).toBeTruthy();
   const body = (await response.json()) as { data: { id: string } };
   return body.data.id;
+}
+
+async function seedSupervisorPipelinePacket(request: APIRequestContext, packetId: string, title: string) {
+  const sourcePath = "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md";
+  const sourceBytes = await fs.readFile(path.join(process.cwd(), sourcePath));
+  const sourceRef = {
+    refId: `repo_doc:${sourcePath}`,
+    sourceType: "repo_doc",
+    pathOrUrl: sourcePath,
+    title: "Latest PRD autonomous BMAD loop goal",
+    contentSha256: createHash("sha256").update(sourceBytes).digest("hex"),
+  };
+  const response = await request.post(`${supervisorUrl}/pipeline-control-plane/work-packets`, {
+    data: {
+      packetId,
+      title,
+      initialStage: "capture",
+      status: "waiting",
+      truthLabel: "source_owned",
+      sourceRef,
+      actor: { actorType: "manager", actorId: "story-4-6-playwright", actorLabel: "Story 4.6 Playwright" },
+      idempotencyKey: `story-4-6-create-${packetId}`,
+      correlationId: `story-4-6-correlation-${packetId}`,
+      evidenceRefs: [`test:story-4-6:${packetId}`],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  const body = (await response.json()) as { data: { packetId: string } };
+  expect(body.data.packetId).toBe(packetId);
+  return body.data;
 }
 
 async function getWorkItem(request: APIRequestContext, workItemId: string) {
@@ -567,7 +600,79 @@ test.describe("dashboard workflow coverage", () => {
     await expect(intake.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
   });
 
-  test("opens fixture-backed pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {
+  test("Story 4.6 empty runtime state does not substitute demo packets", async ({ page }) => {
+    await page.goto("/pipeline");
+
+    await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
+    await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
+    await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Unexpected Runtime Packet", { exact: true })).toHaveCount(0);
+  });
+
+  test("Story 4.6 runtime packet keeps identity and survives refresh", async ({ page, request }) => {
+    const packetId = `story-4-6-runtime:${Date.now()}`;
+    const title = "Story 4.6 persisted supervisor runtime packet";
+    await seedSupervisorPipelinePacket(request, packetId, title);
+
+    await page.goto("/pipeline");
+    await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+
+    await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
+    await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
+  });
+
+  test("Story 4.6 invalid detail identity fails closed", async ({ page }) => {
+    const invalidResponse = await page.goto("/pipeline/packets/%E0%A4%A");
+    expect(invalidResponse?.status()).toBe(404);
+    await expect(page.getByText("Demo fixture", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
+  });
+
+  if (process.env.PLAYWRIGHT_EXPECT_UNAVAILABLE_SUPERVISOR === "true") {
+    test("Story 4.6 unavailable dashboard fails closed without fixture substitution", async ({ page }) => {
+      await page.goto("/pipeline");
+
+      await expect(page.getByText("Supervisor unavailable", { exact: true })).toBeVisible();
+      await expect(page.getByRole("status", { name: "Projection truth summary" }).getByText("refresh unavailable", { exact: true })).toBeVisible();
+      await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
+      await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
+    });
+  }
+
+  test("Story 4.6 missing runtime detail is not replaced by a fixture", async ({ page }) => {
+    const response = await page.goto("/pipeline/packets/story-4-6-missing-runtime-detail");
+    expect(response?.status()).toBe(404);
+    await expect(page.getByText("Demo fixture", { exact: true })).toHaveCount(0);
+  });
+
+  test("Story 4.6 explicit demo route is labeled and isolated", async ({ page }) => {
+    const supervisorRequests: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).origin === new URL(supervisorUrl).origin) {
+        supervisorRequests.push(request.url());
+      }
+    });
+    await page.goto("/pipeline/demo");
+
+    await expect(page.getByText("Demo fixtures", { exact: true })).toBeVisible();
+    await expect(page.locator(".pipeline-mini-packet-proof", { hasText: "non-live fixture" }).first()).toBeVisible();
+    await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: /Inspect packet:/ }).first().click();
+    await expect(page.getByText("Fixture/non-live packet; cannot satisfy live proof.", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Contextual action strip")).toHaveCount(0);
+    await page.getByRole("link", { name: "Open full packet" }).click();
+    await expect(page).toHaveURL(/\/pipeline\/demo\/packets\//);
+    await expect(page.getByText("Source: Demo fixture", { exact: true })).toBeVisible();
+    await expect(page.getByText("Demo fixture; cannot satisfy live proof.", { exact: true })).toBeVisible();
+    expect(supervisorRequests).toEqual([]);
+  });
+
+  test("opens isolated demo pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {
     testInfo.setTimeout(90_000);
     const dashboardOrigin = new URL(baseURL ?? "http://127.0.0.1:3000").origin;
     const supervisorOrigin = new URL(supervisorUrl).origin;
@@ -602,7 +707,7 @@ test.describe("dashboard workflow coverage", () => {
       }
     });
 
-    await page.goto("/pipeline");
+    await page.goto("/pipeline/demo");
 
     await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
     const pageMenu = page.locator(".dashboard-page-menu-summary");

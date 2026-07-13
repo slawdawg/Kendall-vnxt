@@ -1,29 +1,59 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import type { PipelineFixturePacket, PipelineGoldenPathSnapshot, SourceBoundaryDeclarationV0 } from "../../lib/pipeline-fixtures";
+import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
+import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
+
+type PipelineFixturePacket = PipelineDashboardPacket;
+type PipelineGoldenPathSnapshot = {
+  whatHappensNext: string;
+  whatPacketIs: string;
+  whyHere: string;
+};
+type SourceBoundaryDeclarationV0 = {
+  allowedReads: string[];
+  allowedWrites: string[];
+  blockedOperations: string[];
+  boundaryId: string;
+  boundarySummary: string;
+  canonicality: string;
+  label: string;
+  retentionClass: string;
+};
 
 export function PacketDetailPage({
   packet,
-  snapshot,
-  sourceBoundaries,
+  snapshot = null,
+  sourceBoundaries = [],
+  sourceState,
 }: {
   packet: PipelineFixturePacket;
-  snapshot: PipelineGoldenPathSnapshot | null;
-  sourceBoundaries: SourceBoundaryDeclarationV0[];
+  snapshot?: PipelineGoldenPathSnapshot | null;
+  sourceBoundaries?: SourceBoundaryDeclarationV0[];
+  sourceState?: PipelineRuntimeSourceState;
 }) {
-  const fixtureWarning = packet.fixtureId.startsWith("projection:") || packet.fixtureId.startsWith("supervisor:")
-    ? null
-    : "Fixture/non-live packet; cannot satisfy live proof.";
+  const isDemoPacket = packet.sourceKind === "demo-fixture" || (
+    packet.sourceKind === undefined && packet.fixtureKind !== undefined
+  );
+  const fixtureWarning = isDemoPacket ? "Demo fixture; cannot satisfy live proof." : null;
+  const sourceLabel = packet.sourceKind === "supervisor-runtime"
+    ? "Supervisor runtime"
+    : packet.sourceKind === "projection"
+      ? "Backend projection"
+      : isDemoPacket
+        ? "Demo fixture"
+        : packet.fixtureLabel;
+  const backHref = sourceState?.kind === "demo" ? "/pipeline/demo" : "/pipeline";
   return (
     <main className="grid max-w-full min-w-0 gap-4" aria-label="Packet detail">
       <section className="pipeline-nohype-shell rounded-[0.5rem] border p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <Link className="rounded-[0.375rem] border bg-[var(--surface)] px-2 py-1 text-xs text-[var(--accent)]" href="/pipeline">
+          <Link className="rounded-[0.375rem] border bg-[var(--surface)] px-2 py-1 text-xs text-[var(--accent)]" href={backHref}>
             Back to pipeline
           </Link>
           <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{packet.currentStage}</span>
           <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{packet.currentOwner}</span>
-          <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{packet.fixtureLabel}</span>
+          <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">Source: {sourceLabel}</span>
+          {sourceState ? <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{sourceState.label}</span> : null}
           {fixtureWarning ? (
             <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">non-live fixture</span>
           ) : null}
