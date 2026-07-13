@@ -2436,7 +2436,12 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "",
     ].join("\n"),
     "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx": "export default function DemoDetailPage() {}\n",
-    "apps/dashboard/src/components/shared-pipeline-runtime.ts": 'import "../lib/pipeline-fixtures";\n',
+    "apps/dashboard/src/components/shared-pipeline-runtime.ts": [
+      'import "node:fs";',
+      'import "../lib/pipeline-fixtures";',
+      "export function sharedPipelineRuntime() { return fetch(\"/forbidden\"); }",
+      "",
+    ].join("\n"),
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
@@ -2456,6 +2461,8 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     const leakingRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
     assert.equal(leakingRun.status, 1);
     assert.match(leakingRun.stderr, /normal \/pipeline route graph must not reach apps\/dashboard\/src\/lib\/pipeline-fixtures\.ts/);
+    assert.match(leakingRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
+    assert.match(leakingRun.stderr, /shared-pipeline-runtime\.ts: forbidden call boundary network-fetch/);
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),

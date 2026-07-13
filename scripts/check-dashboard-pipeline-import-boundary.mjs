@@ -50,6 +50,11 @@ const requiredSourceFiles = [
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
 ];
 
+const routeGraphTerminalFiles = [
+  join(rootDir, "apps/dashboard/src/components/shell.tsx"),
+  join(rootDir, "apps/dashboard/src/lib/supervisor.ts"),
+];
+
 const failures = [];
 const scannedFiles = [];
 const scannedFileSet = new Set();
@@ -58,11 +63,11 @@ const pendingFiles = [];
 const normalRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx"),
-]);
+], { terminalFiles: routeGraphTerminalFiles });
 const demoRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx"),
-]);
+], { terminalFiles: routeGraphTerminalFiles });
 if (normalRouteGraph.includes("apps/dashboard/src/lib/pipeline-fixtures.ts")) {
   failures.push("normal /pipeline route graph must not reach apps/dashboard/src/lib/pipeline-fixtures.ts");
 }
@@ -163,10 +168,11 @@ async function expandTarget(targetPath) {
   return files.sort();
 }
 
-async function collectRouteGraph(entryFiles) {
+async function collectRouteGraph(entryFiles, { terminalFiles = [] } = {}) {
   const files = [];
   const visited = new Set();
   const pending = [...entryFiles];
+  const terminalPathSet = new Set(terminalFiles.map((filePath) => normalize(filePath)));
   while (pending.length > 0) {
     const filePath = normalize(pending.shift());
     if (visited.has(filePath)) {
@@ -174,7 +180,15 @@ async function collectRouteGraph(entryFiles) {
     }
     visited.add(filePath);
     const source = await readFile(filePath, "utf8");
-    files.push(relative(rootDir, filePath).replaceAll("\\", "/"));
+    const displayPath = relative(rootDir, filePath).replaceAll("\\", "/");
+    files.push(displayPath);
+    if (!terminalPathSet.has(filePath)) {
+      checkImports(displayPath, source);
+      checkForbiddenCalls(displayPath, source);
+    }
+    if (terminalPathSet.has(filePath)) {
+      continue;
+    }
     for (const specifier of extractRuntimeImportSpecifiers(source)) {
       const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
       if (resolvedImport && !visited.has(resolvedImport)) {
