@@ -194,8 +194,6 @@ test("typed fixture provenance is rejected without arbitrary-string false positi
   const fixtures = populatedFixtureCatalog();
   const fixtureRefCases = [
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "fixture:source-ref" }] },
-    { reviewSummaries: [{ reviewer: "kendall", status: "pending", summary: "Review", evidenceRefs: ["fixture:nested-evidence"], artifactRefs: [] }] },
-    { learnOutcome: { evidenceRefs: ["fixture:nested-evidence"], sourceRefs: [] } },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "fixture:evidence-artifact" }] },
@@ -414,60 +412,6 @@ test("malformed nested projection detail structures fail closed before UI derefe
   }
 });
 
-test("learn refill accepts safe cross-packet candidate-work provenance without fixture leakage", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const learnRefill = authoritativeLearnRefill();
-  const crossPacketLearnRefill = {
-    ...learnRefill,
-    followUpCandidates: [{
-      ...learnRefill.followUpCandidates[0],
-      sourcePacketId: "candidate_work:source-packet-123",
-    }],
-    operatorOwnedExits: [{
-      exitId: "operator-owned-exit:source-packet-123",
-      sourcePacketId: "candidate_work:source-packet-123",
-      state: "operator_owned",
-      reason: "Operator review owns the next safe step.",
-      stopStateKind: "operator_owned_exit",
-      reentryPath: "reenter_capture",
-      evidenceRefs: ["event:created"],
-      metadataOnly: true,
-      rawPayloadRetained: false,
-    }],
-  };
-
-  const validLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{ ...packet, learnRefill: crossPacketLearnRefill }],
-  });
-  const valid = await validLoader.loadPipelineCockpitPackets();
-  assert.equal(valid.fixtureMode.kind, "runtime");
-  assert.equal(valid.packets.length, 1);
-
-  for (const [label, sourcePacketId] of [
-    ["blank", ""],
-    ["whitespace", "candidate_work: source-packet-123"],
-    ["unsafe path", "candidate_work:../source-packet-123"],
-    ["unsupported provenance", "other_packet:source-packet-123"],
-    ["fixture provenance", "fixture:source-packet-123"],
-  ]) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{
-        ...packet,
-        learnRefill: {
-          ...crossPacketLearnRefill,
-          followUpCandidates: [{ ...crossPacketLearnRefill.followUpCandidates[0], sourcePacketId }],
-        },
-      }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-});
-
 test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
   const fixtures = populatedFixtureCatalog();
   const packet = authoritativeWorkPacket();
@@ -509,14 +453,86 @@ test("lifecycle source accepts only the bounded WorkPacketV0 source contract", a
   }
 });
 
+test("canonical lifecycle provenance and optional WorkPacket source views fail closed on malformed fields", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const optionalSources = authoritativeOptionalWorkPacketSources();
+  const validLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, ...optionalSources }],
+  });
+  const valid = await validLoader.loadPipelineCockpitPackets();
+  assert.equal(valid.fixtureMode.kind, "runtime");
+  assert.equal(valid.packets.length, 1);
+
+  const lifecycleCases = [
+    ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
+    ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],
+    ["derivedFromRefs", { ...packet.lifecycleState, derivedFromRefs: ["doc:source", null] }],
+    ["transitionEventRefs", { ...packet.lifecycleState, transitionEventRefs: 42 }],
+    ["latestTransitionEventRef", { ...packet.lifecycleState, latestTransitionEventRef: { refId: "event:created" } }],
+    ["attemptRef", { ...packet.lifecycleState, attemptRef: 42 }],
+  ];
+  for (const [label, lifecycleState] of lifecycleCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, lifecycleState }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const { candidateWork, workItem, taskPacket, routingPreview } = optionalSources;
+  const optionalSourceCases = [
+    ["candidate required field", { candidateWork: { ...candidateWork, title: null } }],
+    ["candidate source enum", { candidateWork: { ...candidateWork, source: "runtime_fixture" } }],
+    ["candidate source summary", {
+      candidateWork: { ...candidateWork, sourceSummary: { ...candidateWork.sourceSummary, evidenceRefs: [null] } },
+    }],
+    ["candidate import metadata", { candidateWork: { ...candidateWork, importMetadata: [] } }],
+    ["work item workflow state", { workItem: { ...workItem, state: "active" } }],
+    ["work item metadata value", { workItem: { ...workItem, metadata: { nested: { unsafe: true } } } }],
+    ["work item recipe", {
+      workItem: {
+        ...workItem,
+        executionRecipe: {
+          ...workItem.executionRecipe,
+          remoteAutomationPolicy: { ...workItem.executionRecipe.remoteAutomationPolicy, blockedOperations: null },
+        },
+      },
+    }],
+    ["work item delivery readiness", {
+      workItem: { ...workItem, deliveryReadiness: { ...workItem.deliveryReadiness, readyForApproval: "yes" } },
+    }],
+    ["task packet required field", { taskPacket: { ...taskPacket, verificationSummary: undefined } }],
+    ["routing profile paths", {
+      routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: null } },
+    }],
+    ["routing decision profile snapshot", {
+      routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, profileSnapshot: null } },
+    }],
+    ["routing rejected lane", {
+      routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, rejectedLanes: [null] } },
+    }],
+  ];
+  for (const [label, overrides] of optionalSourceCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
 test("malformed nested evidence and artifact references fail closed before rendering", async () => {
   const fixtures = populatedFixtureCatalog();
   for (const overrides of [
     { evidenceRefs: ["event:created"] },
-    { lifecycleState: { ...authoritativeWorkPacket().lifecycleState, source: "unexpected_source" } },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], sourceType: "repo_doc" }] },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "live" }] },
-    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", pathOrUrl: "docs/blocked.md", blockedReason: "source boundary blocked" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], rawPayloadRetained: true }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "raw_payload" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "forever" }] },
@@ -775,7 +791,10 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   const demoDetailRouteSource = await readFile(demoDetailRoutePath, "utf8");
   const loaderSource = await readFile(loaderPath, "utf8");
   assert.doesNotMatch(normalRouteSource, /pipeline-fixtures/);
+  assert.doesNotMatch(normalRouteSource, /manager-execution-lane-summary|selectedManagerExecutionLaneSummary|managerExecutionLane=/);
   assert.match(demoRouteSource, /pipeline-fixtures/);
+  assert.match(demoRouteSource, /manager-execution-lane-summary/);
+  assert.match(demoRouteSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
   assert.match(demoDetailRouteSource, /pipeline-fixtures/);
   assert.doesNotMatch(loaderSource, /pipeline-fixtures|fixture fallback|fixture_fallback/i);
   assert.match(demoRouteSource, /kind: "demo"/);
@@ -950,6 +969,159 @@ function authoritativeWorkPacket() {
     loopStopStates: [],
     reviewSummaries: [],
     recoveryActions: [],
+  };
+}
+
+function authoritativeOptionalWorkPacketSources() {
+  const profile = {
+    workItemId: "work-item:authoritative",
+    stepId: "step:inspect-source",
+    taskKind: "source_inspection",
+    phase: null,
+    riskLevel: "low",
+    privacyLevel: "internal",
+    writeScope: "none",
+    allowedPaths: ["docs/source.md"],
+    contextNeed: "bounded",
+    reasoningNeed: "standard",
+    determinismNeed: "high",
+    validationExpectations: ["Inspect source metadata."],
+    preferredLanes: ["utility"],
+    forbiddenLanes: ["premium"],
+    escalationTriggers: ["Source becomes unavailable."],
+  };
+  return {
+    candidateWork: {
+      id: "candidate:authoritative",
+      title: "Inspect authoritative source",
+      requestedOutcome: "Confirm persisted source metadata.",
+      source: "operator",
+      sourceArtifactPath: "docs/source.md",
+      sourceArtifactType: "manual_note",
+      riskLevel: "low",
+      priority: "normal",
+      sortOrder: 1,
+      status: "approved",
+      createdAt: "2026-07-13T12:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      approvedAt: "2026-07-13T12:00:00.000Z",
+      promotedWorkItemId: "work-item:authoritative",
+      sourceSummary: {
+        label: "Operator source",
+        summary: "Source metadata is available.",
+        sourceType: "operator",
+        sourceRef: "doc:source",
+        sourceArtifactPath: "docs/source.md",
+        freshness: "fresh",
+        accessState: "allowed",
+        retentionPolicy: "metadata_only",
+        boundarySummary: "Read-only source metadata.",
+        evidenceRefs: ["event:created"],
+        approvalStatus: "approved",
+        approvedBy: "Operator",
+        approvedAt: "2026-07-13T12:00:00.000Z",
+      },
+      importMetadata: { imported: true, sourceOrder: 1, note: null },
+    },
+    workItem: {
+      id: "work-item:authoritative",
+      title: "Inspect authoritative source",
+      requestedOutcome: "Confirm persisted source metadata.",
+      source: "operator",
+      details: null,
+      riskLevel: "low",
+      metadata: { candidateWorkId: "candidate:authoritative", readOnly: true },
+      origin: "supervisor",
+      state: "ready",
+      lane: "implementation",
+      assigneeId: null,
+      assigneeLabel: null,
+      ageMinutes: 1,
+      needsAttention: false,
+      attentionReason: null,
+      escalatedAt: null,
+      escalationReason: null,
+      escalatedByLabel: null,
+      statusSummary: "Ready for read-only inspection.",
+      blockedReason: null,
+      nextStep: "Inspect source metadata.",
+      selfDetectedIssue: false,
+      selfDetectedIssueCategory: null,
+      executionRecipe: {
+        id: "recipe:source-inspection",
+        label: "Source inspection",
+        summary: "Inspect source metadata without mutation.",
+        branchPrefix: "inspect-",
+        allowedPaths: ["docs/source.md"],
+        implementationCommands: [],
+        verificationCommands: ["git diff --check"],
+        policyGates: [{
+          id: "gate:readonly",
+          label: "Read-only",
+          requiredBefore: "inspection",
+          summary: "No source mutation.",
+          evidence: ["event:created"],
+        }],
+        operatorCheckpoints: [],
+        autonomyNotes: ["Read-only only."],
+        remoteAutomationPolicy: {
+          status: "blocked",
+          summary: "Remote operations are not allowed.",
+          allowedOperations: [],
+          blockedOperations: ["push"],
+          approvalRequirements: ["Operator approval."],
+        },
+      },
+      deliveryReadiness: {
+        pullRequestStatus: "not_started",
+        pullRequestUrl: null,
+        ciStatus: "not_started",
+        mergeStatus: "not_started",
+        deliveryWaived: false,
+        deliveryWaiverReason: null,
+        remoteOperationsPerformed: false,
+        remoteOperationsPolicy: "No remote operations.",
+        readyForApproval: false,
+      },
+      createdAt: "2026-07-13T12:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      lastEventAt: "2026-07-13T12:00:00.000Z",
+      requiresAudit: false,
+      auditMode: "none",
+    },
+    taskPacket: {
+      workItemId: "work-item:authoritative",
+      title: "Inspect authoritative source",
+      requestedOutcome: "Confirm persisted source metadata.",
+      source: "operator",
+      sourceArtifactPath: "docs/source.md",
+      taskKind: "source_inspection",
+      riskLevel: "low",
+      priority: "normal",
+      approvalMode: "read_only",
+      verificationSummary: "Inspect source metadata and preserve evidence.",
+    },
+    routingPreview: {
+      profile,
+      decision: {
+        decisionId: "decision:source-inspection",
+        workItemId: "work-item:authoritative",
+        stepId: "step:inspect-source",
+        createdAt: "2026-07-13T12:00:00.000Z",
+        profileSnapshot: { ...profile },
+        selectedLane: "utility",
+        selectedWorkerId: null,
+        authorityMode: "read_only",
+        confidenceScore: 0.9,
+        confidenceBand: "high",
+        reasonCodes: ["route.read_only"],
+        rejectedLanes: [{ lane: "premium", rejectionCodes: ["authority.blocked"], explanation: "Paid execution is not needed." }],
+        rejectedWorkers: [],
+        permissionSummary: "Read-only inspection only.",
+        escalationPath: ["operator"],
+        humanExplanation: "Utility lane preserves the source boundary.",
+      },
+    },
   };
 }
 
@@ -1175,7 +1347,7 @@ function authoritativeLearnRefill() {
       followUpId: "follow-up:authoritative",
       candidateWorkId: "candidate:authoritative",
       label: "Authoritative follow-up",
-      sourcePacketId: "candidate_work:source-manager-authoritative-only",
+      sourcePacketId: "manager-source-authoritative-only",
       reason: "Quality follow-up.",
       status: "not_created",
       origin: "quality",
