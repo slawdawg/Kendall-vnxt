@@ -93,6 +93,22 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   assert.equal(unavailable.packet, null);
 });
 
+test("WorkPacket list failure clears a successful projection and reports the read error", async () => {
+  const fixtures = await loadCompiledDashboardFixtures();
+  const loader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => ({ sourceLabel: "live" }),
+    getWorkPackets: async () => { throw new Error("Supervisor WorkPacket list unavailable"); },
+  });
+
+  const unavailable = await loader.loadPipelineCockpitPackets();
+
+  assert.equal(unavailable.fixtureMode.kind, "unavailable");
+  assert.equal(unavailable.fixtureMode.label, "Supervisor unavailable");
+  assert.equal(unavailable.packets.length, 0);
+  assert.equal(unavailable.projection, null);
+  assert.equal(unavailable.projectionError, "Supervisor WorkPacket list unavailable");
+});
+
 test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
   const source = await readFile(detailRoutePath, "utf8");
   assert.match(source, /loadPipelineCockpitPacket\(decodedPacketId\)/);

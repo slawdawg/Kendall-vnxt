@@ -96,12 +96,15 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       projection: projectionResult.projection,
       projectionError: projectionResult.error,
     };
-  } catch {
+  } catch (error) {
+    const workPacketError = error && typeof error === "object" && "message" in error
+      ? String(error.message)
+      : "Supervisor WorkPacketV0 state could not be read.";
     return {
       fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor WorkPacketV0 state could not be read; no demo packets are substituted."),
       packets: [],
-      projection: projectionResult.projection,
-      projectionError: projectionResult.error,
+      projection: null,
+      projectionError: workPacketError,
     };
   }
 }
