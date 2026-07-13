@@ -132,6 +132,7 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     return false;
   }
   const packet = value as Partial<WorkPacketV0View>;
+  const lifecycleState = packet.lifecycleState;
   return typeof packet.packetId === "string" &&
     packet.packetId.trim().length > 0 &&
     typeof packet.title === "string" &&
@@ -156,11 +157,11 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.executionAttempts) &&
     Array.isArray(packet.transitionEvents) &&
     Array.isArray(packet.loopStopStates) &&
-    packet.lifecycleState !== null &&
-    typeof packet.lifecycleState === "object" &&
-    isEnumValue((packet.lifecycleState as Record<string, unknown>).stage, pipelineStages) &&
-    isEnumValue((packet.lifecycleState as Record<string, unknown>).owner, workPacketOwners) &&
-    isEnumValue((packet.lifecycleState as Record<string, unknown>).status, workPacketStatuses) &&
+    lifecycleState !== null &&
+    typeof lifecycleState === "object" &&
+    isEnumValue(lifecycleState.stage, pipelineStages) &&
+    isEnumValue(lifecycleState.owner, workPacketOwners) &&
+    isEnumValue(lifecycleState.status, workPacketStatuses) &&
     reachableNestedWorkPacketFieldsAreSafe(packet);
 }
 
@@ -276,7 +277,10 @@ function isArtifactRefV0(value: unknown): boolean {
 }
 
 function reachableNestedWorkPacketFieldsAreSafe(packet: Partial<WorkPacketV0View>): boolean {
-  const lifecycleState = packet.lifecycleState as Record<string, unknown>;
+  const lifecycleState = packet.lifecycleState;
+  if (!lifecycleState) {
+    return false;
+  }
   if (
     lifecycleState.stage !== packet.currentStage ||
     lifecycleState.owner !== packet.currentOwner ||
