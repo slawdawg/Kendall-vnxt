@@ -705,9 +705,15 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
     await expect(truthSummary.getByText("Source:")).toBeVisible();
     await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
-    await page.getByRole("button", { name: `Inspect packet: ${title}` }).click();
-    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    const inspectButton = page.getByRole("button", { name: `Inspect packet: ${title}` });
+    await expect(inspectButton).toBeVisible();
+    await inspectButton.click();
+    const packetInspector = page.getByRole("complementary", { name: "Packet inspection panel" });
+    await expect(packetInspector).toBeVisible();
+    await expect(packetInspector.getByRole("heading", { name: title })).toBeVisible();
+    const runtimeDetailLink = packetInspector.getByRole("link", { name: "Open full packet" });
+    await expect(runtimeDetailLink).toBeVisible();
+    await expect(runtimeDetailLink).toHaveAttribute("href", `/pipeline/packets/${encodeURIComponent(packetId)}`);
     await page.reload();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
@@ -723,8 +729,8 @@ test.describe("dashboard workflow coverage", () => {
     await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
     const encodedPacketId = encodeURIComponent(packetId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     await expect(page).toHaveURL(new RegExp(`/pipeline/packets/${encodedPacketId}$`));
+    await expect(page.getByRole("main", { name: "Packet detail" })).toBeVisible();
     await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
   });
 
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {

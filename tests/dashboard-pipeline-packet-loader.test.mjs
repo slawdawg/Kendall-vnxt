@@ -224,6 +224,121 @@ test("typed fixture provenance is rejected without arbitrary-string false positi
   assert.equal(labelOnly.packets.length, 1);
 });
 
+test("nested review, gate, and learn fixture provenance fails closed without scanning ordinary text", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const reviewSummary = {
+    reviewer: "claude_reviewer",
+    status: "complete",
+    summary: "Read-only review complete.",
+    evidenceRefs: ["review:complete"],
+    artifactRefs: ["artifact:review"],
+  };
+  const learnOutcome = authoritativeLearnOutcome();
+  const learnRefill = authoritativeLearnRefill();
+  const nestedFixtureCases = [
+    ["review evidence", { reviewSummaries: [{ ...reviewSummary, evidenceRefs: ["fixture:nested-review"] }] }],
+    ["learn evidence", { learnOutcome: { ...learnOutcome, evidenceRefs: ["fixture:nested-learn-evidence"] } }],
+    ["learn source", { learnOutcome: { ...learnOutcome, sourceRefs: ["fixture:nested-learn-source"] } }],
+    ["learn decision evidence", {
+      learnOutcome: {
+        ...learnOutcome,
+        decisionRecords: [{ ...learnOutcome.decisionRecords[0], evidenceRefs: ["fixture:nested-decision"] }],
+      },
+    }],
+    ["human gate required evidence", {
+      humanGateActions: [{ ...authoritativeHumanGateAction(), requiredEvidenceRefs: ["fixture:nested-human-gate"] }],
+    }],
+    ["learn refill follow-up evidence", {
+      learnRefill: {
+        ...learnRefill,
+        followUpCandidates: [{ ...learnRefill.followUpCandidates[0], evidenceRefs: ["fixture:nested-follow-up"] }],
+      },
+    }],
+    ["learn refill source state", {
+      learnRefill: {
+        ...learnRefill,
+        refillSourceState: { ...learnRefill.refillSourceState, sourceRefs: ["fixture:nested-refill-source"] },
+      },
+    }],
+    ["learn refill ready-to-test verification", {
+      learnRefill: {
+        ...learnRefill,
+        readyToTest: { ...learnRefill.readyToTest, verificationRefs: ["fixture:nested-verification"] },
+      },
+    }],
+    ["gate replay ref state", {
+      gateStateValidation: {
+        ...authoritativeGateStateValidation(),
+        refStates: [{ ...authoritativeGateStateValidation().refStates[0], refId: "fixture:nested-gate-ref" }],
+      },
+    }],
+  ];
+
+  for (const [label, overrides] of nestedFixtureCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const ordinaryTextLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{
+      ...packet,
+      reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
+      learnRefill: { ...learnRefill, nextSafeAction: "Document fixture:legacy as ordinary text." },
+    }],
+  });
+  const ordinaryText = await ordinaryTextLoader.loadPipelineCockpitPackets();
+  assert.equal(ordinaryText.fixtureMode.kind, "runtime");
+  assert.equal(ordinaryText.packets.length, 1);
+});
+
+test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const allowedSources = [
+    "candidate_work",
+    "work_item",
+    "execution_attempt",
+    "workflow_event",
+    "memory_proposal",
+    "delivery_evidence",
+    "source_missing",
+  ];
+
+  for (const source of allowedSources) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, lifecycleState: { ...packet.lifecycleState, source } }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "runtime", source);
+  }
+
+  const missingSourceState = { ...packet.lifecycleState };
+  delete missingSourceState.source;
+  for (const [label, lifecycleState] of [
+    ["missing", missingSourceState],
+    ["null", { ...packet.lifecycleState, source: null }],
+    ["non-string", { ...packet.lifecycleState, source: 42 }],
+    ["empty", { ...packet.lifecycleState, source: "" }],
+    ["unknown", { ...packet.lifecycleState, source: "supervisor_runtime" }],
+  ]) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, lifecycleState }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
 test("malformed nested evidence and artifact references fail closed before rendering", async () => {
   const fixtures = populatedFixtureCatalog();
   for (const overrides of [
@@ -430,11 +545,14 @@ test("normal mode does not substitute the real compiled fixture catalog", async 
   assert.equal(unavailable.packets.map((packet) => packet.packetId).length, 0);
 });
 
-test("restricted source refs and case-insensitive synthetic prefixes fail closed", async () => {
+test("source path invariants and case-insensitive synthetic prefixes fail closed", async () => {
   const fixtures = populatedFixtureCatalog();
   for (const [label, packetOverride] of [
     ["restricted-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", canonical: false, summaryOnly: true, pathOrUrl: "docs/source.md", blockedReason: "blocked by policy" }] }],
     ["restricted-source-url", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "missing", canonical: false, summaryOnly: true, pathOrUrl: "https://example.com/source", blockedReason: "missing from backend" }] }],
+    ["restricted-source-empty-reason", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "excluded", pathOrUrl: null, blockedReason: "" }] }],
+    ["allowed-source-blocked-reason", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], blockedReason: "not allowed for an accessible source" }] }],
+    ["malformed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: 42 }] }],
     ["demo-prefixed-packet-id", { packetId: "Demo:synthetic-runtime" }],
     ["demo-prefixed-source-ref", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "DeMo:source-ref" }] }],
     ["demo-prefixed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: " demo:source-path " }] }],
@@ -449,6 +567,23 @@ test("restricted source refs and case-insensitive synthetic prefixes fail closed
     assert.equal(result.fixtureMode.kind, "invalid", label);
     assert.equal(result.packets.length, 0, label);
   }
+
+  const canonicalRestrictedPacket = authoritativeWorkPacket();
+  canonicalRestrictedPacket.sourceRefs = [{
+    ...canonicalRestrictedPacket.sourceRefs[0],
+    accessState: "blocked",
+    canonical: true,
+    summaryOnly: true,
+    pathOrUrl: null,
+    blockedReason: "Canonical source metadata is blocked by policy.",
+  }];
+  const canonicalRestrictedLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([canonicalRestrictedPacket.packetId]),
+    getWorkPackets: async () => [canonicalRestrictedPacket],
+  });
+  const canonicalRestricted = await canonicalRestrictedLoader.loadPipelineCockpitPackets();
+  assert.equal(canonicalRestricted.fixtureMode.kind, "runtime");
+  assert.equal(canonicalRestricted.packets.length, 1);
 });
 
 test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
@@ -645,6 +780,146 @@ function authoritativeWorkPacket() {
     loopStopStates: [],
     reviewSummaries: [],
     recoveryActions: [],
+  };
+}
+
+function authoritativeHumanGateAction() {
+  return {
+    actionId: "action:approve-route",
+    type: "approve_route",
+    family: "Approve",
+    label: "Approve route",
+    uiCopy: "Approve the bounded route.",
+    status: "available",
+    authorityFamily: "route-approval",
+    payload: {
+      packetId: "manager-source-authoritative-only",
+      actionId: "action:approve-route",
+      decisionId: "decision:approve-route",
+    },
+    requiredEvidenceRefs: ["event:created"],
+    stopLines: ["Stop before execution."],
+    rollbackPath: "Return to route review.",
+    resultingStage: "shape",
+    resultingOwner: "kendall",
+    auditEventType: "route_approved",
+    reasonCodes: ["route.approved"],
+  };
+}
+
+function authoritativeLearnOutcome() {
+  return {
+    outcomeId: "learn-outcome:authoritative",
+    status: "accepted",
+    retentionClass: "metadata_only",
+    learningProposalCount: 1,
+    documentationProposalStatus: "approved",
+    automationAuthorityChangeStatus: "not_requested",
+    blockedWriteBackState: "review_gated",
+    nextSafeAction: "Retain metadata-only learning evidence.",
+    decisionRecords: [{
+      decisionId: "learn-decision:authoritative",
+      proposalId: "memory-proposal:authoritative",
+      proposalType: "decision_record",
+      actor: "operator",
+      result: "approved",
+      operatorAction: "approve",
+      evidenceRefs: ["event:created"],
+      recoveryPath: "Reopen learn review.",
+      writeBackStatus: "review_gated",
+      canonicalMutationAllowed: false,
+      durableWriteAllowed: false,
+    }],
+    evidenceRefs: ["event:created"],
+    sourceRefs: ["doc:source"],
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    durableWriteAllowed: false,
+  };
+}
+
+function authoritativeLearnRefill() {
+  return {
+    projectionId: "learn-refill:authoritative",
+    retentionClass: "metadata_only",
+    followUpCandidates: [{
+      followUpId: "follow-up:authoritative",
+      candidateWorkId: "candidate:authoritative",
+      label: "Authoritative follow-up",
+      sourcePacketId: "manager-source-authoritative-only",
+      reason: "Quality follow-up.",
+      status: "not_created",
+      origin: "quality",
+      reentryPath: "reenter_capture",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    }],
+    operatorOwnedExits: [],
+    refillSourceState: {
+      state: "healthy",
+      operationalLabel: "Healthy",
+      explanation: "Authoritative source remains available.",
+      sourceRefs: ["doc:source"],
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+    },
+    housekeeping: {
+      status: "complete",
+      summary: "Metadata-only housekeeping complete.",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+    },
+    sourceExhaustion: {
+      exhausted: false,
+      summary: "Source is not exhausted.",
+      sourceRefs: ["doc:source"],
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+    },
+    readyToTest: {
+      readyId: "ready:authoritative",
+      userFacingSummary: "Ready for focused verification.",
+      testableSurface: "/pipeline",
+      verificationRefs: ["check:loader"],
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    nextSafeAction: "Run focused verification.",
+    rawPayloadRetained: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+  };
+}
+
+function authoritativeGateStateValidation() {
+  return {
+    status: "matched",
+    storedStage: "capture",
+    derivedStage: "capture",
+    storedOwner: "kendall",
+    derivedOwner: "kendall",
+    storedStatus: "waiting",
+    derivedStatus: "waiting",
+    eventCount: 1,
+    latestEventType: "packet_created",
+    replayedEventTypes: ["packet_created"],
+    mismatchReasons: [],
+    blockedReasons: [],
+    refStates: [{
+      refId: "event:created",
+      refType: "event",
+      state: "allowed",
+      label: "Created event",
+    }],
+    readOnly: true,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
   };
 }
 
