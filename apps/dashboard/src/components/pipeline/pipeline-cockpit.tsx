@@ -751,12 +751,13 @@ function ProjectionTruthSummary({
   const projectionTooOld = projection ? isProjectionTooOld(projection) : false;
   const effectiveSourceLabel = projectionTooOld && projection?.sourceLabel === "live" ? "stale" : projection?.sourceLabel;
   const effectiveFreshnessState = projectionTooOld && projection?.freshnessState === "live" ? "stale" : projection?.freshnessState;
+  const explicitNonRuntimeSource = sourceState.kind !== "runtime" ? sourceState.kind : null;
   const proofSourceLabel = projectionError ? "unavailable" : effectiveSourceLabel ?? "unavailable";
   const proofFreshnessState = projectionError ? "unavailable" : effectiveFreshnessState ?? "unavailable";
   const liveProofState = projectionLiveProofState(projection, proofSourceLabel, proofFreshnessState);
   const displayLabels = projectionDisplayLabels(projection, proofSourceLabel, proofFreshnessState, Boolean(projectionError), liveProofState);
-  const sourceLabel = sourceState.kind === "empty" ? "empty" : displayLabels.sourceLabel;
-  const freshnessState = sourceState.kind === "empty" ? "empty" : displayLabels.freshnessState;
+  const sourceLabel = explicitNonRuntimeSource ?? displayLabels.sourceLabel;
+  const freshnessState = explicitNonRuntimeSource ?? displayLabels.freshnessState;
   const statusNeedsAnnouncement = sourceLabel === "unavailable" || displayLabels.freshnessState === "stale" || Boolean(projectionError) || ["empty", "invalid", "demo"].includes(sourceState.kind);
   const backendState = projectionError
     ? "unavailable"
@@ -773,6 +774,8 @@ function ProjectionTruthSummary({
           ? "limited"
           : sourceState.kind === "empty"
             ? "empty"
+            : sourceState.kind === "demo"
+              ? "demo"
             : sourceState.kind === "invalid"
               ? "invalid"
               : "unavailable";
@@ -3296,7 +3299,7 @@ function normalizeStageEmptyReason(
   freshnessState: CockpitStageSummary["freshnessState"]
 ) {
   if (sourceLabel === "invalid" || freshnessState === "invalid") {
-    return "unknown";
+    return reason;
   }
   if (sourceLabel === "unavailable" || freshnessState === "unavailable") {
     return "backend_unavailable";
@@ -3319,6 +3322,12 @@ function stageHealthStateLabel(
   freshnessState: CockpitStageSummary["freshnessState"],
   packetCount: number
 ) {
+  if (sourceLabel === "invalid" || freshnessState === "invalid") {
+    return "invalid supervisor state";
+  }
+  if (sourceLabel === "demo" || freshnessState === "demo") {
+    return "demo fixtures";
+  }
   if (packetCount > 0) {
     if (sourceLabel === "unavailable" || freshnessState === "unavailable") {
       return "backend unavailable";
@@ -3326,14 +3335,8 @@ function stageHealthStateLabel(
     if (sourceLabel === "stale" || freshnessState === "stale") {
       return "projection stale";
     }
-    if (sourceLabel === "demo") {
-      return "demo fixtures";
-    }
     if (sourceLabel === "empty") {
       return "supervisor empty";
-    }
-    if (sourceLabel === "invalid") {
-      return "invalid supervisor state";
     }
     if (sourceLabel === "simulated") {
       return "simulated";
