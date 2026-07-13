@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 const SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0";
 const CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0";
 const RAMP_SCHEMA_VERSION = "pipeline-live-capacity-ramp/v0";
@@ -31,6 +33,7 @@ const CANONICAL_READINESS_COMPONENT_IDS = [
 const CANONICAL_PRODUCT_MODES = new Set(["contract_only", "operator_review", "local_proof", "read_only", "bounded_write"]);
 const CANONICAL_DELIVERY_ACTIONS = new Set(["branch_push", "pull_request", "merge", "cleanup"]);
 const CANONICAL_RETENTION_DISPOSITIONS = new Set(["metadata_only", "summary_only", "fixture_only"]);
+const CANONICAL_ACTION_TYPED_REASONS = new Set(["no_eligible_work", "blocked_by_policy", "blocked_by_approval", "blocked_by_resources", "runtime_unavailable", "worker_failed", "verification_failed", "delivery_blocked", "evidence_invalid", "projection_stale", "invalid_transition", "test_not_ready", "authenticated_session_required", "unsupported_action", "unknown"]);
 const CANONICAL_FORBIDDEN_FIELD = /^(?:rawPrompt|rawCompletion|rawPayload|providerPayload|reasoningTrace|secret|credential|password|apiKey|accessToken|terminalOutput|stdout|stderr|transcript)$/i;
 const SAFE_REF = /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact|readiness):[A-Za-z0-9._/@:-]{1,180}$/;
 const SECRET_LIKE = /\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])/i;
@@ -116,9 +119,22 @@ function sha256Ref(value) {
   return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value) ? value : "";
 }
 
-function observedEvidenceAttestation(value, packetSchemaVersion, checkedAtMs) {
+function exactObjectKeys(value, keys) {
+  return plainRecord(value) && Object.keys(value).every((key) => keys.has(key));
+}
+
+function observationTargetRef(target = {}) {
+  const owner = safeId(target?.owner);
+  const workerId = safeId(target?.workerId);
+  if (owner && (!workerId || owner === workerId || owner.endsWith(`/${workerId}`))) return owner;
+  return owner && workerId ? `${owner}/${workerId}` : owner || workerId;
+}
+
+function observedEvidenceAttestation(value, packetSchemaVersion, checkedAtMs, expectedTargetRef = "") {
   if (!plainRecord(value) || value.schemaVersion !== OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION ||
-      value.evidenceClass !== "live_observed" || value.metadataOnly !== true || value.rawPayloadRetained !== false) return null;
+      value.evidenceClass !== "live_observed" || value.metadataOnly !== true || value.rawPayloadRetained !== false ||
+      !exactObjectKeys(value, new Set(["schemaVersion", "attestationId", "evidenceClass", "observer", "subject", "receipt", "metadataOnly", "rawPayloadRetained"])) ||
+      !canonicalPayloadSafe(value)) return null;
   const observer = plainRecord(value.observer) ? value.observer : {};
   const subject = plainRecord(value.subject) ? value.subject : {};
   const receipt = plainRecord(value.receipt) ? value.receipt : {};
@@ -127,11 +143,15 @@ function observedEvidenceAttestation(value, packetSchemaVersion, checkedAtMs) {
   const expiresAtMs = Date.parse(receipt.expiresAt || "");
   const valid = Boolean(
     safeId(value.attestationId) && observer.observerType === "independent_runtime" && safeId(observer.observerId) &&
-    subject.packetSchemaVersion === packetSchemaVersion && safeId(subject.targetRef) && safeId(receipt.receiptId) &&
+    exactObjectKeys(observer, new Set(["observerType", "observerId"])) &&
+    exactObjectKeys(subject, new Set(["packetSchemaVersion", "targetRef"])) &&
+    exactObjectKeys(receipt, new Set(["receiptId", "observedAt", "issuedAt", "expiresAt", "evidenceDigestSha256", "sourceRefs", "evidenceRefs"])) &&
+    subject.packetSchemaVersion === packetSchemaVersion && safeId(subject.targetRef) &&
+    (!expectedTargetRef || safeId(subject.targetRef) === expectedTargetRef) && safeId(receipt.receiptId) &&
     sha256Ref(receipt.evidenceDigestSha256) && refs(receipt.sourceRefs).length === receipt.sourceRefs?.length && receipt.sourceRefs.length > 0 &&
     refs(receipt.evidenceRefs).length === receipt.evidenceRefs?.length && receipt.evidenceRefs.length > 0 &&
     Number.isFinite(observedAtMs) && Number.isFinite(issuedAtMs) && Number.isFinite(expiresAtMs) &&
-    observedAtMs <= issuedAtMs && issuedAtMs <= checkedAtMs + FUTURE_SKEW_MS && expiresAtMs >= checkedAtMs &&
+    observedAtMs <= issuedAtMs && issuedAtMs <= expiresAtMs && issuedAtMs <= checkedAtMs + FUTURE_SKEW_MS && expiresAtMs >= checkedAtMs &&
     checkedAtMs - observedAtMs <= FRESHNESS_TTL_MS && expiresAtMs - issuedAtMs <= FRESHNESS_TTL_MS
   );
   if (!valid) return null;
@@ -159,23 +179,27 @@ function evidenceClassFor({ fixtureEvidence, attestation }) {
   return fixtureEvidence ? "fixture" : attestation ? "live_observed" : "integrated_local";
 }
 
-function attestationBindsPacket(attestation, sourceRefs, evidenceRefs) {
+function attestationBindsPacket(attestation, sourceRefs, evidenceRefs, expectedTargetRef = "") {
   return Boolean(attestation &&
+    (!expectedTargetRef || attestation.subject.targetRef === expectedTargetRef) &&
     attestation.receipt.sourceRefs.some((ref) => sourceRefs.includes(ref)) &&
     attestation.receipt.evidenceRefs.some((ref) => evidenceRefs.includes(ref)));
 }
 
-function validateEvidenceProvenance(evidence, packetSchemaVersion, checkedAtMs) {
+function validateEvidenceProvenance(evidence, packetSchemaVersion, checkedAtMs, context = {}) {
   const blockers = [];
   if (!EVIDENCE_CLASSES.has(evidence?.evidenceClass)) {
     blockers.push({ code: "evidence_provenance_missing", message: "Evidence requires an explicit provenance class." });
     return blockers;
   }
-  const attestation = observedEvidenceAttestation(evidence?.observedEvidenceAttestation, packetSchemaVersion, checkedAtMs);
+  const expectedTargetRef = safeId(context.targetRef || observationTargetRef(evidence?.target));
+  const sourceRefs = refs(context.sourceRefs || evidence?.sourceRefs || evidence?.target?.sourceRefs);
+  const evidenceRefs = refs(context.evidenceRefs || evidence?.evidenceRefs || evidence?.target?.evidenceRefs);
+  const attestation = observedEvidenceAttestation(evidence?.observedEvidenceAttestation, packetSchemaVersion, checkedAtMs, expectedTargetRef);
   if (evidence.evidenceClass === "live_observed" && !attestation) {
     blockers.push({ code: "evidence_attestation_invalid", message: "Live-observed evidence requires a fresh independently issued observation receipt bound to this packet schema." });
   }
-  if (attestation && !attestationBindsPacket(attestation, refs(evidence?.sourceRefs), refs(evidence?.evidenceRefs))) {
+  if (attestation && !attestationBindsPacket(attestation, sourceRefs, evidenceRefs, expectedTargetRef)) {
     blockers.push({ code: "evidence_attestation_invalid", message: "The independent observation receipt is not bound to this packet's source and evidence refs." });
   }
   if (evidence.evidenceClass !== "live_observed" && evidence?.observedEvidenceAttestation != null) {
@@ -408,6 +432,141 @@ export function projectCanonicalSupervisorPacket(packet = {}, context = {}) {
   };
 }
 
+function canonicalCapability(value) {
+  if (!plainRecord(value) || !safeId(value.actionId) || !safeId(value.targetType) ||
+      (value.targetId != null && !safeId(value.targetId)) ||
+      !["available", "unavailable", "gated", "simulated"].includes(value.capabilityState) ||
+      !["not_required", "allowed", "needs_product_approval", "needs_authority_approval", "needs_resource_approval", "needs_destination_approval", "needs_safety_approval", "blocked"].includes(value.authorityState) ||
+      !["low", "medium", "high", "extreme"].includes(value.riskTier) ||
+      (value.typedReason != null && !CANONICAL_ACTION_TYPED_REASONS.has(value.typedReason)) || !safeText(value.expectedResultSummary) ||
+      !canonicalRefs(value.evidenceRefs) || value.evidenceRefs.length === 0 ||
+      value.metadataOnly !== true || value.rawPayloadRetained !== false || !canonicalPayloadSafe(value)) return null;
+  return structuredClone(value);
+}
+
+function canonicalRuntimeReadiness(value, nowMs) {
+  if (!plainRecord(value) || value.schemaVersion !== "pipeline-operational-runtime-readiness/v0" ||
+      value.actionSchemaVersion !== "pipeline-operational-action/v0" ||
+      !["ready", "degraded", "blocked", "unavailable", "unknown"].includes(value.readinessState) ||
+      !["disabled", "local_proof", "read_only", "bounded_write", "unavailable", "unknown"].includes(value.operationalMode) ||
+      !["live", "stale", "unavailable", "unknown"].includes(value.freshnessState) ||
+      !["available", "gated", "unavailable", "simulated", "unknown"].includes(value.capabilityState) ||
+      !safeText(value.summary) || !canonicalRefs(value.evidenceRefs) ||
+      value.metadataOnly !== true || value.rawPayloadRetained !== false || !Array.isArray(value.actionCapabilities)) return null;
+  const checkedAtMs = Date.parse(value.checkedAt || "");
+  const expiresAtMs = Date.parse(value.expiresAt || "");
+  if (!Number.isFinite(checkedAtMs) || !Number.isFinite(expiresAtMs) || checkedAtMs > nowMs + FUTURE_SKEW_MS ||
+      expiresAtMs < nowMs || expiresAtMs <= checkedAtMs || expiresAtMs - checkedAtMs > FRESHNESS_TTL_MS || value.freshnessState !== "live") return null;
+  if ((value.readinessState === "ready" && value.capabilityState === "available" && value.typedReason !== null) ||
+      (value.readinessState !== "ready" && !CANONICAL_ACTION_TYPED_REASONS.has(value.typedReason))) return null;
+  const capabilities = value.actionCapabilities.map(canonicalCapability);
+  if (!capabilities.every(Boolean) || new Set(capabilities.map((entry) => entry.actionId)).size !== capabilities.length) return null;
+  return { ...structuredClone(value), actionCapabilities: capabilities };
+}
+
+function blockedCanonicalOperationalActions(capabilities, code, checkedAt, terminal = false) {
+  const typedReason = terminal ? "runtime_unavailable" : code.includes("stale") ? "projection_stale" : "evidence_invalid";
+  return {
+    schemaVersion: "pipeline-operational-runtime-readiness/v0",
+    actionSchemaVersion: "pipeline-operational-action/v0",
+    source: "canonical_supervisor_projection",
+    readinessState: "degraded",
+    operationalMode: "read_only",
+    freshnessState: code === "canonical_product_mode_stale" ? "stale" : "unknown",
+    capabilityState: "gated",
+    typedReason,
+    checkedAt,
+    expiresAt: new Date(Date.parse(checkedAt) + FRESHNESS_TTL_MS).toISOString(),
+    summary: terminal
+      ? "Canonical supervisor packet is terminal; manager mutation remains blocked."
+      : "Canonical supervisor projection is incomplete, stale, or contradictory; manager fallback is disabled.",
+    actionCapabilities: capabilities.map((entry) => ({
+      ...entry,
+      capabilityState: ["inspect", "refresh_projection"].includes(entry.actionId) ? entry.capabilityState : "unavailable",
+      authorityState: ["inspect", "refresh_projection"].includes(entry.actionId) ? entry.authorityState : "blocked",
+      typedReason: ["inspect", "refresh_projection"].includes(entry.actionId) ? entry.typedReason : typedReason,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    })),
+    evidenceRefs: ["evidence:canonical-supervisor-projection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+/** Consume one selected supervisor projection without allowing manager-inferred fallback. */
+export function consumeCanonicalSupervisorProjection(projection = {}, context = {}) {
+  const record = plainRecord(projection) ? projection : {};
+  const lists = [record.workPackets, record.selectedPacketDetails].filter(Array.isArray);
+  const entries = lists.flat().filter(plainRecord);
+  const canonicalEntries = entries.filter((entry) => entry.canonicalContract != null || entry.productModeMapping != null);
+  if (canonicalEntries.length === 0) return { present: false, ok: false, operationalActions: null, blockers: [] };
+
+  const nowValue = context.now || record.generatedAt || new Date().toISOString();
+  const parsedNowMs = Date.parse(nowValue);
+  const nowMs = Number.isFinite(parsedNowMs) ? parsedNowMs : Date.now();
+  const checkedAt = new Date(nowMs).toISOString();
+  const detailed = (Array.isArray(record.selectedPacketDetails) ? record.selectedPacketDetails : [])
+    .filter((entry) => plainRecord(entry) && (entry.canonicalContract != null || entry.productModeMapping != null));
+  const selected = detailed[0] || canonicalEntries[0];
+  const samePacket = entries.filter((entry) => entry.packetId === selected.packetId);
+  const blockers = [];
+  const canonicalPacketIds = new Set(canonicalEntries.map((entry) => safeId(entry.packetId)).filter(Boolean));
+  if (!Number.isFinite(parsedNowMs)) {
+    blockers.push({ code: "canonical_projection_time_invalid", message: "Canonical supervisor projection time is malformed.", nextAction: "Refresh the authoritative supervisor projection." });
+  }
+  if (!safeId(selected.packetId) || detailed.length > 1 || (detailed.length === 0 && canonicalPacketIds.size !== 1)) {
+    blockers.push({ code: "canonical_packet_ambiguous", message: "Canonical supervisor projection must identify exactly one selected packet.", nextAction: "Refresh the selected supervisor packet projection." });
+  }
+  if (samePacket.some((entry) => !isDeepStrictEqual(entry.canonicalContract ?? null, selected.canonicalContract ?? null) ||
+      !isDeepStrictEqual(entry.productModeMapping ?? null, selected.productModeMapping ?? null) ||
+      entry.status !== selected.status || entry.currentStage !== selected.currentStage)) {
+    blockers.push({ code: "canonical_packet_contradiction", message: "Canonical supervisor packet representations contradict each other.", nextAction: "Refresh the authoritative supervisor projection." });
+  }
+  const projected = projectCanonicalSupervisorPacket(selected, { now: checkedAt });
+  blockers.push(...projected.blockers);
+
+  const runtime = canonicalRuntimeReadiness(record.runtimeReadiness, nowMs);
+  if (!runtime) blockers.push({ code: "canonical_runtime_invalid", message: "Canonical runtime readiness is missing, stale, or malformed.", nextAction: "Refresh canonical runtime readiness." });
+  const selectedCapabilities = Array.isArray(selected.actionCapabilities) ? selected.actionCapabilities.map(canonicalCapability) : [];
+  const topCapabilities = Array.isArray(record.actionCapabilities) ? record.actionCapabilities.map(canonicalCapability) : [];
+  const capabilities = runtime?.actionCapabilities || selectedCapabilities.filter(Boolean);
+  if (!Array.isArray(selected.actionCapabilities) || !Array.isArray(record.actionCapabilities) || capabilities.length === 0 ||
+      selectedCapabilities.some((entry) => !entry) || topCapabilities.some((entry) => !entry) ||
+      new Set(selectedCapabilities.filter(Boolean).map((entry) => entry.actionId)).size !== selectedCapabilities.length ||
+      new Set(topCapabilities.filter(Boolean).map((entry) => entry.actionId)).size !== topCapabilities.length) {
+    blockers.push({ code: "canonical_capabilities_invalid", message: "Canonical action capabilities are missing or malformed.", nextAction: "Refresh typed supervisor capabilities." });
+  }
+  if (!isDeepStrictEqual(selectedCapabilities, capabilities) || !isDeepStrictEqual(topCapabilities, capabilities)) {
+    blockers.push({ code: "canonical_capability_contradiction", message: "Canonical capability projections contradict runtime readiness.", nextAction: "Refresh typed supervisor capabilities." });
+  }
+  if (capabilities.some((entry) => !["inspect", "refresh_projection"].includes(entry.actionId) &&
+      entry.capabilityState === "available" && ["allowed", "not_required"].includes(entry.authorityState))) {
+    blockers.push({ code: "canonical_capability_authority_violation", message: "Canonical projection cannot grant manager mutation authority.", nextAction: "Block the capability and refresh supervisor authority truth." });
+  }
+  const terminal = ["done", "failed"].includes(selected.status);
+  const ok = blockers.length === 0;
+  const operationalActions = ok && !terminal && projected.readinessReady
+    ? { ...structuredClone(runtime), source: "canonical_supervisor_projection", metadataOnly: true, rawPayloadRetained: false }
+    : blockedCanonicalOperationalActions(capabilities.filter(Boolean), blockers[0]?.code || "canonical_readiness_blocked", checkedAt, terminal);
+  return {
+    present: true,
+    ok,
+    terminal,
+    blockers,
+    source: projected.source,
+    readinessComponents: projected.readinessComponents,
+    productModeMapping: projected.productModeMapping,
+    retentionEvidence: projected.retentionEvidence,
+    qualityEvidence: projected.qualityEvidence,
+    deliveryEvidence: projected.deliveryEvidence,
+    actionCapabilities: capabilities.filter(Boolean),
+    operationalActions,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function threshold(value, name) {
   if (!value || typeof value !== "object" || !Number.isFinite(Number(value.value))) return null;
   const operator = ["lt", "lte", "gt", "gte", "eq"].includes(value.operator) ? value.operator : "";
@@ -482,6 +641,21 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
     sourceRefs: refs(canonicalSupervisor.present ? canonicalSourceRefs : targetInput.sourceRefs),
     evidenceRefs: refs(canonicalSupervisor.present ? canonicalEvidenceRefs : targetInput.evidenceRefs),
   };
+  const targetRef = observationTargetRef(target);
+  const fixtureEvidence = context.fixtureEvidence === true;
+  const observationAttestation = observedEvidenceAttestation(
+    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
+    SCHEMA_VERSION,
+    checkedAtMs,
+    targetRef,
+  );
+  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(
+    observationAttestation,
+    target.sourceRefs,
+    target.evidenceRefs,
+    targetRef,
+  ) ? observationAttestation : null;
+  const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
   const profile = context.readinessProfile || options.readinessProfile || {};
   const thresholds = explicitThresholds(profile);
   const missingThresholds = REQUIRED_INDICATORS.filter((name) => !thresholds.some((entry) => entry.indicator === name));
@@ -528,7 +702,7 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
     suppliedGate(gatesInput, "resources", ["normal", "ready"].includes(context.resources?.status || context.resources?.state), "resource_pressure", "Wait for an explicitly normal resource posture.", evidence),
     suppliedGate(gatesInput, "heartbeat", context.heartbeat?.fresh === true, "evidence_stale", "Refresh the worker heartbeat within five minutes.", evidence),
     suppliedGate(gatesInput, "dispatcher_lease", context.dispatcherLease?.proven === true, "dispatcher_lease_unproven", "Provide dispatcher lease proof for the exact target.", evidence),
-    suppliedGate(gatesInput, "receipt_evidence", context.receipt?.proven === true, "receipt_unproven", "Provide receipt/checkpoint proof for the exact target.", evidence),
+    gate("receipt_evidence", evidenceClass === "live_observed", "evidence_attestation_invalid", "Provide a fresh independent observation receipt bound to the exact target.", evidence),
   ];
   if (canonicalSupervisor.present) {
     const canonicalBlocker = canonicalSupervisor.blockers[0];
@@ -545,9 +719,11 @@ export function buildOperationalReadinessContract(options = {}, context = {}) {
   }
   const typedBlockers = gates.filter((entry) => entry.state !== "pass").map((entry) => ({ gateId: entry.gateId, reason: entry.typedReason || "unknown", nextAction: entry.nextAction }));
   const authoritativeFreshness = canonicalSupervisor.present ? canonicalSupervisor.productModeMapping?.freshnessState : context.freshnessState;
-  const outcome = typedBlockers.length === 0 && backendTruth === "live" && authoritativeFreshness === "live" && context.metadataOnly !== false ? "go" : "no_go";
+  const outcome = typedBlockers.length === 0 && backendTruth === "live" && authoritativeFreshness === "live" && evidenceClass === "live_observed" && context.metadataOnly !== false ? "go" : "no_go";
   return {
     schemaVersion: SCHEMA_VERSION,
+    evidenceClass,
+    observedEvidenceAttestation: boundObservationAttestation,
     target,
     backendTruth,
     authorityState,
@@ -582,7 +758,14 @@ export function validateOperationalReadinessContract(contract = {}) {
   if (contract?.outcome === "go" && (!Array.isArray(contract?.configuration?.names) || contract.configuration.names.length === 0 || contract.configuration.noValueRetention !== true || contract.configuration.validationState !== "pass" || contract.configuration.names.some((name) => !safeId(name)))) blockers.push({ code: "configuration_invalid", message: "Configuration readiness must contain allowlisted names without values.", nextAction: "Provide validated allowlisted configuration metadata only." });
   if (contract?.outcome === "go" && (!safeId(contract?.telemetry?.source) || !safeId(contract?.telemetry?.coverage) || contract.telemetry.alertReady !== true || !Array.isArray(contract.telemetry.alertThresholdIds) || contract.telemetry.alertThresholdIds.length === 0)) blockers.push({ code: "telemetry_missing", message: "Telemetry and alert coverage is incomplete.", nextAction: "Provide fresh telemetry source, coverage, and alert threshold metadata." });
   if (contract?.outcome === "go" && (contract.backendTruth !== "live" || contract.typedBlockers?.length)) blockers.push({ code: "backend_truth_unproven", message: "Go requires live backend truth and no blockers.", nextAction: "Hold until live proof is complete." });
+  if (contract?.outcome === "go" && contract.gates?.some((entry) => entry?.state !== "pass")) blockers.push({ code: "predecessor_gate_not_passed", message: "Go requires every readiness gate to pass.", nextAction: "Hold until all readiness gates pass." });
+  if (contract?.outcome === "go" && contract.evidenceClass !== "live_observed") blockers.push({ code: "evidence_attestation_invalid", message: "Go requires a target-bound independently observed live attestation.", nextAction: "Hold until target-bound live evidence is available." });
   if (contract?.canonicalSupervisor?.present === true && contract.canonicalSupervisor.valid !== true) blockers.push({ code: "canonical_contract_invalid", message: "Operational readiness cannot use incomplete, stale, or contradictory supervisor canonical truth.", nextAction: "Refresh the authoritative supervisor packet/projection." });
+  blockers.push(...validateEvidenceProvenance(contract, SCHEMA_VERSION, Date.parse(contract?.checkedAt || ""), {
+    targetRef: observationTargetRef(contract?.target),
+    sourceRefs: contract?.target?.sourceRefs,
+    evidenceRefs: contract?.target?.evidenceRefs,
+  }));
   return blockers;
 }
 
@@ -647,17 +830,19 @@ export function buildOneWorkerLiveCanaryEvidence(options = {}, context = {}) {
   const readinessContract = context.readinessContract || options.readinessContract || {};
   const backendTruth = BACKEND_TRUTHS.has(context.backendTruth || options.backendTruth) ? (context.backendTruth || options.backendTruth) : "dry_run";
   const fixtureEvidence = context.fixtureEvidence === true;
+  const targetRef = observationTargetRef(target);
   const observationAttestation = observedEvidenceAttestation(
     context.observedEvidenceAttestation || options.observedEvidenceAttestation,
     CANARY_SCHEMA_VERSION,
     checkedAtMs,
+    targetRef,
   );
   const authority = context.canaryAuthority || context.authority || {};
   const authorityAllowed = (authority.state || context.authorityState || options.authorityState) === "allowed" &&
     (authority.proven === true || context.authorityProven === true || options.authorityProven === true);
   const evidenceRefs = refs([...target.evidenceRefs, ...(context.evidenceRefs || [])]);
   const sourceRefs = refs(target.sourceRefs);
-  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs, targetRef)
     ? observationAttestation
     : null;
   const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
@@ -862,14 +1047,16 @@ export function buildLiveCapacityRampEvidence(options = {}, context = {}) {
   const checkedAt = new Date(checkedAtMs).toISOString();
   const canaryEvidence = context.canaryEvidence || options.canaryEvidence || {};
   const fixtureEvidence = context.fixtureEvidence === true || canaryEvidence.evidenceClass === "fixture";
+  const targetRef = observationTargetRef(context.target || canaryEvidence.target) || safeId(canaryEvidence.observedEvidenceAttestation?.subject?.targetRef);
   const observationAttestation = observedEvidenceAttestation(
     context.observedEvidenceAttestation || options.observedEvidenceAttestation,
     RAMP_SCHEMA_VERSION,
     checkedAtMs,
+    targetRef,
   );
   const sourceRefs = refs([...(canaryEvidence.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(canaryEvidence.evidenceRefs || []), ...(context.evidenceRefs || [])]);
-  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+  const boundObservationAttestation = !fixtureEvidence && targetRef && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs, targetRef)
     ? observationAttestation
     : null;
   const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
@@ -1015,14 +1202,16 @@ export function buildResilienceRecoveryEvidence(options = {}, context = {}) {
   const checkedAt = new Date(checkedAtMs).toISOString();
   const predecessor = context.rampEvidence || context.canaryEvidence || options.rampEvidence || options.canaryEvidence || {};
   const fixtureEvidence = context.fixtureEvidence === true || predecessor.evidenceClass === "fixture";
+  const targetRef = observationTargetRef(context.target || predecessor.target) || safeId(predecessor.observedEvidenceAttestation?.subject?.targetRef);
   const observationAttestation = observedEvidenceAttestation(
     context.observedEvidenceAttestation || options.observedEvidenceAttestation,
     RECOVERY_SCHEMA_VERSION,
     checkedAtMs,
+    targetRef,
   );
   const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
-  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+  const boundObservationAttestation = !fixtureEvidence && targetRef && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs, targetRef)
     ? observationAttestation
     : null;
   const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
@@ -1132,14 +1321,16 @@ export function buildOperationalHardeningRunbookEvidence(options = {}, context =
   const checkedAt = new Date(checkedAtMs).toISOString();
   const predecessor = context.recoveryEvidence || context.rampEvidence || context.canaryEvidence || options.recoveryEvidence || options.rampEvidence || {};
   const fixtureEvidence = context.fixtureEvidence === true || predecessor.evidenceClass === "fixture";
+  const targetRef = observationTargetRef(context.target || predecessor.target) || safeId(predecessor.observedEvidenceAttestation?.subject?.targetRef);
   const observationAttestation = observedEvidenceAttestation(
     context.observedEvidenceAttestation || options.observedEvidenceAttestation,
     HARDENING_SCHEMA_VERSION,
     checkedAtMs,
+    targetRef,
   );
   const sourceRefs = refs([...(predecessor.sourceRefs || []), ...(context.sourceRefs || [])]);
   const evidenceRefs = refs([...(predecessor.evidenceRefs || []), ...(context.evidenceRefs || [])]);
-  const boundObservationAttestation = !fixtureEvidence && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs)
+  const boundObservationAttestation = !fixtureEvidence && targetRef && attestationBindsPacket(observationAttestation, sourceRefs, evidenceRefs, targetRef)
     ? observationAttestation
     : null;
   const evidenceClass = evidenceClassFor({ fixtureEvidence, attestation: boundObservationAttestation });
@@ -1283,11 +1474,7 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
   const nowValue = Date.parse(text(context.now || options.now, new Date().toISOString()));
   const checkedAtMs = Number.isFinite(nowValue) ? nowValue : Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
-  const observationAttestation = observedEvidenceAttestation(
-    context.observedEvidenceAttestation || options.observedEvidenceAttestation,
-    PRODUCTION_DECISION_SCHEMA_VERSION,
-    checkedAtMs,
-  );
+  const observationAttestationInput = context.observedEvidenceAttestation || options.observedEvidenceAttestation;
   const canaryEvidence = context.canaryEvidence || context.oneWorkerLiveCanary || context.canary || options.canaryEvidence || {};
   const rampEvidence = context.rampEvidence || context.liveCapacityRamp || context.capacityRamp || options.rampEvidence || {};
   const recoveryEvidence = context.recoveryEvidence || context.resilienceRecovery || context.recoveryValidation || options.recoveryEvidence || {};
@@ -1298,9 +1485,19 @@ export function buildProductionReadinessDecisionEvidence(options = {}, context =
     { id: "recovery", packet: recoveryEvidence },
     { id: "hardening", packet: hardeningEvidence },
   ];
+  const predecessorTargetRefs = new Set(packetEntries
+    .map(({ packet }) => safeId(packet?.observedEvidenceAttestation?.subject?.targetRef))
+    .filter(Boolean));
+  const targetRef = predecessorTargetRefs.size === 1 ? [...predecessorTargetRefs][0] : "";
+  const observationAttestation = targetRef ? observedEvidenceAttestation(
+    observationAttestationInput,
+    PRODUCTION_DECISION_SCHEMA_VERSION,
+    checkedAtMs,
+    targetRef,
+  ) : null;
   const observationSourceRefs = decisionRefs(context.sourceRefs, ...packetEntries.map((entry) => decisionPacketSources(entry.packet)));
   const observationEvidenceRefs = decisionRefs(context.evidenceRefs, ...packetEntries.map((entry) => decisionPacketEvidence(entry.packet)));
-  const boundObservationAttestation = context.fixtureEvidence !== true && attestationBindsPacket(observationAttestation, observationSourceRefs, observationEvidenceRefs)
+  const boundObservationAttestation = context.fixtureEvidence !== true && targetRef && attestationBindsPacket(observationAttestation, observationSourceRefs, observationEvidenceRefs, targetRef)
     ? observationAttestation
     : null;
   const typedBlockers = [];

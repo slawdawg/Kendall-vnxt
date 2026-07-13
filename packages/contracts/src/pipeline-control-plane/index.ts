@@ -852,6 +852,8 @@ export interface PipelineObservedEvidenceAttestationV0 {
 
 export interface PipelineOperationalReadinessContractV0 {
   schemaVersion: typeof PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION;
+  evidenceClass: PipelineOperationalEvidenceClassV0;
+  observedEvidenceAttestation: PipelineObservedEvidenceAttestationV0 | null;
   target: PipelineOperationalReadinessTargetV0;
   backendTruth: PipelineOperationalReadinessBackendTruthV0;
   authorityState: PipelineOperationalActionAuthorityStateV0;
@@ -1882,7 +1884,7 @@ export function validatePipelineOperationalReadinessContractV0(contract: unknown
   const issues: PipelineOperationalActionValidationIssueV0[] = [];
   const record = operationalActionRecord(contract, issues);
   const allowed = new Set([
-    "schemaVersion", "target", "backendTruth", "authorityState", "riskTier", "sliSlo", "telemetry",
+    "schemaVersion", "evidenceClass", "observedEvidenceAttestation", "target", "backendTruth", "authorityState", "riskTier", "sliSlo", "telemetry",
     "configuration", "recovery", "gates", "outcome", "typedBlockers", "checkedAt", "expiresAt",
     "metadataOnly", "rawPayloadRetained",
   ]);
@@ -1957,10 +1959,29 @@ export function validatePipelineOperationalReadinessContractV0(contract: unknown
   if (record.outcome === "go" && blockers.length > 0) {
     issues.push({ field: "typedBlockers", code: "inconsistent_result", summary: "A go readiness outcome cannot contain blockers." });
   }
+  if (record.outcome === "go" && gates?.some((gateValue) => (gateValue as Record<string, unknown>)?.state !== "pass")) {
+    issues.push({ field: "gates", code: "inconsistent_result", summary: "A go readiness outcome requires every readiness gate to pass." });
+  }
   if (record.outcome === "go" && record.backendTruth !== "live") {
     issues.push({ field: "backendTruth", code: "inconsistent_result", summary: "Go requires proven live backend truth." });
   }
+  if (record.outcome === "go" && record.evidenceClass !== "live_observed") {
+    issues.push({ field: "evidenceClass", code: "policy_violation", summary: "Go requires a target-bound independently observed live attestation." });
+  }
+  validatePipelineObservedEvidenceProvenanceV0(issues, record, PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION, checkedAtMs);
   return issues;
+}
+
+function pipelineObservedTargetRef(record: Record<string, unknown>): string {
+  const target = record.target as Record<string, unknown> | undefined;
+  const owner = typeof target?.owner === "string" && isSafeOperationalIdentifierText(target.owner) ? target.owner : "";
+  const workerId = typeof target?.workerId === "string" && isSafeOperationalIdentifierText(target.workerId) ? target.workerId : "";
+  if (owner && (!workerId || owner === workerId || owner.endsWith(`/${workerId}`))) return owner;
+  return owner && workerId ? `${owner}/${workerId}` : owner || workerId;
+}
+
+function hasOnlyOperationalKeys(value: unknown, allowed: Set<string>): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => allowed.has(key)));
 }
 
 function validatePipelineObservedEvidenceProvenanceV0(
@@ -1985,11 +2006,17 @@ function validatePipelineObservedEvidenceProvenanceV0(
   const observer = attestation.observer as Record<string, unknown> | undefined;
   const subject = attestation.subject as Record<string, unknown> | undefined;
   const receipt = attestation.receipt as Record<string, unknown> | undefined;
+  const expectedTargetRef = pipelineObservedTargetRef(record);
   if (attestation.schemaVersion !== PIPELINE_OBSERVED_EVIDENCE_ATTESTATION_SCHEMA_VERSION || attestation.evidenceClass !== "live_observed" ||
       attestation.metadataOnly !== true || attestation.rawPayloadRetained !== false || typeof attestation.attestationId !== "string" ||
+      !hasOnlyOperationalKeys(attestation, new Set(["schemaVersion", "attestationId", "evidenceClass", "observer", "subject", "receipt", "metadataOnly", "rawPayloadRetained"])) ||
+      !hasOnlyOperationalKeys(observer, new Set(["observerType", "observerId"])) ||
+      !hasOnlyOperationalKeys(subject, new Set(["packetSchemaVersion", "targetRef"])) ||
+      !hasOnlyOperationalKeys(receipt, new Set(["receiptId", "observedAt", "issuedAt", "expiresAt", "evidenceDigestSha256", "sourceRefs", "evidenceRefs"])) ||
       !isSafeOperationalIdentifierText(attestation.attestationId) || observer?.observerType !== "independent_runtime" ||
       typeof observer?.observerId !== "string" || !isSafeOperationalIdentifierText(observer.observerId) ||
       subject?.packetSchemaVersion !== packetSchemaVersion || typeof subject?.targetRef !== "string" || !isSafeOperationalIdentifierText(subject.targetRef) ||
+      (expectedTargetRef && subject.targetRef !== expectedTargetRef) ||
       typeof receipt?.receiptId !== "string" || !isSafeOperationalIdentifierText(receipt.receiptId) ||
       typeof receipt?.evidenceDigestSha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(receipt.evidenceDigestSha256) ||
       !isPipelineOperationalActionEvidenceRefsV0(receipt?.sourceRefs) || !isPipelineOperationalActionEvidenceRefsV0(receipt?.evidenceRefs)) {
@@ -2000,13 +2027,14 @@ function validatePipelineObservedEvidenceProvenanceV0(
   const issuedAtMs = typeof receipt.issuedAt === "string" ? Date.parse(receipt.issuedAt) : NaN;
   const expiresAtMs = typeof receipt.expiresAt === "string" ? Date.parse(receipt.expiresAt) : NaN;
   if (!Number.isFinite(observedAtMs) || !Number.isFinite(issuedAtMs) || !Number.isFinite(expiresAtMs) || !Number.isFinite(checkedAtMs) ||
-      observedAtMs > issuedAtMs || issuedAtMs > checkedAtMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS ||
+      observedAtMs > issuedAtMs || issuedAtMs > expiresAtMs || issuedAtMs > checkedAtMs + OPERATIONAL_ACTION_READINESS_ALLOWED_FUTURE_SKEW_MS ||
       expiresAtMs < checkedAtMs || checkedAtMs - observedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS ||
       expiresAtMs - issuedAtMs > OPERATIONAL_ACTION_READINESS_MAX_TTL_MS) {
     issues.push({ field: "observedEvidenceAttestation.receipt", code: "stale_or_unparseable_readiness", summary: "The independent observation receipt is stale, expired, future-dated, or malformed." });
   }
-  const packetSourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : [];
-  const packetEvidenceRefs = Array.isArray(record.evidenceRefs) ? record.evidenceRefs : [];
+  const target = record.target as Record<string, unknown> | undefined;
+  const packetSourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : Array.isArray(target?.sourceRefs) ? target.sourceRefs : [];
+  const packetEvidenceRefs = Array.isArray(record.evidenceRefs) ? record.evidenceRefs : Array.isArray(target?.evidenceRefs) ? target.evidenceRefs : [];
   if (!(receipt.sourceRefs as unknown[]).some((ref) => packetSourceRefs.includes(ref)) ||
       !(receipt.evidenceRefs as unknown[]).some((ref) => packetEvidenceRefs.includes(ref))) {
     issues.push({ field: "observedEvidenceAttestation.receipt", code: "inconsistent_result", summary: "The observation receipt must share source and evidence refs with the packet it attests." });
