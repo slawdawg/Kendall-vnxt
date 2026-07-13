@@ -775,21 +775,21 @@ function ProjectionTruthSummary({
     : sourceState.kind === "empty"
       ? "reachable"
       : projection?.backendReachability.state ?? "unavailable";
-  const projectionState = liveProofState.canSatisfyLiveProof
-    ? "live"
-    : projectionError
-      ? "refresh unavailable"
-      : explicitNonRuntimeSource === "invalid"
-        ? "invalid"
-        : explicitNonRuntimeSource === "empty"
-          ? "empty"
-          : explicitNonRuntimeSource === "demo"
-            ? "demo"
-      : freshnessState === "stale" || sourceLabel === "stale"
-        ? "stale"
-        : projection
-          ? "limited"
-          : "unavailable";
+  const projectionState = explicitNonRuntimeSource === "invalid"
+    ? "invalid"
+    : explicitNonRuntimeSource === "empty"
+      ? "empty"
+      : explicitNonRuntimeSource === "demo"
+        ? "demo"
+        : liveProofState.canSatisfyLiveProof
+          ? "live"
+          : projectionError
+            ? "refresh unavailable"
+            : freshnessState === "stale" || sourceLabel === "stale"
+              ? "stale"
+              : projection
+                ? "limited"
+                : "unavailable";
   const lastUpdated = projection?.sourceUpdatedAt ?? "not available";
   const activePacketCount = activeBoardViewModel ? String(activeBoardViewModel.summary.activePacketCount) : sourceState.kind === "empty" ? "0" : "unknown";
   const staleHistoryCount = activeBoardViewModel ? String(activeBoardViewModel.summary.staleHistoryCount) : sourceState.kind === "empty" ? "0" : "unknown";
@@ -2730,14 +2730,12 @@ function PacketInspection({
           </ul>
         </section>
       ) : null}
-      {!projectionBackedPacket ? (
-        <Link
-          className="mt-3 inline-flex rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-1.5 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-          href={`${packet.sourceKind === "demo-fixture" ? "/pipeline/demo/packets" : "/pipeline/packets"}/${encodeURIComponent(packet.packetId)}`}
-        >
-          Open full packet
-        </Link>
-      ) : null}
+      <Link
+        className="mt-3 inline-flex rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-1.5 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
+        href={`${packet.sourceKind === "demo-fixture" ? "/pipeline/demo/packets" : "/pipeline/packets"}/${encodeURIComponent(packet.packetId)}`}
+      >
+        Open full packet
+      </Link>
     </aside>
   );
 }
@@ -3399,7 +3397,7 @@ function stageHealthStateLabel(
   }
   switch (reason) {
     case "healthy_empty":
-      return "healthy empty";
+      return "healthy-empty";
     case "source_exhausted":
       return "source exhausted";
     case "blocked":
@@ -3453,7 +3451,7 @@ function stageNextActionLabel(
     return "Packet details unavailable in projection.";
   }
   if (sourceLabel === "empty" || freshnessState === "empty" || reason === "healthy_empty") {
-    return "Supervisor returned zero persisted WorkPacket rows.";
+    return "Supervisor returned zero persisted WorkPacketV0 rows.";
   }
   if (sourceLabel === "unavailable" || reason === "backend_unavailable") {
     return "Check supervisor projection.";
