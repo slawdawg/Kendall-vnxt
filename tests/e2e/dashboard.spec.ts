@@ -689,7 +689,9 @@ test.describe("dashboard workflow coverage", () => {
       await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
       await expect(truthSummary.getByText("Source:")).toBeVisible();
       await expect(truthSummary.getByText("empty", { exact: true }).first()).toBeVisible();
-      await expect(truthSummary.getByText("Supervisor returned zero persisted WorkPacketV0 rows", { exact: false })).toBeVisible();
+      await expect(
+        truthSummary.getByText("Supervisor returned zero persisted WorkPacketV0 rows", { exact: false }).first(),
+      ).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Unexpected Runtime Packet", { exact: true })).toHaveCount(0);
