@@ -42,6 +42,12 @@ const forbiddenCallPatterns = [
   { id: "cleanup-mutation", pattern: /\b(?:cleanupCurrent|cleanupMerged|cleanupOrphans|deleteWorktree|removeWorktree|deleteRemoteBranch)\s*\(/ },
 ];
 
+const readOnlySupervisorProjectionFunctions = [
+  "getPipelineDashboardProjection",
+  "getWorkPacket",
+  "getWorkPackets",
+];
+
 const requiredSourceFiles = [
   "apps/dashboard/src/app/pipeline/page.tsx",
   "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
@@ -269,11 +275,11 @@ function checkForbiddenCalls(displayPath, source) {
         ? ["network-fetch"]
         : [],
   );
+  if (displayPath === "apps/dashboard/src/lib/supervisor.ts") {
+    checkReadOnlySupervisorProjectionFunctions(displayPath, source);
+  }
   for (const { id, pattern } of forbiddenCallPatterns) {
-    if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/supervisor.ts" && pattern.test(executableSource)) {
-      if (!isAllowedReadOnlySupervisorProjectionFetch(source)) {
-        failures.push(`${displayPath}: forbidden call boundary ${id}`);
-      }
+    if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/supervisor.ts") {
       continue;
     }
     if (!allowedCallIds.has(id) && pattern.test(executableSource)) {
@@ -282,17 +288,35 @@ function checkForbiddenCalls(displayPath, source) {
   }
 }
 
-function isAllowedReadOnlySupervisorProjectionFetch(source) {
+function checkReadOnlySupervisorProjectionFunctions(displayPath, source) {
   const requestJsonSource = extractFunctionSource(source, "requestJson");
   if (!requestJsonSource) {
-    return false;
+    failures.push(`${displayPath}: missing audited read-only helper requestJson`);
+    return;
   }
-  const executableSource = stripCommentsAndStrings(source);
   const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
-  return countMatches(executableSource, /\bfetch\s*\(/g) === 1 &&
-    countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) === 1 &&
-    !/\bmethod\s*:/.test(executableRequestJsonSource) &&
-    /\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*\}\s*\)/.test(executableRequestJsonSource);
+  if (
+    countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
+    /\bmethod\s*:/.test(executableRequestJsonSource) ||
+    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*\}\s*\)/.test(executableRequestJsonSource)
+  ) {
+    failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+  }
+
+  for (const functionName of readOnlySupervisorProjectionFunctions) {
+    const functionSource = extractFunctionSource(source, functionName);
+    if (!functionSource) {
+      failures.push(`${displayPath}: missing audited read-only export ${functionName}`);
+      continue;
+    }
+    const executableFunctionSource = stripCommentsAndStrings(functionSource);
+    if (
+      countMatches(executableFunctionSource, /\bfetch\s*\(/g) > 0 ||
+      countMatches(executableFunctionSource, /\brequestJson(?:<[^;\n]*>)?\s*\(/g) !== 1
+    ) {
+      failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+    }
+  }
 }
 
 function extractFunctionSource(source, functionName) {

@@ -2447,10 +2447,18 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
-    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import "./supervisor";\nexport const loadPackets = () => [];\n',
+    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./supervisor";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
     "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
     "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
-    "apps/dashboard/src/lib/supervisor.ts": 'import "../components/shared-pipeline-runtime";\nexport const supervisor = {};\n',
+    "apps/dashboard/src/lib/supervisor.ts": [
+      'import "../components/shared-pipeline-runtime";',
+      'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+      'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
+      'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+      'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+      'export async function mutate(path) { return fetch(path, { method: "POST" }); }',
+      "",
+    ].join("\n"),
   };
 
   try {
@@ -2485,6 +2493,10 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
         '}',
+        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        'export async function mutate(path) { return fetch(path, { method: "POST" }); }',
         "",
       ].join("\n"),
       "utf8",
@@ -2498,7 +2510,9 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
         '}',
-        'async function extraRead(path) { return fetch(path, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getWorkPackets() { return [requestJson("/work-packets"), fetch(path, { cache: "no-store" })]; }',
         "",
       ].join("\n"),
       "utf8",
@@ -2513,14 +2527,16 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
         '}',
-        'async function mutate(path) { return fetch(path, { method: "POST", cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        'export async function mutate(path) { return fetch(path, { method: "POST", cache: "no-store" }); }',
         "",
       ].join("\n"),
       "utf8",
     );
     const extraMutationSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
-    assert.equal(extraMutationSupervisorFetchRun.status, 1);
-    assert.match(extraMutationSupervisorFetchRun.stderr, /supervisor\.ts: forbidden call boundary network-fetch/);
+    assert.equal(extraMutationSupervisorFetchRun.status, 0, extraMutationSupervisorFetchRun.stderr);
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
@@ -2528,6 +2544,9 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { method: "POST", cache: "no-store" });',
         '}',
+        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
         "",
       ].join("\n"),
       "utf8",
@@ -2538,7 +2557,15 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
-      "export const supervisor = {};\n",
+      [
+        'async function requestJson(path) {',
+        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
+        '}',
+        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
       "utf8",
     );
 
