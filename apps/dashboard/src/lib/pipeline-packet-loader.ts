@@ -306,7 +306,10 @@ function emptyRuntimeContradiction(projection: PipelineDashboardProjectionV0 | n
   return null;
 }
 
-function emptyRuntimeSummary(projection: PipelineDashboardProjectionV0): string {
+function emptyRuntimeSummary(projection: PipelineDashboardProjectionV0 | null): string {
+  if (!projection) {
+    return "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted.";
+  }
   const reason = canonicalEmptyReason(projection.truthSummary.emptyReason ?? projection.queueSummary.emptyReason);
   if (reason === "healthy_empty") {
     return projection.truthSummary.summary || projection.queueSummary.summary || "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted.";
@@ -403,7 +406,7 @@ function projectionQueuePacketCount(projection: PipelineDashboardProjectionV0): 
     projection.queueSummary.refillingCount,
     projection.queueSummary.unknownCount,
   ];
-  return queueCounts.reduce((sum, count) => sum + (typeof count === "number" && count > 0 ? count : 0), 0);
+  return queueCounts.reduce<number>((sum, count) => sum + (typeof count === "number" && count > 0 ? count : 0), 0);
 }
 
 function firstDuplicate(values: readonly string[]): string | null {

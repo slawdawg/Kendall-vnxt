@@ -184,6 +184,10 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+function projectionTruthChipPattern(label, value) {
+  return new RegExp(`${escapeRegExp(label)}:<\\/span><span[^>]*>${escapeRegExp(value)}<\\/span>`);
+}
+
 function projectionFixture(overrides = {}) {
   const now = "2026-07-02T16:00:00.000Z";
   const baseWorkPacket = {
@@ -679,6 +683,8 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(cockpitSource, /projectionLiveProofState/);
   assert.match(cockpitSource, /projectionDisplayLabels/);
   assert.match(cockpitSource, /projectionLiveProofLabel/);
+  assert.match(cockpitSource, /explicitNonRuntimeSource[\s\S]*\?\s*"unavailable"/);
+  assert.match(cockpitSource, /applyNonRuntimeStageLabels\(/);
   assert.doesNotMatch(cockpitSource, /ProjectionTruthChip label="Fixture mode"/);
   assert.match(cockpitSource, /Open Diagnostics only when you need debug details/);
   assert.doesNotMatch(cockpitSource, /Diagnostics contain proof, fixture, catalog, and manager internals when needed/);
@@ -742,6 +748,45 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.doesNotMatch(emptyProjectionHtml, /live backend proof/);
   assert.match(emptyProjectionHtml, /Open Diagnostics only when you need debug details/);
   assert.doesNotMatch(emptyProjectionHtml, /Unexpected Runtime Packet/);
+  assert.match(emptyProjectionHtml, projectionTruthChipPattern("Projection", "empty"));
+  assert.match(emptyProjectionHtml, projectionTruthChipPattern("Source", "empty"));
+
+  const demoProjectionHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: {
+      kind: "demo",
+      label: "Demo fixture",
+      summary: "Fixture-only demo route.",
+      matrixRows: 1,
+      fixtureCatalogEntries: 1,
+      canSatisfyLiveProof: false,
+    },
+    packets: [],
+    projection: liveProjection,
+    projectionError: null,
+    selectedPacket: null,
+  }));
+  assert.match(demoProjectionHtml, projectionTruthChipPattern("Projection", "demo"));
+  assert.match(demoProjectionHtml, projectionTruthChipPattern("Source", "demo"));
+  assert.doesNotMatch(demoProjectionHtml, projectionTruthChipPattern("Projection", "live"));
+  assert.doesNotMatch(demoProjectionHtml, projectionTruthChipPattern("Source", "unavailable"));
+
+  const invalidProjectionHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: {
+      kind: "invalid",
+      label: "Supervisor invalid",
+      summary: "Projection identity mismatch.",
+      matrixRows: 0,
+      fixtureCatalogEntries: 0,
+      canSatisfyLiveProof: false,
+    },
+    packets: [],
+    projection: liveProjection,
+    projectionError: null,
+    selectedPacket: null,
+  }));
+  assert.match(invalidProjectionHtml, projectionTruthChipPattern("Projection", "invalid"));
+  assert.match(invalidProjectionHtml, projectionTruthChipPattern("Source", "invalid"));
+  assert.doesNotMatch(invalidProjectionHtml, projectionTruthChipPattern("Projection", "live"));
 
   const negativeCases = [
     {
