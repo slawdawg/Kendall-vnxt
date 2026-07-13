@@ -248,8 +248,29 @@ path remain deferred.
 The named path is: default local BMAD story-and-bundle resolution in the
 manager, metadata-only manager intake of one eligible seed through the loopback
 supervisor, canonical local worker-result continuation, authoritative
-`WorkPacketV0` list/detail parity, and the matching dashboard `/pipeline` list
-and packet-detail projection.
+`WorkPacketV0` list/detail parity for packet identity, source refs, stage, status,
+and evidence refs, and the matching dashboard `/pipeline` list and packet-detail
+projection for those same fields.
+
+The zero-skip joined proof command for the pre-worker source-intake boundary is
+`pnpm run test:gate4-bmad-dashboard-e2e`. It creates a complete local BMAD
+hierarchy under an injectable disposable root that never overlays the canonical
+BMAD tree, executes the manager-generated
+source-intake dry-run and apply commands, starts the real SQLite supervisor and
+Next.js dashboard processes, verifies the named list/detail fields before and
+after supervisor restart, observes that the requested packet uses the supervisor
+projection while static fallback packets remain in list rendering, removes and
+checks both disposable roots, and compares the observed bounded metadata with
+`tests/fixtures/pipeline/gate4-bmad-dashboard-e2e-proof-2026-07-12.json`.
+The artifact records its baseline revision, generator/command version, and
+runner digest. Missing binaries, loopback sockets, process readiness, parity,
+cleanup, configured execution denials, observed database counts, or tracked-byte
+stability fails the command; there is no skip or requested-packet fixture
+substitution success path. The structural contract runs in the normal
+`check:fast`/`check:static` chain; the expensive joined process proof remains the
+focused command above. This proof makes no observed-zero claim for external
+provider, GitHub, or Obsidian systems and makes no dispatch, delivery,
+`bounded_live`, or production claim.
 
 - PR #525 merged as `d3a27aa9e588ca23118ab984ec0ea979963d1cd9`. Its default,
   local-only resolver selects one ready BMAD story and its matching PRD bundle

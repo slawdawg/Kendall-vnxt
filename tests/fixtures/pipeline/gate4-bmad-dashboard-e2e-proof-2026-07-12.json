@@ -1,0 +1,143 @@
+{
+  "schemaVersion": "gate4-bmad-dashboard-e2e-proof/v2",
+  "status": "passed",
+  "skipped": 0,
+  "evidenceLevel": "integrated_local",
+  "command": "pnpm run test:gate4-bmad-dashboard-e2e",
+  "provenance": {
+    "baselineRevision": "bfe5e44b0bee9c0f2424fccf0a3b4a462592ada1",
+    "generator": "gate4-bmad-dashboard-e2e/v2",
+    "commandVersion": 2,
+    "runnerSha256": "sha256:a76616f1448f63eaaaaec8b5677de3a912d2a401ecaae5eb7af06d990ad6d61d"
+  },
+  "manager": {
+    "sourceResolutionMode": "default_local_bmad",
+    "bundleSelection": "canonical_sprint_source_key",
+    "callerSuppliedCandidateDefaults": false,
+    "generatedIntakeAction": "manager-source-intake-ready",
+    "dryRunFetchPerformed": false,
+    "applyFetchPerformed": true,
+    "hierarchy": {
+      "sourceKey": "2099-01-01-gate-4-reconciled-bmad-dashboard-proof",
+      "storyKey": "91-1-gate-4-reconciled-bmad-dashboard-proof",
+      "members": {
+        "prd": {
+          "ref": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2099-01-01-gate-4-reconciled-bmad-dashboard-proof/prd.md",
+          "status": "final",
+          "metadataDigest": "sha256:147c0c52bc776d446d6d2dd642548c92d6199504e4f831aaf56d58bdc7b26d0b"
+        },
+        "architecture": {
+          "ref": "_bmad-output/planning-artifacts/architecture-2099-01-01-gate-4-reconciled-bmad-dashboard-proof.md",
+          "status": "complete",
+          "metadataDigest": "sha256:9b16e9a385f368cbb680a59772cf348d07be8f3b20a149727668511612465f45"
+        },
+        "epics": {
+          "ref": "_bmad-output/planning-artifacts/epics-2099-01-01-gate-4-reconciled-bmad-dashboard-proof.md",
+          "status": "complete",
+          "metadataDigest": "sha256:7e7cbc8422922680d1e8608927985f50f9083393180ecd986d2bebc2668a9e9d"
+        },
+        "implementationReadiness": {
+          "ref": "_bmad-output/planning-artifacts/implementation-readiness-report-2099-01-01-gate-4-reconciled-bmad-dashboard-proof.md",
+          "status": "complete",
+          "metadataDigest": "sha256:97c176a063748dd32a0758ea5e84d3942f3dfdd52ff8e7b859437afe90fa786b"
+        },
+        "sprint": {
+          "ref": "_bmad-output/implementation-artifacts/sprint-status.yaml",
+          "sourceKey": "2099-01-01-gate-4-reconciled-bmad-dashboard-proof",
+          "metadataDigest": "sha256:5bcb146d6d15b9af24bfe817877a844c89d909dc1f3477c636de48d01b491bbd"
+        },
+        "story": {
+          "ref": "_bmad-output/implementation-artifacts/91-1-gate-4-reconciled-bmad-dashboard-proof.md",
+          "status": "ready-for-dev",
+          "key": "91-1-gate-4-reconciled-bmad-dashboard-proof",
+          "metadataDigest": "sha256:8cf75569228ac63d262477d3d8e09c2120473bf09589fa597e0ffc0321408cab"
+        }
+      }
+    }
+  },
+  "supervisor": {
+    "packetId": "manager-source-dbcecc8f5cc2bf428f1f730bd745cb72855cd416",
+    "packetCount": 1,
+    "lifecycleEventCount": 1,
+    "stage": "capture",
+    "status": "waiting",
+    "comparedFieldsParity": true,
+    "comparedFields": [
+      "packetId",
+      "sourceRefs",
+      "currentStage",
+      "status",
+      "evidenceRefs"
+    ],
+    "metadataOnly": true
+  },
+  "dashboard": {
+    "actualProcess": true,
+    "binary": "apps/dashboard/node_modules/.bin/next",
+    "listRoute": "/pipeline",
+    "detailRoute": "/pipeline/packets/manager-source-dbcecc8f5cc2bf428f1f730bd745cb72855cd416",
+    "supervisorPacketMode": true,
+    "comparedFieldsParity": true,
+    "comparedFields": [
+      "packetId",
+      "sourceRefs",
+      "currentStage",
+      "status",
+      "evidenceRefs"
+    ],
+    "requestedPacketUsedSupervisorProjection": true,
+    "staticFallbackPacketsRenderedInList": true
+  },
+  "persistence": {
+    "supervisorRestartVerified": true,
+    "lifecycleParityAfterRestart": true,
+    "requestedPacketProjectionAfterRestart": true
+  },
+  "sideEffects": {
+    "tableCounts": {
+      "candidate_work": 0,
+      "work_items": 0,
+      "workflow_events": 0,
+      "execution_attempts": 0,
+      "queue_leases": 0,
+      "queue_lease_actions": 0,
+      "pipeline_operational_action_records": 0,
+      "pipeline_operational_approvals": 0,
+      "audit_events": 0,
+      "memory_proposals": 0,
+      "manager_terminal_events": 0
+    }
+  },
+  "executionBoundary": {
+    "configuredDenials": {
+      "localProviderCalls": false,
+      "ollamaProviderCalls": false,
+      "premiumExecution": false,
+      "remoteDelivery": false,
+      "subscriptionAgentLaunch": false,
+      "workerSourceMutation": false,
+      "backgroundExecution": false
+    },
+    "observedChildProcessKinds": [
+      "dashboard",
+      "manager-source-intake",
+      "supervisor"
+    ]
+  },
+  "retention": {
+    "metadataOnly": true,
+    "hierarchyBodiesRetained": false,
+    "trackedSourceBytesUnchanged": true,
+    "isolatedBmadRootRemoved": true
+  },
+  "cleanup": {
+    "disposableBmadRootRemoved": true,
+    "disposableRuntimeRootRemoved": true
+  },
+  "denials": [
+    "worker, provider, delivery, and source mutation capabilities configured denied",
+    "no execution-attempt, queue, operational-action, audit, memory-proposal, or terminal-event rows observed",
+    "tracked source bytes observed unchanged",
+    "no bounded-live or production claim"
+  ]
+}

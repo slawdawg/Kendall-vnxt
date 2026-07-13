@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -136,6 +137,29 @@ function refill(overrides = {}, context = {}) {
 
 test.beforeEach(cleanupFixture);
 test.afterEach(cleanupFixture);
+
+test("default BMAD resolution can read a disposable injected root without overlaying canonical planning state", () => {
+  const root = mkdtempSync(join(tmpdir(), "kendall-default-bmad-root-"));
+  try {
+    const sprintPath = join(root, SPRINT_STATUS_PATH);
+    mkdirSync(join(sprintPath, ".."), { recursive: true });
+    writeFileSync(sprintPath, `source_key: ${SOURCE_KEY}\nsource_ref: ${EPICS_REF}\ndevelopment_status:\n  ${STORY_KEY}: ready-for-dev\n`);
+    writeFrontmatter(join(root, ARTIFACT_DIR, `${STORY_KEY}.md`), ["status: ready-for-dev"], "Isolated Story");
+    writeFrontmatter(join(root, PRD_REF), ["status: final", "authoritative: true"], "Isolated PRD");
+    writeFrontmatter(join(root, ARCHITECTURE_REF), ["workflowType: architecture", "status: complete", `authoritative_prd: ${PRD_REF}`], "Isolated Architecture");
+    writeFrontmatter(join(root, EPICS_REF), ["workflowType: epics-and-stories", "status: complete", `authoritative_prd: ${PRD_REF}`, `authoritative_architecture: ${ARCHITECTURE_REF}`], "Isolated Epics");
+    writeFrontmatter(join(root, READINESS_REF), ["workflowType: implementation-readiness", "status: complete", `authoritative_prd: ${PRD_REF}`, `authoritative_architecture: ${ARCHITECTURE_REF}`, `authoritative_epics: ${EPICS_REF}`], "Isolated Readiness");
+
+    const canonicalBefore = existsSync(SPRINT_STATUS_PATH) ? readFileSync(SPRINT_STATUS_PATH) : null;
+    const plan = refill({}, { bmadRoot: root });
+    assert.equal(plan.summary.sourceBackedPacketSeed.packetState, "eligible", JSON.stringify(plan.blockers));
+    assert.equal(plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance.storyKey, STORY_KEY);
+    assert.deepEqual(existsSync(SPRINT_STATUS_PATH) ? readFileSync(SPRINT_STATUS_PATH) : null, canonicalBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    assert.equal(existsSync(root), false);
+  }
+});
 
 test("default refill and cycle resolve one ready BMAD story with matching bundle provenance", () => {
   writeFixture();

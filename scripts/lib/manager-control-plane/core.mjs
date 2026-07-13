@@ -11853,7 +11853,7 @@ export function buildSourceArtifactDiscoveryPlan(options = {}, context = {}) {
   const rejected = [];
   const seen = new Set();
   for (const input of artifactInputs) {
-    const artifact = normalizeSourceArtifact(input);
+    const artifact = normalizeSourceArtifact(input, managerBmadRoot(options, context));
     if (!artifact) {
       const rejectedRef = sanitizeLedgerField(input?.ref || input?.path || input?.sourceRef || input, "unsupported-source-artifact", 180);
       rejected.push(rejectedRef);
@@ -11903,7 +11903,7 @@ export function buildSourceWorkEligibilityPlan(options = {}, context = {}) {
   const seenDedupe = new Map(existingDedupe);
 
   for (const [index, candidate] of candidates.entries()) {
-    const packetCandidate = normalizeCandidateWorkPacket(candidate, index, artifactMap);
+    const packetCandidate = normalizeCandidateWorkPacket(candidate, index, artifactMap, managerBmadRoot(options, context));
     if (packetCandidate.rejectedSourceRefs.length > 0) {
       blockedPackets.push(markCandidateWork(packetCandidate, "blocked", "ambiguous_source"));
       continue;
@@ -12031,7 +12031,7 @@ export function buildSourceBackedPacketSeedPlan(options = {}, context = {}) {
     status,
     summary: {
       runId,
-      seedPacket: eligiblePacket || needsReviewPacket || blockedPacket || skippedPacket || markCandidateWork(normalizeCandidateWorkPacket(seedCandidate, 0, sourceArtifactMap(sourceArtifactDiscovery.summary?.artifacts || [])), "blocked", "no_seed_packet"),
+      seedPacket: eligiblePacket || needsReviewPacket || blockedPacket || skippedPacket || markCandidateWork(normalizeCandidateWorkPacket(seedCandidate, 0, sourceArtifactMap(sourceArtifactDiscovery.summary?.artifacts || []), managerBmadRoot(options, context)), "blocked", "no_seed_packet"),
       packetState,
       sourceArtifactDiscovery: sourceArtifactDiscovery.summary || null,
       sourceWorkEligibility: sourceWorkEligibility.summary || null,
@@ -13642,6 +13642,7 @@ export function buildRefillPlan(options = {}, context = {}) {
       {
         seedCandidate: defaultBmadSourceResolution.seedCandidate,
         existingCandidateWorkPackets: context.existingCandidateWorkPackets,
+        bmadRoot: managerBmadRoot(options, context),
       },
     )
     : null;
@@ -13667,7 +13668,10 @@ export function buildRefillPlan(options = {}, context = {}) {
     ...sourceRefList(discoveredSourceRefs),
     ...refillEligibleSourceWorkPackets.flatMap((candidate) => sourceRefList(candidate.sourceRefs)),
   ];
-  const sourceEvidence = normalizeSourceEvidence(explicitSourceRefs.length > 0 ? explicitSourceRefs : defaultSourceRefs(context));
+  const sourceEvidence = normalizeSourceEvidence(
+    explicitSourceRefs.length > 0 ? explicitSourceRefs : defaultSourceRefs(context),
+    managerBmadRoot(options, context),
+  );
   const sourceSlice = sourceEvidence.valid[0] || null;
   const closedEvidence = { count: closed, preservation: "preserve_do_not_requeue" };
   const closedStoryStatuses = closedAssignmentStoryStatusOverlay(assignment, { stateRoot: options.stateRoot });
@@ -13902,6 +13906,7 @@ export function buildRefillPlan(options = {}, context = {}) {
     runId: resolveManagerRunId(options, context),
     supervisorUrl: options.supervisorUrl || context.supervisorUrl,
     sourceBackedPacketSeed,
+    bmadRoot: managerBmadRoot(options, context),
   });
   if (apply) {
     if (workCreationStep && (requestPacketBlocked || bmadRequestPacketPlan?.summary?.validation?.status !== "ready")) {
@@ -13991,26 +13996,29 @@ function sourceWorkEligibilityHasCandidates(summary = {}) {
     nonNegativeInteger(summary.candidateCount ?? summary.candidate_count) > 0;
 }
 
-function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", sourceBackedPacketSeed = null } = {}) {
+function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", sourceBackedPacketSeed = null, bmadRoot = "" } = {}) {
   if (!supervisorUrl || sourceBackedPacketSeed?.summary?.packetState !== "eligible") return null;
   const seedPacket = sourceBackedPacketSeed.summary?.seedPacket;
   if (!seedPacket || sourceBackedPacketSeed.summary?.sourceWorkEligibility?.eligibleCount !== 1) return null;
-  const exactSeedPlan = buildSourceBackedPacketSeedPlan({
-    runId,
-    candidateId: seedPacket.candidateWorkPacketId,
-    title: seedPacket.title,
-    sourceRefs: seedPacket.sourceRefs,
-    acceptanceCriteria: seedPacket.acceptanceCriteria,
-    verificationTargets: seedPacket.verificationTargets,
-    touchedSurfaceHint: seedPacket.touchedSurfaceHint,
-    riskClass: seedPacket.riskClass,
-    authorityClass: seedPacket.authorityClass,
-    sourceBundleRef: seedPacket.sourceProvenance?.bundleRef,
-    sourceStoryKey: seedPacket.sourceProvenance?.storyKey,
-    sourceStoryStatus: seedPacket.sourceProvenance?.storyStatus,
-    sourceSprintStatusRef: seedPacket.sourceProvenance?.sprintStatusRef,
-    sourceKey: seedPacket.sourceProvenance?.sourceKey,
-  });
+  const exactSeedPlan = buildSourceBackedPacketSeedPlan(
+    {
+      runId,
+      candidateId: seedPacket.candidateWorkPacketId,
+      title: seedPacket.title,
+      sourceRefs: seedPacket.sourceRefs,
+      acceptanceCriteria: seedPacket.acceptanceCriteria,
+      verificationTargets: seedPacket.verificationTargets,
+      touchedSurfaceHint: seedPacket.touchedSurfaceHint,
+      riskClass: seedPacket.riskClass,
+      authorityClass: seedPacket.authorityClass,
+      sourceBundleRef: seedPacket.sourceProvenance?.bundleRef,
+      sourceStoryKey: seedPacket.sourceProvenance?.storyKey,
+      sourceStoryStatus: seedPacket.sourceProvenance?.storyStatus,
+      sourceSprintStatusRef: seedPacket.sourceProvenance?.sprintStatusRef,
+      sourceKey: seedPacket.sourceProvenance?.sourceKey,
+    },
+    { bmadRoot: bmadRoot || repoRoot },
+  );
   if (exactSeedPlan.summary?.packetState !== "eligible") return null;
   let intakePlan;
   try {
@@ -16085,14 +16093,14 @@ function sourceArtifactMap(artifacts = []) {
   return map;
 }
 
-function normalizeSourceArtifact(input) {
+function normalizeSourceArtifact(input, root = repoRoot) {
   const inputObject = isPlainObject(input) ? input : { ref: input };
   const rawRef = inputObject.ref || inputObject.sourceRef || inputObject.path || inputObject.refId || "";
   const runtimeType = String(inputObject.sourceType || inputObject.source_type || inputObject.type || "").toLowerCase() === "runtime_state";
   const runtimeRef = runtimeType ? sanitizeLedgerField(rawRef || "runtime:manager-runtime-state", "runtime:manager-runtime-state", 180) : "";
   const source = runtimeType
     ? { type: "runtime_state", ref: runtimeRef, label: runtimeRef }
-    : classifySourceRef(String(rawRef || ""));
+    : classifySourceRef(String(rawRef || ""), root);
   if (!source) return null;
   const sourceType = source.type;
   const ownershipBoundary = sourceArtifactBoundary(source, inputObject);
@@ -16147,7 +16155,7 @@ function normalizeSourceSpans(spans) {
   }));
 }
 
-function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = new Map()) {
+function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = new Map(), root = repoRoot) {
   const rawSourceRefs = sourceRefList(
     candidate.sourceRefs ||
       candidate.source_refs ||
@@ -16170,7 +16178,7 @@ function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = n
       sourceSpans.push(...normalizeSourceSpans(artifact.sourceSpans));
       continue;
     }
-    const evidence = normalizeSourceEvidence([ref]);
+    const evidence = normalizeSourceEvidence([ref], root);
     if (evidence.valid.length > 0) {
       const normalizedRef = evidence.valid[0].ref;
       if (!sourceRefs.includes(normalizedRef)) sourceRefs.push(normalizedRef);
@@ -16184,7 +16192,7 @@ function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = n
   const dependencyHints = normalizeCandidateStringList(candidate.dependencyHints || candidate.dependency_hints || candidate.dependencies);
   const touchedSurfaceHint = sanitizeLedgerField(candidate.touchedSurfaceHint || candidate.touched_surface_hint || candidate.touchedSurface || "", "", 180);
   const sourceOwnedRewrite = normalizeSourceOwnedRewriteRef(candidate.sourceOwnedRewriteRef || candidate.source_owned_rewrite_ref || "");
-  const provenanceValidation = normalizeDefaultBmadSourceProvenance(candidate.sourceProvenance || candidate.source_provenance, sourceRefs);
+  const provenanceValidation = normalizeDefaultBmadSourceProvenance(candidate.sourceProvenance || candidate.source_provenance, sourceRefs, root);
   const sourceOwnedRewriteRef = sourceOwnedRewrite.ref;
   const requiredSourceOwnedArtifact = sanitizeLedgerField(candidate.requiredSourceOwnedArtifact || candidate.required_source_owned_artifact || sourceOwnedRewriteRef || touchedSurfaceHint, "source-owned docs, scripts, tests, or policy artifact", 180);
   const canonicalDedupeKey = sourceWorkDedupeKey(sourceRefs, acceptanceCriteria, touchedSurfaceHint);
@@ -16374,11 +16382,16 @@ function defaultSourceBackedSeedRefs(context = {}) {
   return defaultSourceRefs({ ...context, discoverDefaultSources: true }).slice(0, 1);
 }
 
+function managerBmadRoot(options = {}, context = {}) {
+  return resolve(String(context.bmadRoot || options.bmadRoot || process.env.KENDALL_BMAD_ROOT || repoRoot));
+}
+
 function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
   const attempted = Boolean(options.supervisorUrl || context.supervisorUrl);
   if (!attempted) return { attempted: false, status: "not_requested", summary: null, blockers: [], seedCandidate: null };
+  const bmadRoot = managerBmadRoot(options, context);
   const sprintStatusRef = "_bmad-output/implementation-artifacts/sprint-status.yaml";
-  const sprintStatusPath = join(repoRoot, sprintStatusRef);
+  const sprintStatusPath = join(bmadRoot, sprintStatusRef);
   const blocked = (code, message, nextAction, details = {}) => ({
     attempted: true,
     status: "blocked",
@@ -16454,7 +16467,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
   }
   const selectedStory = readyStories[0];
   const storyRef = `story:_bmad-output/implementation-artifacts/${selectedStory.key}.md`;
-  const storyPath = join(repoRoot, storyRef.slice("story:".length));
+  const storyPath = join(bmadRoot, storyRef.slice("story:".length));
   if (!existsSync(storyPath)) {
     return blocked(
       "default-bmad-source-story-missing",
@@ -16491,8 +16504,8 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
       { sourceKey },
     );
   }
-  const bundleRefs = explicitBundleRef ? [explicitBundleRef] : defaultBmadBundleRefs(sourceKey);
-  if (explicitBundleRef && (sourcePlanningKey(explicitBundleRef.slice("prd:".length)) !== sourceKey || !existsSync(join(repoRoot, explicitBundleRef.slice("prd:".length))))) {
+  const bundleRefs = explicitBundleRef ? [explicitBundleRef] : defaultBmadBundleRefs(sourceKey, bmadRoot);
+  if (explicitBundleRef && (sourcePlanningKey(explicitBundleRef.slice("prd:".length)) !== sourceKey || !existsSync(join(bmadRoot, explicitBundleRef.slice("prd:".length))))) {
     return blocked(
       "default-bmad-source-explicit-bundle-mismatch",
       "The explicit local PRD bundle does not exist or does not match the canonical sprint source_key.",
@@ -16511,7 +16524,7 @@ function resolveDefaultBmadSourceSeed(options = {}, context = {}) {
     );
   }
   const bundleRef = bundleRefs[0];
-  const hierarchy = reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, storyContent, storyRef });
+  const hierarchy = reconcileDefaultBmadHierarchy({ root: bmadRoot, bundleRef, sourceKey, sprintMetadata, storyContent, storyRef });
   if (!hierarchy.ok) {
     return blocked(hierarchy.code, hierarchy.message, hierarchy.nextAction, {
       sourceKey,
@@ -16650,10 +16663,10 @@ function planningMetadataArtifacts(root = repoRoot) {
   }
 }
 
-function reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, storyContent, storyRef }) {
+function reconcileDefaultBmadHierarchy({ root = repoRoot, bundleRef, sourceKey, sprintMetadata, storyContent, storyRef }) {
   const fail = (code, message, nextAction, details = {}) => ({ ok: false, code, message, nextAction, details });
   const prdRef = bundleRef.slice("prd:".length);
-  const prd = bmadFrontmatterMetadata(join(repoRoot, prdRef));
+  const prd = bmadFrontmatterMetadata(join(root, prdRef));
   if (!prd) return fail("default-bmad-source-prd-unreadable", "The selected authoritative PRD metadata is unreadable.", "Restore readable PRD frontmatter before retrying.");
   if (prd.duplicates.length > 0) return fail("default-bmad-source-prd-conflicting", "The selected PRD contains conflicting metadata keys.", "Reconcile duplicate PRD frontmatter keys before retrying.", { conflictingKeys: prd.duplicates });
   const prdStatus = String(prd.fields.status || "").toLowerCase();
@@ -16663,7 +16676,7 @@ function reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, s
   const authoritativeFor = Array.isArray(prd.fields.authoritative_for) ? prd.fields.authoritative_for.filter(Boolean) : [];
   if (String(prd.fields.authoritative || "").toLowerCase() !== "true" && authoritativeFor.length === 0) return fail("default-bmad-source-prd-not-authoritative", "The selected final PRD is not marked as an authoritative planning input.", "Mark exactly one final PRD authoritative for this scope before retrying.");
 
-  const artifacts = planningMetadataArtifacts();
+  const artifacts = planningMetadataArtifacts(root);
   const select = (kind, workflowType, primaryField, primaryRef) => {
     const candidates = artifacts.filter((entry) => String(entry.metadata.fields.workflowType || "").toLowerCase() === workflowType && entry.metadata.fields[primaryField] === primaryRef);
     if (candidates.length === 0) return fail(`default-bmad-source-${kind}-missing`, `No matching ${kind.replaceAll("-", " ")} metadata artifact was found.`, `Create or restore exactly one matching ${kind.replaceAll("-", " ")} artifact before retrying.`);
@@ -16687,7 +16700,7 @@ function reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, s
   if (readiness.selected.metadata.fields.authoritative_architecture !== architecture.selected.ref || readiness.selected.metadata.fields.authoritative_epics !== epics.selected.ref) {
     return fail("default-bmad-source-readiness-mismatch", "Implementation-readiness metadata does not bind the selected architecture and epics/stories artifacts.", "Regenerate readiness evidence for the exact selected hierarchy.");
   }
-  const story = bmadFrontmatterMetadata(join(repoRoot, storyRef.slice("story:".length)));
+  const story = bmadFrontmatterMetadata(join(root, storyRef.slice("story:".length)));
   if (!story) return fail("default-bmad-source-story-unreadable", "The selected story metadata is unreadable.", "Restore readable story frontmatter before retrying.");
   const storyStatus = bmadStoryStatus(storyContent);
   return {
@@ -16703,14 +16716,14 @@ function reconcileDefaultBmadHierarchy({ bundleRef, sourceKey, sprintMetadata, s
   };
 }
 
-function defaultBmadBundleRefs(sourceKey = "") {
-  const prdRoot = join(repoRoot, "_bmad-output", "planning-artifacts", "prds");
+function defaultBmadBundleRefs(sourceKey = "", root = repoRoot) {
+  const prdRoot = join(root, "_bmad-output", "planning-artifacts", "prds");
   if (!sourceKey || !existsSync(prdRoot)) return [];
   try {
     return readdirSync(prdRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => `_bmad-output/planning-artifacts/prds/${entry.name}/prd.md`)
-      .filter((relativePath) => existsSync(join(repoRoot, relativePath)) && sourcePlanningKey(relativePath) === sourceKey)
+      .filter((relativePath) => existsSync(join(root, relativePath)) && sourcePlanningKey(relativePath) === sourceKey)
       .sort()
       .map((relativePath) => `prd:${relativePath}`);
   } catch {
@@ -16726,7 +16739,7 @@ function readLocalBmadMetadata(path) {
   }
 }
 
-function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
+function normalizeDefaultBmadSourceProvenance(value, sourceRefs = [], root = repoRoot) {
   if (value === undefined || value === null) return { provenance: null, errors: [] };
   if (!isPlainObject(value)) return { provenance: null, errors: ["sourceProvenance must be an object"] };
   const supplied = {
@@ -16749,8 +16762,8 @@ function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
   if (supplied.storyRef !== `story:_bmad-output/implementation-artifacts/${supplied.storyKey}.md`) errors.push("story ref does not match story key");
   if (sourceRefs.length !== 1 || sourceRefs[0] !== supplied.storyRef) errors.push("story ref does not match the selected source");
   if (supplied.sprintStatusRef !== "_bmad-output/implementation-artifacts/sprint-status.yaml") errors.push("sprint status ref is not canonical");
-  const sprintPath = join(repoRoot, supplied.sprintStatusRef);
-  const storyPath = join(repoRoot, supplied.storyRef.replace(/^story:/, ""));
+  const sprintPath = join(root, supplied.sprintStatusRef);
+  const storyPath = join(root, supplied.storyRef.replace(/^story:/, ""));
   let hierarchy = null;
   if (!existsSync(sprintPath) || !existsSync(storyPath)) {
     errors.push("local BMAD provenance artifact is missing");
@@ -16768,6 +16781,7 @@ function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
     if (readyRows.length !== 1 || readyRows[0].key !== supplied.storyKey || readyRows[0].status !== supplied.storyStatus) errors.push("sprint story readiness does not match provenance");
     if (bmadStoryStatus(storyContent) !== supplied.storyStatus) errors.push("story artifact readiness does not match provenance");
     hierarchy = reconcileDefaultBmadHierarchy({
+      root,
       bundleRef: supplied.bundleRef,
       sourceKey: supplied.sourceKey,
       sprintMetadata: currentSprintMetadata,
@@ -16776,7 +16790,7 @@ function normalizeDefaultBmadSourceProvenance(value, sourceRefs = []) {
     });
     if (!hierarchy.ok) errors.push(`full hierarchy revalidation failed: ${hierarchy.code}`);
   }
-  const bundleRefs = defaultBmadBundleRefs(supplied.sourceKey);
+  const bundleRefs = defaultBmadBundleRefs(supplied.sourceKey, root);
   if (!bundleRefs.includes(supplied.bundleRef)) errors.push("authoritative bundle does not match provenance");
   const provenance = hierarchy?.ok
     ? {
@@ -16838,14 +16852,14 @@ function sourceArtifactMtimeMs(path) {
   }
 }
 
-function normalizeSourceEvidence(refs = []) {
+function normalizeSourceEvidence(refs = [], root = repoRoot) {
   const valid = [];
   const rejected = [];
   const seen = new Set();
   for (const raw of refs) {
     const text = String(raw || "").trim();
     if (!text) continue;
-    const source = classifySourceRef(text);
+    const source = classifySourceRef(text, root);
     if (!source) {
       rejected.push(text.slice(0, 160));
       continue;
@@ -16858,22 +16872,23 @@ function normalizeSourceEvidence(refs = []) {
   return { valid: valid.slice(0, 12), rejected: rejected.slice(0, 12) };
 }
 
-function classifySourceRef(text) {
+function classifySourceRef(text, root = repoRoot) {
   const ref = text.replace(/\s+/g, " ").slice(0, 240);
   const prefixed = ref.match(/^(prd|runway|story|doc):(.+)/i);
   if (prefixed) {
     const type = prefixed[1].toLowerCase();
     const remainder = prefixed[2].trim();
-    return classifySourcePath(remainder, type, ref);
+    return classifySourcePath(remainder, type, ref, root);
   }
-  return classifySourcePath(ref, "", ref);
+  return classifySourcePath(ref, "", ref, root);
 }
 
-function classifySourcePath(path, expectedType = "", originalRef = path) {
+function classifySourcePath(path, expectedType = "", originalRef = path, root = repoRoot) {
   const normalized = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
-  if (!normalized || normalized.includes("..") || resolve(repoRoot, normalized) === resolve(repoRoot)) return null;
-  const absolute = resolve(repoRoot, normalized);
-  if (!isInsideOrSame(absolute, repoRoot) || !existsSync(absolute)) return null;
+  const sourceRoot = resolve(String(root || repoRoot));
+  if (!normalized || normalized.includes("..") || resolve(sourceRoot, normalized) === sourceRoot) return null;
+  const absolute = resolve(sourceRoot, normalized);
+  if (!isInsideOrSame(absolute, sourceRoot) || !existsSync(absolute)) return null;
   const lower = normalized.toLowerCase();
   const inferredType = inferSourceType(lower);
   if (!inferredType || (expectedType && inferredType !== expectedType)) return null;
