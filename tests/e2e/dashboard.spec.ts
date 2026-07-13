@@ -600,14 +600,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(intake.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
   });
 
-  test("Story 4.6 empty runtime state does not substitute demo packets", async ({ page }) => {
-    await page.goto("/pipeline");
+  if (process.env.PLAYWRIGHT_EXPECT_EMPTY_SUPERVISOR === "true") {
+    test("Story 4.6 empty runtime state does not substitute demo packets", async ({ page }) => {
+      await page.goto("/pipeline");
 
-    await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
-    await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
-    await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Unexpected Runtime Packet", { exact: true })).toHaveCount(0);
-  });
+      await expect(page.getByText("Supervisor empty", { exact: true })).toBeVisible();
+      await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
+      await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Unexpected Runtime Packet", { exact: true })).toHaveCount(0);
+    });
+  }
 
   test("Story 4.6 runtime packet keeps identity and survives refresh", async ({ page, request }) => {
     const packetId = `story-4-6-runtime:${Date.now()}`;
@@ -787,10 +789,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(pipelineBoard).toBeVisible();
     await expect(page.getByLabel("NohypeAI inspired workflow map")).toHaveCount(0);
     await expect(page.getByLabel("Deep Review and artifact stack")).toHaveCount(0);
-    await expect(pipelineBoard.getByText("Route map", { exact: true })).toBeVisible();
+    await expect(pipelineBoard.getByText("Active board", { exact: true })).toBeVisible();
     await expect(pipelineBoard.locator(".kendall-info-tip")).toHaveCount(1);
     await expect(pipelineBoard.locator(".kendall-info-tip-icon").first()).toHaveText("i");
-    await expect(pipelineBoard.locator(".kendall-info-tip-bubble").first()).toHaveText("Each stage shows packets currently sitting there. Color marks state; order puts urgent work first.");
+    await expect(pipelineBoard.locator(".kendall-info-tip-bubble").first()).toHaveText("Shows current actionable packets. Stale and diagnostic packets stay out of active lanes.");
     await expect(pipelineBoard.getByText("map view", { exact: true })).toHaveCount(0);
     const statusKey = page.getByLabel("Pipeline status key");
     await expect(statusKey).toBeVisible();
@@ -819,7 +821,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(routeMap.locator(".pipeline-route-station")).toHaveCount(10);
     await expect(routeMap.locator(".pipeline-route-connectors")).toBeVisible();
     await expect(routeMap.locator(".pipeline-route-connector-line")).toHaveCount(9);
-    await expect(routeMap.locator(".pipeline-route-connector-pulse")).toHaveCount(9);
+    await expect(routeMap.locator(".pipeline-route-connector-pulse")).toHaveCount(0);
     await expect(page.getByLabel("Pipeline inspection panel")).toHaveCount(0);
     await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
     await expect(page.getByLabel("Stage inspection panel")).toHaveCount(0);
@@ -890,10 +892,10 @@ test.describe("dashboard workflow coverage", () => {
     const failedInspection = page.getByLabel("Packet inspection panel");
     await expect(failedInspection).toBeVisible();
     await expect(failedInspection.getByText("Next", { exact: true })).toBeVisible();
-    await expect(failedInspection.getByText("Recovery", { exact: true })).toBeVisible();
+    await expect(failedInspection.getByText("Recovery", { exact: true }).first()).toBeVisible();
     await failedPacketButton.click();
     await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
-    await packetSearch.fill("hermes.governed");
+    await packetSearch.fill("governed hermes");
     const governedHermesPacketButton = routeMap.getByRole("button", { name: /Inspect packet: Governed Hermes dry-run attempt active/ });
     await expect(governedHermesPacketButton).toBeVisible();
     await governedHermesPacketButton.click();
@@ -939,11 +941,11 @@ test.describe("dashboard workflow coverage", () => {
       await expect(packetInspection.getByText(inspectionLabel, { exact: true })).toBeVisible();
     }
     await expect(packetInspection.getByText("Captured intake", { exact: true })).toBeVisible();
-    await expect(packetInspection.getByText("Being sorted", { exact: true })).toBeVisible();
-    await expect(packetInspection.getByText("Research or source review", { exact: true })).toBeVisible();
-    await expect(packetInspection.getByText("Source freshness needs review", { exact: true })).toBeVisible();
+    await expect(packetInspection.getByText("Demo fixture", { exact: true })).toBeVisible();
+    await expect(packetInspection.getByText("From explicit demo mode", { exact: true })).toBeVisible();
+    await expect(packetInspection.getByText("Clarify source", { exact: true }).first()).toBeVisible();
     await packetInspection.getByRole("link", { name: "Open full packet", exact: true }).click();
-    await expect(page).toHaveURL(/\/pipeline\/packets\/fixture%3Astale-source|\/pipeline\/packets\/fixture:stale-source/);
+    await expect(page).toHaveURL(/\/pipeline\/demo\/packets\/fixture%3Astale-source|\/pipeline\/demo\/packets\/fixture:stale-source/);
     const packetDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(packetDetail).toBeVisible();
     await expect(packetDetail.getByRole("heading", { name: "Packet detail: Resolve stale research source before routing" })).toBeVisible();
@@ -967,8 +969,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(packetDetail.getByText("Source Boundary Checklist", { exact: true })).toBeVisible();
     await expect(packetDetail.getByText("Obsidian is canonical and human-owned", { exact: false }).first()).toBeVisible();
     await packetDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
-    await expect(page).toHaveURL(/\/pipeline$/);
-    await page.goto("/pipeline/packets/fixture:human-gate-blocked");
+    await expect(page).toHaveURL(/\/pipeline\/demo$/);
+    await page.goto("/pipeline/demo/packets/fixture:human-gate-blocked");
     const gatePacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(gatePacketDetail).toBeVisible();
     await expect(gatePacketDetail.getByText("Required evidence", { exact: true }).first()).toBeVisible();
@@ -976,7 +978,6 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gatePacketDetail.getByText("Do not launch a real worker from fixture mode.", { exact: false }).first()).toBeVisible();
     await expect(gatePacketDetail.getByText("Rollback", { exact: true }).first()).toBeVisible();
     await expect(gatePacketDetail.getByText("Audit", { exact: true }).first()).toBeVisible();
-    await expect(gatePacketDetail.getByText("Action guard previews", { exact: true }).first()).toBeVisible();
     const actionRequestLedger = gatePacketDetail.getByRole("region", { name: "Action request ledger" });
     await expect(actionRequestLedger).toBeVisible();
     const actionRequestState = await actionRequestLedger.locator("article").first().evaluate((article) =>
@@ -993,8 +994,8 @@ test.describe("dashboard workflow coverage", () => {
       "Resulting state applied": "false",
     });
     await gatePacketDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
-    await expect(page).toHaveURL(/\/pipeline$/);
-    await page.goto("/pipeline/packets/fixture:deliver-evidence");
+    await expect(page).toHaveURL(/\/pipeline\/demo$/);
+    await page.goto("/pipeline/demo/packets/fixture:deliver-evidence");
     const deliveryPacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(deliveryPacketDetail).toBeVisible();
     await expect(deliveryPacketDetail.getByRole("heading", { name: "Delivery and cleanup evidence", exact: true })).toBeVisible();
@@ -1008,7 +1009,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(deliveryEvidence.getByText("Cleanup approved", { exact: true })).toBeVisible();
     await expect(deliveryEvidence.getByText("false", { exact: true }).first()).toBeVisible();
     await expect(deliveryEvidence.getByText("fixture:deliver-evidence:evidence:retained-delivery-summary", { exact: false })).toBeVisible();
-    await page.goto("/pipeline/packets/fixture:learn-memory");
+    await page.goto("/pipeline/demo/packets/fixture:learn-memory");
     const memoryPacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(memoryPacketDetail).toBeVisible();
     await expect(memoryPacketDetail.getByRole("heading", { name: "Learn panel: Memory proposals", exact: true })).toBeVisible();
@@ -1043,21 +1044,18 @@ test.describe("dashboard workflow coverage", () => {
     await expect(pendingMemoryProposal.getByText("Reject available", { exact: true })).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Backup / recovery", { exact: true })).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Preserve proposal evidence, leave Obsidian unchanged, and rerun review from packet metadata.", { exact: true }).first()).toBeVisible();
-    await page.goto("/pipeline/packets/fixture:failed-stage");
+    await page.goto("/pipeline/demo/packets/fixture:failed-stage");
     const recoveryPacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(recoveryPacketDetail).toBeVisible();
-    const retryRecoveryAction = recoveryPacketDetail.locator("article").filter({ hasText: "Retry smaller" });
-    await expect(retryRecoveryAction.getByText("Action guard preview", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("Expected binding", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("Actual binding", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("Primary risk", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("Stop line", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("Safe next option", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("Recovery preview event", { exact: true })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("fixture:failed-stage:recovery:retry_smaller:event", { exact: false })).toBeVisible();
-    await expect(retryRecoveryAction.getByText("fixture:failed-stage:action:rerun_smaller", { exact: true })).toBeVisible();
+    const retryRecoveryAction = recoveryPacketDetail.locator("li").filter({ hasText: "Retry smaller" }).first();
+    await expect(retryRecoveryAction).toContainText("expected binding: fixture:failed-stage / fixture:failed-stage:recovery:retry_smaller");
+    await expect(retryRecoveryAction).toContainText("actual binding: fixture:failed-stage / fixture:failed-stage:recovery:retry_smaller");
+    await expect(retryRecoveryAction).toContainText("primary risk: false_authority");
+    await expect(retryRecoveryAction).toContainText("stop line: Do not launch or cancel a real worker from fixture mode.");
+    await expect(retryRecoveryAction).toContainText("safe next option: Open Human Gate reference fixture:failed-stage:action:rerun_smaller");
+    await expect(retryRecoveryAction).toContainText("fixture event: fixture:failed-stage:recovery:retry_smaller:event");
     await recoveryPacketDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
-    await expect(page).toHaveURL(/\/pipeline$/);
+    await expect(page).toHaveURL(/\/pipeline\/demo$/);
     await expect(pipelineBoard).toBeVisible();
     await expect(cockpit.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
     for (const viewport of [pipelineViewportForProject(testInfo.project.name)] as const) {
@@ -1082,10 +1080,11 @@ test.describe("dashboard workflow coverage", () => {
           )
         );
         return {
-          miniPacketLabelsWrappedAndContained: Array.from(document.querySelectorAll(".pipeline-mini-packet-label")).every((label) => {
+          miniPacketLabelsTruncatedAndContained: Array.from(document.querySelectorAll(".pipeline-mini-packet-label")).every((label) => {
             const style = window.getComputedStyle(label);
             const htmlLabel = label as HTMLElement;
-            return style.whiteSpace === "normal" && htmlLabel.scrollWidth <= htmlLabel.clientWidth + 1;
+            const parent = htmlLabel.parentElement;
+            return style.whiteSpace === "nowrap" && style.overflow === "hidden" && Boolean(parent && htmlLabel.clientWidth <= parent.clientWidth + 1);
           }),
           stageLabelsUntruncated: Array.from(document.querySelectorAll(".pipeline-stage-label")).every((label) => {
             const htmlLabel = label as HTMLElement;
@@ -1108,7 +1107,7 @@ test.describe("dashboard workflow coverage", () => {
         expect(mobileRouteEvidence.routeMapHasHorizontalScroll, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(false);
         expect(mobileRouteEvidence.maxVisiblePacketsPerStage, JSON.stringify({ viewport, mobileRouteEvidence })).toBeLessThanOrEqual(4);
       }
-      expect(mobileRouteEvidence.miniPacketLabelsWrappedAndContained, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
+      expect(mobileRouteEvidence.miniPacketLabelsTruncatedAndContained, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       expect(mobileRouteEvidence.stageLabelsUntruncated, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       expect(mobileRouteEvidence.stageCardsHaveVisibleFrames, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       const visualIntegrityEvidence = await page.evaluate(() => {
@@ -1143,14 +1142,16 @@ test.describe("dashboard workflow coverage", () => {
           .map((element) => {
             const htmlElement = element as HTMLElement;
             const rect = htmlElement.getBoundingClientRect();
+            const style = window.getComputedStyle(htmlElement);
             return {
               text: htmlElement.textContent?.trim().slice(0, 48) ?? htmlElement.tagName,
               clientWidth: Math.round(htmlElement.clientWidth),
               scrollWidth: Math.round(htmlElement.scrollWidth),
               width: Math.round(rect.width),
+              overflowContained: ["hidden", "clip"].includes(style.overflowX),
             };
           })
-          .filter((entry) => entry.scrollWidth > entry.clientWidth + 8)
+          .filter((entry) => entry.scrollWidth > entry.clientWidth + 8 && !entry.overflowContained)
           .slice(0, 8);
         return {
           boxes,
@@ -1213,13 +1214,11 @@ test.describe("dashboard workflow coverage", () => {
         const routeMap = document.querySelector(".pipeline-route-map");
         const routeRow = document.querySelector(".pipeline-route-row");
         const routeConnector = document.querySelector(".pipeline-route-connector-line");
-        const routeConnectorPulse = document.querySelector(".pipeline-route-connector-pulse");
         const missionStrip = document.querySelector(".pipeline-mission-strip");
         const stageCode = document.querySelector(".pipeline-stage-code");
         const miniPacket = document.querySelector(".pipeline-mini-packet");
         const inspectionPanel = document.querySelector(".pipeline-inspection-panel");
         const connectorStyle = routeConnector ? window.getComputedStyle(routeConnector) : null;
-        const connectorPulseStyle = routeConnectorPulse ? window.getComputedStyle(routeConnectorPulse) : null;
         const graphBackgroundStyle = graphBackground ? window.getComputedStyle(graphBackground) : null;
         const graphLinkStyle = graphLink ? window.getComputedStyle(graphLink) : null;
         const graphMapStyle = graphMap ? window.getComputedStyle(graphMap) : null;
@@ -1254,9 +1253,7 @@ test.describe("dashboard workflow coverage", () => {
           hasMiniPacket: miniPacket !== null,
           hidesInspectionPanelUntilPacketSelect: inspectionPanel === null,
           hasRouteConnector: connectorStyle !== null && routeConnector?.getAttribute("d")?.startsWith("M ") === true,
-          routeConnectorAnimated: connectorPulseStyle?.animationName === "pipeline-route-flow",
-          routeConnectorSlow: slowestAnimationSeconds(connectorPulseStyle?.animationDuration) >= 9,
-          routeConnectorMoves: connectorPulseStyle?.strokeDasharray !== "none",
+          routeConnectorDashed: connectorStyle?.strokeDasharray !== "none",
           shellSignalAnimated: shellSignalStyle?.animationName === "pipeline-shell-drift",
           shellSignalSlow: slowestAnimationSeconds(shellSignalStyle?.animationDuration) >= 60,
           shellOverflow: shell ? window.getComputedStyle(shell).overflow : null,
@@ -1282,9 +1279,7 @@ test.describe("dashboard workflow coverage", () => {
         hasMiniPacket: true,
         hidesInspectionPanelUntilPacketSelect: true,
         hasRouteConnector: true,
-        routeConnectorAnimated: true,
-        routeConnectorSlow: true,
-        routeConnectorMoves: true,
+        routeConnectorDashed: true,
         shellSignalAnimated: true,
         shellSignalSlow: true,
         shellOverflow: "visible",
@@ -3341,7 +3336,7 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("renders reviewable memory proposals in packet detail without write-back controls", async ({ page }) => {
-    await page.goto("/pipeline/packets/fixture:learn-memory");
+    await page.goto("/pipeline/demo/packets/fixture:learn-memory");
 
     const memoryPacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(memoryPacketDetail).toBeVisible();

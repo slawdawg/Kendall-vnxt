@@ -197,6 +197,7 @@
     "test:e2e:dashboard": "playwright test",
     "test:e2e:dashboard:pipeline-targets": "PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true playwright test tests/e2e/dashboard.spec.ts --grep \"opens isolated demo pipeline cockpit without live execution framing\"",
     "test:e2e:dashboard:pipeline:windows": "playwright test tests/e2e/dashboard.spec.ts --project windows-11-chromium --grep \"opens isolated demo pipeline cockpit without live execution framing\"",
+    "test:e2e:dashboard:pipeline:empty": "PLAYWRIGHT_EXPECT_EMPTY_SUPERVISOR=true PLAYWRIGHT_DASHBOARD_URL=http://127.0.0.1:3103 PLAYWRIGHT_SUPERVISOR_URL=http://127.0.0.1:8103 playwright test tests/e2e/dashboard.spec.ts --project windows-11-chromium --grep \"empty runtime state does not substitute\"",
     "test:e2e:dashboard:pipeline:unavailable": "PLAYWRIGHT_EXPECT_UNAVAILABLE_SUPERVISOR=true PLAYWRIGHT_DASHBOARD_URL=http://127.0.0.1:3102 PLAYWRIGHT_SUPERVISOR_URL=http://127.0.0.1:8199 playwright test tests/e2e/dashboard.spec.ts --project windows-11-chromium --grep \"unavailable dashboard fails closed\"",
     "test:e2e:dashboard:pipeline:ipad": "PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true playwright test tests/e2e/dashboard.spec.ts --project ipad-pro-gen-2-safari-ios-26 --grep \"opens isolated demo pipeline cockpit without live execution framing\"",
     "test:e2e:dashboard:pipeline:iphone": "PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true playwright test tests/e2e/dashboard.spec.ts --project iphone-15-pro-max-safari-ios-27 --grep \"opens isolated demo pipeline cockpit without live execution framing\"",
