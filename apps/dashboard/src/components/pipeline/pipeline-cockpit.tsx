@@ -35,7 +35,7 @@ import type {
   PipelineManagerFeedbackRouteRow,
   PipelineManagerLanePanel,
   PipelineManagerLaneRow,
-} from "../../lib/pipeline/manager-execution-lane-summary";
+} from "../../lib/pipeline/manager-execution-lane-types";
 import {
   applyPipelineOperationalAction,
   requestPipelineOperationalApproval,

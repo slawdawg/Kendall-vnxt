@@ -69,6 +69,12 @@ if (normalRouteGraph.includes("apps/dashboard/src/lib/pipeline-fixtures.ts")) {
 if (!demoRouteGraph.includes("apps/dashboard/src/lib/pipeline-fixtures.ts")) {
   failures.push("explicit /pipeline/demo route graph must retain access to apps/dashboard/src/lib/pipeline-fixtures.ts");
 }
+if (normalRouteGraph.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts")) {
+  failures.push("normal /pipeline route graph must not reach apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts");
+}
+if (!demoRouteGraph.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts")) {
+  failures.push("explicit /pipeline/demo route graph must retain access to apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts");
+}
 for (const runtimeBoundaryFile of [
   "apps/dashboard/src/lib/pipeline-packet-loader.ts",
   "apps/dashboard/src/lib/pipeline-supervisor-projector.ts",
@@ -126,6 +132,8 @@ console.log(
       demoRouteGraphFiles: demoRouteGraph.length,
       normalFixtureCatalogReachable: false,
       demoFixtureCatalogReachable: true,
+      normalManagerFixtureSummaryReachable: false,
+      demoManagerFixtureSummaryReachable: true,
       boundary:
         "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from /pipeline dashboard code outside the read-only supervisor WorkPacketV0 projection loader.",
     },
@@ -336,6 +344,7 @@ function isPipelineBoundaryPath(filePath) {
   return (
     relativePath.startsWith("apps/dashboard/src/app/pipeline/") ||
     relativePath.startsWith("apps/dashboard/src/components/pipeline/") ||
+    relativePath.startsWith("apps/dashboard/src/lib/pipeline/") ||
     relativePath.startsWith("apps/dashboard/src/lib/pipeline-")
   );
 }
