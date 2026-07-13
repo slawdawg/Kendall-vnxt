@@ -139,28 +139,31 @@ function readSupervisorPipelinePacket(packetId: string) {
   return JSON.parse(result) as SupervisorPipelinePacketSnapshot;
 }
 
-function ageSupervisorPipelinePacket(packetId: string) {
+function ageSupervisorPipelinePacket(packetId: string, snapshot: SupervisorPipelinePacketSnapshot) {
   const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
   expect(dbPath).toBeTruthy();
   const script = [
     "import json, sqlite3, sys",
     "db_path = sys.argv[1]",
     "packet_id = sys.argv[2]",
+    "expected_status = sys.argv[3]",
+    "expected_updated_at = sys.argv[4]",
     "conn = sqlite3.connect(db_path)",
     "row = conn.execute(\"select status, updated_at from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
-    "assert row is not None",
+    "assert row is not None and row[0] == expected_status and row[1] == expected_updated_at",
     "conn.execute(\"update authoritative_work_packets set status = 'complete', updated_at = datetime('now', '-1 day') where id = ?\", (packet_id,))",
     "conn.commit()",
     "mutated = conn.execute(\"select status, updated_at from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
     "assert mutated is not None and mutated[0] == 'complete'",
     "conn.close()",
-    "print(json.dumps({'snapshot': {'status': row[0], 'updatedAt': row[1]}, 'mutated': {'status': mutated[0], 'updatedAt': mutated[1]}}))",
+    "print(json.dumps({'mutated': {'status': mutated[0], 'updatedAt': mutated[1]}}))",
   ].join("; ");
-  const result = execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], {
+  const result = execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
-  return JSON.parse(result) as { snapshot: SupervisorPipelinePacketSnapshot; mutated: SupervisorPipelinePacketSnapshot };
+  const body = JSON.parse(result) as { mutated: SupervisorPipelinePacketSnapshot };
+  return { snapshot, mutated: body.mutated };
 }
 
 function restoreSupervisorPipelinePacket(packetId: string, snapshot: SupervisorPipelinePacketSnapshot) {
@@ -724,10 +727,9 @@ test.describe("dashboard workflow coverage", () => {
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {
     const packetId = `story-4-6-stale:${Date.now()}`;
     await seedSupervisorPipelinePacket(request, packetId, "Story 4.6 stale supervisor packet", "complete");
-    let snapshot: SupervisorPipelinePacketSnapshot | null = null;
+    const snapshot = readSupervisorPipelinePacket(packetId);
     try {
-      const staleMutation = ageSupervisorPipelinePacket(packetId);
-      snapshot = staleMutation.snapshot;
+      const staleMutation = ageSupervisorPipelinePacket(packetId, snapshot);
       await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(staleMutation.mutated);
       await page.goto("/pipeline");
       await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
@@ -742,10 +744,8 @@ test.describe("dashboard workflow coverage", () => {
         expect(staleBody).not.toContain(fixtureSentinel);
       }
     } finally {
-      if (snapshot) {
-        restoreSupervisorPipelinePacket(packetId, snapshot);
-        await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(snapshot);
-      }
+      restoreSupervisorPipelinePacket(packetId, snapshot);
+      await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(snapshot);
     }
   });
 
