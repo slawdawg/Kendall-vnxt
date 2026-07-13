@@ -79,7 +79,6 @@ export const STATIC_BUNDLES = Object.freeze({
     "test:work-packet-stage-map",
     "test:work-packet-fixtures",
     "test:pipeline-state-matrix",
-    "test:dashboard-pipeline-loader",
     "test:dashboard-pipeline-fixtures",
     "test:dashboard-memory-proposals",
     "test:dashboard-e2e-runner",
