@@ -788,6 +788,23 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(invalidProjectionHtml, projectionTruthChipPattern("Source", "invalid"));
   assert.doesNotMatch(invalidProjectionHtml, projectionTruthChipPattern("Projection", "live"));
 
+  const invalidProjectionWithReadbackErrorHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: {
+      kind: "invalid",
+      label: "Supervisor invalid",
+      summary: "Projection timestamps are stale.",
+      matrixRows: 0,
+      fixtureCatalogEntries: 0,
+      canSatisfyLiveProof: false,
+    },
+    packets: [],
+    projection: liveProjection,
+    projectionError: "Projection timestamps are stale.",
+    selectedPacket: null,
+  }));
+  assert.match(invalidProjectionWithReadbackErrorHtml, projectionTruthChipPattern("Projection", "invalid"));
+  assert.match(invalidProjectionWithReadbackErrorHtml, projectionTruthChipPattern("Source", "invalid"));
+
   const negativeCases = [
     {
       caseId: "backend-unavailable",
@@ -1197,6 +1214,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.doesNotMatch(cockpitSource, /fixtureKind: "future-real-source"/);
   assert.match(cockpitSource, /fixtureLabel:\s+packetIsLive\s+\?\s+"backend projection: packet truth live"/);
   assert.match(cockpitSource, /: `backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}`/);
+  assert.match(cockpitSource, /packet\.sourceKind !== "demo-fixture"/);
   assert.match(cockpitSource, /managerExecutionLane\?\.operatorAttentionRequired \? <ManagerAttentionSummary lane=\{managerExecutionLane\} \/> : null/);
   assert.match(cockpitSource, /managerExecutionLane \? \([\s\S]*<ManagerExecutionLane lane=\{managerExecutionLane\} \/>/);
   assert.match(cockpitSource, /aria-label="Projection truth summary"/);
