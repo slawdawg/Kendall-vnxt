@@ -1057,7 +1057,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(pipelinePacketLoaderSource, /projectionError: projectionResult\.error/);
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
-  assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, packets, currentProjectionError, activeBoardViewModel\)/);
+  assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, packets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
   assert.match(cockpitSource, /runtimePacketIds = new Set\(runtimePackets\.map/);
   assert.match(cockpitSource, /!runtimePacketIds\.has\(card\.packetId\)/);
   assert.match(cockpitSource, /selectedDetailByPacketId = new Map\(projection\.selectedPacketDetails\.map/);
@@ -1118,7 +1118,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /effectiveLabels = projectionDisplayLabels\(projection, proofSource, proofFreshness, refreshUnavailable, projectionLiveProof\)/);
   assert.match(cockpitSource, /stageSummaryByStage/);
   assert.match(cockpitSource, /buildStageSummaryByStage/);
-  assert.match(cockpitSource, /buildStageSummaryByStage\(currentProjection, currentProjectionError\)/);
+  assert.match(cockpitSource, /buildStageSummaryByStage\(currentProjection, currentProjectionError, fixtureMode\)/);
   assert.match(cockpitSource, /stageSummary=\{stageSummaryByStage\.get\(stage\)/);
   assert.match(cockpitSource, /projectionAvailable=\{Boolean\(currentProjection\)\}/);
   assert.doesNotMatch(cockpitSource, /stageProjectionCount/);
