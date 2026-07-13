@@ -72,6 +72,19 @@ export type PipelineSupervisorProjectionResult =
   | { kind: "empty"; packets: [] }
   | { kind: "invalid"; packets: []; error: string };
 
+const pipelineStages = new Set(["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"]);
+const workPacketOwners = new Set(["kendall", "operator", "local_model", "hermes_worker_mock", "codex_worker", "claude_reviewer", "github", "memory_review", "blocked"]);
+const workPacketStatuses = new Set(["active", "waiting", "blocked", "failed", "complete", "deferred"]);
+const riskLevels = new Set(["low", "medium", "high"]);
+const priorities = new Set(["low", "normal", "high", "urgent"]);
+const sourceRefTypes = new Set(["candidate_work", "work_item", "bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual"]);
+const sourceFreshnessValues = new Set(["fresh", "stale", "unknown", "not_applicable"]);
+const sourceAccessStates = new Set(["allowed", "excluded", "missing", "blocked"]);
+const evidenceRefTypes = new Set(["route", "event", "attempt", "local_model", "review", "gate", "memory", "fixture"]);
+const evidenceRetentionClasses = new Set(["metadata_only", "summary", "fixture"]);
+const artifactRefTypes = new Set(["plan", "progress", "report", "pull_request", "check", "memory_proposal", "fixture"]);
+const artifactRefStatuses = new Set(["available", "missing", "blocked", "deferred"]);
+
 export function projectSupervisorWorkPacketsToCockpitPackets(
   packets: readonly WorkPacketV0View[] | unknown,
 ): PipelineSupervisorProjectionResult {
@@ -97,6 +110,14 @@ export function projectSupervisorWorkPacketsToCockpitPackets(
       error: "Supervisor returned fixture-shaped WorkPacketV0 row at index " + fixtureShapedIndex + ".",
     };
   }
+  const duplicatePacketId = firstDuplicatePacketId(packets);
+  if (duplicatePacketId) {
+    return {
+      kind: "invalid",
+      packets: [],
+      error: "Supervisor returned duplicate WorkPacketV0 identity " + duplicatePacketId + ".",
+    };
+  }
   try {
     return {
       kind: "runtime",
@@ -115,11 +136,11 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     packet.packetId.trim().length > 0 &&
     typeof packet.title === "string" &&
     typeof packet.requestedOutcome === "string" &&
-    typeof packet.currentStage === "string" &&
-    typeof packet.currentOwner === "string" &&
-    typeof packet.status === "string" &&
-    typeof packet.riskLevel === "string" &&
-    typeof packet.priority === "string" &&
+    isEnumValue(packet.currentStage, pipelineStages) &&
+    isEnumValue(packet.currentOwner, workPacketOwners) &&
+    isEnumValue(packet.status, workPacketStatuses) &&
+    isEnumValue(packet.riskLevel, riskLevels) &&
+    isEnumValue(packet.priority, priorities) &&
     Array.isArray(packet.sourceRefs) &&
     packet.sourceRefs.every(isSourceRefV0) &&
     Array.isArray(packet.evidenceRefs) &&
@@ -136,7 +157,10 @@ function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
     Array.isArray(packet.transitionEvents) &&
     Array.isArray(packet.loopStopStates) &&
     packet.lifecycleState !== null &&
-    typeof packet.lifecycleState === "object";
+    typeof packet.lifecycleState === "object" &&
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).stage, pipelineStages) &&
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).owner, workPacketOwners) &&
+    isEnumValue((packet.lifecycleState as Record<string, unknown>).status, workPacketStatuses);
 }
 
 function hasFixtureOnlyRuntimeShape(value: unknown): boolean {
@@ -192,10 +216,10 @@ function isSourceRefV0(value: unknown): boolean {
   const ref = value as Record<string, unknown>;
   if (
     typeof ref.refId !== "string" ||
-    typeof ref.sourceType !== "string" ||
+    !isEnumValue(ref.sourceType, sourceRefTypes) ||
     typeof ref.label !== "string" ||
-    typeof ref.freshness !== "string" ||
-    typeof ref.accessState !== "string" ||
+    !isEnumValue(ref.freshness, sourceFreshnessValues) ||
+    !isEnumValue(ref.accessState, sourceAccessStates) ||
     typeof ref.canonical !== "boolean" ||
     typeof ref.summaryOnly !== "boolean" ||
     !isNullableString(ref.pathOrUrl) ||
@@ -215,10 +239,10 @@ function isEvidenceRefV0(value: unknown): boolean {
   }
   const ref = value as Record<string, unknown>;
   return typeof ref.refId === "string" &&
-    typeof ref.evidenceType === "string" &&
+    isEnumValue(ref.evidenceType, evidenceRefTypes) &&
     typeof ref.label === "string" &&
     isNullableString(ref.artifactPath) &&
-    typeof ref.retentionClass === "string" &&
+    isEnumValue(ref.retentionClass, evidenceRetentionClasses) &&
     ref.rawPayloadRetained === false;
 }
 
@@ -228,10 +252,25 @@ function isArtifactRefV0(value: unknown): boolean {
   }
   const ref = value as Record<string, unknown>;
   return typeof ref.refId === "string" &&
-    typeof ref.artifactType === "string" &&
+    isEnumValue(ref.artifactType, artifactRefTypes) &&
     typeof ref.label === "string" &&
     isNullableString(ref.pathOrUrl) &&
-    typeof ref.status === "string";
+    isEnumValue(ref.status, artifactRefStatuses);
+}
+
+function isEnumValue(value: unknown, allowedValues: ReadonlySet<string>): value is string {
+  return typeof value === "string" && allowedValues.has(value);
+}
+
+function firstDuplicatePacketId(packets: readonly WorkPacketV0View[]): string | null {
+  const seen = new Set<string>();
+  for (const packet of packets) {
+    if (seen.has(packet.packetId)) {
+      return packet.packetId;
+    }
+    seen.add(packet.packetId);
+  }
+  return null;
 }
 
 function projectSupervisorWorkPacketToCockpitPacket(packet: WorkPacketV0View): PipelineRuntimePacket {

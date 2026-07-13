@@ -113,18 +113,47 @@ async function seedSupervisorPipelinePacket(
   return body.data;
 }
 
-function ageSupervisorPipelinePackets() {
+function supervisorPythonCommand() {
+  return process.env.PLAYWRIGHT_SUPERVISOR_PYTHON ?? process.env.PYTHON ?? "python3";
+}
+
+function ageSupervisorPipelinePacket(packetId: string) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import json, sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "conn = sqlite3.connect(db_path)",
+    "row = conn.execute(\"select status, updated_at from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert row is not None",
+    "conn.execute(\"update authoritative_work_packets set status = 'complete', updated_at = datetime('now', '-1 day') where id = ?\", (packet_id,))",
+    "conn.commit()",
+    "conn.close()",
+    "print(json.dumps({'status': row[0], 'updatedAt': row[1]}))",
+  ].join("; ");
+  const result = execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  return JSON.parse(result) as { status: string; updatedAt: string };
+}
+
+function restoreSupervisorPipelinePacket(packetId: string, snapshot: { status: string; updatedAt: string }) {
   const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
   expect(dbPath).toBeTruthy();
   const script = [
     "import sqlite3, sys",
     "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "status = sys.argv[3]",
+    "updated_at = sys.argv[4]",
     "conn = sqlite3.connect(db_path)",
-    "conn.execute(\"update authoritative_work_packets set status = 'complete', updated_at = datetime('now', '-1 day')\")",
+    "conn.execute(\"update authoritative_work_packets set status = ?, updated_at = ? where id = ?\", (status, updated_at, packet_id))",
     "conn.commit()",
     "conn.close()",
   ].join("; ");
-  execFileSync("services/supervisor/.venv/bin/python", ["-c", script, dbPath!], {
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], {
     cwd: process.cwd(),
   });
 }
@@ -646,6 +675,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(truthSummary.getByText("Source:")).toBeVisible();
     await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+    await page.getByRole("button", { name: `Inspect packet: ${title}` }).click();
+    await expect(page.getByRole("link", { name: "Open full packet" })).toHaveAttribute("href", `/pipeline/packets/${encodeURIComponent(packetId)}`);
     await page.reload();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
@@ -659,6 +690,8 @@ test.describe("dashboard workflow coverage", () => {
     }
 
     await page.goto(`/pipeline/packets/${encodeURIComponent(packetId)}`);
+    const encodedPacketId = encodeURIComponent(packetId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await expect(page).toHaveURL(new RegExp(`/pipeline/packets/${encodedPacketId}$`));
     await expect(page.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
   });
@@ -666,25 +699,28 @@ test.describe("dashboard workflow coverage", () => {
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {
     const packetId = `story-4-6-stale:${Date.now()}`;
     await seedSupervisorPipelinePacket(request, packetId, "Story 4.6 stale supervisor packet", "complete");
-    ageSupervisorPipelinePackets();
-
-    await page.goto("/pipeline");
-    await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
-    await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
-    const staleBody = await page.locator("body").innerText();
-    expect(staleBody).toMatch(/stale|timestamps|invalid supervisor state/i);
-    for (const fixtureSentinel of [
-      "fixture:happy-path",
-      "Shape cockpit route from Work Packet matrix",
-      "Resolve stale research source before routing",
-    ]) {
-      expect(staleBody).not.toContain(fixtureSentinel);
+    const snapshot = ageSupervisorPipelinePacket(packetId);
+    try {
+      await page.goto("/pipeline");
+      await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
+      await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
+      const staleBody = await page.locator("body").innerText();
+      expect(staleBody).toMatch(/stale|timestamps|invalid supervisor state/i);
+      for (const fixtureSentinel of [
+        "fixture:happy-path",
+        "Shape cockpit route from Work Packet matrix",
+        "Resolve stale research source before routing",
+      ]) {
+        expect(staleBody).not.toContain(fixtureSentinel);
+      }
+    } finally {
+      restoreSupervisorPipelinePacket(packetId, snapshot);
     }
   });
 
   test("Story 4.6 invalid detail identity fails closed", async ({ page }) => {
     const invalidResponse = await page.goto("/pipeline/packets/%E0%A4%A");
-    expect([400, 404]).toContain(invalidResponse?.status());
+    expect(invalidResponse?.status()).toBe(404);
     await expect(page.getByText("Demo fixture", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
   });
