@@ -752,12 +752,23 @@ function ProjectionTruthSummary({
   const effectiveSourceLabel = projectionTooOld && projection?.sourceLabel === "live" ? "stale" : projection?.sourceLabel;
   const effectiveFreshnessState = projectionTooOld && projection?.freshnessState === "live" ? "stale" : projection?.freshnessState;
   const explicitNonRuntimeSource = cockpitNonRuntimeSourceKind(sourceState);
-  const proofSourceLabel = projectionError ? "unavailable" : effectiveSourceLabel ?? "unavailable";
-  const proofFreshnessState = projectionError ? "unavailable" : effectiveFreshnessState ?? "unavailable";
+  const proofSourceLabel = projectionError
+    ? "unavailable"
+    : explicitNonRuntimeSource
+      ? "unavailable"
+      : effectiveSourceLabel ?? "unavailable";
+  const proofFreshnessState = projectionError
+    ? "unavailable"
+    : explicitNonRuntimeSource
+      ? "unavailable"
+      : effectiveFreshnessState ?? "unavailable";
   const liveProofState = projectionLiveProofState(projection, proofSourceLabel, proofFreshnessState);
-  const displayLabels = projectionDisplayLabels(projection, proofSourceLabel, proofFreshnessState, Boolean(projectionError), liveProofState);
-  const sourceLabel = explicitNonRuntimeSource ?? displayLabels.sourceLabel;
-  const freshnessState = explicitNonRuntimeSource ?? displayLabels.freshnessState;
+  const displayLabels = applyNonRuntimeStageLabels(
+    projectionDisplayLabels(projection, proofSourceLabel, proofFreshnessState, Boolean(projectionError), liveProofState),
+    explicitNonRuntimeSource
+  );
+  const sourceLabel = displayLabels.sourceLabel;
+  const freshnessState = displayLabels.freshnessState;
   const statusNeedsAnnouncement = sourceLabel === "unavailable" || displayLabels.freshnessState === "stale" || Boolean(projectionError) || ["empty", "invalid", "demo"].includes(sourceState.kind);
   const backendState = projectionError
     ? "unavailable"
@@ -3372,14 +3383,8 @@ function stageHealthStateLabel(
     if (sourceLabel === "stale" || freshnessState === "stale") {
       return "projection stale";
     }
-    if (sourceLabel === "demo") {
-      return "demo fixtures";
-    }
     if (sourceLabel === "empty") {
       return "supervisor empty";
-    }
-    if (sourceLabel === "invalid") {
-      return "invalid supervisor state";
     }
     if (sourceLabel === "simulated") {
       return "simulated";
