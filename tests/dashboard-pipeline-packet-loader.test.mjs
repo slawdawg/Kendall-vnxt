@@ -316,14 +316,26 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
     ["nested demo source kind discriminator", {
       learnOutcome: { ...learnOutcome, detail: { sourceKind: "demo-fixture" } },
     }],
+    ["nested case-normalized demo source kind discriminator", {
+      learnOutcome: { ...learnOutcome, detail: { SourceKind: "DEMO-FIXTURE" } },
+    }],
     ["nested fixture evidence type discriminator", {
       learnRefill: { ...learnRefill, detail: { evidenceType: "fixture" } },
+    }],
+    ["nested case-normalized fixture evidence type discriminator", {
+      learnRefill: { ...learnRefill, detail: { EvidenceType: "FIXTURE" } },
     }],
     ["nested fixture retention discriminator", {
       gateStateValidation: { ...authoritativeGateStateValidation(), detail: { retentionClass: "fixture" } },
     }],
+    ["nested case-normalized fixture retention discriminator", {
+      gateStateValidation: { ...authoritativeGateStateValidation(), detail: { RetentionClass: "FIXTURE" } },
+    }],
     ["nested fixture artifact type discriminator", {
       humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { artifactType: "fixture" } }],
+    }],
+    ["nested case-normalized fixture artifact type discriminator", {
+      humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { ArtifactType: "FIXTURE" } }],
     }],
   ];
 
@@ -499,6 +511,28 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
     }],
     ["targetVaultFolder", {
       memoryProposals: [{ ...nestedPacketCollections.memoryProposals[0], targetVaultFolder: "fixture:nested-folder" }],
+    }],
+    ["branchPrefix", {
+      workItem: {
+        ...optionalSources.workItem,
+        executionRecipe: { ...optionalSources.workItem.executionRecipe, branchPrefix: "fixture:nested-branch-prefix" },
+      },
+    }],
+    ["derivedTargetFolder", {
+      alphaMemorySourceStatus: {
+        ...authoritativeAlphaMemorySourceStatus(),
+        llmWikiReadiness: authoritativeLlmWikiReadiness({
+          rebuildPreview: { derivedTargetFolder: "fixture:nested-derived-folder" },
+        }),
+      },
+    }],
+    ["reference array object member", {
+      alphaMemorySourceStatus: {
+        ...authoritativeAlphaMemorySourceStatus(),
+        llmWikiReadiness: authoritativeLlmWikiReadiness({
+          rebuildPreview: { inputRefs: [{ refId: "fixture:nested-input-ref" }] },
+        }),
+      },
     }],
     ["backupPath", {
       alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), backupPath: "demo:nested-backup" },
@@ -1502,6 +1536,28 @@ function authoritativeAlphaMemorySourceStatus() {
     workerLaunchAllowed: false,
     githubCallsAllowed: false,
     networkEgressAllowed: false,
+  };
+}
+
+function authoritativeLlmWikiReadiness(overrides = {}) {
+  return {
+    statusId: "llm-wiki-readiness:authoritative",
+    operationMode: "read_only",
+    decisionState: "ready",
+    canonicality: "derived_disposable_rebuildable",
+    retentionClass: "metadata_only",
+    sourceRefs: ["doc:source"],
+    evidenceRefs: ["event:created"],
+    memoryProposalRefs: ["memory-proposal:authoritative"],
+    allowedInputs: ["doc:source"],
+    blockedReasons: [],
+    nextActions: ["Review derived readiness."],
+    boundarySummary: "Derived read-only readiness metadata.",
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    durableWriteAllowed: false,
+    ...overrides,
   };
 }
 

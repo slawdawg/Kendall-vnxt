@@ -2443,6 +2443,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "export function sharedPipelineRuntime() { return fetch(\"/forbidden\"); }",
       "",
     ].join("\n"),
+    "apps/dashboard/src/components/static-module.ts": "export const staticModule = true;\n",
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": "export function PipelineCockpit() {}\n",
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
@@ -2495,6 +2496,36 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
       [
         'async function requestJson(path) {',
+        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
+        '}',
+        'async function extraRead(path) { return fetch(path, { cache: "no-store" }); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const extraSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(extraSupervisorFetchRun.status, 1);
+    assert.match(extraSupervisorFetchRun.stderr, /supervisor\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
+      [
+        'async function requestJson(path) {',
+        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
+        '}',
+        'async function mutate(path) { return fetch(path, { method: "POST", cache: "no-store" }); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const extraMutationSupervisorFetchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(extraMutationSupervisorFetchRun.status, 1);
+    assert.match(extraMutationSupervisorFetchRun.stderr, /supervisor\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
+      [
+        'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { method: "POST", cache: "no-store" });',
         '}',
         "",
@@ -2523,8 +2554,22 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/static-module.ts"),
+      'import "node:fs";\n',
+      "utf8",
+    );
     const staticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
-    assert.equal(staticDynamicRun.status, 0, staticDynamicRun.stderr);
+    assert.equal(staticDynamicRun.status, 1);
+    assert.match(staticDynamicRun.stderr, /static-module\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/static-module.ts"),
+      "export const staticModule = true;\n",
+      "utf8",
+    );
+    const cleanStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(cleanStaticDynamicRun.status, 0, cleanStaticDynamicRun.stderr);
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),

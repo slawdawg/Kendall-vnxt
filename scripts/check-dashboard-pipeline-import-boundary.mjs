@@ -250,9 +250,14 @@ function extractRuntimeImportSpecifiers(source) {
     /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
   ];
 
-  return importPatterns.flatMap((importPattern) =>
+  const quotedSpecifiers = importPatterns.flatMap((importPattern) =>
     [...runtimeSource.matchAll(importPattern)].map((importMatch) => importMatch[1])
   );
+  const staticTemplateSpecifiers = [...runtimeSource.matchAll(/\b(?:import|require)\s*\(\s*`([^`]*)`\s*\)/g)]
+    .map((match) => match[1])
+    .filter((specifier) => !specifier.includes("${"));
+
+  return [...quotedSpecifiers, ...staticTemplateSpecifiers];
 }
 
 function checkForbiddenCalls(displayPath, source) {
@@ -282,8 +287,10 @@ function isAllowedReadOnlySupervisorProjectionFetch(source) {
   if (!requestJsonSource) {
     return false;
   }
+  const executableSource = stripCommentsAndStrings(source);
   const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
-  return countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) === 1 &&
+  return countMatches(executableSource, /\bfetch\s*\(/g) === 1 &&
+    countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) === 1 &&
     !/\bmethod\s*:/.test(executableRequestJsonSource) &&
     /\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*\}\s*\)/.test(executableRequestJsonSource);
 }

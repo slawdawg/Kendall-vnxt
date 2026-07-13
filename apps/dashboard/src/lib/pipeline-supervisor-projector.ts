@@ -157,6 +157,7 @@ const referenceBearingFieldNames = new Set([
   "allowedinputs",
   "basebranch",
   "branch",
+  "branchprefix",
   "branchname",
   "cleanuptarget",
   "evidence",
@@ -174,6 +175,7 @@ const referenceBearingFieldNames = new Set([
   "remotebranch",
   "revision",
   "source",
+  "derivedtargetfolder",
   "targetbranch",
   "targetvaultfolder",
   "worktree",
@@ -1038,13 +1040,14 @@ function hasFixtureMarkersInReachableNestedFields(packet: Partial<WorkPacketV0Vi
 
 function isFixtureDiscriminator(fieldName: string, value: unknown): boolean {
   const normalizedFieldName = fieldName.toLowerCase();
+  const normalizedValue = typeof value === "string" ? value.trim().toLowerCase() : value;
   return normalizedFieldName === "fixtureid" ||
     normalizedFieldName === "fixturekind" ||
     normalizedFieldName === "fixturelabel" ||
-    (normalizedFieldName === "sourcekind" && value === "demo-fixture") ||
-    (normalizedFieldName === "evidencetype" && value === "fixture") ||
-    (normalizedFieldName === "retentionclass" && value === "fixture") ||
-    (normalizedFieldName === "artifacttype" && value === "fixture");
+    (normalizedFieldName === "sourcekind" && normalizedValue === "demo-fixture") ||
+    (normalizedFieldName === "evidencetype" && normalizedValue === "fixture") ||
+    (normalizedFieldName === "retentionclass" && normalizedValue === "fixture") ||
+    (normalizedFieldName === "artifacttype" && normalizedValue === "fixture");
 }
 
 function isReferenceBearingField(fieldName: string): boolean {
