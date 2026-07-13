@@ -117,6 +117,28 @@ function supervisorPythonCommand() {
   return process.env.PLAYWRIGHT_SUPERVISOR_PYTHON ?? process.env.PYTHON ?? "python3";
 }
 
+type SupervisorPipelinePacketSnapshot = { status: string; updatedAt: string };
+
+function readSupervisorPipelinePacket(packetId: string) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import json, sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "conn = sqlite3.connect(db_path)",
+    "row = conn.execute(\"select status, updated_at from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert row is not None",
+    "conn.close()",
+    "print(json.dumps({'status': row[0], 'updatedAt': row[1]}))",
+  ].join("; ");
+  const result = execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  return JSON.parse(result) as SupervisorPipelinePacketSnapshot;
+}
+
 function ageSupervisorPipelinePacket(packetId: string) {
   const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
   expect(dbPath).toBeTruthy();
@@ -129,21 +151,23 @@ function ageSupervisorPipelinePacket(packetId: string) {
     "assert row is not None",
     "conn.execute(\"update authoritative_work_packets set status = 'complete', updated_at = datetime('now', '-1 day') where id = ?\", (packet_id,))",
     "conn.commit()",
+    "mutated = conn.execute(\"select status, updated_at from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert mutated is not None and mutated[0] == 'complete'",
     "conn.close()",
-    "print(json.dumps({'status': row[0], 'updatedAt': row[1]}))",
+    "print(json.dumps({'snapshot': {'status': row[0], 'updatedAt': row[1]}, 'mutated': {'status': mutated[0], 'updatedAt': mutated[1]}}))",
   ].join("; ");
   const result = execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
-  return JSON.parse(result) as { status: string; updatedAt: string };
+  return JSON.parse(result) as { snapshot: SupervisorPipelinePacketSnapshot; mutated: SupervisorPipelinePacketSnapshot };
 }
 
-function restoreSupervisorPipelinePacket(packetId: string, snapshot: { status: string; updatedAt: string }) {
+function restoreSupervisorPipelinePacket(packetId: string, snapshot: SupervisorPipelinePacketSnapshot) {
   const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
   expect(dbPath).toBeTruthy();
   const script = [
-    "import sqlite3, sys",
+    "import json, sqlite3, sys",
     "db_path = sys.argv[1]",
     "packet_id = sys.argv[2]",
     "status = sys.argv[3]",
@@ -151,10 +175,14 @@ function restoreSupervisorPipelinePacket(packetId: string, snapshot: { status: s
     "conn = sqlite3.connect(db_path)",
     "conn.execute(\"update authoritative_work_packets set status = ?, updated_at = ? where id = ?\", (status, updated_at, packet_id))",
     "conn.commit()",
+    "restored = conn.execute(\"select status, updated_at from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert restored is not None and restored[0] == status and restored[1] == updated_at",
     "conn.close()",
+    "print(json.dumps({'status': status, 'updatedAt': updated_at}))",
   ].join("; ");
   execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], {
     cwd: process.cwd(),
+    encoding: "utf8",
   });
 }
 
@@ -699,8 +727,11 @@ test.describe("dashboard workflow coverage", () => {
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {
     const packetId = `story-4-6-stale:${Date.now()}`;
     await seedSupervisorPipelinePacket(request, packetId, "Story 4.6 stale supervisor packet", "complete");
-    const snapshot = ageSupervisorPipelinePacket(packetId);
+    let snapshot: SupervisorPipelinePacketSnapshot | null = null;
     try {
+      const staleMutation = ageSupervisorPipelinePacket(packetId);
+      snapshot = staleMutation.snapshot;
+      await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(staleMutation.mutated);
       await page.goto("/pipeline");
       await expect(page.getByText("Supervisor invalid", { exact: true })).toBeVisible();
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
@@ -714,7 +745,10 @@ test.describe("dashboard workflow coverage", () => {
         expect(staleBody).not.toContain(fixtureSentinel);
       }
     } finally {
-      restoreSupervisorPipelinePacket(packetId, snapshot);
+      if (snapshot) {
+        restoreSupervisorPipelinePacket(packetId, snapshot);
+        await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(snapshot);
+      }
     }
   });
 

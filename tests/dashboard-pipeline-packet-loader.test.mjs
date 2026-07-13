@@ -87,9 +87,9 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
       getWorkPackets: async () => [],
     });
     const reasonEmpty = await reasonLoader.loadPipelineCockpitPackets();
-    assert.equal(reasonEmpty.fixtureMode.kind, "empty");
-    assert.equal(reasonEmpty.projection.truthSummary.emptyReason, emptyReason);
-    assert.equal(reasonEmpty.projection.queueSummary.emptyReason, emptyReason);
+    assert.equal(reasonEmpty.fixtureMode.kind, "invalid");
+    assert.equal(reasonEmpty.packets.length, 0);
+    assert.match(reasonEmpty.fixtureMode.summary, new RegExp(`empty reason was ${emptyReason}`));
   }
 
   const malformedLoader = await loadPipelinePacketLoader(fixtures, {
@@ -318,7 +318,7 @@ test("malformed detail packet IDs fail closed before supervisor lookup", async (
     },
   });
 
-  for (const packetId of ["", "   ", "fixture:legacy-detail", "fixture:legacy detail", "packet/with/slash", "packet\\with\\slash", 42, null, { packetId: "manager-source-authoritative-only" }]) {
+  for (const packetId of ["", "   ", "fixture:legacy-detail", "Fixture:legacy-detail", "demo:legacy-detail", "Demo:legacy-detail", "fixture:legacy detail", "packet/with/slash", "packet\\with\\slash", 42, null, { packetId: "manager-source-authoritative-only" }]) {
     const result = await loader.loadPipelineCockpitPacket(packetId);
     assert.equal(result.fixtureMode.kind, "invalid");
     assert.equal(result.packet, null);
@@ -380,6 +380,20 @@ test("contradictory projection empty and populated states fail closed", async ()
   assert.match(duplicateRuntime.fixtureMode.summary, /duplicate WorkPacketV0 identity|duplicate runtime packet identity/);
 });
 
+test("projection and runtime list identities must match exactly with unique packet IDs", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const exactIdentityLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only", "extra-runtime-packet"]),
+    getWorkPackets: async () => [authoritativeWorkPacket()],
+  });
+
+  const exactIdentity = await exactIdentityLoader.loadPipelineCockpitPackets();
+
+  assert.equal(exactIdentity.fixtureMode.kind, "invalid");
+  assert.equal(exactIdentity.packets.length, 0);
+  assert.match(exactIdentity.fixtureMode.summary, /included runtime packet identity extra-runtime-packet that was absent from the WorkPacket list/);
+});
+
 test("normal mode does not substitute the real compiled fixture catalog", async () => {
   const realFixtures = await loadCompiledDashboardFixtures();
   assert.ok(realFixtures.pipelineCockpitPackets.length > 5);
@@ -410,6 +424,27 @@ test("normal mode does not substitute the real compiled fixture catalog", async 
   assert.equal(unavailable.fixtureMode.kind, "unavailable");
   assert.equal(unavailable.packets.length, 0);
   assert.equal(unavailable.packets.map((packet) => packet.packetId).length, 0);
+});
+
+test("restricted source refs and case-insensitive synthetic prefixes fail closed", async () => {
+  const fixtures = populatedFixtureCatalog();
+  for (const [label, packetOverride] of [
+    ["restricted-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", canonical: false, summaryOnly: true, pathOrUrl: "docs/source.md", blockedReason: "blocked by policy" }] }],
+    ["restricted-source-url", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "missing", canonical: false, summaryOnly: true, pathOrUrl: "https://example.com/source", blockedReason: "missing from backend" }] }],
+    ["demo-prefixed-packet-id", { packetId: "Demo:synthetic-runtime" }],
+    ["demo-prefixed-source-ref", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "DeMo:source-ref" }] }],
+    ["demo-prefixed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: " demo:source-path " }] }],
+    ["demo-prefixed-evidence-artifact", { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "DeMo:evidence-artifact" }] }],
+    ["demo-prefixed-artifact-path", { artifactRefs: [{ refId: "artifact:demo", artifactType: "report", label: "Report", pathOrUrl: "DEMO:artifact-path", status: "available" }] }],
+  ]) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...packetOverride }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
 });
 
 test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
