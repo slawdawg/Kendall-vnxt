@@ -40,6 +40,7 @@ const thresholds = Object.fromEntries([
 ].map(([name, unit]) => [name, { name, operator: "lte", value: 1, unit }]));
 
 const packetSchemas = {
+  readiness: "pipeline-operational-readiness-contract/v0",
   canary: "pipeline-one-worker-live-canary/v0",
   ramp: "pipeline-live-capacity-ramp/v0",
   recovery: "pipeline-resilience-recovery-validation/v0",
@@ -100,13 +101,16 @@ function passingContext(overrides = {}) {
     resources: { status: "normal" },
     heartbeat: { fresh: true },
     dispatcherLease: { proven: true },
+    observedEvidenceAttestation: observedAttestation(packetSchemas.readiness, {
+      receipt: { evidenceRefs: ["evidence:25-1-readiness-fixture"] },
+    }),
     receipt: { proven: true },
     gates: Object.fromEntries([
       "exact_ownership", "source_evidence", "backend_truth", "authority_risk", "recovery_rollback",
       "resource_cost", "configuration_secrets", "telemetry_alerts", "preflight", "usage", "resources",
       "heartbeat", "dispatcher_lease", "receipt_evidence",
     ].map((gateId) => [gateId, { state: "pass", evidenceRefs: ["evidence:25-1-readiness-fixture"] }])),
-    now: new Date().toISOString(),
+    now: "2026-07-10T01:00:00.000Z",
     ...overrides,
   };
 }
@@ -123,10 +127,27 @@ test("readiness contract fails closed when thresholds and live evidence are abse
 test("readiness contract produces go only for explicit live one-worker proof", () => {
   const contract = buildOperationalReadinessContract({}, passingContext());
   assert.equal(contract.outcome, "go");
+  assert.equal(contract.evidenceClass, "live_observed");
+  assert.equal(contract.observedEvidenceAttestation.subject.targetRef, target.owner);
   assert.equal(contract.backendTruth, "live");
   assert.equal(contract.target.workerId, "codex-1");
   assert.deepEqual(contract.typedBlockers, []);
   assert.deepEqual(validateOperationalReadinessContract(contract), []);
+});
+
+test("readiness booleans cannot forge live provenance without a target-bound attestation", () => {
+  const contract = buildOperationalReadinessContract({}, passingContext({
+    observedEvidenceAttestation: null,
+    receipt: { proven: true },
+  }));
+  assert.equal(contract.outcome, "no_go");
+  assert.equal(contract.evidenceClass, "integrated_local");
+  assert.equal(contract.observedEvidenceAttestation, null);
+  assert.ok(contract.typedBlockers.some((blocker) => blocker.reason === "evidence_attestation_invalid"));
+  assert.deepEqual(validateOperationalReadinessContract(contract), []);
+
+  const forged = { ...contract, outcome: "go", evidenceClass: "integrated_local", typedBlockers: [] };
+  assert.ok(validateOperationalReadinessContract(forged).some((blocker) => blocker.code === "evidence_attestation_invalid"));
 });
 
 test("readiness contract rejects secret-like and contradictory telemetry metadata", () => {
@@ -286,6 +307,31 @@ test("forged live provenance and missing or invalid attestations fail closed", (
   assert.deepEqual(validateOneWorkerLiveCanaryEvidence(fixture), []);
 });
 
+test("fresh metadata-only attestations for another target fail closed through canary promotion", () => {
+  const evidence = buildOneWorkerLiveCanaryEvidence({}, {
+    ...passingContext(),
+    readinessContract: buildOperationalReadinessContract({}, passingContext()),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary, {
+      subject: { packetSchemaVersion: packetSchemas.canary, targetRef: "manager-other/codex-9" },
+    }),
+    canaryAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:canary-authority"] },
+    lease: { state: "pass", proofRef: "evidence:lease-proof" },
+    checkpoint: { state: "pass", proofRef: "evidence:checkpoint-proof" },
+    measurements: { latencyMs: 1, errorCount: 0, cpuPercent: 1, memoryPercent: 1, diskPercent: 1, costCents: 1, timedOut: false },
+    evidenceRefs: ["evidence:canary-observation"],
+  });
+  assert.equal(evidence.evidenceClass, "integrated_local");
+  assert.equal(evidence.outcome, "hold");
+  assert.equal(evidence.observedEvidenceAttestation, null);
+
+  const unsafeRetention = buildOneWorkerLiveCanaryEvidence({}, {
+    ...passingContext(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary, { rawPayloadRetained: true, rawPrompt: "forbidden" }),
+  });
+  assert.equal(unsafeRetention.evidenceClass, "integrated_local");
+  assert.equal(unsafeRetention.observedEvidenceAttestation, null);
+});
+
 test("stale independent observation receipts cannot produce promotion-grade evidence", () => {
   const stale = buildOneWorkerLiveCanaryEvidence({}, {
     now: "2026-07-10T01:10:00.000Z",
@@ -298,6 +344,16 @@ test("stale independent observation receipts cannot produce promotion-grade evid
   assert.equal(stale.evidenceClass, "integrated_local");
   assert.equal(stale.outcome, "hold");
   assert.equal(stale.observedEvidenceAttestation, null);
+
+  const invertedLifetime = buildOneWorkerLiveCanaryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    target,
+    observedEvidenceAttestation: observedAttestation(packetSchemas.canary, {
+      receipt: { issuedAt: "2026-07-10T01:00:30.000Z", expiresAt: "2026-07-10T01:00:15.000Z" },
+    }),
+  });
+  assert.equal(invertedLifetime.evidenceClass, "integrated_local");
+  assert.equal(invertedLifetime.observedEvidenceAttestation, null);
 });
 
 test("continuous runtime readiness projects canary evidence without enabling live mutation", () => {
@@ -543,6 +599,45 @@ test("operational hardening records all runbook domains and hands off without ro
   assert.deepEqual(validateOperationalHardeningRunbookEvidence(hardening), []);
 });
 
+test("ramp recovery and hardening cannot switch the observed target", () => {
+  const unrelated = (schemaVersion) => observedAttestation(schemaVersion, {
+    subject: { packetSchemaVersion: schemaVersion, targetRef: "manager-other/codex-9" },
+  });
+  const ramp = buildLiveCapacityRampEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    canaryEvidence: passingCanaryEvidence(),
+    observedEvidenceAttestation: unrelated(packetSchemas.ramp),
+    stages: [1, 2, 4, 6].map(passingRampStage),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:ramp-observation"],
+    recovery: passingContext().recovery,
+  });
+  assert.notEqual(ramp.outcome, "pass");
+  assert.equal(ramp.evidenceClass, "integrated_local");
+
+  const recovery = buildResilienceRecoveryEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    rampEvidence: passingRampEvidence(),
+    observedEvidenceAttestation: unrelated(packetSchemas.recovery),
+    drills: ["restart"].map(passingRecoveryDrill),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:recovery-validation"],
+  });
+  assert.notEqual(recovery.outcome, "pass");
+  assert.equal(recovery.evidenceClass, "integrated_local");
+
+  const hardening = buildOperationalHardeningRunbookEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    recoveryEvidence: passingRecoveryEvidence(),
+    observedEvidenceAttestation: unrelated(packetSchemas.hardening),
+    domains: ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"].map(passingHardeningDomain),
+    sourceRefs: ["prd:epic-25-production-hardening"],
+    evidenceRefs: ["evidence:hardening-handoff"],
+  });
+  assert.notEqual(hardening.outcome, "pass");
+  assert.equal(hardening.evidenceClass, "integrated_local");
+});
+
 test("operational hardening stops on an unresolved high-risk gap", () => {
   const domains = ["alerts", "readiness", "authority", "secrets", "resources", "cost", "rollback", "incident_support", "retention", "cleanup"]
     .map(passingHardeningDomain);
@@ -709,12 +804,28 @@ test("production readiness decision refuses missing provenance even when predece
   assert.deepEqual(validateProductionReadinessDecisionEvidence(decision), []);
 });
 
+test("production decision cannot switch the independently observed target", () => {
+  const decision = buildProductionReadinessDecisionEvidence({}, {
+    now: "2026-07-10T01:00:00.000Z",
+    ...passingDecisionPackets(),
+    observedEvidenceAttestation: observedAttestation(packetSchemas.decision, {
+      subject: { packetSchemaVersion: packetSchemas.decision, targetRef: "manager-other/codex-9" },
+    }),
+    finalAuthority: { state: "allowed", proven: true, evidenceRefs: ["evidence:final-readiness-authority"] },
+  });
+  assert.equal(decision.decision, "hold");
+  assert.equal(decision.evidenceClass, "integrated_local");
+  assert.equal(decision.observedEvidenceAttestation, null);
+  assert.ok(decision.typedBlockers.some((blocker) => blocker.code === "decision_evidence_attestation_invalid"));
+});
+
 test("Epic 25 TypeScript and runtime provenance schemas stay aligned", async () => {
   const [types, runtime] = await Promise.all([
     readFile(new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/lib/manager-control-plane/operational-readiness.mjs", import.meta.url), "utf8"),
   ]);
   for (const packetType of [
+    "PipelineOperationalReadinessContractV0",
     "PipelineOneWorkerLiveCanaryEvidenceV0",
     "PipelineLiveCapacityRampEvidenceV0",
     "PipelineResilienceRecoveryEvidenceV0",

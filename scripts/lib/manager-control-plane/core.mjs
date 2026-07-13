@@ -14,6 +14,7 @@ import {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
   projectCanonicalSupervisorPacket,
+  consumeCanonicalSupervisorProjection,
   buildOneWorkerLiveCanaryEvidence,
   validateOneWorkerLiveCanaryEvidence,
   buildLiveCapacityRampEvidence,
@@ -37,6 +38,7 @@ export {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
   projectCanonicalSupervisorPacket,
+  consumeCanonicalSupervisorProjection,
   buildOneWorkerLiveCanaryEvidence,
   validateOneWorkerLiveCanaryEvidence,
   buildLiveCapacityRampEvidence,
@@ -22816,6 +22818,56 @@ function safeProjectionPacket(value) {
   return safePlainObjectSnapshot(value) || {};
 }
 
+function canonicalSupervisorOperationalActions(inferred = {}, consumed = {}) {
+  const canonical = safePlainObjectSnapshot(consumed.operationalActions) || {};
+  const canonicalCapabilities = new Map(
+    (Array.isArray(canonical.actionCapabilities) ? canonical.actionCapabilities : [])
+      .filter((entry) => isPlainObject(entry) && typeof entry.actionId === "string")
+      .map((entry) => [entry.actionId, entry]),
+  );
+  const inferredCapabilities = Array.isArray(inferred.actionCapabilities) ? inferred.actionCapabilities : [];
+  const actionCapabilities = inferredCapabilities.map((fallback) => {
+    const authoritative = canonicalCapabilities.get(fallback.actionId);
+    if (!authoritative) {
+      return {
+        ...fallback,
+        capabilityState: "unavailable",
+        authorityState: "blocked",
+        typedReason: consumed.terminal ? "runtime_unavailable" : "evidence_invalid",
+        evidenceRefs: ["evidence:canonical-supervisor-projection", `operational-action:${fallback.actionId}`],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      };
+    }
+    const mutationAction = !["inspect", "refresh_projection"].includes(fallback.actionId);
+    const canonicalBlocked = consumed.ok !== true || consumed.terminal === true ||
+      (mutationAction && authoritative.capabilityState === "available" && ["allowed", "not_required"].includes(authoritative.authorityState));
+    return {
+      ...fallback,
+      targetType: authoritative.targetType,
+      targetId: authoritative.targetId ?? null,
+      capabilityState: canonicalBlocked ? "unavailable" : authoritative.capabilityState,
+      authorityState: canonicalBlocked ? "blocked" : authoritative.authorityState,
+      riskTier: authoritative.riskTier,
+      typedReason: canonicalBlocked
+        ? consumed.terminal ? "runtime_unavailable" : "evidence_invalid"
+        : authoritative.typedReason ?? null,
+      expectedResultSummary: authoritative.expectedResultSummary,
+      evidenceRefs: Array.isArray(authoritative.evidenceRefs) ? authoritative.evidenceRefs : [],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  });
+  return {
+    ...inferred,
+    ...canonical,
+    source: "canonical_supervisor_projection",
+    actionCapabilities,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 const OPERATIONAL_LOOP_AUTHORITY_STATES = new Set([
   "allowed",
   "blocked",
@@ -23594,7 +23646,7 @@ export function buildCyclePacket(options = {}, context = {}) {
   const selfRepair = buildManagerSelfRepairSummary(readOnlyRunOptions, context);
   const feedback = buildFeedbackPlan(readOnlyRunOptions, context);
   const delivery = context.deliveryPlan ? normalizePacketContext(context.deliveryPlan) : buildDeliveryPlan(readOnlyRunOptions, { ...context, feedbackPlan: feedback });
-  const operationalActions = buildOperationalActionReadinessProjection({
+  const inferredOperationalActions = buildOperationalActionReadinessProjection({
     runOptions: readOnlyRunOptions,
     usage,
     resources,
@@ -23604,8 +23656,14 @@ export function buildCyclePacket(options = {}, context = {}) {
     cleanup,
     context,
   });
+  const canonicalSupervisor = consumeCanonicalSupervisorProjection(context.supervisorProjection, {
+    now: context.now || runOptions.now,
+  });
+  const operationalActions = canonicalSupervisor.present
+    ? canonicalSupervisorOperationalActions(inferredOperationalActions, canonicalSupervisor)
+    : inferredOperationalActions;
   const dispatcherState = buildCycleDispatcherState(dispatchPreview, preflight.summary?.dispatcher, runway);
-  const dispatchTrustProof = bindTrustedOperationalDispatchAuthority(operationalActions, dispatchPreview);
+  const dispatchTrustProof = canonicalSupervisor.present ? null : bindTrustedOperationalDispatchAuthority(operationalActions, dispatchPreview);
   markTrustedOperationalReadiness(operationalActions, { dispatchApply: dispatchTrustProof });
   const summaryOperationalActions = sanitizeCyclePacketValue(operationalActions);
   markTrustedOperationalReadiness(summaryOperationalActions, { dispatchApply: dispatchTrustProof });
@@ -23629,6 +23687,13 @@ export function buildCyclePacket(options = {}, context = {}) {
   const activeWorkerCount = Number(workers.summary?.workerCounts?.active || 0);
   const preflightBlockers = preflight.blockers || [];
   const blockers = [];
+  if (canonicalSupervisor.present && canonicalSupervisor.ok !== true) {
+    blockers.push(...canonicalSupervisor.blockers.map((blocker) => ({
+      code: blocker.code,
+      message: blocker.message,
+      nextAction: blocker.nextAction,
+    })));
+  }
   if (!workspace.ok) {
     blockers.push({ code: "workspace-state-unsafe", message: workspace.error, nextAction: "Choose a safe workspace state root." });
   }
@@ -23955,6 +24020,7 @@ export function buildCyclePacket(options = {}, context = {}) {
       progress: sanitizeCyclePacketValue(progress.summary),
       feedback: sanitizeCyclePacketValue(feedback.summary),
       operationalActions: summaryOperationalActions,
+      canonicalSupervisor: sanitizeCyclePacketValue(canonicalSupervisor),
       operationalSummary: sanitizeCyclePacketValue(operationalSummary),
       operationalLoop: sanitizeCyclePacketValue(operationalLoop),
       signalGaps: {
