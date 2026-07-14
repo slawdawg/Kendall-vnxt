@@ -1,3 +1,5 @@
+import { isValidSupervisorTerminalEventMetadata } from "./terminal-event-contract.mjs";
+
 export const DEFAULT_SUMMARY_STALE_AFTER_MS = 300_000;
 export const SIMULATED_WARNING = "backend_proof_simulated_no_live_worker_execution";
 
@@ -421,19 +423,7 @@ function isValidatedTerminalDisposition(disposition) {
   if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== keys.reduce((total, key) => total + counts[key], 0)) return false;
   if (["eligible", "queued", "leased", "running", "reviewFix", "requiredRetrospective", "otherwiseRequired"].some((key) => counts[key] !== 0)) return false;
   if (counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
-  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorEvent(disposition.supervisorEvent);
-}
-
-function isValidSupervisorEvent(event) {
-  if (!event || typeof event !== "object" || Array.isArray(event)) return false;
-  const allowedKeys = ["eventId", "evidenceRef", "metadataOnly", "persistedAt", "rawPayloadRetained", "status"];
-  const keys = Object.keys(event);
-  if (keys.length !== allowedKeys.length || keys.some((key) => !allowedKeys.includes(key))) return false;
-  if (typeof event.eventId !== "string" || !/^manager-terminal-event:[0-9a-f]{40}$/.test(event.eventId)) return false;
-  if (event.evidenceRef !== `supervisor-event:${event.eventId}` || event.status !== "persisted") return false;
-  if (typeof event.persistedAt !== "string" || event.persistedAt.length > 64 || !Number.isFinite(Date.parse(event.persistedAt))) return false;
-  if (new Date(event.persistedAt).toISOString() !== event.persistedAt) return false;
-  return event.metadataOnly === true && event.rawPayloadRetained === false;
+  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorTerminalEventMetadata(disposition.supervisorEvent);
 }
 
 function isValidUnresolvedApprovalGatedWorkRecord(record) {
