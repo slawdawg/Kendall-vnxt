@@ -118,6 +118,7 @@ const memoryProposalStatuses = new Set([
 const memoryProposalTypes = new Set(["new_note", "append_note", "link_notes", "tag_update", "decision_record", "error_book_entry", "user_facing_documentation"]);
 const memoryProposalSensitivities = new Set(["low", "medium", "high"]);
 const memoryProposalFreshnessValues = new Set(["fresh", "stale", "conflicting", "unknown"]);
+const llmWikiRebuildBasisValues = new Set(["approved-memory-proposals", "source-evidence-crosswalk"]);
 const memoryProposalContradictionStatuses = new Set(["none", "possible", "confirmed"]);
 const memoryProposalConfidenceValues = new Set(["low", "medium", "high"]);
 const memoryProposalOperatorActions = new Set(["approve", "edit", "reject", "defer", "blocked"]);
@@ -344,6 +345,10 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonEmptyString);
+}
+
+function isSafeReferenceArray(value: unknown): value is string[] {
+  return isStringArray(value) && value.every(isSafeReferenceString);
 }
 
 function isNonEmptyStringArray(value: unknown): value is [string, ...string[]] {
@@ -911,7 +916,40 @@ function isLlmWikiDerivedIndexReadinessV0(value: unknown): boolean {
     isNonEmptyString(value.boundarySummary) &&
     hasExactBooleanFields(value, ["canonicalMutationAllowed", "sourceMutationAllowed", "providerCallsAllowed", "durableWriteAllowed"], false) &&
     isAbsentOr(value.rebuildPreview, isRecord) &&
-    isAbsentOr(value.rebuildDryRunPlan, isRecord);
+    isAbsentOr(value.rebuildDryRunPlan, isLlmWikiRebuildDryRunPlanV0);
+}
+
+function isLlmWikiRebuildDryRunPlanV0(value: unknown): boolean {
+  return isRecord(value) &&
+    isNonEmptyString(value.planId) &&
+    value.operationMode === "dry_run" &&
+    isSafeReferenceArray(value.inputRefs) &&
+    isSafeReferenceArray(value.memoryProposalRefs) &&
+    isStringArray(value.plannedDerivedSections) &&
+    isSafeReferenceString(value.disposableTargetNamespace) &&
+    isSafeReferenceString(value.derivedTargetFolder) &&
+    isEnumValue(value.freshness, memoryProposalFreshnessValues) &&
+    isStringArray(value.rebuildBasis) &&
+    value.rebuildBasis.every((basis) => isEnumValue(basis, llmWikiRebuildBasisValues)) &&
+    value.retentionClass === "metadata_only" &&
+    isStringArray(value.stopLines) &&
+    isNonEmptyString(value.discardRecoveryPath) &&
+    isNonEmptyString(value.auditEventSummary) &&
+    hasExactBooleanFields(
+      value,
+      [
+        "canonicalMutationAllowed",
+        "sourceMutationAllowed",
+        "providerCallsAllowed",
+        "workerLaunchAllowed",
+        "githubCallsAllowed",
+        "networkEgressAllowed",
+        "durableWriteAllowed",
+        "writePerformed",
+        "backupCreated",
+      ],
+      false,
+    );
 }
 
 function isWorkPacketGateStateValidationV0(value: unknown): boolean {
@@ -1062,7 +1100,7 @@ function isReferenceBearingField(fieldName: string): boolean {
   const normalizedFieldName = fieldName.toLowerCase();
   return referenceBearingFieldNames.has(normalizedFieldName) ||
     normalizedFieldName === "retainedevidence" ||
-    /(?:paths?|urls?|uris?|hrefs?|refs?|ids?)$/.test(normalizedFieldName);
+    /(?:paths?|urls?|uris?|hrefs?|refs?|ids?|namespaces?)$/.test(normalizedFieldName);
 }
 
 function isEnumValue(value: unknown, allowedValues: ReadonlySet<string>): value is string {

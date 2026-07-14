@@ -677,6 +677,11 @@ test("projection counts reject contradictory active and empty states while prese
   mismatchedWorkerCounts.managerSummary.activeWorkerCount = 1;
   mismatchedWorkerCounts.workerSummary.activeCount = 0;
   assert.equal(projectionModule.isPipelineDashboardProjection(mismatchedWorkerCounts), false, "manager and worker count mismatch");
+
+  const liveWorkerProjection = validDashboardProjection();
+  liveWorkerProjection.managerSummary.activeWorkerCount = 1;
+  liveWorkerProjection.workerSummary.activeCount = 1;
+  assert.equal(projectionModule.isPipelineDashboardProjection(liveWorkerProjection), true, "live worker counts should be accepted");
 });
 
 test("real WorkPacket projection proof artifact is metadata-only and non-fixture", async () => {
@@ -2695,7 +2700,8 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "",
     ].join("\n"),
     "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx": "export default function DemoDetailPage() {}\n",
-    "apps/dashboard/src/components/shell.tsx": 'import "./shared-pipeline-runtime";\nexport function Shell() {}\n',
+    "apps/dashboard/src/components/shell.tsx": 'import "./shared-pipeline-runtime";\nimport "./realtime-refresh";\nexport function Shell() {}\n',
+    "apps/dashboard/src/components/realtime-refresh.tsx": 'export function RealtimeRefresh() { new EventSource("/events"); return fetch("/disabled"); }\n',
     "apps/dashboard/src/components/shared-pipeline-runtime.ts": [
       'import "node:fs";',
       'import "../lib/pipeline-fixtures";',
@@ -2709,8 +2715,8 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
     "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts": [
       'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-      'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
-      'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+      'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+      'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
       'export async function getWorkPackets() { return requestJson("/work-packets"); }',
       "",
     ].join("\n"),
@@ -2745,6 +2751,10 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     assert.equal(report.normalFixtureCatalogReachable, false);
     assert.equal(report.demoFixtureCatalogReachable, true);
     assert.equal(report.normalSupervisorModuleReachable, false);
+    assert.ok(
+      report.gatedSupervisorEdgesAudited.includes("apps/dashboard/src/lib/pipeline-supervisor-actions.ts -> ./supervisor"),
+      "mutation edge should remain explicitly capability-gated",
+    );
     assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
 
     await writeFile(
@@ -2778,8 +2788,8 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
-        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPackets() { return requestJson("/work-packets"); }',
         'export async function mutate(path) { return fetch(path, { method: "POST" }); }',
         "",
@@ -2794,8 +2804,54 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
-        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/candidate-work"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const endpointMismatchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(endpointMismatchRun.status, 1);
+    assert.match(endpointMismatchRun.stderr, /approved endpoint mismatch for getWorkPackets/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store", ["method"]: "POST" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const computedMethodRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(computedMethodRun.status, 1);
+    assert.match(computedMethodRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store", ...{} }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const spreadMethodRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(spreadMethodRun.status, 1);
+    assert.match(spreadMethodRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPackets() { return requestJson("/work-packets"); }',
         "",
       ].join("\n"),
@@ -2808,8 +2864,8 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
         '}',
-        'export async function getPipelineDashboardProjection() { return requestJson("/projection"); }',
-        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${packetId}`); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPackets() { return requestJson("/work-packets"); }',
         "",
       ].join("\n"),
@@ -2844,6 +2900,15 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     );
     const cleanStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
     assert.equal(cleanStaticDynamicRun.status, 0, cleanStaticDynamicRun.stderr);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      'const commentedImport = import(/* webpackIgnore: true */ "node:fs");\nvoid commentedImport;\n',
+      "utf8",
+    );
+    const commentedStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(commentedStaticDynamicRun.status, 1);
+    assert.match(commentedStaticDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),

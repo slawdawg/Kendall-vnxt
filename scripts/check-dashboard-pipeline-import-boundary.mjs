@@ -48,6 +48,16 @@ const readOnlyPipelineRuntimeFunctions = [
   "getWorkPackets",
 ];
 
+const readOnlyPipelineRuntimeEndpoints = new Map([
+  ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
+  ["getWorkPacket", "/work-packets/${encodeURIComponent(packetId)}"],
+  ["getWorkPackets", "/work-packets"],
+]);
+
+const disabledNormalPipelineRouteImports = new Set([
+  "apps/dashboard/src/components/realtime-refresh.tsx",
+]);
+
 const requiredSourceFiles = [
   "apps/dashboard/src/app/pipeline/page.tsx",
   "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
@@ -66,7 +76,7 @@ const gatedSupervisorEdgesAudited = new Set();
 const normalRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx"),
-]);
+], { skipDisabledImports: disabledNormalPipelineRouteImports });
 const demoRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx"),
@@ -181,7 +191,7 @@ async function expandTarget(targetPath) {
   return files.sort();
 }
 
-async function collectRouteGraph(entryFiles) {
+async function collectRouteGraph(entryFiles, { skipDisabledImports = new Set() } = {}) {
   const files = [];
   const visited = new Set();
   const pending = [...entryFiles];
@@ -201,7 +211,10 @@ async function collectRouteGraph(entryFiles) {
         continue;
       }
       const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
-      if (resolvedImport && !visited.has(resolvedImport)) {
+      const resolvedDisplayPath = resolvedImport
+        ? relative(rootDir, resolvedImport).replaceAll("\\", "/")
+        : null;
+      if (resolvedImport && !skipDisabledImports.has(resolvedDisplayPath) && !visited.has(resolvedImport)) {
         pending.push(resolvedImport);
       }
     }
@@ -258,7 +271,7 @@ function checkImports(displayPath, source) {
 
 function checkUnresolvedDynamicModuleBoundaries(displayPath, source) {
   const executableSource = stripCommentsAndStringsForModuleDetection(source);
-  const unresolvedDynamicImportPattern = /\b(?:import|require)\s*\(\s*(?!["'][^"']*["']\s*\))[^)]*\)/g;
+  const unresolvedDynamicImportPattern = /\b(?:import|require)\s*\((?!\s*["'][^"']*["']\s*\))\s*[^)]*\)/g;
   for (const match of executableSource.matchAll(unresolvedDynamicImportPattern)) {
     failures.push(`${displayPath}: unresolved dynamic module boundary: ${match[0]}`);
   }
@@ -272,8 +285,7 @@ function extractRuntimeImportSpecifiers(source) {
     /^\s*import[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /^\s*import\s+["']([^"']+)["'];?/gm,
     /^\s*export[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\b(?:import|require)\s*\(\s*(?:(?:\/\*[\s\S]*?\*\/)|(?:\/\/[^\n]*(?:\n|$)))\s*["']([^"']+)["']\s*\)/g,
   ];
 
   const quotedSpecifiers = importPatterns.flatMap((importPattern) =>
@@ -322,11 +334,17 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
     return;
   }
   const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
+  const requestJsonSourceWithoutComments = stripComments(requestJsonSource);
+  const allowedSignalSpread = /\.\.\.\s*\(\s*controller\s*\?\s*\{\s*signal\s*:\s*controller\.signal\s*\}\s*:\s*\{\s*\}\s*\)/g;
+  const requestJsonSourceWithoutAllowedSpread = requestJsonSourceWithoutComments.replace(allowedSignalSpread, "");
+  const requestJsonHasHiddenMethod = /\bmethod\s*:|\[[^\]]+\]\s*:/.test(requestJsonSourceWithoutComments);
+  const requestJsonHasUnsafeSpread = /\.\.\./.test(requestJsonSourceWithoutAllowedSpread);
   if (
     countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 1 ||
     countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
-    /\bmethod\s*:/.test(executableRequestJsonSource) ||
-    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*""\s*(?:,[\s\S]*?)?\}\s*\)/.test(executableRequestJsonSource)
+    requestJsonHasHiddenMethod ||
+    requestJsonHasUnsafeSpread ||
+    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*["']no-store["']/.test(requestJsonSourceWithoutComments)
   ) {
     failures.push(`${displayPath}: forbidden call boundary network-fetch`);
   }
@@ -343,6 +361,10 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
       countMatches(executableFunctionSource, /\brequestJson(?:<[^;\n]*>)?\s*\(/g) !== 1
     ) {
       failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+    }
+    const expectedEndpoint = readOnlyPipelineRuntimeEndpoints.get(functionName);
+    if (expectedEndpoint && !functionSource.includes(expectedEndpoint)) {
+      failures.push(`${displayPath}: approved endpoint mismatch for ${functionName}`);
     }
   }
 }
@@ -408,6 +430,12 @@ function stripCommentsAndStrings(source) {
     .replace(/`(?:\\.|[^`\\])*`/g, (templateSource) => extractTemplateExpressions(templateSource))
     .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
     .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+}
+
+function stripComments(source) {
+  return source
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 }

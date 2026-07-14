@@ -537,21 +537,25 @@ function isEmptyProjectionSummaryConsistent(projection: Partial<PipelineDashboar
     }
   }
 
-  return [
-    manager.activeLeaseCount,
-    manager.activeWorkerCount,
-    manager.warmWorkerCount,
-    worker.warmCount,
-    worker.activeCount,
-    worker.waitingCount,
-    worker.stalledCount,
-    worker.failedCount,
-    worker.drainingCount,
-    worker.killedCount,
-    worker.completeCount,
-    worker.unavailableCount,
-    worker.unknownCount,
-  ].every((count) => !isKnownCount(count) || count === 0);
+  if (packetCount === 0 && projection.truthSummary.backendEmpty === true) {
+    return [
+      manager.activeLeaseCount,
+      manager.activeWorkerCount,
+      manager.warmWorkerCount,
+      worker.warmCount,
+      worker.activeCount,
+      worker.waitingCount,
+      worker.stalledCount,
+      worker.failedCount,
+      worker.drainingCount,
+      worker.killedCount,
+      worker.completeCount,
+      worker.unavailableCount,
+      worker.unknownCount,
+    ].every((count) => !isKnownCount(count) || count === 0);
+  }
+
+  return true;
 }
 
 function isKnownCount(value: unknown): value is number {

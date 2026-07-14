@@ -527,6 +527,16 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
         }),
       },
     }],
+    ["disposableTargetNamespace", {
+      alphaMemorySourceStatus: {
+        ...authoritativeAlphaMemorySourceStatus(),
+        llmWikiReadiness: authoritativeLlmWikiReadiness({
+          rebuildDryRunPlan: authoritativeLlmWikiRebuildDryRunPlan({
+            disposableTargetNamespace: "fixture:nested-dry-run-namespace",
+          }),
+        }),
+      },
+    }],
     ["reference array object member", {
       alphaMemorySourceStatus: {
         ...authoritativeAlphaMemorySourceStatus(),
@@ -1642,6 +1652,34 @@ function authoritativeLlmWikiReadiness(overrides = {}) {
     sourceMutationAllowed: false,
     providerCallsAllowed: false,
     durableWriteAllowed: false,
+    ...overrides,
+  };
+}
+
+function authoritativeLlmWikiRebuildDryRunPlan(overrides = {}) {
+  return {
+    planId: "llm-wiki-rebuild-dry-run-plan:authoritative",
+    operationMode: "dry_run",
+    inputRefs: ["doc:source"],
+    memoryProposalRefs: ["memory-proposal:authoritative"],
+    plannedDerivedSections: ["approved-memory-proposals"],
+    disposableTargetNamespace: "derived://llm-wiki/dry-run/authoritative",
+    derivedTargetFolder: "llm-wiki/derived",
+    freshness: "fresh",
+    rebuildBasis: ["approved-memory-proposals"],
+    retentionClass: "metadata_only",
+    stopLines: ["Do not write the canonical source."],
+    discardRecoveryPath: "Discard the derived dry-run plan and return to review.",
+    auditEventSummary: "Metadata-only derived rebuild plan.",
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubCallsAllowed: false,
+    networkEgressAllowed: false,
+    durableWriteAllowed: false,
+    writePerformed: false,
+    backupCreated: false,
     ...overrides,
   };
 }

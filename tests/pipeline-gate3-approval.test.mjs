@@ -7,20 +7,22 @@ import vm from "node:vm";
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 
 const supervisorPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
-const loaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
+const actionsPath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-actions.ts", import.meta.url);
 const cockpitPath = new URL("../apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", import.meta.url);
 const operationalSmokePath = new URL("../services/supervisor/scripts/pipeline_operational_smoke.py", import.meta.url);
 
 test("dashboard obtains server-bound approval before gated pipeline apply", async () => {
-  const [supervisor, loader, cockpit] = await Promise.all([
+  const [supervisor, actions, cockpit] = await Promise.all([
     readFile(supervisorPath, "utf8"),
-    readFile(loaderPath, "utf8"),
+    readFile(actionsPath, "utf8"),
     readFile(cockpitPath, "utf8"),
   ]);
 
   assert.match(supervisor, /\/pipeline-control-plane\/approvals/);
   assert.match(supervisor, /issuePipelineOperationalApproval/);
-  assert.match(loader, /requestPipelineOperationalApproval/);
+  assert.match(actions, /requestPipelineOperationalApproval/);
+  assert.match(actions, /issueSupervisorPipelineOperationalApproval/);
+  assert.match(actions, /applySupervisorPipelineOperationalAction/);
   assert.match(cockpit, /const approval = await requestPipelineOperationalApproval\(approvalRequest\)/);
   assert.match(cockpit, /approvalId: approval\.approvalId/);
   assert.match(cockpit, /expectedCurrentEventId: approval\.expectedCurrentEventId/);
@@ -73,6 +75,13 @@ test("dashboard supervisor client performs approval then apply with server event
     require: (specifier) => {
       if (specifier === "@kendall/contracts") {
         return { AUTHORITATIVE_PACKET_STAGES: ["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"] };
+      }
+      if (specifier === "./pipeline-supervisor-runtime") {
+        return {
+          getPipelineDashboardProjection: async () => { throw new Error("unexpected projection read in approval proof"); },
+          getWorkPacket: async () => { throw new Error("unexpected packet read in approval proof"); },
+          getWorkPackets: async () => { throw new Error("unexpected packet list read in approval proof"); },
+        };
       }
       throw new Error(`Unexpected dashboard supervisor import: ${specifier}`);
     },
