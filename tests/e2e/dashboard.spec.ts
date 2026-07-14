@@ -183,10 +183,24 @@ function restoreSupervisorPipelinePacket(packetId: string, snapshot: SupervisorP
     "conn.close()",
     "print(json.dumps({'status': status, 'updatedAt': updated_at}))",
   ].join("; ");
-  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], { cwd: process.cwd(), encoding: "utf8" });
+}
+
+function deleteSupervisorPipelinePacket(packetId: string) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"delete from authoritative_work_packets where id = ?\", (packet_id,))",
+    "conn.commit()",
+    "remaining = conn.execute(\"select 1 from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert remaining is None",
+    "conn.close()",
+  ].join("; ");
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], { cwd: process.cwd(), encoding: "utf8" });
 }
 
 async function getWorkItem(request: APIRequestContext, workItemId: string) {
@@ -699,40 +713,43 @@ test.describe("dashboard workflow coverage", () => {
     const packetId = `story-4-6-runtime:${Date.now()}`;
     const title = "Story 4.6 persisted supervisor runtime packet";
     await seedSupervisorPipelinePacket(request, packetId, title);
-
-    await page.goto("/pipeline");
-    const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
-    await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
-    await expect(truthSummary.getByText("Source:")).toBeVisible();
-    await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
-    const inspectButton = page.getByRole("button", { name: `Inspect packet: ${title}` });
-    await expect(inspectButton).toBeVisible();
-    await inspectButton.click();
-    const packetInspector = page.getByRole("complementary", { name: "Packet inspection panel" });
-    await expect(packetInspector).toBeVisible();
-    await expect(packetInspector.getByRole("heading", { name: title })).toBeVisible();
-    const runtimeDetailLink = packetInspector.getByRole("link", { name: "Open full packet" });
-    await expect(runtimeDetailLink).toBeVisible();
-    const runtimeDetailHref = `/pipeline/packets/${encodeURIComponent(packetId)}`;
-    await expect(runtimeDetailLink).toHaveAttribute("href", runtimeDetailHref);
-    const runtimeDetailUrl = new URL(runtimeDetailHref, page.url()).toString();
-    await runtimeDetailLink.click();
-    await expect(page).toHaveURL(runtimeDetailUrl);
-    const packetDetail = page.getByRole("main", { name: "Packet detail" });
-    await expect(packetDetail).toBeVisible();
-    await expect(packetDetail.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
-    await expect(packetDetail.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
-    await page.goto("/pipeline");
-    await page.reload();
-    await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
-    const runtimeBody = await page.locator("body").innerText();
-    for (const fixtureSentinel of [
-      "fixture:happy-path",
-      "Shape cockpit route from Work Packet matrix",
-      "Resolve stale research source before routing",
-    ]) {
-      expect(runtimeBody).not.toContain(fixtureSentinel);
+    try {
+      await page.goto("/pipeline");
+      const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
+      await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+      await expect(truthSummary.getByText("Source:")).toBeVisible();
+      await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
+      const inspectButton = page.getByRole("button", { name: `Inspect packet: ${title}` });
+      await expect(inspectButton).toBeVisible();
+      await inspectButton.click();
+      const packetInspector = page.getByRole("complementary", { name: "Packet inspection panel" });
+      await expect(packetInspector).toBeVisible();
+      await expect(packetInspector.getByRole("heading", { name: title })).toBeVisible();
+      const runtimeDetailLink = packetInspector.getByRole("link", { name: "Open full packet" });
+      await expect(runtimeDetailLink).toBeVisible();
+      const runtimeDetailHref = `/pipeline/packets/${encodeURIComponent(packetId)}`;
+      await expect(runtimeDetailLink).toHaveAttribute("href", runtimeDetailHref);
+      const runtimeDetailUrl = new URL(runtimeDetailHref, page.url()).toString();
+      await runtimeDetailLink.click();
+      await expect(page).toHaveURL(runtimeDetailUrl);
+      const packetDetail = page.getByRole("main", { name: "Packet detail" });
+      await expect(packetDetail).toBeVisible();
+      await expect(packetDetail.getByRole("heading", { name: `Packet detail: ${title}`, exact: true })).toBeVisible();
+      await expect(packetDetail.getByText("Source: Supervisor runtime", { exact: true })).toBeVisible();
+      await page.goto("/pipeline");
+      await page.reload();
+      await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+      const runtimeBody = await page.locator("body").innerText();
+      for (const fixtureSentinel of [
+        "fixture:happy-path",
+        "Shape cockpit route from Work Packet matrix",
+        "Resolve stale research source before routing",
+      ]) {
+        expect(runtimeBody).not.toContain(fixtureSentinel);
+      }
+    } finally {
+      deleteSupervisorPipelinePacket(packetId);
     }
   });
 
