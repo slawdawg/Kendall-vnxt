@@ -12245,26 +12245,36 @@ export function buildBmadPlanningGapPlan(options = {}, context = {}) {
   ];
   const selected = selectBmadPlanningGapWorkflow(sourceSlice, sourcePlanning, signals);
   if (!selected.narrowestWorkflow) {
+    const existingReadyForDevWork = selected.gapType === "existing_ready_for_dev_work";
     return packet({
       status: "attention",
       summary: {
         ...baseSummary,
         ...selected,
-        refillDisposition: "source_exhausted",
+        refillDisposition: existingReadyForDevWork ? "preserve_existing_ready_for_dev_work" : "source_exhausted",
         broaderRegeneration: {
           decision: "blocked",
-          reason: "No eligible source-owned work or narrow BMAD planning workflow was detected.",
+          reason: existingReadyForDevWork
+            ? selected.broaderReason
+            : "No eligible source-owned work or narrow BMAD planning workflow was detected.",
         },
       },
       blockers: [
-        {
+        existingReadyForDevWork ? {
+          code: "bmad-planning-ready-for-dev-work-remains",
+          message: "Ready-for-dev source-owned implementation work remains in a protected lane and was not converted into refill backlog.",
+          nextAction: "Preserve the active lane and reconcile its source-owned status; do not mark it done or create course-correction backlog.",
+        } : {
           code: "bmad-planning-source-exhausted",
           message: "No eligible source-owned work or narrow BMAD planning gap is available for automatic refill.",
           nextAction: "Run housekeeping and stop, or ask the operator for the next product decision.",
         },
       ],
       nextActions: [
-        {
+        existingReadyForDevWork ? {
+          code: "bmad-planning-preserve-ready-for-dev-work",
+          nextAction: "Preserve the protected ready-for-dev lane and stop planning expansion until its status is reconciled.",
+        } : {
           code: "bmad-planning-source-exhausted",
           nextAction: "Do not claim existing source work; no eligible source-work packet was available.",
         },
@@ -13913,6 +13923,7 @@ export function buildRefillPlan(options = {}, context = {}) {
     sourceBackedPacketSeed,
     bmadRoot: managerBmadRoot(options, context),
   });
+  const readyForDevAttention = starvation && bmadPlanningGap?.summary?.refillDisposition === "preserve_existing_ready_for_dev_work";
   if (apply) {
     if (workCreationStep && (requestPacketBlocked || bmadRequestPacketPlan?.summary?.validation?.status !== "ready")) {
       return packet({
@@ -13948,7 +13959,7 @@ export function buildRefillPlan(options = {}, context = {}) {
     return refillApply;
   }
   return packet({
-    status: starvation ? "refill_needed" : "ready",
+    status: readyForDevAttention ? "attention" : starvation ? "refill_needed" : "ready",
     summary: {
       desiredWorkers,
       dispatchableLanes: dispatchable,
@@ -13972,11 +13983,15 @@ export function buildRefillPlan(options = {}, context = {}) {
       closedEvidence,
       workCreationStep,
       splitPlan,
-      mutationMode: starvation ? "dry_run_required" : "none",
+      mutationMode: readyForDevAttention
+        ? "none; preserve existing ready-for-dev source work"
+        : starvation ? "dry_run_required" : "none",
     },
     warnings: [...sourceWarnings, ...sourceWorkEligibilityWarnings, ...sourceBackedPacketSeedWarnings],
     blockers: [...(bmadPlanningGap?.blockers || []), ...(requestPacketBlocked ? bmadRequestPacketPlan.blockers || [] : [])],
-    nextActions: starvation
+    nextActions: readyForDevAttention
+      ? [...(sourceIntakeAction ? [sourceIntakeAction] : []), ...(bmadPlanningGap?.nextActions || [])]
+      : starvation
       ? [
           ...(sourceIntakeAction ? [sourceIntakeAction] : []),
           {
@@ -17782,6 +17797,14 @@ function selectBmadPlanningGapWorkflow(sourceSlice, sourcePlanning = null, signa
       gapType: "story_creation",
       reason: "A backlog story exists; story creation is the narrowest missing workflow before implementation dispatch.",
       broaderReason: "Existing PRD, architecture, epics, and sprint tracking are sufficient for the next story.",
+    };
+  }
+  if ((readyForDevCount ?? 0) > 0) {
+    return {
+      narrowestWorkflow: null,
+      gapType: "existing_ready_for_dev_work",
+      reason: "Ready-for-dev source-owned implementation work already exists; preserve its active-lane state instead of creating planning work.",
+      broaderReason: "Existing ready-for-dev work must be reconciled through its protected lane before backlog expansion is considered.",
     };
   }
   if (sprintStatus?.exists && (nonNegativeInteger(sprintStatus.backlogStories) ?? 0) === 0) {
