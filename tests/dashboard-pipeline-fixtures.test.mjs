@@ -608,6 +608,12 @@ test("selected projection details reject synthetic and blank nested references",
     ["blank source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "  "; }],
     ["blank evidence reference", (projection) => { projection.selectedPacketDetails[0].evidenceRefs = ["\t"]; }],
     ["demo evidence reference", (projection) => { projection.selectedPacketDetails[0].evidenceRefs = ["DeMo:nested-evidence"]; }],
+    ["blank latest transition event reference", (projection) => { projection.selectedPacketDetails[0].latestTransitionEventRef = "  "; }],
+    ["fixture latest transition event reference", (projection) => { projection.selectedPacketDetails[0].latestTransitionEventRef = "fixture:event"; }],
+    ["demo latest transition event reference", (projection) => { projection.selectedPacketDetails[0].latestTransitionEventRef = "demo:event"; }],
+    ["blank recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["\t"]; }],
+    ["fixture recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["fixture:event"]; }],
+    ["demo recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["demo:event"]; }],
   ];
   for (const [label, mutate] of invalidCases) {
     const candidate = structuredClone(cleanProjection);

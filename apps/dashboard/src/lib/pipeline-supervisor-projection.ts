@@ -923,11 +923,11 @@ function isProjectionSelectedPacketDetail(value: unknown) {
   const hasValidLatestTransitionEventRef =
     detail.latestTransitionEventRef === undefined ||
     detail.latestTransitionEventRef === null ||
-    typeof detail.latestTransitionEventRef === "string";
+    isSafeReferenceString(detail.latestTransitionEventRef);
   const hasValidRecentTransitionEventRefs =
     detail.recentTransitionEventRefs === undefined ||
     (Array.isArray(detail.recentTransitionEventRefs) &&
-      detail.recentTransitionEventRefs.every((ref) => typeof ref === "string"));
+      detail.recentTransitionEventRefs.every(isSafeReferenceString));
   const hasValidLatestMovementSummary =
     detail.latestMovementSummary === undefined ||
     detail.latestMovementSummary === null ||
