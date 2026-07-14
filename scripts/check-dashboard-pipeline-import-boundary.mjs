@@ -285,7 +285,7 @@ function extractRuntimeImportSpecifiers(source) {
     /^\s*import[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /^\s*import\s+["']([^"']+)["'];?/gm,
     /^\s*export[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
-    /\b(?:import|require)\s*\(\s*(?:(?:\/\*[\s\S]*?\*\/)|(?:\/\/[^\n]*(?:\n|$)))\s*["']([^"']+)["']\s*\)/g,
+    /\b(?:import|require)\s*\(\s*(?:(?:(?:\/\*[\s\S]*?\*\/)|(?:\/\/[^\n]*(?:\n|$)))\s*)*["']([^"']+)["']\s*\)/g,
   ];
 
   const quotedSpecifiers = importPatterns.flatMap((importPattern) =>
