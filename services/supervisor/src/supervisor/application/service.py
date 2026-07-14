@@ -1381,7 +1381,12 @@ class SupervisorService:
 
         lease: QueueLease | None = None
         if payload.actionId == "retry_verification":
-            if attempt and attempt.queue_lease_id:
+            if attempt and (attempt.queue_lease_id is None) != (attempt.queue_fencing_token is None):
+                raise OperationalActionIneligible(
+                    "Retry lease/fencing context is stale or ambiguous.",
+                    "projection_stale",
+                )
+            if attempt and attempt.queue_lease_id is not None:
                 lease = await session.get(QueueLease, attempt.queue_lease_id, **get_options)
                 if (
                     not lease

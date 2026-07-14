@@ -420,6 +420,104 @@ def test_retry_rejects_non_verification_provenance_and_stale_persisted_attempt_f
         assert stale_capability.json()["data"]["typedReason"] == "projection_stale"
 
 
+def test_retry_rejects_orphan_persisted_fencing_token_across_validation_paths(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-orphan-fence.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        orphan = _seed_target(client, db_path, suffix="orphan-fence", attempt_status="failed")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update execution_attempts set queue_lease_id = null where id = ?",
+                (orphan["attemptId"],),
+            )
+            conn.commit()
+        orphan_request = _approval_request(
+            "retry_verification",
+            orphan,
+            expectedLeaseId=None,
+            expectedLeaseFencingToken=None,
+        )
+        capability = client.post("/pipeline-control-plane/actions/v1/capability", json=orphan_request)
+        assert capability.status_code == 200
+        assert capability.json()["data"]["typedReason"] == "projection_stale"
+        approval_rejected = client.post("/pipeline-control-plane/approvals/v1", json=orphan_request)
+        assert approval_rejected.status_code == 400
+        assert "lease/fencing context is stale or ambiguous" in approval_rejected.text
+
+        apply_target = _seed_target(client, db_path, suffix="orphan-fence-apply", attempt_status="failed")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update execution_attempts set queue_lease_id = null, queue_fencing_token = null where id = ?",
+                (apply_target["attemptId"],),
+            )
+            conn.commit()
+        apply_approval_request = _approval_request(
+            "retry_verification",
+            apply_target,
+            expectedLeaseId=None,
+            expectedLeaseFencingToken=None,
+        )
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=apply_approval_request)
+        assert approval.status_code == 200, approval.text
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update execution_attempts set queue_fencing_token = 7 where id = ?",
+                (apply_target["attemptId"],),
+            )
+            conn.commit()
+        applied = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(
+                apply_approval_request,
+                approval.json()["data"],
+                suffix="orphan-fence-apply",
+            ),
+        )
+        assert applied.status_code == 400
+        assert "lease/fencing context is stale or ambiguous" in applied.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from verification_retry_intents").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("stale_fence", ["attempt_updated_at", "packet_current_event"])
+def test_retry_revalidates_revision_fences_between_approval_and_apply(
+    tmp_path,
+    monkeypatch,
+    stale_fence: str,
+) -> None:
+    db_name = f"p2-1-retry-stale-after-approval-{stale_fence}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix=stale_fence, attempt_status="failed")
+        approval_request = _approval_request("retry_verification", target)
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request)
+        assert approval.status_code == 200, approval.text
+
+        with sqlite3.connect(db_path) as conn:
+            if stale_fence == "attempt_updated_at":
+                conn.execute(
+                    "update execution_attempts set updated_at = ? where id = ?",
+                    ("2026-07-14T20:00:01+00:00", target["attemptId"]),
+                )
+                expected_error = "attempt revision fence is stale"
+            else:
+                conn.execute(
+                    "update authoritative_work_packets set current_event_id = ? where id = ?",
+                    (f"event-after-approval-{stale_fence}", target["packetId"]),
+                )
+                expected_error = "packet event fence is stale"
+            conn.commit()
+
+        applied = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(approval_request, approval.json()["data"], suffix=stale_fence),
+        )
+        assert applied.status_code == 400
+        assert expected_error in applied.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from verification_retry_intents").fetchone()[0] == 0
+
+
 def test_concurrent_retry_admission_serializes_packet_and_wip_capacity(tmp_path, monkeypatch) -> None:
     db_name = "p2-1-retry-concurrent.db"
     db_path = (tmp_path / db_name).as_posix()
