@@ -183,6 +183,12 @@ async def init_db() -> None:
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text(
+                "INSERT INTO admission_locks (scope, generation) VALUES ('execute', 0) "
+                "ON CONFLICT (scope) DO NOTHING"
+            )
+        )
         dialect = connection.dialect.name
         if dialect == "postgresql":
             await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_label VARCHAR(120)"))

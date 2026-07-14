@@ -1394,6 +1394,7 @@ export const PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS = {
     "executionAttemptId",
     "linkedWorkItemId",
     "linkedPacketId",
+    "expectedWorkItemState",
     "expectedAttemptStatus",
     "expectedAttemptUpdatedAt",
     "expectedPacketCurrentEventId",
@@ -1427,6 +1428,7 @@ export interface PipelineRetryVerificationActionContextV1 {
   executionAttemptId: string;
   linkedWorkItemId: string;
   linkedPacketId: string;
+  expectedWorkItemState: PipelineOperationalWorkItemStateV1;
   expectedAttemptStatus: "failed" | "timed_out" | "rejected";
   /** Canonical RFC3339 `ExecutionAttempt.updatedAt`; this is the additive v1 attempt revision fence. */
   expectedAttemptUpdatedAt: string;
@@ -2379,6 +2381,11 @@ function validatePipelineOperationalActionV1Context(
       if (!isSafeOperationalActionV1Identifier(context[field])) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Retry context identifiers must be exact and safe.");
     }
     if (context.executionAttemptId !== targetId) pushPipelineOperationalActionV1Issue(issues, "actionContext.executionAttemptId", "target_context_mismatch", "Retry context must bind the target execution attempt.");
+    if (!isOneOfString(context.expectedWorkItemState, [
+      "queued", "triaged", "ready", "implementing", "validating", "reviewing", "awaiting_audit", "needs_rework", "operator_owned", "blocked", "done",
+    ])) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedWorkItemState", "stale_fence", "Retry requires the exact linked WorkItem state.");
+    }
     if (!isOneOfString(context.expectedAttemptStatus, ["failed", "timed_out", "rejected"]) || !Number.isFinite(pipelineOperationalActionV1Timestamp(context.expectedAttemptUpdatedAt))) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedAttemptStatus", "stale_fence", "Retry requires a terminal failed/timed-out/rejected attempt status and exact updatedAt revision.");
     }

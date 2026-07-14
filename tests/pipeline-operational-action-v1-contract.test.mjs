@@ -36,6 +36,7 @@ function contexts() {
       executionAttemptId: "attempt-1",
       linkedWorkItemId: "work-1",
       linkedPacketId: "packet-1",
+      expectedWorkItemState: "ready",
       expectedAttemptStatus: "failed",
       expectedAttemptUpdatedAt: "2026-07-14T20:00:00.000Z",
       expectedPacketCurrentEventId: "event-1",
@@ -148,6 +149,9 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
   const missingFence = structuredClone(retry);
   delete missingFence.actionContext.expectedAttemptUpdatedAt;
   assert.ok(contract.validatePipelineOperationalActionRequestV1(missingFence).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
+  const missingWorkItemState = structuredClone(retry);
+  delete missingWorkItemState.actionContext.expectedWorkItemState;
+  assert.ok(contract.validatePipelineOperationalActionRequestV1(missingWorkItemState).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
   assert.ok(contract.validatePipelineOperationalActionRequestV1({ ...retry, targetType: "work_packet" }).some((issue) => issue.code === "policy_violation"));
 
   const reassign = requestFor(contract, "reassign");

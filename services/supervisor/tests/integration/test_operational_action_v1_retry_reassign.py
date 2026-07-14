@@ -1,6 +1,10 @@
+import asyncio
+import inspect
 import json
+import os
 import sqlite3
 import sys
+import textwrap
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -79,6 +83,7 @@ def _seed_target(
     }
     attempt_id = f"attempt-{suffix}"
     lease_id = f"lease-{suffix}"
+    route_decision_id = f"route-{suffix}"
     attempt_updated_at = "2026-07-14T20:00:00+00:00"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -97,7 +102,7 @@ def _seed_target(
                     item["id"],
                     lease_id,
                     attempt_fencing_token,
-                    f"route-{suffix}",
+                    route_decision_id,
                     "metadata-only-verifier",
                     "validation",
                     "metadata_only",
@@ -107,7 +112,11 @@ def _seed_target(
                         [
                             {
                                 "artifactType": "task_packet_v0",
+                                "packetId": f"task-packet-{route_decision_id}",
+                                "workItemId": item["id"],
+                                "routeDecisionId": route_decision_id,
                                 "taskKind": "validation_execution" if attempt_purpose == "verification" else "code_execution",
+                                "approvalMode": "metadata_only",
                             }
                         ]
                     ),
@@ -121,6 +130,7 @@ def _seed_target(
         "packetId": packet_id,
         "packetEventId": packet["currentEventId"],
         "workItemId": item["id"],
+        "workItemState": state,
         "attemptId": attempt_id,
         "attemptUpdatedAt": attempt_updated_at,
         "leaseId": lease_id,
@@ -140,6 +150,7 @@ def _approval_request(action_id: str, target: dict[str, object], **context_overr
             "executionAttemptId": target["attemptId"],
             "linkedWorkItemId": target["workItemId"],
             "linkedPacketId": target["packetId"],
+            "expectedWorkItemState": target["workItemState"],
             "expectedAttemptStatus": "failed",
             "expectedAttemptUpdatedAt": target["attemptUpdatedAt"],
             "expectedPacketCurrentEventId": target["packetEventId"],
@@ -420,6 +431,105 @@ def test_retry_rejects_non_verification_provenance_and_stale_persisted_attempt_f
         assert stale_capability.json()["data"]["typedReason"] == "projection_stale"
 
 
+@pytest.mark.parametrize(
+    ("case", "field", "missing"),
+    [
+        ("missing-work-item", "workItemId", True),
+        ("wrong-work-item", "workItemId", False),
+        ("missing-route", "routeDecisionId", True),
+        ("wrong-route", "routeDecisionId", False),
+        ("missing-packet", "packetId", True),
+        ("wrong-packet", "packetId", False),
+        ("missing-authority", "approvalMode", True),
+        ("wrong-authority", "approvalMode", False),
+    ],
+)
+def test_retry_rejects_wrong_or_missing_persisted_attempt_provenance_binding(
+    tmp_path,
+    monkeypatch,
+    case: str,
+    field: str,
+    missing: bool,
+) -> None:
+    db_name = f"p2-1-retry-provenance-{case}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix=case, attempt_status="failed")
+        with sqlite3.connect(db_path) as conn:
+            artifact_refs = json.loads(
+                conn.execute(
+                    "select artifact_refs_json from execution_attempts where id = ?",
+                    (target["attemptId"],),
+                ).fetchone()[0]
+            )
+            if missing:
+                artifact_refs[0].pop(field)
+            else:
+                artifact_refs[0][field] = f"wrong-{field.lower()}"
+            conn.execute(
+                "update execution_attempts set artifact_refs_json = ? where id = ?",
+                (json.dumps(artifact_refs), target["attemptId"]),
+            )
+            conn.commit()
+
+        approval_request = _approval_request("retry_verification", target)
+        capability = client.post("/pipeline-control-plane/actions/v1/capability", json=approval_request)
+        assert capability.status_code == 200
+        assert capability.json()["data"]["typedReason"] == "evidence_invalid"
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request)
+        assert approval.status_code == 400
+        assert "explicitly marked verification attempt" in approval.text
+
+
+@pytest.mark.parametrize("changed_state", ["done", "operator_owned"])
+def test_retry_revalidates_expected_work_item_state_without_side_effects(
+    tmp_path,
+    monkeypatch,
+    changed_state: str,
+) -> None:
+    db_name = f"p2-1-retry-state-{changed_state}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix=f"state-{changed_state}", attempt_status="failed")
+        approval_request = _approval_request("retry_verification", target)
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request)
+        assert approval.status_code == 200, approval.text
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update work_items set state = ? where id = ?",
+                (changed_state, target["workItemId"]),
+            )
+            conn.commit()
+
+        capability = client.post("/pipeline-control-plane/actions/v1/capability", json=approval_request)
+        assert capability.status_code == 200
+        assert capability.json()["data"]["typedReason"] == "projection_stale"
+        second_approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request)
+        assert second_approval.status_code == 400
+        assert "WorkItem state fence is stale" in second_approval.text
+
+        applied = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(approval_request, approval.json()["data"], suffix=f"state-{changed_state}"),
+        )
+        assert applied.status_code == 400
+        assert "WorkItem state fence is stale" in applied.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select count(*) from verification_retry_intents where original_attempt_id = ?",
+                (target["attemptId"],),
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "select count(*) from pipeline_operational_action_records where target_id = ?",
+                (target["attemptId"],),
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "select consumed_at from pipeline_operational_approvals where approval_id = ?",
+                (approval.json()["data"]["approvalId"],),
+            ).fetchone()[0] is None
+
+
 def test_retry_rejects_orphan_persisted_fencing_token_across_validation_paths(tmp_path, monkeypatch) -> None:
     db_name = "p2-1-retry-orphan-fence.db"
     db_path = (tmp_path / db_name).as_posix()
@@ -540,6 +650,80 @@ def test_concurrent_retry_admission_serializes_packet_and_wip_capacity(tmp_path,
             assert conn.execute(
                 "select count(*) from workflow_events where event_type = 'work_item.verification_retry_queued'"
             ).fetchone()[0] == 1
+
+
+def test_concurrent_retry_and_active_attempt_admission_are_mutually_exclusive(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-attempt-cross-path.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="attempt-cross-path", attempt_status="failed")
+        approval_request = _approval_request("retry_verification", target)
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request).json()["data"]
+        retry_request = _apply_request(approval_request, approval, suffix="attempt-cross-path")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            retry_future = executor.submit(client.post, "/pipeline-control-plane/actions/v1", json=retry_request)
+            attempt_future = executor.submit(
+                client.post,
+                f"/work-items/{target['workItemId']}/execution-attempts",
+                json={"taskKind": "path_scope_check"},
+            )
+            retry_response = retry_future.result()
+            attempt_response = attempt_future.result()
+
+        assert sorted((retry_response.status_code, attempt_response.status_code)) in ([200, 400], [200, 409])
+        with sqlite3.connect(db_path) as conn:
+            pending_retry_count = conn.execute(
+                "select count(*) from verification_retry_intents where work_item_id = ? and status = 'pending'",
+                (target["workItemId"],),
+            ).fetchone()[0]
+            active_attempt_count = conn.execute(
+                "select count(*) from execution_attempts where work_item_id = ? "
+                "and status in ('planned', 'approved', 'starting', 'running', 'cancel_requested')",
+                (target["workItemId"],),
+            ).fetchone()[0]
+            assert (pending_retry_count, active_attempt_count) in {(1, 0), (0, 1)}
+
+
+def test_concurrent_retry_and_queue_lease_admission_are_mutually_exclusive(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-lease-cross-path.db"
+    db_path = (tmp_path / db_name).as_posix()
+    monkeypatch.setenv("SUPERVISOR_ALLOW_DIRTY_REPO", "true")
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(
+            client,
+            db_path,
+            suffix="lease-cross-path",
+            state="needs_rework",
+            attempt_status="failed",
+        )
+        approval_request = _approval_request("retry_verification", target)
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request).json()["data"]
+        retry_request = _apply_request(approval_request, approval, suffix="lease-cross-path")
+        from supervisor.api.main import service
+
+        monkeypatch.setattr(service, "_repo_is_dirty", lambda: False)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            retry_future = executor.submit(client.post, "/pipeline-control-plane/actions/v1", json=retry_request)
+            lease_future = executor.submit(
+                client.post,
+                f"/work-items/{target['workItemId']}/actions",
+                json={"action": "restart_implementation", "note": "Cross-path admission proof."},
+            )
+            retry_response = retry_future.result()
+            lease_response = lease_future.result()
+
+        assert sorted((retry_response.status_code, lease_response.status_code)) in ([200, 400], [200, 409])
+        with sqlite3.connect(db_path) as conn:
+            pending_retry_count = conn.execute(
+                "select count(*) from verification_retry_intents where work_item_id = ? and status = 'pending'",
+                (target["workItemId"],),
+            ).fetchone()[0]
+            active_lease_count = conn.execute(
+                "select count(*) from queue_leases where work_item_id = ? and active = 1",
+                (target["workItemId"],),
+            ).fetchone()[0]
+            assert (pending_retry_count, active_lease_count) in {(1, 0), (0, 1)}
 
 
 def test_concurrent_retry_idempotency_replays_canonically(tmp_path, monkeypatch) -> None:
@@ -736,3 +920,81 @@ def test_p2_1_identifier_column_lengths_match_sqlite_and_cross_dialect_model_sch
         assert AuthoritativeWorkPacketLifecycleEvent.__table__.c.idempotency_key.type.length == 120
         assert WorkflowEvent.__table__.c.correlation_id.type.length == 36
         assert WorkItem.__table__.c.assignee_id.type.length == 100
+
+
+def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> None:
+    from sqlalchemy.dialects import postgresql
+    from supervisor.application.service import SupervisorService
+    from supervisor.infrastructure.db.models import AdmissionLock
+
+    statement = SupervisorService._execute_admission_lock_statement()
+    postgres_sql = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "UPDATE admission_locks" in postgres_sql
+    assert "generation=(admission_locks.generation + 1)" in postgres_sql
+    assert "admission_locks.scope = 'execute'" in postgres_sql
+    assert AdmissionLock.__table__.primary_key.columns.keys() == ["scope"]
+
+    admission_reads = {
+        SupervisorService.apply_pipeline_operational_action_v1: "_operational_action_by_idempotency",
+        SupervisorService.create_execution_attempt: "session.get(WorkItem",
+        SupervisorService._reserve_subscription_agent_launch_runtime_attempt: "session.get(ExecutionAttempt",
+        SupervisorService._create_or_refresh_lease: "select(QueueLease)",
+    }
+    for method, first_admission_read in admission_reads.items():
+        source = textwrap.dedent(inspect.getsource(method))
+        assert source.index("await self._acquire_execute_admission_lock(session)") < source.index(first_admission_read)
+    service_source = inspect.getsource(SupervisorService)
+    assert "LOCK TABLE" not in service_source
+    assert "BEGIN IMMEDIATE" not in service_source
+
+
+def test_postgres_admission_row_lock_serializes_concurrent_sessions_when_available() -> None:
+    database_url = os.getenv("SUPERVISOR_POSTGRES_TEST_DATABASE_URL")
+    if not database_url or os.getenv("SUPERVISOR_POSTGRES_TEST_DATABASE_ISOLATED") != "1":
+        pytest.skip("No explicitly isolated PostgreSQL test database; source-owned cross-path row-lock contract was verified.")
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from supervisor.application.service import SupervisorService
+
+    async def run_probe() -> None:
+        test_engine = create_async_engine(database_url, future=True)
+        try:
+            async with test_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "CREATE TABLE IF NOT EXISTS admission_locks "
+                        "(scope VARCHAR(32) PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0)"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO admission_locks (scope, generation) VALUES ('execute', 0) "
+                        "ON CONFLICT (scope) DO NOTHING"
+                    )
+                )
+            sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+            async with sessions() as first, sessions() as second:
+                await first.execute(SupervisorService._execute_admission_lock_statement())
+                second_acquired = asyncio.Event()
+
+                async def acquire_second() -> None:
+                    await second.execute(SupervisorService._execute_admission_lock_statement())
+                    second_acquired.set()
+                    await second.rollback()
+
+                waiter = asyncio.create_task(acquire_second())
+                await asyncio.sleep(0.1)
+                assert not second_acquired.is_set()
+                await first.commit()
+                await asyncio.wait_for(waiter, timeout=2)
+                assert second_acquired.is_set()
+        finally:
+            await test_engine.dispose()
+
+    asyncio.run(run_probe())

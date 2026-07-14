@@ -2560,8 +2560,8 @@ OPERATIONAL_ACTION_V1_POLICY: dict[str, dict[str, str]] = {
 }
 OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
     "retry_verification": (
-        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedAttemptStatus",
-        "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
+        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedWorkItemState",
+        "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
         "expectedLeaseFencingToken", "expectedLeaseActive",
     ),
     "pause": ("kind", "expectedRuntimeMode", "expectedRuntimeRevision"),
@@ -2613,6 +2613,7 @@ class RetryVerificationActionContextV1(BaseModel):
     executionAttemptId: str
     linkedWorkItemId: str
     linkedPacketId: str
+    expectedWorkItemState: WorkflowState
     expectedAttemptStatus: Literal["failed", "timed_out", "rejected"]
     expectedAttemptUpdatedAt: str
     expectedPacketCurrentEventId: str

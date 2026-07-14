@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -350,6 +350,7 @@ from supervisor.domain.types import (
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
 from supervisor.infrastructure.db.models import (
+    AdmissionLock,
     AuditEvent,
     AuthoritativeWorkPacket,
     AuthoritativeWorkPacketLifecycleEvent,
@@ -385,6 +386,7 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
 }
 
 P2_1_OPERATIONAL_ACTIONS = {"retry_verification", "reassign"}
+EXECUTE_ADMISSION_LOCK_SCOPE = "execute"
 QUIESCENT_REASSIGN_STATES = {
     WorkflowState.QUEUED.value,
     WorkflowState.TRIAGED.value,
@@ -1091,7 +1093,7 @@ class SupervisorService:
         if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
             raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
 
-        await self._begin_p2_1_admission_transaction(session)
+        await self._acquire_execute_admission_lock(session)
         existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
         if existing:
             if not self._operational_action_matches_v1(existing, payload):
@@ -1266,27 +1268,44 @@ class SupervisorService:
         await self._publish_recorded_workflow_event(work_event)
         return self._operational_action_result_view_v1(record, replayed=False)
 
-    async def _begin_p2_1_admission_transaction(self, session: AsyncSession) -> None:
-        """Serialize admission against every writer of the predicates checked below."""
+    @staticmethod
+    def _execute_admission_lock_statement():
+        return (
+            update(AdmissionLock)
+            .where(AdmissionLock.scope == EXECUTE_ADMISSION_LOCK_SCOPE)
+            .values(generation=AdmissionLock.generation + 1)
+        )
 
-        dialect = session.get_bind().dialect.name
-        if dialect == "sqlite":
-            # SQLite has no row-level predicate locks. BEGIN IMMEDIATE obtains the
-            # database write reservation before any admission read, so a writer
-            # cannot create a lease/attempt or change capacity/state mid-decision.
-            await session.execute(text("BEGIN IMMEDIATE"))
-            return
-        if dialect == "postgresql":
-            # SHARE ROW EXCLUSIVE conflicts with INSERT/UPDATE/DELETE table locks.
-            # This deliberately bounded action path favors a truthful admission
-            # decision over throughput and prevents phantom active rows.
-            await session.execute(
-                text(
-                    "LOCK TABLE work_items, execution_attempts, queue_leases, "
-                    "authoritative_work_packets, verification_retry_intents, "
-                    "pipeline_operational_action_records, pipeline_operational_approvals "
-                    "IN SHARE ROW EXCLUSIVE MODE"
-                )
+    async def _acquire_execute_admission_lock(self, session: AsyncSession) -> None:
+        """Acquire the durable cross-process Execute admission authority."""
+
+        with session.no_autoflush:
+            result = await session.execute(self._execute_admission_lock_statement())
+        if result.rowcount != 1:
+            raise RuntimeError("Execute admission lock singleton is missing; initialize the supervisor database.")
+
+    async def _pending_verification_retry_intent(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+    ) -> VerificationRetryIntent | None:
+        return await session.scalar(
+            select(VerificationRetryIntent).where(
+                VerificationRetryIntent.work_item_id == work_item_id,
+                VerificationRetryIntent.status == "pending",
+            )
+        )
+
+    async def _reject_pending_verification_retry_admission(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+    ) -> None:
+        retry_intent = await self._pending_verification_retry_intent(session, work_item_id)
+        if retry_intent:
+            raise ValueError(
+                f"Work item has pending verification retry intent {retry_intent.id}; "
+                "new active execution or lease admission is blocked."
             )
 
     async def _verification_retry_intent_by_idempotency(
@@ -1321,6 +1340,10 @@ class SupervisorService:
                 isinstance(ref, dict)
                 and ref.get("artifactType") == "task_packet_v0"
                 and ref.get("taskKind") == TaskKind.VALIDATION_EXECUTION.value
+                and ref.get("workItemId") == attempt.work_item_id
+                and ref.get("routeDecisionId") == attempt.route_decision_id
+                and ref.get("packetId") == f"task-packet-{attempt.route_decision_id}"
+                and ref.get("approvalMode") == attempt.authority_mode
                 for ref in attempt_artifacts
             )
             if not has_verification_provenance:
@@ -1337,6 +1360,11 @@ class SupervisorService:
             expected_updated_at = datetime.fromisoformat(context.expectedAttemptUpdatedAt.replace("Z", "+00:00"))
             if self._ensure_aware(attempt.updated_at).astimezone(timezone.utc) != expected_updated_at.astimezone(timezone.utc):
                 raise OperationalActionIneligible("Retry rejected because the attempt revision fence is stale.", "projection_stale")
+            if item.state != context.expectedWorkItemState:
+                raise OperationalActionIneligible(
+                    "Retry rejected because the linked WorkItem state fence is stale.",
+                    "projection_stale",
+                )
         else:
             attempt = None
             packet = await session.get(AuthoritativeWorkPacket, payload.targetId, **get_options)
@@ -20429,6 +20457,7 @@ class SupervisorService:
         lease_id: str | None = None,
         fencing_token: int | None = None,
     ) -> ExecutionAttemptView | None:
+        await self._acquire_execute_admission_lock(session)
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
@@ -20452,6 +20481,9 @@ class SupervisorService:
             )
         worker = self._worker_for_execution_attempt(preview)
         status, rejection_reason = self._execution_attempt_initial_status(preview, worker)
+        if status.value in ACTIVE_EXECUTION_ATTEMPT_STATUSES:
+            await self._reject_pending_verification_retry_admission(session, item.id)
+            self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
         now = datetime.now(timezone.utc)
         attempt_id = str(uuid.uuid4())
         workspace_isolation_plan = self._workspace_isolation_plan(attempt_id, preview)
@@ -24107,11 +24139,14 @@ class SupervisorService:
         authority_mode: str,
         workspace_contract: dict[str, object],
     ) -> bool:
+        await self._acquire_execute_admission_lock(session)
         if await session.get(ExecutionAttempt, attempt_id):
             return False
         active_attempt = await self._active_execution_attempt(session, item.id)
         if active_attempt:
             return False
+        await self._reject_pending_verification_retry_admission(session, item.id)
+        self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
 
         now = datetime.now(timezone.utc)
         attempt = ExecutionAttempt(
@@ -25824,6 +25859,8 @@ class SupervisorService:
         actor_id: str | None = None,
         actor_label: str | None = None,
     ) -> WorkItem | None:
+        if action == WorkflowAction.RESTART_IMPLEMENTATION:
+            await self._acquire_execute_admission_lock(session)
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
@@ -26297,6 +26334,7 @@ class SupervisorService:
         if current == WorkflowState.READY:
             if mode in {RunMode.PAUSED, RunMode.DRAINING}:
                 return
+            await self._acquire_execute_admission_lock(session)
             if not await self._has_active_execute_lease(session, item):
                 admission = await self._evaluate_execute_admission(session)
                 if not admission.capacityAvailable:
@@ -26751,6 +26789,7 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.RESTART_IMPLEMENTATION and current == WorkflowState.NEEDS_REWORK:
+            await self._acquire_execute_admission_lock(session)
             if not await self._has_active_execute_lease(session, item):
                 self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
             if self._repo_is_dirty():
@@ -27011,6 +27050,7 @@ class SupervisorService:
 
     async def _create_or_refresh_lease(self, session: AsyncSession, item: WorkItem) -> None:
         async with self._execute_admission_lock:
+            await self._acquire_execute_admission_lock(session)
             now = datetime.now(timezone.utc)
             result = await session.execute(
                 select(QueueLease).where(
@@ -27026,6 +27066,7 @@ class SupervisorService:
                 lease.fencing_token += 1
                 lease.attempt_count += 1
                 return
+            await self._reject_pending_verification_retry_admission(session, item.id)
             self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
             session.add(
                 QueueLease(

@@ -222,6 +222,15 @@ class VerificationRetryIntent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AdmissionLock(Base):
+    """Durable singleton authority for cross-process Execute admission."""
+
+    __tablename__ = "admission_locks"
+
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class ExecutionAttempt(Base):
     __tablename__ = "execution_attempts"
 

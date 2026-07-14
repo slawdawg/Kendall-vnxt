@@ -50,6 +50,7 @@ def _contexts() -> dict[str, dict[str, object]]:
             "executionAttemptId": "attempt-1",
             "linkedWorkItemId": "work-1",
             "linkedPacketId": "packet-1",
+            "expectedWorkItemState": "ready",
             "expectedAttemptStatus": "failed",
             "expectedAttemptUpdatedAt": "2026-07-14T20:00:00.000Z",
             "expectedPacketCurrentEventId": "event-1",
@@ -146,8 +147,8 @@ def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
         assert re.search(pattern, typescript), f"TypeScript policy drift for {action_id}"
 
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["retry_verification"] == (
-        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedAttemptStatus",
-        "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
+        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedWorkItemState",
+        "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
         "expectedLeaseFencingToken", "expectedLeaseActive",
     )
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["pause"] == ("kind", "expectedRuntimeMode", "expectedRuntimeRevision")
@@ -167,6 +168,11 @@ def test_v1_requests_accept_only_the_exact_action_binding(action_id: str) -> Non
 def test_v1_requests_fail_closed_for_context_fence_target_authority_and_risk_drift() -> None:
     retry = _request("retry_verification")
     del retry["actionContext"]["expectedAttemptUpdatedAt"]  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(retry)
+
+    retry = _request("retry_verification")
+    del retry["actionContext"]["expectedWorkItemState"]  # type: ignore[index]
     with pytest.raises(ValidationError):
         OperationalActionRequestV1.model_validate(retry)
 
