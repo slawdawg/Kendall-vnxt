@@ -22,6 +22,7 @@ const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPat
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
 const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
 const pipelineSupervisorRuntimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
+const pipelineSupervisorProjectionPath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-projection.ts", import.meta.url);
 const pipelineContractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 const projectionTruthPath = new URL("../apps/dashboard/src/lib/pipeline/projection-truth.ts", import.meta.url);
 const activeBoardViewModelPath = new URL("../apps/dashboard/src/lib/pipeline/active-board-view-model.ts", import.meta.url);
@@ -74,6 +75,167 @@ function loadProjectionTruthModule(source) {
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "projection-truth.ts" });
   return context.module.exports;
+}
+
+function loadPipelineSupervisorProjectionModule(source) {
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") {
+        return {
+          AUTHORITATIVE_PACKET_STAGES: ["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"],
+          isPipelineCanonicalContractV1: () => true,
+          isPipelineProductModeMappingV0: () => true,
+        };
+      }
+      throw new Error(`Unexpected projection import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-projection.ts" });
+  return context.module.exports;
+}
+
+function validDashboardProjection() {
+  const now = new Date().toISOString();
+  const stages = ["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"];
+  const sourceRef = {
+    refId: "repo_doc:runtime-source",
+    sourceType: "repo_doc",
+    pathOrUrl: "docs/source.md",
+    title: "Runtime source",
+    contentSha256: null,
+  };
+  const packet = {
+    packetId: "runtime:packet",
+    title: "Runtime packet",
+    currentStage: "capture",
+    status: "waiting",
+    truthLabel: "live",
+    sourceRef,
+    canonicalContract: null,
+    productModeMapping: null,
+    blocker: null,
+    nextAction: "Inspect runtime packet.",
+    unblocker: "operator",
+    evidenceRefs: ["event:runtime"],
+    updatedAt: now,
+    metadataOnly: true,
+  };
+  const detail = {
+    packetId: packet.packetId,
+    sourceRefs: [sourceRef],
+    canonicalContract: null,
+    productModeMapping: null,
+    evidenceRefs: [...packet.evidenceRefs],
+    currentStage: packet.currentStage,
+    status: packet.status,
+    truthLabel: packet.truthLabel,
+    blocker: null,
+    nextAction: packet.nextAction,
+    unblocker: "operator",
+    metadataOnly: true,
+  };
+  const managerSummary = {
+    stateSource: "supervisor_projection",
+    reliabilityState: "healthy_idle",
+    freshnessState: "live",
+    activeLeaseCount: null,
+    activeWorkerCount: null,
+    warmWorkerCount: null,
+    blockedQueueCount: null,
+    dispatchableQueueCount: null,
+    closedQueueCount: null,
+    healthySourceCount: null,
+    exhaustedSourceCount: null,
+    blockedSourceCount: null,
+    gatedSourceCount: null,
+    staleSourceCount: null,
+    unavailableSourceCount: null,
+    refillingSourceCount: null,
+    unknownSourceCount: null,
+    sourceExhausted: false,
+    inactivityReason: null,
+    evidenceRefs: [],
+    summary: "Supervisor manager summary.",
+    metadataOnly: true,
+  };
+  const workerSummary = {
+    stateSource: "supervisor_projection",
+    freshnessState: "live",
+    warmCount: null,
+    activeCount: null,
+    waitingCount: null,
+    stalledCount: null,
+    failedCount: null,
+    drainingCount: null,
+    killedCount: null,
+    completeCount: null,
+    unavailableCount: null,
+    unknownCount: null,
+    workerRefs: [],
+    evidenceRefs: [],
+    summary: "Supervisor worker summary.",
+    metadataOnly: true,
+  };
+  return {
+    schemaVersion: "pipeline-dashboard-projection/v0",
+    projectionId: "projection-reference-boundary-test",
+    generatedAt: now,
+    sourceUpdatedAt: now,
+    sourceLabel: "live",
+    freshnessState: "live",
+    staleAfterSeconds: 3600,
+    backendReachability: { state: "reachable", checkedAt: now, reason: null, summary: "Supervisor reachable." },
+    fixtureMode: { enabled: false, reason: null, allowedForEnvironment: false, visibleLabelRequired: true, canSatisfyLiveProof: false },
+    truthSummary: { label: "live", emptyReason: null, backendEmpty: false, backendUnavailable: false, fixtureBacked: false, stale: false, summary: "Live supervisor projection." },
+    stageSummaries: stages.map((stage) => ({ stage, label: stage, packetCount: stage === "capture" ? 1 : 0, sourceLabel: "live", freshnessState: "live", emptyReason: null })),
+    sourceStates: [],
+    workPackets: [packet],
+    selectedPacketDetails: [detail],
+    managerSummary,
+    workerSummary,
+    reliabilityProblems: [],
+    gatedControls: [],
+    executeAdmission: {
+      schemaVersion: "pipeline-execute-admission/v0",
+      policyVersion: "supervisor-wip/v0",
+      state: "unavailable",
+      capacityAvailable: false,
+      typedReason: "runtime_unavailable",
+      source: "unavailable",
+      limits: null,
+      observed: null,
+      blockingDimensions: [],
+      nextSafeAction: "Wait for supervisor runtime.",
+      evidenceRefs: [],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    queueSummary: {
+      activeCount: null,
+      dispatchableCount: null,
+      blockedCount: null,
+      gatedCount: null,
+      closedCount: null,
+      staleCount: null,
+      refillingCount: null,
+      unknownCount: null,
+      emptyReason: null,
+      sourceExhausted: false,
+      summary: "Supervisor queue summary.",
+    },
+    evidenceRefs: [],
+  };
 }
 
 function loadActiveBoardViewModelModule(source) {
@@ -432,6 +594,32 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(nextConfigSource, /devIndicators:\s*false/);
   assert.doesNotMatch(globalsSource, /nextjs-portal[\s\S]*display: none !important/);
   assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
+});
+
+test("selected projection details reject synthetic and blank nested references", async () => {
+  const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
+  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const cleanProjection = validDashboardProjection();
+  assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
+
+  const invalidCases = [
+    ["fixture source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "FIXTURE:nested-source"; }],
+    ["demo source path", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].pathOrUrl = " demo:nested-source-path "; }],
+    ["blank source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "  "; }],
+    ["blank evidence reference", (projection) => { projection.selectedPacketDetails[0].evidenceRefs = ["\t"]; }],
+    ["demo evidence reference", (projection) => { projection.selectedPacketDetails[0].evidenceRefs = ["DeMo:nested-evidence"]; }],
+  ];
+  for (const [label, mutate] of invalidCases) {
+    const candidate = structuredClone(cleanProjection);
+    mutate(candidate);
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
+
+  const ordinaryText = structuredClone(cleanProjection);
+  ordinaryText.selectedPacketDetails[0].sourceRefs[0].title = "Operator label mentions fixture:legacy text";
+  ordinaryText.selectedPacketDetails[0].evidenceRefs = ["event:runtime fixture:legacy wording"];
+  ordinaryText.workPackets[0].evidenceRefs = [...ordinaryText.selectedPacketDetails[0].evidenceRefs];
+  assert.equal(projectionModule.isPipelineDashboardProjection(ordinaryText), true);
 });
 
 test("real WorkPacket projection proof artifact is metadata-only and non-fixture", async () => {

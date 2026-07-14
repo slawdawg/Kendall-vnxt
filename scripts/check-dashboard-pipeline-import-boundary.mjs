@@ -61,6 +61,7 @@ const failures = [];
 const scannedFiles = [];
 const scannedFileSet = new Set();
 const pendingFiles = [];
+const gatedSupervisorEdgesAudited = new Set();
 
 const normalRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/page.tsx"),
@@ -125,6 +126,10 @@ for (const sourceFile of requiredSourceFiles) {
     failures.push(`${sourceFile}: required pipeline boundary source was not scanned`);
   }
 }
+const actionSupervisorEdge = "apps/dashboard/src/lib/pipeline-supervisor-actions.ts -> ./supervisor";
+if (!gatedSupervisorEdgesAudited.has(actionSupervisorEdge)) {
+  failures.push(`${actionSupervisorEdge}: capability-gated supervisor edge was not audited`);
+}
 
 if (failures.length > 0) {
   console.error("Dashboard pipeline import boundary check failed:");
@@ -146,6 +151,7 @@ console.log(
       normalManagerFixtureSummaryReachable: false,
       demoManagerFixtureSummaryReachable: true,
       normalSupervisorModuleReachable: normalRouteGraph.includes("apps/dashboard/src/lib/supervisor.ts"),
+      gatedSupervisorEdgesAudited: [...gatedSupervisorEdgesAudited],
       boundary:
         "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from the /pipeline read graph outside the dedicated read-only supervisor runtime module.",
     },
@@ -231,6 +237,11 @@ function checkImports(displayPath, source) {
     }
   }
   const specifiers = extractRuntimeImportSpecifiers(source);
+  for (const specifier of specifiers) {
+    if (isGatedSupervisorImport(displayPath, specifier)) {
+      gatedSupervisorEdgesAudited.add(`${displayPath} -> ${specifier}`);
+    }
+  }
   for (const specifier of specifiers) {
     for (const { id, pattern } of forbiddenImportPatterns) {
       if (id === "supervisor-client" && isAllowedPipelineSupervisorImport(displayPath, specifier)) {

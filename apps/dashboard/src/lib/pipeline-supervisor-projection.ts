@@ -175,6 +175,7 @@ export function isPipelineDashboardProjection(value: unknown): value is Pipeline
     isProjectionBackendReachabilityConsistent(projection) &&
     isProjectionManagerReliabilityConsistent(projection) &&
     isProjectionReliabilityProblemsConsistent(projection) &&
+    isEmptyProjectionSummaryConsistent(projection) &&
     (projection.sourceLabel !== "live" || isLiveProjectionRenderable(projection)) &&
     Array.isArray(projection.sourceStates) &&
     projection.sourceStates.every(isProjectionSourceState) &&
@@ -316,11 +317,22 @@ function isNullableCount(value: unknown) {
 
 function isSafeEvidenceRef(value: unknown) {
   return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
+    isSafeReferenceString(value) &&
     value.length <= 255 &&
     !unsafeEvidenceRefPattern.test(value)
   );
+}
+
+function isSafeReferenceString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && !isSyntheticRuntimeIdentity(value);
+}
+
+function isSyntheticRuntimeIdentity(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("fixture:") || normalized.startsWith("demo:");
 }
 
 function isSafeWorkerRef(value: unknown) {
@@ -395,6 +407,43 @@ function isLiveProjectionRenderable(projection: Partial<PipelineDashboardProject
     projection.queueSummary?.sourceExhausted === true &&
     projection.queueSummary.emptyReason === "source_exhausted"
   );
+}
+
+function isEmptyProjectionSummaryConsistent(projection: Partial<PipelineDashboardProjectionV0>) {
+  if (projection.workPackets?.length !== 0 || projection.truthSummary?.backendEmpty !== true) {
+    return true;
+  }
+  const manager = projection.managerSummary;
+  const worker = projection.workerSummary;
+  if (!manager || !worker) {
+    return false;
+  }
+  return [
+    manager.activeLeaseCount,
+    manager.activeWorkerCount,
+    manager.warmWorkerCount,
+    manager.blockedQueueCount,
+    manager.dispatchableQueueCount,
+    manager.closedQueueCount,
+    manager.healthySourceCount,
+    manager.exhaustedSourceCount,
+    manager.blockedSourceCount,
+    manager.gatedSourceCount,
+    manager.staleSourceCount,
+    manager.unavailableSourceCount,
+    manager.refillingSourceCount,
+    manager.unknownSourceCount,
+    worker.warmCount,
+    worker.activeCount,
+    worker.waitingCount,
+    worker.stalledCount,
+    worker.failedCount,
+    worker.drainingCount,
+    worker.killedCount,
+    worker.completeCount,
+    worker.unavailableCount,
+    worker.unknownCount,
+  ].every((count) => count === null || count === 0);
 }
 
 function projectionHasOpenPacket(projection: Partial<PipelineDashboardProjectionV0>) {
@@ -799,9 +848,9 @@ function isProjectionSourceRef(value: unknown) {
   }
   const sourceRef = value as NonNullable<PipelineDashboardProjectionV0["workPackets"][number]["sourceRef"]>;
   return (
-    typeof sourceRef.refId === "string" &&
+    isSafeReferenceString(sourceRef.refId) &&
     projectionSourceTypes.has(sourceRef.sourceType) &&
-    (sourceRef.pathOrUrl === null || sourceRef.pathOrUrl === undefined || typeof sourceRef.pathOrUrl === "string") &&
+    (sourceRef.pathOrUrl === null || sourceRef.pathOrUrl === undefined || isSafeReferenceString(sourceRef.pathOrUrl)) &&
     (sourceRef.title === null || sourceRef.title === undefined || typeof sourceRef.title === "string") &&
     (sourceRef.contentSha256 === null || sourceRef.contentSha256 === undefined || (typeof sourceRef.contentSha256 === "string" && /^[0-9a-f]{64}$/i.test(sourceRef.contentSha256)))
   );

@@ -322,6 +322,14 @@ function isSyntheticRuntimeIdentity(value: unknown): boolean {
   return normalized.startsWith("fixture:") || normalized.startsWith("demo:");
 }
 
+function isSafeReferenceString(value: unknown): value is string {
+  return isNonEmptyString(value) && !isSyntheticRuntimeIdentity(value);
+}
+
+function isNullableSafeReferenceString(value: unknown): boolean {
+  return value === null || typeof value === "undefined" || isSafeReferenceString(value);
+}
+
 function isNullableString(value: unknown): boolean {
   return value === null || typeof value === "string" || typeof value === "undefined";
 }
@@ -938,14 +946,14 @@ function isSourceRefV0(value: unknown): boolean {
   }
   const ref = value as Record<string, unknown>;
   if (
-    typeof ref.refId !== "string" ||
+    !isSafeReferenceString(ref.refId) ||
     !isEnumValue(ref.sourceType, sourceRefTypes) ||
     typeof ref.label !== "string" ||
     !isEnumValue(ref.freshness, sourceFreshnessValues) ||
     !isEnumValue(ref.accessState, sourceAccessStates) ||
     typeof ref.canonical !== "boolean" ||
     typeof ref.summaryOnly !== "boolean" ||
-    !isNullableString(ref.pathOrUrl) ||
+    !isNullableSafeReferenceString(ref.pathOrUrl) ||
     !isNullableString(ref.blockedReason)
   ) {
     return false;
@@ -967,12 +975,10 @@ function isEvidenceRefV0(value: unknown): boolean {
     return false;
   }
   const ref = value as Record<string, unknown>;
-  return typeof ref.refId === "string" &&
-    !isSyntheticRuntimeIdentity(ref.refId) &&
-    !isSyntheticRuntimeIdentity(ref.artifactPath) &&
+  return isSafeReferenceString(ref.refId) &&
     isEnumValue(ref.evidenceType, evidenceRefTypes) &&
     typeof ref.label === "string" &&
-    isNullableString(ref.artifactPath) &&
+    isNullableSafeReferenceString(ref.artifactPath) &&
     isEnumValue(ref.retentionClass, evidenceRetentionClasses) &&
     ref.rawPayloadRetained === false;
 }
@@ -982,12 +988,10 @@ function isArtifactRefV0(value: unknown): boolean {
     return false;
   }
   const ref = value as Record<string, unknown>;
-  return typeof ref.refId === "string" &&
-    !isSyntheticRuntimeIdentity(ref.refId) &&
-    !isSyntheticRuntimeIdentity(ref.pathOrUrl) &&
+  return isSafeReferenceString(ref.refId) &&
     isEnumValue(ref.artifactType, artifactRefTypes) &&
     typeof ref.label === "string" &&
-    isNullableString(ref.pathOrUrl) &&
+    isNullableSafeReferenceString(ref.pathOrUrl) &&
     isEnumValue(ref.status, artifactRefStatuses);
 }
 
