@@ -11,6 +11,10 @@ import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-re
 import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
 import { planManagerSourcePacketIntake, resolveLoopbackSourceIntakeEndpoint } from "./manager-supervisor-source-intake.mjs";
 import {
+  isValidSupervisorTerminalEventMetadata,
+  normalizeSupervisorTerminalEventMetadata,
+} from "./terminal-event-contract.mjs";
+import {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
   projectCanonicalSupervisorPacket,
@@ -14782,30 +14786,12 @@ function isValidAuthoritativeBacklogExhaustedDisposition(disposition) {
   if (["totalItems", "reconciledItems", ...AUTHORITATIVE_RECONCILIATION_STATUS_KEYS].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
   if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + counts[key], 0)) return false;
   if (AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS.some((key) => counts[key] !== 0) || counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
-  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorCanonicalEventMetadata(disposition.supervisorEvent);
-}
-
-function isValidSupervisorCanonicalEventMetadata(event) {
-  if (!isPlainObject(event)) return false;
-  const allowedKeys = ["eventId", "evidenceRef", "metadataOnly", "persistedAt", "rawPayloadRetained", "status"];
-  if (Object.keys(event).length !== allowedKeys.length || Object.keys(event).some((key) => !allowedKeys.includes(key))) return false;
-  if (typeof event.eventId !== "string" || !/^manager-terminal-event:[0-9a-f]{40}$/.test(event.eventId)) return false;
-  if (event.evidenceRef !== `supervisor-event:${event.eventId}` || event.status !== "persisted") return false;
-  if (typeof event.persistedAt !== "string" || event.persistedAt.length > 64 || !Number.isFinite(Date.parse(event.persistedAt))) return false;
-  if (new Date(event.persistedAt).toISOString() !== event.persistedAt) return false;
-  return event.metadataOnly === true && event.rawPayloadRetained === false;
+  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorTerminalEventMetadata(disposition.supervisorEvent);
 }
 
 function normalizeSupervisorCanonicalEventMetadata(integration, event) {
-  if (integration !== "supervisor_canonical_event" || !isValidSupervisorCanonicalEventMetadata(event)) return null;
-  return {
-    eventId: event.eventId,
-    evidenceRef: event.evidenceRef,
-    status: "persisted",
-    persistedAt: event.persistedAt,
-    metadataOnly: true,
-    rawPayloadRetained: false,
-  };
+  if (integration !== "supervisor_canonical_event") return null;
+  return normalizeSupervisorTerminalEventMetadata(event);
 }
 
 function authoritativeTerminalSupervisorProjection(disposition) {
