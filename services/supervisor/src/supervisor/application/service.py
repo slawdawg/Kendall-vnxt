@@ -47,6 +47,12 @@ class OperationalActionReplay(Exception):
         self.record = record
 
 
+class OperationalActionIneligible(ValueError):
+    def __init__(self, message: str, typed_reason: str) -> None:
+        super().__init__(message)
+        self.typed_reason = typed_reason
+
+
 LOCAL_PROOF_TEST_CAPABILITY = object()
 LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
 PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
@@ -171,10 +177,15 @@ from supervisor.api.schemas import (
     PipelineGatedControlV0View,
     PipelineRuntimeReadinessV0View,
     OperationalActionCapabilityView,
+    OperationalActionCapabilityV1,
     OperationalActionApprovalRequest,
+    OperationalActionApprovalRequestV1,
     OperationalActionApprovalView,
+    OperationalActionApprovalV1,
     OperationalActionRequest,
+    OperationalActionRequestV1,
     OperationalActionResultView,
+    OperationalActionResultV1,
     OperationalReadyToTestRequest,
     PipelineManagerSummaryV0View,
     PipelineProductModeMappingV0View,
@@ -352,6 +363,7 @@ from supervisor.infrastructure.db.models import (
     QueueLeaseAction,
     SupervisorControl,
     WorkItem,
+    VerificationRetryIntent,
     WorkflowEvent,
 )
 from supervisor.infrastructure.streaming.bus import EventBus
@@ -370,6 +382,15 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.STARTING.value,
     ExecutionAttemptStatus.RUNNING.value,
     ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+}
+
+P2_1_OPERATIONAL_ACTIONS = {"retry_verification", "reassign"}
+QUIESCENT_REASSIGN_STATES = {
+    WorkflowState.QUEUED.value,
+    WorkflowState.TRIAGED.value,
+    WorkflowState.READY.value,
+    WorkflowState.NEEDS_REWORK.value,
+    WorkflowState.BLOCKED.value,
 }
 
 DEFAULT_LLM_WIKI_DERIVED_FOLDER = "01 Dashboard Queue/LLM Wiki Derived"
@@ -990,6 +1011,531 @@ class SupervisorService:
                 "Requested actor must be the server-owned local operator "
                 "(actorType=operator, actorId=pipeline-operator, actorLabel=Pipeline operator)."
             )
+
+    async def pipeline_operational_action_capability_v1(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionApprovalRequestV1,
+    ) -> OperationalActionCapabilityV1:
+        self._validate_server_owned_local_operator(payload.requestedBy)
+        if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+        typed_reason: str | None = "blocked_by_approval"
+        capability_state = "available"
+        authority_state = "needs_authority_approval"
+        try:
+            await self._validate_p2_1_operational_target(session, payload)
+        except OperationalActionIneligible as exc:
+            typed_reason = exc.typed_reason
+            capability_state = "unavailable"
+            authority_state = "blocked"
+        return OperationalActionCapabilityV1(
+            schemaVersion=payload.schemaVersion,
+            actionId=payload.actionId,
+            targetType=payload.targetType,
+            targetId=payload.targetId,
+            actionContext=payload.actionContext,
+            actionContextDigestSha256=payload.actionContextDigestSha256,
+            serverBound=True,
+            capabilityState=capability_state,
+            authorityState=authority_state,
+            riskTier=payload.requestedRiskTier,
+            typedReason=typed_reason,
+            expectedResultSummary=(
+                "Create one metadata-only pending verification intent without launching a provider or worker."
+                if payload.actionId == "retry_verification"
+                else "Update the exact quiescent linked WorkItem owner and append canonical packet/work-item events."
+            ),
+            correlationRequired=True,
+            idempotencyRequired=True,
+            evidenceRefs=[f"capability:{payload.actionId}:{payload.targetId}"],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    async def issue_pipeline_operational_approval_v1(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionApprovalRequestV1,
+    ) -> OperationalActionApprovalV1:
+        self._validate_server_owned_local_operator(payload.requestedBy)
+        if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+        _, _, packet, _ = await self._validate_p2_1_operational_target(session, payload, lock=True)
+        now = datetime.now(timezone.utc)
+        approval = OperationalActionApprovalRecord(
+            approval_id=f"approval-{uuid.uuid4()}",
+            schema_version=payload.schemaVersion,
+            action_id=payload.actionId,
+            target_type=payload.targetType,
+            target_id=payload.targetId,
+            requested_actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
+            requested_authority_family=payload.requestedAuthorityState,
+            requested_risk_tier=payload.requestedRiskTier,
+            expected_current_event_id=packet.current_event_id,
+            action_context_json=payload.actionContext.model_dump(mode="json"),
+            action_context_digest_sha256=payload.actionContextDigestSha256,
+            issued_at=now,
+            expires_at=now + timedelta(minutes=5),
+        )
+        session.add(approval)
+        await session.commit()
+        return self._operational_approval_view_v1(approval)
+
+    async def apply_pipeline_operational_action_v1(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequestV1,
+    ) -> OperationalActionResultV1:
+        self._validate_server_owned_local_operator(payload.requestedBy)
+        if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+
+        existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+        if existing:
+            if not self._operational_action_matches_v1(existing, payload):
+                raise ValueError("Operational action idempotency key already belongs to different action metadata.")
+            return self._operational_action_result_view_v1(existing, replayed=True)
+
+        attempt, item, packet, lease = await self._validate_p2_1_operational_target(session, payload, lock=True)
+        approval = await self._validate_operational_approval_v1(session, payload)
+        action_record_id = f"action-{uuid.uuid4()}"
+        now = datetime.now(timezone.utc)
+        consume = await session.execute(
+            update(OperationalActionApprovalRecord)
+            .execution_options(synchronize_session=False)
+            .where(
+                OperationalActionApprovalRecord.approval_id == approval.approval_id,
+                OperationalActionApprovalRecord.consumed_at.is_(None),
+                OperationalActionApprovalRecord.expires_at > now,
+            )
+            .values(
+                consumed_at=now,
+                consumed_action_idempotency_key=payload.idempotencyKey,
+                consumed_action_record_id=action_record_id,
+            )
+        )
+        if consume.rowcount != 1:
+            await session.rollback()
+            replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+            if replay and self._operational_action_matches_v1(replay, payload):
+                return self._operational_action_result_view_v1(replay, replayed=True)
+            raise ValueError("Operational action approval has already been consumed or expired.")
+
+        packet_event_id = f"event-{uuid.uuid4()}"
+        if payload.actionId == "retry_verification":
+            if attempt is None:
+                raise ValueError("Retry verification requires an exact execution attempt target.")
+            retry_intent_id = f"verification-retry-{uuid.uuid5(uuid.NAMESPACE_URL, payload.idempotencyKey).hex}"
+            session.add(
+                VerificationRetryIntent(
+                    id=retry_intent_id,
+                    original_attempt_id=attempt.id,
+                    work_item_id=item.id,
+                    packet_id=packet.id,
+                    status="pending",
+                    idempotency_key=payload.idempotencyKey,
+                    correlation_id=payload.correlationId,
+                    approval_id=approval.approval_id,
+                    actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
+                    source_ref_json=dict(packet.source_ref_json or {}),
+                    evidence_refs_json=list(payload.evidenceRefs),
+                    expected_lease_id=lease.id if lease else None,
+                    expected_lease_fencing_token=lease.fencing_token if lease else None,
+                    provider_or_worker_launched=False,
+                    created_at=now,
+                )
+            )
+            success_evidence = {
+                "kind": "retry_verification",
+                "originalAttemptId": attempt.id,
+                "retryAttemptId": retry_intent_id,
+                "linkedWorkItemId": item.id,
+                "linkedPacketId": packet.id,
+                "resultingPacketCurrentEventId": packet_event_id,
+                "originalAttemptPreserved": True,
+                "providerOrWorkerLaunched": False,
+            }
+            work_event_type = "work_item.verification_retry_queued"
+            work_event_summary = "Queued a metadata-only verification retry intent without external execution."
+        else:
+            context = payload.actionContext
+            previous_owner_id = item.assignee_id
+            owner_update = await session.execute(
+                update(WorkItem)
+                .execution_options(synchronize_session=False)
+                .where(
+                    WorkItem.id == item.id,
+                    WorkItem.state == context.expectedWorkItemState,
+                    WorkItem.assignee_id == context.expectedCurrentOwnerId,
+                )
+                .values(
+                    assignee_id=context.newOwnerId,
+                    assignee_label=context.newOwnerId,
+                    updated_at=now,
+                    last_event_at=now,
+                )
+            )
+            if owner_update.rowcount != 1:
+                await session.rollback()
+                raise ValueError("Reassign rejected because WorkItem ownership or state changed concurrently.")
+            item.assignee_id = context.newOwnerId
+            item.assignee_label = context.newOwnerId
+            item.updated_at = now
+            item.last_event_at = now
+            success_evidence = {
+                "kind": "reassign",
+                "packetId": packet.id,
+                "linkedWorkItemId": item.id,
+                "previousOwnerId": previous_owner_id,
+                "newOwnerId": context.newOwnerId,
+                "resultingPacketCurrentEventId": packet_event_id,
+                "activeLeaseTransferred": False,
+                "workerLaunched": False,
+            }
+            work_event_type = "work_item.reassigned"
+            work_event_summary = f"Reassigned quiescent work from {previous_owner_id} to {context.newOwnerId}."
+
+        await self._append_p2_1_operational_events(
+            session,
+            payload,
+            approval,
+            item,
+            packet,
+            packet_event_id=packet_event_id,
+            work_event_type=work_event_type,
+            work_event_summary=work_event_summary,
+            success_evidence=success_evidence,
+            occurred_at=now,
+        )
+        record = OperationalActionRecord(
+            id=action_record_id,
+            schema_version=payload.schemaVersion,
+            packet_id=packet.id,
+            action_id=payload.actionId,
+            target_type=payload.targetType,
+            target_id=payload.targetId,
+            idempotency_key=payload.idempotencyKey,
+            correlation_id=payload.correlationId,
+            actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
+            requested_authority_state=payload.requestedAuthorityState,
+            requested_risk_tier=payload.requestedRiskTier,
+            expected_current_event_id=payload.actionContext.expectedPacketCurrentEventId,
+            action_context_json=payload.actionContext.model_dump(mode="json"),
+            action_context_digest_sha256=payload.actionContextDigestSha256,
+            approval_id=approval.approval_id,
+            outcome="succeeded",
+            resulting_stage=packet.current_stage,
+            resulting_status=packet.status,
+            capability_state="available",
+            authority_state="allowed",
+            typed_reason=None,
+            success_evidence_json=success_evidence,
+            evidence_refs_json=list(payload.evidenceRefs),
+            operator_intent_summary=(
+                "Metadata-only verification retry intent."
+                if payload.actionId == "retry_verification"
+                else "Fenced quiescent WorkItem ownership reassignment."
+            ),
+            created_at=now,
+        )
+        session.add(record)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+            if replay and self._operational_action_matches_v1(replay, payload):
+                return self._operational_action_result_view_v1(replay, replayed=True)
+            raise
+        return self._operational_action_result_view_v1(record, replayed=False)
+
+    async def _validate_p2_1_operational_target(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionApprovalRequestV1 | OperationalActionRequestV1,
+        *,
+        lock: bool = False,
+    ) -> tuple[ExecutionAttempt | None, WorkItem, AuthoritativeWorkPacket, QueueLease | None]:
+        context = payload.actionContext
+        get_options = {"with_for_update": True} if lock else {}
+        attempt: ExecutionAttempt | None = None
+        if payload.actionId == "retry_verification":
+            attempt = await session.get(ExecutionAttempt, payload.targetId, **get_options)
+            if not attempt or attempt.id != context.executionAttemptId:
+                raise OperationalActionIneligible("Exact execution attempt target was not found.", "no_eligible_work")
+            item = await session.get(WorkItem, context.linkedWorkItemId, **get_options)
+            packet = await session.get(AuthoritativeWorkPacket, context.linkedPacketId, **get_options)
+            if not item or not packet or attempt.work_item_id != item.id:
+                raise OperationalActionIneligible("Retry target attempt/work-item/packet linkage disagrees.", "evidence_invalid")
+            if attempt.status not in {
+                ExecutionAttemptStatus.FAILED.value,
+                ExecutionAttemptStatus.TIMED_OUT.value,
+                ExecutionAttemptStatus.REJECTED.value,
+            } or attempt.status != context.expectedAttemptStatus:
+                raise OperationalActionIneligible("Retry requires the exact terminal failed, timed-out, or rejected attempt.", "invalid_transition")
+            expected_updated_at = datetime.fromisoformat(context.expectedAttemptUpdatedAt.replace("Z", "+00:00"))
+            if self._ensure_aware(attempt.updated_at).astimezone(timezone.utc) != expected_updated_at.astimezone(timezone.utc):
+                raise OperationalActionIneligible("Retry rejected because the attempt revision fence is stale.", "projection_stale")
+        else:
+            attempt = None
+            packet = await session.get(AuthoritativeWorkPacket, payload.targetId, **get_options)
+            item = await session.get(WorkItem, context.linkedWorkItemId, **get_options)
+            if not item or not packet:
+                raise OperationalActionIneligible("Exact packet and linked WorkItem are required for reassignment.", "no_eligible_work")
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        linked_packet_id = context.linkedPacketId if payload.actionId == "retry_verification" else payload.targetId
+        if (
+            item.authoritative_packet_id != linked_packet_id
+            or metadata.get("authoritativePacketId") != linked_packet_id
+            or metadata.get("authoritativePacketStage") != packet.current_stage
+            or metadata.get("authoritativePacketStatus") != packet.status
+        ):
+            raise OperationalActionIneligible("Canonical packet and WorkItem projections disagree.", "evidence_invalid")
+        if packet.current_event_id != context.expectedPacketCurrentEventId:
+            raise OperationalActionIneligible("Operational action rejected because the packet event fence is stale.", "projection_stale")
+
+        active_attempt_query = (
+            select(ExecutionAttempt)
+            .where(
+                ExecutionAttempt.work_item_id == item.id,
+                ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES),
+            )
+            .order_by(ExecutionAttempt.created_at.desc())
+        )
+        if lock:
+            active_attempt_query = active_attempt_query.with_for_update()
+        active_attempt = await session.scalar(active_attempt_query)
+        if active_attempt:
+            raise OperationalActionIneligible("Operational action rejected while an execution attempt is active.", "invalid_transition")
+        active_lease_query = select(QueueLease).where(
+            QueueLease.work_item_id == item.id,
+            QueueLease.active.is_(True),
+        )
+        if lock:
+            active_lease_query = active_lease_query.with_for_update()
+        active_lease = await session.scalar(active_lease_query)
+        if active_lease:
+            raise OperationalActionIneligible("Operational action rejected while a queue lease is active.", "invalid_transition")
+
+        lease: QueueLease | None = None
+        if payload.actionId == "retry_verification":
+            if attempt and attempt.queue_lease_id:
+                lease = await session.get(QueueLease, attempt.queue_lease_id, **get_options)
+                if (
+                    not lease
+                    or lease.work_item_id != item.id
+                    or context.expectedLeaseId != lease.id
+                    or context.expectedLeaseFencingToken != lease.fencing_token
+                    or lease.active is not False
+                ):
+                    raise OperationalActionIneligible("Retry lease/fencing context is stale or ambiguous.", "projection_stale")
+            elif context.expectedLeaseId is not None or context.expectedLeaseFencingToken is not None:
+                raise OperationalActionIneligible("Retry supplied a lease fence for an unleased attempt.", "projection_stale")
+            admission = await self._evaluate_execute_admission(session)
+            if not admission.capacityAvailable:
+                raise OperationalActionIneligible(
+                    f"Verification retry has no WIP capacity: {admission.typedReason}.",
+                    "blocked_by_resources",
+                )
+        else:
+            if item.state != context.expectedWorkItemState or item.state not in QUIESCENT_REASSIGN_STATES:
+                raise OperationalActionIneligible("Reassign requires the exact eligible quiescent WorkItem state.", "invalid_transition")
+            if not item.assignee_id:
+                raise OperationalActionIneligible("Reassign rejected because current ownership is unknown.", "evidence_invalid")
+            if item.assignee_id != context.expectedCurrentOwnerId:
+                raise OperationalActionIneligible("Reassign expected current owner does not match supervisor truth.", "projection_stale")
+            if item.assignee_id == context.newOwnerId:
+                raise OperationalActionIneligible("Reassign new owner must differ from current owner.", "invalid_transition")
+        return attempt, item, packet, lease
+
+    async def _validate_operational_approval_v1(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequestV1,
+    ) -> OperationalActionApprovalRecord:
+        approval = await session.get(OperationalActionApprovalRecord, payload.approvalId, with_for_update=True)
+        if not approval:
+            raise ValueError("Operational action approval was not found.")
+        if approval.consumed_at is not None:
+            raise ValueError("Operational action approval has already been consumed.")
+        exact_context = payload.actionContext.model_dump(mode="json")
+        if (
+            approval.schema_version != payload.schemaVersion
+            or approval.action_id != payload.actionId
+            or approval.target_type != payload.targetType
+            or approval.target_id != payload.targetId
+            or approval.requested_actor_json != SERVER_OWNED_LOCAL_OPERATOR
+            or approval.requested_authority_family != payload.requestedAuthorityState
+            or approval.requested_risk_tier != payload.requestedRiskTier
+            or approval.action_context_json != exact_context
+            or approval.action_context_digest_sha256 != payload.actionContextDigestSha256
+        ):
+            raise ValueError("Operational action approval does not match the exact v1 action target and context.")
+        if self._ensure_aware(approval.expires_at) <= datetime.now(timezone.utc):
+            raise ValueError("Operational action approval is expired.")
+        return approval
+
+    async def _append_p2_1_operational_events(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequestV1,
+        approval: OperationalActionApprovalRecord,
+        item: WorkItem,
+        packet: AuthoritativeWorkPacket,
+        *,
+        packet_event_id: str,
+        work_event_type: str,
+        work_event_summary: str,
+        success_evidence: dict[str, object],
+        occurred_at: datetime,
+    ) -> None:
+        previous_event_id = packet.current_event_id
+        event_evidence_refs = list(payload.evidenceRefs) + [
+            f"evidence:approval-{approval.approval_id}",
+            f"evidence:{payload.actionId}-context:{payload.actionContextDigestSha256}",
+        ]
+        session.add(
+            AuthoritativeWorkPacketLifecycleEvent(
+                id=packet_event_id,
+                packet_id=packet.id,
+                schema_version=1,
+                event_type="packet.operational_action_applied",
+                previous_stage=packet.current_stage,
+                target_stage=packet.current_stage,
+                status=packet.status,
+                truth_label=packet.truth_label,
+                source_ref_json=dict(packet.source_ref_json or {}),
+                actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
+                correlation_id=payload.correlationId,
+                causation_id=previous_event_id,
+                idempotency_key=f"{payload.idempotencyKey}:packet-event",
+                packet_title=packet.title,
+                parent_packet_id=packet.parent_packet_id,
+                lineage_kind=packet.lineage_kind,
+                ready_to_test_json=packet.ready_to_test_json,
+                operator_test_state=packet.operator_test_state,
+                operator_test_note=packet.operator_test_note,
+                payload_summary=work_event_summary,
+                evidence_refs_json=event_evidence_refs,
+                occurred_at=occurred_at,
+            )
+        )
+        packet_update = await session.execute(
+            update(AuthoritativeWorkPacket)
+            .execution_options(synchronize_session=False)
+            .where(
+                AuthoritativeWorkPacket.id == packet.id,
+                AuthoritativeWorkPacket.current_event_id == previous_event_id,
+            )
+            .values(current_event_id=packet_event_id, updated_at=occurred_at)
+        )
+        if packet_update.rowcount != 1:
+            await session.rollback()
+            raise ValueError("Operational action rejected because packet state changed concurrently.")
+        packet.current_event_id = packet_event_id
+        packet.updated_at = occurred_at
+        item.updated_at = occurred_at
+        item.last_event_at = occurred_at
+        await self._record_event(
+            session,
+            item,
+            work_event_type,
+            work_event_summary,
+            {
+                "actionId": payload.actionId,
+                "targetId": payload.targetId,
+                "packetId": packet.id,
+                "packetEventId": packet_event_id,
+                "state": item.state,
+                "lane": item.lane,
+                "assigneeId": item.assignee_id,
+                "assigneeLabel": item.assignee_label,
+                "idempotencyKey": payload.idempotencyKey,
+                "approvalId": approval.approval_id,
+                "actionContextDigestSha256": payload.actionContextDigestSha256,
+                "sourceRef": dict(packet.source_ref_json or {}),
+                "evidenceRefs": list(payload.evidenceRefs),
+                "successEvidence": success_evidence,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+            actor_type="operator",
+            actor_id=SERVER_OWNED_LOCAL_OPERATOR["actorId"],
+            actor_label=SERVER_OWNED_LOCAL_OPERATOR["actorLabel"],
+            correlation_id=payload.correlationId,
+        )
+
+    def _operational_approval_view_v1(self, approval: OperationalActionApprovalRecord) -> OperationalActionApprovalV1:
+        return OperationalActionApprovalV1(
+            schemaVersion=approval.schema_version,
+            actionId=approval.action_id,
+            targetType=approval.target_type,
+            targetId=approval.target_id,
+            actionContext=approval.action_context_json,
+            actionContextDigestSha256=approval.action_context_digest_sha256,
+            requestedBy=dict(SERVER_OWNED_LOCAL_OPERATOR),
+            requestedAuthorityState=approval.requested_authority_family,
+            requestedRiskTier=approval.requested_risk_tier,
+            serverBound=True,
+            approvalId=approval.approval_id,
+            issuedBy="supervisor_server",
+            issuedAt=approval.issued_at,
+            expiresAt=approval.expires_at,
+            consumed=approval.consumed_at is not None,
+            consumedAt=approval.consumed_at,
+            consumedActionIdempotencyKey=approval.consumed_action_idempotency_key,
+            consumedActionRecordId=approval.consumed_action_record_id,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    def _operational_action_matches_v1(self, record: OperationalActionRecord, payload: OperationalActionRequestV1) -> bool:
+        return (
+            record.schema_version == payload.schemaVersion
+            and record.action_id == payload.actionId
+            and record.target_type == payload.targetType
+            and record.target_id == payload.targetId
+            and record.correlation_id == payload.correlationId
+            and record.actor_json == SERVER_OWNED_LOCAL_OPERATOR
+            and record.requested_authority_state == payload.requestedAuthorityState
+            and record.requested_risk_tier == payload.requestedRiskTier
+            and record.approval_id == payload.approvalId
+            and record.action_context_json == payload.actionContext.model_dump(mode="json")
+            and record.action_context_digest_sha256 == payload.actionContextDigestSha256
+            and list(record.evidence_refs_json or []) == list(payload.evidenceRefs)
+        )
+
+    def _operational_action_result_view_v1(
+        self,
+        record: OperationalActionRecord,
+        *,
+        replayed: bool,
+    ) -> OperationalActionResultV1:
+        return OperationalActionResultV1(
+            schemaVersion=record.schema_version,
+            actionId=record.action_id,
+            targetType=record.target_type,
+            targetId=record.target_id,
+            actionContext=record.action_context_json,
+            actionContextDigestSha256=record.action_context_digest_sha256,
+            outcome=record.outcome,
+            capabilityState=record.capability_state,
+            authorityState=record.authority_state,
+            riskTier=record.requested_risk_tier,
+            typedReason=record.typed_reason,
+            successEvidence=record.success_evidence_json,
+            evidenceRefs=list(record.evidence_refs_json or []),
+            correlationId=record.correlation_id,
+            idempotencyKey=record.idempotency_key,
+            actionRecordId=record.id,
+            approvalId=record.approval_id,
+            replayed=replayed,
+            serverBound=True,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
 
     async def issue_pipeline_operational_approval(
         self,
@@ -3381,11 +3927,18 @@ class SupervisorService:
         packets = list(packet_rows.scalars())
         item_rows = await session.execute(select(WorkItem))
         items = list(item_rows.scalars())
+        retry_intent_rows = await session.execute(
+            select(VerificationRetryIntent).where(VerificationRetryIntent.status == "pending")
+        )
+        pending_verification_retry_count = len(list(retry_intent_rows.scalars()))
         open_statuses = {"active", "waiting", "blocked", "failed"}
         observed = PipelineExecuteAdmissionCountsV0View(
             review=sum(1 for packet in packets if packet.current_stage == "review" and packet.status in open_statuses),
             deliver=sum(1 for packet in packets if packet.current_stage == "deliver" and packet.status in open_statuses),
-            verification=sum(1 for item in items if item.state == WorkflowState.VALIDATING.value),
+            verification=(
+                sum(1 for item in items if item.state == WorkflowState.VALIDATING.value)
+                + pending_verification_retry_count
+            ),
             operatorTesting=sum(
                 1
                 for packet in packets
@@ -3511,7 +4064,10 @@ class SupervisorService:
             )
             action_results_by_packet: dict[str, list[OperationalActionRecord]] = {}
             for action_record in action_result_rows.scalars():
-                if action_record.packet_id:
+                # P2.1 persists additive v1 results, but the v0 dashboard result
+                # shape cannot represent exact execution-attempt targets. Keep
+                # v1 records out of the legacy projection until P3 cutover.
+                if action_record.packet_id and action_record.schema_version == "pipeline-operational-action/v0":
                     action_results_by_packet.setdefault(action_record.packet_id, []).append(action_record)
         except SQLAlchemyError:
             return self._unavailable_pipeline_dashboard_projection(generated_at, stale_after_seconds)

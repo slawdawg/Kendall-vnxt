@@ -147,6 +147,7 @@ class OperationalActionRecord(Base):
     )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(64), default="pipeline-operational-action/v0")
     packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     action_id: Mapped[str] = mapped_column(String(64))
     target_type: Mapped[str] = mapped_column(String(32))
@@ -157,6 +158,8 @@ class OperationalActionRecord(Base):
     requested_authority_state: Mapped[str] = mapped_column(String(40))
     requested_risk_tier: Mapped[str] = mapped_column(String(16))
     expected_current_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    action_context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    action_context_digest_sha256: Mapped[str | None] = mapped_column(String(80), nullable=True)
     approval_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     outcome: Mapped[str] = mapped_column(String(16))
     resulting_stage: Mapped[str] = mapped_column(String(32))
@@ -165,6 +168,7 @@ class OperationalActionRecord(Base):
     authority_state: Mapped[str] = mapped_column(String(40))
     typed_reason: Mapped[str | None] = mapped_column(String(48), nullable=True)
     child_packet_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    success_evidence_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
     operator_intent_summary: Mapped[str] = mapped_column(Text, default="")
     test_result: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -176,6 +180,7 @@ class OperationalActionApprovalRecord(Base):
     __tablename__ = "pipeline_operational_approvals"
 
     approval_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(64), default="pipeline-operational-action/v0")
     action_id: Mapped[str] = mapped_column(String(64))
     target_type: Mapped[str] = mapped_column(String(32))
     target_id: Mapped[str] = mapped_column(String(120))
@@ -183,11 +188,38 @@ class OperationalActionApprovalRecord(Base):
     requested_authority_family: Mapped[str] = mapped_column(String(40))
     requested_risk_tier: Mapped[str] = mapped_column(String(16))
     expected_current_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    action_context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    action_context_digest_sha256: Mapped[str | None] = mapped_column(String(80), nullable=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consumed_action_idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
     consumed_action_record_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
+class VerificationRetryIntent(Base):
+    """Metadata-only verification queue intent; never an execution/launch record."""
+
+    __tablename__ = "verification_retry_intents"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_verification_retry_intent_idempotency"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    original_attempt_id: Mapped[str] = mapped_column(ForeignKey("execution_attempts.id"))
+    work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"))
+    packet_id: Mapped[str] = mapped_column(ForeignKey("authoritative_work_packets.id"))
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    correlation_id: Mapped[str] = mapped_column(String(120))
+    approval_id: Mapped[str] = mapped_column(String(120))
+    actor_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_ref_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    expected_lease_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    expected_lease_fencing_token: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider_or_worker_launched: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ExecutionAttempt(Base):

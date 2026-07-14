@@ -71,6 +71,16 @@ POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
     ("child_packet_id", "VARCHAR(80)"),
     ("expected_current_event_id", "VARCHAR(80)"),
     ("approval_id", "VARCHAR(120)"),
+    ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+    ("action_context_json", "JSON"),
+    ("action_context_digest_sha256", "VARCHAR(80)"),
+    ("success_evidence_json", "JSON"),
+)
+
+POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+    ("action_context_json", "JSON"),
+    ("action_context_digest_sha256", "VARCHAR(80)"),
 )
 
 
@@ -215,6 +225,13 @@ async def init_db() -> None:
                         f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
                     )
                 )
+            for column_name, column_type in POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS:
+                await connection.execute(
+                    text(
+                        "ALTER TABLE pipeline_operational_approvals "
+                        f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                    )
+                )
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
             result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
@@ -299,6 +316,32 @@ async def init_db() -> None:
                 await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN expected_current_event_id VARCHAR(80)"))
             if "approval_id" not in action_columns:
                 await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN approval_id VARCHAR(120)"))
+            if "schema_version" not in action_columns:
+                await connection.execute(
+                    text(
+                        "ALTER TABLE pipeline_operational_action_records ADD COLUMN schema_version "
+                        "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"
+                    )
+                )
+            if "action_context_json" not in action_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN action_context_json JSON"))
+            if "action_context_digest_sha256" not in action_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN action_context_digest_sha256 VARCHAR(80)"))
+            if "success_evidence_json" not in action_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN success_evidence_json JSON"))
+            result = await connection.execute(text("PRAGMA table_info(pipeline_operational_approvals)"))
+            approval_columns = {row[1] for row in result.fetchall()}
+            if "schema_version" not in approval_columns:
+                await connection.execute(
+                    text(
+                        "ALTER TABLE pipeline_operational_approvals ADD COLUMN schema_version "
+                        "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"
+                    )
+                )
+            if "action_context_json" not in approval_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_approvals ADD COLUMN action_context_json JSON"))
+            if "action_context_digest_sha256" not in approval_columns:
+                await connection.execute(text("ALTER TABLE pipeline_operational_approvals ADD COLUMN action_context_digest_sha256 VARCHAR(80)"))
             await _ensure_sqlite_memory_proposals_schema(connection)
 
 

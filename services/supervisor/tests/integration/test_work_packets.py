@@ -5689,10 +5689,22 @@ def test_existing_sqlite_action_schema_gets_approval_migration_and_ledger_table(
     db_path = _db_path(tmp_path, db_name)
     with sqlite3.connect(db_path) as conn:
         conn.execute("create table pipeline_operational_action_records (id varchar(80) primary key)")
+        conn.execute("create table pipeline_operational_approvals (approval_id varchar(120) primary key)")
         conn.commit()
     with _client(tmp_path, monkeypatch, db_name):
-        assert "approval_id" in _sqlite_table_columns(db_path, "pipeline_operational_action_records")
-        assert "pipeline_operational_approvals" in _sqlite_tables(db_path)
+        assert {
+            "approval_id",
+            "schema_version",
+            "action_context_json",
+            "action_context_digest_sha256",
+            "success_evidence_json",
+        }.issubset(_sqlite_table_columns(db_path, "pipeline_operational_action_records"))
+        assert {
+            "schema_version",
+            "action_context_json",
+            "action_context_digest_sha256",
+        }.issubset(_sqlite_table_columns(db_path, "pipeline_operational_approvals"))
+        assert "verification_retry_intents" in _sqlite_tables(db_path)
 
 
 def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_coverage(tmp_path, monkeypatch) -> None:
@@ -5701,12 +5713,24 @@ def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_co
     source_text = database_source.read_text(encoding="utf-8")
     assert "ADD COLUMN IF NOT EXISTS {column_name} {column_type}" in source_text
 
-    from supervisor.infrastructure.db.database import POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS
+    from supervisor.infrastructure.db.database import (
+        POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS,
+        POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS,
+    )
 
     assert POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS == (
         ("child_packet_id", "VARCHAR(80)"),
         ("expected_current_event_id", "VARCHAR(80)"),
         ("approval_id", "VARCHAR(120)"),
+        ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+        ("action_context_json", "JSON"),
+        ("action_context_digest_sha256", "VARCHAR(80)"),
+        ("success_evidence_json", "JSON"),
+    )
+    assert POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS == (
+        ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+        ("action_context_json", "JSON"),
+        ("action_context_digest_sha256", "VARCHAR(80)"),
     )
 
     database_url = os.getenv("SUPERVISOR_POSTGRES_TEST_DATABASE_URL")

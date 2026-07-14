@@ -19,7 +19,9 @@ from supervisor.api.schemas import (
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
+    OperationalActionRequestV1,
     OperationalActionApprovalRequest,
+    OperationalActionApprovalRequestV1,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     PipelineEpic25EvidenceChainIngestRequest,
@@ -301,6 +303,45 @@ async def issue_pipeline_operational_approval(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_approval").model_dump()) from exc
     return ApiEnvelope(data=approval)
+
+
+@app.post("/pipeline-control-plane/actions/v1/capability", response_model=ApiEnvelope)
+async def pipeline_operational_action_capability_v1(
+    payload: OperationalActionApprovalRequestV1,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        capability = await service.pipeline_operational_action_capability_v1(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_action_v1").model_dump()) from exc
+    return ApiEnvelope(data=capability)
+
+
+@app.post("/pipeline-control-plane/approvals/v1", response_model=ApiEnvelope)
+async def issue_pipeline_operational_approval_v1(
+    payload: OperationalActionApprovalRequestV1,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        approval = await service.issue_pipeline_operational_approval_v1(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_approval_v1").model_dump()) from exc
+    return ApiEnvelope(data=approval)
+
+
+@app.post("/pipeline-control-plane/actions/v1", response_model=ApiEnvelope)
+async def apply_pipeline_operational_action_v1(
+    payload: OperationalActionRequestV1,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await service.apply_pipeline_operational_action_v1(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_action_v1", payload.correlationId).model_dump()) from exc
+    return ApiEnvelope(data=result)
 
 
 @app.post("/manager-control-plane/terminal-events", response_model=ApiEnvelope)
