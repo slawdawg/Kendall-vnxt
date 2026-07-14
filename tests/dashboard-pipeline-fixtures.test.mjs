@@ -626,6 +626,24 @@ test("selected projection details reject synthetic and blank nested references",
   ordinaryText.selectedPacketDetails[0].evidenceRefs = ["event:runtime fixture:legacy wording"];
   ordinaryText.workPackets[0].evidenceRefs = [...ordinaryText.selectedPacketDetails[0].evidenceRefs];
   assert.equal(projectionModule.isPipelineDashboardProjection(ordinaryText), true);
+
+  const sourceStateProjection = structuredClone(cleanProjection);
+  sourceStateProjection.sourceStates = [{
+    sourceId: "source:live",
+    sourceRef: "ref:live",
+    sourceKind: "obsidian",
+    state: "stale",
+    summary: "Live source state.",
+    evidenceRefs: [],
+    updatedAt: cleanProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }];
+  assert.equal(projectionModule.isPipelineDashboardProjection(sourceStateProjection), true);
+  for (const [label, field] of [["fixture source id", "sourceId"], ["demo source ref", "sourceRef"]]) {
+    const candidate = structuredClone(sourceStateProjection);
+    candidate.sourceStates[0][field] = label.includes("fixture") ? "fixture:stale-source" : "demo:blocked-source";
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
 });
 
 test("projection counts reject contradictory active and empty states while preserving unknown counts", async () => {
@@ -2756,6 +2774,37 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "mutation edge should remain explicitly capability-gated",
     );
     assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        'export const getCandidateWork = () => requestJson("/candidate-work");',
+        'export { getWorkPackets as getOtherPackets };',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const unapprovedRuntimeExportRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(unapprovedRuntimeExportRun.status, 1);
+    assert.match(unapprovedRuntimeExportRun.stderr, /only the approved read-only runtime functions may be exported/);
+    assert.match(unapprovedRuntimeExportRun.stderr, /getCandidateWork/);
+    assert.match(unapprovedRuntimeExportRun.stderr, /getOtherPackets/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),

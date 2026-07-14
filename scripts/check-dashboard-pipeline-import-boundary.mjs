@@ -321,12 +321,17 @@ function checkForbiddenCalls(displayPath, source) {
 }
 
 function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
-  const exportedFunctions = [...source.matchAll(/\bexport\s+async\s+function\s+(\w+)\b/g)].map((match) => match[1]);
+  const exportedFunctions = extractRuntimeExportNames(source);
+  const unexpectedExports = exportedFunctions.filter((exportName) => !readOnlyPipelineRuntimeFunctions.includes(exportName));
   if (
     exportedFunctions.length !== readOnlyPipelineRuntimeFunctions.length ||
-    exportedFunctions.some((functionName) => !readOnlyPipelineRuntimeFunctions.includes(functionName))
+    unexpectedExports.length > 0 ||
+    readOnlyPipelineRuntimeFunctions.some((functionName) => !exportedFunctions.includes(functionName))
   ) {
-    failures.push(`${displayPath}: only the approved read-only runtime functions may be exported`);
+    failures.push(
+      `${displayPath}: only the approved read-only runtime functions may be exported` +
+      (unexpectedExports.length > 0 ? ` (unapproved: ${unexpectedExports.join(", ")})` : ""),
+    );
   }
   const requestJsonSource = extractFunctionSource(source, "requestJson");
   if (!requestJsonSource) {
@@ -367,6 +372,26 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
       failures.push(`${displayPath}: approved endpoint mismatch for ${functionName}`);
     }
   }
+}
+
+function extractRuntimeExportNames(source) {
+  const exportNames = [];
+  for (const match of source.matchAll(/\bexport\s+(?:async\s+)?(?:function|const|let|var|class)\s+(\w+)\b/g)) {
+    exportNames.push(match[1]);
+  }
+  for (const match of source.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
+    for (const specifier of match[1].split(",")) {
+      const tokens = specifier.trim().split(/\s+as\s+/);
+      const exportName = tokens.at(-1)?.trim();
+      if (exportName) {
+        exportNames.push(exportName);
+      }
+    }
+  }
+  if (/\bexport\s+default\b/.test(source)) {
+    exportNames.push("default");
+  }
+  return exportNames;
 }
 
 function extractFunctionSource(source, functionName) {

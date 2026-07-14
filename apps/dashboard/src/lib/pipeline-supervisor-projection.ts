@@ -1023,8 +1023,8 @@ function isProjectionSourceState(value: unknown) {
   }
   const sourceState = value as PipelineDashboardProjectionV0["sourceStates"][number];
   return (
-    typeof sourceState.sourceId === "string" &&
-    typeof sourceState.sourceRef === "string" &&
+    isSafeReferenceString(sourceState.sourceId) &&
+    isSafeReferenceString(sourceState.sourceRef) &&
     projectionSourceKinds.has(sourceState.sourceKind) &&
     projectionSourceStates.has(sourceState.state) &&
     typeof sourceState.summary === "string" &&

@@ -194,6 +194,7 @@ function deleteSupervisorPipelinePacket(packetId: string) {
     "db_path = sys.argv[1]",
     "packet_id = sys.argv[2]",
     "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"delete from authoritative_work_packet_lifecycle_events where packet_id = ?\", (packet_id,))",
     "conn.execute(\"delete from authoritative_work_packets where id = ?\", (packet_id,))",
     "conn.commit()",
     "remaining = conn.execute(\"select 1 from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
@@ -201,25 +202,6 @@ function deleteSupervisorPipelinePacket(packetId: string) {
     "conn.close()",
   ].join("; ");
   execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], { cwd: process.cwd(), encoding: "utf8" });
-}
-
-function deleteSupervisorPipelinePacket(packetId: string) {
-  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
-  expect(dbPath).toBeTruthy();
-  const script = [
-    "import sqlite3, sys",
-    "db_path = sys.argv[1]",
-    "packet_id = sys.argv[2]",
-    "conn = sqlite3.connect(db_path)",
-    "conn.execute(\"delete from authoritative_work_packet_lifecycle_events where packet_id = ?\", (packet_id,))",
-    "conn.execute(\"delete from authoritative_work_packets where id = ?\", (packet_id,))",
-    "conn.commit()",
-    "conn.close()",
-  ].join("; ");
-  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
 }
 
 async function getWorkItem(request: APIRequestContext, workItemId: string) {
