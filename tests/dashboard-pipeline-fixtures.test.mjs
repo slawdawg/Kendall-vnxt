@@ -668,6 +668,34 @@ test("projection counts reject contradictory active and empty states while prese
   };
   assert.equal(projectionModule.isPipelineDashboardProjection(emptyProjection), true);
 
+  const approvalRequiredProjection = structuredClone(emptyProjection);
+  approvalRequiredProjection.truthSummary = {
+    ...approvalRequiredProjection.truthSummary,
+    emptyReason: "approval_required",
+  };
+  approvalRequiredProjection.queueSummary = {
+    ...approvalRequiredProjection.queueSummary,
+    gatedCount: 1,
+    emptyReason: "approval_required",
+  };
+  approvalRequiredProjection.managerSummary = {
+    ...approvalRequiredProjection.managerSummary,
+    reliabilityState: "waiting_for_approval",
+    gatedSourceCount: 1,
+    inactivityReason: "approval_required",
+  };
+  approvalRequiredProjection.sourceStates = [{
+    sourceId: "source:approval-required",
+    sourceRef: "ref:approval-required",
+    sourceKind: "obsidian",
+    state: "gated",
+    summary: "Source access is waiting for operator approval.",
+    evidenceRefs: [],
+    updatedAt: approvalRequiredProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }];
+  assert.equal(projectionModule.isPipelineDashboardProjection(approvalRequiredProjection), true);
+
   const unknownCounts = structuredClone(emptyProjection);
   for (const field of ["activeCount", "dispatchableCount", "blockedCount", "gatedCount", "closedCount", "staleCount", "refillingCount", "unknownCount"]) {
     unknownCounts.queueSummary[field] = null;

@@ -394,8 +394,8 @@ function isLiveProjectionRenderable(projection: Partial<PipelineDashboardProject
   return projectionHasOpenPacket(projection) || (
     projection.workPackets.length === 0 &&
     projection.truthSummary?.backendEmpty === true &&
-    ["healthy_empty", "blocked", "refilling"].includes(projection.truthSummary.emptyReason || "") &&
-    (!["blocked", "refilling"].includes(projection.truthSummary.emptyReason || "") || projection.queueSummary?.emptyReason === projection.truthSummary.emptyReason)
+    ["healthy_empty", "blocked", "refilling", "approval_required"].includes(projection.truthSummary.emptyReason || "") &&
+    (!["blocked", "refilling", "approval_required"].includes(projection.truthSummary.emptyReason || "") || projection.queueSummary?.emptyReason === projection.truthSummary.emptyReason)
   ) || (
     projection.workPackets.length === 0 &&
     projection.truthSummary?.backendEmpty === true &&
