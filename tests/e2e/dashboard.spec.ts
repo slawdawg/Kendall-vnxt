@@ -194,6 +194,7 @@ function deleteSupervisorPipelinePacket(packetId: string) {
     "db_path = sys.argv[1]",
     "packet_id = sys.argv[2]",
     "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"delete from authoritative_work_packet_lifecycle_events where packet_id = ?\", (packet_id,))",
     "conn.execute(\"delete from authoritative_work_packets where id = ?\", (packet_id,))",
     "conn.commit()",
     "remaining = conn.execute(\"select 1 from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
@@ -712,8 +713,8 @@ test.describe("dashboard workflow coverage", () => {
   test("Story 4.6 runtime packet keeps identity and survives refresh", async ({ page, request }) => {
     const packetId = `story-4-6-runtime:${Date.now()}`;
     const title = "Story 4.6 persisted supervisor runtime packet";
-    await seedSupervisorPipelinePacket(request, packetId, title);
     try {
+      await seedSupervisorPipelinePacket(request, packetId, title);
       await page.goto("/pipeline");
       const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
       await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
@@ -755,9 +756,10 @@ test.describe("dashboard workflow coverage", () => {
 
   test("Story 4.6 stale runtime projection fails closed without fixture substitution", async ({ page, request }) => {
     const packetId = `story-4-6-stale:${Date.now()}`;
-    await seedSupervisorPipelinePacket(request, packetId, "Story 4.6 stale supervisor packet", "complete");
-    const snapshot = readSupervisorPipelinePacket(packetId);
+    let snapshot: SupervisorPipelinePacketSnapshot | null = null;
     try {
+      await seedSupervisorPipelinePacket(request, packetId, "Story 4.6 stale supervisor packet", "complete");
+      snapshot = readSupervisorPipelinePacket(packetId);
       const staleMutation = ageSupervisorPipelinePacket(packetId, snapshot);
       await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(staleMutation.mutated);
       await page.goto("/pipeline");
@@ -774,8 +776,12 @@ test.describe("dashboard workflow coverage", () => {
         expect(staleBody).not.toContain(fixtureSentinel);
       }
     } finally {
-      restoreSupervisorPipelinePacket(packetId, snapshot);
-      await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(snapshot);
+      if (snapshot) {
+        restoreSupervisorPipelinePacket(packetId, snapshot);
+        await expect.poll(() => readSupervisorPipelinePacket(packetId)).toEqual(snapshot);
+      } else {
+        deleteSupervisorPipelinePacket(packetId);
+      }
     }
   });
 

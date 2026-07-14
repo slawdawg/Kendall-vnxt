@@ -2844,7 +2844,37 @@ function loadDashboardSupervisorModule(source) {
   }).outputText;
   let projectionPayload = projectionContractFixture();
   let projectionEnvelope = { data: projectionPayload };
+  let workPacketsPayload = [];
   let responseOk = true;
+  const runtimeRequestJson = async (path) => {
+    const expectedUrl = path === "/pipeline-control-plane/projection"
+      ? "http://supervisor.test/pipeline-control-plane/projection"
+      : path === "/work-packets"
+        ? "http://supervisor.test/work-packets"
+        : /^\/work-packets\/[^/]+$/.test(path)
+          ? `http://supervisor.test${path}`
+          : null;
+    assert.ok(expectedUrl, `unexpected runtime read path ${path}`);
+    const envelope = path === "/pipeline-control-plane/projection"
+      ? projectionEnvelope
+      : path === "/work-packets"
+        ? { data: workPacketsPayload }
+        : { data: workPacketsPayload[0] ?? null };
+    const response = {
+      ok: responseOk,
+      async json() {
+        return envelope;
+      },
+    };
+    if (!response.ok) {
+      throw new Error(`Request failed for ${path} (${response.status})`);
+    }
+    const payload = await response.json();
+    if (!payload || !("data" in payload)) {
+      throw new Error(`Malformed response for ${path}`);
+    }
+    return payload.data;
+  };
   const context = {
     exports: {},
     module: { exports: {} },
@@ -2864,6 +2894,13 @@ function loadDashboardSupervisorModule(source) {
       };
     },
     require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-runtime") {
+        return {
+          getPipelineDashboardProjection: () => runtimeRequestJson("/pipeline-control-plane/projection"),
+          getWorkPacket: (packetId) => runtimeRequestJson(`/work-packets/${encodeURIComponent(packetId)}`),
+          getWorkPackets: () => runtimeRequestJson("/work-packets"),
+        };
+      }
       if (specifier === "@kendall/contracts") {
         return {
           AUTHORITATIVE_PACKET_STAGES: [
@@ -2895,6 +2932,7 @@ function loadDashboardSupervisorModule(source) {
     setProjectionPayload(nextProjectionPayload) {
       projectionPayload = nextProjectionPayload;
       projectionEnvelope = { data: projectionPayload };
+      workPacketsPayload = Array.isArray(nextProjectionPayload.workPackets) ? nextProjectionPayload.workPackets : [];
       responseOk = true;
     },
     setResponseOk(nextResponseOk) {

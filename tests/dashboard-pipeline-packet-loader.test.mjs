@@ -10,6 +10,7 @@ import vm from "node:vm";
 
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 const loaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
+const runtimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
 const detailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
 const detailComponentPath = new URL("../apps/dashboard/src/components/pipeline/packet-detail-page.tsx", import.meta.url);
 const normalRoutePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
@@ -255,6 +256,9 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
         cleanupApproved: false,
       },
     }],
+    ["delivery pull request URL", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestUrl: "fixture:pr" },
+    }],
     ["learn evidence", { learnOutcome: { ...learnOutcome, evidenceRefs: ["fixture:nested-learn-evidence"] } }],
     ["learn source", { learnOutcome: { ...learnOutcome, sourceRefs: ["fixture:nested-learn-source"] } }],
     ["learn decision evidence", {
@@ -297,6 +301,13 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
         detail: { fixtureId: "ordinary-looking-value" },
       },
     }],
+    ["nested case-variant fixture id discriminator", {
+      routeSummary: {
+        recommendation: "capture",
+        reasonCodes: ["route.capture"],
+        detail: { FixtureID: "ordinary-looking-value" },
+      },
+    }],
     ["nested fixture kind discriminator", {
       reviewSummaries: [{ ...reviewSummary, detail: { fixtureKind: "future-real-source" } }],
     }],
@@ -306,14 +317,26 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
     ["nested demo source kind discriminator", {
       learnOutcome: { ...learnOutcome, detail: { sourceKind: "demo-fixture" } },
     }],
+    ["nested case-normalized demo source kind discriminator", {
+      learnOutcome: { ...learnOutcome, detail: { SourceKind: "DEMO-FIXTURE" } },
+    }],
     ["nested fixture evidence type discriminator", {
       learnRefill: { ...learnRefill, detail: { evidenceType: "fixture" } },
+    }],
+    ["nested case-normalized fixture evidence type discriminator", {
+      learnRefill: { ...learnRefill, detail: { EvidenceType: "FIXTURE" } },
     }],
     ["nested fixture retention discriminator", {
       gateStateValidation: { ...authoritativeGateStateValidation(), detail: { retentionClass: "fixture" } },
     }],
+    ["nested case-normalized fixture retention discriminator", {
+      gateStateValidation: { ...authoritativeGateStateValidation(), detail: { RetentionClass: "FIXTURE" } },
+    }],
     ["nested fixture artifact type discriminator", {
       humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { artifactType: "fixture" } }],
+    }],
+    ["nested case-normalized fixture artifact type discriminator", {
+      humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { ArtifactType: "FIXTURE" } }],
     }],
   ];
 
@@ -333,6 +356,10 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
       ...packet,
       reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
       humanGateActions: [{ ...authoritativeHumanGateAction(), label: "Discuss fixture:legacy wording" }],
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        detail: { label: "Operator label mentions fixture:legacy text" },
+      },
       learnRefill: { ...learnRefill, nextSafeAction: "Document fixture:legacy as ordinary text." },
     }],
   });
@@ -465,6 +492,191 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   assert.equal(valid.fixtureMode.kind, "runtime");
   assert.equal(valid.packets.length, 1);
 
+  const proseOnlySources = structuredClone(optionalSources);
+  proseOnlySources.candidateWork.sourceSummary.label = "Operator label mentions fixture:legacy text";
+  proseOnlySources.workItem.executionRecipe.label = "Review fixture:legacy wording";
+  proseOnlySources.taskPacket.verificationSummary = "Document fixture:legacy as ordinary prose.";
+  proseOnlySources.routingPreview.decision.humanExplanation = "The label fixture:legacy is not provenance.";
+  const proseOnlyLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, ...proseOnlySources }],
+  });
+  const proseOnly = await proseOnlyLoader.loadPipelineCockpitPackets();
+  assert.equal(proseOnly.fixtureMode.kind, "runtime");
+  assert.equal(proseOnly.packets.length, 1);
+
+  const nestedPacketCollections = authoritativeNestedWorkPacketCollections(packet.packetId);
+  const nestedSyntheticProvenanceCases = [
+    ["allowed inputs", {
+      routingPreview: { ...optionalSources.routingPreview, detail: { allowedInputs: ["fixture:nested-input"] } },
+    }],
+    ["targetVaultFolder", {
+      memoryProposals: [{ ...nestedPacketCollections.memoryProposals[0], targetVaultFolder: "fixture:nested-folder" }],
+    }],
+    ["branchPrefix", {
+      workItem: {
+        ...optionalSources.workItem,
+        executionRecipe: { ...optionalSources.workItem.executionRecipe, branchPrefix: "fixture:nested-branch-prefix" },
+      },
+    }],
+    ["derivedTargetFolder", {
+      alphaMemorySourceStatus: {
+        ...authoritativeAlphaMemorySourceStatus(),
+        llmWikiReadiness: authoritativeLlmWikiReadiness({
+          rebuildPreview: { derivedTargetFolder: "fixture:nested-derived-folder" },
+        }),
+      },
+    }],
+    ["disposableTargetNamespace", {
+      alphaMemorySourceStatus: {
+        ...authoritativeAlphaMemorySourceStatus(),
+        llmWikiReadiness: authoritativeLlmWikiReadiness({
+          rebuildDryRunPlan: authoritativeLlmWikiRebuildDryRunPlan({
+            disposableTargetNamespace: "fixture:nested-dry-run-namespace",
+          }),
+        }),
+      },
+    }],
+    ["reference array object member", {
+      alphaMemorySourceStatus: {
+        ...authoritativeAlphaMemorySourceStatus(),
+        llmWikiReadiness: authoritativeLlmWikiReadiness({
+          rebuildPreview: { inputRefs: [{ refId: "fixture:nested-input-ref" }] },
+        }),
+      },
+    }],
+    ["backupPath", {
+      alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), backupPath: "demo:nested-backup" },
+    }],
+    ["rollbackPath", {
+      alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), rollbackPath: "fixture:nested-rollback" },
+    }],
+    ["expectedPr", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedPr: "demo:nested-pr" }),
+      },
+    }],
+    ["expectedWorktree", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedWorktree: "fixture:nested-worktree" }),
+      },
+    }],
+    ["expectedOwner", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedOwner: "fixture:nested-owner" }),
+      },
+    }],
+    ["expectedLocalBranch", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedLocalBranch: "fixture:nested-local-branch" }),
+      },
+    }],
+    ["expectedRemoteBranch", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedRemoteBranch: "fixture:nested-remote-branch" }),
+      },
+    }],
+    ["expectedHeadRevision", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedHeadRevision: "fixture:nested-head-revision" }),
+      },
+    }],
+    ["delivery target branch", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), targetBranch: "fixture:nested-target-branch" },
+    }],
+    ["delivery base branch", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), baseBranch: "fixture:nested-base-branch" },
+    }],
+    ["delivery pull request head revision", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestHeadRevision: "fixture:nested-pr-head" },
+    }],
+    ["delivery evidence identity", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), evidenceId: "fixture:nested-delivery-id" },
+    }],
+    ["delivery gate evidence", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        mergeGate: {
+          status: "blocked",
+          lowRiskReady: false,
+          criteria: [{
+            criterionId: "criterion:delivery",
+            label: "Delivery criterion",
+            status: "blocked",
+            evidence: ["fixture:nested-gate-evidence"],
+            blockedReason: null,
+          }],
+          blockedReasons: [],
+          recoveryPath: "Return to delivery review.",
+          metadataOnly: true,
+          mergeApproved: false,
+        },
+      },
+    }],
+    ["cleanupTarget", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), cleanupTarget: "demo:nested-cleanup" },
+    }],
+    ["lowercase url", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { url: "fixture:nested-url" } } }],
+    ["uppercase URI", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { URI: "demo:nested-uri" } } }],
+    ["uppercase HREF", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { HREF: "fixture:nested-href" } } }],
+  ];
+  for (const [label, overrides] of nestedSyntheticProvenanceCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const whitespaceProvenanceCases = [
+    ["lifecycle latest transition event reference", { lifecycleState: { ...packet.lifecycleState, latestTransitionEventRef: " \t " } }],
+    ["lifecycle attempt reference", { lifecycleState: { ...packet.lifecycleState, attemptRef: "  " } }],
+    ["delivery pull request URL", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestUrl: " \t " } }],
+    ["delivery expected head revision", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), expectedHeadRevision: "  " } }],
+    ["delivery cleanup target", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), cleanupTarget: "\t" } }],
+    ["cleanup expected head revision", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedHeadRevision: "  " }),
+      },
+    }],
+  ];
+  for (const [label, overrides] of whitespaceProvenanceCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const nullableDeliveryLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{
+      ...packet,
+      ...optionalSources,
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        pullRequestUrl: null,
+        expectedHeadRevision: null,
+        cleanupTarget: null,
+        cleanupDryRunGate: authoritativeCleanupDryRunGate(),
+      },
+    }],
+  });
+  const nullableDelivery = await nullableDeliveryLoader.loadPipelineCockpitPackets();
+  assert.equal(nullableDelivery.fixtureMode.kind, "runtime");
+  assert.equal(nullableDelivery.packets.length, 1);
+
   const lifecycleCases = [
     ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
     ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],
@@ -487,11 +699,19 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   const optionalSourceCases = [
     ["candidate required field", { candidateWork: { ...candidateWork, title: null } }],
     ["candidate source enum", { candidateWork: { ...candidateWork, source: "runtime_fixture" } }],
+    ["candidate source artifact path", { candidateWork: { ...candidateWork, sourceArtifactPath: "fixture:candidate-source" } }],
     ["candidate source summary", {
       candidateWork: { ...candidateWork, sourceSummary: { ...candidateWork.sourceSummary, evidenceRefs: [null] } },
     }],
+    ["candidate summary source artifact path", {
+      candidateWork: {
+        ...candidateWork,
+        sourceSummary: { ...candidateWork.sourceSummary, sourceArtifactPath: "demo:candidate-summary-source" },
+      },
+    }],
     ["candidate import metadata", { candidateWork: { ...candidateWork, importMetadata: [] } }],
     ["work item workflow state", { workItem: { ...workItem, state: "active" } }],
+    ["work item source", { workItem: { ...workItem, source: "fixture:work-item-source" } }],
     ["work item metadata value", { workItem: { ...workItem, metadata: { nested: { unsafe: true } } } }],
     ["work item recipe", {
       workItem: {
@@ -505,12 +725,34 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
     ["work item delivery readiness", {
       workItem: { ...workItem, deliveryReadiness: { ...workItem.deliveryReadiness, readyForApproval: "yes" } },
     }],
+    ["work item recipe allowed path", {
+      workItem: {
+        ...workItem,
+        executionRecipe: { ...workItem.executionRecipe, allowedPaths: ["demo:work-item-path"] },
+      },
+    }],
     ["task packet required field", { taskPacket: { ...taskPacket, verificationSummary: undefined } }],
+    ["task packet source", { taskPacket: { ...taskPacket, source: "fixture:task-packet-source" } }],
+    ["task packet source artifact path", {
+      taskPacket: { ...taskPacket, sourceArtifactPath: "demo:task-packet-source" },
+    }],
     ["routing profile paths", {
       routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: null } },
     }],
+    ["routing profile synthetic path", {
+      routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: ["fixture:routing-path"] } },
+    }],
     ["routing decision profile snapshot", {
       routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, profileSnapshot: null } },
+    }],
+    ["routing decision snapshot synthetic path", {
+      routingPreview: {
+        ...routingPreview,
+        decision: {
+          ...routingPreview.decision,
+          profileSnapshot: { ...routingPreview.decision.profileSnapshot, allowedPaths: ["demo:routing-snapshot-path"] },
+        },
+      },
     }],
     ["routing rejected lane", {
       routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, rejectedLanes: [null] } },
@@ -802,6 +1044,49 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoRouteSource, /label: "Demo fixtures"/);
   assert.match(demoDetailRouteSource, /sourceKind: "demo-fixture"/);
   assert.match(demoDetailRouteSource, /cannot satisfy live proof or invoke supervisor authority/);
+});
+
+test("dedicated runtime aborts a stalled supervisor read", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+    clearTimeout() {},
+    AbortController,
+    fetch: async (_url, options) => {
+      assert.equal(options.cache, "no-store");
+      assert.equal(options.signal.aborted, true);
+      throw new Error("aborted");
+    },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return {
+          normalizePipelineDashboardProjection: (projection) => projection,
+          isPipelineDashboardProjection: () => true,
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Request timed out for \/work-packets/,
+  );
 });
 
 function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {
@@ -1307,6 +1592,98 @@ function authoritativeDeliveryEvidence() {
   };
 }
 
+function authoritativeCleanupDryRunGate(overrides = {}) {
+  return {
+    status: "blocked",
+    dryRunMatchesPolicy: false,
+    expectedPr: null,
+    expectedOwner: null,
+    expectedWorktree: null,
+    expectedLocalBranch: null,
+    expectedRemoteBranch: null,
+    expectedHeadRevision: null,
+    blockedReasons: [],
+    recoveryPath: "Return to cleanup review.",
+    metadataOnly: true,
+    cleanupApproved: false,
+    ...overrides,
+  };
+}
+
+function authoritativeAlphaMemorySourceStatus() {
+  return {
+    statusId: "memory-source-status:authoritative",
+    authorityFamily: "memory-writeback-and-source-mutation",
+    operationMode: "read_only",
+    decisionState: "ready",
+    retentionClass: "metadata_only",
+    sourceRefs: ["doc:source"],
+    targetMetadata: { label: "Operator memory target" },
+    backupPath: "docs/memory-backup.md",
+    rollbackPath: "docs/memory-rollback.md",
+    auditEventSummary: "Metadata-only memory source status.",
+    blockedReasons: [],
+    recoveryOptions: ["Return to memory review."],
+    evidenceRefs: ["event:created"],
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubCallsAllowed: false,
+    networkEgressAllowed: false,
+  };
+}
+
+function authoritativeLlmWikiReadiness(overrides = {}) {
+  return {
+    statusId: "llm-wiki-readiness:authoritative",
+    operationMode: "read_only",
+    decisionState: "ready",
+    canonicality: "derived_disposable_rebuildable",
+    retentionClass: "metadata_only",
+    sourceRefs: ["doc:source"],
+    evidenceRefs: ["event:created"],
+    memoryProposalRefs: ["memory-proposal:authoritative"],
+    allowedInputs: ["doc:source"],
+    blockedReasons: [],
+    nextActions: ["Review derived readiness."],
+    boundarySummary: "Derived read-only readiness metadata.",
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    durableWriteAllowed: false,
+    ...overrides,
+  };
+}
+
+function authoritativeLlmWikiRebuildDryRunPlan(overrides = {}) {
+  return {
+    planId: "llm-wiki-rebuild-dry-run-plan:authoritative",
+    operationMode: "dry_run",
+    inputRefs: ["doc:source"],
+    memoryProposalRefs: ["memory-proposal:authoritative"],
+    plannedDerivedSections: ["approved-memory-proposals"],
+    disposableTargetNamespace: "derived://llm-wiki/dry-run/authoritative",
+    derivedTargetFolder: "llm-wiki/derived",
+    freshness: "fresh",
+    rebuildBasis: ["approved-memory-proposals"],
+    retentionClass: "metadata_only",
+    stopLines: ["Do not write the canonical source."],
+    discardRecoveryPath: "Discard the derived dry-run plan and return to review.",
+    auditEventSummary: "Metadata-only derived rebuild plan.",
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubCallsAllowed: false,
+    networkEgressAllowed: false,
+    durableWriteAllowed: false,
+    writePerformed: false,
+    backupCreated: false,
+    ...overrides,
+  };
+}
+
 function authoritativeLearnOutcome() {
   return {
     outcomeId: "learn-outcome:authoritative",
@@ -1456,7 +1833,7 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides) {
         vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
         return projectorContext.module.exports;
       }
-      if (specifier === "./supervisor") return supervisor;
+      if (specifier === "./pipeline-supervisor-runtime") return supervisor;
       throw new Error(`Unexpected loader import: ${specifier}`);
     },
   };

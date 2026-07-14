@@ -118,6 +118,7 @@ const memoryProposalStatuses = new Set([
 const memoryProposalTypes = new Set(["new_note", "append_note", "link_notes", "tag_update", "decision_record", "error_book_entry", "user_facing_documentation"]);
 const memoryProposalSensitivities = new Set(["low", "medium", "high"]);
 const memoryProposalFreshnessValues = new Set(["fresh", "stale", "conflicting", "unknown"]);
+const llmWikiRebuildBasisValues = new Set(["approved-memory-proposals", "source-evidence-crosswalk"]);
 const memoryProposalContradictionStatuses = new Set(["none", "possible", "confirmed"]);
 const memoryProposalConfidenceValues = new Set(["low", "medium", "high"]);
 const memoryProposalOperatorActions = new Set(["approve", "edit", "reject", "defer", "blocked"]);
@@ -152,6 +153,33 @@ const lifecycleSources = new Set<WorkPacketLifecycleSourceV0>([
   "memory_proposal",
   "delivery_evidence",
   "source_missing",
+]);
+const referenceBearingFieldNames = new Set([
+  "allowedinputs",
+  "basebranch",
+  "branch",
+  "branchprefix",
+  "branchname",
+  "cleanuptarget",
+  "evidence",
+  "expectedheadrevision",
+  "expectedlocalbranch",
+  "expectedowner",
+  "expectedpr",
+  "expectedremotebranch",
+  "expectedworktree",
+  "headrevision",
+  "localbranch",
+  "owner",
+  "pullrequestheadrevision",
+  "pullrequesturl",
+  "remotebranch",
+  "revision",
+  "source",
+  "derivedtargetfolder",
+  "targetbranch",
+  "targetvaultfolder",
+  "worktree",
 ]);
 
 export function projectSupervisorWorkPacketsToCockpitPackets(
@@ -295,6 +323,14 @@ function isSyntheticRuntimeIdentity(value: unknown): boolean {
   return normalized.startsWith("fixture:") || normalized.startsWith("demo:");
 }
 
+function isSafeReferenceString(value: unknown): value is string {
+  return isNonEmptyString(value) && !isSyntheticRuntimeIdentity(value);
+}
+
+function isNullableSafeReferenceString(value: unknown): boolean {
+  return value === null || typeof value === "undefined" || isSafeReferenceString(value);
+}
+
 function isNullableString(value: unknown): boolean {
   return value === null || typeof value === "string" || typeof value === "undefined";
 }
@@ -309,6 +345,10 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonEmptyString);
+}
+
+function isSafeReferenceArray(value: unknown): value is string[] {
+  return isStringArray(value) && value.every(isSafeReferenceString);
 }
 
 function isNonEmptyStringArray(value: unknown): value is [string, ...string[]] {
@@ -357,8 +397,8 @@ function isWorkPacketLifecycleStateV0(value: unknown): boolean {
     isNonEmptyString(value.authoritativeRef) &&
     isStringArray(value.derivedFromRefs) &&
     isStringArray(value.transitionEventRefs) &&
-    isNullableString(value.latestTransitionEventRef) &&
-    isNullableString(value.attemptRef) &&
+    isNullableSafeReferenceString(value.latestTransitionEventRef) &&
+    isNullableSafeReferenceString(value.attemptRef) &&
     value.metadataOnly === true &&
     hasExactBooleanFields(
       value,
@@ -381,7 +421,7 @@ function isCandidateWorkView(value: unknown): boolean {
     Number.isFinite(value.sortOrder) &&
     isEnumValue(value.status, candidateWorkStatuses) &&
     isNullableString(value.approvedAt) &&
-    isNullableString(value.promotedWorkItemId) &&
+    isNullableSafeReferenceString(value.promotedWorkItemId) &&
     isAbsentOr(value.sourceSummary, isCandidateWorkSourceSummaryView) &&
     isRecord(value.importMetadata);
 }
@@ -457,7 +497,7 @@ function isWorkItemRemoteAutomationPolicyView(value: unknown): boolean {
 function isWorkItemDeliveryReadinessView(value: unknown): boolean {
   return isRecord(value) &&
     ["pullRequestStatus", "ciStatus", "mergeStatus", "remoteOperationsPolicy"].every((field) => isNonEmptyString(value[field])) &&
-    isNullableString(value.pullRequestUrl) &&
+    isNullableSafeReferenceString(value.pullRequestUrl) &&
     typeof value.deliveryWaived === "boolean" &&
     isNullableString(value.deliveryWaiverReason) &&
     typeof value.remoteOperationsPerformed === "boolean" &&
@@ -597,7 +637,7 @@ function isMemoryProposalV0(value: unknown, packetId: string): boolean {
     isNonEmptyStringArray(value.sourceRefs) &&
     isNonEmptyStringArray(value.evidenceRefs) &&
     isAbsentOr(value.targetRef, isSourceRefV0) &&
-    isNullableString(value.targetVaultPath) &&
+    isNullableSafeReferenceString(value.targetVaultPath) &&
     isNonEmptyString(value.targetVaultFolder) &&
     isEnumValue(value.proposalType, memoryProposalTypes) &&
     isNonEmptyString(value.suggestedContentSummary) &&
@@ -640,7 +680,7 @@ function isWorkPacketExecutionAttemptSummaryV0(value: unknown): boolean {
   }
   return ["attemptId", "workItemId", "routeDecisionId", "workerId", "lane", "authorityMode", "createdAt", "updatedAt"]
     .every((field) => isNonEmptyString(value[field])) &&
-    isNullableString(value.leaseId) &&
+    isNullableSafeReferenceString(value.leaseId) &&
     (value.fencingToken === undefined || value.fencingToken === null || (Number.isInteger(value.fencingToken) && (value.fencingToken as number) >= 0)) &&
     isEnumValue(value.status, executionAttemptStatuses) &&
     ["requestedById", "requestedByLabel", "startedAt", "completedAt", "heartbeatAt", "timeoutAt", "cancelRequestedAt", "cancelReason", "rejectionReason", "failureReason"]
@@ -661,7 +701,7 @@ function isWorkPacketStageTransitionEventV0(value: unknown): boolean {
     isStringArray(value.reasonCodes) &&
     isStringArray(value.evidenceRefs) &&
     typeof value.durable === "boolean" &&
-    isNullableString(value.sourceEventId) &&
+    isNullableSafeReferenceString(value.sourceEventId) &&
     isNullableString(value.actorLabel);
 }
 
@@ -687,7 +727,11 @@ function isWorkPacketDeliveryEvidenceV0(value: unknown): boolean {
     value.mode === "metadata_only" &&
     (value.actionId === undefined || value.actionId === null || value.actionId === "pr" || value.actionId === "merge" || value.actionId === "cleanup") &&
     isNonEmptyString(value.status) &&
-    optionalStringFields.every((field) => isNullableString(value[field])) &&
+    optionalStringFields.every((field) => [
+      "targetBranch", "baseBranch", "pullRequestUrl", "expectedHeadRevision", "pullRequestHeadRevision", "cleanupTarget",
+    ].includes(field)
+      ? isNullableSafeReferenceString(value[field])
+      : isNullableString(value[field])) &&
     typeof value.readyForApproval === "boolean" &&
     typeof value.hasDeliveryExecutionEvidence === "boolean" &&
     isStringArray(value.evidenceRefs) &&
@@ -728,7 +772,7 @@ function isWorkPacketCleanupDryRunGateV0(value: unknown): boolean {
   return (value.status === "passed" || value.status === "blocked") &&
     typeof value.dryRunMatchesPolicy === "boolean" &&
     ["expectedPr", "expectedOwner", "expectedWorktree", "expectedLocalBranch", "expectedRemoteBranch", "expectedHeadRevision"]
-      .every((field) => isNullableString(value[field])) &&
+      .every((field) => isNullableSafeReferenceString(value[field])) &&
     isStringArray(value.blockedReasons) &&
     isNonEmptyString(value.recoveryPath) &&
     value.metadataOnly === true &&
@@ -872,7 +916,40 @@ function isLlmWikiDerivedIndexReadinessV0(value: unknown): boolean {
     isNonEmptyString(value.boundarySummary) &&
     hasExactBooleanFields(value, ["canonicalMutationAllowed", "sourceMutationAllowed", "providerCallsAllowed", "durableWriteAllowed"], false) &&
     isAbsentOr(value.rebuildPreview, isRecord) &&
-    isAbsentOr(value.rebuildDryRunPlan, isRecord);
+    isAbsentOr(value.rebuildDryRunPlan, isLlmWikiRebuildDryRunPlanV0);
+}
+
+function isLlmWikiRebuildDryRunPlanV0(value: unknown): boolean {
+  return isRecord(value) &&
+    isNonEmptyString(value.planId) &&
+    value.operationMode === "dry_run" &&
+    isSafeReferenceArray(value.inputRefs) &&
+    isSafeReferenceArray(value.memoryProposalRefs) &&
+    isStringArray(value.plannedDerivedSections) &&
+    isSafeReferenceString(value.disposableTargetNamespace) &&
+    isSafeReferenceString(value.derivedTargetFolder) &&
+    isEnumValue(value.freshness, memoryProposalFreshnessValues) &&
+    isStringArray(value.rebuildBasis) &&
+    value.rebuildBasis.every((basis) => isEnumValue(basis, llmWikiRebuildBasisValues)) &&
+    value.retentionClass === "metadata_only" &&
+    isStringArray(value.stopLines) &&
+    isNonEmptyString(value.discardRecoveryPath) &&
+    isNonEmptyString(value.auditEventSummary) &&
+    hasExactBooleanFields(
+      value,
+      [
+        "canonicalMutationAllowed",
+        "sourceMutationAllowed",
+        "providerCallsAllowed",
+        "workerLaunchAllowed",
+        "githubCallsAllowed",
+        "networkEgressAllowed",
+        "durableWriteAllowed",
+        "writePerformed",
+        "backupCreated",
+      ],
+      false,
+    );
 }
 
 function isWorkPacketGateStateValidationV0(value: unknown): boolean {
@@ -911,14 +988,14 @@ function isSourceRefV0(value: unknown): boolean {
   }
   const ref = value as Record<string, unknown>;
   if (
-    typeof ref.refId !== "string" ||
+    !isSafeReferenceString(ref.refId) ||
     !isEnumValue(ref.sourceType, sourceRefTypes) ||
     typeof ref.label !== "string" ||
     !isEnumValue(ref.freshness, sourceFreshnessValues) ||
     !isEnumValue(ref.accessState, sourceAccessStates) ||
     typeof ref.canonical !== "boolean" ||
     typeof ref.summaryOnly !== "boolean" ||
-    !isNullableString(ref.pathOrUrl) ||
+    !isNullableSafeReferenceString(ref.pathOrUrl) ||
     !isNullableString(ref.blockedReason)
   ) {
     return false;
@@ -940,12 +1017,10 @@ function isEvidenceRefV0(value: unknown): boolean {
     return false;
   }
   const ref = value as Record<string, unknown>;
-  return typeof ref.refId === "string" &&
-    !isSyntheticRuntimeIdentity(ref.refId) &&
-    !isSyntheticRuntimeIdentity(ref.artifactPath) &&
+  return isSafeReferenceString(ref.refId) &&
     isEnumValue(ref.evidenceType, evidenceRefTypes) &&
     typeof ref.label === "string" &&
-    isNullableString(ref.artifactPath) &&
+    isNullableSafeReferenceString(ref.artifactPath) &&
     isEnumValue(ref.retentionClass, evidenceRetentionClasses) &&
     ref.rawPayloadRetained === false;
 }
@@ -955,12 +1030,10 @@ function isArtifactRefV0(value: unknown): boolean {
     return false;
   }
   const ref = value as Record<string, unknown>;
-  return typeof ref.refId === "string" &&
-    !isSyntheticRuntimeIdentity(ref.refId) &&
-    !isSyntheticRuntimeIdentity(ref.pathOrUrl) &&
+  return isSafeReferenceString(ref.refId) &&
     isEnumValue(ref.artifactType, artifactRefTypes) &&
     typeof ref.label === "string" &&
-    isNullableString(ref.pathOrUrl) &&
+    isNullableSafeReferenceString(ref.pathOrUrl) &&
     isEnumValue(ref.status, artifactRefStatuses);
 }
 
@@ -1012,26 +1085,22 @@ function hasFixtureMarkersInReachableNestedFields(packet: Partial<WorkPacketV0Vi
 }
 
 function isFixtureDiscriminator(fieldName: string, value: unknown): boolean {
-  return fieldName === "fixtureId" ||
-    fieldName === "fixtureKind" ||
-    fieldName === "fixtureLabel" ||
-    (fieldName === "sourceKind" && value === "demo-fixture") ||
-    (fieldName === "evidenceType" && value === "fixture") ||
-    (fieldName === "retentionClass" && value === "fixture") ||
-    (fieldName === "artifactType" && value === "fixture");
+  const normalizedFieldName = fieldName.toLowerCase();
+  const normalizedValue = typeof value === "string" ? value.trim().toLowerCase() : value;
+  return normalizedFieldName === "fixtureid" ||
+    normalizedFieldName === "fixturekind" ||
+    normalizedFieldName === "fixturelabel" ||
+    (normalizedFieldName === "sourcekind" && normalizedValue === "demo-fixture") ||
+    (normalizedFieldName === "evidencetype" && normalizedValue === "fixture") ||
+    (normalizedFieldName === "retentionclass" && normalizedValue === "fixture") ||
+    (normalizedFieldName === "artifacttype" && normalizedValue === "fixture");
 }
 
 function isReferenceBearingField(fieldName: string): boolean {
-  return fieldName !== "fixtureId" && (
-    fieldName === "pathOrUrl" ||
-    fieldName === "artifactPath" ||
-    fieldName === "targetVaultPath" ||
-    fieldName === "retainedEvidence" ||
-    fieldName.endsWith("Ref") ||
-    fieldName.endsWith("Refs") ||
-    fieldName.endsWith("Id") ||
-    fieldName.endsWith("Ids")
-  );
+  const normalizedFieldName = fieldName.toLowerCase();
+  return referenceBearingFieldNames.has(normalizedFieldName) ||
+    normalizedFieldName === "retainedevidence" ||
+    /(?:paths?|urls?|uris?|hrefs?|refs?|ids?|namespaces?)$/.test(normalizedFieldName);
 }
 
 function isEnumValue(value: unknown, allowedValues: ReadonlySet<string>): value is string {

@@ -21,6 +21,8 @@ const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
 const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
 const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
+const pipelineSupervisorRuntimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
+const pipelineSupervisorProjectionPath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-projection.ts", import.meta.url);
 const pipelineContractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 const projectionTruthPath = new URL("../apps/dashboard/src/lib/pipeline/projection-truth.ts", import.meta.url);
 const activeBoardViewModelPath = new URL("../apps/dashboard/src/lib/pipeline/active-board-view-model.ts", import.meta.url);
@@ -36,6 +38,7 @@ const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-
 const realtimeRefreshPath = new URL("../apps/dashboard/src/components/realtime-refresh.tsx", import.meta.url);
 const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", import.meta.url);
 const setupE2ePath = new URL("../scripts/setup-e2e.mjs", import.meta.url);
+const pipelineImportBoundaryCheckPath = new URL("../scripts/check-dashboard-pipeline-import-boundary.mjs", import.meta.url);
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 
 function loadManagerExecutionLaneSummaryModule(source) {
@@ -72,6 +75,167 @@ function loadProjectionTruthModule(source) {
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "projection-truth.ts" });
   return context.module.exports;
+}
+
+function loadPipelineSupervisorProjectionModule(source) {
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") {
+        return {
+          AUTHORITATIVE_PACKET_STAGES: ["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"],
+          isPipelineCanonicalContractV1: () => true,
+          isPipelineProductModeMappingV0: () => true,
+        };
+      }
+      throw new Error(`Unexpected projection import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-projection.ts" });
+  return context.module.exports;
+}
+
+function validDashboardProjection() {
+  const now = new Date().toISOString();
+  const stages = ["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"];
+  const sourceRef = {
+    refId: "repo_doc:runtime-source",
+    sourceType: "repo_doc",
+    pathOrUrl: "docs/source.md",
+    title: "Runtime source",
+    contentSha256: null,
+  };
+  const packet = {
+    packetId: "runtime:packet",
+    title: "Runtime packet",
+    currentStage: "capture",
+    status: "waiting",
+    truthLabel: "live",
+    sourceRef,
+    canonicalContract: null,
+    productModeMapping: null,
+    blocker: null,
+    nextAction: "Inspect runtime packet.",
+    unblocker: "operator",
+    evidenceRefs: ["event:runtime"],
+    updatedAt: now,
+    metadataOnly: true,
+  };
+  const detail = {
+    packetId: packet.packetId,
+    sourceRefs: [sourceRef],
+    canonicalContract: null,
+    productModeMapping: null,
+    evidenceRefs: [...packet.evidenceRefs],
+    currentStage: packet.currentStage,
+    status: packet.status,
+    truthLabel: packet.truthLabel,
+    blocker: null,
+    nextAction: packet.nextAction,
+    unblocker: "operator",
+    metadataOnly: true,
+  };
+  const managerSummary = {
+    stateSource: "supervisor_projection",
+    reliabilityState: "healthy_idle",
+    freshnessState: "live",
+    activeLeaseCount: null,
+    activeWorkerCount: null,
+    warmWorkerCount: null,
+    blockedQueueCount: null,
+    dispatchableQueueCount: null,
+    closedQueueCount: null,
+    healthySourceCount: null,
+    exhaustedSourceCount: null,
+    blockedSourceCount: null,
+    gatedSourceCount: null,
+    staleSourceCount: null,
+    unavailableSourceCount: null,
+    refillingSourceCount: null,
+    unknownSourceCount: null,
+    sourceExhausted: false,
+    inactivityReason: null,
+    evidenceRefs: [],
+    summary: "Supervisor manager summary.",
+    metadataOnly: true,
+  };
+  const workerSummary = {
+    stateSource: "supervisor_projection",
+    freshnessState: "live",
+    warmCount: null,
+    activeCount: null,
+    waitingCount: null,
+    stalledCount: null,
+    failedCount: null,
+    drainingCount: null,
+    killedCount: null,
+    completeCount: null,
+    unavailableCount: null,
+    unknownCount: null,
+    workerRefs: [],
+    evidenceRefs: [],
+    summary: "Supervisor worker summary.",
+    metadataOnly: true,
+  };
+  return {
+    schemaVersion: "pipeline-dashboard-projection/v0",
+    projectionId: "projection-reference-boundary-test",
+    generatedAt: now,
+    sourceUpdatedAt: now,
+    sourceLabel: "live",
+    freshnessState: "live",
+    staleAfterSeconds: 3600,
+    backendReachability: { state: "reachable", checkedAt: now, reason: null, summary: "Supervisor reachable." },
+    fixtureMode: { enabled: false, reason: null, allowedForEnvironment: false, visibleLabelRequired: true, canSatisfyLiveProof: false },
+    truthSummary: { label: "live", emptyReason: null, backendEmpty: false, backendUnavailable: false, fixtureBacked: false, stale: false, summary: "Live supervisor projection." },
+    stageSummaries: stages.map((stage) => ({ stage, label: stage, packetCount: stage === "capture" ? 1 : 0, sourceLabel: "live", freshnessState: "live", emptyReason: null })),
+    sourceStates: [],
+    workPackets: [packet],
+    selectedPacketDetails: [detail],
+    managerSummary,
+    workerSummary,
+    reliabilityProblems: [],
+    gatedControls: [],
+    executeAdmission: {
+      schemaVersion: "pipeline-execute-admission/v0",
+      policyVersion: "supervisor-wip/v0",
+      state: "unavailable",
+      capacityAvailable: false,
+      typedReason: "runtime_unavailable",
+      source: "unavailable",
+      limits: null,
+      observed: null,
+      blockingDimensions: [],
+      nextSafeAction: "Wait for supervisor runtime.",
+      evidenceRefs: [],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    queueSummary: {
+      activeCount: null,
+      dispatchableCount: null,
+      blockedCount: null,
+      gatedCount: null,
+      closedCount: null,
+      staleCount: null,
+      refillingCount: null,
+      unknownCount: null,
+      emptyReason: null,
+      sourceExhausted: false,
+      summary: "Supervisor queue summary.",
+    },
+    evidenceRefs: [],
+  };
 }
 
 function loadActiveBoardViewModelModule(source) {
@@ -130,10 +294,13 @@ function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardVie
           },
         };
       }
-      if (specifier === "../../lib/pipeline-packet-loader") {
+      if (specifier === "../../lib/pipeline-supervisor-actions") {
         return {
           applyPipelineOperationalAction: async () => {
             throw new Error("server-render test does not apply operational actions");
+          },
+          requestPipelineOperationalApproval: async () => {
+            throw new Error("server-render test does not request operational approvals");
           },
         };
       }
@@ -354,6 +521,9 @@ async function collectRelativeImportGraph(entryUrl, options = {}) {
     if (terminalPaths.has(currentPath)) {
       continue;
     }
+    if (/^\s*["']use client["'];/.test(source)) {
+      continue;
+    }
     for (const specifier of extractImportSpecifiers(source)) {
       if (!specifier.startsWith(".")) {
         continue;
@@ -424,6 +594,199 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(nextConfigSource, /devIndicators:\s*false/);
   assert.doesNotMatch(globalsSource, /nextjs-portal[\s\S]*display: none !important/);
   assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
+});
+
+test("selected projection details reject synthetic and blank nested references", async () => {
+  const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
+  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const cleanProjection = validDashboardProjection();
+  assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
+
+  const invalidCases = [
+    ["fixture source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "FIXTURE:nested-source"; }],
+    ["demo source path", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].pathOrUrl = " demo:nested-source-path "; }],
+    ["blank source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "  "; }],
+    ["blank evidence reference", (projection) => { projection.selectedPacketDetails[0].evidenceRefs = ["\t"]; }],
+    ["demo evidence reference", (projection) => { projection.selectedPacketDetails[0].evidenceRefs = ["DeMo:nested-evidence"]; }],
+    ["blank latest transition event reference", (projection) => { projection.selectedPacketDetails[0].latestTransitionEventRef = "  "; }],
+    ["fixture latest transition event reference", (projection) => { projection.selectedPacketDetails[0].latestTransitionEventRef = "fixture:event"; }],
+    ["demo latest transition event reference", (projection) => { projection.selectedPacketDetails[0].latestTransitionEventRef = "demo:event"; }],
+    ["blank recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["\t"]; }],
+    ["fixture recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["fixture:event"]; }],
+    ["demo recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["demo:event"]; }],
+  ];
+  for (const [label, mutate] of invalidCases) {
+    const candidate = structuredClone(cleanProjection);
+    mutate(candidate);
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
+
+  const ordinaryText = structuredClone(cleanProjection);
+  ordinaryText.selectedPacketDetails[0].sourceRefs[0].title = "Operator label mentions fixture:legacy text";
+  ordinaryText.selectedPacketDetails[0].evidenceRefs = ["event:runtime fixture:legacy wording"];
+  ordinaryText.workPackets[0].evidenceRefs = [...ordinaryText.selectedPacketDetails[0].evidenceRefs];
+  assert.equal(projectionModule.isPipelineDashboardProjection(ordinaryText), true);
+
+  const sourceStateProjection = structuredClone(cleanProjection);
+  sourceStateProjection.sourceStates = [{
+    sourceId: "source:live",
+    sourceRef: "ref:live",
+    sourceKind: "obsidian",
+    state: "stale",
+    summary: "Live source state.",
+    evidenceRefs: [],
+    updatedAt: cleanProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }];
+  assert.equal(projectionModule.isPipelineDashboardProjection(sourceStateProjection), true);
+  for (const [label, field] of [["fixture source id", "sourceId"], ["demo source ref", "sourceRef"]]) {
+    const candidate = structuredClone(sourceStateProjection);
+    candidate.sourceStates[0][field] = label.includes("fixture") ? "fixture:stale-source" : "demo:blocked-source";
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
+});
+
+test("projection counts reject contradictory active and empty states while preserving unknown counts", async () => {
+  const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
+  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const emptyProjection = validDashboardProjection();
+  emptyProjection.workPackets = [];
+  emptyProjection.selectedPacketDetails = [];
+  emptyProjection.truthSummary = { ...emptyProjection.truthSummary, backendEmpty: true, emptyReason: "healthy_empty" };
+  emptyProjection.stageSummaries = emptyProjection.stageSummaries.map((summary) => ({ ...summary, packetCount: 0 }));
+  emptyProjection.queueSummary = {
+    ...emptyProjection.queueSummary,
+    activeCount: 0,
+    dispatchableCount: 0,
+    blockedCount: 0,
+    gatedCount: 0,
+    closedCount: 0,
+    staleCount: 0,
+    refillingCount: 0,
+    unknownCount: 0,
+    emptyReason: "healthy_empty",
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(emptyProjection), true);
+
+  const approvalRequiredProjection = structuredClone(emptyProjection);
+  approvalRequiredProjection.truthSummary = {
+    ...approvalRequiredProjection.truthSummary,
+    emptyReason: "approval_required",
+  };
+  approvalRequiredProjection.queueSummary = {
+    ...approvalRequiredProjection.queueSummary,
+    gatedCount: 1,
+    emptyReason: "approval_required",
+  };
+  approvalRequiredProjection.managerSummary = {
+    ...approvalRequiredProjection.managerSummary,
+    reliabilityState: "waiting_for_approval",
+    gatedSourceCount: 1,
+    inactivityReason: "approval_required",
+  };
+  approvalRequiredProjection.sourceStates = [{
+    sourceId: "source:approval-required",
+    sourceRef: "ref:approval-required",
+    sourceKind: "obsidian",
+    state: "gated",
+    summary: "Source access is waiting for operator approval.",
+    evidenceRefs: [],
+    updatedAt: approvalRequiredProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }];
+  assert.equal(projectionModule.isPipelineDashboardProjection(approvalRequiredProjection), true);
+
+  const mixedBlockedProjection = structuredClone(emptyProjection);
+  mixedBlockedProjection.truthSummary = {
+    ...mixedBlockedProjection.truthSummary,
+    emptyReason: "blocked",
+  };
+  mixedBlockedProjection.queueSummary = {
+    ...mixedBlockedProjection.queueSummary,
+    blockedCount: 1,
+    gatedCount: 1,
+    refillingCount: 1,
+    staleCount: 1,
+    unknownCount: 1,
+    emptyReason: "blocked",
+  };
+  mixedBlockedProjection.managerSummary = {
+    ...mixedBlockedProjection.managerSummary,
+    reliabilityState: "blocked",
+    blockedSourceCount: 1,
+    gatedSourceCount: 1,
+    refillingSourceCount: 1,
+    staleSourceCount: 1,
+    unknownSourceCount: 1,
+    inactivityReason: "blocked",
+  };
+  mixedBlockedProjection.sourceStates = ["blocked", "gated", "refilling", "stale", "unknown"].map((state) => ({
+    sourceId: `source:${state}`,
+    sourceRef: `ref:${state}`,
+    sourceKind: "obsidian",
+    state,
+    summary: `Source is ${state}.`,
+    evidenceRefs: [],
+    updatedAt: mixedBlockedProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }));
+  assert.equal(projectionModule.isPipelineDashboardProjection(mixedBlockedProjection), true, "lower-priority source counts may accompany blocked empty reason");
+
+  const mixedApprovalRequiredProjection = structuredClone(approvalRequiredProjection);
+  mixedApprovalRequiredProjection.queueSummary = {
+    ...mixedApprovalRequiredProjection.queueSummary,
+    refillingCount: 1,
+    unknownCount: 1,
+  };
+  mixedApprovalRequiredProjection.managerSummary = {
+    ...mixedApprovalRequiredProjection.managerSummary,
+    refillingSourceCount: 1,
+    unknownSourceCount: 1,
+  };
+  mixedApprovalRequiredProjection.sourceStates = ["gated", "refilling", "unknown"].map((state) => ({
+    sourceId: `source:approval-${state}`,
+    sourceRef: `ref:approval-${state}`,
+    sourceKind: "obsidian",
+    state,
+    summary: `Source is ${state}.`,
+    evidenceRefs: [],
+    updatedAt: mixedApprovalRequiredProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }));
+  assert.equal(projectionModule.isPipelineDashboardProjection(mixedApprovalRequiredProjection), true, "lower-priority source counts may accompany approval-required empty reason");
+
+  const unknownCounts = structuredClone(emptyProjection);
+  for (const field of ["activeCount", "dispatchableCount", "blockedCount", "gatedCount", "closedCount", "staleCount", "refillingCount", "unknownCount"]) {
+    unknownCounts.queueSummary[field] = null;
+  }
+  assert.equal(projectionModule.isPipelineDashboardProjection(unknownCounts), true);
+
+  const invalidCases = [
+    ["queue active count", (projection) => { projection.queueSummary.activeCount = 1; }],
+    ["stage packet count", (projection) => { projection.stageSummaries[0].packetCount = 1; }],
+    ["manager queue count", (projection) => { projection.managerSummary.blockedQueueCount = 1; }],
+    ["worker active count", (projection) => { projection.workerSummary.activeCount = 1; }],
+    ["selected detail count", (projection) => { projection.selectedPacketDetails.push({}); }],
+  ];
+  for (const [label, mutate] of invalidCases) {
+    const candidate = structuredClone(emptyProjection);
+    mutate(candidate);
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
+
+  const activeProjection = validDashboardProjection();
+  activeProjection.truthSummary = { ...activeProjection.truthSummary, backendEmpty: true };
+  assert.equal(projectionModule.isPipelineDashboardProjection(activeProjection), false, "active packet with empty truth");
+
+  const mismatchedWorkerCounts = validDashboardProjection();
+  mismatchedWorkerCounts.managerSummary.activeWorkerCount = 1;
+  mismatchedWorkerCounts.workerSummary.activeCount = 0;
+  assert.equal(projectionModule.isPipelineDashboardProjection(mismatchedWorkerCounts), false, "manager and worker count mismatch");
+
+  const liveWorkerProjection = validDashboardProjection();
+  liveWorkerProjection.managerSummary.activeWorkerCount = 1;
+  liveWorkerProjection.workerSummary.activeCount = 1;
+  assert.equal(projectionModule.isPipelineDashboardProjection(liveWorkerProjection), true, "live worker counts should be accepted");
 });
 
 test("real WorkPacket projection proof artifact is metadata-only and non-fixture", async () => {
@@ -998,6 +1361,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   const cockpitSource = await readFile(cockpitPath, "utf8");
   const fixtureSource = await readFile(fixturesPath, "utf8");
   const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
+  const pipelineSupervisorRuntimeSource = await readFile(pipelineSupervisorRuntimePath, "utf8");
   const contractSource = await readFile(pipelineContractPath, "utf8");
   const projectionTruthSource = await readFile(projectionTruthPath, "utf8");
   const activeBoardViewModelSource = await readFile(activeBoardViewModelPath, "utf8");
@@ -1056,7 +1420,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/app/pipeline/page.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/shell.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx"));
-  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/supervisor.ts"));
+  assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/supervisor.ts"));
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"));
   assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
   assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline-fixtures.ts"));
   assert.ok(demoPipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
@@ -1072,6 +1437,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
     "/pipeline import graph should only use the supervisor projection read path and avoid runtime transports"
   );
   assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.doesNotMatch(pipelineSupervisorRuntimeSource, /method\s*:\s*["'](?:POST|PATCH|PUT|DELETE)["']/);
+  assert.doesNotMatch(pipelineSupervisorRuntimeSource, /export\s+(?:async\s+)?function\s+requestJson/);
+  assert.match(pipelineSupervisorRuntimeSource, /normalizePipelineDashboardProjection/);
+  assert.match(pipelineSupervisorRuntimeSource, /Invalid projection payload/);
+  assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 1);
   assert.match(cockpitSource, /ProjectionTruthSummary/);
   for (const bannedDefaultSurfacePattern of [
     /route id/i,
@@ -1391,7 +1761,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
   assert.doesNotMatch(packetDetailRouteSource, /generateStaticParams/);
   assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
-  assert.match(supervisorLibSource, /Malformed response for \$\{path\}/);
+  assert.match(pipelineSupervisorRuntimeSource, /Malformed response for \$\{path\}/);
   assert.match(supervisorLibSource, /Invalid projection payload/);
   assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
   assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);
@@ -2420,6 +2790,304 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
     /from\s+["']node:child_process["']|require\(["']child_process["']\)|spawn\s*\(|exec\s*\(|from\s+["']node:worker_threads["']|from\s+["']node:http["']|from\s+["']node:https["']|from\s+["']node:fs["']|from\s+["']fs["']|writeFile\s*\(|appendFile\s*\(|mkdir\s*\(|rename\s*\(|unlink\s*\(|from\s+["']undici["']|from\s+["']axios["']|import\s*\(\s*["']openai["']|import\s*\(\s*["']@anthropic|new\s+Worker\s*\(|Dockerode|dockerode|@docker|createContainer|runHermes|launchHermes|HermesRuntime|runCodex|launchCodex|CodexRuntime|runClaude|launchClaude|ClaudeRuntime|writeObsidian|mutateObsidian|updateCanonicalMemory|canonicalMemoryUpdate|obsidianWriteBack|vaultWrite|from\s+["']@anthropic|from\s+["']openai|api\.anthropic|api\.openai|killSwitch\(\)/i
   );
   assert.match(navSource, /href:\s*"\/pipeline"/);
+});
+
+test("pipeline import boundary follows shared dashboard-local runtime intermediaries", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "pipeline-import-boundary-"));
+  const fixtureFiles = {
+    "scripts/check-dashboard-pipeline-import-boundary.mjs": await readFile(pipelineImportBoundaryCheckPath, "utf8"),
+    "apps/dashboard/src/app/pipeline/page.tsx": 'import "../../components/shell";\nimport "../../lib/pipeline-packet-loader";\n',
+    "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx": "export default function Page() {}\n",
+    "apps/dashboard/src/app/pipeline/demo/page.tsx": [
+      'import "../../../lib/pipeline-fixtures";',
+      'import "../../../lib/pipeline/manager-execution-lane-summary";',
+      "export default function DemoPage() {}",
+      "",
+    ].join("\n"),
+    "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx": "export default function DemoDetailPage() {}\n",
+    "apps/dashboard/src/components/shell.tsx": 'import "./shared-pipeline-runtime";\nimport "./realtime-refresh";\nexport function Shell() {}\n',
+    "apps/dashboard/src/components/realtime-refresh.tsx": 'export function RealtimeRefresh() { new EventSource("/events"); return fetch("/disabled"); }\n',
+    "apps/dashboard/src/components/shared-pipeline-runtime.ts": [
+      'import "node:fs";',
+      'import "../lib/pipeline-fixtures";',
+      "export function sharedPipelineRuntime() { return fetch(\"/forbidden\"); }",
+      "",
+    ].join("\n"),
+    "apps/dashboard/src/components/static-module.ts": "export const staticModule = true;\n",
+    "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": '"use client";\nimport "../../lib/pipeline-supervisor-actions";\nexport function PipelineCockpit() {}\n',
+    "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
+    "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
+    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
+    "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts": [
+      'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+      'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+      'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+      'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+      "",
+    ].join("\n"),
+    "apps/dashboard/src/lib/pipeline-supervisor-projector.ts": "export const projectPackets = () => [];\n",
+    "apps/dashboard/src/lib/pipeline-supervisor-actions.ts": 'import { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
+    "apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts": "export const managerSummary = {};\n",
+    "apps/dashboard/src/lib/supervisor.ts": 'export async function mutate(path) { return fetch(path, { method: "POST" }); }\n',
+  };
+
+  try {
+    for (const [relativePath, source] of Object.entries(fixtureFiles)) {
+      const targetPath = join(fixtureRoot, relativePath);
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, source, "utf8");
+    }
+
+    const checkerPath = join(fixtureRoot, "scripts/check-dashboard-pipeline-import-boundary.mjs");
+    const leakingRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(leakingRun.status, 1);
+    assert.match(leakingRun.stderr, /normal \/pipeline route graph must not reach apps\/dashboard\/src\/lib\/pipeline-fixtures\.ts/);
+    assert.match(leakingRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
+    assert.match(leakingRun.stderr, /shared-pipeline-runtime\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      "export const sharedPipelineRuntime = true;\n",
+      "utf8",
+    );
+    const cleanRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(cleanRun.status, 0, cleanRun.stderr);
+    const report = JSON.parse(cleanRun.stdout);
+    assert.equal(report.normalFixtureCatalogReachable, false);
+    assert.equal(report.demoFixtureCatalogReachable, true);
+    assert.equal(report.normalSupervisorModuleReachable, false);
+    assert.ok(
+      report.gatedSupervisorEdgesAudited.includes("apps/dashboard/src/lib/pipeline-supervisor-actions.ts -> ./supervisor"),
+      "mutation edge should remain explicitly capability-gated",
+    );
+    assert.ok(report.normalRouteGraphFiles >= 3, "normal graph should include the shared dashboard-local intermediary");
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        'export const getCandidateWork = () => requestJson("/candidate-work");',
+        'export { getWorkPackets as getOtherPackets };',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const unapprovedRuntimeExportRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(unapprovedRuntimeExportRun.status, 1);
+    assert.match(unapprovedRuntimeExportRun.stderr, /only the approved read-only runtime functions may be exported/);
+    assert.match(unapprovedRuntimeExportRun.stderr, /getCandidateWork/);
+    assert.match(unapprovedRuntimeExportRun.stderr, /getOtherPackets/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),
+      'import "node:fs";\nimport { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
+      "utf8",
+    );
+    const actionImportRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(actionImportRun.status, 1);
+    assert.match(actionImportRun.stderr, /pipeline-supervisor-actions\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),
+      'import { applyPipelineOperationalAction } from "./supervisor";\nexport function unsafeAction() { return fetch("/forbidden"); }\nexport { applyPipelineOperationalAction };\n',
+      "utf8",
+    );
+    const actionCallRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(actionCallRun.status, 1);
+    assert.match(actionCallRun.stderr, /pipeline-supervisor-actions\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-actions.ts"),
+      'import { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
+      "utf8",
+    );
+
+    const mutationSupervisorRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(mutationSupervisorRun.status, 0, mutationSupervisorRun.stderr);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        'export async function mutate(path) { return fetch(path, { method: "POST" }); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const mutationRuntimeRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(mutationRuntimeRun.status, 1);
+    assert.match(mutationRuntimeRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/candidate-work"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const endpointMismatchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(endpointMismatchRun.status, 1);
+    assert.match(endpointMismatchRun.stderr, /approved endpoint mismatch for getWorkPackets/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store", ["method"]: "POST" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const computedMethodRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(computedMethodRun.status, 1);
+    assert.match(computedMethodRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store", ...{} }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const spreadMethodRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(spreadMethodRun.status, 1);
+    assert.match(spreadMethodRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/supervisor.ts"),
+      [
+        'async function requestJson(path) {',
+        '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
+        '}',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPackets() { return requestJson("/work-packets"); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      [
+        "// import(runtimeModule); require(runtimeModule);",
+        "const staticImport = import(`./static-module`);",
+        "const staticRequire = require(`./static-module`);",
+        "void staticImport;",
+        "void staticRequire;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/static-module.ts"),
+      'import "node:fs";\n',
+      "utf8",
+    );
+    const staticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(staticDynamicRun.status, 1);
+    assert.match(staticDynamicRun.stderr, /static-module\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/static-module.ts"),
+      "export const staticModule = true;\n",
+      "utf8",
+    );
+    const cleanStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(cleanStaticDynamicRun.status, 0, cleanStaticDynamicRun.stderr);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      [
+        'const ordinaryImport = import("node:fs");',
+        'const ordinaryRequire = require("../lib/pipeline-fixtures");',
+        "void ordinaryImport;",
+        "void ordinaryRequire;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const ordinaryQuotedDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(ordinaryQuotedDynamicRun.status, 1);
+    assert.match(ordinaryQuotedDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
+    assert.match(ordinaryQuotedDynamicRun.stderr, /normal \/pipeline route graph must not reach apps\/dashboard\/src\/lib\/pipeline-fixtures\.ts/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      'const commentedImport = import(/* webpackIgnore: true */ "node:fs");\nvoid commentedImport;\n',
+      "utf8",
+    );
+    const commentedStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(commentedStaticDynamicRun.status, 1);
+    assert.match(commentedStaticDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      'const commentedTemplateImport = import(/* webpackIgnore: true */ `node:fs`);\nvoid commentedTemplateImport;\n',
+      "utf8",
+    );
+    const commentedTemplateDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(commentedTemplateDynamicRun.status, 1);
+    assert.match(commentedTemplateDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      [
+        'const runtimeModule = "./not-static";',
+        "void import(runtimeModule);",
+        "void require(runtimeModule);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const unresolvedDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(unresolvedDynamicRun.status, 1);
+    assert.match(unresolvedDynamicRun.stderr, /shared-pipeline-runtime\.ts: unresolved dynamic module boundary: import\(runtimeModule\)/);
+    assert.match(unresolvedDynamicRun.stderr, /shared-pipeline-runtime\.ts: unresolved dynamic module boundary: require\(runtimeModule\)/);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("pipeline local model health fixtures cover readiness states without direct provider probes", async () => {

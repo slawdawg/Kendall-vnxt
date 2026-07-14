@@ -39,7 +39,7 @@ import type {
 import {
   applyPipelineOperationalAction,
   requestPipelineOperationalApproval,
-} from "../../lib/pipeline-packet-loader";
+} from "../../lib/pipeline-supervisor-actions";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 
 type PipelineFixturePacket = PipelineDashboardPacket;

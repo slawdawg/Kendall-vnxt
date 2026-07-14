@@ -3,243 +3,9 @@ import {
   isPipelineCanonicalContractV1,
   isPipelineProductModeMappingV0,
 } from "@kendall/contracts";
-import {
-  getPipelineDashboardProjection as getRuntimePipelineDashboardProjection,
-} from "./pipeline-supervisor-runtime";
-export { getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";
-import type {
-  ApiEnvelope,
-  AuthorityReadinessMatrixReportView,
-  CandidateWorkBmadImportPayload,
-  CandidateWorkObsidianMetadataImportPayload,
-  CandidateWorkPromotionView,
-  CandidateWorkUpdatePayload,
-  CandidateWorkView,
-  ClaudeReviewApprovalReportView,
-  ClaudeReviewReadinessReportView,
-  CodexImplementationApprovalReportView,
-  CodexReadinessReportView,
-  DashboardE2EReportView,
-  DeliveryReadinessPolicyReportView,
-  DevelopmentRunwayReportView,
-  DocumentationAuthorityReportView,
-  EpicCompletionAuditReportView,
-  ExecutionAttemptView,
-  ExecutionReadinessReportView,
-  GitHubDeliveryAuthorityReportView,
-  GitHubWorkflowPolicyReportView,
-  GitHygieneReportView,
-  CleanupPlanView,
-  LegacyPlanningArtifactInventoryReportView,
-  LocalCleanupReadinessReportView,
-  LocalEvidenceExplanationPayload,
-  LocalEvidenceExplanationView,
-  LocalWorktreePlanView,
-  LowRiskDeliveryPlanReportView,
-  ManagedRecipePolicyReportView,
-  MaintenanceActionPlanReportView,
-  MaintenanceReadinessReportView,
-  MvpProofTrialReportView,
-  PipelineDashboardProjectionV0,
-  PipelineOperationalActionRequestV0,
-  PipelineOperationalActionApprovalRequestV0,
-  PipelineOperationalActionApprovalV0,
-  PipelineOperationalActionResultV0,
-  RuntimeEvidenceReviewReportView,
-  ReviewResourcePolicyReportView,
-  RunnerAssignmentStatusReportView,
-  RuntimeEvidenceExportView,
-  RemoteCleanupSyncReadinessReportView,
-  RoutingLaneEvidenceProfileView,
-  RoutingPreviewView,
-  RunStatusView,
-  SafeDevelopmentBacklogReportView,
-  SavedWorkItemView,
-  SavedWorkItemViewPayload,
-  SupervisorReportCatalogView,
-  TrustedDeliveryEligibilityReportView,
-  TrustedAutonomyReadinessReportView,
-  WorkItemBranchPreparationPayload,
-  WorkItemAssignmentPayload,
-  WorkItemFilterScope,
-  WorkItemExecutionRecipeView,
-  WorkItemManagedActionPayload,
-  WorkItemRecipeGateAuditView,
-  WorkPacketLearnFollowUpCandidateWorkPayload,
-  VerificationReadinessReportView,
-  WorkflowEventView,
-  WorkItemView,
-  WorkerRegistryEntryView,
-} from "@kendall/contracts";
+import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
-const configuredPublicBaseUrl = process.env.NEXT_PUBLIC_SUPERVISOR_URL;
-const publicBaseUrl = configuredPublicBaseUrl ?? "http://localhost:8000";
-const internalBaseUrl = process.env.SUPERVISOR_INTERNAL_URL ?? publicBaseUrl;
-
-export function getSupervisorBaseUrl(): string {
-  if (typeof window === "undefined") {
-    return publicBaseUrl;
-  }
-
-  if (!configuredPublicBaseUrl) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
-  }
-
-  return configuredPublicBaseUrl;
-}
-
-async function requestJson<T>(path: string): Promise<T> {
-  const baseUrl = typeof window === "undefined" ? internalBaseUrl : getSupervisorBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Request failed for ${path} (${response.status})`);
-  }
-  const payload = (await response.json()) as ApiEnvelope<T>;
-  if (!payload || !("data" in payload)) {
-    throw new Error(`Malformed response for ${path}`);
-  }
-  return payload.data;
-}
-
-export async function getRunStatus(): Promise<RunStatusView> {
-  return requestJson<RunStatusView>("/supervisor/status");
-}
-
-export async function getWorkItems(): Promise<WorkItemView[]> {
-  return requestJson<WorkItemView[]>("/work-items");
-}
-
-export async function getCandidateWork(): Promise<CandidateWorkView[]> {
-  return requestJson<CandidateWorkView[]>("/candidate-work");
-}
-
-export async function importBmadCandidateWork(payload: CandidateWorkBmadImportPayload): Promise<CandidateWorkView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/import-bmad`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as
-      | { detail?: { error?: { message?: string } } }
-      | null;
-    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to import BMAD work.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
-  return envelope.data;
-}
-
-export async function importObsidianMetadataCandidateWork(payload: CandidateWorkObsidianMetadataImportPayload): Promise<CandidateWorkView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/import-obsidian-metadata`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to import Obsidian metadata: ${response.status}`);
-  }
-  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
-  return envelope.data;
-}
-
-export async function updateCandidateWork(candidateWorkId: string, payload: CandidateWorkUpdatePayload): Promise<CandidateWorkView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error("Unable to update proposed work.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
-  return envelope.data;
-}
-
-export async function promoteCandidateWork(candidateWorkId: string): Promise<CandidateWorkPromotionView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}/promote`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as
-      | { detail?: { error?: { message?: string } } }
-      | null;
-    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to move proposed work into active work.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkPromotionView>;
-  return envelope.data;
-}
-
-export async function getWorkItem(id: string): Promise<WorkItemView> {
-  return requestJson<WorkItemView>(`/work-items/${id}`);
-}
-
-export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]> {
-  return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`);
-}
-
-export async function createLearnFollowUpCandidateWork(
-  packetId: string,
-  payload: WorkPacketLearnFollowUpCandidateWorkPayload,
-): Promise<CandidateWorkView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/work-packets/${encodeURIComponent(packetId)}/learn-follow-up-candidate-work`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to create Learn follow-up Candidate Work: ${response.status}`);
-  }
-  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
-  return envelope.data;
-}
-
-export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {
-  const projection = normalizePipelineDashboardProjection(
-    await getRuntimePipelineDashboardProjection(),
-  );
-  if (!isPipelineDashboardProjection(projection)) {
-    throw new Error("Invalid projection payload");
-  }
-  return projection;
-}
-
-export async function applyPipelineOperationalAction(
-  payload: PipelineOperationalActionRequestV0,
-): Promise<PipelineOperationalActionResultV0> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/actions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionResultV0>;
-  if (!response.ok || !envelope.data) {
-    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
-    throw new Error(detail.detail?.error?.message ?? `Operational action failed: ${response.status}`);
-  }
-  return envelope.data;
-}
-
-export async function issuePipelineOperationalApproval(
-  payload: PipelineOperationalActionApprovalRequestV0,
-): Promise<PipelineOperationalActionApprovalV0> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/approvals`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionApprovalV0>;
-  if (!response.ok || !envelope.data) {
-    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
-    throw new Error(detail.detail?.error?.message ?? `Operational approval failed: ${response.status}`);
-  }
-  return envelope.data;
-}
-
-function normalizePipelineDashboardProjection(projection: Partial<PipelineDashboardProjectionV0>): Partial<PipelineDashboardProjectionV0> {
+export function normalizePipelineDashboardProjection(projection: Partial<PipelineDashboardProjectionV0>): Partial<PipelineDashboardProjectionV0> {
   if (!projection || typeof projection !== "object") {
     return projection;
   }
@@ -375,7 +141,7 @@ function normalizePipelineDashboardProjection(projection: Partial<PipelineDashbo
   };
 }
 
-function isPipelineDashboardProjection(value: unknown): value is PipelineDashboardProjectionV0 {
+export function isPipelineDashboardProjection(value: unknown): value is PipelineDashboardProjectionV0 {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -409,6 +175,7 @@ function isPipelineDashboardProjection(value: unknown): value is PipelineDashboa
     isProjectionBackendReachabilityConsistent(projection) &&
     isProjectionManagerReliabilityConsistent(projection) &&
     isProjectionReliabilityProblemsConsistent(projection) &&
+    isEmptyProjectionSummaryConsistent(projection) &&
     (projection.sourceLabel !== "live" || isLiveProjectionRenderable(projection)) &&
     Array.isArray(projection.sourceStates) &&
     projection.sourceStates.every(isProjectionSourceState) &&
@@ -550,11 +317,22 @@ function isNullableCount(value: unknown) {
 
 function isSafeEvidenceRef(value: unknown) {
   return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
+    isSafeReferenceString(value) &&
     value.length <= 255 &&
     !unsafeEvidenceRefPattern.test(value)
   );
+}
+
+function isSafeReferenceString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && !isSyntheticRuntimeIdentity(value);
+}
+
+function isSyntheticRuntimeIdentity(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("fixture:") || normalized.startsWith("demo:");
 }
 
 function isSafeWorkerRef(value: unknown) {
@@ -616,8 +394,8 @@ function isLiveProjectionRenderable(projection: Partial<PipelineDashboardProject
   return projectionHasOpenPacket(projection) || (
     projection.workPackets.length === 0 &&
     projection.truthSummary?.backendEmpty === true &&
-    ["healthy_empty", "blocked", "refilling"].includes(projection.truthSummary.emptyReason || "") &&
-    (!["blocked", "refilling"].includes(projection.truthSummary.emptyReason || "") || projection.queueSummary?.emptyReason === projection.truthSummary.emptyReason)
+    ["healthy_empty", "blocked", "refilling", "approval_required"].includes(projection.truthSummary.emptyReason || "") &&
+    (!["blocked", "refilling", "approval_required"].includes(projection.truthSummary.emptyReason || "") || projection.queueSummary?.emptyReason === projection.truthSummary.emptyReason)
   ) || (
     projection.workPackets.length === 0 &&
     projection.truthSummary?.backendEmpty === true &&
@@ -629,6 +407,164 @@ function isLiveProjectionRenderable(projection: Partial<PipelineDashboardProject
     projection.queueSummary?.sourceExhausted === true &&
     projection.queueSummary.emptyReason === "source_exhausted"
   );
+}
+
+function isEmptyProjectionSummaryConsistent(projection: Partial<PipelineDashboardProjectionV0>) {
+  if (!Array.isArray(projection.workPackets) || !projection.truthSummary) {
+    return false;
+  }
+  const packetCount = projection.workPackets.length;
+  if (projection.truthSummary.backendEmpty === true && packetCount > 0) {
+    return false;
+  }
+  if (
+    packetCount === 0 &&
+    projection.truthSummary.backendEmpty === false &&
+    projection.sourceLabel === "live" &&
+    projection.backendReachability?.state === "reachable"
+  ) {
+    return false;
+  }
+  if (!Array.isArray(projection.stageSummaries)) {
+    return false;
+  }
+  const packetCountsByStage = new Map<string, number>();
+  for (const packet of projection.workPackets) {
+    if (!packet || typeof packet !== "object" || typeof packet.currentStage !== "string") {
+      return false;
+    }
+    packetCountsByStage.set(packet.currentStage, (packetCountsByStage.get(packet.currentStage) ?? 0) + 1);
+  }
+  const stagePacketCount = projection.stageSummaries.reduce((sum, summary) => sum + summary.packetCount, 0);
+  if (
+    stagePacketCount !== packetCount ||
+    projection.stageSummaries.some((summary) => summary.packetCount !== (packetCountsByStage.get(summary.stage) ?? 0))
+  ) {
+    return false;
+  }
+  if (Array.isArray(projection.selectedPacketDetails) && projection.selectedPacketDetails.length !== packetCount) {
+    return false;
+  }
+
+  const manager = projection.managerSummary;
+  const worker = projection.workerSummary;
+  const queue = projection.queueSummary;
+  if (!manager || !worker || !queue) {
+    return false;
+  }
+
+  const queueCounts = [
+    queue.activeCount,
+    queue.dispatchableCount,
+    queue.blockedCount,
+    queue.gatedCount,
+    queue.closedCount,
+    queue.staleCount,
+    queue.refillingCount,
+    queue.unknownCount,
+  ];
+  if (queueCounts.every(isKnownCount) && queueCounts.reduce((sum, count) => sum + count, 0) < packetCount) {
+    return false;
+  }
+
+  const queueManagerCounts: Array<[unknown, unknown]> = [
+    [queue.blockedCount, manager.blockedQueueCount],
+    [queue.dispatchableCount, manager.dispatchableQueueCount],
+    [queue.closedCount, manager.closedQueueCount],
+  ];
+  if (queueManagerCounts.some(([queueCount, managerCount]) => !countsMatch(queueCount, managerCount))) {
+    return false;
+  }
+
+  const managerWorkerCounts: Array<[unknown, unknown]> = [
+    [manager.warmWorkerCount, worker.warmCount],
+    [manager.activeWorkerCount, worker.activeCount],
+  ];
+  if (managerWorkerCounts.some(([managerCount, workerCount]) => !countsMatch(managerCount, workerCount))) {
+    return false;
+  }
+
+  if (Array.isArray(projection.sourceStates)) {
+    const sourceStateCounts = new Map<string, number>();
+    for (const sourceState of projection.sourceStates) {
+      if (!sourceState || typeof sourceState !== "object" || typeof sourceState.state !== "string") {
+        return false;
+      }
+      sourceStateCounts.set(sourceState.state, (sourceStateCounts.get(sourceState.state) ?? 0) + 1);
+    }
+    const managerSourceCounts: Array<[unknown, string]> = [
+      [manager.healthySourceCount, "healthy"],
+      [manager.exhaustedSourceCount, "exhausted"],
+      [manager.blockedSourceCount, "blocked"],
+      [manager.gatedSourceCount, "gated"],
+      [manager.staleSourceCount, "stale"],
+      [manager.unavailableSourceCount, "unavailable"],
+      [manager.refillingSourceCount, "refilling"],
+      [manager.unknownSourceCount, "unknown"],
+    ];
+    if (managerSourceCounts.some(([managerCount, state]) => isKnownCount(managerCount) && managerCount !== (sourceStateCounts.get(state) ?? 0))) {
+      return false;
+    }
+  }
+
+  const emptyReason = projection.truthSummary.emptyReason;
+  const emptyQueueCountNames = ["blockedCount", "gatedCount", "refillingCount", "staleCount", "unknownCount"];
+  const emptyReasonPriority = {
+    blocked: 0,
+    approval_required: 1,
+    refilling: 2,
+    unknown: 3,
+  }[emptyReason as "blocked" | "approval_required" | "refilling" | "unknown"];
+  const allowedEmptyQueueCounts = new Set(
+    typeof emptyReasonPriority === "number"
+      ? emptyQueueCountNames.slice(emptyReasonPriority)
+      : emptyReason === "projection_stale"
+        ? ["staleCount"]
+        : [],
+  );
+  if (packetCount === 0 && projection.truthSummary.backendEmpty === true) {
+    const namedQueueCounts: Array<[string, unknown]> = [
+      ["activeCount", queue.activeCount],
+      ["dispatchableCount", queue.dispatchableCount],
+      ["blockedCount", queue.blockedCount],
+      ["gatedCount", queue.gatedCount],
+      ["closedCount", queue.closedCount],
+      ["staleCount", queue.staleCount],
+      ["refillingCount", queue.refillingCount],
+      ["unknownCount", queue.unknownCount],
+    ];
+    if (namedQueueCounts.some(([name, count]) => isKnownCount(count) && count > 0 && !allowedEmptyQueueCounts.has(name))) {
+      return false;
+    }
+  }
+
+  if (packetCount === 0 && projection.truthSummary.backendEmpty === true) {
+    return [
+      manager.activeLeaseCount,
+      manager.activeWorkerCount,
+      manager.warmWorkerCount,
+      worker.warmCount,
+      worker.activeCount,
+      worker.waitingCount,
+      worker.stalledCount,
+      worker.failedCount,
+      worker.drainingCount,
+      worker.killedCount,
+      worker.completeCount,
+      worker.unavailableCount,
+      worker.unknownCount,
+    ].every((count) => !isKnownCount(count) || count === 0);
+  }
+
+  return true;
+}
+
+function isKnownCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function countsMatch(left: unknown, right: unknown): boolean {
+  return !isKnownCount(left) || !isKnownCount(right) || left === right;
 }
 
 function projectionHasOpenPacket(projection: Partial<PipelineDashboardProjectionV0>) {
@@ -1033,9 +969,9 @@ function isProjectionSourceRef(value: unknown) {
   }
   const sourceRef = value as NonNullable<PipelineDashboardProjectionV0["workPackets"][number]["sourceRef"]>;
   return (
-    typeof sourceRef.refId === "string" &&
+    isSafeReferenceString(sourceRef.refId) &&
     projectionSourceTypes.has(sourceRef.sourceType) &&
-    (sourceRef.pathOrUrl === null || sourceRef.pathOrUrl === undefined || typeof sourceRef.pathOrUrl === "string") &&
+    (sourceRef.pathOrUrl === null || sourceRef.pathOrUrl === undefined || isSafeReferenceString(sourceRef.pathOrUrl)) &&
     (sourceRef.title === null || sourceRef.title === undefined || typeof sourceRef.title === "string") &&
     (sourceRef.contentSha256 === null || sourceRef.contentSha256 === undefined || (typeof sourceRef.contentSha256 === "string" && /^[0-9a-f]{64}$/i.test(sourceRef.contentSha256)))
   );
@@ -1088,8 +1024,8 @@ function isProjectionSourceState(value: unknown) {
   }
   const sourceState = value as PipelineDashboardProjectionV0["sourceStates"][number];
   return (
-    typeof sourceState.sourceId === "string" &&
-    typeof sourceState.sourceRef === "string" &&
+    isSafeReferenceString(sourceState.sourceId) &&
+    isSafeReferenceString(sourceState.sourceRef) &&
     projectionSourceKinds.has(sourceState.sourceKind) &&
     projectionSourceStates.has(sourceState.state) &&
     typeof sourceState.summary === "string" &&
@@ -1108,11 +1044,11 @@ function isProjectionSelectedPacketDetail(value: unknown) {
   const hasValidLatestTransitionEventRef =
     detail.latestTransitionEventRef === undefined ||
     detail.latestTransitionEventRef === null ||
-    typeof detail.latestTransitionEventRef === "string";
+    isSafeReferenceString(detail.latestTransitionEventRef);
   const hasValidRecentTransitionEventRefs =
     detail.recentTransitionEventRefs === undefined ||
     (Array.isArray(detail.recentTransitionEventRefs) &&
-      detail.recentTransitionEventRefs.every((ref) => typeof ref === "string"));
+      detail.recentTransitionEventRefs.every(isSafeReferenceString));
   const hasValidLatestMovementSummary =
     detail.latestMovementSummary === undefined ||
     detail.latestMovementSummary === null ||
@@ -1152,278 +1088,4 @@ function isProjectionSelectedPacketDetail(value: unknown) {
     movementProofIsConsistent &&
     detail.metadataOnly === true
   );
-}
-
-export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {
-  return requestJson<ExecutionAttemptView[]>(`/work-items/${workItemId}/execution-attempts`);
-}
-
-export async function getRuntimeEvidenceExport(workItemId: string): Promise<RuntimeEvidenceExportView> {
-  return requestJson<RuntimeEvidenceExportView>(`/work-items/${workItemId}/runtime-evidence-export`);
-}
-
-export async function getLocalWorktreePlan(workItemId: string): Promise<LocalWorktreePlanView> {
-  return requestJson<LocalWorktreePlanView>(`/work-items/${workItemId}/local-worktree-plan`);
-}
-
-export async function getWorkItemLowRiskDeliveryPlan(workItemId: string): Promise<LowRiskDeliveryPlanReportView> {
-  return requestJson<LowRiskDeliveryPlanReportView>(`/work-items/${workItemId}/low-risk-delivery-plan`);
-}
-
-export async function getWorkItemCleanupPlan(workItemId: string): Promise<CleanupPlanView> {
-  return requestJson<CleanupPlanView>(`/work-items/${workItemId}/cleanup-plan`);
-}
-
-export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {
-  return requestJson<WorkItemExecutionRecipeView[]>("/execution-recipes");
-}
-
-export async function getRecipeGateAudit(workItemId: string): Promise<WorkItemRecipeGateAuditView> {
-  return requestJson<WorkItemRecipeGateAuditView>(`/work-items/${workItemId}/recipe-gate-audit`);
-}
-
-export async function getRoutingPreview(workItemId: string): Promise<RoutingPreviewView> {
-  return requestJson<RoutingPreviewView>(`/work-items/${workItemId}/routing-preview`);
-}
-
-export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
-  return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles");
-}
-
-export async function createLocalEvidenceExplanation(
-  workItemId: string,
-  payload: LocalEvidenceExplanationPayload,
-): Promise<LocalEvidenceExplanationView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/local-evidence-explanation`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as
-      | { detail?: { error?: { message?: string } } }
-      | null;
-    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to run the local check.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<LocalEvidenceExplanationView>;
-  return envelope.data;
-}
-
-export async function getExecutionReadinessReport(): Promise<ExecutionReadinessReportView> {
-  return requestJson<ExecutionReadinessReportView>("/supervisor/execution-readiness-report");
-}
-
-export async function getDocumentationAuthorityReport(): Promise<DocumentationAuthorityReportView> {
-  return requestJson<DocumentationAuthorityReportView>("/supervisor/documentation-authority-report");
-}
-
-export async function getLegacyPlanningArtifactInventoryReport(): Promise<LegacyPlanningArtifactInventoryReportView> {
-  return requestJson<LegacyPlanningArtifactInventoryReportView>("/supervisor/legacy-planning-artifact-inventory");
-}
-
-export async function getVerificationReadinessReport(): Promise<VerificationReadinessReportView> {
-  return requestJson<VerificationReadinessReportView>("/supervisor/verification-readiness-report");
-}
-
-export async function getAuthorityReadinessMatrixReport(): Promise<AuthorityReadinessMatrixReportView> {
-  return requestJson<AuthorityReadinessMatrixReportView>("/supervisor/authority-readiness-matrix-report");
-}
-
-export async function getDashboardE2EReport(): Promise<DashboardE2EReportView> {
-  return requestJson<DashboardE2EReportView>("/supervisor/dashboard-e2e-report");
-}
-
-export async function getSupervisorReportCatalog(): Promise<SupervisorReportCatalogView> {
-  return requestJson<SupervisorReportCatalogView>("/supervisor/report-catalog");
-}
-
-export async function getMaintenanceReadinessReport(): Promise<MaintenanceReadinessReportView> {
-  return requestJson<MaintenanceReadinessReportView>("/supervisor/maintenance-readiness-report");
-}
-
-export async function getMaintenanceActionPlanReport(): Promise<MaintenanceActionPlanReportView> {
-  return requestJson<MaintenanceActionPlanReportView>("/supervisor/maintenance-action-plan-report");
-}
-
-export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopmentBacklogReportView> {
-  return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog");
-}
-
-export async function getRunnerAssignmentStatusReport(): Promise<RunnerAssignmentStatusReportView> {
-  return requestJson<RunnerAssignmentStatusReportView>("/supervisor/runner-assignment-status-report");
-}
-
-export async function getDevelopmentRunwayReport(): Promise<DevelopmentRunwayReportView> {
-  return requestJson<DevelopmentRunwayReportView>("/supervisor/development-runway-report");
-}
-
-export async function getRuntimeEvidenceReviewReport(): Promise<RuntimeEvidenceReviewReportView> {
-  return requestJson<RuntimeEvidenceReviewReportView>("/supervisor/runtime-evidence-review-report");
-}
-
-export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {
-  return requestJson<ManagedRecipePolicyReportView>("/supervisor/managed-recipe-policy-report");
-}
-
-export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPolicyReportView> {
-  return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report");
-}
-
-export async function getGitHubDeliveryAuthorityReport(): Promise<GitHubDeliveryAuthorityReportView> {
-  return requestJson<GitHubDeliveryAuthorityReportView>("/supervisor/github-delivery-authority-report");
-}
-
-export async function getTrustedDeliveryEligibilityReport(): Promise<TrustedDeliveryEligibilityReportView> {
-  return requestJson<TrustedDeliveryEligibilityReportView>("/supervisor/trusted-delivery-eligibility-report");
-}
-
-export async function getWorkItemTrustedDeliveryEligibilityReport(workItemId: string): Promise<TrustedDeliveryEligibilityReportView> {
-  return requestJson<TrustedDeliveryEligibilityReportView>(`/work-items/${workItemId}/trusted-delivery-eligibility-report`);
-}
-
-export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
-  return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report");
-}
-
-export async function getLocalCleanupReadinessReport(): Promise<LocalCleanupReadinessReportView> {
-  return requestJson<LocalCleanupReadinessReportView>("/supervisor/local-cleanup-readiness-report");
-}
-
-export async function getRemoteCleanupSyncReadinessReport(): Promise<RemoteCleanupSyncReadinessReportView> {
-  return requestJson<RemoteCleanupSyncReadinessReportView>("/supervisor/remote-cleanup-sync-readiness-report");
-}
-
-export async function getTrustedAutonomyReadinessReport(): Promise<TrustedAutonomyReadinessReportView> {
-  return requestJson<TrustedAutonomyReadinessReportView>("/supervisor/trusted-autonomy-readiness-report");
-}
-
-export async function getEpic6CompletionAuditReport(): Promise<EpicCompletionAuditReportView> {
-  return requestJson<EpicCompletionAuditReportView>("/supervisor/epic-6-completion-audit-report");
-}
-
-export async function getMvpProofTrialReport(): Promise<MvpProofTrialReportView> {
-  return requestJson<MvpProofTrialReportView>("/supervisor/epic-6-mvp-proof-trial-report");
-}
-
-export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {
-  return requestJson<CodexReadinessReportView>("/supervisor/codex-readiness-report");
-}
-
-export async function getCodexImplementationApprovalReport(): Promise<CodexImplementationApprovalReportView> {
-  return requestJson<CodexImplementationApprovalReportView>("/supervisor/codex-implementation-approval-report");
-}
-
-export async function getClaudeReviewReadinessReport(): Promise<ClaudeReviewReadinessReportView> {
-  return requestJson<ClaudeReviewReadinessReportView>("/supervisor/claude-review-readiness-report");
-}
-
-export async function getClaudeReviewApprovalReport(): Promise<ClaudeReviewApprovalReportView> {
-  return requestJson<ClaudeReviewApprovalReportView>("/supervisor/claude-review-approval-report");
-}
-
-export async function getReviewResourcePolicyReport(): Promise<ReviewResourcePolicyReportView> {
-  return requestJson<ReviewResourcePolicyReportView>("/supervisor/review-resource-policy-report");
-}
-
-export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {
-  return requestJson<DeliveryReadinessPolicyReportView>("/supervisor/delivery-readiness-policy-report");
-}
-
-export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
-  return requestJson<WorkerRegistryEntryView[]>("/routing/worker-registry");
-}
-
-export async function getAuditEvents(): Promise<
-  Array<{
-    id: string;
-    workItemId: string;
-    reason: string;
-    mode: string;
-    outcome: string;
-    createdAt: string;
-  }>
-> {
-  return requestJson("/audit-events");
-}
-
-export async function getSavedOperatorViews(scope?: WorkItemFilterScope): Promise<SavedWorkItemView[]> {
-  const query = scope ? `?scope=${encodeURIComponent(scope)}` : "";
-  return requestJson<SavedWorkItemView[]>(`/operator-views${query}`);
-}
-
-export async function saveOperatorView(payload: SavedWorkItemViewPayload): Promise<SavedWorkItemView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/operator-views`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error("Unable to save operator view.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<SavedWorkItemView>;
-  return envelope.data;
-}
-
-export async function setOperatorViewDefault(viewId: string, isDefault: boolean): Promise<SavedWorkItemView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/operator-views/${viewId}/default`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ isDefault }),
-  });
-  if (!response.ok) {
-    throw new Error("Unable to update the default operator view.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<SavedWorkItemView>;
-  return envelope.data;
-}
-
-export async function deleteOperatorView(viewId: string): Promise<void> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/operator-views/${viewId}`, {
-    method: "DELETE",
-  });
-  if (!response.ok) {
-    throw new Error("Unable to delete the operator view.");
-  }
-}
-
-export async function assignWorkItem(workItemId: string, payload: WorkItemAssignmentPayload): Promise<WorkItemView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/assignment`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error("Unable to update assignment.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<WorkItemView>;
-  return envelope.data;
-}
-
-export async function prepareRecipeBranch(workItemId: string, payload: WorkItemBranchPreparationPayload): Promise<WorkItemView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/prepare-branch`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error("Unable to prepare recipe branch.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<WorkItemView>;
-  return envelope.data;
-}
-
-export async function executeManagedNextAction(workItemId: string, payload: WorkItemManagedActionPayload): Promise<WorkItemView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/managed-next-action`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as
-      | { detail?: { error?: { message?: string } } }
-      | null;
-    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to execute the managed next action.");
-  }
-  const envelope = (await response.json()) as ApiEnvelope<WorkItemView>;
-  return envelope.data;
 }

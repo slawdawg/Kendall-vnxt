@@ -42,23 +42,41 @@ const forbiddenCallPatterns = [
   { id: "cleanup-mutation", pattern: /\b(?:cleanupCurrent|cleanupMerged|cleanupOrphans|deleteWorktree|removeWorktree|deleteRemoteBranch)\s*\(/ },
 ];
 
+const readOnlyPipelineRuntimeFunctions = [
+  "getPipelineDashboardProjection",
+  "getWorkPacket",
+  "getWorkPackets",
+];
+
+const readOnlyPipelineRuntimeEndpoints = new Map([
+  ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
+  ["getWorkPacket", "/work-packets/${encodeURIComponent(packetId)}"],
+  ["getWorkPackets", "/work-packets"],
+]);
+
+const disabledNormalPipelineRouteImports = new Set([
+  "apps/dashboard/src/components/realtime-refresh.tsx",
+]);
+
 const requiredSourceFiles = [
   "apps/dashboard/src/app/pipeline/page.tsx",
   "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
   "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
   "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
+  "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts",
 ];
 
 const failures = [];
 const scannedFiles = [];
 const scannedFileSet = new Set();
 const pendingFiles = [];
+const gatedSupervisorEdgesAudited = new Set();
 
 const normalRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx"),
-]);
+], { skipDisabledImports: disabledNormalPipelineRouteImports });
 const demoRouteGraph = await collectRouteGraph([
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/page.tsx"),
   join(rootDir, "apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx"),
@@ -77,6 +95,7 @@ if (!demoRouteGraph.includes("apps/dashboard/src/lib/pipeline/manager-execution-
 }
 for (const runtimeBoundaryFile of [
   "apps/dashboard/src/lib/pipeline-packet-loader.ts",
+  "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts",
   "apps/dashboard/src/lib/pipeline-supervisor-projector.ts",
 ]) {
   const runtimeBoundarySource = await readFile(join(rootDir, runtimeBoundaryFile), "utf8");
@@ -102,6 +121,9 @@ while (pendingFiles.length > 0) {
   const specifiers = checkImports(displayPath, source);
   checkForbiddenCalls(displayPath, source);
   for (const specifier of specifiers) {
+    if (isGatedSupervisorImport(displayPath, specifier)) {
+      continue;
+    }
     const resolvedImport = await resolveLocalImport(filePath, specifier);
     if (resolvedImport) {
       queueFile(resolvedImport);
@@ -113,6 +135,10 @@ for (const sourceFile of requiredSourceFiles) {
   if (!scannedFiles.includes(sourceFile)) {
     failures.push(`${sourceFile}: required pipeline boundary source was not scanned`);
   }
+}
+const actionSupervisorEdge = "apps/dashboard/src/lib/pipeline-supervisor-actions.ts -> ./supervisor";
+if (!gatedSupervisorEdgesAudited.has(actionSupervisorEdge)) {
+  failures.push(`${actionSupervisorEdge}: capability-gated supervisor edge was not audited`);
 }
 
 if (failures.length > 0) {
@@ -134,8 +160,10 @@ console.log(
       demoFixtureCatalogReachable: true,
       normalManagerFixtureSummaryReachable: false,
       demoManagerFixtureSummaryReachable: true,
+      normalSupervisorModuleReachable: normalRouteGraph.includes("apps/dashboard/src/lib/supervisor.ts"),
+      gatedSupervisorEdgesAudited: [...gatedSupervisorEdgesAudited],
       boundary:
-        "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from /pipeline dashboard code outside the read-only supervisor WorkPacketV0 projection loader.",
+        "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from the /pipeline read graph outside the dedicated read-only supervisor runtime module.",
     },
     null,
     2
@@ -163,7 +191,7 @@ async function expandTarget(targetPath) {
   return files.sort();
 }
 
-async function collectRouteGraph(entryFiles) {
+async function collectRouteGraph(entryFiles, { skipDisabledImports = new Set() } = {}) {
   const files = [];
   const visited = new Set();
   const pending = [...entryFiles];
@@ -174,10 +202,19 @@ async function collectRouteGraph(entryFiles) {
     }
     visited.add(filePath);
     const source = await readFile(filePath, "utf8");
-    files.push(relative(rootDir, filePath).replaceAll("\\", "/"));
-    for (const specifier of checkImports(relative(rootDir, filePath), source)) {
-      const resolvedImport = await resolveLocalImport(filePath, specifier);
-      if (resolvedImport && !visited.has(resolvedImport)) {
+    const displayPath = relative(rootDir, filePath).replaceAll("\\", "/");
+    files.push(displayPath);
+    checkImports(displayPath, source);
+    checkForbiddenCalls(displayPath, source);
+    for (const specifier of extractRuntimeImportSpecifiers(source)) {
+      if (isGatedSupervisorImport(displayPath, specifier)) {
+        continue;
+      }
+      const resolvedImport = await resolveLocalImport(filePath, specifier, { allDashboardLocal: true });
+      const resolvedDisplayPath = resolvedImport
+        ? relative(rootDir, resolvedImport).replaceAll("\\", "/")
+        : null;
+      if (resolvedImport && !skipDisabledImports.has(resolvedDisplayPath) && !visited.has(resolvedImport)) {
         pending.push(resolvedImport);
       }
     }
@@ -195,7 +232,7 @@ function queueFile(filePath) {
 }
 
 function checkImports(displayPath, source) {
-  const specifiers = [];
+  checkUnresolvedDynamicModuleBoundaries(displayPath, source);
   const typeOnlyImportPatterns = [
     /^\s*import\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
     /^\s*export\s+type[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
@@ -203,7 +240,7 @@ function checkImports(displayPath, source) {
   for (const typeOnlyImportPattern of typeOnlyImportPatterns) {
     for (const importMatch of source.matchAll(typeOnlyImportPattern)) {
       for (const { id, pattern } of forbiddenImportPatterns) {
-        if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, importMatch[1])) {
+        if (id === "supervisor-client" && isAllowedPipelineSupervisorImport(displayPath, importMatch[1])) {
           continue;
         }
         if (pattern.test(importMatch[1])) {
@@ -212,28 +249,19 @@ function checkImports(displayPath, source) {
       }
     }
   }
-  const runtimeSource = source
-    .replace(/^\s*import\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "")
-    .replace(/^\s*export\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "");
-  const importPatterns = [
-    /^\s*import[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
-    /^\s*import\s+["']([^"']+)["'];?/gm,
-    /^\s*export[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
-  ];
-
-  for (const importPattern of importPatterns) {
-    for (const importMatch of runtimeSource.matchAll(importPattern)) {
-      const specifier = importMatch[1];
-      specifiers.push(specifier);
-      for (const { id, pattern } of forbiddenImportPatterns) {
-        if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, specifier)) {
-          continue;
-        }
-        if (pattern.test(specifier)) {
-          failures.push(`${displayPath}: forbidden import boundary ${id}: ${specifier}`);
-        }
+  const specifiers = extractRuntimeImportSpecifiers(source);
+  for (const specifier of specifiers) {
+    if (isGatedSupervisorImport(displayPath, specifier)) {
+      gatedSupervisorEdgesAudited.add(`${displayPath} -> ${specifier}`);
+    }
+  }
+  for (const specifier of specifiers) {
+    for (const { id, pattern } of forbiddenImportPatterns) {
+      if (id === "supervisor-client" && isAllowedPipelineSupervisorImport(displayPath, specifier)) {
+        continue;
+      }
+      if (pattern.test(specifier)) {
+        failures.push(`${displayPath}: forbidden import boundary ${id}: ${specifier}`);
       }
     }
   }
@@ -241,13 +269,185 @@ function checkImports(displayPath, source) {
   return specifiers;
 }
 
+function checkUnresolvedDynamicModuleBoundaries(displayPath, source) {
+  const executableSource = stripCommentsAndStringsForModuleDetection(source);
+  const unresolvedDynamicImportPattern = /\b(?:import|require)\s*\((?!\s*["'][^"']*["']\s*\))\s*[^)]*\)/g;
+  for (const match of executableSource.matchAll(unresolvedDynamicImportPattern)) {
+    failures.push(`${displayPath}: unresolved dynamic module boundary: ${match[0]}`);
+  }
+}
+
+function extractRuntimeImportSpecifiers(source) {
+  const runtimeSource = source
+    .replace(/^\s*import\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "")
+    .replace(/^\s*export\s+type[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "");
+  const importPatterns = [
+    /^\s*import[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
+    /^\s*import\s+["']([^"']+)["'];?/gm,
+    /^\s*export[\s\S]*?\sfrom\s+["']([^"']+)["'];?/gm,
+    /\b(?:import|require)\s*\(\s*(?:(?:(?:\/\*[\s\S]*?\*\/)|(?:\/\/[^\n]*(?:\n|$)))\s*)*["']([^"']+)["']\s*\)/g,
+  ];
+
+  const quotedSpecifiers = importPatterns.flatMap((importPattern) =>
+    [...runtimeSource.matchAll(importPattern)].map((importMatch) => importMatch[1])
+  );
+  const staticTemplateSpecifiers = [...runtimeSource.matchAll(/\b(?:import|require)\s*\(\s*(?:(?:(?:\/\*[\s\S]*?\*\/)|(?:\/\/[^\n]*(?:\n|$)))\s*)*`([^`]*)`\s*\)/g)]
+    .map((match) => match[1])
+    .filter((specifier) => !specifier.includes("${"));
+
+  return [...quotedSpecifiers, ...staticTemplateSpecifiers];
+}
+
 function checkForbiddenCalls(displayPath, source) {
   const executableSource = stripCommentsAndStrings(source);
+  const allowedCallIds = new Set(
+    displayPath === "apps/dashboard/src/components/realtime-refresh.tsx"
+      ? ["network-eventsource"]
+      : displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"
+        ? ["network-fetch"]
+        : [],
+  );
+  if (displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {
+    checkReadOnlyPipelineRuntimeFunctions(displayPath, source);
+  }
   for (const { id, pattern } of forbiddenCallPatterns) {
-    if (pattern.test(executableSource)) {
+    if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {
+      continue;
+    }
+    if (!allowedCallIds.has(id) && pattern.test(executableSource)) {
       failures.push(`${displayPath}: forbidden call boundary ${id}`);
     }
   }
+}
+
+function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
+  const exportedFunctions = extractRuntimeExportNames(source);
+  const unexpectedExports = exportedFunctions.filter((exportName) => !readOnlyPipelineRuntimeFunctions.includes(exportName));
+  if (
+    exportedFunctions.length !== readOnlyPipelineRuntimeFunctions.length ||
+    unexpectedExports.length > 0 ||
+    readOnlyPipelineRuntimeFunctions.some((functionName) => !exportedFunctions.includes(functionName))
+  ) {
+    failures.push(
+      `${displayPath}: only the approved read-only runtime functions may be exported` +
+      (unexpectedExports.length > 0 ? ` (unapproved: ${unexpectedExports.join(", ")})` : ""),
+    );
+  }
+  const requestJsonSource = extractFunctionSource(source, "requestJson");
+  if (!requestJsonSource) {
+    failures.push(`${displayPath}: missing audited read-only helper requestJson`);
+    return;
+  }
+  const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
+  const requestJsonSourceWithoutComments = stripComments(requestJsonSource);
+  const allowedSignalSpread = /\.\.\.\s*\(\s*controller\s*\?\s*\{\s*signal\s*:\s*controller\.signal\s*\}\s*:\s*\{\s*\}\s*\)/g;
+  const requestJsonSourceWithoutAllowedSpread = requestJsonSourceWithoutComments.replace(allowedSignalSpread, "");
+  const requestJsonHasHiddenMethod = /\bmethod\s*:|\[[^\]]+\]\s*:/.test(requestJsonSourceWithoutComments);
+  const requestJsonHasUnsafeSpread = /\.\.\./.test(requestJsonSourceWithoutAllowedSpread);
+  if (
+    countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 1 ||
+    countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
+    requestJsonHasHiddenMethod ||
+    requestJsonHasUnsafeSpread ||
+    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*["']no-store["']/.test(requestJsonSourceWithoutComments)
+  ) {
+    failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+  }
+
+  for (const functionName of readOnlyPipelineRuntimeFunctions) {
+    const functionSource = extractFunctionSource(source, functionName);
+    if (!functionSource) {
+      failures.push(`${displayPath}: missing audited read-only export ${functionName}`);
+      continue;
+    }
+    const executableFunctionSource = stripCommentsAndStrings(functionSource);
+    if (
+      countMatches(executableFunctionSource, /\bfetch\s*\(/g) > 0 ||
+      countMatches(executableFunctionSource, /\brequestJson(?:<[^;\n]*>)?\s*\(/g) !== 1
+    ) {
+      failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+    }
+    const expectedEndpoint = readOnlyPipelineRuntimeEndpoints.get(functionName);
+    if (expectedEndpoint && !functionSource.includes(expectedEndpoint)) {
+      failures.push(`${displayPath}: approved endpoint mismatch for ${functionName}`);
+    }
+  }
+}
+
+function extractRuntimeExportNames(source) {
+  const exportNames = [];
+  for (const match of source.matchAll(/\bexport\s+(?:async\s+)?(?:function|const|let|var|class)\s+(\w+)\b/g)) {
+    exportNames.push(match[1]);
+  }
+  for (const match of source.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
+    for (const specifier of match[1].split(",")) {
+      const tokens = specifier.trim().split(/\s+as\s+/);
+      const exportName = tokens.at(-1)?.trim();
+      if (exportName) {
+        exportNames.push(exportName);
+      }
+    }
+  }
+  if (/\bexport\s+default\b/.test(source)) {
+    exportNames.push("default");
+  }
+  return exportNames;
+}
+
+function extractFunctionSource(source, functionName) {
+  const declaration = new RegExp(`(?:async\\s+)?function\\s+${functionName}\\b`).exec(source);
+  if (!declaration) {
+    return null;
+  }
+  const bodyStart = source.indexOf("{", declaration.index + declaration[0].length);
+  if (bodyStart < 0) {
+    return null;
+  }
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(declaration.index, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function countMatches(source, pattern) {
+  return [...source.matchAll(pattern)].length;
+}
+
+function stripCommentsAndStringsForModuleDetection(source) {
+  return source
+    .replace(/`(?:\\.|[^`\\])*`/g, (templateSource) => {
+      const expressions = extractTemplateExpressions(templateSource);
+      return expressions.length > 0 ? expressions : "\"\"";
+    })
+    .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
 }
 
 function stripCommentsAndStrings(source) {
@@ -255,6 +455,12 @@ function stripCommentsAndStrings(source) {
     .replace(/`(?:\\.|[^`\\])*`/g, (templateSource) => extractTemplateExpressions(templateSource))
     .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
     .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+}
+
+function stripComments(source) {
+  return source
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 }
@@ -289,7 +495,7 @@ function extractTemplateExpressions(templateSource) {
   return expressions.join("\n");
 }
 
-async function resolveLocalImport(fromFile, specifier) {
+async function resolveLocalImport(fromFile, specifier, { allDashboardLocal = false } = {}) {
   if (!specifier.startsWith(".") && !specifier.startsWith("/")) {
     if (!specifier.startsWith("@/")) {
       return null;
@@ -301,7 +507,7 @@ async function resolveLocalImport(fromFile, specifier) {
     : specifier.startsWith("/")
       ? join(dashboardSrcDir, specifier.slice(1))
       : resolve(dirname(fromFile), specifier);
-  if (!isInsideDashboardSrc(basePath) || !isPipelineBoundaryPath(basePath)) {
+  if (!isInsideDashboardSrc(basePath) || (!allDashboardLocal && !isPipelineBoundaryPath(basePath))) {
     return null;
   }
 
@@ -349,6 +555,19 @@ function isPipelineBoundaryPath(filePath) {
   );
 }
 
-function isAllowedReadOnlySupervisorProjection(displayPath, specifier) {
-  return displayPath === "apps/dashboard/src/lib/pipeline-packet-loader.ts" && specifier === "./supervisor";
+function isAllowedPipelineSupervisorImport(displayPath, specifier) {
+  return (
+    (displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" && specifier === "../lib/supervisor") ||
+    isGatedSupervisorImport(displayPath, specifier)
+  );
+}
+
+function isGatedSupervisorImport(displayPath, specifier) {
+  return (
+    displayPath === "apps/dashboard/src/lib/pipeline-supervisor-actions.ts" &&
+    specifier === "./supervisor"
+  ) || (
+    displayPath === "apps/dashboard/src/components/realtime-refresh.tsx" &&
+    specifier === "../lib/supervisor"
+  );
 }
