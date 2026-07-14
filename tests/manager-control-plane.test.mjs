@@ -1283,14 +1283,14 @@ test("verified claimed lanes do not count as worker-eligible safe supply", () =>
     },
   );
 
-  assert.equal(plan.status, "refill_needed");
+  assert.equal(plan.status, "attention");
   assert.equal(plan.summary.activeLanes, 5);
   assert.equal(plan.summary.safeWorkSupply, 5);
   assert.equal(plan.summary.refillNeeded, 1);
   assert.equal(plan.summary.activeLaneEvidence.activeCount, 6);
   assert.equal(plan.summary.activeLaneEvidence.verifiedCount, 1);
   assert.equal(plan.summary.activeLaneEvidence.workerEligibleCount, 5);
-  assert.equal(plan.summary.workCreationStep.workflow, "bmad-correct-course");
+  assert.equal(plan.summary.workCreationStep, null);
 });
 
 test("refill plan exposes bounded correct-course materialization gate", () => {
@@ -1320,8 +1320,8 @@ test("refill plan exposes bounded correct-course materialization gate", () => {
           exists: true,
           path: "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml",
           backlogStories: 0,
-          readyStories: 6,
-          readyForDevStories: 6,
+          readyStories: 0,
+          readyForDevStories: 0,
           activeStories: 0,
           doneStories: 16,
           nextBacklogStoryKey: null,
@@ -1382,8 +1382,8 @@ test("refill plan skips correct-course candidates that already have local story 
           exists: true,
           path: "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml",
           backlogStories: 0,
-          readyStories: 6,
-          readyForDevStories: 6,
+          readyStories: 0,
+          readyForDevStories: 0,
           activeStories: 0,
           doneStories: 16,
           nextBacklogStoryKey: null,
@@ -1785,9 +1785,9 @@ development_status:
     },
   );
 
-  assert.equal(plan.summary.materializationGate.state, "blocked");
-  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
-  assert.equal(plan.summary.materializationGate.selectedCandidateStory, null);
+  assert.equal(plan.status, "attention");
+  assert.equal(plan.summary.bmadPlanningGap.gapType, "existing_ready_for_dev_work");
+  assert.equal(plan.summary.materializationGate, null);
 });
 
 test("refill materialization does not treat dirty active assignment evidence as completion evidence", () => {
@@ -1839,9 +1839,9 @@ development_status:
     },
   );
 
-  assert.equal(plan.summary.materializationGate.state, "blocked");
-  assert.ok(plan.summary.materializationGate.missingRequiredFields.includes("selectedCandidateStory"));
-  assert.equal(plan.summary.materializationGate.selectedCandidateStory, null);
+  assert.equal(plan.status, "attention");
+  assert.equal(plan.summary.bmadPlanningGap.gapType, "existing_ready_for_dev_work");
+  assert.equal(plan.summary.materializationGate, null);
 });
 
 test("refill materialization reads closed workspace evidence when workspace summary is truncated", () => {
@@ -1927,8 +1927,8 @@ test("refill materialization gate requires request packet authorization before a
           exists: true,
           path: "_bmad-output/implementation-artifacts/sprint-status-manager-control-plane-2026-06-28.yaml",
           backlogStories: 0,
-          readyStories: 6,
-          readyForDevStories: 6,
+          readyStories: 0,
+          readyForDevStories: 0,
           activeStories: 0,
           doneStories: 16,
           nextBacklogStoryKey: null,
@@ -2029,8 +2029,8 @@ test("refill materialization gate blocks incomplete correct-course packets", () 
           exists: true,
           path: "",
           backlogStories: 0,
-          readyStories: 6,
-          readyForDevStories: 6,
+          readyStories: 0,
+          readyForDevStories: 0,
           activeStories: 0,
           doneStories: 16,
           nextBacklogStoryKey: null,
@@ -4806,7 +4806,7 @@ test("refill dry-run and apply use the same course-correction backlog candidate"
       path: sprintPath,
       backlogStories: 0,
       readyStories: 1,
-      readyForDevStories: 1,
+      readyForDevStories: 0,
       activeStories: 1,
       doneStories: 1,
       nextBacklogStoryKey: null,
@@ -5254,7 +5254,7 @@ test("review-ready and delivery-ready lanes do not consume worker-eligible suppl
     },
   );
 
-  assert.equal(plan.status, "refill_needed");
+  assert.equal(plan.status, "attention");
   assert.equal(plan.summary.activeLaneEvidence.activeCount, 4);
   assert.equal(plan.summary.activeLaneEvidence.workerEligibleCount, 1);
   assert.equal(plan.summary.activeLanes, 1);
@@ -7574,6 +7574,50 @@ test("BMAD planning gap prioritizes review-ready work before backlog expansion",
   assert.equal(reviewReady.summary.narrowestWorkflow, "bmad-code-review");
   assert.equal(reviewReady.summary.gapType, "review");
   assert.equal(reviewReady.summary.refillDisposition, "request_narrow_bmad_workflow");
+});
+
+test("BMAD planning gap preserves ready-for-dev work before backlog expansion", () => {
+  const sourceRef = "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+  const context = {
+    assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 91 } } },
+    dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+    sourcePlanningState: {
+      sourceKey: "2026-07-04-operational-pipeline-action-loop",
+      prerequisites: { correctedPrd: true, correctedArchitecture: true, epicsAndStories: true, implementationReadiness: true },
+      sprintStatus: {
+        exists: true,
+        path: "_bmad-output/implementation-artifacts/sprint-status.yaml",
+        backlogStories: 0,
+        readyStories: 1,
+        reviewReadyStories: 0,
+        readyForDevStories: 1,
+        activeStories: 0,
+        doneStories: 23,
+        nextBacklogStoryKey: null,
+        storyStatuses: { "4-6-protected-pipeline-lane": "ready-for-dev" },
+      },
+    },
+  };
+
+  const gap = buildBmadPlanningGapPlan({ runId: "manager-ready-for-dev-attention" }, {
+    sourceRefs: [sourceRef],
+    sourcePlanningState: context.sourcePlanningState,
+  });
+  const plan = buildRefillPlan({ desiredWorkers: 6, sourceRefs: [sourceRef] }, context);
+
+  assert.equal(gap.status, "attention");
+  assert.equal(gap.summary.narrowestWorkflow, null);
+  assert.equal(gap.summary.gapType, "existing_ready_for_dev_work");
+  assert.equal(gap.summary.refillDisposition, "preserve_existing_ready_for_dev_work");
+  assert.equal(gap.blockers[0].code, "bmad-planning-ready-for-dev-work-remains");
+  assert.equal(plan.status, "attention");
+  assert.equal(plan.summary.bmadPlanningGap.gapType, "existing_ready_for_dev_work");
+  assert.equal(plan.summary.workCreationStep, null);
+  assert.equal(plan.summary.materializationGate, null);
+  assert.deepEqual(plan.summary.candidateLanes, []);
+  assert.match(plan.summary.mutationMode, /preserve existing ready-for-dev/);
+  assert.equal(plan.nextActions[0].code, "bmad-planning-preserve-ready-for-dev-work");
+  assert.doesNotMatch(JSON.stringify(plan), /bmad-correct-course|26-[1-6]-/i);
 });
 
 test("refill plan surfaces planning gap and preserves dispatcher refill behavior", () => {
