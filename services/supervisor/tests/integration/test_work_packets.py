@@ -5705,6 +5705,10 @@ def test_existing_sqlite_action_schema_gets_approval_migration_and_ledger_table(
             "action_context_digest_sha256",
         }.issubset(_sqlite_table_columns(db_path, "pipeline_operational_approvals"))
         assert "verification_retry_intents" in _sqlite_tables(db_path)
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select scope, generation from admission_locks where scope = 'execute'"
+            ).fetchone() == ("execute", 0)
 
 
 def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_coverage(tmp_path, monkeypatch) -> None:

@@ -116,6 +116,18 @@ function approvalFor(request, overrides = {}) {
   };
 }
 
+function withReboundContext(contract, request, contextOverrides) {
+  const rebound = structuredClone(request);
+  Object.assign(rebound.actionContext, contextOverrides);
+  rebound.actionContextDigestSha256 = contract.pipelineOperationalActionContextDigestSha256V1(
+    rebound.actionId,
+    rebound.targetType,
+    rebound.targetId,
+    rebound.actionContext,
+  );
+  return rebound;
+}
+
 test("v1 policy reconciles exact targets, authority families, risks, and context fences", async () => {
   const contract = await loadContract();
   assert.deepEqual(contract.PIPELINE_OPERATIONAL_ACTION_V1_POLICY, {
@@ -176,6 +188,70 @@ test("v1 request and approval reject valid-shaped incorrect context digests", as
     ...approval,
     actionContextDigestSha256: wrongDigest,
   }).some((issue) => issue.code === "context_digest_mismatch"));
+});
+
+test("v1 identifiers accept exact persistence bounds and reject max plus one", async () => {
+  const contract = await loadContract();
+  const validate = contract.validatePipelineOperationalActionRequestV1;
+
+  for (const [field, maxLength] of [["correlationId", 36], ["idempotencyKey", 160], ["approvalId", 120]]) {
+    assert.deepEqual(validate(requestFor(contract, "retry_verification", { [field]: "a".repeat(maxLength) })), [], `${field} exact max`);
+    assert.ok(
+      validate(requestFor(contract, "retry_verification", { [field]: "a".repeat(maxLength + 1) }))
+        .some((issue) => issue.field === field && issue.code === "invalid_contract"),
+      `${field} max plus one`,
+    );
+  }
+
+  for (const [field, maxLength] of [
+    ["linkedWorkItemId", 36],
+    ["linkedPacketId", 80],
+    ["expectedPacketCurrentEventId", 80],
+    ["expectedLeaseId", 36],
+  ]) {
+    assert.deepEqual(
+      validate(withReboundContext(contract, requestFor(contract, "retry_verification"), { [field]: "a".repeat(maxLength) })),
+      [],
+      `actionContext.${field} exact max`,
+    );
+    assert.ok(
+      validate(withReboundContext(contract, requestFor(contract, "retry_verification"), { [field]: "a".repeat(maxLength + 1) }))
+        .some((issue) => issue.field === `actionContext.${field}` && ["invalid_contract", "stale_fence"].includes(issue.code)),
+      `actionContext.${field} max plus one`,
+    );
+  }
+
+  assert.deepEqual(
+    validate(withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "a".repeat(100) })),
+    [],
+    "owner exact max",
+  );
+  assert.ok(
+    validate(withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "a".repeat(101) }))
+      .some((issue) => issue.field === "actionContext.newOwnerId" && issue.code === "invalid_contract"),
+    "owner max plus one",
+  );
+
+  const attemptAtMax = requestFor(contract, "retry_verification", { targetId: "a".repeat(36) });
+  attemptAtMax.actionContext.executionAttemptId = attemptAtMax.targetId;
+  attemptAtMax.actionContextDigestSha256 = contract.pipelineOperationalActionContextDigestSha256V1(
+    attemptAtMax.actionId,
+    attemptAtMax.targetType,
+    attemptAtMax.targetId,
+    attemptAtMax.actionContext,
+  );
+  assert.deepEqual(validate(attemptAtMax), [], "attempt target exact max");
+
+  const attemptTooLong = structuredClone(attemptAtMax);
+  attemptTooLong.targetId = "a".repeat(37);
+  attemptTooLong.actionContext.executionAttemptId = attemptTooLong.targetId;
+  attemptTooLong.actionContextDigestSha256 = contract.pipelineOperationalActionContextDigestSha256V1(
+    attemptTooLong.actionId,
+    attemptTooLong.targetType,
+    attemptTooLong.targetId,
+    attemptTooLong.actionContext,
+  );
+  assert.ok(validate(attemptTooLong).some((issue) => issue.field === "targetId" && issue.code === "invalid_contract"));
 });
 
 test("v1 authorization fails closed for stale context, digest, actor, expiry, and replay", async () => {

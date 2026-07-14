@@ -1697,6 +1697,18 @@ const OPERATIONAL_ACTION_IDENTIFIER =
   /^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/;
 const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
 const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
+const OPERATIONAL_ACTION_V1_ID_LENGTHS = {
+  executionAttempt: 36,
+  workItem: 36,
+  queueLease: 36,
+  workPacket: 80,
+  packetEvent: 80,
+  owner: 100,
+  approval: 120,
+  actionRecord: 80,
+  correlation: 36,
+  idempotency: 160,
+} as const;
 const EPIC_25_RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 const EPIC_25_HIGH_ENTROPY_OR_PEM = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?<![A-Za-z0-9])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])/i;
 const EPIC_25_TOKEN_LIKE_METADATA_VALUE = /(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])[A-Za-z]{2,12}[-_](?=(?:[A-Za-z0-9]*\d){2})[A-Za-z0-9]{20,}(?![A-Za-z0-9])|^(?=[A-Za-z0-9+/]{48,}={0,2}$)(?=.*[0-9+/=])[A-Za-z0-9+/]+={0,2}$|^(?=[a-f0-9]{40,}$)(?=.*[0-9])[a-f0-9]+$/i;
@@ -2128,8 +2140,12 @@ export function validatePipelineOperationalActionRequestV1(request: unknown): Pi
     "idempotencyKey", "correlationId", "requestedBy", "requestedAuthorityState", "requestedRiskTier",
     "approvalId", "evidenceRefs",
   ]);
-  for (const field of ["idempotencyKey", "correlationId", "approvalId"]) {
-    if (!isSafeOperationalActionV1Identifier(record[field])) {
+  for (const [field, maxLength] of [
+    ["idempotencyKey", OPERATIONAL_ACTION_V1_ID_LENGTHS.idempotency],
+    ["correlationId", OPERATIONAL_ACTION_V1_ID_LENGTHS.correlation],
+    ["approvalId", OPERATIONAL_ACTION_V1_ID_LENGTHS.approval],
+  ] as const) {
+    if (!isSafeOperationalActionV1Identifier(record[field], maxLength)) {
       pushPipelineOperationalActionV1Issue(issues, field, "invalid_contract", `V1 ${field} must be an exact safe identifier.`);
     }
   }
@@ -2160,7 +2176,7 @@ export function validatePipelineOperationalActionApprovalV1(approval: unknown): 
     "consumed", "consumedAt", "consumedActionIdempotencyKey", "consumedActionRecordId",
   ]);
   validatePipelineOperationalActionV1Actor(issues, record.requestedBy, "requestedBy");
-  if (!isSafeOperationalActionV1Identifier(record.approvalId)) {
+  if (!isSafeOperationalActionV1Identifier(record.approvalId, OPERATIONAL_ACTION_V1_ID_LENGTHS.approval)) {
     pushPipelineOperationalActionV1Issue(issues, "approvalId", "invalid_contract", "V1 approvals require an exact safe approval id.");
   }
   if (record.issuedBy !== "supervisor_server") {
@@ -2175,7 +2191,11 @@ export function validatePipelineOperationalActionApprovalV1(approval: unknown): 
     pushPipelineOperationalActionV1Issue(issues, "consumed", "invalid_contract", "V1 approval consumption state must be explicit.");
   } else {
     const consumptionFields = [record.consumedAt, record.consumedActionIdempotencyKey, record.consumedActionRecordId];
-    if (record.consumed && consumptionFields.some((value) => !isSafeOperationalIdentifierOrTimestamp(value))) {
+    if (record.consumed && (
+      !Number.isFinite(pipelineOperationalActionV1Timestamp(record.consumedAt)) ||
+      !isSafeOperationalActionV1Identifier(record.consumedActionIdempotencyKey, OPERATIONAL_ACTION_V1_ID_LENGTHS.idempotency) ||
+      !isSafeOperationalActionV1Identifier(record.consumedActionRecordId, OPERATIONAL_ACTION_V1_ID_LENGTHS.actionRecord)
+    )) {
       pushPipelineOperationalActionV1Issue(issues, "consumed", "invalid_contract", "Consumed V1 approvals require complete consumption metadata.");
     }
     if (!record.consumed && consumptionFields.some((value) => value !== null)) {
@@ -2227,8 +2247,13 @@ export function validatePipelineOperationalActionResultV1(result: unknown): Pipe
       !isOneOfString(record.authorityState, ["needs_authority_approval", "allowed", "blocked"])) {
     pushPipelineOperationalActionV1Issue(issues, "outcome", "invalid_contract", "V1 result outcome, capability, or authority state is invalid.");
   }
-  for (const field of ["correlationId", "idempotencyKey", "actionRecordId", "approvalId"]) {
-    if (!isSafeOperationalActionV1Identifier(record[field])) {
+  for (const [field, maxLength] of [
+    ["correlationId", OPERATIONAL_ACTION_V1_ID_LENGTHS.correlation],
+    ["idempotencyKey", OPERATIONAL_ACTION_V1_ID_LENGTHS.idempotency],
+    ["actionRecordId", OPERATIONAL_ACTION_V1_ID_LENGTHS.actionRecord],
+    ["approvalId", OPERATIONAL_ACTION_V1_ID_LENGTHS.approval],
+  ] as const) {
+    if (!isSafeOperationalActionV1Identifier(record[field], maxLength)) {
       pushPipelineOperationalActionV1Issue(issues, field, "invalid_contract", `V1 result ${field} must be an exact safe identifier.`);
     }
   }
@@ -2337,7 +2362,12 @@ function validatePipelineOperationalActionV1Common(
   if (surface === "request" && record[authorityField] !== policy.authorityState) {
     pushPipelineOperationalActionV1Issue(issues, authorityField, "policy_violation", "V1 requests require the authority-approval family.");
   }
-  if (!isSafeOperationalActionV1Identifier(record.targetId)) {
+  const targetIdMaxLength = record.actionId === "retry_verification"
+    ? OPERATIONAL_ACTION_V1_ID_LENGTHS.executionAttempt
+    : record.actionId === "reassign"
+      ? OPERATIONAL_ACTION_V1_ID_LENGTHS.workPacket
+      : PIPELINE_OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID.length;
+  if (!isSafeOperationalActionV1Identifier(record.targetId, targetIdMaxLength)) {
     pushPipelineOperationalActionV1Issue(issues, "targetId", "invalid_contract", "V1 target id must be an exact safe identifier.");
   }
   if ((record.actionId === "pause" || record.actionId === "drain") && record.targetId !== PIPELINE_OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID) {
@@ -2377,8 +2407,13 @@ function validatePipelineOperationalActionV1Context(
     pushPipelineOperationalActionV1Issue(issues, "actionContext.kind", "target_context_mismatch", "V1 action context discriminator must match actionId.");
   }
   if (actionId === "retry_verification") {
-    for (const field of ["executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedPacketCurrentEventId"]) {
-      if (!isSafeOperationalActionV1Identifier(context[field])) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Retry context identifiers must be exact and safe.");
+    for (const [field, maxLength] of [
+      ["executionAttemptId", OPERATIONAL_ACTION_V1_ID_LENGTHS.executionAttempt],
+      ["linkedWorkItemId", OPERATIONAL_ACTION_V1_ID_LENGTHS.workItem],
+      ["linkedPacketId", OPERATIONAL_ACTION_V1_ID_LENGTHS.workPacket],
+      ["expectedPacketCurrentEventId", OPERATIONAL_ACTION_V1_ID_LENGTHS.packetEvent],
+    ] as const) {
+      if (!isSafeOperationalActionV1Identifier(context[field], maxLength)) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Retry context identifiers must be exact and safe.");
     }
     if (context.executionAttemptId !== targetId) pushPipelineOperationalActionV1Issue(issues, "actionContext.executionAttemptId", "target_context_mismatch", "Retry context must bind the target execution attempt.");
     if (!isOneOfString(context.expectedWorkItemState, [
@@ -2389,7 +2424,7 @@ function validatePipelineOperationalActionV1Context(
     if (!isOneOfString(context.expectedAttemptStatus, ["failed", "timed_out", "rejected"]) || !Number.isFinite(pipelineOperationalActionV1Timestamp(context.expectedAttemptUpdatedAt))) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedAttemptStatus", "stale_fence", "Retry requires a terminal failed/timed-out/rejected attempt status and exact updatedAt revision.");
     }
-    const leaseIdValid = context.expectedLeaseId === null || isSafeOperationalActionV1Identifier(context.expectedLeaseId);
+    const leaseIdValid = context.expectedLeaseId === null || isSafeOperationalActionV1Identifier(context.expectedLeaseId, OPERATIONAL_ACTION_V1_ID_LENGTHS.queueLease);
     const leaseTokenValid = context.expectedLeaseFencingToken === null || isPositiveInteger(context.expectedLeaseFencingToken);
     if (!leaseIdValid || !leaseTokenValid || (context.expectedLeaseId === null) !== (context.expectedLeaseFencingToken === null) || context.expectedLeaseActive !== false) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedLeaseId", "stale_fence", "Retry lease id/token must be paired and the exact lease must be inactive.");
@@ -2404,10 +2439,14 @@ function validatePipelineOperationalActionV1Context(
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedRuntimeRevision", "stale_fence", "Drain requires exact runtime mode/revision and non-negative active-count snapshot.");
     }
   } else {
-    for (const field of ["linkedWorkItemId", "expectedPacketCurrentEventId", "newOwnerId"]) {
-      if (!isSafeOperationalActionV1Identifier(context[field])) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Reassign context identifiers must be exact and safe.");
+    for (const [field, maxLength] of [
+      ["linkedWorkItemId", OPERATIONAL_ACTION_V1_ID_LENGTHS.workItem],
+      ["expectedPacketCurrentEventId", OPERATIONAL_ACTION_V1_ID_LENGTHS.packetEvent],
+      ["newOwnerId", OPERATIONAL_ACTION_V1_ID_LENGTHS.owner],
+    ] as const) {
+      if (!isSafeOperationalActionV1Identifier(context[field], maxLength)) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Reassign context identifiers must be exact and safe.");
     }
-    if (context.expectedCurrentOwnerId !== null && !isSafeOperationalActionV1Identifier(context.expectedCurrentOwnerId)) {
+    if (context.expectedCurrentOwnerId !== null && !isSafeOperationalActionV1Identifier(context.expectedCurrentOwnerId, OPERATIONAL_ACTION_V1_ID_LENGTHS.owner)) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedCurrentOwnerId", "invalid_contract", "Reassign current owner must be exact or explicitly unassigned.");
     }
     if (context.expectedCurrentOwnerId === context.newOwnerId || !isOneOfString(context.expectedWorkItemState, [
@@ -2430,9 +2469,9 @@ function validatePipelineOperationalActionV1SuccessEvidence(
   }
   if (record.actionId === "retry_verification") {
     if (evidence.originalAttemptId !== record.targetId || evidence.originalAttemptPreserved !== true || evidence.providerOrWorkerLaunched !== false ||
-        !isSafeOperationalActionV1Identifier(evidence.retryAttemptId) || evidence.retryAttemptId === evidence.originalAttemptId ||
+        !isSafeOperationalActionV1Identifier(evidence.retryAttemptId, OPERATIONAL_ACTION_V1_ID_LENGTHS.executionAttempt) || evidence.retryAttemptId === evidence.originalAttemptId ||
         evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.linkedPacketId !== context.linkedPacketId ||
-        !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId)) {
+        !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId, OPERATIONAL_ACTION_V1_ID_LENGTHS.packetEvent)) {
       pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Retry success must preserve the original attempt, create a distinct attempt, and launch nothing.");
     }
   } else if (record.actionId === "pause") {
@@ -2450,7 +2489,7 @@ function validatePipelineOperationalActionV1SuccessEvidence(
   } else if (evidence.packetId !== record.targetId || evidence.activeLeaseTransferred !== false || evidence.workerLaunched !== false ||
       evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.previousOwnerId !== context.expectedCurrentOwnerId ||
       evidence.newOwnerId !== context.newOwnerId || evidence.resultingPacketCurrentEventId === context.expectedPacketCurrentEventId ||
-      !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId)) {
+      !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId, OPERATIONAL_ACTION_V1_ID_LENGTHS.packetEvent)) {
     pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Reassign success must report changed ownership without lease transfer or worker launch.");
   }
 }
@@ -2484,12 +2523,8 @@ function pipelineOperationalActionV1Timestamp(value: unknown): number {
   return typeof value === "string" && EPIC_25_RFC3339_TIMESTAMP.test(value) ? Date.parse(value) : NaN;
 }
 
-function isSafeOperationalIdentifierOrTimestamp(value: unknown): boolean {
-  return isSafeOperationalActionV1Identifier(value) || Number.isFinite(pipelineOperationalActionV1Timestamp(value));
-}
-
-function isSafeOperationalActionV1Identifier(value: unknown): value is string {
-  return typeof value === "string" && isSafeOperationalIdentifierText(value);
+function isSafeOperationalActionV1Identifier(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length <= maxLength && isSafeOperationalIdentifierText(value);
 }
 
 function validatePipelineOperationalActionV1Actor(
@@ -2502,7 +2537,8 @@ function validatePipelineOperationalActionV1Actor(
       !isOneOfString(actor.actorType, ["system", "operator", "manager", "worker"])) {
     pushPipelineOperationalActionV1Issue(issues, field, "wrong_actor", "V1 requests require one exact accountable actor.");
   }
-  const actorIdValid = actor.actorId === undefined || actor.actorId === null || isSafeOperationalActionV1Identifier(actor.actorId);
+  const actorIdValid = actor.actorId === undefined || actor.actorId === null ||
+    isSafeOperationalActionV1Identifier(actor.actorId, OPERATIONAL_ACTION_V1_ID_LENGTHS.owner);
   const actorLabelValid = actor.actorLabel === undefined || actor.actorLabel === null ||
     (typeof actor.actorLabel === "string" && isSafeOperationalMetadataText(actor.actorLabel));
   if (!actorIdValid || !actorLabelValid || (actor.actorId == null && actor.actorLabel == null)) {
