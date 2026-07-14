@@ -20,6 +20,7 @@ from supervisor.api.schemas import (
     ReassignActionContextV1,
     RetryVerificationActionContextV1,
     operational_action_context_digest_payload_v1,
+    operational_action_context_digest_sha256_v1,
 )
 from supervisor.application.service import (
     SERVER_APPLICABLE_OPERATIONAL_ACTIONS,
@@ -79,13 +80,24 @@ def _contexts() -> dict[str, dict[str, object]]:
 def _request(action_id: str) -> dict[str, object]:
     policy = EXPECTED_POLICY[action_id]
     target_id = "attempt-1" if action_id == "retry_verification" else "packet-1" if action_id == "reassign" else "supervisor-runtime"
+    context_model = {
+        "retry_verification": RetryVerificationActionContextV1,
+        "pause": PauseActionContextV1,
+        "drain": DrainActionContextV1,
+        "reassign": ReassignActionContextV1,
+    }[action_id].model_validate(_contexts()[action_id])
     return {
         "schemaVersion": "pipeline-operational-action/v1",
         "actionId": action_id,
         "targetType": policy["targetType"],
         "targetId": target_id,
-        "actionContext": deepcopy(_contexts()[action_id]),
-        "actionContextDigestSha256": f"sha256:{'a' * 64}",
+        "actionContext": context_model.model_dump(mode="json"),
+        "actionContextDigestSha256": operational_action_context_digest_sha256_v1(
+            action_id,
+            policy["targetType"],
+            target_id,
+            context_model,
+        ),
         "idempotencyKey": f"idem-{action_id.replace('_', '-')}",
         "correlationId": "corr-1",
         "requestedBy": _actor(),
@@ -192,6 +204,19 @@ def test_context_digest_payload_is_canonical_and_field_ordered() -> None:
     assert ReassignActionContextV1.model_validate(_contexts()["reassign"]).newOwnerId == "owner-new"
 
 
+def test_valid_shaped_wrong_digest_is_rejected_for_request_and_approval() -> None:
+    request = _request("retry_verification")
+    request["actionContextDigestSha256"] = f"sha256:{'a' * 64}"
+    with pytest.raises(ValidationError, match="does not match the canonical"):
+        OperationalActionRequestV1.model_validate(request)
+
+    valid_request = _request("pause")
+    approval = _approval(valid_request)
+    approval["actionContextDigestSha256"] = f"sha256:{'a' * 64}"
+    with pytest.raises(ValidationError, match="does not match the canonical"):
+        OperationalActionApprovalV1.model_validate(approval)
+
+
 def test_authorization_rejects_digest_context_actor_expiry_and_replay_drift() -> None:
     request = _request("retry_verification")
     approval = _approval(request)
@@ -200,12 +225,12 @@ def test_authorization_rejects_digest_context_actor_expiry_and_replay_drift() ->
 
     stale = deepcopy(envelope)
     stale["approval"]["actionContext"]["expectedAttemptStatus"] = "timed_out"  # type: ignore[index]
-    with pytest.raises(ValidationError, match="stale or changed"):
+    with pytest.raises(ValidationError, match="does not match the canonical"):
         OperationalActionAuthorizationEnvelopeV1.model_validate(stale)
 
     digest_mismatch = deepcopy(envelope)
     digest_mismatch["approval"]["actionContextDigestSha256"] = f"sha256:{'0' * 64}"  # type: ignore[index]
-    with pytest.raises(ValidationError, match="digest mismatch"):
+    with pytest.raises(ValidationError, match="does not match the canonical"):
         OperationalActionAuthorizationEnvelopeV1.model_validate(digest_mismatch)
 
     wrong_actor = deepcopy(envelope)

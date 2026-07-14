@@ -135,6 +135,16 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
   assert.ok(contract.validatePipelineOperationalActionRequestV1({ ...pause, actionContext: undefined }).some((issue) => issue.code === "invalid_contract"));
 
   const retry = requestFor(contract, "retry_verification");
+  assert.equal(
+    retry.actionContextDigestSha256,
+    contract.pipelineOperationalActionContextDigestSha256V1(
+      retry.actionId,
+      retry.targetType,
+      retry.targetId,
+      retry.actionContext,
+    ),
+    "contract SHA-256 must match the Node reference digest",
+  );
   const missingFence = structuredClone(retry);
   delete missingFence.actionContext.expectedAttemptUpdatedAt;
   assert.ok(contract.validatePipelineOperationalActionRequestV1(missingFence).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
@@ -147,6 +157,23 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
   }).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
 });
 
+test("v1 request and approval reject valid-shaped incorrect context digests", async () => {
+  const contract = await loadContract();
+  const request = requestFor(contract, "retry_verification");
+  const wrongDigest = `sha256:${"a".repeat(64)}`;
+  assert.notEqual(request.actionContextDigestSha256, wrongDigest);
+  assert.ok(contract.validatePipelineOperationalActionRequestV1({
+    ...request,
+    actionContextDigestSha256: wrongDigest,
+  }).some((issue) => issue.code === "context_digest_mismatch"));
+
+  const approval = approvalFor(request);
+  assert.ok(contract.validatePipelineOperationalActionApprovalV1({
+    ...approval,
+    actionContextDigestSha256: wrongDigest,
+  }).some((issue) => issue.code === "context_digest_mismatch"));
+});
+
 test("v1 authorization fails closed for stale context, digest, actor, expiry, and replay", async () => {
   const contract = await loadContract();
   const request = requestFor(contract, "retry_verification");
@@ -155,7 +182,7 @@ test("v1 authorization fails closed for stale context, digest, actor, expiry, an
 
   const staleAttempt = structuredClone(approval);
   staleAttempt.actionContext.expectedAttemptStatus = "timed_out";
-  assert.ok(contract.validatePipelineOperationalActionAuthorizationV1(request, staleAttempt, "2026-07-14T20:01:00.000Z").some((issue) => issue.code === "stale_fence"));
+  assert.ok(contract.validatePipelineOperationalActionAuthorizationV1(request, staleAttempt, "2026-07-14T20:01:00.000Z").some((issue) => issue.code === "context_digest_mismatch"));
   assert.ok(contract.validatePipelineOperationalActionAuthorizationV1(request, { ...approval, actionContextDigestSha256: `sha256:${"0".repeat(64)}` }, "2026-07-14T20:01:00.000Z").some((issue) => issue.code === "context_digest_mismatch"));
   assert.ok(contract.validatePipelineOperationalActionAuthorizationV1(request, { ...approval, requestedBy: actor("operator-2") }, "2026-07-14T20:01:00.000Z").some((issue) => issue.code === "wrong_actor"));
   assert.ok(contract.validatePipelineOperationalActionAuthorizationV1(request, approval, "2026-07-14T20:05:00.000Z").some((issue) => issue.code === "approval_expired"));

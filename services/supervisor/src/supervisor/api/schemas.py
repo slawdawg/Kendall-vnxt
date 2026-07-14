@@ -1,4 +1,5 @@
-﻿import json
+﻿import hashlib
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
@@ -2697,6 +2698,16 @@ def operational_action_context_digest_payload_v1(
     )
 
 
+def operational_action_context_digest_sha256_v1(
+    action_id: str,
+    target_type: str,
+    target_id: str,
+    action_context: OperationalActionContextV1,
+) -> str:
+    payload = operational_action_context_digest_payload_v1(action_id, target_type, target_id, action_context)
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
 class OperationalActionBindingV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2724,6 +2735,14 @@ class OperationalActionBindingV1(BaseModel):
             raise ValueError("Retry context must bind the exact target execution attempt.")
         if self.actionId in {"pause", "drain"} and self.targetId != OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID:
             raise ValueError("Runtime V1 actions must target the singleton supervisor runtime.")
+        expected_digest = operational_action_context_digest_sha256_v1(
+            self.actionId,
+            self.targetType,
+            self.targetId,
+            self.actionContext,
+        )
+        if self.actionContextDigestSha256 != expected_digest:
+            raise ValueError("V1 action context digest does not match the canonical target-and-context SHA-256 digest.")
         return self
 
 
