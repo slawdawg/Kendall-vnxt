@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -1091,11 +1091,18 @@ class SupervisorService:
         if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
             raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
 
+        await self._begin_p2_1_admission_transaction(session)
         existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
         if existing:
             if not self._operational_action_matches_v1(existing, payload):
+                await session.rollback()
                 raise ValueError("Operational action idempotency key already belongs to different action metadata.")
-            return self._operational_action_result_view_v1(existing, replayed=True)
+            replay = self._operational_action_result_view_v1(existing, replayed=True)
+            await session.rollback()
+            return replay
+        if await self._verification_retry_intent_by_idempotency(session, payload.idempotencyKey):
+            await session.rollback()
+            raise ValueError("Operational action idempotency key already belongs to different action metadata.")
 
         attempt, item, packet, lease = await self._validate_p2_1_operational_target(session, payload, lock=True)
         approval = await self._validate_operational_approval_v1(session, payload)
@@ -1196,7 +1203,7 @@ class SupervisorService:
             work_event_type = "work_item.reassigned"
             work_event_summary = f"Reassigned quiescent work from {previous_owner_id} to {context.newOwnerId}."
 
-        await self._append_p2_1_operational_events(
+        work_event = await self._append_p2_1_operational_events(
             session,
             payload,
             approval,
@@ -1242,13 +1249,54 @@ class SupervisorService:
         session.add(record)
         try:
             await session.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             await session.rollback()
             replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
-            if replay and self._operational_action_matches_v1(replay, payload):
-                return self._operational_action_result_view_v1(replay, replayed=True)
-            raise
+            if replay:
+                if self._operational_action_matches_v1(replay, payload):
+                    return self._operational_action_result_view_v1(replay, replayed=True)
+                raise ValueError(
+                    "Operational action idempotency key already belongs to different action metadata."
+                ) from exc
+            if await self._verification_retry_intent_by_idempotency(session, payload.idempotencyKey):
+                raise ValueError(
+                    "Operational action idempotency key already belongs to different action metadata."
+                ) from exc
+            raise ValueError("Operational action conflicted with concurrent persisted state.") from exc
+        await self._publish_recorded_workflow_event(work_event)
         return self._operational_action_result_view_v1(record, replayed=False)
+
+    async def _begin_p2_1_admission_transaction(self, session: AsyncSession) -> None:
+        """Serialize admission against every writer of the predicates checked below."""
+
+        dialect = session.get_bind().dialect.name
+        if dialect == "sqlite":
+            # SQLite has no row-level predicate locks. BEGIN IMMEDIATE obtains the
+            # database write reservation before any admission read, so a writer
+            # cannot create a lease/attempt or change capacity/state mid-decision.
+            await session.execute(text("BEGIN IMMEDIATE"))
+            return
+        if dialect == "postgresql":
+            # SHARE ROW EXCLUSIVE conflicts with INSERT/UPDATE/DELETE table locks.
+            # This deliberately bounded action path favors a truthful admission
+            # decision over throughput and prevents phantom active rows.
+            await session.execute(
+                text(
+                    "LOCK TABLE work_items, execution_attempts, queue_leases, "
+                    "authoritative_work_packets, verification_retry_intents, "
+                    "pipeline_operational_action_records, pipeline_operational_approvals "
+                    "IN SHARE ROW EXCLUSIVE MODE"
+                )
+            )
+
+    async def _verification_retry_intent_by_idempotency(
+        self,
+        session: AsyncSession,
+        idempotency_key: str,
+    ) -> VerificationRetryIntent | None:
+        return await session.scalar(
+            select(VerificationRetryIntent).where(VerificationRetryIntent.idempotency_key == idempotency_key)
+        )
 
     async def _validate_p2_1_operational_target(
         self,
@@ -1268,6 +1316,18 @@ class SupervisorService:
             packet = await session.get(AuthoritativeWorkPacket, context.linkedPacketId, **get_options)
             if not item or not packet or attempt.work_item_id != item.id:
                 raise OperationalActionIneligible("Retry target attempt/work-item/packet linkage disagrees.", "evidence_invalid")
+            attempt_artifacts = attempt.artifact_refs_json if isinstance(attempt.artifact_refs_json, list) else []
+            has_verification_provenance = any(
+                isinstance(ref, dict)
+                and ref.get("artifactType") == "task_packet_v0"
+                and ref.get("taskKind") == TaskKind.VALIDATION_EXECUTION.value
+                for ref in attempt_artifacts
+            )
+            if not has_verification_provenance:
+                raise OperationalActionIneligible(
+                    "Retry target is not an explicitly marked verification attempt.",
+                    "evidence_invalid",
+                )
             if attempt.status not in {
                 ExecutionAttemptStatus.FAILED.value,
                 ExecutionAttemptStatus.TIMED_OUT.value,
@@ -1328,6 +1388,7 @@ class SupervisorService:
                     or lease.work_item_id != item.id
                     or context.expectedLeaseId != lease.id
                     or context.expectedLeaseFencingToken != lease.fencing_token
+                    or attempt.queue_fencing_token != lease.fencing_token
                     or lease.active is not False
                 ):
                     raise OperationalActionIneligible("Retry lease/fencing context is stale or ambiguous.", "projection_stale")
@@ -1390,7 +1451,7 @@ class SupervisorService:
         work_event_summary: str,
         success_evidence: dict[str, object],
         occurred_at: datetime,
-    ) -> None:
+    ) -> WorkflowEvent:
         previous_event_id = packet.current_event_id
         event_evidence_refs = list(payload.evidenceRefs) + [
             f"evidence:approval-{approval.approval_id}",
@@ -1410,7 +1471,7 @@ class SupervisorService:
                 actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
                 correlation_id=payload.correlationId,
                 causation_id=previous_event_id,
-                idempotency_key=f"{payload.idempotencyKey}:packet-event",
+                idempotency_key=self._p2_1_packet_event_idempotency_key(payload.idempotencyKey),
                 packet_title=packet.title,
                 parent_packet_id=packet.parent_packet_id,
                 lineage_kind=packet.lineage_kind,
@@ -1438,7 +1499,7 @@ class SupervisorService:
         packet.updated_at = occurred_at
         item.updated_at = occurred_at
         item.last_event_at = occurred_at
-        await self._record_event(
+        return await self._record_event(
             session,
             item,
             work_event_type,
@@ -1465,7 +1526,12 @@ class SupervisorService:
             actor_id=SERVER_OWNED_LOCAL_OPERATOR["actorId"],
             actor_label=SERVER_OWNED_LOCAL_OPERATOR["actorLabel"],
             correlation_id=payload.correlationId,
+            publish=False,
         )
+
+    @staticmethod
+    def _p2_1_packet_event_idempotency_key(action_idempotency_key: str) -> str:
+        return f"p2-1:{hashlib.sha256(action_idempotency_key.encode('utf-8')).hexdigest()}"
 
     def _operational_approval_view_v1(self, approval: OperationalActionApprovalRecord) -> OperationalActionApprovalV1:
         return OperationalActionApprovalV1(
@@ -27022,6 +27088,7 @@ class SupervisorService:
         actor_id: str | None = None,
         actor_label: str | None = None,
         correlation_id: str | None = None,
+        publish: bool = True,
     ) -> WorkflowEvent:
         correlation_id = correlation_id or str(uuid.uuid4())
         event = WorkflowEvent(
@@ -27035,18 +27102,22 @@ class SupervisorService:
             payload=payload,
         )
         session.add(event)
+        if publish:
+            await self._publish_recorded_workflow_event(event)
+        return event
+
+    async def _publish_recorded_workflow_event(self, event: WorkflowEvent) -> None:
         await self.bus.publish(
             self._event_payload(
-                event_type,
-                item.id,
-                correlation_id,
-                payload | {"summary": summary},
-                actor_type=actor_type,
-                actor_id=actor_id,
-                actor_label=actor_label,
+                event.event_type,
+                event.work_item_id,
+                event.correlation_id,
+                dict(event.payload or {}) | {"summary": event.summary},
+                actor_type=event.actor_type,
+                actor_id=event.actor_id,
+                actor_label=event.actor_label,
             )
         )
-        return event
 
     async def _publish_item(self, item: WorkItem) -> None:
         needs_attention, attention_reason = self._derive_attention(item)

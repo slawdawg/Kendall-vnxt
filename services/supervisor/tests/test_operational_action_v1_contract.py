@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from supervisor.api.schemas import (
     OPERATIONAL_ACTION_V1_CONTEXT_FIELDS,
+    OPERATIONAL_ACTION_V1_ID_LENGTHS,
     OPERATIONAL_ACTION_V1_POLICY,
     DrainActionContextV1,
     OperationalActionApprovalV1,
@@ -26,6 +27,7 @@ from supervisor.application.service import (
     SERVER_APPLICABLE_OPERATIONAL_ACTIONS,
     SERVER_APPROVABLE_OPERATIONAL_ACTIONS,
     SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS,
+    SupervisorService,
 )
 
 
@@ -192,6 +194,58 @@ def test_v1_requests_fail_closed_for_context_fence_target_authority_and_risk_dri
     reassign["actionContext"]["expectedActiveLeaseId"] = "lease-1"  # type: ignore[index]
     with pytest.raises(ValidationError):
         OperationalActionRequestV1.model_validate(reassign)
+
+
+def test_v1_identifier_boundaries_match_persistence_without_truncation() -> None:
+    retry_context = deepcopy(_contexts()["retry_verification"])
+    retry_context.update(
+        executionAttemptId="a" * OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+        linkedWorkItemId="w" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+        linkedPacketId="p" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"],
+        expectedPacketCurrentEventId="e" * OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"],
+        expectedLeaseId="l" * OPERATIONAL_ACTION_V1_ID_LENGTHS["queue_lease"],
+    )
+    assert RetryVerificationActionContextV1.model_validate(retry_context).linkedPacketId == "p" * 80
+
+    reassign_context = deepcopy(_contexts()["reassign"])
+    reassign_context.update(
+        linkedWorkItemId="w" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+        expectedPacketCurrentEventId="e" * OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"],
+        expectedCurrentOwnerId="o" * OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"],
+        newOwnerId="n" * OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"],
+    )
+    assert ReassignActionContextV1.model_validate(reassign_context).newOwnerId == "n" * 100
+
+    request = _request("retry_verification")
+    request.update(
+        idempotencyKey="i" * OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"],
+        correlationId="c" * OPERATIONAL_ACTION_V1_ID_LENGTHS["correlation"],
+        approvalId="v" * OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"],
+    )
+    accepted = OperationalActionRequestV1.model_validate(request)
+    assert len(accepted.idempotencyKey) == 160
+    assert len(accepted.correlationId) == 36
+    assert len(accepted.approvalId) == 120
+
+    for field, limit in (
+        ("idempotencyKey", OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"]),
+        ("correlationId", OPERATIONAL_ACTION_V1_ID_LENGTHS["correlation"]),
+        ("approvalId", OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"]),
+    ):
+        oversized = deepcopy(request)
+        oversized[field] = "x" * (limit + 1)
+        with pytest.raises(ValidationError, match="exact safe identifier"):
+            OperationalActionRequestV1.model_validate(oversized)
+
+    oversized_attempt = deepcopy(retry_context)
+    oversized_attempt["executionAttemptId"] = "a" * (OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"] + 1)
+    with pytest.raises(ValidationError, match="exact safe identifier"):
+        RetryVerificationActionContextV1.model_validate(oversized_attempt)
+
+    first_key = SupervisorService._p2_1_packet_event_idempotency_key("i" * 160)
+    second_key = SupervisorService._p2_1_packet_event_idempotency_key(("i" * 159) + "j")
+    assert len(first_key) == 69
+    assert first_key != second_key
 
 
 def test_context_digest_payload_is_canonical_and_field_ordered() -> None:

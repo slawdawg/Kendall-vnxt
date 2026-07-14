@@ -1,8 +1,11 @@
 import json
 import sqlite3
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 
 def _reset_supervisor_modules() -> None:
@@ -30,6 +33,8 @@ def _seed_target(
     state: str = "ready",
     attempt_status: str | None = None,
     lease_active: bool = False,
+    attempt_purpose: str = "verification",
+    attempt_fencing_token: int = 7,
 ) -> dict[str, object]:
     packet_id = f"packet-{suffix}"
     create_packet = client.post(
@@ -91,14 +96,21 @@ def _seed_target(
                     attempt_id,
                     item["id"],
                     lease_id,
-                    7,
+                    attempt_fencing_token,
                     f"route-{suffix}",
                     "metadata-only-verifier",
                     "validation",
                     "metadata_only",
                     attempt_status,
                     json.dumps({}),
-                    json.dumps([]),
+                    json.dumps(
+                        [
+                            {
+                                "artifactType": "task_packet_v0",
+                                "taskKind": "validation_execution" if attempt_purpose == "verification" else "code_execution",
+                            }
+                        ]
+                    ),
                     json.dumps([]),
                     attempt_updated_at,
                     attempt_updated_at,
@@ -248,6 +260,42 @@ def test_retry_verification_preserves_attempt_and_queues_one_idempotent_metadata
             event_payload = json.loads(work_events[0][1])
             assert event_payload["approvalId"] == action_request["approvalId"]
             assert event_payload["evidenceRefs"] == action_request["evidenceRefs"]
+            packet_event_key = conn.execute(
+                "select idempotency_key from authoritative_work_packet_lifecycle_events "
+                "where packet_id = ? and event_type = 'packet.operational_action_applied'",
+                (target["packetId"],),
+            ).fetchone()[0]
+            assert packet_event_key.startswith("p2-1:")
+            assert len(packet_event_key) == 69
+
+
+@pytest.mark.parametrize("terminal_status", ["timed_out", "rejected"])
+def test_retry_verification_accepts_other_explicit_terminal_verification_attempts(
+    tmp_path,
+    monkeypatch,
+    terminal_status: str,
+) -> None:
+    db_name = f"p2-1-retry-{terminal_status}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix=terminal_status, attempt_status=terminal_status)
+        approval_request = _approval_request(
+            "retry_verification",
+            target,
+            expectedAttemptStatus=terminal_status,
+        )
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request)
+        assert approval.status_code == 200, approval.text
+        applied = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(approval_request, approval.json()["data"], suffix=terminal_status),
+        )
+        assert applied.status_code == 200, applied.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select count(*) from verification_retry_intents where original_attempt_id = ?",
+                (target["attemptId"],),
+            ).fetchone()[0] == 1
 
 
 def test_reassign_updates_only_quiescent_exact_owner_and_appends_correlated_events(tmp_path, monkeypatch) -> None:
@@ -339,6 +387,116 @@ def test_retry_rejects_stale_fence_active_attempt_mismatched_target_and_missing_
         assert capacity_capability.json()["data"]["typedReason"] == "blocked_by_resources"
 
 
+def test_retry_rejects_non_verification_provenance_and_stale_persisted_attempt_fence(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-provenance-fence.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        execution = _seed_target(
+            client,
+            db_path,
+            suffix="ordinary-execution",
+            attempt_status="failed",
+            attempt_purpose="execution",
+        )
+        execution_capability = client.post(
+            "/pipeline-control-plane/actions/v1/capability",
+            json=_approval_request("retry_verification", execution),
+        )
+        assert execution_capability.status_code == 200
+        assert execution_capability.json()["data"]["typedReason"] == "evidence_invalid"
+
+        stale_fence = _seed_target(
+            client,
+            db_path,
+            suffix="persisted-stale-fence",
+            attempt_status="failed",
+            attempt_fencing_token=6,
+        )
+        stale_capability = client.post(
+            "/pipeline-control-plane/actions/v1/capability",
+            json=_approval_request("retry_verification", stale_fence),
+        )
+        assert stale_capability.status_code == 200
+        assert stale_capability.json()["data"]["typedReason"] == "projection_stale"
+
+
+def test_concurrent_retry_admission_serializes_packet_and_wip_capacity(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-concurrent.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="concurrent-retry", attempt_status="failed")
+        approval_request = _approval_request("retry_verification", target)
+        approvals = [
+            client.post("/pipeline-control-plane/approvals/v1", json=approval_request).json()["data"]
+            for _ in range(2)
+        ]
+        requests = [
+            _apply_request(approval_request, approval, suffix=f"concurrent-retry-{index}")
+            for index, approval in enumerate(approvals)
+        ]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda request: client.post("/pipeline-control-plane/actions/v1", json=request), requests))
+        assert sorted(response.status_code for response in responses) == [200, 400]
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from verification_retry_intents").fetchone()[0] == 1
+            assert conn.execute(
+                "select count(*) from workflow_events where event_type = 'work_item.verification_retry_queued'"
+            ).fetchone()[0] == 1
+
+
+def test_concurrent_retry_idempotency_replays_canonically(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-idempotency-concurrent.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        replay_target = _seed_target(client, db_path, suffix="concurrent-replay", attempt_status="failed")
+        replay_approval_request = _approval_request("retry_verification", replay_target)
+        replay_approval = client.post(
+            "/pipeline-control-plane/approvals/v1", json=replay_approval_request
+        ).json()["data"]
+        replay_request = _apply_request(replay_approval_request, replay_approval, suffix="same-key")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            replay_responses = list(
+                executor.map(
+                    lambda _: client.post("/pipeline-control-plane/actions/v1", json=replay_request),
+                    range(2),
+                )
+            )
+        assert [response.status_code for response in replay_responses] == [200, 200]
+        assert len({response.json()["data"]["actionRecordId"] for response in replay_responses}) == 1
+        assert sorted(response.json()["data"]["replayed"] for response in replay_responses) == [False, True]
+
+
+def test_concurrent_retry_idempotency_conflicts_canonically_without_ghost_event(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-idempotency-conflict.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        conflict_target = _seed_target(client, db_path, suffix="concurrent-conflict", attempt_status="failed")
+        conflict_approval_request = _approval_request("retry_verification", conflict_target)
+        conflict_approvals = [
+            client.post("/pipeline-control-plane/approvals/v1", json=conflict_approval_request).json()["data"]
+            for _ in range(2)
+        ]
+        conflict_requests = [
+            _apply_request(conflict_approval_request, approval, suffix="conflicting-key")
+            for approval in conflict_approvals
+        ]
+        conflict_requests[1]["correlationId"] = "corr-conflicting-metadata"
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            conflict_responses = list(
+                executor.map(
+                    lambda request: client.post("/pipeline-control-plane/actions/v1", json=request),
+                    conflict_requests,
+                )
+            )
+        assert sorted(response.status_code for response in conflict_responses) == [200, 400]
+        rejected = next(response for response in conflict_responses if response.status_code == 400)
+        assert "idempotency key already belongs to different action metadata" in rejected.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select count(*) from workflow_events where event_type = 'work_item.verification_retry_queued'"
+            ).fetchone()[0] == 1
+
+
 def test_reassign_rejects_unknown_or_same_owner_active_lease_and_packet_disagreement(tmp_path, monkeypatch) -> None:
     db_name = "p2-1-reassign-adversarial.db"
     db_path = (tmp_path / db_name).as_posix()
@@ -378,3 +536,105 @@ def test_reassign_rejects_unknown_or_same_owner_active_lease_and_packet_disagree
         unambiguous = _approval_request("reassign", same)
         unambiguous["executeNow"] = True
         assert client.post("/pipeline-control-plane/approvals/v1", json=unambiguous).status_code == 422
+
+
+def test_concurrent_reassign_admission_allows_only_one_owner_transition(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-reassign-concurrent.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="concurrent-reassign")
+        approval_request = _approval_request("reassign", target)
+        approvals = [
+            client.post("/pipeline-control-plane/approvals/v1", json=approval_request).json()["data"]
+            for _ in range(2)
+        ]
+        requests = [
+            _apply_request(approval_request, approval, suffix=f"concurrent-reassign-{index}")
+            for index, approval in enumerate(approvals)
+        ]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda request: client.post("/pipeline-control-plane/actions/v1", json=request), requests))
+        assert sorted(response.status_code for response in responses) == [200, 400]
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select assignee_id from work_items where id = ?", (target["workItemId"],)
+            ).fetchone()[0] == "owner-new"
+            assert conn.execute(
+                "select count(*) from workflow_events where event_type = 'work_item.reassigned'"
+            ).fetchone()[0] == 1
+
+
+def test_late_transaction_conflict_publishes_no_ghost_event(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-no-ghost-event.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="no-ghost", attempt_status="failed")
+        approval_request = _approval_request("retry_verification", target)
+        approval = client.post("/pipeline-control-plane/approvals/v1", json=approval_request).json()["data"]
+        action_request = _apply_request(approval_request, approval, suffix="no-ghost")
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from supervisor.api import main
+
+        published: list[str] = []
+
+        async def capture_publish(message: str) -> None:
+            published.append(message)
+
+        async def reject_commit(_session: AsyncSession) -> None:
+            raise IntegrityError("forced late conflict", {}, RuntimeError("forced late conflict"))
+
+        monkeypatch.setattr(main.service.bus, "publish", capture_publish)
+        monkeypatch.setattr(AsyncSession, "commit", reject_commit)
+        response = client.post("/pipeline-control-plane/actions/v1", json=action_request)
+        assert response.status_code == 400
+        assert "concurrent persisted state" in response.text
+        assert published == []
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("select count(*) from verification_retry_intents").fetchone()[0] == 0
+            assert conn.execute(
+                "select count(*) from workflow_events where event_type = 'work_item.verification_retry_queued'"
+            ).fetchone()[0] == 0
+
+
+def test_p2_1_identifier_column_lengths_match_sqlite_and_cross_dialect_model_schema(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-identifier-schema.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name):
+        with sqlite3.connect(db_path) as conn:
+            sqlite_types = {
+                table: {row[1]: row[2].upper() for row in conn.execute(f"pragma table_info({table})").fetchall()}
+                for table in (
+                    "pipeline_operational_action_records",
+                    "pipeline_operational_approvals",
+                    "verification_retry_intents",
+                    "authoritative_work_packet_lifecycle_events",
+                    "workflow_events",
+                    "work_items",
+                )
+            }
+        assert sqlite_types["pipeline_operational_action_records"]["idempotency_key"] == "VARCHAR(160)"
+        assert sqlite_types["pipeline_operational_action_records"]["correlation_id"] == "VARCHAR(120)"
+        assert sqlite_types["pipeline_operational_approvals"]["approval_id"] == "VARCHAR(120)"
+        assert sqlite_types["verification_retry_intents"]["correlation_id"] == "VARCHAR(120)"
+        assert sqlite_types["authoritative_work_packet_lifecycle_events"]["idempotency_key"] == "VARCHAR(120)"
+        assert sqlite_types["workflow_events"]["correlation_id"] == "VARCHAR(36)"
+        assert sqlite_types["work_items"]["assignee_id"] == "VARCHAR(100)"
+
+        from supervisor.infrastructure.db.models import (
+            AuthoritativeWorkPacketLifecycleEvent,
+            OperationalActionApprovalRecord,
+            OperationalActionRecord,
+            VerificationRetryIntent,
+            WorkflowEvent,
+            WorkItem,
+        )
+
+        # These SQLAlchemy lengths generate the same bounded VARCHAR columns on
+        # PostgreSQL; the SQLite assertions above prove startup schema parity.
+        assert OperationalActionRecord.__table__.c.idempotency_key.type.length == 160
+        assert OperationalActionRecord.__table__.c.target_id.type.length == 120
+        assert OperationalActionApprovalRecord.__table__.c.approval_id.type.length == 120
+        assert VerificationRetryIntent.__table__.c.idempotency_key.type.length == 160
+        assert AuthoritativeWorkPacketLifecycleEvent.__table__.c.idempotency_key.type.length == 120
+        assert WorkflowEvent.__table__.c.correlation_id.type.length == 36
+        assert WorkItem.__table__.c.assignee_id.type.length == 100
