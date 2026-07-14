@@ -1,6 +1,7 @@
-﻿import re
+﻿import json
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
 
@@ -2540,6 +2541,440 @@ class OperationalActionResultView(BaseModel):
     childPacketId: str | None = None
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
+
+
+# Additive v1 contract only. The service keeps these actions outside its
+# approvable/applicable sets until their later persistence lanes are complete.
+OperationalActionIdV1 = Literal["retry_verification", "pause", "drain", "reassign"]
+OperationalActionTargetTypeV1 = Literal["execution_attempt", "runtime", "work_packet"]
+OperationalActionRuntimeModeV1 = Literal["running", "paused", "draining", "disabled"]
+
+OPERATIONAL_ACTION_V1_SCHEMA_VERSION = "pipeline-operational-action/v1"
+OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID = "supervisor-runtime"
+OPERATIONAL_ACTION_V1_POLICY: dict[str, dict[str, str]] = {
+    "retry_verification": {"targetType": "execution_attempt", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+    "pause": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "low"},
+    "drain": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+    "reassign": {"targetType": "work_packet", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+}
+OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
+    "retry_verification": (
+        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedAttemptStatus",
+        "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
+        "expectedLeaseFencingToken", "expectedLeaseActive",
+    ),
+    "pause": ("kind", "expectedRuntimeMode", "expectedRuntimeRevision"),
+    "drain": (
+        "kind", "expectedRuntimeMode", "expectedRuntimeRevision", "expectedActiveWorkCount",
+        "expectedActiveLeaseCount", "expectedRunningAttemptCount",
+    ),
+    "reassign": (
+        "kind", "linkedWorkItemId", "expectedPacketCurrentEventId", "expectedCurrentOwnerId", "newOwnerId",
+        "expectedWorkItemState", "expectedActiveLeaseId", "expectedRunningAttemptId",
+    ),
+}
+OPERATIONAL_ACTION_V1_IDENTIFIER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$")
+
+
+def _validate_operational_action_v1_identifier(value: str, *, label: str) -> str:
+    if not OPERATIONAL_ACTION_V1_IDENTIFIER_RE.fullmatch(value) or ".." in value:
+        raise ValueError(f"{label} must be an exact safe identifier.")
+    return value
+
+
+def _validate_operational_action_v1_timestamp(value: str, *, label: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a canonical RFC3339 timestamp.") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None or "T" not in value:
+        raise ValueError(f"{label} must be a canonical RFC3339 timestamp.")
+    return value
+
+
+class RetryVerificationActionContextV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["retry_verification"]
+    executionAttemptId: str
+    linkedWorkItemId: str
+    linkedPacketId: str
+    expectedAttemptStatus: Literal["failed", "timed_out", "rejected"]
+    expectedAttemptUpdatedAt: str
+    expectedPacketCurrentEventId: str
+    expectedLeaseId: str | None
+    expectedLeaseFencingToken: PositiveInt | None
+    expectedLeaseActive: Literal[False]
+
+    @field_validator("executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedPacketCurrentEventId")
+    @classmethod
+    def exact_identifiers(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(value, label="Retry context identifier")
+
+    @field_validator("expectedAttemptUpdatedAt")
+    @classmethod
+    def exact_attempt_revision(cls, value: str) -> str:
+        return _validate_operational_action_v1_timestamp(value, label="expectedAttemptUpdatedAt")
+
+    @model_validator(mode="after")
+    def lease_fence_is_exact(self) -> "RetryVerificationActionContextV1":
+        if (self.expectedLeaseId is None) != (self.expectedLeaseFencingToken is None):
+            raise ValueError("Retry lease id and fencing token must both be null or both be present.")
+        if self.expectedLeaseId is not None:
+            _validate_operational_action_v1_identifier(self.expectedLeaseId, label="expectedLeaseId")
+        return self
+
+
+class PauseActionContextV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["pause"]
+    expectedRuntimeMode: OperationalActionRuntimeModeV1
+    expectedRuntimeRevision: PositiveInt
+
+
+class DrainActionContextV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["drain"]
+    expectedRuntimeMode: OperationalActionRuntimeModeV1
+    expectedRuntimeRevision: PositiveInt
+    expectedActiveWorkCount: int = Field(ge=0)
+    expectedActiveLeaseCount: int = Field(ge=0)
+    expectedRunningAttemptCount: int = Field(ge=0)
+
+
+class ReassignActionContextV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["reassign"]
+    linkedWorkItemId: str
+    expectedPacketCurrentEventId: str
+    expectedCurrentOwnerId: str | None
+    newOwnerId: str
+    expectedWorkItemState: WorkflowState
+    expectedActiveLeaseId: None
+    expectedRunningAttemptId: None
+
+    @field_validator("linkedWorkItemId", "expectedPacketCurrentEventId", "newOwnerId")
+    @classmethod
+    def exact_identifiers(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(value, label="Reassign context identifier")
+
+    @field_validator("expectedCurrentOwnerId")
+    @classmethod
+    def exact_optional_owner(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_operational_action_v1_identifier(value, label="expectedCurrentOwnerId")
+
+    @model_validator(mode="after")
+    def owner_must_change(self) -> "ReassignActionContextV1":
+        if self.expectedCurrentOwnerId == self.newOwnerId:
+            raise ValueError("Reassign new owner must differ from the exact current owner.")
+        return self
+
+
+OperationalActionContextV1 = Annotated[
+    RetryVerificationActionContextV1 | PauseActionContextV1 | DrainActionContextV1 | ReassignActionContextV1,
+    Field(discriminator="kind"),
+]
+
+
+def operational_action_context_digest_payload_v1(
+    action_id: str,
+    target_type: str,
+    target_id: str,
+    action_context: OperationalActionContextV1,
+) -> str:
+    values = action_context.model_dump(mode="json")
+    ordered_context = {field: values[field] for field in OPERATIONAL_ACTION_V1_CONTEXT_FIELDS[action_id]}
+    return json.dumps(
+        {
+            "schemaVersion": OPERATIONAL_ACTION_V1_SCHEMA_VERSION,
+            "actionId": action_id,
+            "targetType": target_type,
+            "targetId": target_id,
+            "actionContext": ordered_context,
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+class OperationalActionBindingV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["pipeline-operational-action/v1"] = "pipeline-operational-action/v1"
+    actionId: OperationalActionIdV1
+    targetType: OperationalActionTargetTypeV1
+    targetId: str
+    actionContext: OperationalActionContextV1
+    actionContextDigestSha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    serverBound: Literal[True]
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @field_validator("targetId")
+    @classmethod
+    def exact_target_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(value, label="targetId")
+
+    @model_validator(mode="after")
+    def exact_action_binding(self) -> "OperationalActionBindingV1":
+        policy = OPERATIONAL_ACTION_V1_POLICY[self.actionId]
+        if self.targetType != policy["targetType"] or self.actionContext.kind != self.actionId:
+            raise ValueError("V1 action target/context does not match policy.")
+        if self.actionId == "retry_verification" and self.actionContext.executionAttemptId != self.targetId:
+            raise ValueError("Retry context must bind the exact target execution attempt.")
+        if self.actionId in {"pause", "drain"} and self.targetId != OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID:
+            raise ValueError("Runtime V1 actions must target the singleton supervisor runtime.")
+        return self
+
+
+class OperationalActionApprovalRequestV1(OperationalActionBindingV1):
+    requestedBy: AuthoritativePacketActorView
+    requestedAuthorityState: Literal["needs_authority_approval"]
+    requestedRiskTier: Literal["low", "medium"]
+
+    @model_validator(mode="after")
+    def exact_request_policy(self) -> "OperationalActionApprovalRequestV1":
+        policy = OPERATIONAL_ACTION_V1_POLICY[self.actionId]
+        if self.requestedAuthorityState != policy["authorityState"] or self.requestedRiskTier != policy["riskTier"]:
+            raise ValueError("V1 authority family or risk tier does not match policy.")
+        return self
+
+
+class OperationalActionRequestV1(OperationalActionApprovalRequestV1):
+    idempotencyKey: str
+    correlationId: str
+    approvalId: str
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator("idempotencyKey", "correlationId", "approvalId")
+    @classmethod
+    def exact_request_identifiers(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(value, label="V1 request identifier")
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def exact_evidence_refs(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("V1 evidence refs must be unique safe metadata refs.")
+        return refs
+
+
+class OperationalActionApprovalV1(OperationalActionApprovalRequestV1):
+    approvalId: str
+    issuedBy: Literal["supervisor_server"]
+    issuedAt: datetime
+    expiresAt: datetime
+    consumed: bool
+    consumedAt: datetime | None
+    consumedActionIdempotencyKey: str | None
+    consumedActionRecordId: str | None
+
+    @field_validator("approvalId")
+    @classmethod
+    def exact_approval_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(value, label="approvalId")
+
+    @field_validator("issuedAt", "expiresAt", "consumedAt")
+    @classmethod
+    def canonical_timestamps(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _canonical_utc(value, label="V1 approval timestamp")
+
+    @field_validator("consumedActionIdempotencyKey", "consumedActionRecordId")
+    @classmethod
+    def exact_consumption_identifiers(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_operational_action_v1_identifier(value, label="Approval consumption identifier")
+
+    @model_validator(mode="after")
+    def exact_approval_lifecycle(self) -> "OperationalActionApprovalV1":
+        if self.expiresAt <= self.issuedAt:
+            raise ValueError("V1 approval expiry must follow issuance.")
+        consumption = (self.consumedAt, self.consumedActionIdempotencyKey, self.consumedActionRecordId)
+        if self.consumed and any(value is None for value in consumption):
+            raise ValueError("Consumed V1 approvals require complete consumption metadata.")
+        if not self.consumed and any(value is not None for value in consumption):
+            raise ValueError("Unconsumed V1 approvals cannot carry consumption metadata.")
+        return self
+
+
+class OperationalActionCapabilityV1(OperationalActionBindingV1):
+    capabilityState: OperationalActionCapabilityState
+    authorityState: Literal["needs_authority_approval", "allowed", "blocked"]
+    riskTier: Literal["low", "medium"]
+    typedReason: OperationalActionTypedReason | None
+    expectedResultSummary: str = Field(min_length=1, max_length=500)
+    correlationRequired: Literal[True] = True
+    idempotencyRequired: Literal[True] = True
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator("expectedResultSummary")
+    @classmethod
+    def safe_expected_result(cls, value: str) -> str:
+        if not _is_safe_pipeline_control_text(value):
+            raise ValueError("V1 expected result summary must be safe metadata-only text.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def safe_capability_evidence(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("V1 capability evidence refs must be unique safe metadata refs.")
+        return refs
+
+    @model_validator(mode="after")
+    def exact_capability_policy(self) -> "OperationalActionCapabilityV1":
+        if self.riskTier != OPERATIONAL_ACTION_V1_POLICY[self.actionId]["riskTier"]:
+            raise ValueError("V1 capability risk tier does not match policy.")
+        if self.capabilityState != "available" and self.typedReason is None:
+            raise ValueError("Unavailable, gated, or simulated V1 capabilities require a typed reason.")
+        return self
+
+
+class RetryVerificationSuccessEvidenceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["retry_verification"]
+    originalAttemptId: str
+    retryAttemptId: str
+    linkedWorkItemId: str
+    linkedPacketId: str
+    resultingPacketCurrentEventId: str
+    originalAttemptPreserved: Literal[True]
+    providerOrWorkerLaunched: Literal[False]
+
+
+class PauseSuccessEvidenceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["pause"]
+    resultingRuntimeMode: Literal["paused"]
+    resultingRuntimeRevision: PositiveInt
+    activeWorkCount: int = Field(ge=0)
+    intakeStopped: Literal[True]
+    activeWorkPreserved: Literal[True]
+
+
+class DrainSuccessEvidenceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["drain"]
+    resultingRuntimeMode: Literal["draining"]
+    resultingRuntimeRevision: PositiveInt
+    activeWorkCount: int = Field(ge=0)
+    intakeStopped: Literal[True]
+    activeWorkAllowedToConverge: Literal[True]
+    workersKilled: Literal[False]
+
+
+class ReassignSuccessEvidenceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["reassign"]
+    packetId: str
+    linkedWorkItemId: str
+    previousOwnerId: str | None
+    newOwnerId: str
+    resultingPacketCurrentEventId: str
+    activeLeaseTransferred: Literal[False]
+    workerLaunched: Literal[False]
+
+
+OperationalActionSuccessEvidenceV1 = Annotated[
+    RetryVerificationSuccessEvidenceV1 | PauseSuccessEvidenceV1 | DrainSuccessEvidenceV1 | ReassignSuccessEvidenceV1,
+    Field(discriminator="kind"),
+]
+
+
+class OperationalActionResultV1(OperationalActionBindingV1):
+    outcome: OperationalActionOutcome
+    capabilityState: OperationalActionCapabilityState
+    authorityState: Literal["needs_authority_approval", "allowed", "blocked"]
+    riskTier: Literal["low", "medium"]
+    typedReason: OperationalActionTypedReason | None
+    successEvidence: OperationalActionSuccessEvidenceV1 | None
+    evidenceRefs: list[str] = Field(min_length=1, max_length=24)
+    correlationId: str
+    idempotencyKey: str
+    actionRecordId: str
+    approvalId: str
+    replayed: bool
+
+    @field_validator("correlationId", "idempotencyKey", "actionRecordId", "approvalId")
+    @classmethod
+    def exact_result_identifiers(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(value, label="V1 result identifier")
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def safe_result_evidence(cls, refs: list[str]) -> list[str]:
+        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("V1 result evidence refs must be unique safe metadata refs.")
+        return refs
+
+    @model_validator(mode="after")
+    def exact_result_policy(self) -> "OperationalActionResultV1":
+        if self.riskTier != OPERATIONAL_ACTION_V1_POLICY[self.actionId]["riskTier"]:
+            raise ValueError("V1 result risk tier does not match policy.")
+        if self.outcome == "succeeded":
+            if self.authorityState != "allowed" or self.capabilityState != "available" or self.typedReason is not None:
+                raise ValueError("Successful V1 results require allowed authority and available capability.")
+            if self.successEvidence is None or self.successEvidence.kind != self.actionId:
+                raise ValueError("Successful V1 result evidence must match the action discriminator.")
+            context = self.actionContext
+            evidence = self.successEvidence
+            if self.actionId == "retry_verification":
+                if (
+                    evidence.originalAttemptId != self.targetId
+                    or evidence.retryAttemptId == evidence.originalAttemptId
+                    or evidence.linkedWorkItemId != context.linkedWorkItemId
+                    or evidence.linkedPacketId != context.linkedPacketId
+                ):
+                    raise ValueError("Retry success evidence does not bind the exact attempt/work-item/packet context.")
+            elif self.actionId == "pause":
+                if evidence.resultingRuntimeRevision <= context.expectedRuntimeRevision:
+                    raise ValueError("Pause success must advance the monotonic runtime revision.")
+            elif self.actionId == "drain":
+                if evidence.resultingRuntimeRevision <= context.expectedRuntimeRevision:
+                    raise ValueError("Drain success must advance the monotonic runtime revision.")
+            elif (
+                evidence.packetId != self.targetId
+                or evidence.linkedWorkItemId != context.linkedWorkItemId
+                or evidence.previousOwnerId != context.expectedCurrentOwnerId
+                or evidence.newOwnerId != context.newOwnerId
+                or evidence.resultingPacketCurrentEventId == context.expectedPacketCurrentEventId
+            ):
+                raise ValueError("Reassign success evidence does not bind the exact packet/owner/event context.")
+        elif self.successEvidence is not None or self.typedReason is None:
+            raise ValueError("Non-success V1 results require a reason and cannot claim success evidence.")
+        return self
+
+
+class OperationalActionAuthorizationEnvelopeV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request: OperationalActionRequestV1
+    approval: OperationalActionApprovalV1
+    evaluatedAt: datetime
+
+    @field_validator("evaluatedAt")
+    @classmethod
+    def canonical_evaluation_time(cls, value: datetime) -> datetime:
+        return _canonical_utc(value, label="evaluatedAt")
+
+    @model_validator(mode="after")
+    def approval_binds_exact_request(self) -> "OperationalActionAuthorizationEnvelopeV1":
+        request = self.request
+        approval = self.approval
+        for field in ("approvalId", "actionId", "targetType", "targetId", "requestedAuthorityState", "requestedRiskTier"):
+            if getattr(request, field) != getattr(approval, field):
+                raise ValueError(f"V1 approval {field} no longer matches the apply request.")
+        if request.actionContextDigestSha256 != approval.actionContextDigestSha256:
+            raise ValueError("V1 action context digest mismatch.")
+        if request.actionContext.model_dump(mode="json") != approval.actionContext.model_dump(mode="json"):
+            raise ValueError("V1 action context is stale or changed after approval issuance.")
+        if request.requestedBy.model_dump(mode="json") != approval.requestedBy.model_dump(mode="json"):
+            raise ValueError("V1 approval requester does not match the apply actor.")
+        if self.evaluatedAt < approval.issuedAt or self.evaluatedAt >= approval.expiresAt:
+            raise ValueError("V1 approval is expired or not yet valid.")
+        if approval.consumed:
+            if approval.consumedActionIdempotencyKey != request.idempotencyKey:
+                raise ValueError("V1 approval replay conflicts with a different idempotency key.")
+            raise ValueError("V1 approval is already consumed; persisted readback is required.")
+        return self
 
 
 class PipelineRuntimeReadinessV0View(BaseModel):

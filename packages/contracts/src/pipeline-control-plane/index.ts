@@ -601,6 +601,7 @@ export function isPipelineProductModeMappingV0(value: unknown): value is Pipelin
 }
 
 export const PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION = "pipeline-operational-action/v0" as const;
+export const PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION = "pipeline-operational-action/v1" as const;
 export const PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION = "pipeline-operational-runtime-readiness/v0" as const;
 export const PIPELINE_OPERATIONAL_READINESS_CONTRACT_SCHEMA_VERSION = "pipeline-operational-readiness-contract/v0" as const;
 export const PIPELINE_ONE_WORKER_LIVE_CANARY_SCHEMA_VERSION = "pipeline-one-worker-live-canary/v0" as const;
@@ -1351,6 +1352,314 @@ export interface PipelineOperationalActionCapabilityV0 {
   rawPayloadRetained: false;
 }
 
+/**
+ * Additive exact-target contract for the four operational actions that remain
+ * server-unsupported until their persistence/apply lanes are implemented.
+ * V0 packet actions intentionally continue to use the interfaces above.
+ */
+export const PIPELINE_OPERATIONAL_ACTION_V1_IDS = ["retry_verification", "pause", "drain", "reassign"] as const;
+export type PipelineOperationalActionIdV1 = (typeof PIPELINE_OPERATIONAL_ACTION_V1_IDS)[number];
+export type PipelineOperationalActionAuthorityStateV1 = "needs_authority_approval";
+export type PipelineOperationalActionRiskTierV1 = "low" | "medium";
+export type PipelineOperationalActionTargetTypeV1 = "execution_attempt" | "runtime" | "work_packet";
+export type PipelineOperationalRuntimeControlModeV1 = "running" | "paused" | "draining" | "disabled";
+export type PipelineOperationalWorkItemStateV1 =
+  | "queued"
+  | "triaged"
+  | "ready"
+  | "implementing"
+  | "validating"
+  | "reviewing"
+  | "awaiting_audit"
+  | "needs_rework"
+  | "operator_owned"
+  | "blocked"
+  | "done";
+
+export const PIPELINE_OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID = "supervisor-runtime" as const;
+export const PIPELINE_OPERATIONAL_ACTION_V1_POLICY = {
+  retry_verification: { targetType: "execution_attempt", authorityState: "needs_authority_approval", riskTier: "medium" },
+  pause: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
+  drain: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "medium" },
+  reassign: { targetType: "work_packet", authorityState: "needs_authority_approval", riskTier: "medium" },
+} as const satisfies Record<PipelineOperationalActionIdV1, {
+  targetType: PipelineOperationalActionTargetTypeV1;
+  authorityState: PipelineOperationalActionAuthorityStateV1;
+  riskTier: PipelineOperationalActionRiskTierV1;
+}>;
+
+export const PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS = {
+  retry_verification: [
+    "kind",
+    "executionAttemptId",
+    "linkedWorkItemId",
+    "linkedPacketId",
+    "expectedAttemptStatus",
+    "expectedAttemptUpdatedAt",
+    "expectedPacketCurrentEventId",
+    "expectedLeaseId",
+    "expectedLeaseFencingToken",
+    "expectedLeaseActive",
+  ],
+  pause: ["kind", "expectedRuntimeMode", "expectedRuntimeRevision"],
+  drain: [
+    "kind",
+    "expectedRuntimeMode",
+    "expectedRuntimeRevision",
+    "expectedActiveWorkCount",
+    "expectedActiveLeaseCount",
+    "expectedRunningAttemptCount",
+  ],
+  reassign: [
+    "kind",
+    "linkedWorkItemId",
+    "expectedPacketCurrentEventId",
+    "expectedCurrentOwnerId",
+    "newOwnerId",
+    "expectedWorkItemState",
+    "expectedActiveLeaseId",
+    "expectedRunningAttemptId",
+  ],
+} as const satisfies Record<PipelineOperationalActionIdV1, readonly string[]>;
+
+export interface PipelineRetryVerificationActionContextV1 {
+  kind: "retry_verification";
+  executionAttemptId: string;
+  linkedWorkItemId: string;
+  linkedPacketId: string;
+  expectedAttemptStatus: "failed" | "timed_out" | "rejected";
+  /** Canonical RFC3339 `ExecutionAttempt.updatedAt`; this is the additive v1 attempt revision fence. */
+  expectedAttemptUpdatedAt: string;
+  expectedPacketCurrentEventId: string;
+  expectedLeaseId: string | null;
+  expectedLeaseFencingToken: number | null;
+  expectedLeaseActive: false;
+}
+
+export interface PipelinePauseActionContextV1 {
+  kind: "pause";
+  expectedRuntimeMode: PipelineOperationalRuntimeControlModeV1;
+  expectedRuntimeRevision: number;
+}
+
+export interface PipelineDrainActionContextV1 {
+  kind: "drain";
+  expectedRuntimeMode: PipelineOperationalRuntimeControlModeV1;
+  expectedRuntimeRevision: number;
+  expectedActiveWorkCount: number;
+  expectedActiveLeaseCount: number;
+  expectedRunningAttemptCount: number;
+}
+
+export interface PipelineReassignActionContextV1 {
+  kind: "reassign";
+  linkedWorkItemId: string;
+  expectedPacketCurrentEventId: string;
+  /** Null means explicitly unassigned; unknown ownership is not representable. */
+  expectedCurrentOwnerId: string | null;
+  newOwnerId: string;
+  expectedWorkItemState: PipelineOperationalWorkItemStateV1;
+  expectedActiveLeaseId: null;
+  expectedRunningAttemptId: null;
+}
+
+export type PipelineOperationalActionContextV1 =
+  | PipelineRetryVerificationActionContextV1
+  | PipelinePauseActionContextV1
+  | PipelineDrainActionContextV1
+  | PipelineReassignActionContextV1;
+
+export type PipelineOperationalActionContextForV1<A extends PipelineOperationalActionIdV1> =
+  A extends "retry_verification" ? PipelineRetryVerificationActionContextV1
+    : A extends "pause" ? PipelinePauseActionContextV1
+      : A extends "drain" ? PipelineDrainActionContextV1
+        : PipelineReassignActionContextV1;
+
+export type PipelineOperationalActionTargetForV1<A extends PipelineOperationalActionIdV1> =
+  A extends "retry_verification" ? "execution_attempt" : A extends "reassign" ? "work_packet" : "runtime";
+
+export type PipelineOperationalActionRiskForV1<A extends PipelineOperationalActionIdV1> = A extends "pause" ? "low" : "medium";
+export type PipelineOperationalActionContextDigestV1 = `sha256:${string}`;
+
+interface PipelineOperationalActionRequestBaseV1<A extends PipelineOperationalActionIdV1> {
+  schemaVersion: typeof PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION;
+  actionId: A;
+  targetType: PipelineOperationalActionTargetForV1<A>;
+  targetId: string;
+  actionContext: PipelineOperationalActionContextForV1<A>;
+  actionContextDigestSha256: PipelineOperationalActionContextDigestV1;
+  idempotencyKey: string;
+  correlationId: string;
+  requestedBy: AuthoritativePacketActor;
+  requestedAuthorityState: "needs_authority_approval";
+  requestedRiskTier: PipelineOperationalActionRiskForV1<A>;
+  approvalId: string;
+  serverBound: true;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export type PipelineOperationalActionRequestV1 = {
+  [A in PipelineOperationalActionIdV1]: PipelineOperationalActionRequestBaseV1<A>;
+}[PipelineOperationalActionIdV1];
+
+interface PipelineOperationalActionApprovalRequestBaseV1<A extends PipelineOperationalActionIdV1> {
+  schemaVersion: typeof PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION;
+  actionId: A;
+  targetType: PipelineOperationalActionTargetForV1<A>;
+  targetId: string;
+  actionContext: PipelineOperationalActionContextForV1<A>;
+  actionContextDigestSha256: PipelineOperationalActionContextDigestV1;
+  requestedBy: AuthoritativePacketActor;
+  requestedAuthorityState: "needs_authority_approval";
+  requestedRiskTier: PipelineOperationalActionRiskForV1<A>;
+  serverBound: true;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export type PipelineOperationalActionApprovalRequestV1 = {
+  [A in PipelineOperationalActionIdV1]: PipelineOperationalActionApprovalRequestBaseV1<A>;
+}[PipelineOperationalActionIdV1];
+
+interface PipelineOperationalActionApprovalBaseV1<A extends PipelineOperationalActionIdV1>
+  extends PipelineOperationalActionApprovalRequestBaseV1<A> {
+  approvalId: string;
+  issuedBy: "supervisor_server";
+  issuedAt: string;
+  expiresAt: string;
+  consumed: boolean;
+  consumedAt: string | null;
+  consumedActionIdempotencyKey: string | null;
+  consumedActionRecordId: string | null;
+}
+
+export type PipelineOperationalActionApprovalV1 = {
+  [A in PipelineOperationalActionIdV1]: PipelineOperationalActionApprovalBaseV1<A>;
+}[PipelineOperationalActionIdV1];
+
+interface PipelineOperationalActionCapabilityBaseV1<A extends PipelineOperationalActionIdV1> {
+  schemaVersion: typeof PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION;
+  actionId: A;
+  targetType: PipelineOperationalActionTargetForV1<A>;
+  targetId: string;
+  actionContext: PipelineOperationalActionContextForV1<A>;
+  actionContextDigestSha256: PipelineOperationalActionContextDigestV1;
+  capabilityState: PipelineOperationalActionCapabilityStateV0;
+  authorityState: "needs_authority_approval" | "allowed" | "blocked";
+  riskTier: PipelineOperationalActionRiskForV1<A>;
+  typedReason: PipelineOperationalActionTypedReasonV0 | null;
+  expectedResultSummary: string;
+  correlationRequired: true;
+  idempotencyRequired: true;
+  serverBound: true;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export type PipelineOperationalActionCapabilityV1 = {
+  [A in PipelineOperationalActionIdV1]: PipelineOperationalActionCapabilityBaseV1<A>;
+}[PipelineOperationalActionIdV1];
+
+export interface PipelineRetryVerificationSuccessEvidenceV1 {
+  kind: "retry_verification";
+  originalAttemptId: string;
+  retryAttemptId: string;
+  linkedWorkItemId: string;
+  linkedPacketId: string;
+  resultingPacketCurrentEventId: string;
+  originalAttemptPreserved: true;
+  providerOrWorkerLaunched: false;
+}
+
+export interface PipelinePauseSuccessEvidenceV1 {
+  kind: "pause";
+  resultingRuntimeMode: "paused";
+  resultingRuntimeRevision: number;
+  activeWorkCount: number;
+  intakeStopped: true;
+  activeWorkPreserved: true;
+}
+
+export interface PipelineDrainSuccessEvidenceV1 {
+  kind: "drain";
+  resultingRuntimeMode: "draining";
+  resultingRuntimeRevision: number;
+  activeWorkCount: number;
+  intakeStopped: true;
+  activeWorkAllowedToConverge: true;
+  workersKilled: false;
+}
+
+export interface PipelineReassignSuccessEvidenceV1 {
+  kind: "reassign";
+  packetId: string;
+  linkedWorkItemId: string;
+  previousOwnerId: string | null;
+  newOwnerId: string;
+  resultingPacketCurrentEventId: string;
+  activeLeaseTransferred: false;
+  workerLaunched: false;
+}
+
+export type PipelineOperationalActionSuccessEvidenceV1 =
+  | PipelineRetryVerificationSuccessEvidenceV1
+  | PipelinePauseSuccessEvidenceV1
+  | PipelineDrainSuccessEvidenceV1
+  | PipelineReassignSuccessEvidenceV1;
+
+export type PipelineOperationalActionSuccessEvidenceForV1<A extends PipelineOperationalActionIdV1> =
+  A extends "retry_verification" ? PipelineRetryVerificationSuccessEvidenceV1
+    : A extends "pause" ? PipelinePauseSuccessEvidenceV1
+      : A extends "drain" ? PipelineDrainSuccessEvidenceV1
+        : PipelineReassignSuccessEvidenceV1;
+
+interface PipelineOperationalActionResultBaseV1<A extends PipelineOperationalActionIdV1> {
+  schemaVersion: typeof PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION;
+  actionId: A;
+  targetType: PipelineOperationalActionTargetForV1<A>;
+  targetId: string;
+  actionContext: PipelineOperationalActionContextForV1<A>;
+  actionContextDigestSha256: PipelineOperationalActionContextDigestV1;
+  outcome: PipelineOperationalActionOutcomeV0;
+  capabilityState: PipelineOperationalActionCapabilityStateV0;
+  authorityState: "needs_authority_approval" | "allowed" | "blocked";
+  riskTier: PipelineOperationalActionRiskForV1<A>;
+  typedReason: PipelineOperationalActionTypedReasonV0 | null;
+  successEvidence: PipelineOperationalActionSuccessEvidenceForV1<A> | null;
+  evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
+  correlationId: string;
+  idempotencyKey: string;
+  actionRecordId: string;
+  approvalId: string;
+  replayed: boolean;
+  serverBound: true;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export type PipelineOperationalActionResultV1 = {
+  [A in PipelineOperationalActionIdV1]: PipelineOperationalActionResultBaseV1<A>;
+}[PipelineOperationalActionIdV1];
+
+export interface PipelineOperationalActionValidationIssueV1 {
+  field: string;
+  code:
+    | "invalid_contract"
+    | "policy_violation"
+    | "target_context_mismatch"
+    | "context_digest_mismatch"
+    | "stale_fence"
+    | "approval_expired"
+    | "approval_consumed"
+    | "replay_conflict"
+    | "wrong_actor"
+    | "inconsistent_result";
+  summary: string;
+}
+
 export interface PipelineOperationalRuntimeReadinessV0 {
   schemaVersion: typeof PIPELINE_OPERATIONAL_RUNTIME_READINESS_SCHEMA_VERSION;
   actionSchemaVersion: typeof PIPELINE_OPERATIONAL_ACTION_SCHEMA_VERSION;
@@ -1772,6 +2081,418 @@ export function validatePipelineOperationalActionCapabilityV0(capability: unknow
     });
   }
   return issues;
+}
+
+const PIPELINE_OPERATIONAL_ACTION_V1_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS = [
+  "schemaVersion", "actionId", "targetType", "targetId", "actionContext", "actionContextDigestSha256",
+  "serverBound", "metadataOnly", "rawPayloadRetained",
+] as const;
+
+export function pipelineOperationalActionContextDigestPayloadV1(
+  actionId: PipelineOperationalActionIdV1,
+  targetType: PipelineOperationalActionTargetTypeV1,
+  targetId: string,
+  actionContext: PipelineOperationalActionContextV1,
+): string {
+  const orderedContext: Record<string, unknown> = {};
+  for (const field of PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS[actionId]) {
+    orderedContext[field] = (actionContext as unknown as Record<string, unknown>)[field];
+  }
+  return JSON.stringify({
+    schemaVersion: PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION,
+    actionId,
+    targetType,
+    targetId,
+    actionContext: orderedContext,
+  });
+}
+
+export function validatePipelineOperationalActionRequestV1(request: unknown): PipelineOperationalActionValidationIssueV1[] {
+  const issues: PipelineOperationalActionValidationIssueV1[] = [];
+  const record = pipelineOperationalActionV1Record(request, issues);
+  validatePipelineOperationalActionV1Common(issues, record, [
+    ...PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS,
+    "idempotencyKey", "correlationId", "requestedBy", "requestedAuthorityState", "requestedRiskTier",
+    "approvalId", "evidenceRefs",
+  ]);
+  for (const field of ["idempotencyKey", "correlationId", "approvalId"]) {
+    if (!isSafeOperationalActionV1Identifier(record[field])) {
+      pushPipelineOperationalActionV1Issue(issues, field, "invalid_contract", `V1 ${field} must be an exact safe identifier.`);
+    }
+  }
+  validatePipelineOperationalActionV1Actor(issues, record.requestedBy, "requestedBy");
+  if (!isPipelineOperationalActionEvidenceRefsV0(record.evidenceRefs)) {
+    pushPipelineOperationalActionV1Issue(issues, "evidenceRefs", "invalid_contract", "V1 requests require safe metadata-only evidence refs.");
+  }
+  return issues;
+}
+
+export function validatePipelineOperationalActionApprovalRequestV1(approvalRequest: unknown): PipelineOperationalActionValidationIssueV1[] {
+  const issues: PipelineOperationalActionValidationIssueV1[] = [];
+  const record = pipelineOperationalActionV1Record(approvalRequest, issues);
+  validatePipelineOperationalActionV1Common(issues, record, [
+    ...PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS,
+    "requestedBy", "requestedAuthorityState", "requestedRiskTier",
+  ]);
+  validatePipelineOperationalActionV1Actor(issues, record.requestedBy, "requestedBy");
+  return issues;
+}
+
+export function validatePipelineOperationalActionApprovalV1(approval: unknown): PipelineOperationalActionValidationIssueV1[] {
+  const issues: PipelineOperationalActionValidationIssueV1[] = [];
+  const record = pipelineOperationalActionV1Record(approval, issues);
+  validatePipelineOperationalActionV1Common(issues, record, [
+    ...PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS,
+    "requestedBy", "requestedAuthorityState", "requestedRiskTier", "approvalId", "issuedBy", "issuedAt", "expiresAt",
+    "consumed", "consumedAt", "consumedActionIdempotencyKey", "consumedActionRecordId",
+  ]);
+  validatePipelineOperationalActionV1Actor(issues, record.requestedBy, "requestedBy");
+  if (!isSafeOperationalActionV1Identifier(record.approvalId)) {
+    pushPipelineOperationalActionV1Issue(issues, "approvalId", "invalid_contract", "V1 approvals require an exact safe approval id.");
+  }
+  if (record.issuedBy !== "supervisor_server") {
+    pushPipelineOperationalActionV1Issue(issues, "issuedBy", "policy_violation", "V1 approvals must be issued by the supervisor server.");
+  }
+  const issuedAt = pipelineOperationalActionV1Timestamp(record.issuedAt);
+  const expiresAt = pipelineOperationalActionV1Timestamp(record.expiresAt);
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt) {
+    pushPipelineOperationalActionV1Issue(issues, "expiresAt", "invalid_contract", "V1 approval timestamps must be canonical, parseable, and ordered.");
+  }
+  if (typeof record.consumed !== "boolean") {
+    pushPipelineOperationalActionV1Issue(issues, "consumed", "invalid_contract", "V1 approval consumption state must be explicit.");
+  } else {
+    const consumptionFields = [record.consumedAt, record.consumedActionIdempotencyKey, record.consumedActionRecordId];
+    if (record.consumed && consumptionFields.some((value) => !isSafeOperationalIdentifierOrTimestamp(value))) {
+      pushPipelineOperationalActionV1Issue(issues, "consumed", "invalid_contract", "Consumed V1 approvals require complete consumption metadata.");
+    }
+    if (!record.consumed && consumptionFields.some((value) => value !== null)) {
+      pushPipelineOperationalActionV1Issue(issues, "consumed", "invalid_contract", "Unconsumed V1 approvals cannot carry consumption metadata.");
+    }
+  }
+  return issues;
+}
+
+export function validatePipelineOperationalActionCapabilityV1(capability: unknown): PipelineOperationalActionValidationIssueV1[] {
+  const issues: PipelineOperationalActionValidationIssueV1[] = [];
+  const record = pipelineOperationalActionV1Record(capability, issues);
+  validatePipelineOperationalActionV1Common(issues, record, [
+    ...PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS,
+    "capabilityState", "authorityState", "riskTier", "typedReason", "expectedResultSummary",
+    "correlationRequired", "idempotencyRequired", "evidenceRefs",
+  ], "capability");
+  if (!isOneOfString(record.capabilityState, PIPELINE_OPERATIONAL_ACTION_CAPABILITY_STATES)) {
+    pushPipelineOperationalActionV1Issue(issues, "capabilityState", "invalid_contract", "V1 capability state is invalid.");
+  }
+  if (!isOneOfString(record.authorityState, ["needs_authority_approval", "allowed", "blocked"])) {
+    pushPipelineOperationalActionV1Issue(issues, "authorityState", "policy_violation", "V1 capabilities use only the authority-approval family, allowed, or blocked.");
+  }
+  if (record.correlationRequired !== true || record.idempotencyRequired !== true) {
+    pushPipelineOperationalActionV1Issue(issues, "correlationRequired", "policy_violation", "V1 capabilities require correlation and idempotency.");
+  }
+  if (!isPipelineOperationalActionEvidenceRefsV0(record.evidenceRefs)) {
+    pushPipelineOperationalActionV1Issue(issues, "evidenceRefs", "invalid_contract", "V1 capabilities require safe metadata-only evidence refs.");
+  }
+  if (typeof record.expectedResultSummary !== "string" || !isSafeOperationalMetadataText(record.expectedResultSummary)) {
+    pushPipelineOperationalActionV1Issue(issues, "expectedResultSummary", "invalid_contract", "V1 capabilities require a safe expected-result summary.");
+  }
+  if (record.capabilityState !== "available" && !isKnownOperationalTypedReason(record.typedReason)) {
+    pushPipelineOperationalActionV1Issue(issues, "typedReason", "inconsistent_result", "Unavailable, gated, or simulated V1 capabilities require a typed reason.");
+  }
+  return issues;
+}
+
+export function validatePipelineOperationalActionResultV1(result: unknown): PipelineOperationalActionValidationIssueV1[] {
+  const issues: PipelineOperationalActionValidationIssueV1[] = [];
+  const record = pipelineOperationalActionV1Record(result, issues);
+  validatePipelineOperationalActionV1Common(issues, record, [
+    ...PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS,
+    "outcome", "capabilityState", "authorityState", "riskTier", "typedReason", "successEvidence", "evidenceRefs",
+    "correlationId", "idempotencyKey", "actionRecordId", "approvalId", "replayed",
+  ], "result");
+  if (!isOneOfString(record.outcome, PIPELINE_OPERATIONAL_ACTION_OUTCOMES) ||
+      !isOneOfString(record.capabilityState, PIPELINE_OPERATIONAL_ACTION_CAPABILITY_STATES) ||
+      !isOneOfString(record.authorityState, ["needs_authority_approval", "allowed", "blocked"])) {
+    pushPipelineOperationalActionV1Issue(issues, "outcome", "invalid_contract", "V1 result outcome, capability, or authority state is invalid.");
+  }
+  for (const field of ["correlationId", "idempotencyKey", "actionRecordId", "approvalId"]) {
+    if (!isSafeOperationalActionV1Identifier(record[field])) {
+      pushPipelineOperationalActionV1Issue(issues, field, "invalid_contract", `V1 result ${field} must be an exact safe identifier.`);
+    }
+  }
+  if (!isPipelineOperationalActionEvidenceRefsV0(record.evidenceRefs) || typeof record.replayed !== "boolean") {
+    pushPipelineOperationalActionV1Issue(issues, "evidenceRefs", "invalid_contract", "V1 results require safe evidence refs and explicit replay state.");
+  }
+  if (record.outcome === "succeeded") {
+    if (record.authorityState !== "allowed" || record.capabilityState !== "available" || record.typedReason !== null) {
+      pushPipelineOperationalActionV1Issue(issues, "outcome", "inconsistent_result", "Successful V1 results require allowed authority, available capability, and no failure reason.");
+    }
+    validatePipelineOperationalActionV1SuccessEvidence(issues, record);
+  } else {
+    if (record.successEvidence !== null) {
+      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Non-success V1 results cannot claim success evidence.");
+    }
+    if (!isKnownOperationalTypedReason(record.typedReason)) {
+      pushPipelineOperationalActionV1Issue(issues, "typedReason", "inconsistent_result", "Non-success V1 results require a typed reason.");
+    }
+  }
+  return issues;
+}
+
+export function validatePipelineOperationalActionAuthorizationV1(
+  request: unknown,
+  approval: unknown,
+  evaluatedAt: string,
+): PipelineOperationalActionValidationIssueV1[] {
+  const issues = [
+    ...validatePipelineOperationalActionRequestV1(request),
+    ...validatePipelineOperationalActionApprovalV1(approval),
+  ];
+  if (issues.length > 0) return issues;
+  const requestRecord = request as Record<string, unknown>;
+  const approvalRecord = approval as Record<string, unknown>;
+  for (const field of ["approvalId", "actionId", "targetType", "targetId", "requestedAuthorityState", "requestedRiskTier"]) {
+    if (requestRecord[field] !== approvalRecord[field]) {
+      pushPipelineOperationalActionV1Issue(issues, field, "stale_fence", `V1 approval ${field} no longer matches the apply request.`);
+    }
+  }
+  if (requestRecord.actionContextDigestSha256 !== approvalRecord.actionContextDigestSha256) {
+    pushPipelineOperationalActionV1Issue(issues, "actionContextDigestSha256", "context_digest_mismatch", "V1 approval context digest does not match the apply request.");
+  }
+  const requestContextPayload = pipelineOperationalActionContextDigestPayloadV1(
+    requestRecord.actionId as PipelineOperationalActionIdV1,
+    requestRecord.targetType as PipelineOperationalActionTargetTypeV1,
+    requestRecord.targetId as string,
+    requestRecord.actionContext as PipelineOperationalActionContextV1,
+  );
+  const approvalContextPayload = pipelineOperationalActionContextDigestPayloadV1(
+    approvalRecord.actionId as PipelineOperationalActionIdV1,
+    approvalRecord.targetType as PipelineOperationalActionTargetTypeV1,
+    approvalRecord.targetId as string,
+    approvalRecord.actionContext as PipelineOperationalActionContextV1,
+  );
+  if (requestContextPayload !== approvalContextPayload) {
+    pushPipelineOperationalActionV1Issue(issues, "actionContext", "stale_fence", "V1 action context changed after approval issuance.");
+  }
+  if (!samePipelineOperationalActionV1Actor(requestRecord.requestedBy, approvalRecord.requestedBy)) {
+    pushPipelineOperationalActionV1Issue(issues, "requestedBy", "wrong_actor", "V1 approval requester does not match the apply actor.");
+  }
+  const evaluatedAtMs = pipelineOperationalActionV1Timestamp(evaluatedAt);
+  const issuedAtMs = pipelineOperationalActionV1Timestamp(approvalRecord.issuedAt);
+  const expiresAtMs = pipelineOperationalActionV1Timestamp(approvalRecord.expiresAt);
+  if (!Number.isFinite(evaluatedAtMs) || evaluatedAtMs < issuedAtMs || evaluatedAtMs >= expiresAtMs) {
+    pushPipelineOperationalActionV1Issue(issues, "expiresAt", "approval_expired", "V1 approval is not fresh at evaluation time.");
+  }
+  if (approvalRecord.consumed === true) {
+    const sameReplay = approvalRecord.consumedActionIdempotencyKey === requestRecord.idempotencyKey;
+    pushPipelineOperationalActionV1Issue(
+      issues,
+      "idempotencyKey",
+      sameReplay ? "approval_consumed" : "replay_conflict",
+      sameReplay
+        ? "V1 approval was already consumed; return persisted readback instead of applying again."
+        : "V1 approval was consumed by a different idempotency key.",
+    );
+  }
+  return issues;
+}
+
+function validatePipelineOperationalActionV1Common(
+  issues: PipelineOperationalActionValidationIssueV1[],
+  record: Record<string, unknown>,
+  allowedKeys: readonly string[],
+  surface: "request" | "capability" | "result" = "request",
+): void {
+  for (const key of Object.keys(record)) {
+    if (!allowedKeys.includes(key)) {
+      pushPipelineOperationalActionV1Issue(issues, key, "invalid_contract", "V1 operational action objects reject uncontracted fields.");
+    }
+  }
+  if (record.schemaVersion !== PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION || record.serverBound !== true ||
+      record.metadataOnly !== true || record.rawPayloadRetained !== false) {
+    pushPipelineOperationalActionV1Issue(issues, "schemaVersion", "policy_violation", "V1 actions must be server-bound metadata-only objects with no raw payload retention.");
+  }
+  if (!isPipelineOperationalActionIdV1(record.actionId)) {
+    pushPipelineOperationalActionV1Issue(issues, "actionId", "invalid_contract", "V1 operational action id is unsupported.");
+    return;
+  }
+  const policy = PIPELINE_OPERATIONAL_ACTION_V1_POLICY[record.actionId];
+  const riskField = surface === "request" ? "requestedRiskTier" : "riskTier";
+  const authorityField = surface === "request" ? "requestedAuthorityState" : "authorityState";
+  if (record.targetType !== policy.targetType || record[riskField] !== policy.riskTier) {
+    pushPipelineOperationalActionV1Issue(issues, "targetType", "policy_violation", "V1 target type and risk tier must exactly match policy.");
+  }
+  if (surface === "request" && record[authorityField] !== policy.authorityState) {
+    pushPipelineOperationalActionV1Issue(issues, authorityField, "policy_violation", "V1 requests require the authority-approval family.");
+  }
+  if (!isSafeOperationalActionV1Identifier(record.targetId)) {
+    pushPipelineOperationalActionV1Issue(issues, "targetId", "invalid_contract", "V1 target id must be an exact safe identifier.");
+  }
+  if ((record.actionId === "pause" || record.actionId === "drain") && record.targetId !== PIPELINE_OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID) {
+    pushPipelineOperationalActionV1Issue(issues, "targetId", "target_context_mismatch", "Runtime V1 actions must target the singleton supervisor runtime.");
+  }
+  if (typeof record.actionContextDigestSha256 !== "string" || !PIPELINE_OPERATIONAL_ACTION_V1_DIGEST.test(record.actionContextDigestSha256)) {
+    pushPipelineOperationalActionV1Issue(issues, "actionContextDigestSha256", "invalid_contract", "V1 action context requires a lowercase SHA-256 digest.");
+  }
+  validatePipelineOperationalActionV1Context(issues, record.actionId, record.targetId, record.actionContext);
+}
+
+function validatePipelineOperationalActionV1Context(
+  issues: PipelineOperationalActionValidationIssueV1[],
+  actionId: PipelineOperationalActionIdV1,
+  targetId: unknown,
+  contextValue: unknown,
+): void {
+  const context = pipelineOperationalActionV1Record(contextValue, issues, "actionContext");
+  const expectedFields = PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS[actionId];
+  if (Object.keys(context).length !== expectedFields.length || Object.keys(context).some((key) => !expectedFields.includes(key as never))) {
+    pushPipelineOperationalActionV1Issue(issues, "actionContext", "invalid_contract", "V1 action context fields must exactly match the action discriminator.");
+  }
+  if (context.kind !== actionId) {
+    pushPipelineOperationalActionV1Issue(issues, "actionContext.kind", "target_context_mismatch", "V1 action context discriminator must match actionId.");
+  }
+  if (actionId === "retry_verification") {
+    for (const field of ["executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedPacketCurrentEventId"]) {
+      if (!isSafeOperationalActionV1Identifier(context[field])) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Retry context identifiers must be exact and safe.");
+    }
+    if (context.executionAttemptId !== targetId) pushPipelineOperationalActionV1Issue(issues, "actionContext.executionAttemptId", "target_context_mismatch", "Retry context must bind the target execution attempt.");
+    if (!isOneOfString(context.expectedAttemptStatus, ["failed", "timed_out", "rejected"]) || !Number.isFinite(pipelineOperationalActionV1Timestamp(context.expectedAttemptUpdatedAt))) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedAttemptStatus", "stale_fence", "Retry requires a terminal failed/timed-out/rejected attempt status and exact updatedAt revision.");
+    }
+    const leaseIdValid = context.expectedLeaseId === null || isSafeOperationalActionV1Identifier(context.expectedLeaseId);
+    const leaseTokenValid = context.expectedLeaseFencingToken === null || isPositiveInteger(context.expectedLeaseFencingToken);
+    if (!leaseIdValid || !leaseTokenValid || (context.expectedLeaseId === null) !== (context.expectedLeaseFencingToken === null) || context.expectedLeaseActive !== false) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedLeaseId", "stale_fence", "Retry lease id/token must be paired and the exact lease must be inactive.");
+    }
+  } else if (actionId === "pause") {
+    if (!isOneOfString(context.expectedRuntimeMode, ["running", "paused", "draining", "disabled"]) || !isPositiveInteger(context.expectedRuntimeRevision)) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedRuntimeRevision", "stale_fence", "Pause requires exact runtime mode and positive monotonic revision.");
+    }
+  } else if (actionId === "drain") {
+    if (!isOneOfString(context.expectedRuntimeMode, ["running", "paused", "draining", "disabled"]) || !isPositiveInteger(context.expectedRuntimeRevision) ||
+        !isNonNegativeInteger(context.expectedActiveWorkCount) || !isNonNegativeInteger(context.expectedActiveLeaseCount) || !isNonNegativeInteger(context.expectedRunningAttemptCount)) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedRuntimeRevision", "stale_fence", "Drain requires exact runtime mode/revision and non-negative active-count snapshot.");
+    }
+  } else {
+    for (const field of ["linkedWorkItemId", "expectedPacketCurrentEventId", "newOwnerId"]) {
+      if (!isSafeOperationalActionV1Identifier(context[field])) pushPipelineOperationalActionV1Issue(issues, `actionContext.${field}`, "invalid_contract", "Reassign context identifiers must be exact and safe.");
+    }
+    if (context.expectedCurrentOwnerId !== null && !isSafeOperationalActionV1Identifier(context.expectedCurrentOwnerId)) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedCurrentOwnerId", "invalid_contract", "Reassign current owner must be exact or explicitly unassigned.");
+    }
+    if (context.expectedCurrentOwnerId === context.newOwnerId || !isOneOfString(context.expectedWorkItemState, [
+      "queued", "triaged", "ready", "implementing", "validating", "reviewing", "awaiting_audit", "needs_rework", "operator_owned", "blocked", "done",
+    ]) || context.expectedActiveLeaseId !== null || context.expectedRunningAttemptId !== null) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext", "stale_fence", "Reassign requires changed exact ownership, linked state, and no active lease or running attempt.");
+    }
+  }
+}
+
+function validatePipelineOperationalActionV1SuccessEvidence(
+  issues: PipelineOperationalActionValidationIssueV1[],
+  record: Record<string, unknown>,
+): void {
+  const evidence = pipelineOperationalActionV1Record(record.successEvidence, issues, "successEvidence");
+  const context = pipelineOperationalActionV1Record(record.actionContext, issues, "actionContext");
+  if (evidence.kind !== record.actionId) {
+    pushPipelineOperationalActionV1Issue(issues, "successEvidence.kind", "inconsistent_result", "V1 success evidence must match the action discriminator.");
+    return;
+  }
+  if (record.actionId === "retry_verification") {
+    if (evidence.originalAttemptId !== record.targetId || evidence.originalAttemptPreserved !== true || evidence.providerOrWorkerLaunched !== false ||
+        !isSafeOperationalActionV1Identifier(evidence.retryAttemptId) || evidence.retryAttemptId === evidence.originalAttemptId ||
+        evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.linkedPacketId !== context.linkedPacketId ||
+        !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId)) {
+      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Retry success must preserve the original attempt, create a distinct attempt, and launch nothing.");
+    }
+  } else if (record.actionId === "pause") {
+    if (evidence.resultingRuntimeMode !== "paused" || !isPositiveInteger(evidence.resultingRuntimeRevision) || !isNonNegativeInteger(evidence.activeWorkCount) ||
+        evidence.resultingRuntimeRevision <= (context.expectedRuntimeRevision as number) ||
+        evidence.intakeStopped !== true || evidence.activeWorkPreserved !== true) {
+      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Pause success must report paused mode/revision and preserved active work.");
+    }
+  } else if (record.actionId === "drain") {
+    if (evidence.resultingRuntimeMode !== "draining" || !isPositiveInteger(evidence.resultingRuntimeRevision) || !isNonNegativeInteger(evidence.activeWorkCount) ||
+        evidence.resultingRuntimeRevision <= (context.expectedRuntimeRevision as number) ||
+        evidence.intakeStopped !== true || evidence.activeWorkAllowedToConverge !== true || evidence.workersKilled !== false) {
+      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Drain success must report draining mode/revision, convergence, and no worker kill.");
+    }
+  } else if (evidence.packetId !== record.targetId || evidence.activeLeaseTransferred !== false || evidence.workerLaunched !== false ||
+      evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.previousOwnerId !== context.expectedCurrentOwnerId ||
+      evidence.newOwnerId !== context.newOwnerId || evidence.resultingPacketCurrentEventId === context.expectedPacketCurrentEventId ||
+      !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId)) {
+    pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Reassign success must report changed ownership without lease transfer or worker launch.");
+  }
+}
+
+function isPipelineOperationalActionIdV1(value: unknown): value is PipelineOperationalActionIdV1 {
+  return typeof value === "string" && (PIPELINE_OPERATIONAL_ACTION_V1_IDS as readonly string[]).includes(value);
+}
+
+function pipelineOperationalActionV1Record(
+  value: unknown,
+  issues: PipelineOperationalActionValidationIssueV1[],
+  field = "request",
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    pushPipelineOperationalActionV1Issue(issues, field, "invalid_contract", "V1 operational action value must be an object.");
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function pushPipelineOperationalActionV1Issue(
+  issues: PipelineOperationalActionValidationIssueV1[],
+  field: string,
+  code: PipelineOperationalActionValidationIssueV1["code"],
+  summary: string,
+): void {
+  issues.push({ field, code, summary });
+}
+
+function pipelineOperationalActionV1Timestamp(value: unknown): number {
+  return typeof value === "string" && EPIC_25_RFC3339_TIMESTAMP.test(value) ? Date.parse(value) : NaN;
+}
+
+function isSafeOperationalIdentifierOrTimestamp(value: unknown): boolean {
+  return isSafeOperationalActionV1Identifier(value) || Number.isFinite(pipelineOperationalActionV1Timestamp(value));
+}
+
+function isSafeOperationalActionV1Identifier(value: unknown): value is string {
+  return typeof value === "string" && isSafeOperationalIdentifierText(value);
+}
+
+function validatePipelineOperationalActionV1Actor(
+  issues: PipelineOperationalActionValidationIssueV1[],
+  value: unknown,
+  field: string,
+): void {
+  const actor = pipelineOperationalActionV1Record(value, issues, field);
+  if (Object.keys(actor).some((key) => !["actorType", "actorId", "actorLabel"].includes(key)) ||
+      !isOneOfString(actor.actorType, ["system", "operator", "manager", "worker"])) {
+    pushPipelineOperationalActionV1Issue(issues, field, "wrong_actor", "V1 requests require one exact accountable actor.");
+  }
+  const actorIdValid = actor.actorId === undefined || actor.actorId === null || isSafeOperationalActionV1Identifier(actor.actorId);
+  const actorLabelValid = actor.actorLabel === undefined || actor.actorLabel === null ||
+    (typeof actor.actorLabel === "string" && isSafeOperationalMetadataText(actor.actorLabel));
+  if (!actorIdValid || !actorLabelValid || (actor.actorId == null && actor.actorLabel == null)) {
+    pushPipelineOperationalActionV1Issue(issues, field, "wrong_actor", "V1 actor id/label must be safe and at least one identity field is required.");
+  }
+}
+
+function samePipelineOperationalActionV1Actor(left: unknown, right: unknown): boolean {
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const leftActor = left as Record<string, unknown>;
+  const rightActor = right as Record<string, unknown>;
+  return leftActor.actorType === rightActor.actorType && leftActor.actorId === rightActor.actorId && leftActor.actorLabel === rightActor.actorLabel;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 export function validatePipelineOperationalRuntimeReadinessV0(readiness: unknown): PipelineOperationalActionValidationIssueV0[] {

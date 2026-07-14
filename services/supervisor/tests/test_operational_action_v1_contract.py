@@ -1,0 +1,311 @@
+from __future__ import annotations
+
+import re
+from copy import deepcopy
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from supervisor.api.schemas import (
+    OPERATIONAL_ACTION_V1_CONTEXT_FIELDS,
+    OPERATIONAL_ACTION_V1_POLICY,
+    DrainActionContextV1,
+    OperationalActionApprovalV1,
+    OperationalActionAuthorizationEnvelopeV1,
+    OperationalActionRequest,
+    OperationalActionRequestV1,
+    OperationalActionResultV1,
+    PauseActionContextV1,
+    ReassignActionContextV1,
+    RetryVerificationActionContextV1,
+    operational_action_context_digest_payload_v1,
+)
+from supervisor.application.service import (
+    SERVER_APPLICABLE_OPERATIONAL_ACTIONS,
+    SERVER_APPROVABLE_OPERATIONAL_ACTIONS,
+    SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS,
+)
+
+
+EXPECTED_POLICY = {
+    "retry_verification": {"targetType": "execution_attempt", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+    "pause": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "low"},
+    "drain": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+    "reassign": {"targetType": "work_packet", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+}
+
+
+def _actor(actor_id: str = "operator-1") -> dict[str, str]:
+    return {"actorType": "operator", "actorId": actor_id, "actorLabel": "Operator one"}
+
+
+def _contexts() -> dict[str, dict[str, object]]:
+    return {
+        "retry_verification": {
+            "kind": "retry_verification",
+            "executionAttemptId": "attempt-1",
+            "linkedWorkItemId": "work-1",
+            "linkedPacketId": "packet-1",
+            "expectedAttemptStatus": "failed",
+            "expectedAttemptUpdatedAt": "2026-07-14T20:00:00.000Z",
+            "expectedPacketCurrentEventId": "event-1",
+            "expectedLeaseId": "lease-1",
+            "expectedLeaseFencingToken": 7,
+            "expectedLeaseActive": False,
+        },
+        "pause": {"kind": "pause", "expectedRuntimeMode": "running", "expectedRuntimeRevision": 3},
+        "drain": {
+            "kind": "drain",
+            "expectedRuntimeMode": "running",
+            "expectedRuntimeRevision": 3,
+            "expectedActiveWorkCount": 2,
+            "expectedActiveLeaseCount": 1,
+            "expectedRunningAttemptCount": 1,
+        },
+        "reassign": {
+            "kind": "reassign",
+            "linkedWorkItemId": "work-1",
+            "expectedPacketCurrentEventId": "event-1",
+            "expectedCurrentOwnerId": "owner-old",
+            "newOwnerId": "owner-new",
+            "expectedWorkItemState": "ready",
+            "expectedActiveLeaseId": None,
+            "expectedRunningAttemptId": None,
+        },
+    }
+
+
+def _request(action_id: str) -> dict[str, object]:
+    policy = EXPECTED_POLICY[action_id]
+    target_id = "attempt-1" if action_id == "retry_verification" else "packet-1" if action_id == "reassign" else "supervisor-runtime"
+    return {
+        "schemaVersion": "pipeline-operational-action/v1",
+        "actionId": action_id,
+        "targetType": policy["targetType"],
+        "targetId": target_id,
+        "actionContext": deepcopy(_contexts()[action_id]),
+        "actionContextDigestSha256": f"sha256:{'a' * 64}",
+        "idempotencyKey": f"idem-{action_id.replace('_', '-')}",
+        "correlationId": "corr-1",
+        "requestedBy": _actor(),
+        "requestedAuthorityState": policy["authorityState"],
+        "requestedRiskTier": policy["riskTier"],
+        "approvalId": f"approval-{action_id.replace('_', '-')}",
+        "serverBound": True,
+        "evidenceRefs": ["verification:operational-action-v1"],
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
+
+
+def _approval(request: dict[str, object]) -> dict[str, object]:
+    approval = deepcopy(request)
+    approval.pop("idempotencyKey")
+    approval.pop("correlationId")
+    approval.pop("evidenceRefs")
+    approval.update(
+        {
+            "issuedBy": "supervisor_server",
+            "issuedAt": "2026-07-14T20:00:00Z",
+            "expiresAt": "2026-07-14T20:05:00Z",
+            "consumed": False,
+            "consumedAt": None,
+            "consumedActionIdempotencyKey": None,
+            "consumedActionRecordId": None,
+        }
+    )
+    return approval
+
+
+def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
+    assert OPERATIONAL_ACTION_V1_POLICY == EXPECTED_POLICY
+    typescript = (
+        Path(__file__).resolve().parents[3]
+        / "packages/contracts/src/pipeline-control-plane/index.ts"
+    ).read_text(encoding="utf-8")
+    for action_id, policy in EXPECTED_POLICY.items():
+        pattern = (
+            rf'{action_id}: \{{ targetType: "{policy["targetType"]}", '
+            rf'authorityState: "{policy["authorityState"]}", riskTier: "{policy["riskTier"]}" \}}'
+        )
+        assert re.search(pattern, typescript), f"TypeScript policy drift for {action_id}"
+
+    assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["retry_verification"] == (
+        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedAttemptStatus",
+        "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
+        "expectedLeaseFencingToken", "expectedLeaseActive",
+    )
+    assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["pause"] == ("kind", "expectedRuntimeMode", "expectedRuntimeRevision")
+    assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["drain"][-3:] == (
+        "expectedActiveWorkCount", "expectedActiveLeaseCount", "expectedRunningAttemptCount"
+    )
+    assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["reassign"][-2:] == (
+        "expectedActiveLeaseId", "expectedRunningAttemptId"
+    )
+
+
+@pytest.mark.parametrize("action_id", EXPECTED_POLICY)
+def test_v1_requests_accept_only_the_exact_action_binding(action_id: str) -> None:
+    assert OperationalActionRequestV1.model_validate(_request(action_id)).actionId == action_id
+
+
+def test_v1_requests_fail_closed_for_context_fence_target_authority_and_risk_drift() -> None:
+    retry = _request("retry_verification")
+    del retry["actionContext"]["expectedAttemptUpdatedAt"]  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(retry)
+
+    retry = _request("retry_verification")
+    retry["targetType"] = "work_packet"
+    with pytest.raises(ValidationError, match="target/context"):
+        OperationalActionRequestV1.model_validate(retry)
+
+    pause = _request("pause")
+    pause["requestedAuthorityState"] = "not_required"
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(pause)
+
+    pause = _request("pause")
+    pause["requestedRiskTier"] = "medium"
+    with pytest.raises(ValidationError, match="risk tier"):
+        OperationalActionRequestV1.model_validate(pause)
+
+    drain = _request("drain")
+    drain["actionContext"]["expectedRuntimeRevision"] = 0  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(drain)
+
+    reassign = _request("reassign")
+    reassign["actionContext"]["expectedActiveLeaseId"] = "lease-1"  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(reassign)
+
+
+def test_context_digest_payload_is_canonical_and_field_ordered() -> None:
+    context = RetryVerificationActionContextV1.model_validate(_contexts()["retry_verification"])
+    payload = operational_action_context_digest_payload_v1("retry_verification", "execution_attempt", "attempt-1", context)
+    assert payload.startswith('{"schemaVersion":"pipeline-operational-action/v1","actionId":"retry_verification"')
+    assert list(context.model_dump()) == list(OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["retry_verification"])
+    assert PauseActionContextV1.model_validate(_contexts()["pause"]).expectedRuntimeRevision == 3
+    assert DrainActionContextV1.model_validate(_contexts()["drain"]).expectedActiveWorkCount == 2
+    assert ReassignActionContextV1.model_validate(_contexts()["reassign"]).newOwnerId == "owner-new"
+
+
+def test_authorization_rejects_digest_context_actor_expiry_and_replay_drift() -> None:
+    request = _request("retry_verification")
+    approval = _approval(request)
+    envelope = {"request": request, "approval": approval, "evaluatedAt": "2026-07-14T20:01:00Z"}
+    assert OperationalActionAuthorizationEnvelopeV1.model_validate(envelope).request.targetId == "attempt-1"
+
+    stale = deepcopy(envelope)
+    stale["approval"]["actionContext"]["expectedAttemptStatus"] = "timed_out"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="stale or changed"):
+        OperationalActionAuthorizationEnvelopeV1.model_validate(stale)
+
+    digest_mismatch = deepcopy(envelope)
+    digest_mismatch["approval"]["actionContextDigestSha256"] = f"sha256:{'0' * 64}"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="digest mismatch"):
+        OperationalActionAuthorizationEnvelopeV1.model_validate(digest_mismatch)
+
+    wrong_actor = deepcopy(envelope)
+    wrong_actor["approval"]["requestedBy"] = _actor("operator-2")  # type: ignore[index]
+    with pytest.raises(ValidationError, match="apply actor"):
+        OperationalActionAuthorizationEnvelopeV1.model_validate(wrong_actor)
+
+    expired = deepcopy(envelope)
+    expired["evaluatedAt"] = "2026-07-14T20:05:00Z"
+    with pytest.raises(ValidationError, match="expired"):
+        OperationalActionAuthorizationEnvelopeV1.model_validate(expired)
+
+    consumed = deepcopy(envelope)
+    consumed["approval"].update(  # type: ignore[union-attr]
+        consumed=True,
+        consumedAt="2026-07-14T20:01:00Z",
+        consumedActionIdempotencyKey=request["idempotencyKey"],
+        consumedActionRecordId="record-1",
+    )
+    with pytest.raises(ValidationError, match="already consumed"):
+        OperationalActionAuthorizationEnvelopeV1.model_validate(consumed)
+
+    replay_conflict = deepcopy(consumed)
+    replay_conflict["request"]["idempotencyKey"] = "idem-conflict"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="different idempotency key"):
+        OperationalActionAuthorizationEnvelopeV1.model_validate(replay_conflict)
+
+
+def test_runtime_keeps_v1_actions_unsupported_and_preserves_v0_actions() -> None:
+    v1_actions = set(EXPECTED_POLICY)
+    assert v1_actions == SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS
+    assert not v1_actions.intersection(SERVER_APPROVABLE_OPERATIONAL_ACTIONS)
+    assert not v1_actions.intersection(SERVER_APPLICABLE_OPERATIONAL_ACTIONS)
+    assert {"mark_tested", "request_rework", "requeue", "reject"} == SERVER_APPROVABLE_OPERATIONAL_ACTIONS
+    assert {"inspect", "refresh_projection", "mark_tested", "request_rework", "requeue", "reject"} == SERVER_APPLICABLE_OPERATIONAL_ACTIONS
+
+    v0 = OperationalActionRequest.model_validate(
+        {
+            "schemaVersion": "pipeline-operational-action/v0",
+            "actionId": "inspect",
+            "targetType": "work_packet",
+            "targetId": "packet-1",
+            "idempotencyKey": "idem-v0",
+            "correlationId": "corr-v0",
+            "requestedBy": {"actorType": "manager", "actorId": "manager-1"},
+            "requestedAuthorityState": "not_required",
+            "requestedRiskTier": "low",
+            "evidenceRefs": ["verification:v0-preserved"],
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+    )
+    assert v0.schemaVersion == "pipeline-operational-action/v0"
+
+
+def test_approval_schema_rejects_non_server_issuer_and_incomplete_consumption() -> None:
+    approval = _approval(_request("pause"))
+    approval["issuedBy"] = "remote_client"
+    with pytest.raises(ValidationError):
+        OperationalActionApprovalV1.model_validate(approval)
+
+    approval = _approval(_request("pause"))
+    approval["consumed"] = True
+    with pytest.raises(ValidationError, match="complete consumption"):
+        OperationalActionApprovalV1.model_validate(approval)
+
+
+def test_runtime_result_requires_explicit_mode_revision_and_preservation_evidence() -> None:
+    request = _request("pause")
+    result = {
+        key: deepcopy(request[key])
+        for key in (
+            "schemaVersion", "actionId", "targetType", "targetId", "actionContext",
+            "actionContextDigestSha256", "serverBound", "metadataOnly", "rawPayloadRetained",
+        )
+    }
+    result.update(
+        {
+            "outcome": "succeeded",
+            "capabilityState": "available",
+            "authorityState": "allowed",
+            "riskTier": "low",
+            "typedReason": None,
+            "successEvidence": {
+                "kind": "pause",
+                "resultingRuntimeMode": "paused",
+                "resultingRuntimeRevision": 4,
+                "activeWorkCount": 2,
+                "intakeStopped": True,
+                "activeWorkPreserved": True,
+            },
+            "evidenceRefs": ["operational-action:pause-result"],
+            "correlationId": request["correlationId"],
+            "idempotencyKey": request["idempotencyKey"],
+            "actionRecordId": "record-1",
+            "approvalId": request["approvalId"],
+            "replayed": False,
+        }
+    )
+    assert OperationalActionResultV1.model_validate(result).successEvidence.resultingRuntimeRevision == 4
+    result["successEvidence"]["resultingRuntimeRevision"] = 3  # type: ignore[index]
+    with pytest.raises(ValidationError, match="advance the monotonic runtime revision"):
+        OperationalActionResultV1.model_validate(result)
