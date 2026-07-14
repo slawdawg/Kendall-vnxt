@@ -1022,11 +1022,16 @@ class SupervisorService:
         self._validate_server_owned_local_operator(payload.requestedBy)
         if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
             raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+        await self._acquire_execute_admission_lock(session)
         typed_reason: str | None = "blocked_by_approval"
         capability_state = "available"
         authority_state = "needs_authority_approval"
         try:
-            await self._validate_p2_1_operational_target(session, payload)
+            await self._validate_p2_1_operational_target(
+                session,
+                payload,
+                admission_lock_acquired=True,
+            )
         except OperationalActionIneligible as exc:
             typed_reason = exc.typed_reason
             capability_state = "unavailable"
@@ -1050,7 +1055,7 @@ class SupervisorService:
             ),
             correlationRequired=True,
             idempotencyRequired=True,
-            evidenceRefs=[f"capability:{payload.actionId}:{payload.targetId}"],
+            evidenceRefs=[f"operational-action:capability:{payload.actionId}:{payload.targetId}"],
             metadataOnly=True,
             rawPayloadRetained=False,
         )
@@ -1063,7 +1068,13 @@ class SupervisorService:
         self._validate_server_owned_local_operator(payload.requestedBy)
         if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
             raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
-        _, _, packet, _ = await self._validate_p2_1_operational_target(session, payload, lock=True)
+        await self._acquire_execute_admission_lock(session)
+        _, _, packet, _ = await self._validate_p2_1_operational_target(
+            session,
+            payload,
+            lock=True,
+            admission_lock_acquired=True,
+        )
         now = datetime.now(timezone.utc)
         approval = OperationalActionApprovalRecord(
             approval_id=f"approval-{uuid.uuid4()}",
@@ -1106,7 +1117,12 @@ class SupervisorService:
             await session.rollback()
             raise ValueError("Operational action idempotency key already belongs to different action metadata.")
 
-        attempt, item, packet, lease = await self._validate_p2_1_operational_target(session, payload, lock=True)
+        attempt, item, packet, lease = await self._validate_p2_1_operational_target(
+            session,
+            payload,
+            lock=True,
+            admission_lock_acquired=True,
+        )
         # The singleton admission row serializes this per-work-item WIP check
         # with retry, reassign, lease, and execution-attempt reservations.
         await self._reject_pending_verification_retry_admission(session, item.id)
@@ -1135,6 +1151,39 @@ class SupervisorService:
             raise ValueError("Operational action approval has already been consumed or expired.")
 
         packet_event_id = f"event-{uuid.uuid4()}"
+        context = payload.actionContext
+        expected_work_item_updated_at = datetime.fromisoformat(
+            context.expectedWorkItemUpdatedAt.replace("Z", "+00:00")
+        )
+        work_item_fences = [
+            WorkItem.id == item.id,
+            WorkItem.state == context.expectedWorkItemState,
+            WorkItem.updated_at == expected_work_item_updated_at,
+            WorkItem.authoritative_packet_id == packet.id,
+        ]
+        work_item_values: dict[str, object] = {
+            "updated_at": now,
+            "last_event_at": now,
+        }
+        if payload.actionId == "reassign":
+            work_item_fences.append(WorkItem.assignee_id == context.expectedCurrentOwnerId)
+            work_item_values.update(
+                assignee_id=context.newOwnerId,
+                assignee_label=context.newOwnerId,
+            )
+        work_item_update = await session.execute(
+            update(WorkItem)
+            .execution_options(synchronize_session=False)
+            .where(*work_item_fences)
+            .values(**work_item_values)
+        )
+        if work_item_update.rowcount != 1:
+            await session.rollback()
+            raise ValueError(
+                "Operational action rejected because the WorkItem revision, packet linkage, owner, or state changed concurrently."
+            )
+        item.updated_at = now
+        item.last_event_at = now
         if payload.actionId == "retry_verification":
             if attempt is None:
                 raise ValueError("Retry verification requires an exact execution attempt target.")
@@ -1171,30 +1220,9 @@ class SupervisorService:
             work_event_type = "work_item.verification_retry_queued"
             work_event_summary = "Queued a metadata-only verification retry intent without external execution."
         else:
-            context = payload.actionContext
             previous_owner_id = item.assignee_id
-            owner_update = await session.execute(
-                update(WorkItem)
-                .execution_options(synchronize_session=False)
-                .where(
-                    WorkItem.id == item.id,
-                    WorkItem.state == context.expectedWorkItemState,
-                    WorkItem.assignee_id == context.expectedCurrentOwnerId,
-                )
-                .values(
-                    assignee_id=context.newOwnerId,
-                    assignee_label=context.newOwnerId,
-                    updated_at=now,
-                    last_event_at=now,
-                )
-            )
-            if owner_update.rowcount != 1:
-                await session.rollback()
-                raise ValueError("Reassign rejected because WorkItem ownership or state changed concurrently.")
             item.assignee_id = context.newOwnerId
             item.assignee_label = context.newOwnerId
-            item.updated_at = now
-            item.last_event_at = now
             success_evidence = {
                 "kind": "reassign",
                 "packetId": packet.id,
@@ -1326,7 +1354,10 @@ class SupervisorService:
         payload: OperationalActionApprovalRequestV1 | OperationalActionRequestV1,
         *,
         lock: bool = False,
+        admission_lock_acquired: bool = False,
     ) -> tuple[ExecutionAttempt | None, WorkItem, AuthoritativeWorkPacket, QueueLease | None]:
+        if not admission_lock_acquired:
+            await self._acquire_execute_admission_lock(session)
         context = payload.actionContext
         get_options = {"with_for_update": True} if lock else {}
         attempt: ExecutionAttempt | None = None
@@ -1386,6 +1417,17 @@ class SupervisorService:
             raise OperationalActionIneligible("Canonical packet and WorkItem projections disagree.", "evidence_invalid")
         if packet.current_event_id != context.expectedPacketCurrentEventId:
             raise OperationalActionIneligible("Operational action rejected because the packet event fence is stale.", "projection_stale")
+        expected_work_item_updated_at = datetime.fromisoformat(
+            context.expectedWorkItemUpdatedAt.replace("Z", "+00:00")
+        )
+        if (
+            self._ensure_aware(item.updated_at).astimezone(timezone.utc)
+            != expected_work_item_updated_at.astimezone(timezone.utc)
+        ):
+            raise OperationalActionIneligible(
+                "Operational action rejected because the WorkItem revision fence is stale.",
+                "projection_stale",
+            )
 
         active_attempt_query = (
             select(ExecutionAttempt)
@@ -23464,6 +23506,7 @@ class SupervisorService:
             stale_fields = []
             rejected_fields = {}
             if record_event:
+                await self._acquire_execute_admission_lock(session)
                 existing_attempt = await session.get(ExecutionAttempt, attempt_id)
                 active_attempt = await self._active_execution_attempt(session, item.id)
                 if existing_attempt:
@@ -23499,6 +23542,7 @@ class SupervisorService:
                             dict(workspace_contract),
                             attempt_id=attempt_id,
                         ),
+                        admission_lock_acquired=True,
                     )
                     if not reserved:
                         runtime_metadata = {
@@ -24186,8 +24230,10 @@ class SupervisorService:
         lane: str,
         authority_mode: str,
         workspace_contract: dict[str, object],
+        admission_lock_acquired: bool = False,
     ) -> bool:
-        await self._acquire_execute_admission_lock(session)
+        if not admission_lock_acquired:
+            await self._acquire_execute_admission_lock(session)
         if await session.get(ExecutionAttempt, attempt_id):
             return False
         active_attempt = await self._active_execution_attempt(session, item.id)

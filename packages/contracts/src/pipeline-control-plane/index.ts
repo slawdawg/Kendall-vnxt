@@ -1395,6 +1395,7 @@ export const PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS = {
     "linkedWorkItemId",
     "linkedPacketId",
     "expectedWorkItemState",
+    "expectedWorkItemUpdatedAt",
     "expectedAttemptStatus",
     "expectedAttemptUpdatedAt",
     "expectedPacketCurrentEventId",
@@ -1418,6 +1419,7 @@ export const PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS = {
     "expectedCurrentOwnerId",
     "newOwnerId",
     "expectedWorkItemState",
+    "expectedWorkItemUpdatedAt",
     "expectedActiveLeaseId",
     "expectedRunningAttemptId",
   ],
@@ -1429,6 +1431,8 @@ export interface PipelineRetryVerificationActionContextV1 {
   linkedWorkItemId: string;
   linkedPacketId: string;
   expectedWorkItemState: PipelineOperationalWorkItemStateV1;
+  /** Canonical RFC3339 `WorkItem.updatedAt`; this is the additive v1 WorkItem revision fence. */
+  expectedWorkItemUpdatedAt: string;
   expectedAttemptStatus: "failed" | "timed_out" | "rejected";
   /** Canonical RFC3339 `ExecutionAttempt.updatedAt`; this is the additive v1 attempt revision fence. */
   expectedAttemptUpdatedAt: string;
@@ -1461,6 +1465,8 @@ export interface PipelineReassignActionContextV1 {
   expectedCurrentOwnerId: string | null;
   newOwnerId: string;
   expectedWorkItemState: PipelineOperationalWorkItemStateV1;
+  /** Canonical RFC3339 `WorkItem.updatedAt`; this is the additive v1 WorkItem revision fence. */
+  expectedWorkItemUpdatedAt: string;
   expectedActiveLeaseId: null;
   expectedRunningAttemptId: null;
 }
@@ -1697,6 +1703,9 @@ const OPERATIONAL_ACTION_IDENTIFIER =
   /^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$/;
 const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
 const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
+const OPERATIONAL_ACTION_V1_EVIDENCE_REF_MAX_LENGTH = 180;
+const OPERATIONAL_ACTION_V1_EVIDENCE_REF =
+  /^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$/;
 const OPERATIONAL_ACTION_V1_ID_LENGTHS = {
   executionAttempt: 36,
   retryIntent: 80,
@@ -1834,6 +1843,23 @@ export function isPipelineOperationalActionEvidenceRefsV0(value: unknown): value
         !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(trimmed)
       );
     });
+  } catch {
+    return false;
+  }
+}
+
+function isPipelineOperationalActionEvidenceRefsV1(value: unknown): value is PipelineOperationalActionEvidenceRefsV0 {
+  try {
+    const refs = safeOperationalUnknownArray(value);
+    if (!refs) return false;
+    return refs.length > 0 && refs.length <= OPERATIONAL_ACTION_MAX_EVIDENCE_REFS && new Set(refs).size === refs.length && refs.every((ref) => (
+      typeof ref === "string" &&
+      ref.length <= OPERATIONAL_ACTION_V1_EVIDENCE_REF_MAX_LENGTH &&
+      OPERATIONAL_ACTION_V1_EVIDENCE_REF.test(ref) &&
+      !OPERATIONAL_ACTION_EVIDENCE_REF_PATH_SEGMENT.test(ref) &&
+      !FORBIDDEN_OPERATIONAL_ACTION_METADATA.test(ref) &&
+      !SECRET_LIKE_OPERATIONAL_ACTION_REF.test(ref)
+    ));
   } catch {
     return false;
   }
@@ -2151,7 +2177,7 @@ export function validatePipelineOperationalActionRequestV1(request: unknown): Pi
     }
   }
   validatePipelineOperationalActionV1Actor(issues, record.requestedBy, "requestedBy");
-  if (!isPipelineOperationalActionEvidenceRefsV0(record.evidenceRefs)) {
+  if (!isPipelineOperationalActionEvidenceRefsV1(record.evidenceRefs)) {
     pushPipelineOperationalActionV1Issue(issues, "evidenceRefs", "invalid_contract", "V1 requests require safe metadata-only evidence refs.");
   }
   return issues;
@@ -2223,7 +2249,7 @@ export function validatePipelineOperationalActionCapabilityV1(capability: unknow
   if (record.correlationRequired !== true || record.idempotencyRequired !== true) {
     pushPipelineOperationalActionV1Issue(issues, "correlationRequired", "policy_violation", "V1 capabilities require correlation and idempotency.");
   }
-  if (!isPipelineOperationalActionEvidenceRefsV0(record.evidenceRefs)) {
+  if (!isPipelineOperationalActionEvidenceRefsV1(record.evidenceRefs)) {
     pushPipelineOperationalActionV1Issue(issues, "evidenceRefs", "invalid_contract", "V1 capabilities require safe metadata-only evidence refs.");
   }
   if (typeof record.expectedResultSummary !== "string" || !isSafeOperationalMetadataText(record.expectedResultSummary)) {
@@ -2258,7 +2284,7 @@ export function validatePipelineOperationalActionResultV1(result: unknown): Pipe
       pushPipelineOperationalActionV1Issue(issues, field, "invalid_contract", `V1 result ${field} must be an exact safe identifier.`);
     }
   }
-  if (!isPipelineOperationalActionEvidenceRefsV0(record.evidenceRefs) || typeof record.replayed !== "boolean") {
+  if (!isPipelineOperationalActionEvidenceRefsV1(record.evidenceRefs) || typeof record.replayed !== "boolean") {
     pushPipelineOperationalActionV1Issue(issues, "evidenceRefs", "invalid_contract", "V1 results require safe evidence refs and explicit replay state.");
   }
   if (record.outcome === "succeeded") {
@@ -2419,7 +2445,7 @@ function validatePipelineOperationalActionV1Context(
     if (context.executionAttemptId !== targetId) pushPipelineOperationalActionV1Issue(issues, "actionContext.executionAttemptId", "target_context_mismatch", "Retry context must bind the target execution attempt.");
     if (!isOneOfString(context.expectedWorkItemState, [
       "queued", "triaged", "ready", "implementing", "validating", "reviewing", "awaiting_audit", "needs_rework", "operator_owned", "blocked", "done",
-    ])) {
+    ]) || !Number.isFinite(pipelineOperationalActionV1Timestamp(context.expectedWorkItemUpdatedAt))) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedWorkItemState", "stale_fence", "Retry requires the exact linked WorkItem state.");
     }
     if (!isOneOfString(context.expectedAttemptStatus, ["failed", "timed_out", "rejected"]) || !Number.isFinite(pipelineOperationalActionV1Timestamp(context.expectedAttemptUpdatedAt))) {
@@ -2452,7 +2478,8 @@ function validatePipelineOperationalActionV1Context(
     }
     if (context.expectedCurrentOwnerId === context.newOwnerId || !isOneOfString(context.expectedWorkItemState, [
       "queued", "triaged", "ready", "implementing", "validating", "reviewing", "awaiting_audit", "needs_rework", "operator_owned", "blocked", "done",
-    ]) || context.expectedActiveLeaseId !== null || context.expectedRunningAttemptId !== null) {
+    ]) || !Number.isFinite(pipelineOperationalActionV1Timestamp(context.expectedWorkItemUpdatedAt)) ||
+        context.expectedActiveLeaseId !== null || context.expectedRunningAttemptId !== null) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext", "stale_fence", "Reassign requires changed exact ownership, linked state, and no active lease or running attempt.");
     }
   }

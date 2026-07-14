@@ -2561,8 +2561,8 @@ OPERATIONAL_ACTION_V1_POLICY: dict[str, dict[str, str]] = {
 OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
     "retry_verification": (
         "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedWorkItemState",
-        "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
-        "expectedLeaseFencingToken", "expectedLeaseActive",
+        "expectedWorkItemUpdatedAt", "expectedAttemptStatus", "expectedAttemptUpdatedAt",
+        "expectedPacketCurrentEventId", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
     ),
     "pause": ("kind", "expectedRuntimeMode", "expectedRuntimeRevision"),
     "drain": (
@@ -2571,10 +2571,25 @@ OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "reassign": (
         "kind", "linkedWorkItemId", "expectedPacketCurrentEventId", "expectedCurrentOwnerId", "newOwnerId",
-        "expectedWorkItemState", "expectedActiveLeaseId", "expectedRunningAttemptId",
+        "expectedWorkItemState", "expectedWorkItemUpdatedAt", "expectedActiveLeaseId", "expectedRunningAttemptId",
     ),
 }
 OPERATIONAL_ACTION_V1_IDENTIFIER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$")
+OPERATIONAL_ACTION_V1_IDENTIFIER_REPEATED_SEPARATOR_RE = re.compile(r"[._/@:,-]{2,}")
+OPERATIONAL_ACTION_V1_IDENTIFIER_PATH_SEGMENT_RE = re.compile(r"(?:^|[/\\])\.{1,2}(?:[/\\]|$)")
+OPERATIONAL_ACTION_V1_EVIDENCE_REF_MAX_LENGTH = 180
+OPERATIONAL_ACTION_V1_EVIDENCE_REF_RE = re.compile(
+    r"^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$"
+)
+OPERATIONAL_ACTION_V1_EVIDENCE_REF_PATH_SEGMENT_RE = re.compile(r"(?:^|[:/\\])\.{1,2}(?:[/\\]|$)")
+OPERATIONAL_ACTION_V1_FORBIDDEN_METADATA_RE = re.compile(
+    r"\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?|logs?|sources?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|source[\s_-]*(?:dumps?|copies?|snapshots?)|stack[\s_-]*dumps?|console[\s_-]*logs?|secrets?(?:[\s_-]*(?:key|token|value|id))?|credentials?(?:[\s_-]*(?:key|token|value|id))?|passwords?|api[\s_-]*keys?|access[\s_-]*tokens?|auth[\s_-]*tokens?|private[\s_-]*keys?|passphrases?|(?:terminal|tmux|pane)[\s_-]*(?:scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
+    re.IGNORECASE,
+)
+OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])",
+    re.IGNORECASE,
+)
 
 OPERATIONAL_ACTION_V1_ID_LENGTHS = {
     "execution_attempt": 36,
@@ -2592,9 +2607,27 @@ OPERATIONAL_ACTION_V1_ID_LENGTHS = {
 
 
 def _validate_operational_action_v1_identifier(value: str, *, label: str, max_length: int) -> str:
-    if len(value) > max_length or not OPERATIONAL_ACTION_V1_IDENTIFIER_RE.fullmatch(value) or ".." in value:
+    if (
+        len(value) > max_length
+        or value != value.lower()
+        or not OPERATIONAL_ACTION_V1_IDENTIFIER_RE.fullmatch(value)
+        or OPERATIONAL_ACTION_V1_IDENTIFIER_REPEATED_SEPARATOR_RE.search(value)
+        or OPERATIONAL_ACTION_V1_IDENTIFIER_PATH_SEGMENT_RE.search(value)
+        or OPERATIONAL_ACTION_V1_FORBIDDEN_METADATA_RE.search(value)
+        or OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE.search(value)
+    ):
         raise ValueError(f"{label} must be an exact safe identifier.")
     return value
+
+
+def _is_safe_operational_action_v1_evidence_ref(value: str) -> bool:
+    return bool(
+        len(value) <= OPERATIONAL_ACTION_V1_EVIDENCE_REF_MAX_LENGTH
+        and OPERATIONAL_ACTION_V1_EVIDENCE_REF_RE.fullmatch(value)
+        and not OPERATIONAL_ACTION_V1_EVIDENCE_REF_PATH_SEGMENT_RE.search(value)
+        and not OPERATIONAL_ACTION_V1_FORBIDDEN_METADATA_RE.search(value)
+        and not OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE.search(value)
+    )
 
 
 def _validate_operational_action_v1_timestamp(value: str, *, label: str) -> str:
@@ -2615,6 +2648,7 @@ class RetryVerificationActionContextV1(BaseModel):
     linkedWorkItemId: str
     linkedPacketId: str
     expectedWorkItemState: WorkflowState
+    expectedWorkItemUpdatedAt: str
     expectedAttemptStatus: Literal["failed", "timed_out", "rejected"]
     expectedAttemptUpdatedAt: str
     expectedPacketCurrentEventId: str
@@ -2650,10 +2684,10 @@ class RetryVerificationActionContextV1(BaseModel):
             value, label="expectedPacketCurrentEventId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"]
         )
 
-    @field_validator("expectedAttemptUpdatedAt")
+    @field_validator("expectedWorkItemUpdatedAt", "expectedAttemptUpdatedAt")
     @classmethod
-    def exact_attempt_revision(cls, value: str) -> str:
-        return _validate_operational_action_v1_timestamp(value, label="expectedAttemptUpdatedAt")
+    def exact_revision(cls, value: str, info) -> str:
+        return _validate_operational_action_v1_timestamp(value, label=info.field_name)
 
     @model_validator(mode="after")
     def lease_fence_is_exact(self) -> "RetryVerificationActionContextV1":
@@ -2693,6 +2727,7 @@ class ReassignActionContextV1(BaseModel):
     expectedCurrentOwnerId: str | None
     newOwnerId: str
     expectedWorkItemState: WorkflowState
+    expectedWorkItemUpdatedAt: str
     expectedActiveLeaseId: None
     expectedRunningAttemptId: None
 
@@ -2723,6 +2758,11 @@ class ReassignActionContextV1(BaseModel):
         return None if value is None else _validate_operational_action_v1_identifier(
             value, label="expectedCurrentOwnerId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"]
         )
+
+    @field_validator("expectedWorkItemUpdatedAt")
+    @classmethod
+    def exact_work_item_revision(cls, value: str) -> str:
+        return _validate_operational_action_v1_timestamp(value, label="expectedWorkItemUpdatedAt")
 
     @model_validator(mode="after")
     def owner_must_change(self) -> "ReassignActionContextV1":
@@ -2862,7 +2902,7 @@ class OperationalActionRequestV1(OperationalActionApprovalRequestV1):
     @field_validator("evidenceRefs")
     @classmethod
     def exact_evidence_refs(cls, refs: list[str]) -> list[str]:
-        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if len(set(refs)) != len(refs) or any(not _is_safe_operational_action_v1_evidence_ref(ref) for ref in refs):
             raise ValueError("V1 evidence refs must be unique safe metadata refs.")
         return refs
 
@@ -2939,7 +2979,7 @@ class OperationalActionCapabilityV1(OperationalActionBindingV1):
     @field_validator("evidenceRefs")
     @classmethod
     def safe_capability_evidence(cls, refs: list[str]) -> list[str]:
-        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if len(set(refs)) != len(refs) or any(not _is_safe_operational_action_v1_evidence_ref(ref) for ref in refs):
             raise ValueError("V1 capability evidence refs must be unique safe metadata refs.")
         return refs
 
@@ -3035,6 +3075,34 @@ class ReassignSuccessEvidenceV1(BaseModel):
     activeLeaseTransferred: Literal[False]
     workerLaunched: Literal[False]
 
+    @field_validator("packetId")
+    @classmethod
+    def exact_packet_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="packetId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"]
+        )
+
+    @field_validator("linkedWorkItemId")
+    @classmethod
+    def exact_linked_work_item_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="linkedWorkItemId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"]
+        )
+
+    @field_validator("previousOwnerId", "newOwnerId")
+    @classmethod
+    def exact_owner_id(cls, value: str | None, info) -> str | None:
+        return None if value is None else _validate_operational_action_v1_identifier(
+            value, label=info.field_name, max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"]
+        )
+
+    @field_validator("resultingPacketCurrentEventId")
+    @classmethod
+    def exact_resulting_event_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="resultingPacketCurrentEventId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"]
+        )
+
 
 OperationalActionSuccessEvidenceV1 = Annotated[
     RetryVerificationSuccessEvidenceV1 | PauseSuccessEvidenceV1 | DrainSuccessEvidenceV1 | ReassignSuccessEvidenceV1,
@@ -3087,7 +3155,7 @@ class OperationalActionResultV1(OperationalActionBindingV1):
     @field_validator("evidenceRefs")
     @classmethod
     def safe_result_evidence(cls, refs: list[str]) -> list[str]:
-        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if len(set(refs)) != len(refs) or any(not _is_safe_operational_action_v1_evidence_ref(ref) for ref in refs):
             raise ValueError("V1 result evidence refs must be unique safe metadata refs.")
         return refs
 

@@ -37,6 +37,7 @@ function contexts() {
       linkedWorkItemId: "work-1",
       linkedPacketId: "packet-1",
       expectedWorkItemState: "ready",
+      expectedWorkItemUpdatedAt: "2026-07-14T19:59:59.000Z",
       expectedAttemptStatus: "failed",
       expectedAttemptUpdatedAt: "2026-07-14T20:00:00.000Z",
       expectedPacketCurrentEventId: "event-1",
@@ -60,6 +61,7 @@ function contexts() {
       expectedCurrentOwnerId: "owner-old",
       newOwnerId: "owner-new",
       expectedWorkItemState: "ready",
+      expectedWorkItemUpdatedAt: "2026-07-14T19:59:59.000Z",
       expectedActiveLeaseId: null,
       expectedRunningAttemptId: null,
     },
@@ -164,6 +166,9 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
   const missingWorkItemState = structuredClone(retry);
   delete missingWorkItemState.actionContext.expectedWorkItemState;
   assert.ok(contract.validatePipelineOperationalActionRequestV1(missingWorkItemState).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
+  const missingWorkItemRevision = structuredClone(retry);
+  delete missingWorkItemRevision.actionContext.expectedWorkItemUpdatedAt;
+  assert.ok(contract.validatePipelineOperationalActionRequestV1(missingWorkItemRevision).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
   assert.ok(contract.validatePipelineOperationalActionRequestV1({ ...retry, targetType: "work_packet" }).some((issue) => issue.code === "policy_violation"));
 
   const reassign = requestFor(contract, "reassign");
@@ -252,6 +257,29 @@ test("v1 identifiers accept exact persistence bounds and reject max plus one", a
     attemptTooLong.actionContext,
   );
   assert.ok(validate(attemptTooLong).some((issue) => issue.field === "targetId" && issue.code === "invalid_contract"));
+});
+
+test("v1 identifier and evidence-ref grammar rejects repeated separators and invalid prefixes at exact bounds", async () => {
+  const contract = await loadContract();
+  const validate = contract.validatePipelineOperationalActionRequestV1;
+  assert.deepEqual(
+    validate(withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "owner-new" })),
+    [],
+  );
+  assert.ok(validate(
+    withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "owner--new" }),
+  ).some((issue) => issue.field === "actionContext.newOwnerId" && issue.code === "invalid_contract"));
+
+  const maxEvidenceRef = `evidence:${"A".repeat(160)}`;
+  assert.deepEqual(validate(requestFor(contract, "retry_verification", { evidenceRefs: [maxEvidenceRef] })), []);
+  for (const invalidRef of [
+    `evidence:${"A".repeat(161)}`,
+    "capability:retry-verification",
+    "evidence:../retry-verification",
+  ]) {
+    assert.ok(validate(requestFor(contract, "retry_verification", { evidenceRefs: [invalidRef] }))
+      .some((issue) => issue.field === "evidenceRefs" && issue.code === "invalid_contract"), invalidRef);
+  }
 });
 
 test("v1 authorization fails closed for stale context, digest, actor, expiry, and replay", async () => {

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -52,6 +55,7 @@ def _contexts() -> dict[str, dict[str, object]]:
             "linkedWorkItemId": "work-1",
             "linkedPacketId": "packet-1",
             "expectedWorkItemState": "ready",
+            "expectedWorkItemUpdatedAt": "2026-07-14T19:59:59.000Z",
             "expectedAttemptStatus": "failed",
             "expectedAttemptUpdatedAt": "2026-07-14T20:00:00.000Z",
             "expectedPacketCurrentEventId": "event-1",
@@ -75,6 +79,7 @@ def _contexts() -> dict[str, dict[str, object]]:
             "expectedCurrentOwnerId": "owner-old",
             "newOwnerId": "owner-new",
             "expectedWorkItemState": "ready",
+            "expectedWorkItemUpdatedAt": "2026-07-14T19:59:59.000Z",
             "expectedActiveLeaseId": None,
             "expectedRunningAttemptId": None,
         },
@@ -134,6 +139,53 @@ def _approval(request: dict[str, object]) -> dict[str, object]:
     return approval
 
 
+def _rebind_context(request: dict[str, object], **overrides: object) -> dict[str, object]:
+    rebound = deepcopy(request)
+    context = rebound["actionContext"]
+    assert isinstance(context, dict)
+    context.update(overrides)
+    ordered_context = {
+        field: context.get(field)
+        for field in OPERATIONAL_ACTION_V1_CONTEXT_FIELDS[str(rebound["actionId"])]
+    }
+    payload = json.dumps(
+        {
+            "schemaVersion": rebound["schemaVersion"],
+            "actionId": rebound["actionId"],
+            "targetType": rebound["targetType"],
+            "targetId": rebound["targetId"],
+            "actionContext": ordered_context,
+        },
+        separators=(",", ":"),
+    )
+    rebound["actionContextDigestSha256"] = f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
+    return rebound
+
+
+def _typescript_request_issues(request: dict[str, object]) -> list[dict[str, object]]:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = r'''
+const fs = require("node:fs");
+const path = require("node:path");
+const ts = require(require.resolve("typescript", { paths: [path.join(process.argv[1], "apps/dashboard")] }));
+const source = fs.readFileSync(path.join(process.argv[1], "packages/contracts/src/pipeline-control-plane/index.ts"), "utf8");
+const output = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+const contractModule = { exports: {} };
+Function("module", "exports", output)(contractModule, contractModule.exports);
+process.stdout.write(JSON.stringify(contractModule.exports.validatePipelineOperationalActionRequestV1(JSON.parse(fs.readFileSync(0, "utf8")))));
+'''
+    completed = subprocess.run(
+        ["node", "-e", script, str(repo_root)],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
 def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
     assert OPERATIONAL_ACTION_V1_POLICY == EXPECTED_POLICY
     typescript = (
@@ -149,8 +201,8 @@ def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
 
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["retry_verification"] == (
         "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedWorkItemState",
-        "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
-        "expectedLeaseFencingToken", "expectedLeaseActive",
+        "expectedWorkItemUpdatedAt", "expectedAttemptStatus", "expectedAttemptUpdatedAt",
+        "expectedPacketCurrentEventId", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
     )
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["pause"] == ("kind", "expectedRuntimeMode", "expectedRuntimeRevision")
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["drain"][-3:] == (
@@ -174,6 +226,11 @@ def test_v1_requests_fail_closed_for_context_fence_target_authority_and_risk_dri
 
     retry = _request("retry_verification")
     del retry["actionContext"]["expectedWorkItemState"]  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(retry)
+
+    retry = _request("retry_verification")
+    del retry["actionContext"]["expectedWorkItemUpdatedAt"]  # type: ignore[index]
     with pytest.raises(ValidationError):
         OperationalActionRequestV1.model_validate(retry)
 
@@ -274,6 +331,31 @@ def test_v1_identifier_boundaries_match_persistence_without_truncation() -> None
     second_key = SupervisorService._p2_1_packet_event_idempotency_key(("i" * 159) + "j")
     assert len(first_key) == 69
     assert first_key != second_key
+
+
+@pytest.mark.parametrize(
+    ("payload", "accepted"),
+    [
+        (_rebind_context(_request("reassign"), newOwnerId="owner-new"), True),
+        (_rebind_context(_request("reassign"), newOwnerId="owner--new"), False),
+        ({**_request("retry_verification"), "evidenceRefs": [f"evidence:{'A' * 160}"]}, True),
+        ({**_request("retry_verification"), "evidenceRefs": [f"evidence:{'A' * 161}"]}, False),
+        ({**_request("retry_verification"), "evidenceRefs": ["capability:retry-verification"]}, False),
+        ({**_request("retry_verification"), "evidenceRefs": ["evidence:../retry-verification"]}, False),
+    ],
+)
+def test_python_and_typescript_v1_grammars_match_at_identifier_and_evidence_boundaries(
+    payload: dict[str, object],
+    accepted: bool,
+) -> None:
+    try:
+        OperationalActionRequestV1.model_validate(payload)
+        python_accepted = True
+    except ValidationError:
+        python_accepted = False
+    typescript_accepted = not _typescript_request_issues(payload)
+    assert python_accepted is accepted
+    assert typescript_accepted is accepted
 
 
 def test_context_digest_payload_is_canonical_and_field_ordered() -> None:

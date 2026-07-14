@@ -133,6 +133,7 @@ def _seed_target(
         "packetEventId": packet["currentEventId"],
         "workItemId": item["id"],
         "workItemState": state,
+        "workItemUpdatedAt": item["updatedAt"],
         "attemptId": attempt_id,
         "attemptUpdatedAt": attempt_updated_at,
         "leaseId": lease_id,
@@ -153,6 +154,7 @@ def _approval_request(action_id: str, target: dict[str, object], **context_overr
             "linkedWorkItemId": target["workItemId"],
             "linkedPacketId": target["packetId"],
             "expectedWorkItemState": target["workItemState"],
+            "expectedWorkItemUpdatedAt": target["workItemUpdatedAt"],
             "expectedAttemptStatus": "failed",
             "expectedAttemptUpdatedAt": target["attemptUpdatedAt"],
             "expectedPacketCurrentEventId": target["packetEventId"],
@@ -172,6 +174,7 @@ def _approval_request(action_id: str, target: dict[str, object], **context_overr
             "expectedCurrentOwnerId": "owner-old",
             "newOwnerId": "owner-new",
             "expectedWorkItemState": "ready",
+            "expectedWorkItemUpdatedAt": target["workItemUpdatedAt"],
             "expectedActiveLeaseId": None,
             "expectedRunningAttemptId": None,
             **context_overrides,
@@ -661,6 +664,84 @@ def test_retry_revalidates_revision_fences_between_approval_and_apply(
             assert conn.execute("select count(*) from verification_retry_intents").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("action_id", ["retry_verification", "reassign"])
+@pytest.mark.parametrize("work_item_mutation", ["updated_at", "authoritative_packet_id"])
+def test_retry_and_reassign_reject_work_item_revision_or_packet_linkage_mutation_without_side_effects(
+    tmp_path,
+    monkeypatch,
+    action_id: str,
+    work_item_mutation: str,
+) -> None:
+    suffix = f"{action_id}-{work_item_mutation}"
+    db_name = f"p2-1-{suffix}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(
+            client,
+            db_path,
+            suffix=suffix,
+            attempt_status="failed" if action_id == "retry_verification" else None,
+        )
+        approval_request = _approval_request(action_id, target)
+        approval_response = client.post("/pipeline-control-plane/approvals/v1", json=approval_request)
+        assert approval_response.status_code == 200, approval_response.text
+        replacement = (
+            _seed_target(client, db_path, suffix=f"{suffix}-replacement")
+            if work_item_mutation == "authoritative_packet_id"
+            else None
+        )
+
+        with sqlite3.connect(db_path) as conn:
+            if work_item_mutation == "updated_at":
+                conn.execute(
+                    "update work_items set updated_at = ? where id = ?",
+                    ("2026-07-14T20:00:01+00:00", target["workItemId"]),
+                )
+            else:
+                assert replacement is not None
+                conn.execute(
+                    "update work_items set authoritative_packet_id = ? where id = ?",
+                    (replacement["packetId"], target["workItemId"]),
+                )
+            conn.commit()
+
+        applied = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(
+                approval_request,
+                approval_response.json()["data"],
+                suffix=suffix,
+            ),
+        )
+        assert applied.status_code == 400
+        assert (
+            "WorkItem revision fence is stale" in applied.text
+            or "Canonical packet and WorkItem projections disagree" in applied.text
+        )
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select assignee_id, state from work_items where id = ?",
+                (target["workItemId"],),
+            ).fetchone() == ("owner-old", "ready")
+            assert conn.execute(
+                "select count(*) from verification_retry_intents where work_item_id = ?",
+                (target["workItemId"],),
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "select count(*) from pipeline_operational_action_records where packet_id = ?",
+                (target["packetId"],),
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "select count(*) from workflow_events where work_item_id = ? and event_type in "
+                "('work_item.verification_retry_queued', 'work_item.reassigned')",
+                (target["workItemId"],),
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "select consumed_at from pipeline_operational_approvals where approval_id = ?",
+                (approval_response.json()["data"]["approvalId"],),
+            ).fetchone()[0] is None
+
+
 def test_concurrent_retry_admission_serializes_packet_and_wip_capacity(tmp_path, monkeypatch) -> None:
     db_name = "p2-1-retry-concurrent.db"
     db_path = (tmp_path / db_name).as_posix()
@@ -1063,7 +1144,11 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
     assert AdmissionLock.__table__.primary_key.columns.keys() == ["scope"]
 
     admission_reads = {
+        SupervisorService.pipeline_operational_action_capability_v1: "_validate_p2_1_operational_target",
+        SupervisorService.issue_pipeline_operational_approval_v1: "_validate_p2_1_operational_target",
         SupervisorService.apply_pipeline_operational_action_v1: "_operational_action_by_idempotency",
+        SupervisorService._validate_p2_1_operational_target: "session.get(ExecutionAttempt",
+        SupervisorService.evaluate_subscription_agent_launch_request: "existing_attempt = await session.get(ExecutionAttempt",
         SupervisorService.create_execution_attempt: "session.get(WorkItem",
         SupervisorService.launch_supervised_codex_worker: "session.get(WorkItem",
         SupervisorService._reserve_subscription_agent_launch_runtime_attempt: "session.get(ExecutionAttempt",
@@ -1074,6 +1159,13 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
         assert source.index("await self._acquire_execute_admission_lock(session)") < source.index(first_admission_read)
     launch_source = textwrap.dedent(inspect.getsource(SupervisorService.launch_supervised_codex_worker))
     assert launch_source.index("await session.commit()") < launch_source.index("self._run_supervised_codex_worker")
+    p2_1_apply_source = textwrap.dedent(inspect.getsource(SupervisorService.apply_pipeline_operational_action_v1))
+    for work_item_cas_fence in (
+        "WorkItem.updated_at == expected_work_item_updated_at",
+        "WorkItem.authoritative_packet_id == packet.id",
+        "WorkItem.state == context.expectedWorkItemState",
+    ):
+        assert work_item_cas_fence in p2_1_apply_source
     service_source = inspect.getsource(SupervisorService)
     assert "LOCK TABLE" not in service_source
     assert "BEGIN IMMEDIATE" not in service_source
