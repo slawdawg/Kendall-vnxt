@@ -626,6 +626,47 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
     assert.equal(result.packets.length, 0, label);
   }
 
+  const whitespaceProvenanceCases = [
+    ["lifecycle latest transition event reference", { lifecycleState: { ...packet.lifecycleState, latestTransitionEventRef: " \t " } }],
+    ["lifecycle attempt reference", { lifecycleState: { ...packet.lifecycleState, attemptRef: "  " } }],
+    ["delivery pull request URL", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestUrl: " \t " } }],
+    ["delivery expected head revision", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), expectedHeadRevision: "  " } }],
+    ["delivery cleanup target", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), cleanupTarget: "\t" } }],
+    ["cleanup expected head revision", {
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedHeadRevision: "  " }),
+      },
+    }],
+  ];
+  for (const [label, overrides] of whitespaceProvenanceCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const nullableDeliveryLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{
+      ...packet,
+      ...optionalSources,
+      deliveryEvidence: {
+        ...authoritativeDeliveryEvidence(),
+        pullRequestUrl: null,
+        expectedHeadRevision: null,
+        cleanupTarget: null,
+        cleanupDryRunGate: authoritativeCleanupDryRunGate(),
+      },
+    }],
+  });
+  const nullableDelivery = await nullableDeliveryLoader.loadPipelineCockpitPackets();
+  assert.equal(nullableDelivery.fixtureMode.kind, "runtime");
+  assert.equal(nullableDelivery.packets.length, 1);
+
   const lifecycleCases = [
     ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
     ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],

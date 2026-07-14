@@ -628,6 +628,57 @@ test("selected projection details reject synthetic and blank nested references",
   assert.equal(projectionModule.isPipelineDashboardProjection(ordinaryText), true);
 });
 
+test("projection counts reject contradictory active and empty states while preserving unknown counts", async () => {
+  const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
+  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const emptyProjection = validDashboardProjection();
+  emptyProjection.workPackets = [];
+  emptyProjection.selectedPacketDetails = [];
+  emptyProjection.truthSummary = { ...emptyProjection.truthSummary, backendEmpty: true, emptyReason: "healthy_empty" };
+  emptyProjection.stageSummaries = emptyProjection.stageSummaries.map((summary) => ({ ...summary, packetCount: 0 }));
+  emptyProjection.queueSummary = {
+    ...emptyProjection.queueSummary,
+    activeCount: 0,
+    dispatchableCount: 0,
+    blockedCount: 0,
+    gatedCount: 0,
+    closedCount: 0,
+    staleCount: 0,
+    refillingCount: 0,
+    unknownCount: 0,
+    emptyReason: "healthy_empty",
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(emptyProjection), true);
+
+  const unknownCounts = structuredClone(emptyProjection);
+  for (const field of ["activeCount", "dispatchableCount", "blockedCount", "gatedCount", "closedCount", "staleCount", "refillingCount", "unknownCount"]) {
+    unknownCounts.queueSummary[field] = null;
+  }
+  assert.equal(projectionModule.isPipelineDashboardProjection(unknownCounts), true);
+
+  const invalidCases = [
+    ["queue active count", (projection) => { projection.queueSummary.activeCount = 1; }],
+    ["stage packet count", (projection) => { projection.stageSummaries[0].packetCount = 1; }],
+    ["manager queue count", (projection) => { projection.managerSummary.blockedQueueCount = 1; }],
+    ["worker active count", (projection) => { projection.workerSummary.activeCount = 1; }],
+    ["selected detail count", (projection) => { projection.selectedPacketDetails.push({}); }],
+  ];
+  for (const [label, mutate] of invalidCases) {
+    const candidate = structuredClone(emptyProjection);
+    mutate(candidate);
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
+
+  const activeProjection = validDashboardProjection();
+  activeProjection.truthSummary = { ...activeProjection.truthSummary, backendEmpty: true };
+  assert.equal(projectionModule.isPipelineDashboardProjection(activeProjection), false, "active packet with empty truth");
+
+  const mismatchedWorkerCounts = validDashboardProjection();
+  mismatchedWorkerCounts.managerSummary.activeWorkerCount = 1;
+  mismatchedWorkerCounts.workerSummary.activeCount = 0;
+  assert.equal(projectionModule.isPipelineDashboardProjection(mismatchedWorkerCounts), false, "manager and worker count mismatch");
+});
+
 test("real WorkPacket projection proof artifact is metadata-only and non-fixture", async () => {
   const proofSource = await readFile(realWorkPacketProofPath, "utf8");
   const proof = JSON.parse(proofSource);

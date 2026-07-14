@@ -392,8 +392,8 @@ function isWorkPacketLifecycleStateV0(value: unknown): boolean {
     isNonEmptyString(value.authoritativeRef) &&
     isStringArray(value.derivedFromRefs) &&
     isStringArray(value.transitionEventRefs) &&
-    isNullableString(value.latestTransitionEventRef) &&
-    isNullableString(value.attemptRef) &&
+    isNullableSafeReferenceString(value.latestTransitionEventRef) &&
+    isNullableSafeReferenceString(value.attemptRef) &&
     value.metadataOnly === true &&
     hasExactBooleanFields(
       value,
@@ -416,7 +416,7 @@ function isCandidateWorkView(value: unknown): boolean {
     Number.isFinite(value.sortOrder) &&
     isEnumValue(value.status, candidateWorkStatuses) &&
     isNullableString(value.approvedAt) &&
-    isNullableString(value.promotedWorkItemId) &&
+    isNullableSafeReferenceString(value.promotedWorkItemId) &&
     isAbsentOr(value.sourceSummary, isCandidateWorkSourceSummaryView) &&
     isRecord(value.importMetadata);
 }
@@ -492,7 +492,7 @@ function isWorkItemRemoteAutomationPolicyView(value: unknown): boolean {
 function isWorkItemDeliveryReadinessView(value: unknown): boolean {
   return isRecord(value) &&
     ["pullRequestStatus", "ciStatus", "mergeStatus", "remoteOperationsPolicy"].every((field) => isNonEmptyString(value[field])) &&
-    isNullableString(value.pullRequestUrl) &&
+    isNullableSafeReferenceString(value.pullRequestUrl) &&
     typeof value.deliveryWaived === "boolean" &&
     isNullableString(value.deliveryWaiverReason) &&
     typeof value.remoteOperationsPerformed === "boolean" &&
@@ -632,7 +632,7 @@ function isMemoryProposalV0(value: unknown, packetId: string): boolean {
     isNonEmptyStringArray(value.sourceRefs) &&
     isNonEmptyStringArray(value.evidenceRefs) &&
     isAbsentOr(value.targetRef, isSourceRefV0) &&
-    isNullableString(value.targetVaultPath) &&
+    isNullableSafeReferenceString(value.targetVaultPath) &&
     isNonEmptyString(value.targetVaultFolder) &&
     isEnumValue(value.proposalType, memoryProposalTypes) &&
     isNonEmptyString(value.suggestedContentSummary) &&
@@ -675,7 +675,7 @@ function isWorkPacketExecutionAttemptSummaryV0(value: unknown): boolean {
   }
   return ["attemptId", "workItemId", "routeDecisionId", "workerId", "lane", "authorityMode", "createdAt", "updatedAt"]
     .every((field) => isNonEmptyString(value[field])) &&
-    isNullableString(value.leaseId) &&
+    isNullableSafeReferenceString(value.leaseId) &&
     (value.fencingToken === undefined || value.fencingToken === null || (Number.isInteger(value.fencingToken) && (value.fencingToken as number) >= 0)) &&
     isEnumValue(value.status, executionAttemptStatuses) &&
     ["requestedById", "requestedByLabel", "startedAt", "completedAt", "heartbeatAt", "timeoutAt", "cancelRequestedAt", "cancelReason", "rejectionReason", "failureReason"]
@@ -696,7 +696,7 @@ function isWorkPacketStageTransitionEventV0(value: unknown): boolean {
     isStringArray(value.reasonCodes) &&
     isStringArray(value.evidenceRefs) &&
     typeof value.durable === "boolean" &&
-    isNullableString(value.sourceEventId) &&
+    isNullableSafeReferenceString(value.sourceEventId) &&
     isNullableString(value.actorLabel);
 }
 
@@ -722,7 +722,11 @@ function isWorkPacketDeliveryEvidenceV0(value: unknown): boolean {
     value.mode === "metadata_only" &&
     (value.actionId === undefined || value.actionId === null || value.actionId === "pr" || value.actionId === "merge" || value.actionId === "cleanup") &&
     isNonEmptyString(value.status) &&
-    optionalStringFields.every((field) => isNullableString(value[field])) &&
+    optionalStringFields.every((field) => [
+      "targetBranch", "baseBranch", "pullRequestUrl", "expectedHeadRevision", "pullRequestHeadRevision", "cleanupTarget",
+    ].includes(field)
+      ? isNullableSafeReferenceString(value[field])
+      : isNullableString(value[field])) &&
     typeof value.readyForApproval === "boolean" &&
     typeof value.hasDeliveryExecutionEvidence === "boolean" &&
     isStringArray(value.evidenceRefs) &&
@@ -763,7 +767,7 @@ function isWorkPacketCleanupDryRunGateV0(value: unknown): boolean {
   return (value.status === "passed" || value.status === "blocked") &&
     typeof value.dryRunMatchesPolicy === "boolean" &&
     ["expectedPr", "expectedOwner", "expectedWorktree", "expectedLocalBranch", "expectedRemoteBranch", "expectedHeadRevision"]
-      .every((field) => isNullableString(value[field])) &&
+      .every((field) => isNullableSafeReferenceString(value[field])) &&
     isStringArray(value.blockedReasons) &&
     isNonEmptyString(value.recoveryPath) &&
     value.metadataOnly === true &&

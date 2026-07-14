@@ -410,29 +410,137 @@ function isLiveProjectionRenderable(projection: Partial<PipelineDashboardProject
 }
 
 function isEmptyProjectionSummaryConsistent(projection: Partial<PipelineDashboardProjectionV0>) {
-  if (projection.workPackets?.length !== 0 || projection.truthSummary?.backendEmpty !== true) {
-    return true;
-  }
-  const manager = projection.managerSummary;
-  const worker = projection.workerSummary;
-  if (!manager || !worker) {
+  if (!Array.isArray(projection.workPackets) || !projection.truthSummary) {
     return false;
   }
+  const packetCount = projection.workPackets.length;
+  if (projection.truthSummary.backendEmpty === true && packetCount > 0) {
+    return false;
+  }
+  if (
+    packetCount === 0 &&
+    projection.truthSummary.backendEmpty === false &&
+    projection.sourceLabel === "live" &&
+    projection.backendReachability?.state === "reachable"
+  ) {
+    return false;
+  }
+  if (!Array.isArray(projection.stageSummaries)) {
+    return false;
+  }
+  const packetCountsByStage = new Map<string, number>();
+  for (const packet of projection.workPackets) {
+    if (!packet || typeof packet !== "object" || typeof packet.currentStage !== "string") {
+      return false;
+    }
+    packetCountsByStage.set(packet.currentStage, (packetCountsByStage.get(packet.currentStage) ?? 0) + 1);
+  }
+  const stagePacketCount = projection.stageSummaries.reduce((sum, summary) => sum + summary.packetCount, 0);
+  if (
+    stagePacketCount !== packetCount ||
+    projection.stageSummaries.some((summary) => summary.packetCount !== (packetCountsByStage.get(summary.stage) ?? 0))
+  ) {
+    return false;
+  }
+  if (Array.isArray(projection.selectedPacketDetails) && projection.selectedPacketDetails.length !== packetCount) {
+    return false;
+  }
+
+  const manager = projection.managerSummary;
+  const worker = projection.workerSummary;
+  const queue = projection.queueSummary;
+  if (!manager || !worker || !queue) {
+    return false;
+  }
+
+  const queueCounts = [
+    queue.activeCount,
+    queue.dispatchableCount,
+    queue.blockedCount,
+    queue.gatedCount,
+    queue.closedCount,
+    queue.staleCount,
+    queue.refillingCount,
+    queue.unknownCount,
+  ];
+  if (queueCounts.every(isKnownCount) && queueCounts.reduce((sum, count) => sum + count, 0) < packetCount) {
+    return false;
+  }
+
+  const queueManagerCounts: Array<[unknown, unknown]> = [
+    [queue.blockedCount, manager.blockedQueueCount],
+    [queue.dispatchableCount, manager.dispatchableQueueCount],
+    [queue.closedCount, manager.closedQueueCount],
+  ];
+  if (queueManagerCounts.some(([queueCount, managerCount]) => !countsMatch(queueCount, managerCount))) {
+    return false;
+  }
+
+  const managerWorkerCounts: Array<[unknown, unknown]> = [
+    [manager.warmWorkerCount, worker.warmCount],
+    [manager.activeWorkerCount, worker.activeCount],
+  ];
+  if (managerWorkerCounts.some(([managerCount, workerCount]) => !countsMatch(managerCount, workerCount))) {
+    return false;
+  }
+
+  if (Array.isArray(projection.sourceStates)) {
+    const sourceStateCounts = new Map<string, number>();
+    for (const sourceState of projection.sourceStates) {
+      if (!sourceState || typeof sourceState !== "object" || typeof sourceState.state !== "string") {
+        return false;
+      }
+      sourceStateCounts.set(sourceState.state, (sourceStateCounts.get(sourceState.state) ?? 0) + 1);
+    }
+    const managerSourceCounts: Array<[unknown, string]> = [
+      [manager.healthySourceCount, "healthy"],
+      [manager.exhaustedSourceCount, "exhausted"],
+      [manager.blockedSourceCount, "blocked"],
+      [manager.gatedSourceCount, "gated"],
+      [manager.staleSourceCount, "stale"],
+      [manager.unavailableSourceCount, "unavailable"],
+      [manager.refillingSourceCount, "refilling"],
+      [manager.unknownSourceCount, "unknown"],
+    ];
+    if (managerSourceCounts.some(([managerCount, state]) => isKnownCount(managerCount) && managerCount !== (sourceStateCounts.get(state) ?? 0))) {
+      return false;
+    }
+  }
+
+  const emptyReason = projection.truthSummary.emptyReason;
+  const allowedEmptyQueueCounts = new Set(
+    emptyReason === "blocked"
+      ? ["blockedCount"]
+      : emptyReason === "approval_required"
+        ? ["gatedCount"]
+        : emptyReason === "refilling"
+          ? ["refillingCount"]
+          : emptyReason === "projection_stale"
+            ? ["staleCount"]
+            : emptyReason === "unknown"
+              ? ["staleCount", "unknownCount"]
+              : [],
+  );
+  if (packetCount === 0 && projection.truthSummary.backendEmpty === true) {
+    const namedQueueCounts: Array<[string, unknown]> = [
+      ["activeCount", queue.activeCount],
+      ["dispatchableCount", queue.dispatchableCount],
+      ["blockedCount", queue.blockedCount],
+      ["gatedCount", queue.gatedCount],
+      ["closedCount", queue.closedCount],
+      ["staleCount", queue.staleCount],
+      ["refillingCount", queue.refillingCount],
+      ["unknownCount", queue.unknownCount],
+    ];
+    if (namedQueueCounts.some(([name, count]) => isKnownCount(count) && count > 0 && !allowedEmptyQueueCounts.has(name))) {
+      return false;
+    }
+  }
+
   return [
     manager.activeLeaseCount,
     manager.activeWorkerCount,
     manager.warmWorkerCount,
-    manager.blockedQueueCount,
-    manager.dispatchableQueueCount,
-    manager.closedQueueCount,
-    manager.healthySourceCount,
-    manager.exhaustedSourceCount,
-    manager.blockedSourceCount,
-    manager.gatedSourceCount,
-    manager.staleSourceCount,
-    manager.unavailableSourceCount,
-    manager.refillingSourceCount,
-    manager.unknownSourceCount,
     worker.warmCount,
     worker.activeCount,
     worker.waitingCount,
@@ -443,7 +551,15 @@ function isEmptyProjectionSummaryConsistent(projection: Partial<PipelineDashboar
     worker.completeCount,
     worker.unavailableCount,
     worker.unknownCount,
-  ].every((count) => count === null || count === 0);
+  ].every((count) => !isKnownCount(count) || count === 0);
+}
+
+function isKnownCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function countsMatch(left: unknown, right: unknown): boolean {
+  return !isKnownCount(left) || !isKnownCount(right) || left === right;
 }
 
 function projectionHasOpenPacket(projection: Partial<PipelineDashboardProjectionV0>) {
