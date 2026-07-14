@@ -189,6 +189,12 @@ async def init_db() -> None:
                 "ON CONFLICT (scope) DO NOTHING"
             )
         )
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_retry_intents_pending_work_item "
+                "ON verification_retry_intents(work_item_id) WHERE status = 'pending'"
+            )
+        )
         dialect = connection.dialect.name
         if dialect == "postgresql":
             await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_label VARCHAR(120)"))

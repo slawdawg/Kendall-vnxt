@@ -9108,8 +9108,21 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
         return False, "unexpected git command"
 
     launched: list[str] = []
+    durable_reservations: list[tuple[str, int]] = []
 
     def fake_launch(payload, attempt_id: str) -> dict:
+        with sqlite3.connect(db_path) as conn:
+            reserved_status = conn.execute(
+                "select status from execution_attempts where id = ?",
+                (attempt_id,),
+            ).fetchone()
+            started_event_count = conn.execute(
+                "select count(*) from workflow_events where event_type = ? and payload like ?",
+                ("execution_attempt.supervised_codex_launch_started", f'%"attemptId": "{attempt_id}"%'),
+            ).fetchone()[0]
+        assert reserved_status == ("starting",)
+        assert started_event_count == 1
+        durable_reservations.append((reserved_status[0], started_event_count))
         launched.append(attempt_id)
         return {
             "status": "completed",
@@ -9156,6 +9169,7 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
     attempt = approved.json()["data"]
     assert attempt["status"] == "completed"
     assert launched == [attempt["attemptId"]]
+    assert durable_reservations == [("starting", 1)]
     launch_evidence = next(ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence")
     assert launch_evidence["processLaunchAttempted"] is True
     assert launch_evidence["workspaceOrBranch"] == "repo_owned_codex_workspace"

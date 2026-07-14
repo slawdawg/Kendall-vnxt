@@ -2578,6 +2578,7 @@ OPERATIONAL_ACTION_V1_IDENTIFIER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._/@:,-]{0
 
 OPERATIONAL_ACTION_V1_ID_LENGTHS = {
     "execution_attempt": 36,
+    "retry_intent": 80,
     "work_item": 36,
     "queue_lease": 36,
     "work_packet": 80,
@@ -2955,12 +2956,51 @@ class RetryVerificationSuccessEvidenceV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["retry_verification"]
     originalAttemptId: str
-    retryAttemptId: str
+    retryIntentId: str
     linkedWorkItemId: str
     linkedPacketId: str
     resultingPacketCurrentEventId: str
     originalAttemptPreserved: Literal[True]
     providerOrWorkerLaunched: Literal[False]
+
+    @field_validator("originalAttemptId")
+    @classmethod
+    def exact_original_attempt_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value,
+            label="originalAttemptId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+        )
+
+    @field_validator("retryIntentId")
+    @classmethod
+    def exact_retry_intent_id(cls, value: str) -> str:
+        value = _validate_operational_action_v1_identifier(
+            value,
+            label="retryIntentId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["retry_intent"],
+        )
+        if not value.startswith("verification-retry-"):
+            raise ValueError("retryIntentId must identify a verification retry intent.")
+        return value
+
+    @field_validator("linkedWorkItemId")
+    @classmethod
+    def exact_linked_work_item_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value,
+            label="linkedWorkItemId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+        )
+
+    @field_validator("linkedPacketId", "resultingPacketCurrentEventId")
+    @classmethod
+    def exact_packet_identifier(cls, value: str, info) -> str:
+        return _validate_operational_action_v1_identifier(
+            value,
+            label=info.field_name,
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet" if info.field_name == "linkedPacketId" else "packet_event"],
+        )
 
 
 class PauseSuccessEvidenceV1(BaseModel):
@@ -3065,7 +3105,7 @@ class OperationalActionResultV1(OperationalActionBindingV1):
             if self.actionId == "retry_verification":
                 if (
                     evidence.originalAttemptId != self.targetId
-                    or evidence.retryAttemptId == evidence.originalAttemptId
+                    or evidence.retryIntentId == evidence.originalAttemptId
                     or evidence.linkedWorkItemId != context.linkedWorkItemId
                     or evidence.linkedPacketId != context.linkedPacketId
                 ):

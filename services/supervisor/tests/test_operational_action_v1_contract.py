@@ -19,6 +19,7 @@ from supervisor.api.schemas import (
     OperationalActionResultV1,
     PauseActionContextV1,
     ReassignActionContextV1,
+    RetryVerificationSuccessEvidenceV1,
     RetryVerificationActionContextV1,
     operational_action_context_digest_payload_v1,
     operational_action_context_digest_sha256_v1,
@@ -221,6 +222,27 @@ def test_v1_identifier_boundaries_match_persistence_without_truncation() -> None
         newOwnerId="n" * OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"],
     )
     assert ReassignActionContextV1.model_validate(reassign_context).newOwnerId == "n" * 100
+
+    retry_intent_at_max = "verification-retry-" + "a" * (
+        OPERATIONAL_ACTION_V1_ID_LENGTHS["retry_intent"] - len("verification-retry-")
+    )
+    retry_evidence = RetryVerificationSuccessEvidenceV1.model_validate(
+        {
+            "kind": "retry_verification",
+            "originalAttemptId": "a" * OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+            "retryIntentId": retry_intent_at_max,
+            "linkedWorkItemId": "w" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+            "linkedPacketId": "p" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"],
+            "resultingPacketCurrentEventId": "e" * OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"],
+            "originalAttemptPreserved": True,
+            "providerOrWorkerLaunched": False,
+        }
+    )
+    assert retry_evidence.retryIntentId == retry_intent_at_max
+    with pytest.raises(ValidationError):
+        RetryVerificationSuccessEvidenceV1.model_validate(
+            {**retry_evidence.model_dump(), "retryIntentId": f"{retry_intent_at_max}a"}
+        )
 
     request = _request("retry_verification")
     request.update(

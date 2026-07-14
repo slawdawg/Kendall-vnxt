@@ -284,6 +284,49 @@ test("v1 authorization fails closed for stale context, digest, actor, expiry, an
 
 test("v1 runtime success evidence is explicit while v0 request behavior remains valid", async () => {
   const contract = await loadContract();
+  const retry = requestFor(contract, "retry_verification");
+  const retryResult = {
+    schemaVersion: retry.schemaVersion,
+    actionId: retry.actionId,
+    targetType: retry.targetType,
+    targetId: retry.targetId,
+    actionContext: retry.actionContext,
+    actionContextDigestSha256: retry.actionContextDigestSha256,
+    outcome: "succeeded",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "medium",
+    typedReason: null,
+    successEvidence: {
+      kind: "retry_verification",
+      originalAttemptId: retry.targetId,
+      retryIntentId: `verification-retry-${"a".repeat(32)}`,
+      linkedWorkItemId: retry.actionContext.linkedWorkItemId,
+      linkedPacketId: retry.actionContext.linkedPacketId,
+      resultingPacketCurrentEventId: "event-retry-result",
+      originalAttemptPreserved: true,
+      providerOrWorkerLaunched: false,
+    },
+    evidenceRefs: ["operational-action:retry-result"],
+    correlationId: retry.correlationId,
+    idempotencyKey: retry.idempotencyKey,
+    actionRecordId: "record-retry",
+    approvalId: retry.approvalId,
+    replayed: false,
+    serverBound: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.deepEqual(contract.validatePipelineOperationalActionResultV1(retryResult), []);
+  assert.ok(contract.validatePipelineOperationalActionResultV1({
+    ...retryResult,
+    successEvidence: { ...retryResult.successEvidence, retryIntentId: `verification-retry-${"a".repeat(62)}` },
+  }).some((issue) => issue.code === "inconsistent_result"));
+  const legacyRetryAttemptResult = structuredClone(retryResult);
+  legacyRetryAttemptResult.successEvidence.retryAttemptId = legacyRetryAttemptResult.successEvidence.retryIntentId;
+  delete legacyRetryAttemptResult.successEvidence.retryIntentId;
+  assert.ok(contract.validatePipelineOperationalActionResultV1(legacyRetryAttemptResult).some((issue) => issue.code === "inconsistent_result"));
+
   const pause = requestFor(contract, "pause");
   const result = {
     schemaVersion: pause.schemaVersion,

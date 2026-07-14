@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
@@ -203,6 +203,13 @@ class VerificationRetryIntent(Base):
     __tablename__ = "verification_retry_intents"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_verification_retry_intent_idempotency"),
+        Index(
+            "uq_verification_retry_intents_pending_work_item",
+            "work_item_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)

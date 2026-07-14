@@ -623,9 +623,6 @@ async def launch_supervised_codex_worker(
     payload: WorkItemSupervisedCodexLaunchRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    work_item = await session.get(WorkItem, work_item_id)
-    if not work_item:
-        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         attempt = await service.launch_supervised_codex_worker(session, work_item_id, payload)
     except ValueError as exc:

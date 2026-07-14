@@ -5709,6 +5709,11 @@ def test_existing_sqlite_action_schema_gets_approval_migration_and_ledger_table(
             assert conn.execute(
                 "select scope, generation from admission_locks where scope = 'execute'"
             ).fetchone() == ("execute", 0)
+            retry_indexes = {
+                row[1]: (row[2], row[4])
+                for row in conn.execute("pragma index_list(verification_retry_intents)").fetchall()
+            }
+            assert retry_indexes["uq_verification_retry_intents_pending_work_item"] == (1, 1)
 
 
 def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_coverage(tmp_path, monkeypatch) -> None:

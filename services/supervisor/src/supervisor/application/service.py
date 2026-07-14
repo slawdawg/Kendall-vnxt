@@ -1107,6 +1107,9 @@ class SupervisorService:
             raise ValueError("Operational action idempotency key already belongs to different action metadata.")
 
         attempt, item, packet, lease = await self._validate_p2_1_operational_target(session, payload, lock=True)
+        # The singleton admission row serializes this per-work-item WIP check
+        # with retry, reassign, lease, and execution-attempt reservations.
+        await self._reject_pending_verification_retry_admission(session, item.id)
         approval = await self._validate_operational_approval_v1(session, payload)
         action_record_id = f"action-{uuid.uuid4()}"
         now = datetime.now(timezone.utc)
@@ -1158,7 +1161,7 @@ class SupervisorService:
             success_evidence = {
                 "kind": "retry_verification",
                 "originalAttemptId": attempt.id,
-                "retryAttemptId": retry_intent_id,
+                "retryIntentId": retry_intent_id,
                 "linkedWorkItemId": item.id,
                 "linkedPacketId": packet.id,
                 "resultingPacketCurrentEventId": packet_event_id,
@@ -1305,7 +1308,7 @@ class SupervisorService:
         if retry_intent:
             raise ValueError(
                 f"Work item has pending verification retry intent {retry_intent.id}; "
-                "new active execution or lease admission is blocked."
+                "new retry, reassign, active execution, or lease admission is blocked."
             )
 
     async def _verification_retry_intent_by_idempotency(
@@ -21782,9 +21785,6 @@ class SupervisorService:
         work_item_id: str,
         payload: WorkItemSupervisedCodexLaunchRequest,
     ) -> ExecutionAttemptView | None:
-        item = await session.get(WorkItem, work_item_id)
-        if not item:
-            return None
         if not payload.taskId.strip():
             raise ValueError("Supervised Codex launch requires a taskId.")
         if not payload.allowedPaths:
@@ -21803,9 +21803,16 @@ class SupervisorService:
         if blocked_touched:
             raise ValueError(f"Supervised Codex launch touched files outside approved scope: {', '.join(blocked_touched)}.")
 
+        await self._acquire_execute_admission_lock(session)
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            await session.rollback()
+            return None
+        await self._reject_pending_verification_retry_admission(session, work_item_id)
         active_attempt = await self._active_execution_attempt(session, work_item_id)
         if active_attempt:
             raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
+        self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
 
         attempt_id = str(uuid.uuid4())
         route_decision_id = f"supervised-codex-{payload.taskId}"
@@ -21819,12 +21826,23 @@ class SupervisorService:
             lane=lane,
             authority_mode=authority_mode,
         )
-        launch_result = self._run_supervised_codex_worker(payload, attempt_id)
 
         now = datetime.now(timezone.utc)
         workspace_isolation_plan = self._supervised_codex_workspace_isolation_plan(attempt_id, payload)
-        launch_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, launch_result)
-        terminal_status = launch_result["status"]
+        reservation_result = {
+            "status": ExecutionAttemptStatus.STARTING.value,
+            "commandShape": (
+                "codex <bounded task packet> --cwd <isolated-worktree>"
+                if payload.dryRun
+                else "node ./scripts/codex-workspace.mjs start <bounded task> --mode experiment"
+            ),
+            "workspaceOrBranch": "isolated_codex_worktree" if payload.dryRun else "repo_owned_codex_workspace",
+            "summary": "Durable supervised Codex launch reservation established before external execution.",
+            "exitCode": None,
+            "durationMs": 0,
+            "processLaunchAttempted": False,
+        }
+        reservation_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, reservation_result)
         attempt = ExecutionAttempt(
             id=attempt_id,
             work_item_id=item.id,
@@ -21832,30 +21850,55 @@ class SupervisorService:
             worker_id=worker_id,
             lane=lane,
             authority_mode=authority_mode,
-            status=terminal_status,
+            status=ExecutionAttemptStatus.STARTING.value,
             requested_by_id=payload.actorId,
             requested_by_label=payload.actorLabel or "Operator",
-            failure_reason=launch_result["summary"] if terminal_status != ExecutionAttemptStatus.COMPLETED.value else None,
+            failure_reason=None,
             workspace_isolation_plan_json=workspace_isolation_plan,
-            artifact_refs_json=[launch_evidence],
+            artifact_refs_json=[reservation_evidence],
             event_refs_json=[],
             started_at=now,
-            completed_at=now,
+            completed_at=None,
             heartbeat_at=now,
             created_at=now,
             updated_at=now,
         )
         session.add(attempt)
-        await session.flush()
-        started_event = await self._record_supervised_codex_launch_event(
-            session,
-            item,
-            attempt,
-            payload,
-            launch_evidence,
-            event_type="execution_attempt.supervised_codex_launch_started",
-            summary="Supervised Codex launch started with bounded authority evidence.",
+        try:
+            await session.flush()
+            started_event = await self._record_supervised_codex_launch_event(
+                session,
+                item,
+                attempt,
+                payload,
+                reservation_evidence,
+                event_type="execution_attempt.supervised_codex_launch_started",
+                summary="Supervised Codex launch reserved with bounded authority evidence.",
+            )
+            attempt.event_refs_json = [{"eventId": started_event.id, "eventType": started_event.event_type}]
+            await session.commit()
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            raise ValueError(
+                "Supervised Codex launch rejected because its durable attempt reservation could not be established."
+            ) from exc
+
+        # External execution begins only after the active attempt reservation
+        # and its start event are durable. A failed finalization leaves that
+        # reservation active, so retry admission remains fail-closed.
+        launch_result = self._run_supervised_codex_worker(payload, attempt_id)
+        launch_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, launch_result)
+        terminal_status = launch_result["status"]
+        attempt.status = terminal_status
+        attempt.failure_reason = (
+            launch_result["summary"]
+            if terminal_status != ExecutionAttemptStatus.COMPLETED.value
+            else None
         )
+        attempt.artifact_refs_json = [launch_evidence]
+        attempt.completed_at = datetime.now(timezone.utc)
+        attempt.heartbeat_at = attempt.completed_at
+        attempt.updated_at = attempt.completed_at
         completed_event = await self._record_supervised_codex_launch_event(
             session,
             item,
@@ -21865,11 +21908,16 @@ class SupervisorService:
             event_type=f"execution_attempt.{terminal_status}",
             summary=f"Supervised Codex launch reached terminal {terminal_status} state.",
         )
-        attempt.event_refs_json = [
-            {"eventId": started_event.id, "eventType": started_event.event_type},
-            {"eventId": completed_event.id, "eventType": completed_event.event_type},
+        attempt.event_refs_json = list(attempt.event_refs_json or []) + [
+            {"eventId": completed_event.id, "eventType": completed_event.event_type}
         ]
-        await session.commit()
+        try:
+            await session.commit()
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            raise ValueError(
+                "Supervised Codex launch finalization failed; the durable active attempt reservation remains in force."
+            ) from exc
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)

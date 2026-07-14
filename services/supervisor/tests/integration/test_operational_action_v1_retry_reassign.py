@@ -3,9 +3,11 @@ import inspect
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -212,6 +214,34 @@ def _apply_request(approval_request: dict[str, object], approval: dict[str, obje
     }
 
 
+def _typescript_result_validation_issues(result: dict[str, object]) -> list[dict[str, object]]:
+    repo_root = Path(__file__).resolve().parents[4]
+    script = r"""
+const fs = require("node:fs");
+const path = require("node:path");
+const ts = require(require.resolve("typescript", { paths: [path.join(process.argv[1], "apps/dashboard")] }));
+const sourcePath = path.join(process.argv[1], "packages/contracts/src/pipeline-control-plane/index.ts");
+const source = fs.readFileSync(sourcePath, "utf8");
+const output = ts.transpileModule(source, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+const contractModule = { exports: {} };
+Function("module", "exports", output)(contractModule, contractModule.exports);
+const backendResult = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(contractModule.exports.validatePipelineOperationalActionResultV1(backendResult)));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script, str(repo_root)],
+        input=json.dumps(result),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
 def test_retry_verification_preserves_attempt_and_queues_one_idempotent_metadata_only_intent(tmp_path, monkeypatch) -> None:
     db_name = "p2-1-retry.db"
     db_path = (tmp_path / db_name).as_posix()
@@ -228,7 +258,10 @@ def test_retry_verification_preserves_attempt_and_queues_one_idempotent_metadata
         assert applied.status_code == 200, applied.text
         result = applied.json()["data"]
         assert result["successEvidence"]["originalAttemptId"] == target["attemptId"]
+        assert result["successEvidence"]["retryIntentId"].startswith("verification-retry-")
+        assert len(result["successEvidence"]["retryIntentId"]) <= 80
         assert result["successEvidence"]["providerOrWorkerLaunched"] is False
+        assert _typescript_result_validation_issues(result) == []
         assert result["replayed"] is False
         projection = client.get("/pipeline-control-plane/projection")
         assert projection.status_code == 200
@@ -652,6 +685,96 @@ def test_concurrent_retry_admission_serializes_packet_and_wip_capacity(tmp_path,
             ).fetchone()[0] == 1
 
 
+def test_distinct_key_retry_is_exclusive_per_work_item_even_with_spare_global_wip(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-distinct-key-exclusive.db"
+    db_path = (tmp_path / db_name).as_posix()
+    monkeypatch.setenv("SUPERVISOR_VERIFICATION_WIP_LIMIT", "5")
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="distinct-key", attempt_status="failed")
+        approval_request = _approval_request("retry_verification", target)
+        first_approval = client.post(
+            "/pipeline-control-plane/approvals/v1", json=approval_request
+        ).json()["data"]
+        first = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(approval_request, first_approval, suffix="distinct-key-first"),
+        )
+        assert first.status_code == 200, first.text
+
+        rebound_target = {
+            **target,
+            "packetEventId": first.json()["data"]["successEvidence"]["resultingPacketCurrentEventId"],
+        }
+        rebound_approval_request = _approval_request("retry_verification", rebound_target)
+        second_approval = client.post(
+            "/pipeline-control-plane/approvals/v1", json=rebound_approval_request
+        ).json()["data"]
+        second = client.post(
+            "/pipeline-control-plane/actions/v1",
+            json=_apply_request(rebound_approval_request, second_approval, suffix="distinct-key-second"),
+        )
+
+        assert second.status_code == 400
+        assert "pending verification retry intent" in second.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select count(*) from verification_retry_intents where work_item_id = ? and status = 'pending'",
+                (target["workItemId"],),
+            ).fetchone()[0] == 1
+
+
+def test_retry_and_reassign_are_mutually_exclusive_under_durable_admission(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-retry-reassign-exclusive.db"
+    db_path = (tmp_path / db_name).as_posix()
+    monkeypatch.setenv("SUPERVISOR_VERIFICATION_WIP_LIMIT", "5")
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="retry-reassign", attempt_status="failed")
+        retry_approval_request = _approval_request("retry_verification", target)
+        reassign_approval_request = _approval_request("reassign", target)
+        retry_approval = client.post(
+            "/pipeline-control-plane/approvals/v1", json=retry_approval_request
+        ).json()["data"]
+        reassign_approval = client.post(
+            "/pipeline-control-plane/approvals/v1", json=reassign_approval_request
+        ).json()["data"]
+        retry_request = _apply_request(retry_approval_request, retry_approval, suffix="retry-reassign-retry")
+        reassign_request = _apply_request(
+            reassign_approval_request,
+            reassign_approval,
+            suffix="retry-reassign-reassign",
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            retry_future = executor.submit(
+                client.post,
+                "/pipeline-control-plane/actions/v1",
+                json=retry_request,
+            )
+            reassign_future = executor.submit(
+                client.post,
+                "/pipeline-control-plane/actions/v1",
+                json=reassign_request,
+            )
+            responses = [retry_future.result(), reassign_future.result()]
+
+        assert sorted(response.status_code for response in responses) == [200, 400]
+        with sqlite3.connect(db_path) as conn:
+            pending_retry_count = conn.execute(
+                "select count(*) from verification_retry_intents where work_item_id = ? and status = 'pending'",
+                (target["workItemId"],),
+            ).fetchone()[0]
+            owner = conn.execute(
+                "select assignee_id from work_items where id = ?",
+                (target["workItemId"],),
+            ).fetchone()[0]
+            assert (pending_retry_count, owner) in {(1, "owner-old"), (0, "owner-new")}
+            assert conn.execute(
+                "select count(*) from workflow_events where work_item_id = ? "
+                "and event_type in ('work_item.verification_retry_queued', 'work_item.reassigned')",
+                (target["workItemId"],),
+            ).fetchone()[0] == 1
+
+
 def test_concurrent_retry_and_active_attempt_admission_are_mutually_exclusive(tmp_path, monkeypatch) -> None:
     db_name = "p2-1-retry-attempt-cross-path.db"
     db_path = (tmp_path / db_name).as_posix()
@@ -942,12 +1065,15 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
     admission_reads = {
         SupervisorService.apply_pipeline_operational_action_v1: "_operational_action_by_idempotency",
         SupervisorService.create_execution_attempt: "session.get(WorkItem",
+        SupervisorService.launch_supervised_codex_worker: "session.get(WorkItem",
         SupervisorService._reserve_subscription_agent_launch_runtime_attempt: "session.get(ExecutionAttempt",
         SupervisorService._create_or_refresh_lease: "select(QueueLease)",
     }
     for method, first_admission_read in admission_reads.items():
         source = textwrap.dedent(inspect.getsource(method))
         assert source.index("await self._acquire_execute_admission_lock(session)") < source.index(first_admission_read)
+    launch_source = textwrap.dedent(inspect.getsource(SupervisorService.launch_supervised_codex_worker))
+    assert launch_source.index("await session.commit()") < launch_source.index("self._run_supervised_codex_worker")
     service_source = inspect.getsource(SupervisorService)
     assert "LOCK TABLE" not in service_source
     assert "BEGIN IMMEDIATE" not in service_source

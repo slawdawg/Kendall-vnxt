@@ -1568,7 +1568,7 @@ export type PipelineOperationalActionCapabilityV1 = {
 export interface PipelineRetryVerificationSuccessEvidenceV1 {
   kind: "retry_verification";
   originalAttemptId: string;
-  retryAttemptId: string;
+  retryIntentId: string;
   linkedWorkItemId: string;
   linkedPacketId: string;
   resultingPacketCurrentEventId: string;
@@ -1699,6 +1699,7 @@ const OPERATIONAL_ACTION_IDENTIFIER_REPEATED_SEPARATOR = /[._/@:,-]{2,}/;
 const OPERATIONAL_ACTION_IDENTIFIER_PATH_SEGMENT = /(?:^|[/\\])\.{1,2}(?:[/\\]|$)/;
 const OPERATIONAL_ACTION_V1_ID_LENGTHS = {
   executionAttempt: 36,
+  retryIntent: 80,
   workItem: 36,
   queueLease: 36,
   workPacket: 80,
@@ -2469,10 +2470,11 @@ function validatePipelineOperationalActionV1SuccessEvidence(
   }
   if (record.actionId === "retry_verification") {
     if (evidence.originalAttemptId !== record.targetId || evidence.originalAttemptPreserved !== true || evidence.providerOrWorkerLaunched !== false ||
-        !isSafeOperationalActionV1Identifier(evidence.retryAttemptId, OPERATIONAL_ACTION_V1_ID_LENGTHS.executionAttempt) || evidence.retryAttemptId === evidence.originalAttemptId ||
+        !isSafeOperationalActionV1Identifier(evidence.retryIntentId, OPERATIONAL_ACTION_V1_ID_LENGTHS.retryIntent) ||
+        !(evidence.retryIntentId as string).startsWith("verification-retry-") || evidence.retryIntentId === evidence.originalAttemptId ||
         evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.linkedPacketId !== context.linkedPacketId ||
         !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId, OPERATIONAL_ACTION_V1_ID_LENGTHS.packetEvent)) {
-      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Retry success must preserve the original attempt, create a distinct attempt, and launch nothing.");
+      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Retry success must preserve the original attempt, create a distinct pending retry intent, and launch nothing.");
     }
   } else if (record.actionId === "pause") {
     if (evidence.resultingRuntimeMode !== "paused" || !isPositiveInteger(evidence.resultingRuntimeRevision) || !isNonNegativeInteger(evidence.activeWorkCount) ||
