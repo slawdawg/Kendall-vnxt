@@ -2961,6 +2961,15 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
 
     await writeFile(
       join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
+      'const commentedTemplateImport = import(/* webpackIgnore: true */ `node:fs`);\nvoid commentedTemplateImport;\n',
+      "utf8",
+    );
+    const commentedTemplateDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    assert.equal(commentedTemplateDynamicRun.status, 1);
+    assert.match(commentedTemplateDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/components/shared-pipeline-runtime.ts"),
       [
         'const runtimeModule = "./not-static";',
         "void import(runtimeModule);",

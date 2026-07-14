@@ -291,7 +291,7 @@ function extractRuntimeImportSpecifiers(source) {
   const quotedSpecifiers = importPatterns.flatMap((importPattern) =>
     [...runtimeSource.matchAll(importPattern)].map((importMatch) => importMatch[1])
   );
-  const staticTemplateSpecifiers = [...runtimeSource.matchAll(/\b(?:import|require)\s*\(\s*`([^`]*)`\s*\)/g)]
+  const staticTemplateSpecifiers = [...runtimeSource.matchAll(/\b(?:import|require)\s*\(\s*(?:(?:(?:\/\*[\s\S]*?\*\/)|(?:\/\/[^\n]*(?:\n|$)))\s*)*`([^`]*)`\s*\)/g)]
     .map((match) => match[1])
     .filter((specifier) => !specifier.includes("${"));
 
