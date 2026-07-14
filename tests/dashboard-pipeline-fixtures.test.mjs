@@ -696,6 +696,65 @@ test("projection counts reject contradictory active and empty states while prese
   }];
   assert.equal(projectionModule.isPipelineDashboardProjection(approvalRequiredProjection), true);
 
+  const mixedBlockedProjection = structuredClone(emptyProjection);
+  mixedBlockedProjection.truthSummary = {
+    ...mixedBlockedProjection.truthSummary,
+    emptyReason: "blocked",
+  };
+  mixedBlockedProjection.queueSummary = {
+    ...mixedBlockedProjection.queueSummary,
+    blockedCount: 1,
+    gatedCount: 1,
+    refillingCount: 1,
+    staleCount: 1,
+    unknownCount: 1,
+    emptyReason: "blocked",
+  };
+  mixedBlockedProjection.managerSummary = {
+    ...mixedBlockedProjection.managerSummary,
+    reliabilityState: "blocked",
+    blockedSourceCount: 1,
+    gatedSourceCount: 1,
+    refillingSourceCount: 1,
+    staleSourceCount: 1,
+    unknownSourceCount: 1,
+    inactivityReason: "blocked",
+  };
+  mixedBlockedProjection.sourceStates = ["blocked", "gated", "refilling", "stale", "unknown"].map((state) => ({
+    sourceId: `source:${state}`,
+    sourceRef: `ref:${state}`,
+    sourceKind: "obsidian",
+    state,
+    summary: `Source is ${state}.`,
+    evidenceRefs: [],
+    updatedAt: mixedBlockedProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }));
+  assert.equal(projectionModule.isPipelineDashboardProjection(mixedBlockedProjection), true, "lower-priority source counts may accompany blocked empty reason");
+
+  const mixedApprovalRequiredProjection = structuredClone(approvalRequiredProjection);
+  mixedApprovalRequiredProjection.queueSummary = {
+    ...mixedApprovalRequiredProjection.queueSummary,
+    refillingCount: 1,
+    unknownCount: 1,
+  };
+  mixedApprovalRequiredProjection.managerSummary = {
+    ...mixedApprovalRequiredProjection.managerSummary,
+    refillingSourceCount: 1,
+    unknownSourceCount: 1,
+  };
+  mixedApprovalRequiredProjection.sourceStates = ["gated", "refilling", "unknown"].map((state) => ({
+    sourceId: `source:approval-${state}`,
+    sourceRef: `ref:approval-${state}`,
+    sourceKind: "obsidian",
+    state,
+    summary: `Source is ${state}.`,
+    evidenceRefs: [],
+    updatedAt: mixedApprovalRequiredProjection.sourceUpdatedAt,
+    metadataOnly: true,
+  }));
+  assert.equal(projectionModule.isPipelineDashboardProjection(mixedApprovalRequiredProjection), true, "lower-priority source counts may accompany approval-required empty reason");
+
   const unknownCounts = structuredClone(emptyProjection);
   for (const field of ["activeCount", "dispatchableCount", "blockedCount", "gatedCount", "closedCount", "staleCount", "refillingCount", "unknownCount"]) {
     unknownCounts.queueSummary[field] = null;

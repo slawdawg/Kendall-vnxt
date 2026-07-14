@@ -508,18 +508,19 @@ function isEmptyProjectionSummaryConsistent(projection: Partial<PipelineDashboar
   }
 
   const emptyReason = projection.truthSummary.emptyReason;
+  const emptyQueueCountNames = ["blockedCount", "gatedCount", "refillingCount", "staleCount", "unknownCount"];
+  const emptyReasonPriority = {
+    blocked: 0,
+    approval_required: 1,
+    refilling: 2,
+    unknown: 3,
+  }[emptyReason as "blocked" | "approval_required" | "refilling" | "unknown"];
   const allowedEmptyQueueCounts = new Set(
-    emptyReason === "blocked"
-      ? ["blockedCount"]
-      : emptyReason === "approval_required"
-        ? ["gatedCount"]
-        : emptyReason === "refilling"
-          ? ["refillingCount"]
-          : emptyReason === "projection_stale"
-            ? ["staleCount"]
-            : emptyReason === "unknown"
-              ? ["staleCount", "unknownCount"]
-              : [],
+    typeof emptyReasonPriority === "number"
+      ? emptyQueueCountNames.slice(emptyReasonPriority)
+      : emptyReason === "projection_stale"
+        ? ["staleCount"]
+        : [],
   );
   if (packetCount === 0 && projection.truthSummary.backendEmpty === true) {
     const namedQueueCounts: Array<[string, unknown]> = [
