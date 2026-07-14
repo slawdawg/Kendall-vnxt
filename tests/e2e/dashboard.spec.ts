@@ -183,10 +183,24 @@ function restoreSupervisorPipelinePacket(packetId: string, snapshot: SupervisorP
     "conn.close()",
     "print(json.dumps({'status': status, 'updatedAt': updated_at}))",
   ].join("; ");
-  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, snapshot.status, snapshot.updatedAt], { cwd: process.cwd(), encoding: "utf8" });
+}
+
+function deleteSupervisorPipelinePacket(packetId: string) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"delete from authoritative_work_packets where id = ?\", (packet_id,))",
+    "conn.commit()",
+    "remaining = conn.execute(\"select 1 from authoritative_work_packets where id = ?\", (packet_id,)).fetchone()",
+    "assert remaining is None",
+    "conn.close()",
+  ].join("; ");
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId], { cwd: process.cwd(), encoding: "utf8" });
 }
 
 function deleteSupervisorPipelinePacket(packetId: string) {
