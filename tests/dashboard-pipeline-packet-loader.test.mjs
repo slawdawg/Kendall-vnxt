@@ -194,8 +194,6 @@ test("typed fixture provenance is rejected without arbitrary-string false positi
   const fixtures = populatedFixtureCatalog();
   const fixtureRefCases = [
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "fixture:source-ref" }] },
-    { reviewSummaries: [{ reviewer: "kendall", status: "pending", summary: "Review", evidenceRefs: ["fixture:nested-evidence"], artifactRefs: [] }] },
-    { learnOutcome: { evidenceRefs: ["fixture:nested-evidence"], sourceRefs: [] } },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "fixture" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "fixture:evidence-artifact" }] },
@@ -224,14 +222,317 @@ test("typed fixture provenance is rejected without arbitrary-string false positi
   assert.equal(labelOnly.packets.length, 1);
 });
 
+test("nested review, gate, and learn fixture provenance fails closed without scanning ordinary text", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const reviewSummary = {
+    reviewer: "claude_reviewer",
+    status: "complete",
+    summary: "Read-only review complete.",
+    evidenceRefs: ["review:complete"],
+    artifactRefs: ["artifact:review"],
+  };
+  const learnOutcome = authoritativeLearnOutcome();
+  const learnRefill = authoritativeLearnRefill();
+  const nestedFixtureCases = [
+    ["review evidence", { reviewSummaries: [{ ...reviewSummary, evidenceRefs: ["fixture:nested-review"] }] }],
+    ["delivery retained evidence", {
+      deliveryEvidence: {
+        evidenceId: "delivery:authoritative",
+        mode: "metadata_only",
+        status: "ready",
+        readyForApproval: false,
+        hasDeliveryExecutionEvidence: false,
+        evidenceRefs: ["event:created"],
+        artifactRefs: [],
+        retainedEvidence: ["fixture:nested-delivery-retained"],
+        blockedReasons: [],
+        recoveryPath: "Return to delivery review.",
+        deliveryRailsGrantAuthority: false,
+        rawPayloadRetained: false,
+        remoteMutationApproved: false,
+        mergeApproved: false,
+        cleanupApproved: false,
+      },
+    }],
+    ["learn evidence", { learnOutcome: { ...learnOutcome, evidenceRefs: ["fixture:nested-learn-evidence"] } }],
+    ["learn source", { learnOutcome: { ...learnOutcome, sourceRefs: ["fixture:nested-learn-source"] } }],
+    ["learn decision evidence", {
+      learnOutcome: {
+        ...learnOutcome,
+        decisionRecords: [{ ...learnOutcome.decisionRecords[0], evidenceRefs: ["fixture:nested-decision"] }],
+      },
+    }],
+    ["human gate required evidence", {
+      humanGateActions: [{ ...authoritativeHumanGateAction(), requiredEvidenceRefs: ["fixture:nested-human-gate"] }],
+    }],
+    ["learn refill follow-up evidence", {
+      learnRefill: {
+        ...learnRefill,
+        followUpCandidates: [{ ...learnRefill.followUpCandidates[0], evidenceRefs: ["fixture:nested-follow-up"] }],
+      },
+    }],
+    ["learn refill source state", {
+      learnRefill: {
+        ...learnRefill,
+        refillSourceState: { ...learnRefill.refillSourceState, sourceRefs: ["fixture:nested-refill-source"] },
+      },
+    }],
+    ["learn refill ready-to-test verification", {
+      learnRefill: {
+        ...learnRefill,
+        readyToTest: { ...learnRefill.readyToTest, verificationRefs: ["fixture:nested-verification"] },
+      },
+    }],
+    ["gate replay ref state", {
+      gateStateValidation: {
+        ...authoritativeGateStateValidation(),
+        refStates: [{ ...authoritativeGateStateValidation().refStates[0], refId: "fixture:nested-gate-ref" }],
+      },
+    }],
+    ["nested fixture id discriminator", {
+      routeSummary: {
+        recommendation: "capture",
+        reasonCodes: ["route.capture"],
+        detail: { fixtureId: "ordinary-looking-value" },
+      },
+    }],
+    ["nested fixture kind discriminator", {
+      reviewSummaries: [{ ...reviewSummary, detail: { fixtureKind: "future-real-source" } }],
+    }],
+    ["nested fixture label discriminator", {
+      deliveryEvidence: { ...authoritativeDeliveryEvidence(), detail: { fixtureLabel: "Demo source" } },
+    }],
+    ["nested demo source kind discriminator", {
+      learnOutcome: { ...learnOutcome, detail: { sourceKind: "demo-fixture" } },
+    }],
+    ["nested fixture evidence type discriminator", {
+      learnRefill: { ...learnRefill, detail: { evidenceType: "fixture" } },
+    }],
+    ["nested fixture retention discriminator", {
+      gateStateValidation: { ...authoritativeGateStateValidation(), detail: { retentionClass: "fixture" } },
+    }],
+    ["nested fixture artifact type discriminator", {
+      humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { artifactType: "fixture" } }],
+    }],
+  ];
+
+  for (const [label, overrides] of nestedFixtureCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const ordinaryTextLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{
+      ...packet,
+      reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
+      humanGateActions: [{ ...authoritativeHumanGateAction(), label: "Discuss fixture:legacy wording" }],
+      learnRefill: { ...learnRefill, nextSafeAction: "Document fixture:legacy as ordinary text." },
+    }],
+  });
+  const ordinaryText = await ordinaryTextLoader.loadPipelineCockpitPackets();
+  assert.equal(ordinaryText.fixtureMode.kind, "runtime");
+  assert.equal(ordinaryText.packets.length, 1);
+});
+
+test("runtime-reachable nested WorkPacket collection members fail closed before rendering", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const nested = authoritativeNestedWorkPacketCollections(packet.packetId);
+  const validLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, ...nested }],
+  });
+  const valid = await validLoader.loadPipelineCockpitPackets();
+  assert.equal(valid.fixtureMode.kind, "runtime");
+  assert.equal(valid.packets.length, 1);
+
+  const malformedCases = [
+    ["humanGateActions null member", { humanGateActions: [null] }],
+    ["humanGateActions contradictory packet identity", {
+      humanGateActions: [{
+        ...nested.humanGateActions[0],
+        payload: { ...nested.humanGateActions[0].payload, packetId: "packet:other" },
+      }],
+    }],
+    ["humanGateActionRequests null member", { humanGateActionRequests: [null] }],
+    ["humanGateActionRequests contradictory packet identity", {
+      humanGateActionRequests: [{ ...nested.humanGateActionRequests[0], packetId: "packet:other" }],
+    }],
+    ["laneCards wrong enum", { laneCards: [{ ...nested.laneCards[0], status: "live" }] }],
+    ["memoryProposals missing required field", { memoryProposals: [{ ...nested.memoryProposals[0], proposalId: undefined }] }],
+    ["memoryProposals contradictory packet identity", { memoryProposals: [{ ...nested.memoryProposals[0], packetId: "packet:other" }] }],
+    ["reviewSummaries null member", { reviewSummaries: [null] }],
+    ["recoveryActions wrong enum", { recoveryActions: [{ ...nested.recoveryActions[0], actionType: "retry_forever" }] }],
+    ["executionAttempts missing required field", { executionAttempts: [{ ...nested.executionAttempts[0], attemptId: undefined }] }],
+    ["transitionEvents wrong enum", { transitionEvents: [{ ...nested.transitionEvents[0], targetStage: "archive" }] }],
+    ["loopStopStates contradictory authority", { loopStopStates: [{ ...nested.loopStopStates[0], cleanupAllowed: true }] }],
+  ];
+
+  for (const [label, overrides] of malformedCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
+test("malformed nested projection detail structures fail closed before UI dereference", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const learnOutcome = authoritativeLearnOutcome();
+  const learnRefill = authoritativeLearnRefill();
+  const malformedCases = [
+    ["route summary reason codes", { routeSummary: { recommendation: "capture", reasonCodes: null } }],
+    ["delivery evidence refs", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), evidenceRefs: [null] } }],
+    ["learn decision record", { learnOutcome: { ...learnOutcome, decisionRecords: [null] } }],
+    ["learn refill follow-up", { learnRefill: { ...learnRefill, followUpCandidates: [null] } }],
+    ["gate replay detail", {
+      gateStateValidation: { ...authoritativeGateStateValidation(), refStates: [null] },
+    }],
+  ];
+
+  for (const [label, overrides] of malformedCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
+test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const allowedSources = [
+    "candidate_work",
+    "work_item",
+    "execution_attempt",
+    "workflow_event",
+    "memory_proposal",
+    "delivery_evidence",
+    "source_missing",
+  ];
+
+  for (const source of allowedSources) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, lifecycleState: { ...packet.lifecycleState, source } }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "runtime", source);
+  }
+
+  const missingSourceState = { ...packet.lifecycleState };
+  delete missingSourceState.source;
+  for (const [label, lifecycleState] of [
+    ["missing", missingSourceState],
+    ["null", { ...packet.lifecycleState, source: null }],
+    ["non-string", { ...packet.lifecycleState, source: 42 }],
+    ["empty", { ...packet.lifecycleState, source: "" }],
+    ["unknown", { ...packet.lifecycleState, source: "supervisor_runtime" }],
+  ]) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, lifecycleState }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
+test("canonical lifecycle provenance and optional WorkPacket source views fail closed on malformed fields", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const packet = authoritativeWorkPacket();
+  const optionalSources = authoritativeOptionalWorkPacketSources();
+  const validLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getWorkPackets: async () => [{ ...packet, ...optionalSources }],
+  });
+  const valid = await validLoader.loadPipelineCockpitPackets();
+  assert.equal(valid.fixtureMode.kind, "runtime");
+  assert.equal(valid.packets.length, 1);
+
+  const lifecycleCases = [
+    ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
+    ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],
+    ["derivedFromRefs", { ...packet.lifecycleState, derivedFromRefs: ["doc:source", null] }],
+    ["transitionEventRefs", { ...packet.lifecycleState, transitionEventRefs: 42 }],
+    ["latestTransitionEventRef", { ...packet.lifecycleState, latestTransitionEventRef: { refId: "event:created" } }],
+    ["attemptRef", { ...packet.lifecycleState, attemptRef: 42 }],
+  ];
+  for (const [label, lifecycleState] of lifecycleCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, lifecycleState }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+
+  const { candidateWork, workItem, taskPacket, routingPreview } = optionalSources;
+  const optionalSourceCases = [
+    ["candidate required field", { candidateWork: { ...candidateWork, title: null } }],
+    ["candidate source enum", { candidateWork: { ...candidateWork, source: "runtime_fixture" } }],
+    ["candidate source summary", {
+      candidateWork: { ...candidateWork, sourceSummary: { ...candidateWork.sourceSummary, evidenceRefs: [null] } },
+    }],
+    ["candidate import metadata", { candidateWork: { ...candidateWork, importMetadata: [] } }],
+    ["work item workflow state", { workItem: { ...workItem, state: "active" } }],
+    ["work item metadata value", { workItem: { ...workItem, metadata: { nested: { unsafe: true } } } }],
+    ["work item recipe", {
+      workItem: {
+        ...workItem,
+        executionRecipe: {
+          ...workItem.executionRecipe,
+          remoteAutomationPolicy: { ...workItem.executionRecipe.remoteAutomationPolicy, blockedOperations: null },
+        },
+      },
+    }],
+    ["work item delivery readiness", {
+      workItem: { ...workItem, deliveryReadiness: { ...workItem.deliveryReadiness, readyForApproval: "yes" } },
+    }],
+    ["task packet required field", { taskPacket: { ...taskPacket, verificationSummary: undefined } }],
+    ["routing profile paths", {
+      routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: null } },
+    }],
+    ["routing decision profile snapshot", {
+      routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, profileSnapshot: null } },
+    }],
+    ["routing rejected lane", {
+      routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, rejectedLanes: [null] } },
+    }],
+  ];
+  for (const [label, overrides] of optionalSourceCases) {
+    const loader = await loadPipelinePacketLoader(fixtures, {
+      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
+    });
+    const result = await loader.loadPipelineCockpitPackets();
+    assert.equal(result.fixtureMode.kind, "invalid", label);
+    assert.equal(result.packets.length, 0, label);
+  }
+});
+
 test("malformed nested evidence and artifact references fail closed before rendering", async () => {
   const fixtures = populatedFixtureCatalog();
   for (const overrides of [
     { evidenceRefs: ["event:created"] },
-    { lifecycleState: { ...authoritativeWorkPacket().lifecycleState, source: "unexpected_source" } },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], sourceType: "repo_doc" }] },
     { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "live" }] },
-    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", pathOrUrl: "docs/blocked.md", blockedReason: "source boundary blocked" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], rawPayloadRetained: true }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "raw_payload" }] },
     { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "forever" }] },
@@ -430,11 +731,14 @@ test("normal mode does not substitute the real compiled fixture catalog", async 
   assert.equal(unavailable.packets.map((packet) => packet.packetId).length, 0);
 });
 
-test("restricted source refs and case-insensitive synthetic prefixes fail closed", async () => {
+test("source path invariants and case-insensitive synthetic prefixes fail closed", async () => {
   const fixtures = populatedFixtureCatalog();
   for (const [label, packetOverride] of [
     ["restricted-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", canonical: false, summaryOnly: true, pathOrUrl: "docs/source.md", blockedReason: "blocked by policy" }] }],
     ["restricted-source-url", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "missing", canonical: false, summaryOnly: true, pathOrUrl: "https://example.com/source", blockedReason: "missing from backend" }] }],
+    ["restricted-source-empty-reason", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "excluded", pathOrUrl: null, blockedReason: "" }] }],
+    ["allowed-source-blocked-reason", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], blockedReason: "not allowed for an accessible source" }] }],
+    ["malformed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: 42 }] }],
     ["demo-prefixed-packet-id", { packetId: "Demo:synthetic-runtime" }],
     ["demo-prefixed-source-ref", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "DeMo:source-ref" }] }],
     ["demo-prefixed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: " demo:source-path " }] }],
@@ -449,6 +753,23 @@ test("restricted source refs and case-insensitive synthetic prefixes fail closed
     assert.equal(result.fixtureMode.kind, "invalid", label);
     assert.equal(result.packets.length, 0, label);
   }
+
+  const canonicalRestrictedPacket = authoritativeWorkPacket();
+  canonicalRestrictedPacket.sourceRefs = [{
+    ...canonicalRestrictedPacket.sourceRefs[0],
+    accessState: "blocked",
+    canonical: true,
+    summaryOnly: true,
+    pathOrUrl: null,
+    blockedReason: "Canonical source metadata is blocked by policy.",
+  }];
+  const canonicalRestrictedLoader = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => runtimeProjection([canonicalRestrictedPacket.packetId]),
+    getWorkPackets: async () => [canonicalRestrictedPacket],
+  });
+  const canonicalRestricted = await canonicalRestrictedLoader.loadPipelineCockpitPackets();
+  assert.equal(canonicalRestricted.fixtureMode.kind, "runtime");
+  assert.equal(canonicalRestricted.packets.length, 1);
 });
 
 test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
@@ -470,7 +791,10 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   const demoDetailRouteSource = await readFile(demoDetailRoutePath, "utf8");
   const loaderSource = await readFile(loaderPath, "utf8");
   assert.doesNotMatch(normalRouteSource, /pipeline-fixtures/);
+  assert.doesNotMatch(normalRouteSource, /manager-execution-lane-summary|selectedManagerExecutionLaneSummary|managerExecutionLane=/);
   assert.match(demoRouteSource, /pipeline-fixtures/);
+  assert.match(demoRouteSource, /manager-execution-lane-summary/);
+  assert.match(demoRouteSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
   assert.match(demoDetailRouteSource, /pipeline-fixtures/);
   assert.doesNotMatch(loaderSource, /pipeline-fixtures|fixture fallback|fixture_fallback/i);
   assert.match(demoRouteSource, /kind: "demo"/);
@@ -645,6 +969,457 @@ function authoritativeWorkPacket() {
     loopStopStates: [],
     reviewSummaries: [],
     recoveryActions: [],
+  };
+}
+
+function authoritativeOptionalWorkPacketSources() {
+  const profile = {
+    workItemId: "work-item:authoritative",
+    stepId: "step:inspect-source",
+    taskKind: "source_inspection",
+    phase: null,
+    riskLevel: "low",
+    privacyLevel: "internal",
+    writeScope: "none",
+    allowedPaths: ["docs/source.md"],
+    contextNeed: "bounded",
+    reasoningNeed: "standard",
+    determinismNeed: "high",
+    validationExpectations: ["Inspect source metadata."],
+    preferredLanes: ["utility"],
+    forbiddenLanes: ["premium"],
+    escalationTriggers: ["Source becomes unavailable."],
+  };
+  return {
+    candidateWork: {
+      id: "candidate:authoritative",
+      title: "Inspect authoritative source",
+      requestedOutcome: "Confirm persisted source metadata.",
+      source: "operator",
+      sourceArtifactPath: "docs/source.md",
+      sourceArtifactType: "manual_note",
+      riskLevel: "low",
+      priority: "normal",
+      sortOrder: 1,
+      status: "approved",
+      createdAt: "2026-07-13T12:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      approvedAt: "2026-07-13T12:00:00.000Z",
+      promotedWorkItemId: "work-item:authoritative",
+      sourceSummary: {
+        label: "Operator source",
+        summary: "Source metadata is available.",
+        sourceType: "operator",
+        sourceRef: "doc:source",
+        sourceArtifactPath: "docs/source.md",
+        freshness: "fresh",
+        accessState: "allowed",
+        retentionPolicy: "metadata_only",
+        boundarySummary: "Read-only source metadata.",
+        evidenceRefs: ["event:created"],
+        approvalStatus: "approved",
+        approvedBy: "Operator",
+        approvedAt: "2026-07-13T12:00:00.000Z",
+      },
+      importMetadata: { imported: true, sourceOrder: 1, note: null },
+    },
+    workItem: {
+      id: "work-item:authoritative",
+      title: "Inspect authoritative source",
+      requestedOutcome: "Confirm persisted source metadata.",
+      source: "operator",
+      details: null,
+      riskLevel: "low",
+      metadata: { candidateWorkId: "candidate:authoritative", readOnly: true },
+      origin: "supervisor",
+      state: "ready",
+      lane: "implementation",
+      assigneeId: null,
+      assigneeLabel: null,
+      ageMinutes: 1,
+      needsAttention: false,
+      attentionReason: null,
+      escalatedAt: null,
+      escalationReason: null,
+      escalatedByLabel: null,
+      statusSummary: "Ready for read-only inspection.",
+      blockedReason: null,
+      nextStep: "Inspect source metadata.",
+      selfDetectedIssue: false,
+      selfDetectedIssueCategory: null,
+      executionRecipe: {
+        id: "recipe:source-inspection",
+        label: "Source inspection",
+        summary: "Inspect source metadata without mutation.",
+        branchPrefix: "inspect-",
+        allowedPaths: ["docs/source.md"],
+        implementationCommands: [],
+        verificationCommands: ["git diff --check"],
+        policyGates: [{
+          id: "gate:readonly",
+          label: "Read-only",
+          requiredBefore: "inspection",
+          summary: "No source mutation.",
+          evidence: ["event:created"],
+        }],
+        operatorCheckpoints: [],
+        autonomyNotes: ["Read-only only."],
+        remoteAutomationPolicy: {
+          status: "blocked",
+          summary: "Remote operations are not allowed.",
+          allowedOperations: [],
+          blockedOperations: ["push"],
+          approvalRequirements: ["Operator approval."],
+        },
+      },
+      deliveryReadiness: {
+        pullRequestStatus: "not_started",
+        pullRequestUrl: null,
+        ciStatus: "not_started",
+        mergeStatus: "not_started",
+        deliveryWaived: false,
+        deliveryWaiverReason: null,
+        remoteOperationsPerformed: false,
+        remoteOperationsPolicy: "No remote operations.",
+        readyForApproval: false,
+      },
+      createdAt: "2026-07-13T12:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      lastEventAt: "2026-07-13T12:00:00.000Z",
+      requiresAudit: false,
+      auditMode: "none",
+    },
+    taskPacket: {
+      workItemId: "work-item:authoritative",
+      title: "Inspect authoritative source",
+      requestedOutcome: "Confirm persisted source metadata.",
+      source: "operator",
+      sourceArtifactPath: "docs/source.md",
+      taskKind: "source_inspection",
+      riskLevel: "low",
+      priority: "normal",
+      approvalMode: "read_only",
+      verificationSummary: "Inspect source metadata and preserve evidence.",
+    },
+    routingPreview: {
+      profile,
+      decision: {
+        decisionId: "decision:source-inspection",
+        workItemId: "work-item:authoritative",
+        stepId: "step:inspect-source",
+        createdAt: "2026-07-13T12:00:00.000Z",
+        profileSnapshot: { ...profile },
+        selectedLane: "utility",
+        selectedWorkerId: null,
+        authorityMode: "read_only",
+        confidenceScore: 0.9,
+        confidenceBand: "high",
+        reasonCodes: ["route.read_only"],
+        rejectedLanes: [{ lane: "premium", rejectionCodes: ["authority.blocked"], explanation: "Paid execution is not needed." }],
+        rejectedWorkers: [],
+        permissionSummary: "Read-only inspection only.",
+        escalationPath: ["operator"],
+        humanExplanation: "Utility lane preserves the source boundary.",
+      },
+    },
+  };
+}
+
+function authoritativeHumanGateAction() {
+  return {
+    actionId: "action:approve-route",
+    type: "approve_route",
+    family: "Approve",
+    label: "Approve route",
+    uiCopy: "Approve the bounded route.",
+    status: "available",
+    authorityFamily: "route-approval",
+    payload: {
+      packetId: "manager-source-authoritative-only",
+      actionId: "action:approve-route",
+      decisionId: "decision:approve-route",
+    },
+    requiredEvidenceRefs: ["event:created"],
+    stopLines: ["Stop before execution."],
+    rollbackPath: "Return to route review.",
+    resultingStage: "shape",
+    resultingOwner: "kendall",
+    auditEventType: "route_approved",
+    reasonCodes: ["route.approved"],
+  };
+}
+
+function authoritativeNestedWorkPacketCollections(packetId) {
+  const humanGateAction = authoritativeHumanGateAction();
+  return {
+    humanGateActions: [humanGateAction],
+    humanGateActionRequests: [{
+      requestId: "request:approve-route",
+      packetId,
+      actionId: humanGateAction.actionId,
+      decisionId: humanGateAction.payload.decisionId,
+      requestedActionType: humanGateAction.type,
+      requestDisplayLabel: "Approve route",
+      requestedByLabel: "Operator",
+      requestedAt: "2026-07-13T12:00:00.000Z",
+      status: "recorded",
+      auditEventType: "route_approval_requested",
+      evidenceRefs: ["event:created"],
+      retentionClass: "metadata_only",
+      rawPayloadRetained: false,
+      executionStarted: false,
+      resultingStateApplied: false,
+      stopLines: ["Stop before execution."],
+      rollbackPath: "Return to route review.",
+    }],
+    laneCards: [{
+      laneId: "lane:local-readonly",
+      laneType: "local_readonly",
+      label: "Local read-only",
+      status: "available",
+      summary: "Read-only inspection is available.",
+      currentOwner: "kendall",
+      routeConfidence: 0.82,
+      reasonCodes: ["lane.readonly"],
+      evidenceRefs: ["event:created"],
+      artifactRefs: [],
+    }],
+    memoryProposals: [{
+      proposalId: "memory-proposal:authoritative",
+      packetId,
+      label: "Review authoritative memory proposal",
+      status: "pending_human_approval",
+      summary: "Metadata-only proposal for operator review.",
+      sourceRefs: ["doc:source"],
+      evidenceRefs: ["event:created"],
+      targetRef: null,
+      targetVaultPath: null,
+      targetVaultFolder: "Kendall/Decisions",
+      proposalType: "decision_record",
+      suggestedContentSummary: "Record the bounded source decision.",
+      patchSummary: null,
+      sensitivity: "low",
+      freshness: "fresh",
+      contradictionStatus: "none",
+      confidence: "high",
+      operatorAction: "approve",
+      decisionNeededContext: null,
+      backupRecoveryPath: "Discard the proposal without mutating memory.",
+      writeBackStatus: "review_gated",
+      writeBackAllowed: false,
+    }],
+    reviewSummaries: [{
+      reviewer: "claude_reviewer",
+      status: "complete",
+      summary: "Read-only review complete.",
+      evidenceRefs: ["review:complete"],
+      artifactRefs: ["artifact:review"],
+    }],
+    recoveryActions: [{
+      actionId: "action:retry-smaller",
+      actionType: "retry_smaller",
+      label: "Retry smaller",
+      availability: "available",
+      consequence: "Return to a smaller bounded packet.",
+      resultingStage: "shape",
+      resultingOwner: "kendall",
+      evidenceRefs: ["event:created"],
+    }],
+    executionAttempts: [{
+      attemptId: "attempt:authoritative",
+      workItemId: "work-item:authoritative",
+      leaseId: null,
+      fencingToken: null,
+      routeDecisionId: "decision:approve-route",
+      workerId: "worker:none",
+      lane: "local_readonly",
+      authorityMode: "none",
+      status: "planned",
+      requestedById: null,
+      requestedByLabel: "Operator",
+      createdAt: "2026-07-13T12:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+      heartbeatAt: null,
+      timeoutAt: null,
+      cancelRequestedAt: null,
+      cancelReason: null,
+      rejectionReason: null,
+      failureReason: null,
+      evidenceRefs: ["event:created"],
+      artifactRefs: [],
+    }],
+    transitionEvents: [{
+      eventId: "transition:created",
+      eventType: "packet_created",
+      summary: "Packet entered capture.",
+      createdAt: "2026-07-13T12:00:00.000Z",
+      sourceStage: null,
+      targetStage: "capture",
+      sourceOwner: null,
+      targetOwner: "kendall",
+      sourceStatus: null,
+      targetStatus: "waiting",
+      reasonCodes: ["packet.created"],
+      evidenceRefs: ["event:created"],
+      durable: true,
+      sourceEventId: null,
+      actorLabel: "Supervisor",
+    }],
+    loopStopStates: [{
+      stopStateId: "stop:scope-boundary",
+      kind: "scope_boundary",
+      label: "Scope boundary",
+      phase: "capture",
+      severity: "info",
+      summary: "The packet remains bounded.",
+      stopLine: "Do not expand execution authority.",
+      nextSafeAction: "Continue read-only review.",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      sourceMutationAllowed: false,
+      providerCallsAllowed: false,
+      workerLaunchAllowed: false,
+      githubMutationAllowed: false,
+      cleanupAllowed: false,
+    }],
+  };
+}
+
+function authoritativeDeliveryEvidence() {
+  return {
+    evidenceId: "delivery:authoritative",
+    mode: "metadata_only",
+    status: "ready",
+    readyForApproval: false,
+    hasDeliveryExecutionEvidence: false,
+    evidenceRefs: ["event:created"],
+    artifactRefs: [],
+    retainedEvidence: ["event:created"],
+    blockedReasons: [],
+    recoveryPath: "Return to delivery review.",
+    deliveryRailsGrantAuthority: false,
+    rawPayloadRetained: false,
+    remoteMutationApproved: false,
+    mergeApproved: false,
+    cleanupApproved: false,
+  };
+}
+
+function authoritativeLearnOutcome() {
+  return {
+    outcomeId: "learn-outcome:authoritative",
+    status: "accepted",
+    retentionClass: "metadata_only",
+    learningProposalCount: 1,
+    documentationProposalStatus: "approved",
+    automationAuthorityChangeStatus: "not_requested",
+    blockedWriteBackState: "review_gated",
+    nextSafeAction: "Retain metadata-only learning evidence.",
+    decisionRecords: [{
+      decisionId: "learn-decision:authoritative",
+      proposalId: "memory-proposal:authoritative",
+      proposalType: "decision_record",
+      actor: "operator",
+      result: "approved",
+      operatorAction: "approve",
+      evidenceRefs: ["event:created"],
+      recoveryPath: "Reopen learn review.",
+      writeBackStatus: "review_gated",
+      canonicalMutationAllowed: false,
+      durableWriteAllowed: false,
+    }],
+    evidenceRefs: ["event:created"],
+    sourceRefs: ["doc:source"],
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    durableWriteAllowed: false,
+  };
+}
+
+function authoritativeLearnRefill() {
+  return {
+    projectionId: "learn-refill:authoritative",
+    retentionClass: "metadata_only",
+    followUpCandidates: [{
+      followUpId: "follow-up:authoritative",
+      candidateWorkId: "candidate:authoritative",
+      label: "Authoritative follow-up",
+      sourcePacketId: "manager-source-authoritative-only",
+      reason: "Quality follow-up.",
+      status: "not_created",
+      origin: "quality",
+      reentryPath: "reenter_capture",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    }],
+    operatorOwnedExits: [],
+    refillSourceState: {
+      state: "healthy",
+      operationalLabel: "Healthy",
+      explanation: "Authoritative source remains available.",
+      sourceRefs: ["doc:source"],
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+    },
+    housekeeping: {
+      status: "complete",
+      summary: "Metadata-only housekeeping complete.",
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+    },
+    sourceExhaustion: {
+      exhausted: false,
+      summary: "Source is not exhausted.",
+      sourceRefs: ["doc:source"],
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+    },
+    readyToTest: {
+      readyId: "ready:authoritative",
+      userFacingSummary: "Ready for focused verification.",
+      testableSurface: "/pipeline",
+      verificationRefs: ["check:loader"],
+      evidenceRefs: ["event:created"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    nextSafeAction: "Run focused verification.",
+    rawPayloadRetained: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+  };
+}
+
+function authoritativeGateStateValidation() {
+  return {
+    status: "matched",
+    storedStage: "capture",
+    derivedStage: "capture",
+    storedOwner: "kendall",
+    derivedOwner: "kendall",
+    storedStatus: "waiting",
+    derivedStatus: "waiting",
+    eventCount: 1,
+    latestEventType: "packet_created",
+    replayedEventTypes: ["packet_created"],
+    mismatchReasons: [],
+    blockedReasons: [],
+    refStates: [{
+      refId: "event:created",
+      refType: "event",
+      state: "allowed",
+      label: "Created event",
+    }],
+    readOnly: true,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
   };
 }
 

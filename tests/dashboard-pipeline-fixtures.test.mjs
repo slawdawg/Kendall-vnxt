@@ -11,6 +11,7 @@ import vm from "node:vm";
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const nextConfigPath = new URL("../apps/dashboard/next.config.ts", import.meta.url);
 const routePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
+const demoRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/page.tsx", import.meta.url);
 const packetDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
 const settingsRoutePath = new URL("../apps/dashboard/src/app/settings/page.tsx", import.meta.url);
 const settingsUsageVisibilityPath = new URL("../apps/dashboard/src/components/settings/usage-visibility-settings.tsx", import.meta.url);
@@ -788,6 +789,23 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(invalidProjectionHtml, projectionTruthChipPattern("Source", "invalid"));
   assert.doesNotMatch(invalidProjectionHtml, projectionTruthChipPattern("Projection", "live"));
 
+  const invalidProjectionWithReadbackErrorHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: {
+      kind: "invalid",
+      label: "Supervisor invalid",
+      summary: "Projection timestamps are stale.",
+      matrixRows: 0,
+      fixtureCatalogEntries: 0,
+      canSatisfyLiveProof: false,
+    },
+    packets: [],
+    projection: liveProjection,
+    projectionError: "Projection timestamps are stale.",
+    selectedPacket: null,
+  }));
+  assert.match(invalidProjectionWithReadbackErrorHtml, projectionTruthChipPattern("Projection", "invalid"));
+  assert.match(invalidProjectionWithReadbackErrorHtml, projectionTruthChipPattern("Source", "invalid"));
+
   const negativeCases = [
     {
       caseId: "backend-unavailable",
@@ -971,6 +989,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
 
 test("/pipeline route uses supervisor WorkPacketV0 projections and isolates explicit demo fixtures", async () => {
   const routeSource = await readFile(routePath, "utf8");
+  const demoRouteSource = await readFile(demoRoutePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
   const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
   const settingsUsageVisibilitySource = await readFile(settingsUsageVisibilityPath, "utf8");
@@ -1005,6 +1024,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   const packetInspectionSource = extractFunctionSource(cockpitSource, "PacketInspection");
   const pipelinePacketLoaderSource = await readFile(pipelinePacketLoaderPath, "utf8");
   const pipelineImportGraph = await collectRelativeImportGraph(routePath, { terminalUrls: [shellPath, supervisorLibPath] });
+  const demoPipelineImportGraph = await collectRelativeImportGraph(demoRoutePath, { terminalUrls: [shellPath, supervisorLibPath] });
 
   assert.match(routeSource, /<Shell\b/);
   assert.match(routeSource, /<Shell\b[^>]*realtimeRefresh=\{false\}[^>]*wide/);
@@ -1029,13 +1049,18 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(routeSource, /loadPipelineCockpitPackets/);
   assert.match(routeSource, /projection=\{projection\}/);
   assert.match(routeSource, /projectionError=\{projectionError\}/);
-  assert.match(routeSource, /selectedManagerExecutionLaneSummary/);
-  assert.match(routeSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
+  assert.doesNotMatch(routeSource, /selectedManagerExecutionLaneSummary|manager-execution-lane-summary|managerExecutionLane=/);
+  assert.match(demoRouteSource, /selectedManagerExecutionLaneSummary/);
+  assert.match(demoRouteSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
+  assert.match(demoRouteSource, /pipeline-fixtures/);
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/app/pipeline/page.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/shell.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx"));
   assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/supervisor.ts"));
-  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
+  assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
+  assert.ok(!pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline-fixtures.ts"));
+  assert.ok(demoPipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
+  assert.ok(demoPipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline-fixtures.ts"));
   assert.equal(
     pipelineImportGraph.files.filter((path) => /(^|\/)(scripts|services\/supervisor|packages\/workflow-core\/src\/manager-control-plane|scripts\/lib\/manager-control-plane)(\/|$)/.test(path)).length,
     0,
@@ -1176,7 +1201,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /Stage health/);
   assert.match(cockpitSource, /stageHealthStateLabel/);
   assert.match(cockpitSource, /normalizeStageEmptyReason/);
-  assert.match(cockpitSource, /healthy empty/);
+  assert.match(cockpitSource, /healthy-empty/);
   assert.match(cockpitSource, /source exhausted/);
   assert.match(cockpitSource, /blocked/);
   assert.match(cockpitSource, /refilling/);
@@ -1197,6 +1222,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.doesNotMatch(cockpitSource, /fixtureKind: "future-real-source"/);
   assert.match(cockpitSource, /fixtureLabel:\s+packetIsLive\s+\?\s+"backend projection: packet truth live"/);
   assert.match(cockpitSource, /: `backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}`/);
+  assert.match(cockpitSource, /packet\.sourceKind === "demo-fixture" \? "\/pipeline\/demo\/packets" : "\/pipeline\/packets"/);
+  assert.doesNotMatch(cockpitSource, /packet\.sourceKind !== "demo-fixture"/);
   assert.match(cockpitSource, /managerExecutionLane\?\.operatorAttentionRequired \? <ManagerAttentionSummary lane=\{managerExecutionLane\} \/> : null/);
   assert.match(cockpitSource, /managerExecutionLane \? \([\s\S]*<ManagerExecutionLane lane=\{managerExecutionLane\} \/>/);
   assert.match(cockpitSource, /aria-label="Projection truth summary"/);
