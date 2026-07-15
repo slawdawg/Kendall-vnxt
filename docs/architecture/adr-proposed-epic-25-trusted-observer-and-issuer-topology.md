@@ -173,8 +173,15 @@ uncertainty is `hold`.
 ## Smallest safe follow-on sequence
 
 This ADR is the only deliverable in this lane. If and only if it is approved
-by architecture, security, and operator authority, the next source-owned
-sequence is:
+by architecture and security, and a separate operator-authority record exists
+for the later bounded-live scope, the next source-owned sequence may be
+considered:
+
+Approval of this ADR records a topology/security decision only. It grants no
+source-implementation, live, deployment, production, merge, or cleanup
+authority. The follow-on source sequence may be considered only after
+architecture/security approval plus that separate operator-authority record;
+neither condition authorizes runtime behavior or expands the recorded bounds.
 
 1. **Approved ADR and authority record.** Record the selected topology and
    every required decision field, threat-model disposition, named owners, and
