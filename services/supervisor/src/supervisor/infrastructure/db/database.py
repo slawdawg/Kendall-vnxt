@@ -1,5 +1,6 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase
 
 from supervisor.config.settings import get_settings
@@ -109,6 +110,34 @@ async def _sqlite_table_columns(connection, table_name: str) -> set[str]:
     return {row[1] for row in result.fetchall()}
 
 
+async def _begin_sqlite_schema_migration(connection) -> None:
+    """Serialize startup DDL and wait briefly for another initializer to finish."""
+
+    await connection.execute(text("PRAGMA busy_timeout = 30000"))
+    await connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+
+async def _sqlite_add_columns(
+    connection,
+    table_name: str,
+    columns_to_add: tuple[tuple[str, str], ...],
+) -> None:
+    """Add legacy columns under the init lock, rechecking duplicate races."""
+
+    columns = await _sqlite_table_columns(connection, table_name)
+    for column_name, column_type in columns_to_add:
+        if column_name in columns:
+            continue
+        try:
+            await connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+        except OperationalError as exc:
+            columns = await _sqlite_table_columns(connection, table_name)
+            if column_name not in columns or "duplicate column name" not in str(exc).lower():
+                raise
+            continue
+        columns.add(column_name)
+
+
 async def _sqlite_unique_index_exists(connection, table_name: str, columns: tuple[str, ...]) -> bool:
     result = await connection.execute(text(f"PRAGMA index_list({table_name})"))
     for row in result.fetchall():
@@ -160,10 +189,7 @@ async def _ensure_postgres_memory_proposals_schema(connection) -> None:
 
 
 async def _ensure_sqlite_memory_proposals_schema(connection) -> None:
-    columns = await _sqlite_table_columns(connection, "memory_proposals")
-    for column_name, column_type in MEMORY_PROPOSAL_SQLITE_COLUMNS:
-        if column_name not in columns:
-            await connection.execute(text(f"ALTER TABLE memory_proposals ADD COLUMN {column_name} {column_type}"))
+    await _sqlite_add_columns(connection, "memory_proposals", MEMORY_PROPOSAL_SQLITE_COLUMNS)
     await connection.execute(
         text(
             """
@@ -202,6 +228,9 @@ async def init_db() -> None:
     from supervisor.infrastructure.db import models  # noqa: F401
 
     async with engine.begin() as connection:
+        dialect = connection.dialect.name
+        if dialect == "sqlite":
+            await _begin_sqlite_schema_migration(connection)
         await connection.run_sync(Base.metadata.create_all)
         await connection.execute(
             text(
@@ -215,12 +244,15 @@ async def init_db() -> None:
                 "ON verification_retry_intents(work_item_id) WHERE status = 'pending'"
             )
         )
-        dialect = connection.dialect.name
         if dialect == "postgresql":
             for column_name, column_type in SUPERVISOR_CONTROL_POSTGRES_COLUMNS:
                 await connection.execute(
                     text(f"ALTER TABLE supervisor_control ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
                 )
+            await connection.execute(text("ALTER TABLE supervisor_control ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"))
+            await connection.execute(
+                text("UPDATE supervisor_control SET updated_at = COALESCE(updated_at, NOW()) WHERE updated_at IS NULL")
+            )
             await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_label VARCHAR(120)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee_id VARCHAR(100)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee_label VARCHAR(120)"))
@@ -274,124 +306,102 @@ async def init_db() -> None:
                 )
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
-            result = await connection.execute(text("PRAGMA table_info(supervisor_control)"))
-            supervisor_control_columns = {row[1] for row in result.fetchall()}
-            for column_name, column_type in SUPERVISOR_CONTROL_SQLITE_COLUMNS:
-                if column_name not in supervisor_control_columns:
-                    await connection.execute(text(f"ALTER TABLE supervisor_control ADD COLUMN {column_name} {column_type}"))
-            result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
-            column_names = {row[1] for row in result.fetchall()}
-            if "actor_label" not in column_names:
-                await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN actor_label VARCHAR(120)"))
-            result = await connection.execute(text("PRAGMA table_info(work_items)"))
-            item_columns = {row[1] for row in result.fetchall()}
-            if "authoritative_packet_id" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN authoritative_packet_id VARCHAR(80)"))
+            await _sqlite_add_columns(
+                connection,
+                "supervisor_control",
+                SUPERVISOR_CONTROL_SQLITE_COLUMNS + (("updated_at", "DATETIME"),),
+            )
+            await connection.execute(
+                text("UPDATE supervisor_control SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL")
+            )
+            await _sqlite_add_columns(connection, "workflow_events", (("actor_label", "VARCHAR(120)"),))
+            await _sqlite_add_columns(
+                connection,
+                "work_items",
+                (
+                    ("authoritative_packet_id", "VARCHAR(80)"),
+                    ("assignee_id", "VARCHAR(100)"),
+                    ("assignee_label", "VARCHAR(120)"),
+                    ("escalated_at", "DATETIME"),
+                    ("escalation_reason", "TEXT"),
+                    ("escalated_by_id", "VARCHAR(100)"),
+                    ("escalated_by_label", "VARCHAR(120)"),
+                ),
+            )
             await connection.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_authoritative_packet "
                     "ON work_items(authoritative_packet_id) WHERE authoritative_packet_id IS NOT NULL"
                 )
             )
-            if "assignee_id" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN assignee_id VARCHAR(100)"))
-            if "assignee_label" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN assignee_label VARCHAR(120)"))
-            if "escalated_at" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN escalated_at DATETIME"))
-            if "escalation_reason" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN escalation_reason TEXT"))
-            if "escalated_by_id" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN escalated_by_id VARCHAR(100)"))
-            if "escalated_by_label" not in item_columns:
-                await connection.execute(text("ALTER TABLE work_items ADD COLUMN escalated_by_label VARCHAR(120)"))
-            result = await connection.execute(text("PRAGMA table_info(execution_attempts)"))
-            attempt_columns = {row[1] for row in result.fetchall()}
-            if "workspace_isolation_plan_json" not in attempt_columns:
-                await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN workspace_isolation_plan_json JSON"))
-            if "queue_lease_id" not in attempt_columns:
-                await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN queue_lease_id VARCHAR(36)"))
-            if "queue_fencing_token" not in attempt_columns:
-                await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN queue_fencing_token INTEGER"))
-            for column_name, column_type in EXECUTION_ATTEMPT_SQLITE_COLUMNS:
-                if column_name not in attempt_columns:
-                    await connection.execute(
-                        text(f"ALTER TABLE execution_attempts ADD COLUMN {column_name} {column_type}")
-                    )
-            result = await connection.execute(text("PRAGMA table_info(authoritative_work_packet_lifecycle_events)"))
-            lifecycle_event_columns = {row[1] for row in result.fetchall()}
-            if "packet_title" not in lifecycle_event_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN packet_title VARCHAR(255)"))
-            if "parent_packet_id" not in lifecycle_event_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN parent_packet_id VARCHAR(80)"))
-            if "lineage_kind" not in lifecycle_event_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN lineage_kind VARCHAR(32)"))
-            if "ready_to_test_json" not in lifecycle_event_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN ready_to_test_json JSON"))
-            if "operator_test_state" not in lifecycle_event_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN operator_test_state VARCHAR(24)"))
-            if "operator_test_note" not in lifecycle_event_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN operator_test_note VARCHAR(255)"))
-            result = await connection.execute(text("PRAGMA table_info(queue_lease_actions)"))
-            lease_action_columns = {row[1] for row in result.fetchall()}
-            if "provided_fencing_token" not in lease_action_columns:
-                await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN provided_fencing_token INTEGER"))
-            if "outcome" not in lease_action_columns:
-                await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN outcome VARCHAR(16) DEFAULT 'accepted'"))
-            if "rejection_reason" not in lease_action_columns:
-                await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN rejection_reason TEXT"))
-            result = await connection.execute(text("PRAGMA table_info(candidate_work)"))
-            candidate_columns = {row[1] for row in result.fetchall()}
-            if "sort_order" not in candidate_columns:
-                await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN sort_order INTEGER DEFAULT 0"))
-            if "import_metadata_json" not in candidate_columns:
-                await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN import_metadata_json JSON DEFAULT '{}'"))
-            result = await connection.execute(text("PRAGMA table_info(authoritative_work_packets)"))
-            authoritative_columns = {row[1] for row in result.fetchall()}
-            if "parent_packet_id" not in authoritative_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN parent_packet_id VARCHAR(80)"))
-            if "lineage_kind" not in authoritative_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN lineage_kind VARCHAR(32) DEFAULT 'root'"))
-            if "ready_to_test_json" not in authoritative_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN ready_to_test_json JSON"))
-            if "operator_test_state" not in authoritative_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN operator_test_state VARCHAR(24) DEFAULT 'not_ready'"))
-            if "operator_test_note" not in authoritative_columns:
-                await connection.execute(text("ALTER TABLE authoritative_work_packets ADD COLUMN operator_test_note TEXT"))
-            result = await connection.execute(text("PRAGMA table_info(pipeline_operational_action_records)"))
-            action_columns = {row[1] for row in result.fetchall()}
-            if "child_packet_id" not in action_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN child_packet_id VARCHAR(80)"))
-            if "expected_current_event_id" not in action_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN expected_current_event_id VARCHAR(80)"))
-            if "approval_id" not in action_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN approval_id VARCHAR(120)"))
-            if "schema_version" not in action_columns:
-                await connection.execute(
-                    text(
-                        "ALTER TABLE pipeline_operational_action_records ADD COLUMN schema_version "
-                        "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"
-                    )
-                )
-            if "action_context_json" not in action_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN action_context_json JSON"))
-            if "action_context_digest_sha256" not in action_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN action_context_digest_sha256 VARCHAR(80)"))
-            if "success_evidence_json" not in action_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_action_records ADD COLUMN success_evidence_json JSON"))
-            result = await connection.execute(text("PRAGMA table_info(pipeline_operational_approvals)"))
-            approval_columns = {row[1] for row in result.fetchall()}
-            if "schema_version" not in approval_columns:
-                await connection.execute(
-                    text(
-                        "ALTER TABLE pipeline_operational_approvals ADD COLUMN schema_version "
-                        "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"
-                    )
-                )
-            if "action_context_json" not in approval_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_approvals ADD COLUMN action_context_json JSON"))
-            if "action_context_digest_sha256" not in approval_columns:
-                await connection.execute(text("ALTER TABLE pipeline_operational_approvals ADD COLUMN action_context_digest_sha256 VARCHAR(80)"))
+            await _sqlite_add_columns(
+                connection,
+                "execution_attempts",
+                (
+                    ("workspace_isolation_plan_json", "JSON"),
+                    ("queue_lease_id", "VARCHAR(36)"),
+                    ("queue_fencing_token", "INTEGER"),
+                ) + EXECUTION_ATTEMPT_SQLITE_COLUMNS,
+            )
+            await _sqlite_add_columns(
+                connection,
+                "authoritative_work_packet_lifecycle_events",
+                (
+                    ("packet_title", "VARCHAR(255)"),
+                    ("parent_packet_id", "VARCHAR(80)"),
+                    ("lineage_kind", "VARCHAR(32)"),
+                    ("ready_to_test_json", "JSON"),
+                    ("operator_test_state", "VARCHAR(24)"),
+                    ("operator_test_note", "VARCHAR(255)"),
+                ),
+            )
+            await _sqlite_add_columns(
+                connection,
+                "queue_lease_actions",
+                (
+                    ("provided_fencing_token", "INTEGER"),
+                    ("outcome", "VARCHAR(16) DEFAULT 'accepted'"),
+                    ("rejection_reason", "TEXT"),
+                ),
+            )
+            await _sqlite_add_columns(
+                connection,
+                "candidate_work",
+                (("sort_order", "INTEGER DEFAULT 0"), ("import_metadata_json", "JSON DEFAULT '{}'")),
+            )
+            await _sqlite_add_columns(
+                connection,
+                "authoritative_work_packets",
+                (
+                    ("parent_packet_id", "VARCHAR(80)"),
+                    ("lineage_kind", "VARCHAR(32) DEFAULT 'root'"),
+                    ("ready_to_test_json", "JSON"),
+                    ("operator_test_state", "VARCHAR(24) DEFAULT 'not_ready'"),
+                    ("operator_test_note", "TEXT"),
+                ),
+            )
+            await _sqlite_add_columns(
+                connection,
+                "pipeline_operational_action_records",
+                (
+                    ("child_packet_id", "VARCHAR(80)"),
+                    ("expected_current_event_id", "VARCHAR(80)"),
+                    ("approval_id", "VARCHAR(120)"),
+                    ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+                    ("action_context_json", "JSON"),
+                    ("action_context_digest_sha256", "VARCHAR(80)"),
+                    ("success_evidence_json", "JSON"),
+                ),
+            )
+            await _sqlite_add_columns(
+                connection,
+                "pipeline_operational_approvals",
+                (
+                    ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+                    ("action_context_json", "JSON"),
+                    ("action_context_digest_sha256", "VARCHAR(80)"),
+                ),
+            )
             await _ensure_sqlite_memory_proposals_schema(connection)
         # Seed the singleton after dialect-specific migrations so this is also
         # safe for an older database that needs the revision column added first.
@@ -399,7 +409,8 @@ async def init_db() -> None:
         # initialization idempotent on both supported dialects.
         await connection.execute(
             text(
-                "INSERT INTO supervisor_control (id, mode, revision) VALUES (1, 'running', 1) "
+                "INSERT INTO supervisor_control (id, mode, revision, updated_at) "
+                "VALUES (1, 'running', 1, CURRENT_TIMESTAMP) "
                 "ON CONFLICT (id) DO NOTHING"
             )
         )

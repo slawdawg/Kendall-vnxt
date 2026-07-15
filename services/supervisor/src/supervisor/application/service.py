@@ -678,7 +678,8 @@ class SupervisorService:
         # PostgreSQL, and intentionally leaves transaction ownership to callers.
         await session.execute(
             text(
-                "INSERT INTO supervisor_control (id, mode, revision) VALUES (1, 'running', 1) "
+                "INSERT INTO supervisor_control (id, mode, revision, updated_at) "
+                "VALUES (1, 'running', 1, CURRENT_TIMESTAMP) "
                 "ON CONFLICT (id) DO NOTHING"
             )
         )
@@ -1159,8 +1160,12 @@ class SupervisorService:
                 "projection_stale",
             )
         if payload.actionId == "drain" and any(
-            counts[field] != getattr(context, field)
-            for field in ("activeWorkCount", "activeLeaseCount", "runningAttemptCount")
+            counts[count_field] != getattr(context, expected_field)
+            for count_field, expected_field in (
+                ("activeWorkCount", "expectedActiveWorkCount"),
+                ("activeLeaseCount", "expectedActiveLeaseCount"),
+                ("runningAttemptCount", "expectedRunningAttemptCount"),
+            )
         ):
             raise OperationalActionIneligible(
                 "Drain action rejected because the active-work convergence snapshot is stale.",
@@ -1242,7 +1247,11 @@ class SupervisorService:
             "resultingRuntimeMode": resulting_mode,
             "resultingRuntimeRevision": resulting_revision,
             **counts,
-            "intakeStopped": True,
+            **(
+                {"intakeStopped": True}
+                if payload.actionId in {"pause", "drain"}
+                else {}
+            ),
             **(
                 {"activeWorkPreserved": True}
                 if payload.actionId == "pause"
@@ -21633,6 +21642,10 @@ class SupervisorService:
         payload: WorkItemLocalProofRequest,
     ) -> dict[str, object] | None:
         self._assert_local_proof_authority()
+        # Hold the durable runtime admission fence before creating the linked
+        # WorkItem or advancing any canonical packet/work-item state. The
+        # fence is reacquired for each committed lifecycle transition below.
+        await self._require_running_runtime_for_admission(session)
         packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if not packet:
             return None
@@ -21974,6 +21987,7 @@ class SupervisorService:
         *,
         ready_to_test: OperationalReadyToTestRequest | None = None,
     ) -> None:
+        await self._require_running_runtime_for_admission(session)
         await self._prepare_authoritative_local_proof_item(session, item, target_stage, status)
         active_attempt = await self._active_execution_attempt(session, item.id)
         await self.transition_authoritative_work_packet(
@@ -22024,9 +22038,7 @@ class SupervisorService:
         ):
             raise ValueError(f"Local proof idempotency key {payload.idempotencyKey} has already been used.")
 
-        control = await self.ensure_control(session)
-        if control.mode != RunMode.RUNNING.value:
-            raise ValueError("Local proof requires supervisor running mode.")
+        await self._require_running_runtime_for_admission(session)
         for _ in range(3):
             if item.state not in {WorkflowState.QUEUED.value, WorkflowState.TRIAGED.value, WorkflowState.READY.value}:
                 break
@@ -27931,16 +27943,18 @@ class SupervisorService:
 
     async def process_once(self, session: AsyncSession) -> None:
         async with self._loop_lock:
+            try:
+                await self._require_running_runtime_for_admission(session)
+            except ValueError:
+                # Paused, draining, and disabled are idle poller states. Do
+                # not let a non-running mode terminate the background loop.
+                return
             items = await self.list_work_items(session)
             for listed_item in items:
                 await self._acquire_execute_admission_lock(session)
-                # The mode used for this item must be read after the same
-                # durable admission boundary that protects lease/attempt
-                # reservation. A pause committed between an earlier snapshot
-                # and this lock must fail closed.
-                control, _ = await self._runtime_control_snapshot(session, lock=True)
-                if control.mode == RunMode.DISABLED.value:
-                    return
+                # Keep the same durable admission boundary around item
+                # reservation and advancement; the running-mode gate above
+                # holds the runtime control row until this cycle commits.
                 item = await session.get(WorkItem, listed_item.id, with_for_update=True)
                 if not item:
                     continue
@@ -27948,7 +27962,7 @@ class SupervisorService:
                     continue
                 if await self._active_execution_attempt(session, item.id, lock=True):
                     continue
-                await self._advance_item(session, item, RunMode(control.mode))
+                await self._advance_item(session, item, RunMode.RUNNING)
             await session.commit()
 
     async def _advance_item(self, session: AsyncSession, item: WorkItem, mode: RunMode) -> None:

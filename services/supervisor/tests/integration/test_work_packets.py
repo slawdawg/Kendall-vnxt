@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import json
 import os
 import socket
@@ -5902,6 +5904,104 @@ def test_automatic_ready_cycle_holds_before_execute_side_effects_when_capacity_i
         assert not any(event["eventType"] in {"work_item.implementing", "recipe.implementation_passed"} for event in events)
         with sqlite3.connect(db_path) as conn:
             assert conn.execute("select count(*) from queue_leases where work_item_id = ?", (candidate["id"],)).fetchone()[0] == 0
+
+
+def test_paused_authoritative_local_proof_leaves_canonical_state_unchanged(tmp_path, monkeypatch) -> None:
+    db_name = "paused-authoritative-local-proof.db"
+    db_path = _db_path(tmp_path, db_name)
+    source_path = "docs/workflows/implementation-evidence-boundary.md"
+    repo_root = Path(__file__).parents[4]
+    source_ref = {
+        "refId": "repo-doc:paused-local-proof",
+        "sourceType": "repo_doc",
+        "pathOrUrl": source_path,
+        "title": "Implementation evidence boundary",
+        "contentSha256": hashlib.sha256((repo_root / source_path).read_bytes()).hexdigest(),
+    }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+        from supervisor.application.service import LOCAL_PROOF_TEST_CAPABILITY
+
+        service._local_proof_capability = LOCAL_PROOF_TEST_CAPABILITY
+        service._local_proof_attestation = (Path(db_path).resolve(), "paused-local-proof-attestation")
+        monkeypatch.setattr(service, "_local_proof_database_attested", lambda: True)
+        monkeypatch.setattr(service, "_local_proof_settings_safe", lambda: True)
+        packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-paused-local-proof",
+                "title": "Paused local proof packet",
+                "sourceRef": source_ref,
+            },
+        )
+        assert packet_response.status_code == 200, packet_response.text
+        packet = packet_response.json()["data"]
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("update supervisor_control set mode = 'paused' where id = 1")
+            connection.commit()
+            before_packet = connection.execute(
+                "select current_stage, status, current_event_id from authoritative_work_packets where id = ?",
+                (packet["packetId"],),
+            ).fetchone()
+            before_lifecycle_events = connection.execute(
+                "select count(*) from authoritative_work_packet_lifecycle_events where packet_id = ?",
+                (packet["packetId"],),
+            ).fetchone()[0]
+
+        response = client.post(
+            f"/pipeline-control-plane/work-packets/{packet['packetId']}/local-proof",
+            json={
+                "proofMode": "integrated_local",
+                "idempotencyKey": "paused-local-proof-1",
+                "correlationId": "paused-local-proof-correlation",
+            },
+        )
+        assert response.status_code == 409
+        assert "New work and launch admission is blocked" in response.text
+
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "select current_stage, status, current_event_id from authoritative_work_packets where id = ?",
+                (packet["packetId"],),
+            ).fetchone() == before_packet
+            assert connection.execute(
+                "select count(*) from authoritative_work_packet_lifecycle_events where packet_id = ?",
+                (packet["packetId"],),
+            ).fetchone()[0] == before_lifecycle_events
+            assert connection.execute("select count(*) from work_items").fetchone()[0] == 0
+
+
+def test_concurrent_sqlite_init_migrates_pre_revision_schema_once(tmp_path, monkeypatch) -> None:
+    db_name = "concurrent-pre-revision-init.db"
+    db_path = tmp_path / db_name
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "create table supervisor_control (id integer primary key, mode varchar(32) not null)"
+        )
+        connection.execute("insert into supervisor_control (id, mode) values (1, 'running')")
+        connection.commit()
+
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+    from supervisor.infrastructure.db.database import engine, init_db
+
+    async def initialize_concurrently() -> None:
+        await asyncio.gather(init_db(), init_db())
+
+    asyncio_run(initialize_concurrently())
+    asyncio_run(engine.dispose())
+
+    with sqlite3.connect(db_path) as connection:
+        columns = {row[1] for row in connection.execute("pragma table_info(supervisor_control)").fetchall()}
+        assert "revision" in columns
+        assert connection.execute(
+            "select mode, revision from supervisor_control where id = 1"
+        ).fetchone() == ("running", 1)
+        assert connection.execute(
+            "select count(*) from admission_locks where scope = 'execute'"
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize(

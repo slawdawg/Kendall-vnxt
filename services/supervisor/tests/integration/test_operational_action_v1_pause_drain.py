@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from asyncio import run as asyncio_run
 import json
 import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -340,3 +342,32 @@ def test_concurrent_runtime_transitions_allow_one_revision_winner(tmp_path, monk
 
         assert sorted(status for status, _ in results) == [200, 400]
         assert any("mode or revision fence is stale" in body for status, body in results if status == 400)
+
+
+@pytest.mark.parametrize("mode", ["paused", "draining"])
+def test_process_once_does_not_advance_queue_work_in_non_running_modes(tmp_path, monkeypatch, mode: str) -> None:
+    db_name = f"p2-2-process-{mode}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item_id = _seed_quiescent_work(client, db_path, "queued", f"P2.2 {mode} queue hold")
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("update supervisor_control set mode = ? where id = 1", (mode,))
+            connection.commit()
+            before = connection.execute(
+                "select state, updated_at from work_items where id = ?", (work_item_id,)
+            ).fetchone()
+            before_events = connection.execute(
+                "select count(*) from workflow_events where work_item_id = ?", (work_item_id,)
+            ).fetchone()[0]
+
+        from supervisor.api.main import process_once_for_tests
+
+        asyncio_run(process_once_for_tests())
+
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "select state, updated_at from work_items where id = ?", (work_item_id,)
+            ).fetchone() == before
+            assert connection.execute(
+                "select count(*) from workflow_events where work_item_id = ?", (work_item_id,)
+            ).fetchone()[0] == before_events
