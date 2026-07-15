@@ -100,6 +100,32 @@ def _seed_quiescent_work(client: TestClient, db_path: str, state: str, title: st
     return work_item_id
 
 
+def _seed_recipe_work(client: TestClient, db_path: str, state: str, title: str) -> str:
+    response = client.post(
+        "/work-items",
+        json={
+            "title": title,
+            "requestedOutcome": f"Keep recipe-managed {state} work behind the runtime fence.",
+            "source": "pytest",
+            "metadata": {
+                "executionRecipeId": "dashboard-test-coverage",
+                "executionBranch": "p2-2-current-branch",
+                "baseBranch": "main",
+                "baseRevision": "base-revision",
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    work_item_id = response.json()["data"]["id"]
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "update work_items set state = ?, updated_at = ?, last_event_at = ? where id = ?",
+            (state, "2026-07-15 00:00:00.000000", "2026-07-15 00:00:00.000000", work_item_id),
+        )
+        connection.commit()
+    return work_item_id
+
+
 def _runtime_request(action_id: str, *, mode: str, revision: int, counts: dict[str, int], key: str, correlation: str) -> dict:
     from supervisor.api.schemas import (
         DrainActionContextV1,
@@ -371,3 +397,98 @@ def test_process_once_does_not_advance_queue_work_in_non_running_modes(tmp_path,
             assert connection.execute(
                 "select count(*) from workflow_events where work_item_id = ?", (work_item_id,)
             ).fetchone()[0] == before_events
+
+
+@pytest.mark.parametrize("mode", ["paused", "draining"])
+@pytest.mark.parametrize("state", ["queued", "triaged"])
+def test_managed_next_action_rechecks_runtime_before_advancing_queued_or_triaged_work(
+    tmp_path,
+    monkeypatch,
+    mode: str,
+    state: str,
+) -> None:
+    db_name = f"p2-2-managed-next-action-{state}-{mode}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item_id = _seed_recipe_work(client, db_path, state, f"P2.2 managed action {state} {mode} hold")
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        from supervisor.api.main import service
+        from supervisor.infrastructure.db.models import SupervisorControl
+
+        original_advance = service._advance_item
+
+        async def no_utility(*_args, **_kwargs):
+            return None, None
+
+        async def pause_before_advance(session, item, run_mode):
+            control = await session.get(SupervisorControl, 1)
+            assert control is not None
+            # The initial admission read has already passed. This models a
+            # pause/drain commit arriving in the race window before the
+            # shared state-transition boundary.
+            control.mode = mode
+            return await original_advance(session, item, run_mode)
+
+        monkeypatch.setattr(service, "_run_guarded_utility_worker", no_utility)
+        monkeypatch.setattr(service, "_advance_item", pause_before_advance)
+
+        response = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "supervisor_triage",
+                "actorId": "operator:p2-2",
+                "actorLabel": "P2.2 test operator",
+            },
+        )
+
+        assert response.status_code == 409, response.text
+        assert "New work and launch admission is blocked" in response.text
+
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "select state from work_items where id = ?", (work_item_id,)
+            ).fetchone() == (state,)
+            assert connection.execute(
+                "select count(*) from workflow_events where work_item_id = ?", (work_item_id,)
+            ).fetchone() == (len(before_events),)
+            assert connection.execute(
+                "select mode from supervisor_control where id = 1"
+            ).fetchone() == ("running",)
+
+
+@pytest.mark.parametrize("mode", ["paused", "draining"])
+def test_prepare_branch_rejects_no_launch_mutation_during_pause_or_drain(tmp_path, monkeypatch, mode: str) -> None:
+    db_name = f"p2-2-prepare-branch-{mode}.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item_id = _seed_recipe_work(client, db_path, "blocked", f"P2.2 branch preparation {mode} hold")
+        from supervisor.api.main import service
+
+        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+        service._git_output = lambda args: (  # type: ignore[method-assign]
+            (True, "p2-2-current-branch")
+            if args == ["git", "branch", "--show-current"]
+            else (True, "base-revision")
+        )
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("update supervisor_control set mode = ? where id = 1", (mode,))
+            connection.commit()
+            before_events = connection.execute(
+                "select count(*) from workflow_events where work_item_id = ?", (work_item_id,)
+            ).fetchone()[0]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/prepare-branch",
+            json={"actorId": "operator:p2-2", "actorLabel": "P2.2 test operator"},
+        )
+
+        assert response.status_code == 409, response.text
+        assert "New work and launch admission is blocked" in response.text
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "select state from work_items where id = ?", (work_item_id,)
+            ).fetchone() == ("blocked",)
+            assert connection.execute(
+                "select count(*) from workflow_events where work_item_id = ?", (work_item_id,)
+            ).fetchone() == (before_events,)

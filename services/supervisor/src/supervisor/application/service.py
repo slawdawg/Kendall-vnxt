@@ -27392,7 +27392,11 @@ class SupervisorService:
         work_item_id: str,
         payload: WorkItemManagedActionRequest,
     ) -> WorkItem | None:
-        item = await self._lock_work_item_mutation_admission(session, work_item_id)
+        item = await self._lock_work_item_mutation_admission(
+            session,
+            work_item_id,
+            require_running_runtime=True,
+        )
         if not item:
             return None
 
@@ -27520,9 +27524,10 @@ class SupervisorService:
                 ),
             )
         if next_action.actionId in {"supervisor_triage", "run_recipe_implementation"}:
-            control = await self.ensure_control(session)
-            if control.mode != RunMode.RUNNING.value:
-                raise ValueError("Supervisor managed actions require running mode.")
+            # Utility work may commit before this lifecycle transition. Take a
+            # fresh shared runtime admission fence after that boundary rather
+            # than trusting the earlier generic WorkItem lock/read.
+            await self._require_running_runtime_for_admission(session)
             max_steps = 2 if next_action.actionId == "supervisor_triage" else 1
             for _ in range(max_steps):
                 before_state = item.state
@@ -27609,7 +27614,11 @@ class SupervisorService:
         work_item_id: str,
         payload: WorkItemBranchPreparationRequest,
     ) -> WorkItem | None:
-        item = await self._lock_work_item_mutation_admission(session, work_item_id)
+        item = await self._lock_work_item_mutation_admission(
+            session,
+            work_item_id,
+            require_running_runtime=True,
+        )
         if not item:
             return None
 
@@ -27741,6 +27750,11 @@ class SupervisorService:
                 actor_id=payload.actorId,
                 actor_label=payload.actorLabel,
             )
+        # Branch preparation can reach this point after a durable launch
+        # reservation/claim commit. Reacquire the shared runtime fence at the
+        # mutation boundary so a pause or drain committed in that interval
+        # cannot change WorkItem state.
+        await self._require_running_runtime_for_admission(session)
         try:
             preparation_error, preparation_payload = self._prepare_recipe_branch(
                 item,
@@ -27966,6 +27980,11 @@ class SupervisorService:
             await session.commit()
 
     async def _advance_item(self, session: AsyncSession, item: WorkItem, mode: RunMode) -> None:
+        # This is the shared state-transition boundary for both the poller and
+        # managed-next-action. Recheck after any earlier admission/worker
+        # commit; a stale running-mode read must never advance queued/triaged
+        # work after pause or drain.
+        await self._require_running_runtime_for_admission(session)
         current = WorkflowState(item.state)
         if current == WorkflowState.QUEUED:
             await self._transition(session, item, WorkflowState.TRIAGED, "work_item.triaged", default_status_summary(WorkflowState.TRIAGED))

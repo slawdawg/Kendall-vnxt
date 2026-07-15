@@ -133,6 +133,24 @@ def test_alternate_intake_and_requeue_paths_share_the_runtime_admission_fence() 
     assert "admission_lock_acquired=True" in action_source
 
 
+def test_p2_2_managed_mutation_endpoints_and_transition_boundary_share_running_fence() -> None:
+    managed_action_source = inspect.getsource(SupervisorService.execute_managed_next_action)
+    branch_source = inspect.getsource(SupervisorService.prepare_recipe_branch)
+    advance_source = inspect.getsource(SupervisorService._advance_item)
+
+    assert "require_running_runtime=True" in managed_action_source
+    assert "_require_running_runtime_for_admission(session)" in managed_action_source
+    assert "require_running_runtime=True" in branch_source
+    assert "_require_running_runtime_for_admission(session)" in branch_source
+    assert "_require_running_runtime_for_admission(session)" in advance_source
+    assert branch_source.index("_require_running_runtime_for_admission(session)") < branch_source.index(
+        "self._prepare_recipe_branch("
+    )
+    assert advance_source.index("_require_running_runtime_for_admission(session)") < advance_source.index(
+        "self._transition("
+    )
+
+
 def test_resume_contract_is_fenced_and_preserves_active_work() -> None:
     context = ResumeActionContextV1.model_validate(
         {"kind": "resume", "expectedRuntimeMode": "draining", "expectedRuntimeRevision": 3}
