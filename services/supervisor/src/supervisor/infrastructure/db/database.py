@@ -393,6 +393,16 @@ async def init_db() -> None:
             if "action_context_digest_sha256" not in approval_columns:
                 await connection.execute(text("ALTER TABLE pipeline_operational_approvals ADD COLUMN action_context_digest_sha256 VARCHAR(80)"))
             await _ensure_sqlite_memory_proposals_schema(connection)
+        # Seed the singleton after dialect-specific migrations so this is also
+        # safe for an older database that needs the revision column added first.
+        # The conflict clause makes repeated startup and concurrent first
+        # initialization idempotent on both supported dialects.
+        await connection.execute(
+            text(
+                "INSERT INTO supervisor_control (id, mode, revision) VALUES (1, 'running', 1) "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+        )
 
 
 async def get_session() -> AsyncSession:

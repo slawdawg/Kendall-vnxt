@@ -1353,11 +1353,11 @@ export interface PipelineOperationalActionCapabilityV0 {
 }
 
 /**
- * Additive exact-target contract for the four operational actions that remain
- * server-unsupported until their persistence/apply lanes are implemented.
- * V0 packet actions intentionally continue to use the interfaces above.
+ * Additive exact-target contract for the operational actions implemented by
+ * the server-bound persistence/apply lanes. V0 packet actions intentionally
+ * continue to use the interfaces above.
  */
-export const PIPELINE_OPERATIONAL_ACTION_V1_IDS = ["retry_verification", "pause", "drain", "reassign"] as const;
+export const PIPELINE_OPERATIONAL_ACTION_V1_IDS = ["retry_verification", "pause", "drain", "resume", "reassign"] as const;
 export type PipelineOperationalActionIdV1 = (typeof PIPELINE_OPERATIONAL_ACTION_V1_IDS)[number];
 export type PipelineOperationalActionAuthorityStateV1 = "needs_authority_approval";
 export type PipelineOperationalActionRiskTierV1 = "low" | "medium";
@@ -1381,6 +1381,7 @@ export const PIPELINE_OPERATIONAL_ACTION_V1_POLICY = {
   retry_verification: { targetType: "execution_attempt", authorityState: "needs_authority_approval", riskTier: "medium" },
   pause: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
   drain: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "medium" },
+  resume: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
   reassign: { targetType: "work_packet", authorityState: "needs_authority_approval", riskTier: "medium" },
 } as const satisfies Record<PipelineOperationalActionIdV1, {
   targetType: PipelineOperationalActionTargetTypeV1;
@@ -1412,6 +1413,7 @@ export const PIPELINE_OPERATIONAL_ACTION_V1_CONTEXT_FIELDS = {
     "expectedActiveLeaseCount",
     "expectedRunningAttemptCount",
   ],
+  resume: ["kind", "expectedRuntimeMode", "expectedRuntimeRevision"],
   reassign: [
     "kind",
     "linkedWorkItemId",
@@ -1457,6 +1459,12 @@ export interface PipelineDrainActionContextV1 {
   expectedRunningAttemptCount: number;
 }
 
+export interface PipelineResumeActionContextV1 {
+  kind: "resume";
+  expectedRuntimeMode: "paused" | "draining";
+  expectedRuntimeRevision: number;
+}
+
 export interface PipelineReassignActionContextV1 {
   kind: "reassign";
   linkedWorkItemId: string;
@@ -1475,18 +1483,20 @@ export type PipelineOperationalActionContextV1 =
   | PipelineRetryVerificationActionContextV1
   | PipelinePauseActionContextV1
   | PipelineDrainActionContextV1
+  | PipelineResumeActionContextV1
   | PipelineReassignActionContextV1;
 
 export type PipelineOperationalActionContextForV1<A extends PipelineOperationalActionIdV1> =
   A extends "retry_verification" ? PipelineRetryVerificationActionContextV1
     : A extends "pause" ? PipelinePauseActionContextV1
       : A extends "drain" ? PipelineDrainActionContextV1
-        : PipelineReassignActionContextV1;
+        : A extends "resume" ? PipelineResumeActionContextV1
+          : PipelineReassignActionContextV1;
 
 export type PipelineOperationalActionTargetForV1<A extends PipelineOperationalActionIdV1> =
   A extends "retry_verification" ? "execution_attempt" : A extends "reassign" ? "work_packet" : "runtime";
 
-export type PipelineOperationalActionRiskForV1<A extends PipelineOperationalActionIdV1> = A extends "pause" ? "low" : "medium";
+export type PipelineOperationalActionRiskForV1<A extends PipelineOperationalActionIdV1> = A extends "pause" | "resume" ? "low" : "medium";
 export type PipelineOperationalActionContextDigestV1 = `sha256:${string}`;
 
 interface PipelineOperationalActionRequestBaseV1<A extends PipelineOperationalActionIdV1> {
@@ -1605,6 +1615,17 @@ export interface PipelineDrainSuccessEvidenceV1 {
   workersKilled: false;
 }
 
+export interface PipelineResumeSuccessEvidenceV1 {
+  kind: "resume";
+  resultingRuntimeMode: "running";
+  resultingRuntimeRevision: number;
+  activeWorkCount: number;
+  activeLeaseCount: number;
+  runningAttemptCount: number;
+  intakeResumed: true;
+  activeWorkPreserved: true;
+}
+
 export interface PipelineReassignSuccessEvidenceV1 {
   kind: "reassign";
   packetId: string;
@@ -1620,13 +1641,15 @@ export type PipelineOperationalActionSuccessEvidenceV1 =
   | PipelineRetryVerificationSuccessEvidenceV1
   | PipelinePauseSuccessEvidenceV1
   | PipelineDrainSuccessEvidenceV1
+  | PipelineResumeSuccessEvidenceV1
   | PipelineReassignSuccessEvidenceV1;
 
 export type PipelineOperationalActionSuccessEvidenceForV1<A extends PipelineOperationalActionIdV1> =
   A extends "retry_verification" ? PipelineRetryVerificationSuccessEvidenceV1
     : A extends "pause" ? PipelinePauseSuccessEvidenceV1
       : A extends "drain" ? PipelineDrainSuccessEvidenceV1
-        : PipelineReassignSuccessEvidenceV1;
+        : A extends "resume" ? PipelineResumeSuccessEvidenceV1
+          : PipelineReassignSuccessEvidenceV1;
 
 interface PipelineOperationalActionResultBaseV1<A extends PipelineOperationalActionIdV1> {
   schemaVersion: typeof PIPELINE_OPERATIONAL_ACTION_V1_SCHEMA_VERSION;
@@ -2401,7 +2424,7 @@ function validatePipelineOperationalActionV1Common(
   if (!isSafeOperationalActionV1Identifier(record.targetId, targetIdMaxLength)) {
     pushPipelineOperationalActionV1Issue(issues, "targetId", "invalid_contract", "V1 target id must be an exact safe identifier.");
   }
-  if ((record.actionId === "pause" || record.actionId === "drain") && record.targetId !== PIPELINE_OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID) {
+  if ((record.actionId === "pause" || record.actionId === "drain" || record.actionId === "resume") && record.targetId !== PIPELINE_OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID) {
     pushPipelineOperationalActionV1Issue(issues, "targetId", "target_context_mismatch", "Runtime V1 actions must target the singleton supervisor runtime.");
   }
   if (typeof record.actionContextDigestSha256 !== "string" || !PIPELINE_OPERATIONAL_ACTION_V1_DIGEST.test(record.actionContextDigestSha256)) {
@@ -2469,6 +2492,10 @@ function validatePipelineOperationalActionV1Context(
         !isNonNegativeInteger(context.expectedActiveWorkCount) || !isNonNegativeInteger(context.expectedActiveLeaseCount) || !isNonNegativeInteger(context.expectedRunningAttemptCount)) {
       pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedRuntimeRevision", "stale_fence", "Drain requires exact runtime mode/revision and non-negative active-count snapshot.");
     }
+  } else if (actionId === "resume") {
+    if (!isOneOfString(context.expectedRuntimeMode, ["paused", "draining"]) || !isPositiveInteger(context.expectedRuntimeRevision)) {
+      pushPipelineOperationalActionV1Issue(issues, "actionContext.expectedRuntimeRevision", "stale_fence", "Resume requires an exact paused/draining runtime mode and positive monotonic revision.");
+    }
   } else {
     for (const [field, maxLength] of [
       ["linkedWorkItemId", OPERATIONAL_ACTION_V1_ID_LENGTHS.workItem],
@@ -2508,6 +2535,10 @@ function validatePipelineOperationalActionV1SuccessEvidence(
       "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "activeLeaseCount", "runningAttemptCount", "intakeStopped",
       "activeWorkAllowedToConverge", "workersKilled",
     ],
+    resume: [
+      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "activeLeaseCount", "runningAttemptCount", "intakeResumed",
+      "activeWorkPreserved",
+    ],
     reassign: [
       "kind", "packetId", "linkedWorkItemId", "previousOwnerId", "newOwnerId",
       "resultingPacketCurrentEventId", "activeLeaseTransferred", "workerLaunched",
@@ -2543,6 +2574,13 @@ function validatePipelineOperationalActionV1SuccessEvidence(
         evidence.resultingRuntimeRevision <= (context.expectedRuntimeRevision as number) ||
         evidence.intakeStopped !== true || evidence.activeWorkAllowedToConverge !== true || evidence.workersKilled !== false) {
       pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Drain success must report draining mode/revision, convergence, and no worker kill.");
+    }
+  } else if (record.actionId === "resume") {
+    if (evidence.resultingRuntimeMode !== "running" || !isPositiveInteger(evidence.resultingRuntimeRevision) || !isNonNegativeInteger(evidence.activeWorkCount) ||
+        !isNonNegativeInteger(evidence.activeLeaseCount) || !isNonNegativeInteger(evidence.runningAttemptCount) ||
+        evidence.resultingRuntimeRevision <= (context.expectedRuntimeRevision as number) ||
+        evidence.intakeResumed !== true || evidence.activeWorkPreserved !== true) {
+      pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Resume success must report running mode/revision and preserved active work.");
     }
   } else if (evidence.packetId !== record.targetId || evidence.activeLeaseTransferred !== false || evidence.workerLaunched !== false ||
       evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.previousOwnerId !== context.expectedCurrentOwnerId ||

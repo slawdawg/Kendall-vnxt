@@ -21,6 +21,7 @@ from supervisor.api.schemas import (
     OperationalActionRequestV1,
     OperationalActionResultV1,
     PauseActionContextV1,
+    ResumeActionContextV1,
     ReassignActionContextV1,
     RetryVerificationSuccessEvidenceV1,
     RetryVerificationActionContextV1,
@@ -39,6 +40,7 @@ EXPECTED_POLICY = {
     "retry_verification": {"targetType": "execution_attempt", "authorityState": "needs_authority_approval", "riskTier": "medium"},
     "pause": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "low"},
     "drain": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+    "resume": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "low"},
     "reassign": {"targetType": "work_packet", "authorityState": "needs_authority_approval", "riskTier": "medium"},
 }
 
@@ -72,6 +74,7 @@ def _contexts() -> dict[str, dict[str, object]]:
             "expectedActiveLeaseCount": 1,
             "expectedRunningAttemptCount": 1,
         },
+        "resume": {"kind": "resume", "expectedRuntimeMode": "paused", "expectedRuntimeRevision": 3},
         "reassign": {
             "kind": "reassign",
             "linkedWorkItemId": "work-1",
@@ -93,6 +96,7 @@ def _request(action_id: str) -> dict[str, object]:
         "retry_verification": RetryVerificationActionContextV1,
         "pause": PauseActionContextV1,
         "drain": DrainActionContextV1,
+        "resume": ResumeActionContextV1,
         "reassign": ReassignActionContextV1,
     }[action_id].model_validate(_contexts()[action_id])
     return {
@@ -208,6 +212,7 @@ def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["drain"][-3:] == (
         "expectedActiveWorkCount", "expectedActiveLeaseCount", "expectedRunningAttemptCount"
     )
+    assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["resume"] == ("kind", "expectedRuntimeMode", "expectedRuntimeRevision")
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["reassign"][-2:] == (
         "expectedActiveLeaseId", "expectedRunningAttemptId"
     )
@@ -423,10 +428,10 @@ def test_authorization_rejects_digest_context_actor_expiry_and_replay_drift() ->
         OperationalActionAuthorizationEnvelopeV1.model_validate(replay_conflict)
 
 
-def test_runtime_keeps_v1_actions_unsupported_and_preserves_v0_actions() -> None:
+def test_runtime_keeps_v0_action_flags_unavailable_and_preserves_v0_actions() -> None:
     v1_actions = set(EXPECTED_POLICY)
-    assert v1_actions == SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS
-    assert not v1_actions.intersection(SERVER_APPROVABLE_OPERATIONAL_ACTIONS)
+    assert SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS == {"retry_verification", "pause", "drain", "reassign"}
+    assert "resume" not in SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS
     assert not v1_actions.intersection(SERVER_APPLICABLE_OPERATIONAL_ACTIONS)
     assert {"mark_tested", "request_rework", "requeue", "reject"} == SERVER_APPROVABLE_OPERATIONAL_ACTIONS
     assert {"inspect", "refresh_projection", "mark_tested", "request_rework", "requeue", "reject"} == SERVER_APPLICABLE_OPERATIONAL_ACTIONS

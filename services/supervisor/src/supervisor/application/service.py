@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -398,7 +398,7 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
 }
 
 P2_1_OPERATIONAL_ACTIONS = {"retry_verification", "reassign"}
-P2_2_OPERATIONAL_ACTIONS = {"pause", "drain"}
+P2_2_OPERATIONAL_ACTIONS = {"pause", "drain", "resume"}
 IMPLEMENTED_V1_OPERATIONAL_ACTIONS = P2_1_OPERATIONAL_ACTIONS | P2_2_OPERATIONAL_ACTIONS
 EXECUTE_ADMISSION_LOCK_SCOPE = "execute"
 QUIESCENT_REASSIGN_STATES = {
@@ -449,6 +449,7 @@ OPERATIONAL_ACTION_POLICIES = {
     "requeue": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Return a blocked packet to its current queue stage."},
     "pause": {"risk": "low", "authority": "needs_authority_approval", "targets": {"runtime", "manager_run"}, "summary": "Pause new operational work while preserving packet state."},
     "drain": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"runtime", "manager_run"}, "summary": "Drain active work before entering paused mode."},
+    "resume": {"risk": "low", "authority": "needs_authority_approval", "targets": {"runtime", "manager_run"}, "summary": "Resume the last approved running runtime mode through a fresh fence."},
     "reassign": {"risk": "medium", "authority": "needs_authority_approval", "targets": {"work_packet"}, "summary": "Reassign ownership after explicit authority approval."},
     "reject": {"risk": "medium", "authority": "needs_product_approval", "targets": {"work_packet"}, "summary": "Reject the packet with an auditable operator decision."},
 }
@@ -669,11 +670,21 @@ class SupervisorService:
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
+        if control:
+            return control
+        # init_db seeds this row, but keep service-level initialization safe for
+        # callers that construct a fresh schema directly. ON CONFLICT makes two
+        # first readers converge without a read/insert/commit race on SQLite or
+        # PostgreSQL, and intentionally leaves transaction ownership to callers.
+        await session.execute(
+            text(
+                "INSERT INTO supervisor_control (id, mode, revision) VALUES (1, 'running', 1) "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+        )
+        control = await session.get(SupervisorControl, 1)
         if not control:
-            control = SupervisorControl(id=1, mode=RunMode.RUNNING.value, revision=1)
-            session.add(control)
-            await session.commit()
-            await session.refresh(control)
+            raise OperationalActionIneligible("Supervisor runtime control is unavailable.", "runtime_unavailable")
         return control
 
     async def create_authoritative_work_packet(
@@ -1088,6 +1099,9 @@ class SupervisorService:
     ) -> tuple[SupervisorControl, dict[str, int]]:
         control = await session.get(SupervisorControl, 1, with_for_update=lock)
         if not control:
+            await self.ensure_control(session)
+            control = await session.get(SupervisorControl, 1, with_for_update=lock)
+        if not control:
             raise OperationalActionIneligible(
                 "Supervisor runtime control is unavailable.",
                 "runtime_unavailable",
@@ -1110,7 +1124,8 @@ class SupervisorService:
         }
 
     async def _require_running_runtime_for_admission(self, session: AsyncSession) -> SupervisorControl:
-        control = await self.ensure_control(session)
+        await self._acquire_execute_admission_lock(session)
+        control, _ = await self._runtime_control_snapshot(session, lock=True)
         if control.mode != RunMode.RUNNING.value:
             raise ValueError(
                 f"New work and launch admission is blocked while supervisor runtime is {control.mode}."
@@ -1148,6 +1163,7 @@ class SupervisorService:
         allowed_modes = {
             "pause": {RunMode.RUNNING.value},
             "drain": {RunMode.RUNNING.value, RunMode.PAUSED.value},
+            "resume": {RunMode.PAUSED.value, RunMode.DRAINING.value},
         }[payload.actionId]
         if control.mode not in allowed_modes:
             raise OperationalActionIneligible(
@@ -1174,7 +1190,11 @@ class SupervisorService:
         approval = await self._validate_operational_approval_v1(session, payload)
         action_record_id = f"action-{uuid.uuid4()}"
         now = datetime.now(timezone.utc)
-        resulting_mode = RunMode.PAUSED.value if payload.actionId == "pause" else RunMode.DRAINING.value
+        resulting_mode = {
+            "pause": RunMode.PAUSED.value,
+            "drain": RunMode.DRAINING.value,
+            "resume": RunMode.RUNNING.value,
+        }[payload.actionId]
         resulting_revision = control.revision + 1
         consume = await session.execute(
             update(OperationalActionApprovalRecord)
@@ -1221,6 +1241,8 @@ class SupervisorService:
                 {"activeWorkPreserved": True}
                 if payload.actionId == "pause"
                 else {"activeWorkAllowedToConverge": True, "workersKilled": False}
+                if payload.actionId == "drain"
+                else {"activeWorkPreserved": True, "intakeResumed": True}
             ),
         }
         record = OperationalActionRecord(
@@ -1247,11 +1269,11 @@ class SupervisorService:
             typed_reason=None,
             success_evidence_json=success_evidence,
             evidence_refs_json=list(payload.evidenceRefs),
-            operator_intent_summary=(
-                "Stopped new work admission while preserving active work."
-                if payload.actionId == "pause"
-                else "Stopped new work admission while allowing active work to converge."
-            ),
+            operator_intent_summary={
+                "pause": "Stopped new work admission while preserving active work.",
+                "drain": "Stopped new work admission while allowing active work to converge.",
+                "resume": "Returned the runtime to the last approved running mode through a fresh fence.",
+            }[payload.actionId],
             created_at=now,
         )
         session.add(record)
@@ -3828,6 +3850,9 @@ class SupervisorService:
         *,
         _internal_authoritative: bool = False,
     ) -> WorkItem:
+        # Work-item creation is the intake boundary. Keep metadata-only reads
+        # available while rejecting every new intake in paused/draining mode.
+        await self._require_running_runtime_for_admission(session)
         _validate_work_item_scalar_text(payload.title)
         _validate_work_item_scalar_text(payload.requestedOutcome)
         _validate_work_item_scalar_text(payload.source)
@@ -21968,6 +21993,11 @@ class SupervisorService:
         item = await session.get(WorkItem, item.id, with_for_update=True, populate_existing=True)
         if not item:
             raise ValueError("Local proof lost its authoritative WorkItem before lease admission.")
+        control, _ = await self._runtime_control_snapshot(session, lock=True)
+        if control.mode != RunMode.RUNNING.value:
+            raise ValueError(
+                f"New work and launch admission is blocked while supervisor runtime is {control.mode}."
+            )
         await self._reject_pending_verification_retry_admission(session, item.id)
         active_attempt = await self._active_execution_attempt(session, item.id, lock=True)
         if active_attempt:
@@ -22764,6 +22794,7 @@ class SupervisorService:
         if not item:
             await session.rollback()
             return None
+        await self._require_running_runtime_for_admission(session)
         expected_snapshot = self._external_launch_admission_snapshot(item)
         await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
         await self._reject_pending_verification_retry_admission(session, work_item_id)
@@ -26829,6 +26860,7 @@ class SupervisorService:
     ) -> tuple[RoutingDecision | None, UtilityWorkerResult | None]:
         expected_snapshot = self._external_launch_admission_snapshot(item)
         await self._acquire_execute_admission_lock(session)
+        await self._require_running_runtime_for_admission(session)
         await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
         current_recipe = self._execution_recipe_for_item(item)
         if not current_recipe or current_recipe.id != recipe.id:
@@ -27168,14 +27200,22 @@ class SupervisorService:
         )
 
     async def get_status(self, session: AsyncSession) -> RunStatusView:
-        control = await self.ensure_control(session)
+        control, runtime_counts = await self._runtime_control_snapshot(session)
         items = await self.list_work_items(session)
+        active_work_count = runtime_counts["activeWorkCount"]
         return RunStatusView(
             mode=RunMode(control.mode),
             revision=control.revision,
             pollIntervalSeconds=self.settings.poll_interval_seconds,
             queueCount=sum(1 for item in items if item.state in {WorkflowState.QUEUED.value, WorkflowState.TRIAGED.value, WorkflowState.READY.value}),
-            activeCount=sum(1 for item in items if item.state in ACTIVE_STATES),
+            activeCount=active_work_count,
+            activeWorkCount=active_work_count,
+            activeLeaseCount=runtime_counts["activeLeaseCount"],
+            runningAttemptCount=runtime_counts["runningAttemptCount"],
+            drainConverged=(
+                control.mode != RunMode.DRAINING.value
+                or all(runtime_counts[field] == 0 for field in ("activeWorkCount", "activeLeaseCount", "runningAttemptCount"))
+            ),
             blockedCount=sum(1 for item in items if item.state == WorkflowState.BLOCKED.value),
             doneCount=sum(1 for item in items if item.state == WorkflowState.DONE.value),
             summary=mode_summary(RunMode(control.mode)),
@@ -27842,13 +27882,16 @@ class SupervisorService:
 
     async def process_once(self, session: AsyncSession) -> None:
         async with self._loop_lock:
-            control = await self.ensure_control(session)
-            if control.mode == RunMode.DISABLED.value:
-                return
-
             items = await self.list_work_items(session)
             for listed_item in items:
                 await self._acquire_execute_admission_lock(session)
+                # The mode used for this item must be read after the same
+                # durable admission boundary that protects lease/attempt
+                # reservation. A pause committed between an earlier snapshot
+                # and this lock must fail closed.
+                control, _ = await self._runtime_control_snapshot(session, lock=True)
+                if control.mode == RunMode.DISABLED.value:
+                    return
                 item = await session.get(WorkItem, listed_item.id, with_for_update=True)
                 if not item:
                     continue
@@ -27917,9 +27960,14 @@ class SupervisorService:
             )
             return
         if current == WorkflowState.READY:
-            if mode in {RunMode.PAUSED, RunMode.DRAINING}:
-                return
+            # Re-read runtime control after acquiring the authoritative
+            # admission lock. The caller-supplied mode is only a hint and may
+            # be stale when this method is reached directly.
             await self._acquire_execute_admission_lock(session)
+            control, _ = await self._runtime_control_snapshot(session, lock=True)
+            if control.mode != RunMode.RUNNING.value:
+                return
+            mode = RunMode(control.mode)
             if not await self._has_active_execute_lease(session, item):
                 admission = await self._evaluate_execute_admission(session)
                 if not admission.capacityAvailable:
@@ -28417,6 +28465,11 @@ class SupervisorService:
 
         if action == WorkflowAction.RESTART_IMPLEMENTATION and current == WorkflowState.NEEDS_REWORK:
             await self._acquire_execute_admission_lock(session)
+            control, _ = await self._runtime_control_snapshot(session, lock=True)
+            if control.mode != RunMode.RUNNING.value:
+                raise ValueError(
+                    f"New work and launch admission is blocked while supervisor runtime is {control.mode}."
+                )
             if not await self._has_active_execute_lease(session, item):
                 self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
             if self._repo_is_dirty():
@@ -28685,6 +28738,11 @@ class SupervisorService:
     async def _create_or_refresh_lease(self, session: AsyncSession, item: WorkItem) -> None:
         async with self._execute_admission_lock:
             await self._acquire_execute_admission_lock(session)
+            control, _ = await self._runtime_control_snapshot(session, lock=True)
+            if control.mode != RunMode.RUNNING.value:
+                raise ValueError(
+                    f"New work and launch admission is blocked while supervisor runtime is {control.mode}."
+                )
             now = datetime.now(timezone.utc)
             result = await session.execute(
                 select(QueueLease).where(

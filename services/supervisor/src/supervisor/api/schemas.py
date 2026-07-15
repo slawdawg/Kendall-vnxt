@@ -2557,7 +2557,7 @@ class OperationalActionResultView(BaseModel):
 
 # Additive v1 contract. The service keeps the v0 forms unavailable while each
 # action uses the exact server-bound v1 authority and persistence path.
-OperationalActionIdV1 = Literal["retry_verification", "pause", "drain", "reassign"]
+OperationalActionIdV1 = Literal["retry_verification", "pause", "drain", "resume", "reassign"]
 OperationalActionTargetTypeV1 = Literal["execution_attempt", "runtime", "work_packet"]
 OperationalActionRuntimeModeV1 = Literal["running", "paused", "draining", "disabled"]
 
@@ -2567,6 +2567,7 @@ OPERATIONAL_ACTION_V1_POLICY: dict[str, dict[str, str]] = {
     "retry_verification": {"targetType": "execution_attempt", "authorityState": "needs_authority_approval", "riskTier": "medium"},
     "pause": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "low"},
     "drain": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "medium"},
+    "resume": {"targetType": "runtime", "authorityState": "needs_authority_approval", "riskTier": "low"},
     "reassign": {"targetType": "work_packet", "authorityState": "needs_authority_approval", "riskTier": "medium"},
 }
 OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
@@ -2580,6 +2581,7 @@ OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
         "kind", "expectedRuntimeMode", "expectedRuntimeRevision", "expectedActiveWorkCount",
         "expectedActiveLeaseCount", "expectedRunningAttemptCount",
     ),
+    "resume": ("kind", "expectedRuntimeMode", "expectedRuntimeRevision"),
     "reassign": (
         "kind", "linkedWorkItemId", "expectedPacketCurrentEventId", "expectedCurrentOwnerId", "newOwnerId",
         "expectedWorkItemState", "expectedWorkItemUpdatedAt", "expectedActiveLeaseId", "expectedRunningAttemptId",
@@ -2735,6 +2737,25 @@ class DrainActionContextV1(BaseModel):
     expectedRunningAttemptCount: int = Field(ge=0)
 
 
+class ResumeActionContextV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["resume"]
+    expectedRuntimeMode: Literal["paused", "draining"]
+    expectedRuntimeRevision: PositiveInt
+
+
+class ResumeSuccessEvidenceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["resume"]
+    resultingRuntimeMode: Literal["running"]
+    resultingRuntimeRevision: PositiveInt
+    activeWorkCount: int = Field(ge=0)
+    activeLeaseCount: int = Field(ge=0)
+    runningAttemptCount: int = Field(ge=0)
+    intakeResumed: Literal[True]
+    activeWorkPreserved: Literal[True]
+
+
 class ReassignActionContextV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["reassign"]
@@ -2788,7 +2809,7 @@ class ReassignActionContextV1(BaseModel):
 
 
 OperationalActionContextV1 = Annotated[
-    RetryVerificationActionContextV1 | PauseActionContextV1 | DrainActionContextV1 | ReassignActionContextV1,
+    RetryVerificationActionContextV1 | PauseActionContextV1 | DrainActionContextV1 | ResumeActionContextV1 | ReassignActionContextV1,
     Field(discriminator="kind"),
 ]
 
@@ -2862,7 +2883,7 @@ class OperationalActionBindingV1(BaseModel):
         _validate_operational_action_v1_identifier(self.targetId, label="targetId", max_length=target_limit)
         if self.actionId == "retry_verification" and self.actionContext.executionAttemptId != self.targetId:
             raise ValueError("Retry context must bind the exact target execution attempt.")
-        if self.actionId in {"pause", "drain"} and self.targetId != OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID:
+        if self.actionId in {"pause", "drain", "resume"} and self.targetId != OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID:
             raise ValueError("Runtime V1 actions must target the singleton supervisor runtime.")
         expected_digest = operational_action_context_digest_sha256_v1(
             self.actionId,
@@ -3134,7 +3155,7 @@ class ReassignSuccessEvidenceV1(BaseModel):
 
 
 OperationalActionSuccessEvidenceV1 = Annotated[
-    RetryVerificationSuccessEvidenceV1 | PauseSuccessEvidenceV1 | DrainSuccessEvidenceV1 | ReassignSuccessEvidenceV1,
+    RetryVerificationSuccessEvidenceV1 | PauseSuccessEvidenceV1 | DrainSuccessEvidenceV1 | ResumeSuccessEvidenceV1 | ReassignSuccessEvidenceV1,
     Field(discriminator="kind"),
 ]
 
@@ -3214,6 +3235,9 @@ class OperationalActionResultV1(OperationalActionBindingV1):
             elif self.actionId == "drain":
                 if evidence.resultingRuntimeRevision <= context.expectedRuntimeRevision:
                     raise ValueError("Drain success must advance the monotonic runtime revision.")
+            elif self.actionId == "resume":
+                if evidence.resultingRuntimeRevision <= context.expectedRuntimeRevision:
+                    raise ValueError("Resume success must advance the monotonic runtime revision.")
             elif (
                 evidence.packetId != self.targetId
                 or evidence.linkedWorkItemId != context.linkedWorkItemId
@@ -5811,6 +5835,10 @@ class RunStatusView(BaseModel):
     pollIntervalSeconds: int
     queueCount: int
     activeCount: int
+    activeWorkCount: int
+    activeLeaseCount: int
+    runningAttemptCount: int
+    drainConverged: bool
     blockedCount: int
     doneCount: int
     summary: str

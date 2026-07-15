@@ -81,6 +81,7 @@ def _runtime_request(action_id: str, *, mode: str, revision: int, counts: dict[s
     from supervisor.api.schemas import (
         DrainActionContextV1,
         PauseActionContextV1,
+        ResumeActionContextV1,
         operational_action_context_digest_sha256_v1,
     )
 
@@ -98,7 +99,11 @@ def _runtime_request(action_id: str, *, mode: str, revision: int, counts: dict[s
             else {}
         ),
     }
-    context_model = (PauseActionContextV1 if action_id == "pause" else DrainActionContextV1).model_validate(context_values)
+    context_model = {
+        "pause": PauseActionContextV1,
+        "drain": DrainActionContextV1,
+        "resume": ResumeActionContextV1,
+    }[action_id].model_validate(context_values)
     target_type = "runtime"
     target_id = "supervisor-runtime"
     return {
@@ -116,7 +121,7 @@ def _runtime_request(action_id: str, *, mode: str, revision: int, counts: dict[s
             "actorLabel": "Pipeline operator",
         },
         "requestedAuthorityState": "needs_authority_approval",
-        "requestedRiskTier": "low" if action_id == "pause" else "medium",
+        "requestedRiskTier": "low" if action_id in {"pause", "resume"} else "medium",
         "serverBound": True,
         "metadataOnly": True,
         "rawPayloadRetained": False,
@@ -170,6 +175,17 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
         )
         assert blocked_admission.status_code == 409
         assert "New work and launch admission is blocked" in blocked_admission.text
+        blocked_intake = client.post(
+            "/work-items",
+            json={
+                "title": "blocked paused intake",
+                "requestedOutcome": "must not be admitted",
+                "source": "pytest",
+                "metadata": {},
+            },
+        )
+        assert blocked_intake.status_code == 409
+        assert "New work and launch admission is blocked" in blocked_intake.text
 
         stale_response = client.post("/pipeline-control-plane/actions/v1", json=stale_drain)
         assert stale_response.status_code == 400
@@ -187,6 +203,34 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
         assert drained_result["successEvidence"]["runningAttemptCount"] == 1
         assert drained_result["successEvidence"]["workersKilled"] is False
 
+        resume = _runtime_request("resume", mode="draining", revision=3, counts=counts, key="resume-p2-2", correlation="corr-resume-p2-2")
+        resume = _issue_and_bind_approval(client, resume)
+        resumed_response = client.post("/pipeline-control-plane/actions/v1", json=resume)
+        assert resumed_response.status_code == 200, resumed_response.text
+        resumed_result = resumed_response.json()["data"]
+        assert resumed_result["successEvidence"] == {
+            "kind": "resume",
+            "resultingRuntimeMode": "running",
+            "resultingRuntimeRevision": 4,
+            **counts,
+            "intakeResumed": True,
+            "activeWorkPreserved": True,
+        }
+        status = client.get("/supervisor/status").json()["data"]
+        assert (status["mode"], status["revision"]) == ("running", 4)
+        assert (status["activeWorkCount"], status["activeLeaseCount"], status["runningAttemptCount"]) == (1, 1, 1)
+        assert status["drainConverged"] is True
+        resumed_intake = client.post(
+            "/work-items",
+            json={
+                "title": "resumed intake",
+                "requestedOutcome": "may be admitted after fresh resume",
+                "source": "pytest",
+                "metadata": {},
+            },
+        )
+        assert resumed_intake.status_code == 200, resumed_intake.text
+
         replay = client.post("/pipeline-control-plane/actions/v1", json=drain)
         assert replay.status_code == 200, replay.text
         assert replay.json()["data"]["replayed"] is True
@@ -199,7 +243,7 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
 
         with sqlite3.connect(db_path) as connection:
             control = connection.execute("select mode, revision from supervisor_control where id = 1").fetchone()
-            assert control == ("draining", 3)
+            assert control == ("running", 4)
             assert connection.execute("select state from work_items where id = ?", (work_item_id,)).fetchone()[0] == "implementing"
             assert connection.execute("select active from queue_leases where id = 'lease-p2-2'").fetchone()[0] == 1
             assert connection.execute("select status from execution_attempts where id = 'attempt-p2-2'").fetchone()[0] == "running"

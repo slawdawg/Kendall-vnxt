@@ -56,6 +56,7 @@ function contexts() {
       expectedActiveLeaseCount: 1,
       expectedRunningAttemptCount: 1,
     },
+    resume: { kind: "resume", expectedRuntimeMode: "paused", expectedRuntimeRevision: 3 },
     reassign: {
       kind: "reassign",
       linkedWorkItemId: "work-1",
@@ -138,6 +139,7 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
     retry_verification: { targetType: "execution_attempt", authorityState: "needs_authority_approval", riskTier: "medium" },
     pause: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
     drain: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "medium" },
+    resume: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
     reassign: { targetType: "work_packet", authorityState: "needs_authority_approval", riskTier: "medium" },
   });
   for (const actionId of contract.PIPELINE_OPERATIONAL_ACTION_V1_IDS) {
