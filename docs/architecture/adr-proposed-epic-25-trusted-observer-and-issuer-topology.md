@@ -52,11 +52,17 @@ reference binding, metadata-only retention, and within-chain receipt identity:
   [TypeScript validator tests](../../tests/epic25-evidence-chain-validator.test.ts)
   cover structural and fail-closed contract behavior.
 
-The ignored [Epic 25 trusted-observer feasibility hold
-artifact](../../_bmad-output/implementation-artifacts/epic-25-trusted-observer-feasibility-hold-2026-07-15.md)
-and [live-validation status](../../_bmad-output/implementation-artifacts/epic-25-live-validation-status-2026-07-14.yaml)
-are planning/evidence context only. They are not product truth, approval, or
-clean-install dependencies; this ADR does not modify them.
+The repository record for this boundary is the tracked [current authority
+ADR](adr-current-product-slice-and-authority.md), [Epic 25 pre-live
+runbook](../workflows/epic-25-pre-live-runbook.md), [evidence-chain
+contracts](../../packages/contracts/src/pipeline-control-plane/index.ts),
+[supervisor enforcement](../../services/supervisor/src/supervisor/application/service.py),
+and [evidence-chain tests](../../services/supervisor/tests/integration/test_epic25_evidence_chain.py).
+Local feasibility-hold and live-validation records under
+`_bmad-output/implementation-artifacts/` are non-deliverable companion paths
+for planning/evidence context only. They are not repository sources, product
+truth, approval records, or clean-install dependencies; this ADR does not
+modify them.
 
 ## Topology candidates
 
