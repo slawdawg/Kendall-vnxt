@@ -179,10 +179,10 @@ def test_supervisor_control_endpoints_change_mode(tmp_path, monkeypatch) -> None
 
         assert cors.status_code == 200
         assert cors.headers["access-control-allow-origin"] == "http://localhost:3000"
-        assert pause.status_code == 200
-        assert drain.status_code == 200
-        assert disable.status_code == 200
-        assert enable.status_code == 200
+        assert pause.status_code == 410
+        assert drain.status_code == 410
+        assert disable.status_code == 410
+        assert enable.status_code == 410
         assert status.status_code == 200
         assert status.json()["data"]["mode"] == "running"
 

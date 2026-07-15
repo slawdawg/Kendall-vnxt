@@ -451,6 +451,8 @@ test("v1 runtime success evidence is explicit while v0 request behavior remains 
       resultingRuntimeMode: "paused",
       resultingRuntimeRevision: 4,
       activeWorkCount: 2,
+      activeLeaseCount: 1,
+      runningAttemptCount: 1,
       intakeStopped: true,
       activeWorkPreserved: true,
     },

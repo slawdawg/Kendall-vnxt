@@ -95,6 +95,14 @@ EXECUTION_ATTEMPT_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("launch_claimed_at", "DATETIME"),
 )
 
+SUPERVISOR_CONTROL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("revision", "INTEGER NOT NULL DEFAULT 1"),
+)
+
+SUPERVISOR_CONTROL_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("revision", "INTEGER NOT NULL DEFAULT 1"),
+)
+
 
 async def _sqlite_table_columns(connection, table_name: str) -> set[str]:
     result = await connection.execute(text(f"PRAGMA table_info({table_name})"))
@@ -209,6 +217,10 @@ async def init_db() -> None:
         )
         dialect = connection.dialect.name
         if dialect == "postgresql":
+            for column_name, column_type in SUPERVISOR_CONTROL_POSTGRES_COLUMNS:
+                await connection.execute(
+                    text(f"ALTER TABLE supervisor_control ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+                )
             await connection.execute(text("ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_label VARCHAR(120)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee_id VARCHAR(100)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee_label VARCHAR(120)"))
@@ -262,6 +274,11 @@ async def init_db() -> None:
                 )
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
+            result = await connection.execute(text("PRAGMA table_info(supervisor_control)"))
+            supervisor_control_columns = {row[1] for row in result.fetchall()}
+            for column_name, column_type in SUPERVISOR_CONTROL_SQLITE_COLUMNS:
+                if column_name not in supervisor_control_columns:
+                    await connection.execute(text(f"ALTER TABLE supervisor_control ADD COLUMN {column_name} {column_type}"))
             result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
             column_names = {row[1] for row in result.fetchall()}
             if "actor_label" not in column_names:

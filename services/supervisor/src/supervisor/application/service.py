@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -398,6 +398,8 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
 }
 
 P2_1_OPERATIONAL_ACTIONS = {"retry_verification", "reassign"}
+P2_2_OPERATIONAL_ACTIONS = {"pause", "drain"}
+IMPLEMENTED_V1_OPERATIONAL_ACTIONS = P2_1_OPERATIONAL_ACTIONS | P2_2_OPERATIONAL_ACTIONS
 EXECUTE_ADMISSION_LOCK_SCOPE = "execute"
 QUIESCENT_REASSIGN_STATES = {
     WorkflowState.QUEUED.value,
@@ -668,7 +670,7 @@ class SupervisorService:
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
         if not control:
-            control = SupervisorControl(id=1, mode=RunMode.RUNNING.value)
+            control = SupervisorControl(id=1, mode=RunMode.RUNNING.value, revision=1)
             session.add(control)
             await session.commit()
             await session.refresh(control)
@@ -1078,24 +1080,228 @@ class SupervisorService:
                 "(actorType=operator, actorId=pipeline-operator, actorLabel=Pipeline operator)."
             )
 
+    async def _runtime_control_snapshot(
+        self,
+        session: AsyncSession,
+        *,
+        lock: bool = False,
+    ) -> tuple[SupervisorControl, dict[str, int]]:
+        control = await session.get(SupervisorControl, 1, with_for_update=lock)
+        if not control:
+            raise OperationalActionIneligible(
+                "Supervisor runtime control is unavailable.",
+                "runtime_unavailable",
+            )
+        active_work = await session.scalar(
+            select(func.count(WorkItem.id)).where(WorkItem.state.in_(ACTIVE_STATES))
+        )
+        active_leases = await session.scalar(
+            select(func.count(QueueLease.id)).where(QueueLease.active.is_(True))
+        )
+        running_attempts = await session.scalar(
+            select(func.count(ExecutionAttempt.id)).where(
+                ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES)
+            )
+        )
+        return control, {
+            "activeWorkCount": int(active_work or 0),
+            "activeLeaseCount": int(active_leases or 0),
+            "runningAttemptCount": int(running_attempts or 0),
+        }
+
+    async def _require_running_runtime_for_admission(self, session: AsyncSession) -> SupervisorControl:
+        control = await self.ensure_control(session)
+        if control.mode != RunMode.RUNNING.value:
+            raise ValueError(
+                f"New work and launch admission is blocked while supervisor runtime is {control.mode}."
+            )
+        return control
+
+    async def _validate_p2_2_runtime_target(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionApprovalRequestV1 | OperationalActionRequestV1,
+        *,
+        lock: bool = False,
+        admission_lock_acquired: bool = False,
+    ) -> tuple[SupervisorControl, dict[str, int]]:
+        if not admission_lock_acquired:
+            await self._acquire_execute_admission_lock(session)
+        control, counts = await self._runtime_control_snapshot(session, lock=lock)
+        context = payload.actionContext
+        if (
+            control.mode != context.expectedRuntimeMode
+            or control.revision != context.expectedRuntimeRevision
+        ):
+            raise OperationalActionIneligible(
+                "Runtime action rejected because the exact mode or revision fence is stale.",
+                "projection_stale",
+            )
+        if payload.actionId == "drain" and any(
+            counts[field] != getattr(context, field)
+            for field in ("activeWorkCount", "activeLeaseCount", "runningAttemptCount")
+        ):
+            raise OperationalActionIneligible(
+                "Drain action rejected because the active-work convergence snapshot is stale.",
+                "projection_stale",
+            )
+        allowed_modes = {
+            "pause": {RunMode.RUNNING.value},
+            "drain": {RunMode.RUNNING.value, RunMode.PAUSED.value},
+        }[payload.actionId]
+        if control.mode not in allowed_modes:
+            raise OperationalActionIneligible(
+                f"{payload.actionId.capitalize()} is not valid from runtime mode {control.mode}.",
+                "invalid_transition",
+            )
+        return control, counts
+
+    async def _apply_p2_2_runtime_action(
+        self,
+        session: AsyncSession,
+        payload: OperationalActionRequestV1,
+        *,
+        admission_lock_acquired: bool = False,
+    ) -> OperationalActionResultV1:
+        if not admission_lock_acquired:
+            await self._acquire_execute_admission_lock(session)
+        control, counts = await self._validate_p2_2_runtime_target(
+            session,
+            payload,
+            lock=True,
+            admission_lock_acquired=True,
+        )
+        approval = await self._validate_operational_approval_v1(session, payload)
+        action_record_id = f"action-{uuid.uuid4()}"
+        now = datetime.now(timezone.utc)
+        resulting_mode = RunMode.PAUSED.value if payload.actionId == "pause" else RunMode.DRAINING.value
+        resulting_revision = control.revision + 1
+        consume = await session.execute(
+            update(OperationalActionApprovalRecord)
+            .execution_options(synchronize_session=False)
+            .where(
+                OperationalActionApprovalRecord.approval_id == approval.approval_id,
+                OperationalActionApprovalRecord.consumed_at.is_(None),
+                OperationalActionApprovalRecord.expires_at > now,
+            )
+            .values(
+                consumed_at=now,
+                consumed_action_idempotency_key=payload.idempotencyKey,
+                consumed_action_record_id=action_record_id,
+            )
+        )
+        if consume.rowcount != 1:
+            await session.rollback()
+            replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+            if replay and self._operational_action_matches_v1(replay, payload):
+                return self._operational_action_result_view_v1(replay, replayed=True)
+            raise ValueError("Operational action approval has already been consumed or expired.")
+
+        control_update = await session.execute(
+            update(SupervisorControl)
+            .execution_options(synchronize_session=False)
+            .where(
+                SupervisorControl.id == 1,
+                SupervisorControl.mode == control.mode,
+                SupervisorControl.revision == control.revision,
+            )
+            .values(mode=resulting_mode, revision=resulting_revision, updated_at=now)
+        )
+        if control_update.rowcount != 1:
+            await session.rollback()
+            raise ValueError("Runtime action rejected because the mode or revision changed concurrently.")
+
+        success_evidence = {
+            "kind": payload.actionId,
+            "resultingRuntimeMode": resulting_mode,
+            "resultingRuntimeRevision": resulting_revision,
+            **counts,
+            "intakeStopped": True,
+            **(
+                {"activeWorkPreserved": True}
+                if payload.actionId == "pause"
+                else {"activeWorkAllowedToConverge": True, "workersKilled": False}
+            ),
+        }
+        record = OperationalActionRecord(
+            id=action_record_id,
+            schema_version=payload.schemaVersion,
+            packet_id=None,
+            action_id=payload.actionId,
+            target_type=payload.targetType,
+            target_id=payload.targetId,
+            idempotency_key=payload.idempotencyKey,
+            correlation_id=payload.correlationId,
+            actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
+            requested_authority_state=payload.requestedAuthorityState,
+            requested_risk_tier=payload.requestedRiskTier,
+            expected_current_event_id=None,
+            action_context_json=payload.actionContext.model_dump(mode="json"),
+            action_context_digest_sha256=payload.actionContextDigestSha256,
+            approval_id=approval.approval_id,
+            outcome="succeeded",
+            resulting_stage="runtime",
+            resulting_status=resulting_mode,
+            capability_state="available",
+            authority_state="allowed",
+            typed_reason=None,
+            success_evidence_json=success_evidence,
+            evidence_refs_json=list(payload.evidenceRefs),
+            operator_intent_summary=(
+                "Stopped new work admission while preserving active work."
+                if payload.actionId == "pause"
+                else "Stopped new work admission while allowing active work to converge."
+            ),
+            created_at=now,
+        )
+        session.add(record)
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            replay = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
+            if replay:
+                if self._operational_action_matches_v1(replay, payload):
+                    return self._operational_action_result_view_v1(replay, replayed=True)
+                raise ValueError(
+                    "Operational action idempotency key already belongs to different action metadata."
+                ) from exc
+            raise ValueError("Operational action conflicted with concurrent persisted state.") from exc
+        await self.bus.publish(
+            self._event_payload(
+                "supervisor.mode_changed",
+                correlation_id=payload.correlationId,
+                payload={
+                    "actionId": payload.actionId,
+                    "actionRecordId": action_record_id,
+                    "approvalId": approval.approval_id,
+                    "mode": resulting_mode,
+                    "revision": resulting_revision,
+                    "activeCounts": counts,
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+            )
+        )
+        return self._operational_action_result_view_v1(record, replayed=False)
+
     async def pipeline_operational_action_capability_v1(
         self,
         session: AsyncSession,
         payload: OperationalActionApprovalRequestV1,
     ) -> OperationalActionCapabilityV1:
         self._validate_server_owned_local_operator(payload.requestedBy)
-        if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
-            raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+        if payload.actionId not in IMPLEMENTED_V1_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not implemented by the bounded backend slice.")
         await self._acquire_execute_admission_lock(session)
         typed_reason: str | None = "blocked_by_approval"
         capability_state = "available"
         authority_state = "needs_authority_approval"
         try:
-            await self._validate_p2_1_operational_target(
-                session,
-                payload,
-                admission_lock_acquired=True,
-            )
+            if payload.actionId in P2_2_OPERATIONAL_ACTIONS:
+                await self._validate_p2_2_runtime_target(session, payload, admission_lock_acquired=True)
+            else:
+                await self._validate_p2_1_operational_target(session, payload, admission_lock_acquired=True)
         except OperationalActionIneligible as exc:
             typed_reason = exc.typed_reason
             capability_state = "unavailable"
@@ -1115,6 +1321,8 @@ class SupervisorService:
             expectedResultSummary=(
                 "Create one metadata-only pending verification intent without launching a provider or worker."
                 if payload.actionId == "retry_verification"
+                else "Transition the singleton supervisor runtime with an exact mode/revision fence while preserving active work."
+                if payload.actionId in P2_2_OPERATIONAL_ACTIONS
                 else "Update the exact quiescent linked WorkItem owner and append canonical packet/work-item events."
             ),
             correlationRequired=True,
@@ -1130,15 +1338,19 @@ class SupervisorService:
         payload: OperationalActionApprovalRequestV1,
     ) -> OperationalActionApprovalV1:
         self._validate_server_owned_local_operator(payload.requestedBy)
-        if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
-            raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+        if payload.actionId not in IMPLEMENTED_V1_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not implemented by the bounded backend slice.")
         await self._acquire_execute_admission_lock(session)
-        _, _, packet, _ = await self._validate_p2_1_operational_target(
-            session,
-            payload,
-            lock=True,
-            admission_lock_acquired=True,
-        )
+        if payload.actionId in P2_2_OPERATIONAL_ACTIONS:
+            await self._validate_p2_2_runtime_target(session, payload, lock=True, admission_lock_acquired=True)
+            packet = None
+        else:
+            _, _, packet, _ = await self._validate_p2_1_operational_target(
+                session,
+                payload,
+                lock=True,
+                admission_lock_acquired=True,
+            )
         now = datetime.now(timezone.utc)
         approval = OperationalActionApprovalRecord(
             approval_id=f"approval-{uuid.uuid4()}",
@@ -1149,7 +1361,7 @@ class SupervisorService:
             requested_actor_json=dict(SERVER_OWNED_LOCAL_OPERATOR),
             requested_authority_family=payload.requestedAuthorityState,
             requested_risk_tier=payload.requestedRiskTier,
-            expected_current_event_id=packet.current_event_id,
+            expected_current_event_id=packet.current_event_id if packet else None,
             action_context_json=payload.actionContext.model_dump(mode="json"),
             action_context_digest_sha256=payload.actionContextDigestSha256,
             issued_at=now,
@@ -1165,8 +1377,8 @@ class SupervisorService:
         payload: OperationalActionRequestV1,
     ) -> OperationalActionResultV1:
         self._validate_server_owned_local_operator(payload.requestedBy)
-        if payload.actionId not in P2_1_OPERATIONAL_ACTIONS:
-            raise ValueError("Operational action is not implemented by the P2.1 bounded backend slice.")
+        if payload.actionId not in IMPLEMENTED_V1_OPERATIONAL_ACTIONS:
+            raise ValueError("Operational action is not implemented by the bounded backend slice.")
 
         await self._acquire_execute_admission_lock(session)
         existing = await self._operational_action_by_idempotency(session, payload.idempotencyKey)
@@ -1180,6 +1392,13 @@ class SupervisorService:
         if await self._verification_retry_intent_by_idempotency(session, payload.idempotencyKey):
             await session.rollback()
             raise ValueError("Operational action idempotency key already belongs to different action metadata.")
+
+        if payload.actionId in P2_2_OPERATIONAL_ACTIONS:
+            return await self._apply_p2_2_runtime_action(
+                session,
+                payload,
+                admission_lock_acquired=True,
+            )
 
         attempt, item, packet, lease = await self._validate_p2_1_operational_target(
             session,
@@ -1517,6 +1736,7 @@ class SupervisorService:
             await self._acquire_execute_admission_lock(session)
         expected_snapshot = expected_snapshot or self._external_launch_admission_snapshot(item)
         packet = await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
+        await self._require_running_runtime_for_admission(session)
         await self._reject_pending_verification_retry_admission(session, item.id)
         active_attempt = await self._active_execution_attempt(session, item.id, lock=True)
         if active_attempt:
@@ -1735,6 +1955,7 @@ class SupervisorService:
             locked_item,
             expected_snapshot,
         )
+        await self._require_running_runtime_for_admission(session)
         await self._reject_pending_verification_retry_admission(session, locked_item.id)
         active_attempt_rows = await session.execute(
             select(ExecutionAttempt)
@@ -21110,6 +21331,7 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id, with_for_update=True)
         if not item:
             return None
+        await self._require_running_runtime_for_admission(session)
         if payload.stepId == "local-proof" and (lease_id is None or fencing_token is None):
             raise ValueError("Local-proof execution attempts can only be created by the attested supervisor proof path.")
         active_attempt = await self._active_execution_attempt(session, work_item_id)
@@ -26941,24 +27163,16 @@ class SupervisorService:
         return True
 
     async def set_mode(self, session: AsyncSession, mode: RunMode) -> SupervisorControl:
-        control = await self.ensure_control(session)
-        control.mode = mode.value
-        await session.commit()
-        await session.refresh(control)
-        await self.bus.publish(
-            self._event_payload(
-                "supervisor.mode_changed",
-                correlation_id=str(uuid.uuid4()),
-                payload={"mode": mode.value, "summary": mode_summary(mode)},
-            )
+        raise ValueError(
+            "Direct supervisor mode changes are deprecated; use a fresh server-bound pipeline operational-action v1 fence."
         )
-        return control
 
     async def get_status(self, session: AsyncSession) -> RunStatusView:
         control = await self.ensure_control(session)
         items = await self.list_work_items(session)
         return RunStatusView(
             mode=RunMode(control.mode),
+            revision=control.revision,
             pollIntervalSeconds=self.settings.poll_interval_seconds,
             queueCount=sum(1 for item in items if item.state in {WorkflowState.QUEUED.value, WorkflowState.TRIAGED.value, WorkflowState.READY.value}),
             activeCount=sum(1 for item in items if item.state in ACTIVE_STATES),

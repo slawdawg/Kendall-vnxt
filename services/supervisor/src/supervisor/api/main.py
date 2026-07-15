@@ -62,7 +62,7 @@ from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
 from supervisor.domain.bmad_import import BmadImportError
 from supervisor.domain.obsidian_metadata_import import ObsidianMetadataImportError
-from supervisor.domain.types import ErrorCategory, RunMode, WorkItemFilterScope
+from supervisor.domain.types import ErrorCategory, WorkItemFilterScope
 from supervisor.infrastructure.db.database import get_session, init_db
 from supervisor.infrastructure.db.models import WorkItem
 from supervisor.infrastructure.streaming.bus import EventBus
@@ -1188,30 +1188,36 @@ async def get_threat_boundary():
     return ApiEnvelope(data=service.get_threat_boundary())
 
 
-async def _set_mode(mode: RunMode, session: AsyncSession) -> ApiEnvelope:
-    control = await service.set_mode(session, mode)
-    status = await service.get_status(session)
-    return ApiEnvelope(data={"mode": control.mode, "status": status.model_dump()})
+def _legacy_mode_control_rejected() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": {
+                "code": "deprecated_runtime_control",
+                "message": "Legacy supervisor mode controls are unavailable; use the server-bound pipeline operational-action v1 approval/apply path.",
+            }
+        },
+    )
 
 
 @app.post("/supervisor/enable", response_model=ApiEnvelope)
-async def enable(session: AsyncSession = Depends(get_session)):
-    return await _set_mode(RunMode.RUNNING, session)
+async def enable():
+    _legacy_mode_control_rejected()
 
 
 @app.post("/supervisor/pause", response_model=ApiEnvelope)
-async def pause(session: AsyncSession = Depends(get_session)):
-    return await _set_mode(RunMode.PAUSED, session)
+async def pause():
+    _legacy_mode_control_rejected()
 
 
 @app.post("/supervisor/drain", response_model=ApiEnvelope)
-async def drain(session: AsyncSession = Depends(get_session)):
-    return await _set_mode(RunMode.DRAINING, session)
+async def drain():
+    _legacy_mode_control_rejected()
 
 
 @app.post("/supervisor/disable", response_model=ApiEnvelope)
-async def disable(session: AsyncSession = Depends(get_session)):
-    return await _set_mode(RunMode.DISABLED, session)
+async def disable():
+    _legacy_mode_control_rejected()
 
 
 @app.get("/audit-events", response_model=ApiEnvelope)

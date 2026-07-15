@@ -1587,6 +1587,8 @@ export interface PipelinePauseSuccessEvidenceV1 {
   resultingRuntimeMode: "paused";
   resultingRuntimeRevision: number;
   activeWorkCount: number;
+  activeLeaseCount: number;
+  runningAttemptCount: number;
   intakeStopped: true;
   activeWorkPreserved: true;
 }
@@ -1596,6 +1598,8 @@ export interface PipelineDrainSuccessEvidenceV1 {
   resultingRuntimeMode: "draining";
   resultingRuntimeRevision: number;
   activeWorkCount: number;
+  activeLeaseCount: number;
+  runningAttemptCount: number;
   intakeStopped: true;
   activeWorkAllowedToConverge: true;
   workersKilled: false;
@@ -2497,11 +2501,11 @@ function validatePipelineOperationalActionV1SuccessEvidence(
       "resultingPacketCurrentEventId", "originalAttemptPreserved", "providerOrWorkerLaunched",
     ],
     pause: [
-      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "intakeStopped",
+      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "activeLeaseCount", "runningAttemptCount", "intakeStopped",
       "activeWorkPreserved",
     ],
     drain: [
-      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "intakeStopped",
+      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "activeLeaseCount", "runningAttemptCount", "intakeStopped",
       "activeWorkAllowedToConverge", "workersKilled",
     ],
     reassign: [
@@ -2528,12 +2532,14 @@ function validatePipelineOperationalActionV1SuccessEvidence(
     }
   } else if (record.actionId === "pause") {
     if (evidence.resultingRuntimeMode !== "paused" || !isPositiveInteger(evidence.resultingRuntimeRevision) || !isNonNegativeInteger(evidence.activeWorkCount) ||
+        !isNonNegativeInteger(evidence.activeLeaseCount) || !isNonNegativeInteger(evidence.runningAttemptCount) ||
         evidence.resultingRuntimeRevision <= (context.expectedRuntimeRevision as number) ||
         evidence.intakeStopped !== true || evidence.activeWorkPreserved !== true) {
       pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Pause success must report paused mode/revision and preserved active work.");
     }
   } else if (record.actionId === "drain") {
     if (evidence.resultingRuntimeMode !== "draining" || !isPositiveInteger(evidence.resultingRuntimeRevision) || !isNonNegativeInteger(evidence.activeWorkCount) ||
+        !isNonNegativeInteger(evidence.activeLeaseCount) || !isNonNegativeInteger(evidence.runningAttemptCount) ||
         evidence.resultingRuntimeRevision <= (context.expectedRuntimeRevision as number) ||
         evidence.intakeStopped !== true || evidence.activeWorkAllowedToConverge !== true || evidence.workersKilled !== false) {
       pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Drain success must report draining mode/revision, convergence, and no worker kill.");

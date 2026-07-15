@@ -2555,8 +2555,8 @@ class OperationalActionResultView(BaseModel):
     rawPayloadRetained: Literal[False] = False
 
 
-# Additive v1 contract only. The service keeps these actions outside its
-# approvable/applicable sets until their later persistence lanes are complete.
+# Additive v1 contract. The service keeps the v0 forms unavailable while each
+# action uses the exact server-bound v1 authority and persistence path.
 OperationalActionIdV1 = Literal["retry_verification", "pause", "drain", "reassign"]
 OperationalActionTargetTypeV1 = Literal["execution_attempt", "runtime", "work_packet"]
 OperationalActionRuntimeModeV1 = Literal["running", "paused", "draining", "disabled"]
@@ -3074,6 +3074,8 @@ class PauseSuccessEvidenceV1(BaseModel):
     resultingRuntimeMode: Literal["paused"]
     resultingRuntimeRevision: PositiveInt
     activeWorkCount: int = Field(ge=0)
+    activeLeaseCount: int = Field(ge=0)
+    runningAttemptCount: int = Field(ge=0)
     intakeStopped: Literal[True]
     activeWorkPreserved: Literal[True]
 
@@ -3084,6 +3086,8 @@ class DrainSuccessEvidenceV1(BaseModel):
     resultingRuntimeMode: Literal["draining"]
     resultingRuntimeRevision: PositiveInt
     activeWorkCount: int = Field(ge=0)
+    activeLeaseCount: int = Field(ge=0)
+    runningAttemptCount: int = Field(ge=0)
     intakeStopped: Literal[True]
     activeWorkAllowedToConverge: Literal[True]
     workersKilled: Literal[False]
@@ -5803,6 +5807,7 @@ class WorkItemView(BaseModel):
 
 class RunStatusView(BaseModel):
     mode: RunMode
+    revision: PositiveInt
     pollIntervalSeconds: int
     queueCount: int
     activeCount: int

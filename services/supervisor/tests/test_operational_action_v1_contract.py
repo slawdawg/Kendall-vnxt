@@ -483,6 +483,8 @@ def test_runtime_result_requires_explicit_mode_revision_and_preservation_evidenc
                 "resultingRuntimeMode": "paused",
                 "resultingRuntimeRevision": 4,
                 "activeWorkCount": 2,
+                "activeLeaseCount": 1,
+                "runningAttemptCount": 1,
                 "intakeStopped": True,
                 "activeWorkPreserved": True,
             },

@@ -351,6 +351,7 @@ class SupervisorControl(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     mode: Mapped[str] = mapped_column(String(16), default=RunMode.RUNNING.value)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
