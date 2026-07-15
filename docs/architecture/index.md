@@ -35,6 +35,10 @@ Status: current navigation index
 
 - `kendall-vnxt-architecture-gap-review-2026-06-08.md`: older architecture gap snapshot retained for history.
 
+## Proposed / Blocked
+
+- `adr-proposed-epic-25-trusted-observer-and-issuer-topology.md`: proposed and blocked pending approval; it selects no topology and grants no authority.
+
 ## Current Authority Status
 
 All real execution authority remains disabled unless an explicit approval checkpoint says otherwise:

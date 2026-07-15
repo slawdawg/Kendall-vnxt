@@ -49,7 +49,7 @@ reference binding, metadata-only retention, and within-chain receipt identity:
   blocker on readback.
 - [Evidence-chain integration tests](../../services/supervisor/tests/integration/test_epic25_evidence_chain.py)
   preserve caller-forged-live rejection and mismatch coverage; the
-  [TypeScript validator tests](../../tests/epic25-evidence-chain-validator.test.ts)
+  [TypeScript validator tests](../../tests/epic25-evidence-chain-validator.test.mjs)
   cover structural and fail-closed contract behavior.
 
 The repository record for this boundary is the tracked [current authority
