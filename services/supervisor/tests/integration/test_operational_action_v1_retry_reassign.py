@@ -789,21 +789,80 @@ def test_distinct_key_retry_is_exclusive_per_work_item_even_with_spare_global_wi
             "packetEventId": first.json()["data"]["successEvidence"]["resultingPacketCurrentEventId"],
         }
         rebound_approval_request = _approval_request("retry_verification", rebound_target)
+        capability = client.post(
+            "/pipeline-control-plane/actions/v1/capability", json=rebound_approval_request
+        )
         second_approval = client.post(
             "/pipeline-control-plane/approvals/v1", json=rebound_approval_request
-        ).json()["data"]
-        second = client.post(
-            "/pipeline-control-plane/actions/v1",
-            json=_apply_request(rebound_approval_request, second_approval, suffix="distinct-key-second"),
         )
 
-        assert second.status_code == 400
-        assert "pending verification retry intent" in second.text
+        assert capability.status_code == 200
+        assert capability.json()["data"]["capabilityState"] == "unavailable"
+        assert capability.json()["data"]["authorityState"] == "blocked"
+        assert capability.json()["data"]["typedReason"] == "invalid_transition"
+        assert second_approval.status_code == 400
+        assert "already pending" in second_approval.text
         with sqlite3.connect(db_path) as conn:
             assert conn.execute(
                 "select count(*) from verification_retry_intents where work_item_id = ? and status = 'pending'",
                 (target["workItemId"],),
             ).fetchone()[0] == 1
+
+
+def test_active_external_launch_reservation_fences_workflow_and_packet_mutations(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-active-launch-mutation-fence.db"
+    db_path = (tmp_path / db_name).as_posix()
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        target = _seed_target(client, db_path, suffix="active-launch-fence", attempt_status="failed")
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "insert into execution_attempts "
+                "(id, work_item_id, route_decision_id, worker_id, lane, authority_mode, status, "
+                "workspace_isolation_plan_json, artifact_refs_json, event_refs_json, created_at, updated_at) "
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "attempt-active-launch-fence",
+                    target["workItemId"],
+                    "route-active-launch-fence",
+                    "recipe.branch.command",
+                    "utility",
+                    "guarded",
+                    "starting",
+                    "{}",
+                    "[]",
+                    "[]",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        workflow_response = client.post(f"/work-items/{target['workItemId']}/retry")
+        packet_response = client.post(
+            f"/pipeline-control-plane/work-packets/{target['packetId']}/transitions",
+            json={
+                "targetStage": "execute",
+                "expectedCurrentEventId": target["packetEventId"],
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "payloadSummary": "No-op packet transition must still honor the active launch fence.",
+                "evidenceRefs": ["evidence:active-launch-fence"],
+            },
+        )
+
+        assert workflow_response.status_code == 409
+        assert "active-launch-fence" in workflow_response.text
+        assert packet_response.status_code == 400
+        assert "active-launch-fence" in packet_response.text
+        with sqlite3.connect(db_path) as conn:
+            state = conn.execute(
+                "select state from work_items where id = ?", (target["workItemId"],)
+            ).fetchone()[0]
+            current_event_id = conn.execute(
+                "select current_event_id from authoritative_work_packets where id = ?", (target["packetId"],)
+            ).fetchone()[0]
+        assert state == target["workItemState"]
+        assert current_event_id == target["packetEventId"]
 
 
 def test_retry_and_reassign_are_mutually_exclusive_under_durable_admission(tmp_path, monkeypatch) -> None:
@@ -1176,6 +1235,37 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
     assert "BEGIN IMMEDIATE" not in service_source
 
 
+def test_recipe_branch_switch_rejects_without_durable_launch_reservation() -> None:
+    from supervisor.application.service import SupervisorService
+
+    service = object.__new__(SupervisorService)
+    item = SimpleNamespace(
+        metadata_json={
+            "executionBranch": "recipe-admitted-branch",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+        }
+    )
+    recipe = SimpleNamespace(branch_prefix="recipe-")
+    launched_commands: list[list[str]] = []
+
+    def git_output(args: list[str]) -> tuple[bool, str]:
+        if args == ["git", "branch", "--show-current"]:
+            return True, "main"
+        if args == ["git", "rev-parse", "--verify", "main"]:
+            return True, "base-revision"
+        raise AssertionError(f"unexpected metadata command: {args}")
+
+    service._git_output = git_output
+    service._run_git_command = lambda args: launched_commands.append(args)
+
+    error, payload = service._prepare_recipe_branch(item, recipe, allow_branch_switch=False)
+
+    assert error == "Recipe branch changed after metadata-only inspection; refresh and retry under launch admission."
+    assert payload["branchSwitchAdmitted"] is False
+    assert launched_commands == []
+
+
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [
@@ -1184,6 +1274,7 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
         ("assignee_id", "owner-concurrent"),
         ("assignee_label", "Concurrent owner"),
         ("authoritative_packet_id", "packet-concurrent"),
+        ("metadata_json", {"executionRecipeId": "recipe-concurrent"}),
     ],
 )
 def test_external_launch_admission_cas_rejects_concurrent_routing_input_mutation(field, replacement) -> None:
@@ -1210,7 +1301,8 @@ def test_external_launch_admission_cas_rejects_concurrent_routing_input_mutation
     expected = service._external_launch_admission_snapshot(item)
 
     class ConcurrentMutationSession:
-        async def refresh(self, target) -> None:
+        async def refresh(self, target, *, with_for_update=False) -> None:
+            assert with_for_update is True
             setattr(target, field, replacement)
             if field == "authoritative_packet_id":
                 target.metadata_json = {**target.metadata_json, "authoritativePacketId": replacement}
@@ -1251,7 +1343,8 @@ def test_external_launch_admission_reloads_canonical_packet_projection_under_loc
     )
 
     class ConcurrentPacketMutationSession:
-        async def refresh(self, target) -> None:
+        async def refresh(self, target, *, with_for_update=False) -> None:
+            assert with_for_update is True
             return None
 
         async def get(self, model, packet_id, *, with_for_update=False):

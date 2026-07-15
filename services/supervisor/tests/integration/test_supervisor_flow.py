@@ -692,6 +692,12 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         return True
 
     def fake_run_git_command(args):  # type: ignore[no-untyped-def]
+        with sqlite3.connect(db_path) as conn:
+            reservation = conn.execute(
+                "select status, worker_id from execution_attempts "
+                "where worker_id = 'recipe.branch.command' order by created_at desc limit 1"
+            ).fetchone()
+        assert reservation == ("starting", "recipe.branch.command")
         git_commands.append(args)
         current_branch["value"] = "e2e-branch-prep"
         return {"command": " ".join(args), "exitCode": 0, "stdout": "created", "stderr": ""}
@@ -707,10 +713,19 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
             "outOfScopePaths": [],
         },
     )
-    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
-        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
-        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
-    ]
+    def fake_implementation_commands(recipe, item):  # type: ignore[no-untyped-def]
+        with sqlite3.connect(db_path) as conn:
+            reservation = conn.execute(
+                "select status, worker_id from execution_attempts "
+                "where worker_id = 'recipe.implementation.command' order by created_at desc limit 1"
+            ).fetchone()
+        assert reservation == ("starting", "recipe.implementation.command")
+        return [
+            {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+            {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        ]
+
+    service._run_recipe_implementation_commands = fake_implementation_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -756,6 +771,11 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         assert response.status_code == 200
         assert response.json()["data"]["state"] == "ready"
         assert git_commands == [["git", "switch", "-c", "e2e-branch-prep", "base-revision"]]
+        branch_attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        branch_reservation = next(
+            attempt for attempt in branch_attempts if attempt["workerId"] == "recipe.branch.command"
+        )
+        assert branch_reservation["status"] == "completed"
         branch_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.branch_prepared")
         assert branch_event["actorLabel"] == "Primary operator"
         assert branch_event["payload"]["policyGate"] == "branch-ownership"
@@ -914,7 +934,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
     from supervisor.api.main import app, service
 
     service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
-    service._prepare_recipe_branch = lambda item, recipe: (  # type: ignore[method-assign]
+    service._prepare_recipe_branch = lambda item, recipe, **_kwargs: (  # type: ignore[method-assign]
         None,
         {
             "expectedBranch": "e2e-managed-next-action",

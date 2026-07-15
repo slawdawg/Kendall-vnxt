@@ -5180,12 +5180,17 @@ def test_subscription_agent_launch_stale_verification_is_metadata_only_and_block
                 "nextSafeAction": "Record fresh subscription-agent launch verification evidence before delivery.",
             },
         )
+        attempts_after = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
         export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
 
     assert launch_response.status_code == 200
     assert response.status_code == 200
     evidence = next(ref for ref in response.json()["data"]["artifactRefs"] if ref.get("commandId") == "subscription-launch-stale-check")
     assert evidence["status"] == "stale"
+    assert evidence["processLaunchAttempted"] is False
+    assert evidence["launchClassification"] == "metadata_only_no_launch"
+    assert evidence["launchReservationAttemptId"] is None
+    assert len(attempts_after) == len(attempts)
     assert evidence["subscriptionLaunchVerification"]["blockedReason"] == "subscription-launch-verification-stale"
     assert evidence["subscriptionLaunchVerification"]["deliveryEligible"] is False
     launch_export = export_response.json()["data"]["subscriptionLaunch"]
@@ -9253,6 +9258,12 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
 
     def fake_verification_command(command_shape: str) -> dict:
         assert command_shape == "pnpm run check"
+        with sqlite3.connect(db_path) as conn:
+            reservation = conn.execute(
+                "select status, worker_id from execution_attempts "
+                "where worker_id = 'verification.command' order by created_at desc limit 1"
+            ).fetchone()
+        assert reservation == ("starting", "verification.command")
         return {
             "status": "passed",
             "exitCode": 0,
@@ -9292,6 +9303,7 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
                 "recoveryAction": "retain evidence for green-gate evaluation",
             },
         )
+        verification_attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         events_response = client.get(f"/work-items/{work_item_id}/events")
         runtime_export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
         readiness_response = client.get(f"/work-items/{work_item_id}/trusted-delivery-eligibility-report")
@@ -9323,6 +9335,17 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
     assert evidence["branch"] == "codex/story-7-5"
     assert evidence["headRevision"] == "abc1234"
     assert evidence["retentionPolicy"] == "metadata_only_no_secrets_prompts_provider_payloads_or_source_copies"
+    assert evidence["processLaunchAttempted"] is True
+    assert evidence["launchClassification"] == "admitted_guarded_utility"
+    assert evidence["launchReservationAttemptId"]
+    verification_attempts = verification_attempts_response.json()["data"]
+    reservation = next(
+        candidate
+        for candidate in verification_attempts
+        if candidate["attemptId"] == evidence["launchReservationAttemptId"]
+    )
+    assert reservation["status"] == "completed"
+    assert reservation["workerId"] == "verification.command"
     event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.verification_recorded")
     assert event["payload"]["prCreationAllowed"] is False
     assert event["payload"]["mergeAllowed"] is False
