@@ -1655,7 +1655,7 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     assert explanation["providerAttempt"]["reasoningCharacterCount"] == 42
     assert explanation["providerAttempt"]["rawPayloadRetained"] is False
     assert captured_provider_prompt["reservation"] == (
-        "starting",
+        "running",
         "ollama.local.provider",
         "operator_approved_bounded_provider_call",
     )
@@ -1820,11 +1820,11 @@ def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence
 
     with TestClient(app) as client:
         work_item_id = _create_routing_work_item(client)
-        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
         managed_response = client.post(
             f"/work-items/{work_item_id}/managed-next-action",
             json={"expectedActionId": "supervisor_triage"},
         )
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
         before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
         response = client.get("/supervisor/execution-readiness-report")
         after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
@@ -4592,7 +4592,7 @@ def test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_
     launch = response.json()["data"]
     assert adapter_calls["count"] == 1
     assert adapter_calls["reservation"] == (
-        "starting",
+        "running",
         "subscription.agent.disabled",
         stub["approvalBinding"]["routeDecisionId"],
     )
@@ -4701,7 +4701,12 @@ def test_subscription_agent_runtime_replay_does_not_launch_second_process(tmp_pa
     assert first.status_code == 200
     assert second.status_code == 200
     assert adapter_calls["count"] == 1
-    assert second.json()["data"]["runtimeEvidence"]["status"] == "replayed_existing_attempt"
+    second_launch = second.json()["data"]
+    assert second_launch["approvalAccepted"] is False
+    assert second_launch["status"] == "rejected_replay_conflict_or_in_progress"
+    assert second_launch["readinessStatus"] == "subscription_launch_runtime_in_progress"
+    assert "subscription_launch_runtime_in_progress" in second_launch["blockedReasonIds"]
+    assert second_launch["runtimeEvidence"]["status"] == "rejected_replay_conflict_or_in_progress"
     assert len(attempts) == 1
 
 
@@ -5400,6 +5405,7 @@ def test_verification_finalization_rejection_does_not_commit_evidence_alongside_
                 "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
                 "status": "passed",
                 "summary": "bounded verification passed",
+                "recoveryAction": "retain metadata-only evidence",
             },
         )
 

@@ -825,9 +825,9 @@ def test_active_external_launch_reservation_fences_workflow_and_packet_mutations
         with sqlite3.connect(db_path) as conn:
             conn.execute(
                 "insert into execution_attempts "
-                "(id, work_item_id, route_decision_id, worker_id, lane, authority_mode, status, "
+                "(id, work_item_id, route_decision_id, worker_id, lane, authority_mode, status, launch_fence_token, "
                 "workspace_isolation_plan_json, artifact_refs_json, event_refs_json, created_at, updated_at) "
-                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     "attempt-active-launch-fence",
                     target["workItemId"],
@@ -836,6 +836,7 @@ def test_active_external_launch_reservation_fences_workflow_and_packet_mutations
                     "utility",
                     "guarded",
                     "starting",
+                    "active-launch-fence-token",
                     "{}",
                     "[]",
                     "[]",
