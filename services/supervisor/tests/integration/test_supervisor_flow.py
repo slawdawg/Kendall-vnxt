@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -691,6 +692,12 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         return True
 
     def fake_run_git_command(args):  # type: ignore[no-untyped-def]
+        with sqlite3.connect(db_path) as conn:
+            reservation = conn.execute(
+                "select status, worker_id from execution_attempts "
+                "where worker_id = 'recipe.branch.command' order by created_at desc limit 1"
+            ).fetchone()
+        assert reservation == ("running", "recipe.branch.command")
         git_commands.append(args)
         current_branch["value"] = "e2e-branch-prep"
         return {"command": " ".join(args), "exitCode": 0, "stdout": "created", "stderr": ""}
@@ -706,10 +713,19 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
             "outOfScopePaths": [],
         },
     )
-    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
-        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
-        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
-    ]
+    def fake_implementation_commands(recipe, item):  # type: ignore[no-untyped-def]
+        with sqlite3.connect(db_path) as conn:
+            reservation = conn.execute(
+                "select status, worker_id from execution_attempts "
+                "where worker_id = 'recipe.implementation.command' order by created_at desc limit 1"
+            ).fetchone()
+        assert reservation == ("running", "recipe.implementation.command")
+        return [
+            {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+            {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        ]
+
+    service._run_recipe_implementation_commands = fake_implementation_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -755,6 +771,11 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         assert response.status_code == 200
         assert response.json()["data"]["state"] == "ready"
         assert git_commands == [["git", "switch", "-c", "e2e-branch-prep", "base-revision"]]
+        branch_attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        branch_reservation = next(
+            attempt for attempt in branch_attempts if attempt["workerId"] == "recipe.branch.command"
+        )
+        assert branch_reservation["status"] == "completed"
         branch_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.branch_prepared")
         assert branch_event["actorLabel"] == "Primary operator"
         assert branch_event["payload"]["policyGate"] == "branch-ownership"
@@ -782,6 +803,72 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         run_event_types = [event["eventType"] for event in run_events_response.json()["data"]]
         assert "recipe.implementation_passed" in run_event_types
         assert "recipe.implementing" in run_event_types
+
+
+def test_recipe_branch_finalization_rejection_keeps_business_state_with_running_attempt(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-branch-finalization-rejection.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._git_output = lambda args: (  # type: ignore[method-assign]
+        (True, "main")
+        if args == ["git", "branch", "--show-current"]
+        else (True, "base-revision")
+    )
+    service._git_success = lambda _args: True  # type: ignore[method-assign]
+    service._run_git_command = lambda _args: {  # type: ignore[method-assign]
+        "command": "git switch -c recipe-finalization-rejection",
+        "exitCode": 0,
+        "stdout": "created",
+        "stderr": "",
+    }
+
+    async def reject_finalization(session, item, attempt, **kwargs):
+        raise ValueError("synthetic branch finalization fence rejection")
+
+    monkeypatch.setattr(service, "_finalize_external_launch_attempt", reject_finalization)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Branch finalization rejection",
+                "requestedOutcome": "Keep branch business state coherent when finalization rejects.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "recipe-finalization-rejection",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        asyncio.run(process_once_for_tests())
+        asyncio.run(process_once_for_tests())
+        response = client.post(f"/work-items/{work_item_id}/prepare-branch", json={})
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "invalid_branch_preparation"
+    assert response.json()["detail"]["error"]["message"] == "synthetic branch finalization fence rejection"
+    with sqlite3.connect(db_path) as conn:
+        branch_attempt = conn.execute(
+            "select status from execution_attempts where worker_id = 'recipe.branch.command' order by created_at desc limit 1"
+        ).fetchone()
+        branch_prepared_events = conn.execute(
+            "select count(*) from workflow_events where event_type = 'recipe.branch_prepared'"
+        ).fetchone()[0]
+        state = conn.execute("select state from work_items where id = ?", (work_item_id,)).fetchone()[0]
+    assert branch_attempt == ("running",)
+    assert branch_prepared_events == 0
+    assert state == "ready"
+    assert not any(event["eventType"] == "recipe.branch_prepared" for event in events)
 
 
 def test_recipe_branch_preparation_blocks_when_repo_is_dirty(tmp_path, monkeypatch) -> None:
@@ -913,7 +1000,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
     from supervisor.api.main import app, service
 
     service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
-    service._prepare_recipe_branch = lambda item, recipe: (  # type: ignore[method-assign]
+    service._prepare_recipe_branch = lambda item, recipe, **_kwargs: (  # type: ignore[method-assign]
         None,
         {
             "expectedBranch": "e2e-managed-next-action",
@@ -942,10 +1029,28 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
             "outOfScopePaths": [],
         },
     )
-    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
-        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
-        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
-    ]
+    launch_reservations = {"utility": None, "recipe": None}
+    original_utility_run = service.utility_worker.run
+
+    def guarded_utility_run(task):
+        with sqlite3.connect(db_path) as connection:
+            launch_reservations["utility"] = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts WHERE worker_id = 'utility.internal'"
+            ).fetchone()
+        return original_utility_run(task)
+
+    def recipe_implementation_commands(recipe, item):
+        with sqlite3.connect(db_path) as connection:
+            launch_reservations["recipe"] = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts WHERE worker_id = 'recipe.implementation.command'"
+            ).fetchone()
+        return [
+            {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+            {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        ]
+
+    service.utility_worker.run = guarded_utility_run  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = recipe_implementation_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -993,6 +1098,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
             json={"expectedActionId": "run_recipe_implementation"},
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
         profiles_response = client.get("/routing/lane-profiles")
 
@@ -1005,6 +1111,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert implemented.status_code == 200
         assert implemented.json()["data"]["state"] == "implementing"
         assert events_response.status_code == 200
+        assert attempts_response.status_code == 200
         assert audit_response.status_code == 200
         assert profiles_response.status_code == 200
 
@@ -1014,6 +1121,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         branch_event = next(event for event in events if event["eventType"] == "recipe.branch_prepared")
         implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_passed")
         audit = audit_response.json()["data"]
+        attempts = attempts_response.json()["data"]
 
         assert routing_event["actorType"] == "supervisor"
         assert routing_event["actorLabel"] == "Primary operator"
@@ -1037,6 +1145,16 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert utility_event["payload"]["timeoutSeconds"] == 30
         assert utility_event["payload"]["status"] == "succeeded"
         assert utility_event["payload"]["failureReason"] is None
+        assert launch_reservations["utility"] == ("running", "utility.internal")
+        assert launch_reservations["recipe"] == ("running", "recipe.implementation.command")
+        assert any(
+            attempt["workerId"] == "utility.internal" and attempt["status"] == "completed"
+            for attempt in attempts
+        )
+        assert any(
+            attempt["workerId"] == "recipe.implementation.command" and attempt["status"] == "completed"
+            for attempt in attempts
+        )
         assert branch_event["actorLabel"] == "Primary operator"
         assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
         assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
@@ -1165,10 +1283,21 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
         {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
     ]
-    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
-        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
-        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
-    ]
+    verification_launch_reservation = None
+
+    def recipe_verification_commands(recipe):  # type: ignore[no-untyped-def]
+        nonlocal verification_launch_reservation
+        with sqlite3.connect(db_path) as connection:
+            verification_launch_reservation = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts "
+                "WHERE worker_id = 'recipe.verification.command'"
+            ).fetchone()
+        return [
+            {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+            {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        ]
+
+    service._run_recipe_verification_commands = recipe_verification_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -1222,6 +1351,7 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         profiles_response = client.get("/routing/lane-profiles")
 
         assert missing_validation_note.status_code == 409
@@ -1234,10 +1364,12 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         assert approval_note.status_code == 200
         assert events_response.status_code == 200
         assert audit_response.status_code == 200
+        assert attempts_response.status_code == 200
         assert profiles_response.status_code == 200
 
         events = events_response.json()["data"]
         audit = audit_response.json()["data"]
+        attempts = attempts_response.json()["data"]
         selected_event = next(event for event in events if event["eventType"] == "recipe.selected")
         ready_event = next(event for event in events if event["eventType"] == "recipe.ready")
         implementation_path_scope_event = next(event for event in events if event["eventType"] == "recipe.implementation_path_scope_passed")
@@ -1275,6 +1407,16 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         assert path_scope_event["payload"]["changedPaths"] == ["tests/e2e/dashboard.spec.ts"]
         assert path_scope_event["payload"]["outOfScopePaths"] == []
         verification_event = next(event for event in events if event["eventType"] == "recipe.verification_passed")
+        assert verification_launch_reservation == ("running", "recipe.verification.command")
+        verification_attempt = next(
+            attempt for attempt in attempts if attempt["workerId"] == "recipe.verification.command"
+        )
+        assert verification_attempt["status"] == "completed"
+        assert any(
+            ref.get("artifactType") == "task_packet_v0"
+            and ref.get("taskKind") == "validation_execution"
+            for ref in verification_attempt["artifactRefs"]
+        )
         assert verification_event["payload"]["operatorCheckpoint"] == "verification-command-run"
         assert [result["command"] for result in verification_event["payload"]["commands"]] == [
             "pnpm run test:e2e:dashboard",
@@ -1492,6 +1634,19 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         return original_which(executable)
 
     monkeypatch.setattr(service_module.shutil, "which", fake_which)
+    remote_launch_reservation = None
+    original_remote_delivery_commands = service._remote_delivery_commands
+
+    def remote_delivery_commands(item):  # type: ignore[no-untyped-def]
+        nonlocal remote_launch_reservation
+        with sqlite3.connect(db_path) as connection:
+            remote_launch_reservation = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts "
+                "WHERE worker_id = 'recipe.remote-delivery.command'"
+            ).fetchone()
+        return original_remote_delivery_commands(item)
+
+    service._remote_delivery_commands = remote_delivery_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -1547,17 +1702,20 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         )
         item_response = client.get(f"/work-items/{work_item_id}")
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
 
         assert executed.status_code == 200
         assert approved.status_code == 200
         assert item_response.status_code == 200
         assert audit_after_remote.status_code == 200
         assert events_response.status_code == 200
+        assert attempts_response.status_code == 200
 
         item = item_response.json()["data"]
         delivery = item["deliveryReadiness"]
         event_types = [event["eventType"] for event in events_response.json()["data"]]
         after_action = audit_after_remote.json()["data"]["nextManagedAction"]
+        attempts = attempts_response.json()["data"]
 
         assert item["state"] == "done"
         assert (
@@ -1571,6 +1729,11 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         )
         gh_log_entries = gh_log_path.read_text(encoding="utf-8").splitlines()
         assert "auth" in gh_log_entries
+        assert remote_launch_reservation == ("running", "recipe.remote-delivery.command")
+        assert any(
+            attempt["workerId"] == "recipe.remote-delivery.command" and attempt["status"] == "completed"
+            for attempt in attempts
+        )
 
         remote_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.remote_delivery_executed")
         remote_commands = remote_event["payload"]["commands"]
@@ -2397,7 +2560,7 @@ def test_work_item_creation_records_operator_identity_from_metadata(tmp_path, mo
         assert queued_event["actorLabel"] == "Jane Operator"
 
 
-def test_work_item_assignment_is_persisted_and_recorded(tmp_path, monkeypatch) -> None:
+def test_legacy_work_item_assignment_is_blocked_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "assignment.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -2428,31 +2591,19 @@ def test_work_item_assignment_is_persisted_and_recorded(tmp_path, monkeypatch) -
                 "actorLabel": "Jane Operator",
             },
         )
-        released = client.post(
-            f"/work-items/{work_item_id}/assignment",
-            json={
-                "assigneeId": None,
-                "assigneeLabel": None,
-                "actorId": "ops-jane",
-                "actorLabel": "Jane Operator",
-            },
-        )
         item_response = client.get(f"/work-items/{work_item_id}")
         events_response = client.get(f"/work-items/{work_item_id}/events")
 
-        assert assigned.status_code == 200
-        assert released.status_code == 200
+        assert assigned.status_code == 409
+        assert assigned.json()["detail"]["error"]["code"] == "legacy_assignment_disabled_use_canonical_reassign_v1"
+        assert "exact owner" in assigned.json()["detail"]["error"]["message"]
         assert item_response.status_code == 200
         assert events_response.status_code == 200
         assert item_response.json()["data"]["assigneeId"] is None
-
-        events = events_response.json()["data"]
-        assigned_event = next(event for event in events if event["eventType"] == "work_item.assigned")
-        released_event = next(event for event in events if event["eventType"] == "work_item.unassigned")
-
-        assert assigned_event["actorLabel"] == "Jane Operator"
-        assert assigned_event["payload"]["assigneeLabel"] == "Jane Operator"
-        assert released_event["payload"]["assigneeId"] is None
+        assert not any(
+            event["eventType"] in {"work_item.assigned", "work_item.unassigned"}
+            for event in events_response.json()["data"]
+        )
 
 
 def test_work_item_escalation_is_persisted_and_can_be_cleared(tmp_path, monkeypatch) -> None:

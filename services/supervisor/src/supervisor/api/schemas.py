@@ -579,6 +579,9 @@ class WorkItemLocalProofLeaseRequest(BaseModel):
     correlationId: str = Field(min_length=1, max_length=120)
     operation: Literal["claim", "heartbeat", "stale_heartbeat", "expire"]
     fencingToken: int | None = None
+    expectedAttemptId: str | None = None
+    expectedAttemptStatus: ExecutionAttemptStatus | None = None
+    expectedAttemptRevision: int | None = Field(default=None, ge=1)
     actorId: str = "local-proof"
     actorLabel: str = "Integrated local proof"
 
@@ -593,6 +596,8 @@ class WorkItemLocalProofLeaseRequest(BaseModel):
 
 class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     status: ExecutionAttemptStatus
+    expectedStatus: ExecutionAttemptStatus | None = None
+    expectedRevision: int | None = Field(default=None, ge=1)
     reason: str | None = None
     workItemId: str | None = None
     attemptId: str | None = None
@@ -682,6 +687,9 @@ class ExecutionAttemptView(BaseModel):
     lane: str
     authorityMode: str
     status: ExecutionAttemptStatus
+    revision: int
+    launchFenceState: Literal["not_applicable", "reserved", "claimed"]
+    launchClaimedAt: datetime | None = None
     requestedById: str | None = None
     requestedByLabel: str | None = None
     createdAt: datetime
@@ -2289,6 +2297,9 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
 class AuthoritativeWorkPacketTransitionRequest(BaseModel):
     targetStage: AuthoritativePacketStage
     expectedCurrentEventId: str = Field(min_length=1, max_length=80)
+    expectedAttemptId: str | None = Field(default=None, max_length=36)
+    expectedAttemptStatus: ExecutionAttemptStatus | None = None
+    expectedAttemptRevision: int | None = Field(default=None, ge=1)
     status: AuthoritativePacketStatus = "active"
     truthLabel: AuthoritativePacketTruthLabel = "source_owned"
     actor: AuthoritativePacketActorView = Field(default_factory=AuthoritativePacketActorView)
@@ -2560,9 +2571,9 @@ OPERATIONAL_ACTION_V1_POLICY: dict[str, dict[str, str]] = {
 }
 OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
     "retry_verification": (
-        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedAttemptStatus",
-        "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
-        "expectedLeaseFencingToken", "expectedLeaseActive",
+        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedWorkItemState",
+        "expectedWorkItemUpdatedAt", "expectedAttemptStatus", "expectedAttemptUpdatedAt",
+        "expectedPacketCurrentEventId", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
     ),
     "pause": ("kind", "expectedRuntimeMode", "expectedRuntimeRevision"),
     "drain": (
@@ -2571,24 +2582,76 @@ OPERATIONAL_ACTION_V1_CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "reassign": (
         "kind", "linkedWorkItemId", "expectedPacketCurrentEventId", "expectedCurrentOwnerId", "newOwnerId",
-        "expectedWorkItemState", "expectedActiveLeaseId", "expectedRunningAttemptId",
+        "expectedWorkItemState", "expectedWorkItemUpdatedAt", "expectedActiveLeaseId", "expectedRunningAttemptId",
     ),
 }
 OPERATIONAL_ACTION_V1_IDENTIFIER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._/@:,-]{0,198}[a-z0-9])?$")
+OPERATIONAL_ACTION_V1_IDENTIFIER_REPEATED_SEPARATOR_RE = re.compile(r"[._/@:,-]{2,}")
+OPERATIONAL_ACTION_V1_IDENTIFIER_PATH_SEGMENT_RE = re.compile(r"(?:^|[/\\])\.{1,2}(?:[/\\]|$)")
+OPERATIONAL_ACTION_V1_EVIDENCE_REF_MAX_LENGTH = 180
+OPERATIONAL_ACTION_V1_EVIDENCE_REF_RE = re.compile(
+    r"^(?:manager-cycle|preflight|usage|resources|operational-action|verification|evidence|story|assignment|task|source|prd|check|checkpoint|command|test|artifact):[A-Za-z0-9._/@:-]{1,160}$"
+)
+OPERATIONAL_ACTION_V1_EVIDENCE_REF_PATH_SEGMENT_RE = re.compile(r"(?:^|[:/\\])\.{1,2}(?:[/\\]|$)")
+OPERATIONAL_ACTION_V1_FORBIDDEN_METADATA_RE = re.compile(
+    r"\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?|logs?|sources?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|source[\s_-]*(?:dumps?|copies?|snapshots?)|stack[\s_-]*dumps?|console[\s_-]*logs?|secrets?(?:[\s_-]*(?:key|token|value|id))?|credentials?(?:[\s_-]*(?:key|token|value|id))?|passwords?|api[\s_-]*keys?|access[\s_-]*tokens?|auth[\s_-]*tokens?|private[\s_-]*keys?|passphrases?|(?:terminal|tmux|pane)[\s_-]*(?:scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
+    re.IGNORECASE,
+)
+OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])",
+    re.IGNORECASE,
+)
+OPERATIONAL_ACTION_V1_RFC3339_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
+)
+
+OPERATIONAL_ACTION_V1_ID_LENGTHS = {
+    "execution_attempt": 36,
+    "retry_intent": 80,
+    "work_item": 36,
+    "queue_lease": 36,
+    "work_packet": 80,
+    "packet_event": 80,
+    "owner": 100,
+    "approval": 120,
+    "action_record": 80,
+    "correlation": 36,
+    "idempotency": 160,
+}
 
 
-def _validate_operational_action_v1_identifier(value: str, *, label: str) -> str:
-    if not OPERATIONAL_ACTION_V1_IDENTIFIER_RE.fullmatch(value) or ".." in value:
+def _validate_operational_action_v1_identifier(value: str, *, label: str, max_length: int) -> str:
+    if (
+        len(value) > max_length
+        or value != value.lower()
+        or not OPERATIONAL_ACTION_V1_IDENTIFIER_RE.fullmatch(value)
+        or OPERATIONAL_ACTION_V1_IDENTIFIER_REPEATED_SEPARATOR_RE.search(value)
+        or OPERATIONAL_ACTION_V1_IDENTIFIER_PATH_SEGMENT_RE.search(value)
+        or OPERATIONAL_ACTION_V1_FORBIDDEN_METADATA_RE.search(value)
+        or OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE.search(value)
+    ):
         raise ValueError(f"{label} must be an exact safe identifier.")
     return value
 
 
+def _is_safe_operational_action_v1_evidence_ref(value: str) -> bool:
+    return bool(
+        len(value) <= OPERATIONAL_ACTION_V1_EVIDENCE_REF_MAX_LENGTH
+        and OPERATIONAL_ACTION_V1_EVIDENCE_REF_RE.fullmatch(value)
+        and not OPERATIONAL_ACTION_V1_EVIDENCE_REF_PATH_SEGMENT_RE.search(value)
+        and not OPERATIONAL_ACTION_V1_FORBIDDEN_METADATA_RE.search(value)
+        and not OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE.search(value)
+    )
+
+
 def _validate_operational_action_v1_timestamp(value: str, *, label: str) -> str:
+    if not OPERATIONAL_ACTION_V1_RFC3339_TIMESTAMP_RE.fullmatch(value) or value.startswith("0000-"):
+        raise ValueError(f"{label} must be a canonical RFC3339 timestamp.")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError(f"{label} must be a canonical RFC3339 timestamp.") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None or "T" not in value:
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{label} must be a canonical RFC3339 timestamp.")
     return value
 
@@ -2600,6 +2663,8 @@ class RetryVerificationActionContextV1(BaseModel):
     executionAttemptId: str
     linkedWorkItemId: str
     linkedPacketId: str
+    expectedWorkItemState: WorkflowState
+    expectedWorkItemUpdatedAt: str
     expectedAttemptStatus: Literal["failed", "timed_out", "rejected"]
     expectedAttemptUpdatedAt: str
     expectedPacketCurrentEventId: str
@@ -2607,22 +2672,49 @@ class RetryVerificationActionContextV1(BaseModel):
     expectedLeaseFencingToken: PositiveInt | None
     expectedLeaseActive: Literal[False]
 
-    @field_validator("executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedPacketCurrentEventId")
+    @field_validator("executionAttemptId")
     @classmethod
-    def exact_identifiers(cls, value: str) -> str:
-        return _validate_operational_action_v1_identifier(value, label="Retry context identifier")
+    def exact_attempt_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="executionAttemptId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"]
+        )
 
-    @field_validator("expectedAttemptUpdatedAt")
+    @field_validator("linkedWorkItemId")
     @classmethod
-    def exact_attempt_revision(cls, value: str) -> str:
-        return _validate_operational_action_v1_timestamp(value, label="expectedAttemptUpdatedAt")
+    def exact_work_item_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="linkedWorkItemId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"]
+        )
+
+    @field_validator("linkedPacketId")
+    @classmethod
+    def exact_packet_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="linkedPacketId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"]
+        )
+
+    @field_validator("expectedPacketCurrentEventId")
+    @classmethod
+    def exact_packet_event_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="expectedPacketCurrentEventId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"]
+        )
+
+    @field_validator("expectedWorkItemUpdatedAt", "expectedAttemptUpdatedAt")
+    @classmethod
+    def exact_revision(cls, value: str, info) -> str:
+        return _validate_operational_action_v1_timestamp(value, label=info.field_name)
 
     @model_validator(mode="after")
     def lease_fence_is_exact(self) -> "RetryVerificationActionContextV1":
         if (self.expectedLeaseId is None) != (self.expectedLeaseFencingToken is None):
             raise ValueError("Retry lease id and fencing token must both be null or both be present.")
         if self.expectedLeaseId is not None:
-            _validate_operational_action_v1_identifier(self.expectedLeaseId, label="expectedLeaseId")
+            _validate_operational_action_v1_identifier(
+                self.expectedLeaseId,
+                label="expectedLeaseId",
+                max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["queue_lease"],
+            )
         return self
 
 
@@ -2651,18 +2743,42 @@ class ReassignActionContextV1(BaseModel):
     expectedCurrentOwnerId: str | None
     newOwnerId: str
     expectedWorkItemState: WorkflowState
+    expectedWorkItemUpdatedAt: str
     expectedActiveLeaseId: None
     expectedRunningAttemptId: None
 
-    @field_validator("linkedWorkItemId", "expectedPacketCurrentEventId", "newOwnerId")
+    @field_validator("linkedWorkItemId")
     @classmethod
-    def exact_identifiers(cls, value: str) -> str:
-        return _validate_operational_action_v1_identifier(value, label="Reassign context identifier")
+    def exact_work_item_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="linkedWorkItemId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"]
+        )
+
+    @field_validator("expectedPacketCurrentEventId")
+    @classmethod
+    def exact_packet_event_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="expectedPacketCurrentEventId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"]
+        )
+
+    @field_validator("newOwnerId")
+    @classmethod
+    def exact_new_owner_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="newOwnerId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"]
+        )
 
     @field_validator("expectedCurrentOwnerId")
     @classmethod
     def exact_optional_owner(cls, value: str | None) -> str | None:
-        return None if value is None else _validate_operational_action_v1_identifier(value, label="expectedCurrentOwnerId")
+        return None if value is None else _validate_operational_action_v1_identifier(
+            value, label="expectedCurrentOwnerId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"]
+        )
+
+    @field_validator("expectedWorkItemUpdatedAt")
+    @classmethod
+    def exact_work_item_revision(cls, value: str) -> str:
+        return _validate_operational_action_v1_timestamp(value, label="expectedWorkItemUpdatedAt")
 
     @model_validator(mode="after")
     def owner_must_change(self) -> "ReassignActionContextV1":
@@ -2724,13 +2840,26 @@ class OperationalActionBindingV1(BaseModel):
     @field_validator("targetId")
     @classmethod
     def exact_target_id(cls, value: str) -> str:
-        return _validate_operational_action_v1_identifier(value, label="targetId")
+        return _validate_operational_action_v1_identifier(
+            value,
+            label="targetId",
+            max_length=max(
+                OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+                OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"],
+            ),
+        )
 
     @model_validator(mode="after")
     def exact_action_binding(self) -> "OperationalActionBindingV1":
         policy = OPERATIONAL_ACTION_V1_POLICY[self.actionId]
         if self.targetType != policy["targetType"] or self.actionContext.kind != self.actionId:
             raise ValueError("V1 action target/context does not match policy.")
+        target_limit = {
+            "execution_attempt": OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+            "runtime": len(OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID),
+            "work_packet": OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"],
+        }[self.targetType]
+        _validate_operational_action_v1_identifier(self.targetId, label="targetId", max_length=target_limit)
         if self.actionId == "retry_verification" and self.actionContext.executionAttemptId != self.targetId:
             raise ValueError("Retry context must bind the exact target execution attempt.")
         if self.actionId in {"pause", "drain"} and self.targetId != OPERATIONAL_ACTION_V1_RUNTIME_TARGET_ID:
@@ -2765,15 +2894,31 @@ class OperationalActionRequestV1(OperationalActionApprovalRequestV1):
     approvalId: str
     evidenceRefs: list[str] = Field(min_length=1, max_length=24)
 
-    @field_validator("idempotencyKey", "correlationId", "approvalId")
+    @field_validator("idempotencyKey")
     @classmethod
-    def exact_request_identifiers(cls, value: str) -> str:
-        return _validate_operational_action_v1_identifier(value, label="V1 request identifier")
+    def exact_idempotency_key(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="idempotencyKey", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"]
+        )
+
+    @field_validator("correlationId")
+    @classmethod
+    def exact_correlation_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="correlationId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["correlation"]
+        )
+
+    @field_validator("approvalId")
+    @classmethod
+    def exact_approval_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="approvalId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"]
+        )
 
     @field_validator("evidenceRefs")
     @classmethod
     def exact_evidence_refs(cls, refs: list[str]) -> list[str]:
-        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if len(set(refs)) != len(refs) or any(not _is_safe_operational_action_v1_evidence_ref(ref) for ref in refs):
             raise ValueError("V1 evidence refs must be unique safe metadata refs.")
         return refs
 
@@ -2791,17 +2936,41 @@ class OperationalActionApprovalV1(OperationalActionApprovalRequestV1):
     @field_validator("approvalId")
     @classmethod
     def exact_approval_id(cls, value: str) -> str:
-        return _validate_operational_action_v1_identifier(value, label="approvalId")
+        return _validate_operational_action_v1_identifier(
+            value, label="approvalId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"]
+        )
+
+    @field_validator("issuedAt", "expiresAt", "consumedAt", mode="before")
+    @classmethod
+    def exact_timestamp_lexemes(cls, value: object, info) -> object:
+        if value is None or isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("V1 approval timestamps must be canonical RFC3339 strings.")
+        return _validate_operational_action_v1_timestamp(value, label=info.field_name)
 
     @field_validator("issuedAt", "expiresAt", "consumedAt")
     @classmethod
     def canonical_timestamps(cls, value: datetime | None) -> datetime | None:
         return None if value is None else _canonical_utc(value, label="V1 approval timestamp")
 
-    @field_validator("consumedActionIdempotencyKey", "consumedActionRecordId")
+    @field_validator("consumedActionIdempotencyKey")
     @classmethod
-    def exact_consumption_identifiers(cls, value: str | None) -> str | None:
-        return None if value is None else _validate_operational_action_v1_identifier(value, label="Approval consumption identifier")
+    def exact_consumed_idempotency_key(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_operational_action_v1_identifier(
+            value,
+            label="consumedActionIdempotencyKey",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"],
+        )
+
+    @field_validator("consumedActionRecordId")
+    @classmethod
+    def exact_consumed_action_record_id(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_operational_action_v1_identifier(
+            value,
+            label="consumedActionRecordId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["action_record"],
+        )
 
     @model_validator(mode="after")
     def exact_approval_lifecycle(self) -> "OperationalActionApprovalV1":
@@ -2835,7 +3004,7 @@ class OperationalActionCapabilityV1(OperationalActionBindingV1):
     @field_validator("evidenceRefs")
     @classmethod
     def safe_capability_evidence(cls, refs: list[str]) -> list[str]:
-        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if len(set(refs)) != len(refs) or any(not _is_safe_operational_action_v1_evidence_ref(ref) for ref in refs):
             raise ValueError("V1 capability evidence refs must be unique safe metadata refs.")
         return refs
 
@@ -2852,12 +3021,51 @@ class RetryVerificationSuccessEvidenceV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["retry_verification"]
     originalAttemptId: str
-    retryAttemptId: str
+    retryIntentId: str
     linkedWorkItemId: str
     linkedPacketId: str
     resultingPacketCurrentEventId: str
     originalAttemptPreserved: Literal[True]
     providerOrWorkerLaunched: Literal[False]
+
+    @field_validator("originalAttemptId")
+    @classmethod
+    def exact_original_attempt_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value,
+            label="originalAttemptId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+        )
+
+    @field_validator("retryIntentId")
+    @classmethod
+    def exact_retry_intent_id(cls, value: str) -> str:
+        value = _validate_operational_action_v1_identifier(
+            value,
+            label="retryIntentId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["retry_intent"],
+        )
+        if not value.startswith("verification-retry-"):
+            raise ValueError("retryIntentId must identify a verification retry intent.")
+        return value
+
+    @field_validator("linkedWorkItemId")
+    @classmethod
+    def exact_linked_work_item_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value,
+            label="linkedWorkItemId",
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+        )
+
+    @field_validator("linkedPacketId", "resultingPacketCurrentEventId")
+    @classmethod
+    def exact_packet_identifier(cls, value: str, info) -> str:
+        return _validate_operational_action_v1_identifier(
+            value,
+            label=info.field_name,
+            max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet" if info.field_name == "linkedPacketId" else "packet_event"],
+        )
 
 
 class PauseSuccessEvidenceV1(BaseModel):
@@ -2892,6 +3100,34 @@ class ReassignSuccessEvidenceV1(BaseModel):
     activeLeaseTransferred: Literal[False]
     workerLaunched: Literal[False]
 
+    @field_validator("packetId")
+    @classmethod
+    def exact_packet_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="packetId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"]
+        )
+
+    @field_validator("linkedWorkItemId")
+    @classmethod
+    def exact_linked_work_item_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="linkedWorkItemId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"]
+        )
+
+    @field_validator("previousOwnerId", "newOwnerId")
+    @classmethod
+    def exact_owner_id(cls, value: str | None, info) -> str | None:
+        return None if value is None else _validate_operational_action_v1_identifier(
+            value, label=info.field_name, max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"]
+        )
+
+    @field_validator("resultingPacketCurrentEventId")
+    @classmethod
+    def exact_resulting_event_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="resultingPacketCurrentEventId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"]
+        )
+
 
 OperationalActionSuccessEvidenceV1 = Annotated[
     RetryVerificationSuccessEvidenceV1 | PauseSuccessEvidenceV1 | DrainSuccessEvidenceV1 | ReassignSuccessEvidenceV1,
@@ -2913,15 +3149,38 @@ class OperationalActionResultV1(OperationalActionBindingV1):
     approvalId: str
     replayed: bool
 
-    @field_validator("correlationId", "idempotencyKey", "actionRecordId", "approvalId")
+    @field_validator("correlationId")
     @classmethod
-    def exact_result_identifiers(cls, value: str) -> str:
-        return _validate_operational_action_v1_identifier(value, label="V1 result identifier")
+    def exact_result_correlation_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="correlationId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["correlation"]
+        )
+
+    @field_validator("idempotencyKey")
+    @classmethod
+    def exact_result_idempotency_key(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="idempotencyKey", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"]
+        )
+
+    @field_validator("actionRecordId")
+    @classmethod
+    def exact_action_record_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="actionRecordId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["action_record"]
+        )
+
+    @field_validator("approvalId")
+    @classmethod
+    def exact_result_approval_id(cls, value: str) -> str:
+        return _validate_operational_action_v1_identifier(
+            value, label="approvalId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"]
+        )
 
     @field_validator("evidenceRefs")
     @classmethod
     def safe_result_evidence(cls, refs: list[str]) -> list[str]:
-        if len(set(refs)) != len(refs) or any(not _is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if len(set(refs)) != len(refs) or any(not _is_safe_operational_action_v1_evidence_ref(ref) for ref in refs):
             raise ValueError("V1 result evidence refs must be unique safe metadata refs.")
         return refs
 
@@ -2939,9 +3198,10 @@ class OperationalActionResultV1(OperationalActionBindingV1):
             if self.actionId == "retry_verification":
                 if (
                     evidence.originalAttemptId != self.targetId
-                    or evidence.retryAttemptId == evidence.originalAttemptId
+                    or evidence.retryIntentId == evidence.originalAttemptId
                     or evidence.linkedWorkItemId != context.linkedWorkItemId
                     or evidence.linkedPacketId != context.linkedPacketId
+                    or evidence.resultingPacketCurrentEventId == context.expectedPacketCurrentEventId
                 ):
                     raise ValueError("Retry success evidence does not bind the exact attempt/work-item/packet context.")
             elif self.actionId == "pause":

@@ -1,0 +1,14 @@
+{
+  "invalidRetrySuccessEvidenceCases": [
+    {
+      "name": "extra_success_evidence_key",
+      "patch": {
+        "uncontractedEvidence": "must-be-rejected"
+      }
+    },
+    {
+      "name": "unchanged_pre_action_packet_event",
+      "useExpectedPacketCurrentEventId": true
+    }
+  ]
+}

@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const contractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
+const timestampFixturePath = new URL("./fixtures/pipeline-operational-action-v1-timestamps.json", import.meta.url);
+const resultParityFixturePath = new URL("./fixtures/pipeline-operational-action-v1-result-parity.json", import.meta.url);
 const require = createRequire(import.meta.url);
 
 async function loadContract() {
@@ -36,6 +38,8 @@ function contexts() {
       executionAttemptId: "attempt-1",
       linkedWorkItemId: "work-1",
       linkedPacketId: "packet-1",
+      expectedWorkItemState: "ready",
+      expectedWorkItemUpdatedAt: "2026-07-14T19:59:59.000Z",
       expectedAttemptStatus: "failed",
       expectedAttemptUpdatedAt: "2026-07-14T20:00:00.000Z",
       expectedPacketCurrentEventId: "event-1",
@@ -59,6 +63,7 @@ function contexts() {
       expectedCurrentOwnerId: "owner-old",
       newOwnerId: "owner-new",
       expectedWorkItemState: "ready",
+      expectedWorkItemUpdatedAt: "2026-07-14T19:59:59.000Z",
       expectedActiveLeaseId: null,
       expectedRunningAttemptId: null,
     },
@@ -115,6 +120,18 @@ function approvalFor(request, overrides = {}) {
   };
 }
 
+function withReboundContext(contract, request, contextOverrides) {
+  const rebound = structuredClone(request);
+  Object.assign(rebound.actionContext, contextOverrides);
+  rebound.actionContextDigestSha256 = contract.pipelineOperationalActionContextDigestSha256V1(
+    rebound.actionId,
+    rebound.targetType,
+    rebound.targetId,
+    rebound.actionContext,
+  );
+  return rebound;
+}
+
 test("v1 policy reconciles exact targets, authority families, risks, and context fences", async () => {
   const contract = await loadContract();
   assert.deepEqual(contract.PIPELINE_OPERATIONAL_ACTION_V1_POLICY, {
@@ -148,6 +165,12 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
   const missingFence = structuredClone(retry);
   delete missingFence.actionContext.expectedAttemptUpdatedAt;
   assert.ok(contract.validatePipelineOperationalActionRequestV1(missingFence).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
+  const missingWorkItemState = structuredClone(retry);
+  delete missingWorkItemState.actionContext.expectedWorkItemState;
+  assert.ok(contract.validatePipelineOperationalActionRequestV1(missingWorkItemState).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
+  const missingWorkItemRevision = structuredClone(retry);
+  delete missingWorkItemRevision.actionContext.expectedWorkItemUpdatedAt;
+  assert.ok(contract.validatePipelineOperationalActionRequestV1(missingWorkItemRevision).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
   assert.ok(contract.validatePipelineOperationalActionRequestV1({ ...retry, targetType: "work_packet" }).some((issue) => issue.code === "policy_violation"));
 
   const reassign = requestFor(contract, "reassign");
@@ -155,6 +178,70 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
     ...reassign,
     actionContext: { ...reassign.actionContext, expectedActiveLeaseId: "lease-1" },
   }).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
+});
+
+test("v1 timestamps enforce the shared canonical RFC3339 parity fixture", async () => {
+  const contract = await loadContract();
+  const fixture = JSON.parse(await readFile(timestampFixturePath, "utf8"));
+  for (const timestamp of fixture.accepted) {
+    const request = requestFor(contract, "reassign");
+    request.actionContext.expectedWorkItemUpdatedAt = timestamp;
+    request.actionContextDigestSha256 = digest(
+      contract.pipelineOperationalActionContextDigestPayloadV1(
+        request.actionId,
+        request.targetType,
+        request.targetId,
+        request.actionContext,
+      ),
+    );
+    assert.deepEqual(
+      contract.validatePipelineOperationalActionRequestV1(request),
+      [],
+      `TypeScript rejected shared positive timestamp ${timestamp}`,
+    );
+  }
+  for (const timestamp of fixture.rejected) {
+    const request = requestFor(contract, "reassign");
+    request.actionContext.expectedWorkItemUpdatedAt = timestamp;
+    request.actionContextDigestSha256 = digest(
+      contract.pipelineOperationalActionContextDigestPayloadV1(
+        request.actionId,
+        request.targetType,
+        request.targetId,
+        request.actionContext,
+      ),
+    );
+    assert.ok(
+      contract.validatePipelineOperationalActionRequestV1(request).some(
+        (issue) => issue.field === "actionContext" || issue.field === "actionContext.expectedWorkItemUpdatedAt",
+      ),
+      `TypeScript accepted shared negative timestamp ${timestamp}`,
+    );
+  }
+
+  const approvalRequest = requestFor(contract, "pause");
+  for (const timestamp of fixture.accepted) {
+    const approval = approvalFor(approvalRequest, {
+      consumed: true,
+      consumedAt: timestamp,
+      consumedActionIdempotencyKey: approvalRequest.idempotencyKey,
+      consumedActionRecordId: "record-1",
+    });
+    assert.deepEqual(
+      contract.validatePipelineOperationalActionApprovalV1(approval),
+      [],
+      `TypeScript rejected shared positive approval timestamp ${timestamp}`,
+    );
+  }
+  for (const timestamp of fixture.rejected) {
+    assert.ok(
+      contract.validatePipelineOperationalActionApprovalV1({
+        ...approvalFor(approvalRequest),
+        issuedAt: timestamp,
+      }).some((issue) => issue.field === "expiresAt" || issue.field === "consumed"),
+      `TypeScript accepted shared negative approval timestamp ${timestamp}`,
+    );
+  }
 });
 
 test("v1 request and approval reject valid-shaped incorrect context digests", async () => {
@@ -172,6 +259,93 @@ test("v1 request and approval reject valid-shaped incorrect context digests", as
     ...approval,
     actionContextDigestSha256: wrongDigest,
   }).some((issue) => issue.code === "context_digest_mismatch"));
+});
+
+test("v1 identifiers accept exact persistence bounds and reject max plus one", async () => {
+  const contract = await loadContract();
+  const validate = contract.validatePipelineOperationalActionRequestV1;
+
+  for (const [field, maxLength] of [["correlationId", 36], ["idempotencyKey", 160], ["approvalId", 120]]) {
+    assert.deepEqual(validate(requestFor(contract, "retry_verification", { [field]: "a".repeat(maxLength) })), [], `${field} exact max`);
+    assert.ok(
+      validate(requestFor(contract, "retry_verification", { [field]: "a".repeat(maxLength + 1) }))
+        .some((issue) => issue.field === field && issue.code === "invalid_contract"),
+      `${field} max plus one`,
+    );
+  }
+
+  for (const [field, maxLength] of [
+    ["linkedWorkItemId", 36],
+    ["linkedPacketId", 80],
+    ["expectedPacketCurrentEventId", 80],
+    ["expectedLeaseId", 36],
+  ]) {
+    assert.deepEqual(
+      validate(withReboundContext(contract, requestFor(contract, "retry_verification"), { [field]: "a".repeat(maxLength) })),
+      [],
+      `actionContext.${field} exact max`,
+    );
+    assert.ok(
+      validate(withReboundContext(contract, requestFor(contract, "retry_verification"), { [field]: "a".repeat(maxLength + 1) }))
+        .some((issue) => issue.field === `actionContext.${field}` && ["invalid_contract", "stale_fence"].includes(issue.code)),
+      `actionContext.${field} max plus one`,
+    );
+  }
+
+  assert.deepEqual(
+    validate(withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "a".repeat(100) })),
+    [],
+    "owner exact max",
+  );
+  assert.ok(
+    validate(withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "a".repeat(101) }))
+      .some((issue) => issue.field === "actionContext.newOwnerId" && issue.code === "invalid_contract"),
+    "owner max plus one",
+  );
+
+  const attemptAtMax = requestFor(contract, "retry_verification", { targetId: "a".repeat(36) });
+  attemptAtMax.actionContext.executionAttemptId = attemptAtMax.targetId;
+  attemptAtMax.actionContextDigestSha256 = contract.pipelineOperationalActionContextDigestSha256V1(
+    attemptAtMax.actionId,
+    attemptAtMax.targetType,
+    attemptAtMax.targetId,
+    attemptAtMax.actionContext,
+  );
+  assert.deepEqual(validate(attemptAtMax), [], "attempt target exact max");
+
+  const attemptTooLong = structuredClone(attemptAtMax);
+  attemptTooLong.targetId = "a".repeat(37);
+  attemptTooLong.actionContext.executionAttemptId = attemptTooLong.targetId;
+  attemptTooLong.actionContextDigestSha256 = contract.pipelineOperationalActionContextDigestSha256V1(
+    attemptTooLong.actionId,
+    attemptTooLong.targetType,
+    attemptTooLong.targetId,
+    attemptTooLong.actionContext,
+  );
+  assert.ok(validate(attemptTooLong).some((issue) => issue.field === "targetId" && issue.code === "invalid_contract"));
+});
+
+test("v1 identifier and evidence-ref grammar rejects repeated separators and invalid prefixes at exact bounds", async () => {
+  const contract = await loadContract();
+  const validate = contract.validatePipelineOperationalActionRequestV1;
+  assert.deepEqual(
+    validate(withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "owner-new" })),
+    [],
+  );
+  assert.ok(validate(
+    withReboundContext(contract, requestFor(contract, "reassign"), { newOwnerId: "owner--new" }),
+  ).some((issue) => issue.field === "actionContext.newOwnerId" && issue.code === "invalid_contract"));
+
+  const maxEvidenceRef = `evidence:${"A".repeat(160)}`;
+  assert.deepEqual(validate(requestFor(contract, "retry_verification", { evidenceRefs: [maxEvidenceRef] })), []);
+  for (const invalidRef of [
+    `evidence:${"A".repeat(161)}`,
+    "capability:retry-verification",
+    "evidence:../retry-verification",
+  ]) {
+    assert.ok(validate(requestFor(contract, "retry_verification", { evidenceRefs: [invalidRef] }))
+      .some((issue) => issue.field === "evidenceRefs" && issue.code === "invalid_contract"), invalidRef);
+  }
 });
 
 test("v1 authorization fails closed for stale context, digest, actor, expiry, and replay", async () => {
@@ -204,6 +378,61 @@ test("v1 authorization fails closed for stale context, digest, actor, expiry, an
 
 test("v1 runtime success evidence is explicit while v0 request behavior remains valid", async () => {
   const contract = await loadContract();
+  const retry = requestFor(contract, "retry_verification");
+  const retryResult = {
+    schemaVersion: retry.schemaVersion,
+    actionId: retry.actionId,
+    targetType: retry.targetType,
+    targetId: retry.targetId,
+    actionContext: retry.actionContext,
+    actionContextDigestSha256: retry.actionContextDigestSha256,
+    outcome: "succeeded",
+    capabilityState: "available",
+    authorityState: "allowed",
+    riskTier: "medium",
+    typedReason: null,
+    successEvidence: {
+      kind: "retry_verification",
+      originalAttemptId: retry.targetId,
+      retryIntentId: `verification-retry-${"a".repeat(32)}`,
+      linkedWorkItemId: retry.actionContext.linkedWorkItemId,
+      linkedPacketId: retry.actionContext.linkedPacketId,
+      resultingPacketCurrentEventId: "event-retry-result",
+      originalAttemptPreserved: true,
+      providerOrWorkerLaunched: false,
+    },
+    evidenceRefs: ["operational-action:retry-result"],
+    correlationId: retry.correlationId,
+    idempotencyKey: retry.idempotencyKey,
+    actionRecordId: "record-retry",
+    approvalId: retry.approvalId,
+    replayed: false,
+    serverBound: true,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.deepEqual(contract.validatePipelineOperationalActionResultV1(retryResult), []);
+  const parityFixture = JSON.parse(await readFile(resultParityFixturePath, "utf8"));
+  for (const invalidCase of parityFixture.invalidRetrySuccessEvidenceCases) {
+    const candidate = structuredClone(retryResult);
+    Object.assign(candidate.successEvidence, invalidCase.patch || {});
+    if (invalidCase.useExpectedPacketCurrentEventId) {
+      candidate.successEvidence.resultingPacketCurrentEventId = candidate.actionContext.expectedPacketCurrentEventId;
+    }
+    assert.ok(
+      contract.validatePipelineOperationalActionResultV1(candidate).some((issue) => issue.code === "inconsistent_result"),
+      invalidCase.name,
+    );
+  }
+  assert.ok(contract.validatePipelineOperationalActionResultV1({
+    ...retryResult,
+    successEvidence: { ...retryResult.successEvidence, retryIntentId: `verification-retry-${"a".repeat(62)}` },
+  }).some((issue) => issue.code === "inconsistent_result"));
+  const legacyRetryAttemptResult = structuredClone(retryResult);
+  legacyRetryAttemptResult.successEvidence.retryAttemptId = legacyRetryAttemptResult.successEvidence.retryIntentId;
+  delete legacyRetryAttemptResult.successEvidence.retryIntentId;
+  assert.ok(contract.validatePipelineOperationalActionResultV1(legacyRetryAttemptResult).some((issue) => issue.code === "inconsistent_result"));
+
   const pause = requestFor(contract, "pause");
   const result = {
     schemaVersion: pause.schemaVersion,

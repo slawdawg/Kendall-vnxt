@@ -1,4 +1,5 @@
 ﻿import asyncio
+import hashlib
 import json
 import os
 import sqlite3
@@ -68,6 +69,15 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     from supervisor.api.main import app
 
     return TestClient(app)
+
+
+def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
+    return {
+        "attemptId": attempt["attemptId"],
+        "workItemId": attempt["workItemId"],
+        "expectedStatus": attempt["status"],
+        "expectedRevision": attempt["revision"],
+    }
 
 
 def _assert_unique_related_docs(container: dict) -> None:
@@ -1592,11 +1602,15 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     from supervisor.api.main import app
     from supervisor.domain.ollama_provider_adapter import OllamaProviderResult
 
-    captured_provider_prompt = {}
+    captured_provider_prompt = {"reservation": None}
 
     async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
         captured_provider_prompt["evidence_summary"] = evidence_summary
         captured_provider_prompt["evidence_count"] = evidence_count
+        with sqlite3.connect(db_path) as connection:
+            captured_provider_prompt["reservation"] = connection.execute(
+                "SELECT status, worker_id, authority_mode FROM execution_attempts"
+            ).fetchone()
         return OllamaProviderResult(
             status="completed",
             model_id="qwen3:14b",
@@ -1629,6 +1643,7 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
             },
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
 
     assert response.status_code == 200
     explanation = response.json()["data"]
@@ -1639,6 +1654,14 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     assert explanation["providerAttempt"]["responseCharacterCount"] == 3
     assert explanation["providerAttempt"]["reasoningCharacterCount"] == 42
     assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+    assert captured_provider_prompt["reservation"] == (
+        "running",
+        "ollama.local.provider",
+        "operator_approved_bounded_provider_call",
+    )
+    attempts = attempts_response.json()["data"]
+    assert attempts[0]["status"] == "completed"
+    assert attempts[0]["workerId"] == "ollama.local.provider"
     assert (
         "Ollama approved endpoint: http://192.168.1.128:11434/v1/chat/completions with model qwen3:14b only."
         in explanation["boundaries"]
@@ -1797,11 +1820,11 @@ def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence
 
     with TestClient(app) as client:
         work_item_id = _create_routing_work_item(client)
-        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
         managed_response = client.post(
             f"/work-items/{work_item_id}/managed-next-action",
             json={"expectedActionId": "supervisor_triage"},
         )
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
         before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
         response = client.get("/supervisor/execution-readiness-report")
         after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
@@ -4530,11 +4553,15 @@ def test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_
     from supervisor.api.main import app
     from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
 
-    adapter_calls = {"count": 0, "kwargs": None}
+    adapter_calls = {"count": 0, "kwargs": None, "reservation": None}
 
     async def fake_run(self, **kwargs):
         adapter_calls["count"] += 1
         adapter_calls["kwargs"] = kwargs
+        with sqlite3.connect(db_path) as connection:
+            adapter_calls["reservation"] = connection.execute(
+                "SELECT status, worker_id, route_decision_id FROM execution_attempts"
+            ).fetchone()
         return SupervisedSubscriptionLaunchResult(
             status="completed",
             exit_code=0,
@@ -4564,6 +4591,11 @@ def test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_
     assert response.status_code == 200
     launch = response.json()["data"]
     assert adapter_calls["count"] == 1
+    assert adapter_calls["reservation"] == (
+        "running",
+        "subscription.agent.disabled",
+        stub["approvalBinding"]["routeDecisionId"],
+    )
     assert adapter_calls["kwargs"]["command_argv"] == ["codex", "--version"]
     assert adapter_calls["kwargs"]["environment_allowlist"] == ["PATH"]
     assert adapter_calls["kwargs"]["cwd"].endswith(os.path.join("_bmad-output", "subscription-runtime", stub["approvalBinding"]["attemptId"]))
@@ -4669,8 +4701,207 @@ def test_subscription_agent_runtime_replay_does_not_launch_second_process(tmp_pa
     assert first.status_code == 200
     assert second.status_code == 200
     assert adapter_calls["count"] == 1
-    assert second.json()["data"]["runtimeEvidence"]["status"] == "replayed_existing_attempt"
+    second_launch = second.json()["data"]
+    assert second_launch["approvalAccepted"] is False
+    assert second_launch["status"] == "rejected_replay_conflict_or_in_progress"
+    assert second_launch["readinessStatus"] == "subscription_launch_runtime_in_progress"
+    assert "subscription_launch_runtime_in_progress" in second_launch["blockedReasonIds"]
+    assert second_launch["runtimeEvidence"]["status"] == "rejected_replay_conflict_or_in_progress"
     assert len(attempts) == 1
+
+
+def _seed_subscription_runtime_attempt(
+    db_path: str,
+    *,
+    work_item_id: str,
+    attempt_id: str,
+    route_decision_id: str,
+    status: str,
+    worker_id: str = "subscription.agent.disabled",
+    revision: int = 2,
+    terminal_evidence: bool = False,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    launch_fence = f"fence-{attempt_id}"
+    reservation = {
+        "artifactType": "external_launch_reservation",
+        "operation": "subscription_agent_launch:codex.subscription.disabled",
+        "workItemId": work_item_id,
+        "routeDecisionId": route_decision_id,
+        "workerId": worker_id,
+        "launchFenceSha256": hashlib.sha256(launch_fence.encode()).hexdigest(),
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
+    artifacts = [reservation]
+    if terminal_evidence:
+        artifacts.append(
+            {
+                "artifactType": "subscription_agent_runtime_result",
+                "status": "completed",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "insert into execution_attempts "
+            "(id, work_item_id, route_decision_id, worker_id, lane, authority_mode, status, revision, "
+            "launch_fence_token, launch_claimed_at, completed_at, workspace_isolation_plan_json, "
+            "artifact_refs_json, event_refs_json, created_at, updated_at) "
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                attempt_id,
+                work_item_id,
+                route_decision_id,
+                worker_id,
+                "subscription_agent",
+                "operator_approval_required",
+                status,
+                revision,
+                launch_fence,
+                now,
+                now if terminal_evidence else None,
+                json.dumps({"operation": reservation["operation"]}),
+                json.dumps(artifacts),
+                json.dumps([]),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def test_subscription_agent_runtime_running_replay_is_in_progress_conflict(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-running-replay.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        raise AssertionError("A running deterministic attempt must not be relaunched.")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        _seed_subscription_runtime_attempt(
+            db_path,
+            work_item_id=work_item_id,
+            attempt_id=approval["executionAttemptId"],
+            route_decision_id=approval["routeDecisionId"],
+            status="running",
+        )
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["approvalAccepted"] is False
+    assert launch["status"] == "rejected_replay_conflict_or_in_progress"
+    assert launch["readinessStatus"] == "subscription_launch_runtime_in_progress"
+    assert "subscription_launch_runtime_in_progress" in launch["blockedReasonIds"]
+    assert adapter_calls["count"] == 0
+
+
+def test_subscription_agent_runtime_replay_rejects_mismatched_terminal_identity(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-mismatched-replay.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        _seed_subscription_runtime_attempt(
+            db_path,
+            work_item_id=work_item_id,
+            attempt_id=approval["executionAttemptId"],
+            route_decision_id=approval["routeDecisionId"],
+            status="completed",
+            worker_id="different-worker",
+            revision=4,
+            terminal_evidence=True,
+        )
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["approvalAccepted"] is False
+    assert launch["status"] == "rejected_replay_conflict_or_in_progress"
+    assert launch["processLaunchAttempted"] is False
+
+
+def test_subscription_agent_runtime_different_request_conflicts_without_replay(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-different-request.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        return SupervisedSubscriptionLaunchResult(status="completed", exit_code=0)
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        first = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        different_request = {**approval, "commandArgv": ["codex", "--help"]}
+        second = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **different_request},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["data"]["approvalAccepted"] is False
+    assert second.json()["data"]["processLaunchAttempted"] is False
+    assert "commandArgv-mismatch" in second.json()["data"]["rejectedEnvelopeFields"]["runtimeApproval"]
+    assert adapter_calls["count"] == 1
 
 
 def test_subscription_agent_runtime_rejects_artifact_only_approval_reuse(tmp_path, monkeypatch) -> None:
@@ -5115,6 +5346,92 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
     assert "subscription_launch_rollback_triggered" in blocked_launch["blockedReasonIds"]
 
 
+def test_verification_finalization_rejection_does_not_commit_evidence_alongside_running_attempt(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "verification-finalization-rejection.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api import main as api_main
+    from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
+
+    async def fake_run(self, **kwargs):
+        return SupervisedSubscriptionLaunchResult(status="completed", exit_code=0)
+
+    async def reject_finalization(session, item, attempt, **kwargs):
+        raise ValueError("synthetic finalization fence rejection")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    def fake_git_output(args: list[str]) -> tuple[bool, str]:
+        command = tuple(args)
+        if command == ("git", "branch", "--show-current"):
+            return True, "main"
+        if command == ("git", "rev-parse", "HEAD"):
+            return True, "abc1234"
+        return False, "unexpected git command"
+
+    monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
+    monkeypatch.setattr(api_main.service, "_run_execution_attempt_verification_command", lambda _shape: {
+        "status": "passed",
+        "exitCode": 0,
+        "durationMs": 1,
+        "summary": "bounded verification passed",
+        "recoveryAction": "retain metadata-only evidence",
+    })
+
+    with TestClient(api_main.app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        launch = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        assert launch.status_code == 200
+        attempt_id = approval["executionAttemptId"]
+        monkeypatch.setattr(api_main.service, "_finalize_external_launch_attempt", reject_finalization)
+        response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
+            json={
+                "commandId": "verification-finalization-rejection",
+                "label": "Bounded verification",
+                "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "status": "passed",
+                "summary": "bounded verification passed",
+                "recoveryAction": "retain metadata-only evidence",
+            },
+        )
+
+    assert response.status_code == 409
+    with sqlite3.connect(db_path) as conn:
+        verification_attempts = conn.execute(
+            "select count(*) from execution_attempts where worker_id = 'verification.command'"
+        ).fetchone()[0]
+        verification_events = conn.execute(
+            "select count(*) from workflow_events where event_type = 'execution_attempt.verification_recorded'"
+        ).fetchone()[0]
+        original_attempt = conn.execute(
+            "select worker_id, lane, status, artifact_refs_json from execution_attempts where id = ?",
+            (attempt_id,),
+        ).fetchone()
+    assert verification_attempts == 0
+    assert verification_events == 0
+    assert original_attempt is not None
+    assert original_attempt[:3] == ("subscription.agent.disabled", "subscription_agent", "completed")
+    assert not any(
+        artifact.get("artifactType") == "verification_result"
+        and artifact.get("commandId") == "verification-finalization-rejection"
+        for artifact in json.loads(original_attempt[3])
+    )
+
+
 def test_subscription_agent_launch_stale_verification_is_metadata_only_and_blocks_delivery(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "subscription-launch-stale-verification.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -5158,12 +5475,17 @@ def test_subscription_agent_launch_stale_verification_is_metadata_only_and_block
                 "nextSafeAction": "Record fresh subscription-agent launch verification evidence before delivery.",
             },
         )
+        attempts_after = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
         export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
 
     assert launch_response.status_code == 200
     assert response.status_code == 200
     evidence = next(ref for ref in response.json()["data"]["artifactRefs"] if ref.get("commandId") == "subscription-launch-stale-check")
     assert evidence["status"] == "stale"
+    assert evidence["processLaunchAttempted"] is False
+    assert evidence["launchClassification"] == "metadata_only_no_launch"
+    assert evidence["launchReservationAttemptId"] is None
+    assert len(attempts_after) == len(attempts)
     assert evidence["subscriptionLaunchVerification"]["blockedReason"] == "subscription-launch-verification-stale"
     assert evidence["subscriptionLaunchVerification"]["deliveryEligible"] is False
     launch_export = export_response.json()["data"]["subscriptionLaunch"]
@@ -8622,15 +8944,18 @@ def test_execution_attempt_lifecycle_records_cancel_history_without_execution(tm
         cancel_requested_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "cancel_requested",
                 "reason": "operator paused the route",
                 "actorId": "operator-1",
                 "actorLabel": "Primary operator",
             },
         )
+        cancel_requested = cancel_requested_response.json()["data"]
         cancelled_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(cancel_requested),
                 "status": "cancelled",
                 "reason": "operator confirmed cancellation",
                 "actorId": "operator-1",
@@ -8639,7 +8964,7 @@ def test_execution_attempt_lifecycle_records_cancel_history_without_execution(tm
         )
         terminal_transition_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "completed"},
+            json={**_attempt_transition_fence(cancelled_response.json()["data"]), "status": "completed"},
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
@@ -8708,7 +9033,11 @@ def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_tran
         attempt = attempt_response.json()["data"]
         completed_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "completed", "reason": "mock lifecycle finished"},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "completed",
+                "reason": "mock lifecycle finished",
+            },
         )
         second_attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
 
@@ -8729,7 +9058,11 @@ def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_tran
         rejected_attempt = rejected_attempt_response.json()["data"]
         invalid_transition_response = client.post(
             f"/work-items/{rejected_work_item_id}/execution-attempts/{rejected_attempt['attemptId']}/lifecycle",
-            json={"status": "cancel_requested", "reason": "cannot cancel rejected attempt"},
+            json={
+                **_attempt_transition_fence(rejected_attempt),
+                "status": "cancel_requested",
+                "reason": "cannot cancel rejected attempt",
+            },
         )
         missing_attempt_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/missing/lifecycle",
@@ -8779,11 +9112,16 @@ def test_execution_attempt_approval_requires_route_worker_lane_and_authority_bin
         attempt = attempt_response.json()["data"]
         missing_binding_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "approved", "reason": "operator approves this attempt"},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "approved",
+                "reason": "operator approves this attempt",
+            },
         )
         approved_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "route-bound operator approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -8858,6 +9196,7 @@ def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_
         stale_route_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "stale route approval",
                 "routeDecisionId": "route-stale",
@@ -8869,6 +9208,7 @@ def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_
         worker_mismatch_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "wrong worker approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -8942,6 +9282,9 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     assert response.status_code == 200
     attempt = response.json()["data"]
     assert attempt["status"] == "completed"
+    assert attempt["revision"] == 3
+    assert attempt["launchFenceState"] == "claimed"
+    assert attempt["launchClaimedAt"]
     assert attempt["workerId"] == "codex.local.supervised"
     assert attempt["lane"] == "utility"
     assert attempt["authorityMode"] == "operator_approved_bounded_source_mutation"
@@ -8949,7 +9292,9 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is True
     assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is True
     assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
-    launch_evidence = next(ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence")
+    launch_evidence = [
+        ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence"
+    ][-1]
     assert launch_evidence["dryRun"] is True
     assert launch_evidence["commandShape"] == "codex <bounded task packet> --cwd <isolated-worktree>"
     assert launch_evidence["verificationCommand"] == "pnpm run check"
@@ -8957,13 +9302,16 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     assert launch_evidence["terminalState"] == "completed"
     assert launch_evidence["recoveryPath"] == "inspect retained worktree evidence before retry, revert, or delivery"
     assert len(history_response.json()["data"]) == 1
-    assert len(after_events) == len(before_events) + 2
-    event_types = {event["eventType"] for event in after_events[:2]}
-    assert event_types == {"execution_attempt.completed", "execution_attempt.supervised_codex_launch_started"}
-    completed_event = next(event for event in after_events if event["eventType"] == "execution_attempt.completed")
-    assert completed_event["payload"]["prCreationAllowed"] is False
-    assert completed_event["payload"]["mergeAllowed"] is False
-    assert completed_event["payload"]["cleanupAllowed"] is False
+    assert len(after_events) == len(before_events) + 3
+    event_types = {event["eventType"] for event in after_events[:3]}
+    assert event_types == {
+        "execution_attempt.external_launch_reserved",
+        "execution_attempt.external_launch_claimed",
+        "execution_attempt.completed",
+    }
+    assert launch_evidence["prCreationAllowed"] is False
+    assert launch_evidence["mergeAllowed"] is False
+    assert launch_evidence["cleanupAllowed"] is False
 
 
 def test_supervised_codex_launch_real_mutation_requires_green_diff_guard(tmp_path, monkeypatch) -> None:
@@ -9108,8 +9456,21 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
         return False, "unexpected git command"
 
     launched: list[str] = []
+    durable_reservations: list[tuple[str, int]] = []
 
     def fake_launch(payload, attempt_id: str) -> dict:
+        with sqlite3.connect(db_path) as conn:
+            reserved_status = conn.execute(
+                "select status from execution_attempts where id = ?",
+                (attempt_id,),
+            ).fetchone()
+            started_event_count = conn.execute(
+                "select count(*) from workflow_events where event_type = ? and payload like ?",
+                ("execution_attempt.external_launch_claimed", f'%"executionAttemptId": "{attempt_id}"%'),
+            ).fetchone()[0]
+        assert reserved_status == ("running",)
+        assert started_event_count == 1
+        durable_reservations.append((reserved_status[0], started_event_count))
         launched.append(attempt_id)
         return {
             "status": "completed",
@@ -9156,7 +9517,10 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
     attempt = approved.json()["data"]
     assert attempt["status"] == "completed"
     assert launched == [attempt["attemptId"]]
-    launch_evidence = next(ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence")
+    assert durable_reservations == [("running", 1)]
+    launch_evidence = [
+        ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence"
+    ][-1]
     assert launch_evidence["processLaunchAttempted"] is True
     assert launch_evidence["workspaceOrBranch"] == "repo_owned_codex_workspace"
 
@@ -9217,6 +9581,12 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
 
     def fake_verification_command(command_shape: str) -> dict:
         assert command_shape == "pnpm run check"
+        with sqlite3.connect(db_path) as conn:
+            reservation = conn.execute(
+                "select status, worker_id from execution_attempts "
+                "where worker_id = 'verification.command' order by created_at desc limit 1"
+            ).fetchone()
+        assert reservation == ("running", "verification.command")
         return {
             "status": "passed",
             "exitCode": 0,
@@ -9256,6 +9626,7 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
                 "recoveryAction": "retain evidence for green-gate evaluation",
             },
         )
+        verification_attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         events_response = client.get(f"/work-items/{work_item_id}/events")
         runtime_export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
         readiness_response = client.get(f"/work-items/{work_item_id}/trusted-delivery-eligibility-report")
@@ -9287,6 +9658,17 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
     assert evidence["branch"] == "codex/story-7-5"
     assert evidence["headRevision"] == "abc1234"
     assert evidence["retentionPolicy"] == "metadata_only_no_secrets_prompts_provider_payloads_or_source_copies"
+    assert evidence["processLaunchAttempted"] is True
+    assert evidence["launchClassification"] == "admitted_guarded_utility"
+    assert evidence["launchReservationAttemptId"]
+    verification_attempts = verification_attempts_response.json()["data"]
+    reservation = next(
+        candidate
+        for candidate in verification_attempts
+        if candidate["attemptId"] == evidence["launchReservationAttemptId"]
+    )
+    assert reservation["status"] == "completed"
+    assert reservation["workerId"] == "verification.command"
     event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.verification_recorded")
     assert event["payload"]["prCreationAllowed"] is False
     assert event["payload"]["mergeAllowed"] is False
@@ -9364,6 +9746,7 @@ def test_subscription_launch_approval_rejection_records_non_executing_event(tmp_
         rejection_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "incomplete launch approval",
                 "workItemId": work_item_id,
@@ -9428,6 +9811,7 @@ def test_subscription_launch_approval_rejects_stale_policy_and_command_template(
         rejection_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "stale launch approval",
                 "workItemId": work_item_id,

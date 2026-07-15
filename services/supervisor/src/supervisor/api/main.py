@@ -19,7 +19,9 @@ from supervisor.api.schemas import (
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
+    OperationalActionRequestV1,
     OperationalActionApprovalRequest,
+    OperationalActionApprovalRequestV1,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     PipelineEpic25EvidenceChainIngestRequest,
@@ -303,6 +305,45 @@ async def issue_pipeline_operational_approval(
     return ApiEnvelope(data=approval)
 
 
+@app.post("/pipeline-control-plane/actions/v1/capability", response_model=ApiEnvelope)
+async def pipeline_operational_action_capability_v1(
+    payload: OperationalActionApprovalRequestV1,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        capability = await service.pipeline_operational_action_capability_v1(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_action_v1").model_dump()) from exc
+    return ApiEnvelope(data=capability)
+
+
+@app.post("/pipeline-control-plane/approvals/v1", response_model=ApiEnvelope)
+async def issue_pipeline_operational_approval_v1(
+    payload: OperationalActionApprovalRequestV1,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        approval = await service.issue_pipeline_operational_approval_v1(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_approval_v1").model_dump()) from exc
+    return ApiEnvelope(data=approval)
+
+
+@app.post("/pipeline-control-plane/actions/v1", response_model=ApiEnvelope)
+async def apply_pipeline_operational_action_v1(
+    payload: OperationalActionRequestV1,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await service.apply_pipeline_operational_action_v1(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_pipeline_operational_action_v1", payload.correlationId).model_dump()) from exc
+    return ApiEnvelope(data=result)
+
+
 @app.post("/manager-control-plane/terminal-events", response_model=ApiEnvelope)
 async def record_manager_terminal_event(
     payload: ManagerTerminalEventRequest,
@@ -519,9 +560,6 @@ async def create_work_item_execution_attempt(
     payload: WorkItemExecutionAttemptCreateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    work_item = await session.get(WorkItem, work_item_id)
-    if not work_item:
-        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         attempt = await service.create_execution_attempt(session, work_item_id, payload)
     except ValueError as exc:
@@ -585,9 +623,6 @@ async def launch_supervised_codex_worker(
     payload: WorkItemSupervisedCodexLaunchRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    work_item = await session.get(WorkItem, work_item_id)
-    if not work_item:
-        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         attempt = await service.launch_supervised_codex_worker(session, work_item_id, payload)
     except ValueError as exc:
@@ -892,14 +927,20 @@ async def assign_work_item(
     payload: WorkItemAssignmentRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    item = await service.assign_work_item(
-        session,
-        work_item_id,
-        payload.assigneeId,
-        payload.assigneeLabel,
-        payload.actorId,
-        payload.actorLabel,
-    )
+    try:
+        item = await service.assign_work_item(
+            session,
+            work_item_id,
+            payload.assigneeId,
+            payload.assigneeLabel,
+            payload.actorId,
+            payload.actorLabel,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "legacy_assignment_disabled_use_canonical_reassign_v1").model_dump(),
+        ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=service.to_work_item_view(item))

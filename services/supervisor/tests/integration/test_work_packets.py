@@ -36,6 +36,15 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     return TestClient(app, client=("127.0.0.1", 50000))
 
 
+def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
+    return {
+        "attemptId": attempt["attemptId"],
+        "workItemId": attempt["workItemId"],
+        "expectedStatus": attempt["status"],
+        "expectedRevision": attempt["revision"],
+    }
+
+
 @dataclass(frozen=True)
 class _HttpResponse:
     status_code: int
@@ -2756,7 +2765,11 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         attempt = attempt_response.json()["data"]
         failed_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "failed", "reason": "Fixture failure for recovery drawer."},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "failed",
+                "reason": "Fixture failure for recovery drawer.",
+            },
         )
         assert failed_response.status_code == 200
         _update_execution_attempt_fixture(
@@ -2836,7 +2849,11 @@ def test_operator_owned_rework_exit_stops_automation_until_reenter_capture(tmp_p
         attempt = attempt_response.json()["data"]
         failed_attempt_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "failed", "reason": "Stale failed attempt before operator-owned exit."},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "failed",
+                "reason": "Stale failed attempt before operator-owned exit.",
+            },
         )
         assert failed_attempt_response.status_code == 200
         _update_work_item_fixture(
@@ -2974,7 +2991,11 @@ def test_done_delivery_work_packet_outranks_historical_execution_attempts(tmp_pa
         attempt = attempt_response.json()["data"]
         failed_attempt_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "failed", "reason": "Historical failed attempt before delivery."},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "failed",
+                "reason": "Historical failed attempt before delivery.",
+            },
         )
         assert failed_attempt_response.status_code == 200
 
@@ -4376,6 +4397,7 @@ def test_work_packet_gate_state_validation_matches_event_replay_without_mutation
         approval_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "operator gate approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -4436,6 +4458,7 @@ def test_work_packet_gate_state_validation_blocks_mismatch_from_event_replay(tmp
         approval_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "operator gate approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -5689,10 +5712,31 @@ def test_existing_sqlite_action_schema_gets_approval_migration_and_ledger_table(
     db_path = _db_path(tmp_path, db_name)
     with sqlite3.connect(db_path) as conn:
         conn.execute("create table pipeline_operational_action_records (id varchar(80) primary key)")
+        conn.execute("create table pipeline_operational_approvals (approval_id varchar(120) primary key)")
         conn.commit()
     with _client(tmp_path, monkeypatch, db_name):
-        assert "approval_id" in _sqlite_table_columns(db_path, "pipeline_operational_action_records")
-        assert "pipeline_operational_approvals" in _sqlite_tables(db_path)
+        assert {
+            "approval_id",
+            "schema_version",
+            "action_context_json",
+            "action_context_digest_sha256",
+            "success_evidence_json",
+        }.issubset(_sqlite_table_columns(db_path, "pipeline_operational_action_records"))
+        assert {
+            "schema_version",
+            "action_context_json",
+            "action_context_digest_sha256",
+        }.issubset(_sqlite_table_columns(db_path, "pipeline_operational_approvals"))
+        assert "verification_retry_intents" in _sqlite_tables(db_path)
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "select scope, generation from admission_locks where scope = 'execute'"
+            ).fetchone() == ("execute", 0)
+            retry_indexes = {
+                row[1]: (row[2], row[4])
+                for row in conn.execute("pragma index_list(verification_retry_intents)").fetchall()
+            }
+            assert retry_indexes["uq_verification_retry_intents_pending_work_item"] == (1, 1)
 
 
 def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_coverage(tmp_path, monkeypatch) -> None:
@@ -5701,12 +5745,24 @@ def test_postgres_startup_migration_contract_and_conditional_pre_patch_schema_co
     source_text = database_source.read_text(encoding="utf-8")
     assert "ADD COLUMN IF NOT EXISTS {column_name} {column_type}" in source_text
 
-    from supervisor.infrastructure.db.database import POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS
+    from supervisor.infrastructure.db.database import (
+        POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS,
+        POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS,
+    )
 
     assert POSTGRES_OPERATIONAL_ACTION_MIGRATION_COLUMNS == (
         ("child_packet_id", "VARCHAR(80)"),
         ("expected_current_event_id", "VARCHAR(80)"),
         ("approval_id", "VARCHAR(120)"),
+        ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+        ("action_context_json", "JSON"),
+        ("action_context_digest_sha256", "VARCHAR(80)"),
+        ("success_evidence_json", "JSON"),
+    )
+    assert POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS == (
+        ("schema_version", "VARCHAR(64) DEFAULT 'pipeline-operational-action/v0'"),
+        ("action_context_json", "JSON"),
+        ("action_context_digest_sha256", "VARCHAR(80)"),
     )
 
     database_url = os.getenv("SUPERVISOR_POSTGRES_TEST_DATABASE_URL")

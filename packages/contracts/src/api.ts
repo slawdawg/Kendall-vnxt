@@ -366,6 +366,9 @@ export interface ExecutionAttemptView {
   lane: string;
   authorityMode: string;
   status: ExecutionAttemptStatus;
+  revision: number;
+  launchFenceState: "not_applicable" | "reserved" | "claimed";
+  launchClaimedAt?: string | null;
   requestedById?: string | null;
   requestedByLabel?: string | null;
   createdAt: string;

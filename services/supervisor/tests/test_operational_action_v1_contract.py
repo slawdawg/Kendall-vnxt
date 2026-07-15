@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -9,6 +12,7 @@ from pydantic import ValidationError
 
 from supervisor.api.schemas import (
     OPERATIONAL_ACTION_V1_CONTEXT_FIELDS,
+    OPERATIONAL_ACTION_V1_ID_LENGTHS,
     OPERATIONAL_ACTION_V1_POLICY,
     DrainActionContextV1,
     OperationalActionApprovalV1,
@@ -18,6 +22,7 @@ from supervisor.api.schemas import (
     OperationalActionResultV1,
     PauseActionContextV1,
     ReassignActionContextV1,
+    RetryVerificationSuccessEvidenceV1,
     RetryVerificationActionContextV1,
     operational_action_context_digest_payload_v1,
     operational_action_context_digest_sha256_v1,
@@ -26,6 +31,7 @@ from supervisor.application.service import (
     SERVER_APPLICABLE_OPERATIONAL_ACTIONS,
     SERVER_APPROVABLE_OPERATIONAL_ACTIONS,
     SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS,
+    SupervisorService,
 )
 
 
@@ -48,6 +54,8 @@ def _contexts() -> dict[str, dict[str, object]]:
             "executionAttemptId": "attempt-1",
             "linkedWorkItemId": "work-1",
             "linkedPacketId": "packet-1",
+            "expectedWorkItemState": "ready",
+            "expectedWorkItemUpdatedAt": "2026-07-14T19:59:59.000Z",
             "expectedAttemptStatus": "failed",
             "expectedAttemptUpdatedAt": "2026-07-14T20:00:00.000Z",
             "expectedPacketCurrentEventId": "event-1",
@@ -71,6 +79,7 @@ def _contexts() -> dict[str, dict[str, object]]:
             "expectedCurrentOwnerId": "owner-old",
             "newOwnerId": "owner-new",
             "expectedWorkItemState": "ready",
+            "expectedWorkItemUpdatedAt": "2026-07-14T19:59:59.000Z",
             "expectedActiveLeaseId": None,
             "expectedRunningAttemptId": None,
         },
@@ -130,6 +139,53 @@ def _approval(request: dict[str, object]) -> dict[str, object]:
     return approval
 
 
+def _rebind_context(request: dict[str, object], **overrides: object) -> dict[str, object]:
+    rebound = deepcopy(request)
+    context = rebound["actionContext"]
+    assert isinstance(context, dict)
+    context.update(overrides)
+    ordered_context = {
+        field: context.get(field)
+        for field in OPERATIONAL_ACTION_V1_CONTEXT_FIELDS[str(rebound["actionId"])]
+    }
+    payload = json.dumps(
+        {
+            "schemaVersion": rebound["schemaVersion"],
+            "actionId": rebound["actionId"],
+            "targetType": rebound["targetType"],
+            "targetId": rebound["targetId"],
+            "actionContext": ordered_context,
+        },
+        separators=(",", ":"),
+    )
+    rebound["actionContextDigestSha256"] = f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
+    return rebound
+
+
+def _typescript_request_issues(request: dict[str, object]) -> list[dict[str, object]]:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = r'''
+const fs = require("node:fs");
+const path = require("node:path");
+const ts = require(require.resolve("typescript", { paths: [path.join(process.argv[1], "apps/dashboard")] }));
+const source = fs.readFileSync(path.join(process.argv[1], "packages/contracts/src/pipeline-control-plane/index.ts"), "utf8");
+const output = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+const contractModule = { exports: {} };
+Function("module", "exports", output)(contractModule, contractModule.exports);
+process.stdout.write(JSON.stringify(contractModule.exports.validatePipelineOperationalActionRequestV1(JSON.parse(fs.readFileSync(0, "utf8")))));
+'''
+    completed = subprocess.run(
+        ["node", "-e", script, str(repo_root)],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
 def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
     assert OPERATIONAL_ACTION_V1_POLICY == EXPECTED_POLICY
     typescript = (
@@ -144,9 +200,9 @@ def test_typescript_and_python_v1_policy_matrix_are_exactly_aligned() -> None:
         assert re.search(pattern, typescript), f"TypeScript policy drift for {action_id}"
 
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["retry_verification"] == (
-        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedAttemptStatus",
-        "expectedAttemptUpdatedAt", "expectedPacketCurrentEventId", "expectedLeaseId",
-        "expectedLeaseFencingToken", "expectedLeaseActive",
+        "kind", "executionAttemptId", "linkedWorkItemId", "linkedPacketId", "expectedWorkItemState",
+        "expectedWorkItemUpdatedAt", "expectedAttemptStatus", "expectedAttemptUpdatedAt",
+        "expectedPacketCurrentEventId", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
     )
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["pause"] == ("kind", "expectedRuntimeMode", "expectedRuntimeRevision")
     assert OPERATIONAL_ACTION_V1_CONTEXT_FIELDS["drain"][-3:] == (
@@ -165,6 +221,16 @@ def test_v1_requests_accept_only_the_exact_action_binding(action_id: str) -> Non
 def test_v1_requests_fail_closed_for_context_fence_target_authority_and_risk_drift() -> None:
     retry = _request("retry_verification")
     del retry["actionContext"]["expectedAttemptUpdatedAt"]  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(retry)
+
+    retry = _request("retry_verification")
+    del retry["actionContext"]["expectedWorkItemState"]  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        OperationalActionRequestV1.model_validate(retry)
+
+    retry = _request("retry_verification")
+    del retry["actionContext"]["expectedWorkItemUpdatedAt"]  # type: ignore[index]
     with pytest.raises(ValidationError):
         OperationalActionRequestV1.model_validate(retry)
 
@@ -192,6 +258,104 @@ def test_v1_requests_fail_closed_for_context_fence_target_authority_and_risk_dri
     reassign["actionContext"]["expectedActiveLeaseId"] = "lease-1"  # type: ignore[index]
     with pytest.raises(ValidationError):
         OperationalActionRequestV1.model_validate(reassign)
+
+
+def test_v1_identifier_boundaries_match_persistence_without_truncation() -> None:
+    retry_context = deepcopy(_contexts()["retry_verification"])
+    retry_context.update(
+        executionAttemptId="a" * OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+        linkedWorkItemId="w" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+        linkedPacketId="p" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"],
+        expectedPacketCurrentEventId="e" * OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"],
+        expectedLeaseId="l" * OPERATIONAL_ACTION_V1_ID_LENGTHS["queue_lease"],
+    )
+    assert RetryVerificationActionContextV1.model_validate(retry_context).linkedPacketId == "p" * 80
+
+    reassign_context = deepcopy(_contexts()["reassign"])
+    reassign_context.update(
+        linkedWorkItemId="w" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+        expectedPacketCurrentEventId="e" * OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"],
+        expectedCurrentOwnerId="o" * OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"],
+        newOwnerId="n" * OPERATIONAL_ACTION_V1_ID_LENGTHS["owner"],
+    )
+    assert ReassignActionContextV1.model_validate(reassign_context).newOwnerId == "n" * 100
+
+    retry_intent_at_max = "verification-retry-" + "a" * (
+        OPERATIONAL_ACTION_V1_ID_LENGTHS["retry_intent"] - len("verification-retry-")
+    )
+    retry_evidence = RetryVerificationSuccessEvidenceV1.model_validate(
+        {
+            "kind": "retry_verification",
+            "originalAttemptId": "a" * OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"],
+            "retryIntentId": retry_intent_at_max,
+            "linkedWorkItemId": "w" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_item"],
+            "linkedPacketId": "p" * OPERATIONAL_ACTION_V1_ID_LENGTHS["work_packet"],
+            "resultingPacketCurrentEventId": "e" * OPERATIONAL_ACTION_V1_ID_LENGTHS["packet_event"],
+            "originalAttemptPreserved": True,
+            "providerOrWorkerLaunched": False,
+        }
+    )
+    assert retry_evidence.retryIntentId == retry_intent_at_max
+    with pytest.raises(ValidationError):
+        RetryVerificationSuccessEvidenceV1.model_validate(
+            {**retry_evidence.model_dump(), "retryIntentId": f"{retry_intent_at_max}a"}
+        )
+
+    request = _request("retry_verification")
+    request.update(
+        idempotencyKey="i" * OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"],
+        correlationId="c" * OPERATIONAL_ACTION_V1_ID_LENGTHS["correlation"],
+        approvalId="v" * OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"],
+    )
+    accepted = OperationalActionRequestV1.model_validate(request)
+    assert len(accepted.idempotencyKey) == 160
+    assert len(accepted.correlationId) == 36
+    assert len(accepted.approvalId) == 120
+
+    for field, limit in (
+        ("idempotencyKey", OPERATIONAL_ACTION_V1_ID_LENGTHS["idempotency"]),
+        ("correlationId", OPERATIONAL_ACTION_V1_ID_LENGTHS["correlation"]),
+        ("approvalId", OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"]),
+    ):
+        oversized = deepcopy(request)
+        oversized[field] = "x" * (limit + 1)
+        with pytest.raises(ValidationError, match="exact safe identifier"):
+            OperationalActionRequestV1.model_validate(oversized)
+
+    oversized_attempt = deepcopy(retry_context)
+    oversized_attempt["executionAttemptId"] = "a" * (OPERATIONAL_ACTION_V1_ID_LENGTHS["execution_attempt"] + 1)
+    with pytest.raises(ValidationError, match="exact safe identifier"):
+        RetryVerificationActionContextV1.model_validate(oversized_attempt)
+
+    first_key = SupervisorService._p2_1_packet_event_idempotency_key("i" * 160)
+    second_key = SupervisorService._p2_1_packet_event_idempotency_key(("i" * 159) + "j")
+    assert len(first_key) == 69
+    assert first_key != second_key
+
+
+@pytest.mark.parametrize(
+    ("payload", "accepted"),
+    [
+        (_rebind_context(_request("reassign"), newOwnerId="owner-new"), True),
+        (_rebind_context(_request("reassign"), newOwnerId="owner--new"), False),
+        ({**_request("retry_verification"), "evidenceRefs": [f"evidence:{'A' * 160}"]}, True),
+        ({**_request("retry_verification"), "evidenceRefs": [f"evidence:{'A' * 161}"]}, False),
+        ({**_request("retry_verification"), "evidenceRefs": ["capability:retry-verification"]}, False),
+        ({**_request("retry_verification"), "evidenceRefs": ["evidence:../retry-verification"]}, False),
+    ],
+)
+def test_python_and_typescript_v1_grammars_match_at_identifier_and_evidence_boundaries(
+    payload: dict[str, object],
+    accepted: bool,
+) -> None:
+    try:
+        OperationalActionRequestV1.model_validate(payload)
+        python_accepted = True
+    except ValidationError:
+        python_accepted = False
+    typescript_accepted = not _typescript_request_issues(payload)
+    assert python_accepted is accepted
+    assert typescript_accepted is accepted
 
 
 def test_context_digest_payload_is_canonical_and_field_ordered() -> None:
@@ -334,3 +498,80 @@ def test_runtime_result_requires_explicit_mode_revision_and_preservation_evidenc
     result["successEvidence"]["resultingRuntimeRevision"] = 3  # type: ignore[index]
     with pytest.raises(ValidationError, match="advance the monotonic runtime revision"):
         OperationalActionResultV1.model_validate(result)
+
+
+def test_operational_action_v1_timestamp_parity_fixture() -> None:
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "pipeline-operational-action-v1-timestamps.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    context = deepcopy(_contexts()["reassign"])
+    for timestamp in fixture["accepted"]:
+        candidate = deepcopy(context)
+        candidate["expectedWorkItemUpdatedAt"] = timestamp
+        ReassignActionContextV1.model_validate(candidate)
+    for timestamp in fixture["rejected"]:
+        candidate = deepcopy(context)
+        candidate["expectedWorkItemUpdatedAt"] = timestamp
+        with pytest.raises(ValidationError, match="canonical RFC3339 timestamp"):
+            ReassignActionContextV1.model_validate(candidate)
+
+    approval_request = _request("pause")
+    for timestamp in fixture["accepted"]:
+        approval = _approval(approval_request)
+        approval.update(
+            consumed=True,
+            consumedAt=timestamp,
+            consumedActionIdempotencyKey=approval_request["idempotencyKey"],
+            consumedActionRecordId="record-1",
+        )
+        OperationalActionApprovalV1.model_validate(approval)
+    for timestamp in fixture["rejected"]:
+        approval = _approval(approval_request)
+        approval["issuedAt"] = timestamp
+        with pytest.raises(ValidationError, match="canonical RFC3339 timestamp"):
+            OperationalActionApprovalV1.model_validate(approval)
+
+
+def test_retry_result_parity_fixture_rejects_extra_evidence_and_unchanged_packet_event() -> None:
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "pipeline-operational-action-v1-result-parity.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    request = _request("retry_verification")
+    result = {
+        key: deepcopy(request[key])
+        for key in (
+            "schemaVersion", "actionId", "targetType", "targetId", "actionContext",
+            "actionContextDigestSha256", "serverBound", "metadataOnly", "rawPayloadRetained",
+        )
+    }
+    result.update(
+        outcome="succeeded",
+        capabilityState="available",
+        authorityState="allowed",
+        riskTier="medium",
+        typedReason=None,
+        successEvidence={
+            "kind": "retry_verification",
+            "originalAttemptId": request["targetId"],
+            "retryIntentId": "verification-retry-result",
+            "linkedWorkItemId": request["actionContext"]["linkedWorkItemId"],
+            "linkedPacketId": request["actionContext"]["linkedPacketId"],
+            "resultingPacketCurrentEventId": "event-retry-result",
+            "originalAttemptPreserved": True,
+            "providerOrWorkerLaunched": False,
+        },
+        evidenceRefs=["operational-action:retry-result"],
+        correlationId=request["correlationId"],
+        idempotencyKey=request["idempotencyKey"],
+        actionRecordId="record-retry",
+        approvalId=request["approvalId"],
+        replayed=False,
+    )
+    OperationalActionResultV1.model_validate(result)
+    for invalid_case in fixture["invalidRetrySuccessEvidenceCases"]:
+        candidate = deepcopy(result)
+        candidate["successEvidence"].update(invalid_case.get("patch", {}))
+        if invalid_case.get("useExpectedPacketCurrentEventId"):
+            candidate["successEvidence"]["resultingPacketCurrentEventId"] = request["actionContext"][
+                "expectedPacketCurrentEventId"
+            ]
+        with pytest.raises(ValidationError):
+            OperationalActionResultV1.model_validate(candidate)
