@@ -1197,10 +1197,21 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
         {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
     ]
-    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
-        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
-        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
-    ]
+    verification_launch_reservation = None
+
+    def recipe_verification_commands(recipe):  # type: ignore[no-untyped-def]
+        nonlocal verification_launch_reservation
+        with sqlite3.connect(db_path) as connection:
+            verification_launch_reservation = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts "
+                "WHERE worker_id = 'recipe.verification.command'"
+            ).fetchone()
+        return [
+            {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+            {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        ]
+
+    service._run_recipe_verification_commands = recipe_verification_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -1254,6 +1265,7 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         profiles_response = client.get("/routing/lane-profiles")
 
         assert missing_validation_note.status_code == 409
@@ -1266,10 +1278,12 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         assert approval_note.status_code == 200
         assert events_response.status_code == 200
         assert audit_response.status_code == 200
+        assert attempts_response.status_code == 200
         assert profiles_response.status_code == 200
 
         events = events_response.json()["data"]
         audit = audit_response.json()["data"]
+        attempts = attempts_response.json()["data"]
         selected_event = next(event for event in events if event["eventType"] == "recipe.selected")
         ready_event = next(event for event in events if event["eventType"] == "recipe.ready")
         implementation_path_scope_event = next(event for event in events if event["eventType"] == "recipe.implementation_path_scope_passed")
@@ -1307,6 +1321,16 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         assert path_scope_event["payload"]["changedPaths"] == ["tests/e2e/dashboard.spec.ts"]
         assert path_scope_event["payload"]["outOfScopePaths"] == []
         verification_event = next(event for event in events if event["eventType"] == "recipe.verification_passed")
+        assert verification_launch_reservation == ("starting", "recipe.verification.command")
+        verification_attempt = next(
+            attempt for attempt in attempts if attempt["workerId"] == "recipe.verification.command"
+        )
+        assert verification_attempt["status"] == "completed"
+        assert any(
+            ref.get("artifactType") == "task_packet_v0"
+            and ref.get("taskKind") == "validation_execution"
+            for ref in verification_attempt["artifactRefs"]
+        )
         assert verification_event["payload"]["operatorCheckpoint"] == "verification-command-run"
         assert [result["command"] for result in verification_event["payload"]["commands"]] == [
             "pnpm run test:e2e:dashboard",
@@ -1524,6 +1548,19 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         return original_which(executable)
 
     monkeypatch.setattr(service_module.shutil, "which", fake_which)
+    remote_launch_reservation = None
+    original_remote_delivery_commands = service._remote_delivery_commands
+
+    def remote_delivery_commands(item):  # type: ignore[no-untyped-def]
+        nonlocal remote_launch_reservation
+        with sqlite3.connect(db_path) as connection:
+            remote_launch_reservation = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts "
+                "WHERE worker_id = 'recipe.remote-delivery.command'"
+            ).fetchone()
+        return original_remote_delivery_commands(item)
+
+    service._remote_delivery_commands = remote_delivery_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -1579,17 +1616,20 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         )
         item_response = client.get(f"/work-items/{work_item_id}")
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
 
         assert executed.status_code == 200
         assert approved.status_code == 200
         assert item_response.status_code == 200
         assert audit_after_remote.status_code == 200
         assert events_response.status_code == 200
+        assert attempts_response.status_code == 200
 
         item = item_response.json()["data"]
         delivery = item["deliveryReadiness"]
         event_types = [event["eventType"] for event in events_response.json()["data"]]
         after_action = audit_after_remote.json()["data"]["nextManagedAction"]
+        attempts = attempts_response.json()["data"]
 
         assert item["state"] == "done"
         assert (
@@ -1603,6 +1643,11 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         )
         gh_log_entries = gh_log_path.read_text(encoding="utf-8").splitlines()
         assert "auth" in gh_log_entries
+        assert remote_launch_reservation == ("starting", "recipe.remote-delivery.command")
+        assert any(
+            attempt["workerId"] == "recipe.remote-delivery.command" and attempt["status"] == "completed"
+            for attempt in attempts
+        )
 
         remote_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.remote_delivery_executed")
         remote_commands = remote_event["payload"]["commands"]

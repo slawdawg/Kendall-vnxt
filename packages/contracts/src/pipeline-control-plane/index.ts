@@ -2491,6 +2491,28 @@ function validatePipelineOperationalActionV1SuccessEvidence(
 ): void {
   const evidence = pipelineOperationalActionV1Record(record.successEvidence, issues, "successEvidence");
   const context = pipelineOperationalActionV1Record(record.actionContext, issues, "actionContext");
+  const exactKeysByAction: Record<PipelineOperationalActionIdV1, readonly string[]> = {
+    retry_verification: [
+      "kind", "originalAttemptId", "retryIntentId", "linkedWorkItemId", "linkedPacketId",
+      "resultingPacketCurrentEventId", "originalAttemptPreserved", "providerOrWorkerLaunched",
+    ],
+    pause: [
+      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "intakeStopped",
+      "activeWorkPreserved",
+    ],
+    drain: [
+      "kind", "resultingRuntimeMode", "resultingRuntimeRevision", "activeWorkCount", "intakeStopped",
+      "activeWorkAllowedToConverge", "workersKilled",
+    ],
+    reassign: [
+      "kind", "packetId", "linkedWorkItemId", "previousOwnerId", "newOwnerId",
+      "resultingPacketCurrentEventId", "activeLeaseTransferred", "workerLaunched",
+    ],
+  };
+  const exactKeys = exactKeysByAction[record.actionId as PipelineOperationalActionIdV1];
+  if (!exactKeys || Object.keys(evidence).length !== exactKeys.length || Object.keys(evidence).some((key) => !exactKeys.includes(key))) {
+    pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "V1 success evidence fields must exactly match the action discriminator.");
+  }
   if (evidence.kind !== record.actionId) {
     pushPipelineOperationalActionV1Issue(issues, "successEvidence.kind", "inconsistent_result", "V1 success evidence must match the action discriminator.");
     return;
@@ -2500,6 +2522,7 @@ function validatePipelineOperationalActionV1SuccessEvidence(
         !isSafeOperationalActionV1Identifier(evidence.retryIntentId, OPERATIONAL_ACTION_V1_ID_LENGTHS.retryIntent) ||
         !(evidence.retryIntentId as string).startsWith("verification-retry-") || evidence.retryIntentId === evidence.originalAttemptId ||
         evidence.linkedWorkItemId !== context.linkedWorkItemId || evidence.linkedPacketId !== context.linkedPacketId ||
+        evidence.resultingPacketCurrentEventId === context.expectedPacketCurrentEventId ||
         !isSafeOperationalActionV1Identifier(evidence.resultingPacketCurrentEventId, OPERATIONAL_ACTION_V1_ID_LENGTHS.packetEvent)) {
       pushPipelineOperationalActionV1Issue(issues, "successEvidence", "inconsistent_result", "Retry success must preserve the original attempt, create a distinct pending retry intent, and launch nothing.");
     }

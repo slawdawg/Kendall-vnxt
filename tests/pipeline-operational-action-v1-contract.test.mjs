@@ -6,6 +6,7 @@ import test from "node:test";
 
 const contractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 const timestampFixturePath = new URL("./fixtures/pipeline-operational-action-v1-timestamps.json", import.meta.url);
+const resultParityFixturePath = new URL("./fixtures/pipeline-operational-action-v1-result-parity.json", import.meta.url);
 const require = createRequire(import.meta.url);
 
 async function loadContract() {
@@ -217,6 +218,30 @@ test("v1 timestamps enforce the shared canonical RFC3339 parity fixture", async 
       `TypeScript accepted shared negative timestamp ${timestamp}`,
     );
   }
+
+  const approvalRequest = requestFor(contract, "pause");
+  for (const timestamp of fixture.accepted) {
+    const approval = approvalFor(approvalRequest, {
+      consumed: true,
+      consumedAt: timestamp,
+      consumedActionIdempotencyKey: approvalRequest.idempotencyKey,
+      consumedActionRecordId: "record-1",
+    });
+    assert.deepEqual(
+      contract.validatePipelineOperationalActionApprovalV1(approval),
+      [],
+      `TypeScript rejected shared positive approval timestamp ${timestamp}`,
+    );
+  }
+  for (const timestamp of fixture.rejected) {
+    assert.ok(
+      contract.validatePipelineOperationalActionApprovalV1({
+        ...approvalFor(approvalRequest),
+        issuedAt: timestamp,
+      }).some((issue) => issue.field === "expiresAt" || issue.field === "consumed"),
+      `TypeScript accepted shared negative approval timestamp ${timestamp}`,
+    );
+  }
 });
 
 test("v1 request and approval reject valid-shaped incorrect context digests", async () => {
@@ -387,6 +412,18 @@ test("v1 runtime success evidence is explicit while v0 request behavior remains 
     rawPayloadRetained: false,
   };
   assert.deepEqual(contract.validatePipelineOperationalActionResultV1(retryResult), []);
+  const parityFixture = JSON.parse(await readFile(resultParityFixturePath, "utf8"));
+  for (const invalidCase of parityFixture.invalidRetrySuccessEvidenceCases) {
+    const candidate = structuredClone(retryResult);
+    Object.assign(candidate.successEvidence, invalidCase.patch || {});
+    if (invalidCase.useExpectedPacketCurrentEventId) {
+      candidate.successEvidence.resultingPacketCurrentEventId = candidate.actionContext.expectedPacketCurrentEventId;
+    }
+    assert.ok(
+      contract.validatePipelineOperationalActionResultV1(candidate).some((issue) => issue.code === "inconsistent_result"),
+      invalidCase.name,
+    );
+  }
   assert.ok(contract.validatePipelineOperationalActionResultV1({
     ...retryResult,
     successEvidence: { ...retryResult.successEvidence, retryIntentId: `verification-retry-${"a".repeat(62)}` },

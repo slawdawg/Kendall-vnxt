@@ -41,6 +41,17 @@ class LocalProviderApprovalValidation:
     approval_reference: str | None = None
 
 
+@dataclass(frozen=True)
+class ExternalLaunchAdmissionSnapshot:
+    work_item_id: str
+    state: str
+    updated_at: datetime
+    assignee_id: str | None
+    assignee_label: str | None
+    authoritative_packet_id: str | None
+    metadata_packet_id: str | None
+
+
 class OperationalActionReplay(Exception):
     def __init__(self, record: object) -> None:
         super().__init__("Operational action idempotency replay.")
@@ -1339,6 +1350,69 @@ class SupervisorService:
                 "new retry, reassign, active execution, or lease admission is blocked."
             )
 
+    @staticmethod
+    def _execution_attempt_has_task_kind(attempt: ExecutionAttempt, task_kind: str) -> bool:
+        artifacts = attempt.artifact_refs_json if isinstance(attempt.artifact_refs_json, list) else []
+        return any(
+            isinstance(ref, dict)
+            and ref.get("artifactType") == "task_packet_v0"
+            and ref.get("taskKind") == task_kind
+            and ref.get("workItemId") == attempt.work_item_id
+            and ref.get("routeDecisionId") == attempt.route_decision_id
+            and ref.get("packetId") == f"task-packet-{attempt.route_decision_id}"
+            and ref.get("approvalMode") == attempt.authority_mode
+            for ref in artifacts
+        )
+
+    def _external_launch_admission_snapshot(self, item: WorkItem) -> ExternalLaunchAdmissionSnapshot:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        metadata_packet_id = metadata.get("authoritativePacketId")
+        return ExternalLaunchAdmissionSnapshot(
+            work_item_id=item.id,
+            state=item.state,
+            updated_at=self._ensure_aware(item.updated_at).astimezone(timezone.utc),
+            assignee_id=item.assignee_id,
+            assignee_label=item.assignee_label,
+            authoritative_packet_id=item.authoritative_packet_id,
+            metadata_packet_id=metadata_packet_id if isinstance(metadata_packet_id, str) else None,
+        )
+
+    async def _refresh_external_launch_target_for_admission(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        expected: ExternalLaunchAdmissionSnapshot,
+    ) -> AuthoritativeWorkPacket | None:
+        """Refresh and CAS-check all mutable launch routing inputs under admission."""
+
+        await session.refresh(item)
+        current = self._external_launch_admission_snapshot(item)
+        if current != expected:
+            raise ValueError(
+                "External launch admission rejected because WorkItem state, revision, ownership, or packet linkage changed concurrently."
+            )
+        packet_id = current.authoritative_packet_id
+        if packet_id != current.metadata_packet_id:
+            if packet_id is not None or current.metadata_packet_id is not None:
+                raise ValueError(
+                    "External launch admission rejected because canonical WorkItem packet linkage is ambiguous."
+                )
+            return None
+        if packet_id is None:
+            return None
+        packet = await session.get(AuthoritativeWorkPacket, packet_id, with_for_update=True)
+        if not packet:
+            raise ValueError("External launch admission rejected because the authoritative packet is missing.")
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        if (
+            metadata.get("authoritativePacketStage") != packet.current_stage
+            or metadata.get("authoritativePacketStatus") != packet.status
+        ):
+            raise ValueError(
+                "External launch admission rejected because the authoritative packet projection is stale."
+            )
+        return packet
+
     async def _reserve_external_launch_attempt(
         self,
         session: AsyncSession,
@@ -1352,12 +1426,17 @@ class SupervisorService:
         requested_by_id: str | None = None,
         requested_by_label: str | None = None,
         admission_lock_acquired: bool = False,
+        expected_snapshot: ExternalLaunchAdmissionSnapshot | None = None,
+        task_kind: str | None = None,
     ) -> ExecutionAttempt:
         """Persist the one durable reservation that must precede an external side effect."""
 
         if not admission_lock_acquired:
             await self._acquire_execute_admission_lock(session)
-        await session.refresh(item)
+        if expected_snapshot is None:
+            await session.refresh(item)
+        else:
+            await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
         await self._reject_pending_verification_retry_admission(session, item.id)
         active_attempt = await self._active_execution_attempt(session, item.id)
         if active_attempt:
@@ -1375,6 +1454,20 @@ class SupervisorService:
 
         self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
         now = datetime.now(timezone.utc)
+        task_packet_ref = (
+            {
+                "artifactType": "task_packet_v0",
+                "packetId": f"task-packet-{route_decision_id}",
+                "workItemId": item.id,
+                "routeDecisionId": route_decision_id,
+                "taskKind": task_kind,
+                "approvalMode": authority_mode,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+            if task_kind is not None
+            else None
+        )
         attempt = ExecutionAttempt(
             id=str(uuid.uuid4()),
             work_item_id=item.id,
@@ -1393,7 +1486,9 @@ class SupervisorService:
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             },
-            artifact_refs_json=[
+            artifact_refs_json=(
+                [task_packet_ref] if task_packet_ref is not None else []
+            ) + [
                 {
                     "artifactType": "external_launch_reservation",
                     "operation": operation,
@@ -1525,16 +1620,9 @@ class SupervisorService:
             packet = await session.get(AuthoritativeWorkPacket, context.linkedPacketId, **get_options)
             if not item or not packet or attempt.work_item_id != item.id:
                 raise OperationalActionIneligible("Retry target attempt/work-item/packet linkage disagrees.", "evidence_invalid")
-            attempt_artifacts = attempt.artifact_refs_json if isinstance(attempt.artifact_refs_json, list) else []
-            has_verification_provenance = any(
-                isinstance(ref, dict)
-                and ref.get("artifactType") == "task_packet_v0"
-                and ref.get("taskKind") == TaskKind.VALIDATION_EXECUTION.value
-                and ref.get("workItemId") == attempt.work_item_id
-                and ref.get("routeDecisionId") == attempt.route_decision_id
-                and ref.get("packetId") == f"task-packet-{attempt.route_decision_id}"
-                and ref.get("approvalMode") == attempt.authority_mode
-                for ref in attempt_artifacts
+            has_verification_provenance = self._execution_attempt_has_task_kind(
+                attempt,
+                TaskKind.VALIDATION_EXECUTION.value,
             )
             if not has_verification_provenance:
                 raise OperationalActionIneligible(
@@ -4231,12 +4319,23 @@ class SupervisorService:
             select(VerificationRetryIntent).where(VerificationRetryIntent.status == "pending")
         )
         pending_verification_retry_count = len(list(retry_intent_rows.scalars()))
+        active_attempt_rows = await session.execute(
+            select(ExecutionAttempt).where(ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES))
+        )
+        active_verification_work_item_ids = {
+            attempt.work_item_id
+            for attempt in active_attempt_rows.scalars()
+            if self._execution_attempt_has_task_kind(attempt, TaskKind.VALIDATION_EXECUTION.value)
+        }
+        validating_work_item_ids = {
+            item.id for item in items if item.state == WorkflowState.VALIDATING.value
+        }
         open_statuses = {"active", "waiting", "blocked", "failed"}
         observed = PipelineExecuteAdmissionCountsV0View(
             review=sum(1 for packet in packets if packet.current_stage == "review" and packet.status in open_statuses),
             deliver=sum(1 for packet in packets if packet.current_stage == "deliver" and packet.status in open_statuses),
             verification=(
-                sum(1 for item in items if item.state == WorkflowState.VALIDATING.value)
+                len(validating_work_item_ids | active_verification_work_item_ids)
                 + pending_verification_retry_count
             ),
             operatorTesting=sum(
@@ -25768,11 +25867,39 @@ class SupervisorService:
         self,
         session: AsyncSession,
         item: WorkItem,
-        decision: RoutingDecision,
-        function_id: str,
+        recipe: ExecutionRecipe,
+        expected_action: WorkItemManagedActionView,
         actor_id: str | None,
         actor_label: str | None,
-    ) -> UtilityWorkerResult:
+    ) -> tuple[RoutingDecision | None, UtilityWorkerResult | None]:
+        expected_snapshot = self._external_launch_admission_snapshot(item)
+        await self._acquire_execute_admission_lock(session)
+        await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
+        current_recipe = self._execution_recipe_for_item(item)
+        if not current_recipe or current_recipe.id != recipe.id:
+            raise ValueError("Guarded utility launch rejected because the managed recipe changed before admission.")
+        events = await self.list_work_item_events(session, item.id)
+        current_audit = self._recipe_gate_audit_view(item, current_recipe, events)
+        current_action = current_audit.nextManagedAction
+        if current_action.actionId != expected_action.actionId:
+            raise ValueError(
+                f"Managed action changed from {expected_action.actionId} to {current_action.actionId}. Refresh before continuing."
+            )
+        if current_action.status != "available":
+            raise ValueError(
+                f"Managed action {current_action.actionId} is {current_action.status}: {current_action.reason}"
+            )
+        decision = await self._record_guarded_utility_routing_event(
+            session,
+            item,
+            current_recipe,
+            current_action,
+            actor_id,
+            actor_label,
+        )
+        if decision is None:
+            return None, None
+        function_id = current_action.actionId
         profile = decision.profile_snapshot
         task = UtilityWorkerTask(
             work_item_id=item.id,
@@ -25792,6 +25919,9 @@ class SupervisorService:
             operation=f"guarded_utility_worker:{function_id}",
             requested_by_id=actor_id,
             requested_by_label=actor_label,
+            admission_lock_acquired=True,
+            expected_snapshot=expected_snapshot,
+            task_kind=profile.task_kind.value,
         )
         try:
             result = self.utility_worker.run(task)
@@ -25837,7 +25967,7 @@ class SupervisorService:
             actor_id=actor_id,
             actor_label=actor_label,
         )
-        return result
+        return decision, result
 
     def _utility_worker_attempt_payload(
         self,
@@ -26234,7 +26364,14 @@ class SupervisorService:
                 raise ValueError("Remote delivery automation is disabled by policy.")
             if item.state != WorkflowState.REVIEWING.value:
                 raise ValueError("Remote delivery can only run during review.")
-            remote_results = self._remote_delivery_commands(item)
+            remote_results = await self._run_admitted_remote_delivery(
+                session,
+                item,
+                recipe,
+                next_action,
+                requested_by_id=payload.actorId,
+                requested_by_label=payload.actorLabel,
+            )
             if any(result["exitCode"] != 0 for result in remote_results):
                 await self._record_event(
                     session,
@@ -26298,7 +26435,7 @@ class SupervisorService:
             await self._publish_item(item)
             return item
         if next_action.actionId == "supervisor_triage":
-            decision = await self._record_guarded_utility_routing_event(
+            decision, utility_result = await self._run_guarded_utility_worker(
                 session,
                 item,
                 recipe,
@@ -26306,15 +26443,7 @@ class SupervisorService:
                 payload.actorId,
                 payload.actorLabel,
             )
-            if decision:
-                utility_result = await self._run_guarded_utility_worker(
-                    session,
-                    item,
-                    decision,
-                    next_action.actionId,
-                    payload.actorId,
-                    payload.actorLabel,
-                )
+            if decision and utility_result:
                 await self._record_routing_outcome_event(
                     session,
                     item,
@@ -26871,7 +27000,14 @@ class SupervisorService:
                         path_payload | {"note": clean_note},
                     ),
                 )
-            command_results = self._run_recipe_verification_commands(recipe)
+            command_results = await self._run_admitted_recipe_verification_commands(
+                session,
+                recipe,
+                item,
+                checkpoint="verification-command-run",
+                requested_by_id=actor_id,
+                requested_by_label=actor_label,
+            )
             if recipe and not all(result["exitCode"] == 0 for result in command_results):
                 item.blocked_reason = None
                 await self._record_event(
@@ -27731,6 +27867,108 @@ class SupervisorService:
 
         return [self._run_recipe_command(command) for command in recipe.verification_commands]
 
+    async def _run_admitted_recipe_verification_commands(
+        self,
+        session: AsyncSession,
+        recipe: ExecutionRecipe | None,
+        item: WorkItem,
+        *,
+        checkpoint: str,
+        requested_by_id: str | None = None,
+        requested_by_label: str | None = None,
+    ) -> list[dict]:
+        if not recipe:
+            return []
+        expected_snapshot = self._external_launch_admission_snapshot(item)
+        await self._acquire_execute_admission_lock(session)
+        await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
+        current_recipe = self._execution_recipe_for_item(item)
+        if not current_recipe or current_recipe.id != recipe.id:
+            raise ValueError("Recipe verification rejected because the managed recipe changed before admission.")
+        if item.state != WorkflowState.IMPLEMENTING.value:
+            raise ValueError("Recipe verification rejected because the WorkItem is no longer implementing.")
+        events = await self.list_work_item_events(session, item.id)
+        current_action = self._recipe_gate_audit_view(item, current_recipe, events).nextManagedAction
+        if current_action.actionId != WorkflowAction.SUBMIT_FOR_VALIDATION.value or current_action.status != "available":
+            raise ValueError(
+                f"Recipe verification rejected because submit_for_validation is no longer available: "
+                f"{current_action.actionId}/{current_action.status}."
+            )
+        if not current_recipe.verification_commands:
+            await self._record_event(
+                session,
+                item,
+                "recipe.verification_no_launch",
+                f"Recipe {current_recipe.label} has no verification command launch.",
+                {
+                    "recipeId": current_recipe.id,
+                    "operatorCheckpoint": checkpoint,
+                    "commandLaunchAllowed": False,
+                    "externalSideEffectRepresented": False,
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+                actor_type="supervisor",
+                actor_id=requested_by_id,
+                actor_label=requested_by_label,
+            )
+            await session.commit()
+            await session.refresh(item)
+            return []
+
+        operation = f"recipe_verification_commands:{current_recipe.id}:{checkpoint}"
+        attempt = await self._reserve_external_launch_attempt(
+            session,
+            item,
+            route_decision_id=f"recipe-verification-{uuid.uuid4()}",
+            worker_id="recipe.verification.command",
+            lane=ExecutionLane.UTILITY.value,
+            authority_mode="guarded_recipe_verification",
+            operation=operation,
+            requested_by_id=requested_by_id,
+            requested_by_label=requested_by_label,
+            admission_lock_acquired=True,
+            expected_snapshot=expected_snapshot,
+            task_kind=TaskKind.VALIDATION_EXECUTION.value,
+        )
+        try:
+            results = self._run_recipe_verification_commands(current_recipe)
+        except Exception as exc:
+            await self._finalize_external_launch_attempt(
+                session,
+                item,
+                attempt,
+                status=ExecutionAttemptStatus.FAILED.value,
+                operation=operation,
+                failure_reason=f"recipe_verification_exception:{type(exc).__name__}",
+            )
+            raise ValueError("Recipe verification command failed after durable reservation.") from exc
+        terminal_status = (
+            ExecutionAttemptStatus.COMPLETED.value
+            if all(result.get("exitCode") == 0 for result in results)
+            else ExecutionAttemptStatus.FAILED.value
+        )
+        await self._finalize_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            status=terminal_status,
+            operation=operation,
+            failure_reason=None if terminal_status == ExecutionAttemptStatus.COMPLETED.value else "recipe_verification_nonzero_exit",
+            evidence={
+                "artifactType": "recipe_verification_command_result",
+                "recipeId": current_recipe.id,
+                "operatorCheckpoint": checkpoint,
+                "commands": [
+                    {"command": result.get("command"), "exitCode": result.get("exitCode")}
+                    for result in results
+                ],
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+        )
+        return results
+
     def _run_recipe_implementation_commands(self, recipe: ExecutionRecipe | None, item: WorkItem) -> list[dict]:
         if not recipe:
             return []
@@ -27772,6 +28010,7 @@ class SupervisorService:
             return []
 
         operation = f"recipe_implementation_commands:{recipe.id}:{checkpoint}"
+        expected_snapshot = self._external_launch_admission_snapshot(item)
         attempt = await self._reserve_external_launch_attempt(
             session,
             item,
@@ -27782,6 +28021,7 @@ class SupervisorService:
             operation=operation,
             requested_by_id=requested_by_id,
             requested_by_label=requested_by_label,
+            expected_snapshot=expected_snapshot,
         )
         try:
             results = self._run_recipe_implementation_commands(recipe, item)
@@ -27925,6 +28165,88 @@ class SupervisorService:
             approvalRequirements=list(policy.approval_requirements)
             + ["GitHub auth and an origin remote must be available before live delivery can run."],
         )
+
+    async def _run_admitted_remote_delivery(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        expected_action: WorkItemManagedActionView,
+        *,
+        requested_by_id: str | None = None,
+        requested_by_label: str | None = None,
+    ) -> list[dict]:
+        expected_snapshot = self._external_launch_admission_snapshot(item)
+        await self._acquire_execute_admission_lock(session)
+        await self._refresh_external_launch_target_for_admission(session, item, expected_snapshot)
+        current_recipe = self._execution_recipe_for_item(item)
+        if not current_recipe or current_recipe.id != recipe.id:
+            raise ValueError("Remote delivery rejected because the managed recipe changed before admission.")
+        if item.state != WorkflowState.REVIEWING.value:
+            raise ValueError("Remote delivery rejected because the WorkItem is no longer in review.")
+        events = await self.list_work_item_events(session, item.id)
+        current_action = self._recipe_gate_audit_view(item, current_recipe, events).nextManagedAction
+        if current_action.actionId != expected_action.actionId:
+            raise ValueError(
+                f"Managed action changed from {expected_action.actionId} to {current_action.actionId}. Refresh before continuing."
+            )
+        if current_action.actionId != "execute_remote_delivery" or current_action.status != "available":
+            raise ValueError(
+                f"Remote delivery is no longer available: {current_action.actionId}/{current_action.status}."
+            )
+        if not self._remote_delivery_enabled():
+            raise ValueError("Remote delivery automation is disabled by policy.")
+
+        operation = f"recipe_remote_delivery:{current_recipe.id}"
+        attempt = await self._reserve_external_launch_attempt(
+            session,
+            item,
+            route_decision_id=f"recipe-remote-delivery-{uuid.uuid4()}",
+            worker_id="recipe.remote-delivery.command",
+            lane=ExecutionLane.UTILITY.value,
+            authority_mode="guarded_recipe_remote_delivery",
+            operation=operation,
+            requested_by_id=requested_by_id,
+            requested_by_label=requested_by_label,
+            admission_lock_acquired=True,
+            expected_snapshot=expected_snapshot,
+        )
+        try:
+            results = self._remote_delivery_commands(item)
+        except Exception as exc:
+            await self._finalize_external_launch_attempt(
+                session,
+                item,
+                attempt,
+                status=ExecutionAttemptStatus.FAILED.value,
+                operation=operation,
+                failure_reason=f"remote_delivery_exception:{type(exc).__name__}",
+            )
+            raise ValueError("Remote delivery failed after durable reservation.") from exc
+        terminal_status = (
+            ExecutionAttemptStatus.COMPLETED.value
+            if results and all(result.get("exitCode") == 0 for result in results)
+            else ExecutionAttemptStatus.FAILED.value
+        )
+        await self._finalize_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            status=terminal_status,
+            operation=operation,
+            failure_reason=None if terminal_status == ExecutionAttemptStatus.COMPLETED.value else "remote_delivery_nonzero_exit",
+            evidence={
+                "artifactType": "recipe_remote_delivery_result",
+                "recipeId": current_recipe.id,
+                "commands": [
+                    {"command": result.get("command"), "exitCode": result.get("exitCode")}
+                    for result in results
+                ],
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+        )
+        return results
 
     def _remote_delivery_commands(self, item: WorkItem) -> list[dict]:
         remote_ready, remote_reason = self._remote_delivery_preflight_status()

@@ -2929,6 +2929,15 @@ class OperationalActionApprovalV1(OperationalActionApprovalRequestV1):
             value, label="approvalId", max_length=OPERATIONAL_ACTION_V1_ID_LENGTHS["approval"]
         )
 
+    @field_validator("issuedAt", "expiresAt", "consumedAt", mode="before")
+    @classmethod
+    def exact_timestamp_lexemes(cls, value: object, info) -> object:
+        if value is None or isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("V1 approval timestamps must be canonical RFC3339 strings.")
+        return _validate_operational_action_v1_timestamp(value, label=info.field_name)
+
     @field_validator("issuedAt", "expiresAt", "consumedAt")
     @classmethod
     def canonical_timestamps(cls, value: datetime | None) -> datetime | None:
@@ -3181,6 +3190,7 @@ class OperationalActionResultV1(OperationalActionBindingV1):
                     or evidence.retryIntentId == evidence.originalAttemptId
                     or evidence.linkedWorkItemId != context.linkedWorkItemId
                     or evidence.linkedPacketId != context.linkedPacketId
+                    or evidence.resultingPacketCurrentEventId == context.expectedPacketCurrentEventId
                 ):
                     raise ValueError("Retry success evidence does not bind the exact attempt/work-item/packet context.")
             elif self.actionId == "pause":

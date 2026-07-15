@@ -7,7 +7,9 @@ import subprocess
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1153,6 +1155,9 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
         SupervisorService.launch_supervised_codex_worker: "session.get(WorkItem",
         SupervisorService._reserve_subscription_agent_launch_runtime_attempt: "session.get(ExecutionAttempt",
         SupervisorService._create_or_refresh_lease: "select(QueueLease)",
+        SupervisorService._run_guarded_utility_worker: "_refresh_external_launch_target_for_admission",
+        SupervisorService._run_admitted_recipe_verification_commands: "_refresh_external_launch_target_for_admission",
+        SupervisorService._run_admitted_remote_delivery: "_refresh_external_launch_target_for_admission",
     }
     for method, first_admission_read in admission_reads.items():
         source = textwrap.dedent(inspect.getsource(method))
@@ -1169,6 +1174,151 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
     service_source = inspect.getsource(SupervisorService)
     assert "LOCK TABLE" not in service_source
     assert "BEGIN IMMEDIATE" not in service_source
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("state", "reviewing"),
+        ("updated_at", datetime(2026, 7, 14, 20, 0, tzinfo=timezone.utc) + timedelta(seconds=1)),
+        ("assignee_id", "owner-concurrent"),
+        ("assignee_label", "Concurrent owner"),
+        ("authoritative_packet_id", "packet-concurrent"),
+    ],
+)
+def test_external_launch_admission_cas_rejects_concurrent_routing_input_mutation(field, replacement) -> None:
+    from supervisor.application.service import SupervisorService
+    from supervisor.infrastructure.db.models import WorkItem
+
+    service = object.__new__(SupervisorService)
+    item = WorkItem(
+        id="work-item-cas",
+        title="CAS target",
+        requested_outcome="Reject stale launch routing inputs.",
+        source="pytest",
+        state="implementing",
+        assignee_id="owner-original",
+        assignee_label="Original owner",
+        authoritative_packet_id="packet-original",
+        metadata_json={
+            "authoritativePacketId": "packet-original",
+            "authoritativePacketStage": "execute",
+            "authoritativePacketStatus": "failed",
+        },
+        updated_at=datetime(2026, 7, 14, 20, 0, tzinfo=timezone.utc),
+    )
+    expected = service._external_launch_admission_snapshot(item)
+
+    class ConcurrentMutationSession:
+        async def refresh(self, target) -> None:
+            setattr(target, field, replacement)
+            if field == "authoritative_packet_id":
+                target.metadata_json = {**target.metadata_json, "authoritativePacketId": replacement}
+
+        async def get(self, *args, **kwargs):
+            raise AssertionError("stale CAS must fail before authoritative packet routing is read")
+
+    with pytest.raises(ValueError, match="state, revision, ownership, or packet linkage changed concurrently"):
+        asyncio.run(service._refresh_external_launch_target_for_admission(ConcurrentMutationSession(), item, expected))
+
+
+def test_external_launch_admission_reloads_canonical_packet_projection_under_lock() -> None:
+    from supervisor.application.service import SupervisorService
+    from supervisor.infrastructure.db.models import AuthoritativeWorkPacket, WorkItem
+
+    service = object.__new__(SupervisorService)
+    item = WorkItem(
+        id="work-item-packet-cas",
+        title="Packet CAS target",
+        requested_outcome="Reject stale authoritative packet routing.",
+        source="pytest",
+        state="implementing",
+        authoritative_packet_id="packet-original",
+        metadata_json={
+            "authoritativePacketId": "packet-original",
+            "authoritativePacketStage": "execute",
+            "authoritativePacketStatus": "failed",
+        },
+        updated_at=datetime(2026, 7, 14, 20, 0, tzinfo=timezone.utc),
+    )
+    expected = service._external_launch_admission_snapshot(item)
+    packet = AuthoritativeWorkPacket(
+        id="packet-original",
+        title="Canonical packet",
+        current_stage="review",
+        status="waiting",
+        current_event_id="event-concurrent",
+    )
+
+    class ConcurrentPacketMutationSession:
+        async def refresh(self, target) -> None:
+            return None
+
+        async def get(self, model, packet_id, *, with_for_update=False):
+            assert model is AuthoritativeWorkPacket
+            assert packet_id == "packet-original"
+            assert with_for_update is True
+            return packet
+
+    with pytest.raises(ValueError, match="authoritative packet projection is stale"):
+        asyncio.run(
+            service._refresh_external_launch_target_for_admission(
+                ConcurrentPacketMutationSession(), item, expected
+            )
+        )
+
+
+def test_active_recipe_verification_reservation_consumes_verification_wip() -> None:
+    from supervisor.application.service import SupervisorService
+    from supervisor.infrastructure.db.models import ExecutionAttempt, WorkItem
+
+    service = object.__new__(SupervisorService)
+    service.settings = SimpleNamespace(
+        review_wip_limit=5,
+        deliver_wip_limit=5,
+        verification_wip_limit=1,
+        operator_testing_wip_limit=5,
+    )
+    item = WorkItem(id="work-item-active-verification", state="implementing")
+    attempt = ExecutionAttempt(
+        id="attempt-active-verification",
+        work_item_id=item.id,
+        route_decision_id="route-active-verification",
+        worker_id="recipe.verification.command",
+        lane="utility",
+        authority_mode="guarded_recipe_verification",
+        status="starting",
+        artifact_refs_json=[
+            {
+                "artifactType": "task_packet_v0",
+                "packetId": "task-packet-route-active-verification",
+                "workItemId": item.id,
+                "routeDecisionId": "route-active-verification",
+                "taskKind": "validation_execution",
+                "approvalMode": "guarded_recipe_verification",
+            }
+        ],
+    )
+
+    class Rows:
+        def __init__(self, values) -> None:
+            self.values = values
+
+        def scalars(self):
+            return iter(self.values)
+
+    class AdmissionSession:
+        def __init__(self) -> None:
+            self.results = iter((Rows([]), Rows([item]), Rows([]), Rows([attempt])))
+
+        async def execute(self, statement):
+            return next(self.results)
+
+    admission = asyncio.run(service._evaluate_execute_admission(AdmissionSession()))
+    assert admission.capacityAvailable is False
+    assert admission.typedReason == "verification_wip_limit_reached"
+    assert admission.observed is not None
+    assert admission.observed.verification == 1
 
 
 def test_postgres_admission_row_lock_serializes_concurrent_sessions_when_available() -> None:

@@ -513,3 +513,65 @@ def test_operational_action_v1_timestamp_parity_fixture() -> None:
         candidate["expectedWorkItemUpdatedAt"] = timestamp
         with pytest.raises(ValidationError, match="canonical RFC3339 timestamp"):
             ReassignActionContextV1.model_validate(candidate)
+
+    approval_request = _request("pause")
+    for timestamp in fixture["accepted"]:
+        approval = _approval(approval_request)
+        approval.update(
+            consumed=True,
+            consumedAt=timestamp,
+            consumedActionIdempotencyKey=approval_request["idempotencyKey"],
+            consumedActionRecordId="record-1",
+        )
+        OperationalActionApprovalV1.model_validate(approval)
+    for timestamp in fixture["rejected"]:
+        approval = _approval(approval_request)
+        approval["issuedAt"] = timestamp
+        with pytest.raises(ValidationError, match="canonical RFC3339 timestamp"):
+            OperationalActionApprovalV1.model_validate(approval)
+
+
+def test_retry_result_parity_fixture_rejects_extra_evidence_and_unchanged_packet_event() -> None:
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "pipeline-operational-action-v1-result-parity.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    request = _request("retry_verification")
+    result = {
+        key: deepcopy(request[key])
+        for key in (
+            "schemaVersion", "actionId", "targetType", "targetId", "actionContext",
+            "actionContextDigestSha256", "serverBound", "metadataOnly", "rawPayloadRetained",
+        )
+    }
+    result.update(
+        outcome="succeeded",
+        capabilityState="available",
+        authorityState="allowed",
+        riskTier="medium",
+        typedReason=None,
+        successEvidence={
+            "kind": "retry_verification",
+            "originalAttemptId": request["targetId"],
+            "retryIntentId": "verification-retry-result",
+            "linkedWorkItemId": request["actionContext"]["linkedWorkItemId"],
+            "linkedPacketId": request["actionContext"]["linkedPacketId"],
+            "resultingPacketCurrentEventId": "event-retry-result",
+            "originalAttemptPreserved": True,
+            "providerOrWorkerLaunched": False,
+        },
+        evidenceRefs=["operational-action:retry-result"],
+        correlationId=request["correlationId"],
+        idempotencyKey=request["idempotencyKey"],
+        actionRecordId="record-retry",
+        approvalId=request["approvalId"],
+        replayed=False,
+    )
+    OperationalActionResultV1.model_validate(result)
+    for invalid_case in fixture["invalidRetrySuccessEvidenceCases"]:
+        candidate = deepcopy(result)
+        candidate["successEvidence"].update(invalid_case.get("patch", {}))
+        if invalid_case.get("useExpectedPacketCurrentEventId"):
+            candidate["successEvidence"]["resultingPacketCurrentEventId"] = request["actionContext"][
+                "expectedPacketCurrentEventId"
+            ]
+        with pytest.raises(ValidationError):
+            OperationalActionResultV1.model_validate(candidate)
