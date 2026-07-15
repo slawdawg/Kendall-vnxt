@@ -1,0 +1,213 @@
+# ADR: Proposed Epic 25 Trusted Observer and Issuer Topology
+
+Date: 2026-07-15
+Status: **PROPOSED / BLOCKED** pending architecture, security, and operator authority approval
+Scope: P4.1 decision packet for trusted observation and receipt issuance; no implementation decision
+
+## Decision status and non-authority
+
+This is a source-owned proposal and decision packet, not an approved decision.
+It records the questions, viable topology candidates, threat model, and
+fail-closed acceptance criteria that an approving architecture owner, security
+owner, and operator authority owner must resolve. It selects no topology,
+algorithm, issuer, key, or deployment boundary.
+
+This document enables none of the following: `live_observed` acceptance,
+`bounded_live` claims, `production_observed` claims, provider or worker launch,
+or live operation. It does not grant run, merge, deployment, production,
+credential, cleanup, or mutation authority. It does not authorize a generic
+live command or cryptographic code. The current ceiling remains
+`integrated_local` only.
+
+The current authority decision remains the [current product slice and
+authority ADR](adr-current-product-slice-and-authority.md). Its source
+hierarchy, server-owned lifecycle truth, and separate approval boundaries
+continue to govern this proposal.
+
+## Current boundary
+
+Epic 25 has source-owned readiness, canary, ramp, recovery, hardening, and
+decision contracts, plus fixture and local-proof coverage. The pre-live
+[runbook](../workflows/epic-25-pre-live-runbook.md) explicitly keeps its
+harness fixture-only and ends in `hold`. The [Epic 25 retrospective and next
+authority record](../workflows/epic-25-retrospective-and-next-authority.md)
+records the accepted implementation boundary as `integrated_local`; it does
+not establish `bounded_live` or `production_observed`.
+
+The current evidence-chain contract already checks metadata shape, packet and
+target identity, timestamps, freshness, predecessor ordering, source/evidence
+reference binding, metadata-only retention, and within-chain receipt identity:
+
+- [TypeScript evidence-chain contracts](../../packages/contracts/src/pipeline-control-plane/index.ts)
+  define the `pipeline-observed-evidence-attestation/v0` shape and the six
+  ordered Epic 25 packets.
+- [Supervisor evidence-chain schemas](../../services/supervisor/src/supervisor/api/schemas.py)
+  enforce exact packet/schema and source/evidence reference relationships.
+- [Supervisor ingestion and readback](../../services/supervisor/src/supervisor/application/service.py)
+  reject `live_observed` until a trusted, server-issued, cryptographically
+  bound receipt can be resolved, and retain the `live_evidence_unavailable`
+  blocker on readback.
+- [Evidence-chain integration tests](../../services/supervisor/tests/integration/test_epic25_evidence_chain.py)
+  preserve caller-forged-live rejection and mismatch coverage; the
+  [TypeScript validator tests](../../tests/epic25-evidence-chain-validator.test.ts)
+  cover structural and fail-closed contract behavior.
+
+The repository record for this boundary is the tracked [current authority
+ADR](adr-current-product-slice-and-authority.md), [Epic 25 pre-live
+runbook](../workflows/epic-25-pre-live-runbook.md), [evidence-chain
+contracts](../../packages/contracts/src/pipeline-control-plane/index.ts),
+[supervisor enforcement](../../services/supervisor/src/supervisor/application/service.py),
+and [evidence-chain tests](../../services/supervisor/tests/integration/test_epic25_evidence_chain.py).
+Local feasibility-hold and live-validation records under
+`_bmad-output/implementation-artifacts/` are non-deliverable companion paths
+for planning/evidence context only. They are not repository sources, product
+truth, approval records, or clean-install dependencies; this ADR does not
+modify them.
+
+## Topology candidates
+
+No candidate is selected. The following options are the minimum comparison set
+for the approval decision.
+
+| Candidate | Independence | Authentication | Key/trust-root management | Replay, rotation, and revocation | Operational burden | Production boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| Independent external observer and issuer | Strongest separation when the observer measures the exact target and the issuer is owned by a separate trust domain. Requires an explicit independence definition; a second process alone is insufficient. | Authenticated observer-to-issuer and issuer-to-supervisor channels; caller identity and transport locality cannot substitute for receipt provenance. | Separate issuer registry, trust roots, key IDs, protected private-key custody, distribution, and owner. | Central or server-enforced nonce/run uniqueness; expiry and clock policy; staged key rotation; revocation and compromise recovery must fail closed across the relevant run boundary. | Highest: service availability, secure deployment, monitoring, incident response, and cross-domain ownership. | Must explicitly identify non-production versus production identities and telemetry. Without separate production authority, the ceiling remains `bounded_live`. |
+| Trusted attestation service | Observer may be independent from the supervisor while a dedicated service owns issuance. Independence depends on who controls observation, issuance, and trust-root administration. | Service identity and authenticated API plus server validation of the exact run authorization and receipt payload. | Attestation service owns or brokers keys; supervisor keeps only verification metadata and revocation state, never secret values in evidence. | Service can provide global replay fencing, but the supervisor must still enforce run/nonce uniqueness, expiry, rotation overlap, revocation, and outage behavior. | Medium to high: shared service lifecycle, availability, tenant/environment isolation, and incident response. | Cross-environment attestations need explicit environment and production identity binding; service trust cannot itself grant production authority. |
+| Supervisor-local issuer | Weakest observer/issuer independence if the supervisor observes and issues its own receipt. It may be acceptable only if the approval decision explicitly accepts that trust model; it cannot be called independent by naming a local component. | Local authenticated component identity and server-owned authorization, with no acceptance of caller-supplied self-attestation. | Supervisor owns key custody, trust-root loading, key IDs, and audit state; compromise of the supervisor may compromise both observation and issuance. | Local durable uniqueness is simpler, but it must still enforce nonce/run uniqueness, expiry, rotation, revocation, and compromise recovery across restart and migration. | Lowest deployment burden, highest concentration of authority and blast radius. | Must not cross the production boundary merely because it is local. Production requires separately approved observer, issuer, deployment, telemetry, and incident authority. |
+
+The comparison is not a decision. Architecture and security approval must state
+whether observer independence is required, what trust-domain separation means,
+and which failure or outage behavior is acceptable. A topology that cannot
+answer every required field below remains `BLOCKED`.
+
+## Recommended decision criteria
+
+The recommended next step is to approve the criteria and record one explicit
+candidate, not to infer a topology from existing code. The selected packet
+must demonstrate all of the following before implementation authority is
+granted:
+
+1. An observer that can measure the exact subject independently of the caller,
+   and an issuer owner whose authority is explicit and reviewable.
+2. A server-verifiable receipt with deterministic canonical bytes, explicit
+   algorithm and key metadata, and no authority carried by caller prose,
+   evidence refs, loopback transport, or UI state.
+3. A server-owned bounded-live run authorization that precedes observation,
+   binds the exact source/target/run/policy/retention scope, expires, and is
+   persisted with replay-safe uniqueness.
+4. Fail-closed behavior for missing, stale, future-dated, revoked, rotated,
+   duplicated, mismatched, unverifiable, or compromised trust material.
+5. A migration that keeps existing v0 attestations structural and
+   metadata-only; v0 must not become promotion-grade evidence by conversion.
+6. Named architecture, security, operator-authority, runtime, observer,
+   issuer, incident, evidence-retention, and final-decision owners, with live
+   authority separately approved after implementation readiness.
+
+## Required decision fields
+
+The approval record must resolve each field explicitly. Blank, contradictory,
+caller-supplied, or inferred values are a hold.
+
+| Field | Required resolution |
+| --- | --- |
+| Observer independence and issuer ownership | Observer location, independence boundary, observer identity, issuer identity, issuer owner, trust-domain owner, and who may revoke either. State why the observer is not merely the caller or the supervisor reporting its own result. |
+| Algorithm and canonical payload | Approved signature/MAC or equivalent verification algorithm, version, deterministic serialization/canonicalization rules, encoding, allowed fields, unknown-field behavior, and digest construction. Do not select these in this proposal. |
+| Key IDs, rotation, revocation, and compromise recovery | Key/issuer IDs, trust-root distribution, private-key custody, activation and overlap windows, revocation source and freshness, emergency disable behavior, historical receipt treatment, and recovery owner. Secret values must never enter evidence. |
+| Server-owned bounded-live run authorization | Persistent authorization record, exact authorizer, target and source revision, run/attempt ID, policy profile, allowed operations, scope, expiry, rollback, retention, and the server check that must precede issuance and acceptance. |
+| Nonce, replay, expiry, and clock policy | Nonce generation and scope, globally durable uniqueness, idempotency, allowed clock skew, trusted time source, observed/issued/checked/expiry ordering, maximum TTL, and behavior during clock or registry outage. |
+| Exact binding | Canonical binding for source revision, packet schema, target/worker/assignment, run/attempt, policy profile, evidence digest, source refs, evidence refs, retention policy, environment, and receipt/attestation IDs. Define whether sets are ordered or canonicalized before signing. |
+| v0 migration | Keep `pipeline-observed-evidence-attestation/v0` parseable for legacy/local fixtures but never promotion-grade. Define dual-read or explicit upgrade records, no silent re-issuance, and the exact point at which a v1 receipt can be accepted. |
+| Threat model | Approved assets, trust boundaries, attacker capabilities, compromise assumptions, residual risks, incident response, and adversarial test cases from the matrix below. |
+| Owners | Named architecture, security, operator-authority, runtime, observer, issuer, key, incident, evidence-custodian, retention/disposal, and final-decision owners. |
+| Separate live authority | A distinct authority packet for any live canary or bounded-live operation, including environment, provider/worker path, exact source and run IDs, allowed actions, thresholds, budget, telemetry, credential owner without values, retention, rollback, expiry, and separate merge/deploy/production/cleanup decisions. |
+
+## Threat model and fail-closed acceptance matrix
+
+### Assets and trust boundaries
+
+Assets are the server-owned run authorization, exact packet/run/policy
+identity, source and evidence digests/refs, observer measurements, receipt
+identity, issuer verification metadata, revocation state, expiry and clock
+decision, and metadata-only retention record. Secrets, raw provider payloads,
+prompts, completions, and full telemetry payloads are outside the retained
+evidence set.
+
+Trust boundaries are: the observed runtime or provider; the observer; the
+issuer and its key custody; the supervisor verifier and persistence store; the
+manager/dashboard/caller; the proxy or loopback transport; and the separate
+operator authority process. The attacker may control caller input, copied
+receipts, transport routing, stale records, packet fields, or a compromised
+issuer key, but must not be assumed unable to exploit canonicalization,
+replay, clock, key-lifecycle, or target-confusion gaps.
+
+### Acceptance matrix
+
+Every row is a verifier test and an operational stop rule. The receipt is not
+accepted as `live_observed`; the chain remains held with
+`live_evidence_unavailable` or a more specific typed blocker until the
+server-side cryptographic verifier, registry, run authorization, and durable
+replay fence exist and pass.
+
+| Threat or malformed input | Required server behavior | Required proof before any future acceptance |
+| --- | --- | --- |
+| Forged receipt or altered signed fields | Reject signature/digest; persist no promotion-grade observation; retain no raw payload. | Adversarial forgery and bit-flip tests across every bound field. |
+| Unsigned receipt | Reject even if the v0 shape, refs, timestamps, and caller identity are valid. | Negative test showing structural validity cannot create `live_observed`. |
+| Wrong key, unknown key ID, or wrong issuer | Reject; do not fall back to another key, caller identity, or default trust root. | Registry allowlist, key/issuer mismatch, and unknown-key tests. |
+| Wrong target or packet schema | Reject when subject target, packet schema, worker, assignment, or environment differs from the authorized subject. | Exact-target negative tests and signed-payload binding assertions. |
+| Wrong run or attempt | Reject when run/attempt/authorization ID differs, including a valid receipt from another run. | Cross-run and cross-attempt replay tests with durable authorization lookup. |
+| Replayed receipt or nonce | Reject duplicate receipt/attestation/nonce within and across chains, restarts, and concurrent submissions; do not make replay idempotently promote a new target. | Database uniqueness/CAS tests, restart tests, and concurrent replay tests. |
+| Expired receipt or authorization | Reject after expiry or revocation; downgrade/hold and preserve the live-evidence blocker. | Boundary-time tests at expiry, registry outage, and expired authorization. |
+| Future-dated receipt or authorization | Reject beyond the approved clock-skew window and reject impossible timestamp orderings. | Trusted-clock and skew tests for observed, issued, checked, and expiry times. |
+| Source-mismatched receipt | Reject if source revision, source identity, or source refs do not exactly match the server-owned packet/authorization. | Source revision and ref-set mismatch tests; caller refs are non-authoritative. |
+| Evidence-mismatched receipt | Reject if evidence digest or evidence refs do not match the exact canonical evidence set and retention policy. | Recomputed digest, canonical payload, ref-set, and retention-binding tests. |
+| Caller self-attestation | Reject caller-created claims, copied attestations, operator prose, fixtures, or UI state as observation authority. | End-to-end test where the caller has a valid transport identity but no issuer proof. |
+| Loopback/proxy confusion | Treat loopback, forwarded headers, proxy identity, or local transport as transport only; never as observer independence or issuer proof. | Proxy/forwarded-header tests and direct-vs-proxied identity tests. |
+| Issuer compromise or revoked key | Fail closed for new receipts, revoke affected IDs, stop affected live decisions, and require an approved recovery/re-authorization path. Do not silently bless historical receipts. | Revocation propagation, emergency disable, incident recovery, and historical-decision tests. |
+| Canonicalization ambiguity | Reject payloads with non-deterministic field order, duplicate/unknown fields, encoding or Unicode ambiguity, alternate timestamps, or mismatched digest bytes. | Golden canonical vectors, cross-language vectors, parser differential tests, and mutation tests. |
+
+No verifier may return a promotion-grade result based only on metadata shape,
+receipt presence, transport locality, or a caller-provided digest. Any
+verification, registry, clock, authorization, persistence, or revocation
+uncertainty is `hold`.
+
+## Smallest safe follow-on sequence
+
+This ADR is the only deliverable in this lane. If and only if it is approved
+by architecture, security, and operator authority, the next source-owned
+sequence is:
+
+1. **Approved ADR and authority record.** Record the selected topology and
+   every required decision field, threat-model disposition, named owners, and
+   the separate live-authority boundary. No provider, worker, or live command.
+2. **Default-disabled verifier, registry, and run-authorization records.** Add
+   additive/versioned contracts and durable records for the approved trust
+   root/issuer metadata, server-owned run authorization, signed receipt
+   verification, exact bindings, and replay fencing. Keep capability disabled
+   by default; do not remove `live_evidence_unavailable`.
+3. **Adversarial tests and security review.** Exercise every matrix row,
+   migration behavior, concurrency/restart replay, key lifecycle, clock
+   policy, canonical vectors, and production-boundary separation. Require
+   independent security review before enabling any acceptance path.
+4. **Dry-run only.** Validate the verifier, registry, and authorization records
+   against metadata-only fixtures with all provider, worker, mutation, and
+   live-operation capabilities disabled. `integrated_local` remains the only
+   accepted evidence level until server cryptographic verification exists and
+   a separate live authority packet is approved.
+
+The explicit preservation rule is: do not remove or weaken
+`live_evidence_unavailable` until the supervisor has cryptographically
+verified the exact receipt, resolved the approved issuer/key registry,
+validated the server-owned run authorization, enforced durable replay
+protection, and recorded the result in supervisor-owned state.
+
+## Approval and supersession
+
+Required approvals are separate and named: architecture approves topology and
+ownership; security approves the threat model, cryptographic and key lifecycle
+controls; operator authority approves any later bounded-live scope. None may be
+inferred from this proposal, from the ignored hold artifact, or from existing
+provider/worker approvals for other stories.
+
+Only a reviewed source-owned ADR may supersede this proposal. Its status must
+change explicitly from `PROPOSED / BLOCKED`; it must identify the selected
+topology, changed fields, migration impact, and effective authority boundary.
