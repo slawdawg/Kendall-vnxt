@@ -23202,15 +23202,18 @@ class SupervisorService:
         if requested_status == ExecutionAttemptStatus.RUNNING.value:
             values["heartbeat_at"] = now
         if requested_status == ExecutionAttemptStatus.CANCEL_REQUESTED.value:
-            values["cancel_requested_at"] = now
+            attempt.cancel_requested_at = now
+            values["cancel_requested_at"] = attempt.cancel_requested_at
             values["cancel_reason"] = payload.reason
         if requested_status == ExecutionAttemptStatus.CANCELLED.value:
-            values["cancel_requested_at"] = attempt.cancel_requested_at or now
+            attempt.cancel_requested_at = attempt.cancel_requested_at or now
+            values["cancel_requested_at"] = attempt.cancel_requested_at
             values["completed_at"] = now
             if payload.reason:
                 values["cancel_reason"] = payload.reason
         if requested_status == ExecutionAttemptStatus.TIMED_OUT.value:
-            values["timeout_at"] = now
+            attempt.timeout_at = now
+            values["timeout_at"] = attempt.timeout_at
             values["completed_at"] = now
             if payload.reason:
                 values["failure_reason"] = payload.reason
@@ -23220,21 +23223,23 @@ class SupervisorService:
         if requested_status == ExecutionAttemptStatus.COMPLETED.value:
             values["completed_at"] = now
 
-        transition_result = await session.execute(
-            update(ExecutionAttempt)
-            .execution_options(synchronize_session=False)
-            .where(
-                ExecutionAttempt.id == attempt_id,
-                ExecutionAttempt.work_item_id == work_item_id,
-                ExecutionAttempt.status == current_status,
-                ExecutionAttempt.revision == payload.expectedRevision,
+        with session.no_autoflush:
+            transition_result = await session.execute(
+                update(ExecutionAttempt)
+                .execution_options(synchronize_session=False)
+                .where(
+                    ExecutionAttempt.id == attempt_id,
+                    ExecutionAttempt.work_item_id == work_item_id,
+                    ExecutionAttempt.status == current_status,
+                    ExecutionAttempt.revision == payload.expectedRevision,
+                )
+                .values(**values)
             )
-            .values(**values)
-        )
         if transition_result.rowcount != 1:
             await session.rollback()
             raise ValueError("Execution attempt transition lost its status/revision CAS fence.")
-        await session.refresh(attempt)
+        with session.no_autoflush:
+            await session.refresh(attempt)
 
         event = await self._record_execution_attempt_transition_event(
             session,
