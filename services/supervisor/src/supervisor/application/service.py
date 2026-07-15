@@ -1855,7 +1855,10 @@ class SupervisorService:
         operation: str,
         failure_reason: str | None = None,
         evidence: dict[str, object] | None = None,
+        commit: bool = True,
     ) -> None:
+        """Finalize a claimed launch, optionally joining its business outcome transaction."""
+
         if status not in TERMINAL_EXECUTION_ATTEMPT_STATUSES:
             raise ValueError("External launch finalization requires a terminal execution-attempt status.")
         expected_revision = attempt.revision
@@ -1911,15 +1914,16 @@ class SupervisorService:
         locked_attempt.event_refs_json = list(locked_attempt.event_refs_json or []) + [
             {"eventId": event.id, "eventType": event.event_type}
         ]
-        try:
-            await session.commit()
-        except SQLAlchemyError as exc:
-            await session.rollback()
-            raise ValueError(
-                "External launch finalization failed; the durable active attempt reservation remains in force."
-            ) from exc
-        await session.refresh(locked_item)
-        await session.refresh(locked_attempt)
+        if commit:
+            try:
+                await session.commit()
+            except SQLAlchemyError as exc:
+                await session.rollback()
+                raise ValueError(
+                    "External launch finalization failed; the durable active attempt reservation remains in force."
+                ) from exc
+            await session.refresh(locked_item)
+            await session.refresh(locked_attempt)
 
     async def _verification_retry_intent_by_idempotency(
         self,
@@ -22945,21 +22949,28 @@ class SupervisorService:
         event_refs = list(attempt.event_refs_json or [])
         event_refs.append({"eventId": event.id, "eventType": event.event_type})
         attempt.event_refs_json = event_refs
-        await session.commit()
         if launch_reservation is not None and reservation_terminal_status is not None:
-            await self._finalize_external_launch_attempt(
-                session,
-                item,
-                launch_reservation,
-                status=reservation_terminal_status,
-                operation=f"execution_attempt_verification:{payload.commandId}",
-                failure_reason=(
-                    None
-                    if reservation_terminal_status == ExecutionAttemptStatus.COMPLETED.value
-                    else f"verification_command_{run_result['status']}"
-                ),
-                evidence=evidence,
-            )
+            try:
+                await self._finalize_external_launch_attempt(
+                    session,
+                    item,
+                    launch_reservation,
+                    status=reservation_terminal_status,
+                    operation=f"execution_attempt_verification:{payload.commandId}",
+                    failure_reason=(
+                        None
+                        if reservation_terminal_status == ExecutionAttemptStatus.COMPLETED.value
+                        else f"verification_command_{run_result['status']}"
+                    ),
+                    evidence=evidence,
+                    commit=False,
+                )
+                await session.commit()
+            except (SQLAlchemyError, ValueError):
+                await session.rollback()
+                raise
+        else:
+            await session.commit()
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
@@ -24339,46 +24350,15 @@ class SupervisorService:
             if record_event:
                 await session.refresh(item)
                 existing_attempt = await session.get(ExecutionAttempt, attempt_id)
-                active_attempt = await self._active_execution_attempt(session, item.id)
                 if existing_attempt:
-                    runtime_metadata = {
-                        "status": "replayed_existing_attempt",
-                        "executionAttemptId": attempt_id,
-                        "processStarted": False,
-                        "rawStdoutRetained": False,
-                        "rawStderrRetained": False,
-                    }
-                elif active_attempt:
-                    accepted_runtime_path = False
-                    rejected_fields["runtimeApproval"] = f"active-attempt-exists:{active_attempt.id}"
-                    runtime_metadata = {
-                        "status": "rejected_active_attempt_exists",
-                        "executionAttemptId": attempt_id,
-                        "processStarted": False,
-                        "rawStdoutRetained": False,
-                        "rawStderrRetained": False,
-                    }
-                    status = "rejected_process_launch_not_approved"
-                    readiness_status = "subscription_launch_approval_rejected"
-                else:
-                    expected_snapshot = self._external_launch_admission_snapshot(item)
-                    reserved = await self._reserve_subscription_agent_launch_runtime_attempt(
+                    if await self._subscription_agent_runtime_attempt_matches_request(
                         session,
-                        item,
-                        attempt_id=attempt_id,
+                        existing_attempt,
+                        item=item,
+                        payload=payload,
                         preview=preview,
-                        worker_id=target.worker_id,
-                        lane=ExecutionLane.SUBSCRIPTION_AGENT.value,
-                        authority_mode="operator_approval_required",
-                        workspace_contract=self._subscription_agent_runtime_workspace_contract(
-                            dict(workspace_contract),
-                            attempt_id=attempt_id,
-                        ),
-                        admission_lock_acquired=True,
-                        expected_snapshot=expected_snapshot,
-                        operation=f"subscription_agent_launch:{target.target_id}",
-                    )
-                    if not reserved:
+                        target=target,
+                    ):
                         runtime_metadata = {
                             "status": "replayed_existing_attempt",
                             "executionAttemptId": attempt_id,
@@ -24387,60 +24367,111 @@ class SupervisorService:
                             "rawStderrRetained": False,
                         }
                     else:
-                        operation = f"subscription_agent_launch:{target.target_id}"
-                        reserved = await self._claim_external_launch_attempt(
+                        accepted_runtime_path = False
+                        rejected_fields["runtimeApproval"] = (
+                            f"replay_conflict_or_in_progress:{existing_attempt.id}"
+                        )
+                        runtime_metadata = {
+                            "status": "rejected_replay_conflict_or_in_progress",
+                            "executionAttemptId": attempt_id,
+                            "processStarted": False,
+                            "rawStdoutRetained": False,
+                            "rawStderrRetained": False,
+                        }
+                        status = "rejected_replay_conflict_or_in_progress"
+                        readiness_status = "subscription_launch_runtime_in_progress"
+                else:
+                    active_attempt = await self._active_execution_attempt(session, item.id)
+                    if active_attempt:
+                        accepted_runtime_path = False
+                        rejected_fields["runtimeApproval"] = f"active-attempt-exists:{active_attempt.id}"
+                        runtime_metadata = {
+                            "status": "rejected_active_attempt_exists",
+                            "executionAttemptId": attempt_id,
+                            "processStarted": False,
+                            "rawStdoutRetained": False,
+                            "rawStderrRetained": False,
+                        }
+                        status = "rejected_active_attempt_exists"
+                        readiness_status = "subscription_launch_runtime_in_progress"
+                    else:
+                        expected_snapshot = self._external_launch_admission_snapshot(item)
+                        reserved = await self._reserve_subscription_agent_launch_runtime_attempt(
                             session,
                             item,
-                            reserved,
-                            operation=operation,
+                            attempt_id=attempt_id,
+                            preview=preview,
+                            worker_id=target.worker_id,
+                            lane=ExecutionLane.SUBSCRIPTION_AGENT.value,
+                            authority_mode="operator_approval_required",
+                            workspace_contract=self._subscription_agent_runtime_workspace_contract(
+                                dict(workspace_contract),
+                                attempt_id=attempt_id,
+                            ),
+                            admission_lock_acquired=True,
+                            expected_snapshot=expected_snapshot,
+                            operation=f"subscription_agent_launch:{target.target_id}",
                         )
-                        runtime_cwd = self._subscription_agent_runtime_cwd(attempt_id)
-                        runtime_cwd.mkdir(parents=True, exist_ok=True)
-                        try:
-                            runtime_result = await self.supervised_subscription_launch_adapter.run(
-                                command_argv=list(payload.commandArgv),
-                                cwd=str(runtime_cwd),
-                                environment_allowlist=list(payload.environmentAllowlist),
-                                startup_timeout_seconds=int(payload.startupTimeoutSeconds or 10),
-                                run_timeout_seconds=int(payload.runTimeoutSeconds or 30),
-                                max_output_bytes=int((payload.artifactLimits or {}).get("rawOutputBytes", 0)),
+                        if not reserved:
+                            raise ValueError(
+                                "Subscription-agent launch replay could not establish an exact terminal attempt."
                             )
-                        except Exception as exc:
+                        else:
+                            operation = f"subscription_agent_launch:{target.target_id}"
+                            reserved = await self._claim_external_launch_attempt(
+                                session,
+                                item,
+                                reserved,
+                                operation=operation,
+                            )
+                            runtime_cwd = self._subscription_agent_runtime_cwd(attempt_id)
+                            runtime_cwd.mkdir(parents=True, exist_ok=True)
+                            try:
+                                runtime_result = await self.supervised_subscription_launch_adapter.run(
+                                    command_argv=list(payload.commandArgv),
+                                    cwd=str(runtime_cwd),
+                                    environment_allowlist=list(payload.environmentAllowlist),
+                                    startup_timeout_seconds=int(payload.startupTimeoutSeconds or 10),
+                                    run_timeout_seconds=int(payload.runTimeoutSeconds or 30),
+                                    max_output_bytes=int((payload.artifactLimits or {}).get("rawOutputBytes", 0)),
+                                )
+                            except Exception as exc:
+                                await self._finalize_external_launch_attempt(
+                                    session,
+                                    item,
+                                    reserved,
+                                    status=ExecutionAttemptStatus.FAILED.value,
+                                    operation=operation,
+                                    failure_reason=f"subscription_agent_exception:{type(exc).__name__}",
+                                )
+                                raise ValueError(
+                                    "Subscription-agent runtime failed after its launch fence was claimed."
+                                ) from exc
+                            runtime_metadata = runtime_result.to_metadata()
+                            terminal_status = {
+                                "completed": ExecutionAttemptStatus.COMPLETED.value,
+                                "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
+                                "cancelled": ExecutionAttemptStatus.CANCELLED.value,
+                            }.get(runtime_result.status, ExecutionAttemptStatus.FAILED.value)
                             await self._finalize_external_launch_attempt(
                                 session,
                                 item,
                                 reserved,
-                                status=ExecutionAttemptStatus.FAILED.value,
+                                status=terminal_status,
                                 operation=operation,
-                                failure_reason=f"subscription_agent_exception:{type(exc).__name__}",
+                                failure_reason=(
+                                    None
+                                    if terminal_status == ExecutionAttemptStatus.COMPLETED.value
+                                    else f"subscription_agent_{runtime_result.status}"
+                                ),
+                                evidence={
+                                    "artifactType": "subscription_agent_runtime_result",
+                                    **runtime_metadata,
+                                    "metadataOnly": True,
+                                    "rawPayloadRetained": False,
+                                },
+                                commit=False,
                             )
-                            raise ValueError(
-                                "Subscription-agent runtime failed after its launch fence was claimed."
-                            ) from exc
-                        runtime_metadata = runtime_result.to_metadata()
-                        terminal_status = {
-                            "completed": ExecutionAttemptStatus.COMPLETED.value,
-                            "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
-                            "cancelled": ExecutionAttemptStatus.CANCELLED.value,
-                        }.get(runtime_result.status, ExecutionAttemptStatus.FAILED.value)
-                        await self._finalize_external_launch_attempt(
-                            session,
-                            item,
-                            reserved,
-                            status=terminal_status,
-                            operation=operation,
-                            failure_reason=(
-                                None
-                                if terminal_status == ExecutionAttemptStatus.COMPLETED.value
-                                else f"subscription_agent_{runtime_result.status}"
-                            ),
-                            evidence={
-                                "artifactType": "subscription_agent_runtime_result",
-                                **runtime_metadata,
-                                "metadataOnly": True,
-                                "rawPayloadRetained": False,
-                            },
-                        )
                 if accepted_runtime_path:
                     status = f"accepted_supervised_runtime_{runtime_metadata['status']}"
                     readiness_status = f"subscription_launch_runtime_{runtime_metadata['status']}"
@@ -24463,6 +24494,9 @@ class SupervisorService:
             else:
                 status = "accepted_artifact_only_fixture_evaluation_ready"
                 readiness_status = "subscription_launch_fixture_evaluation_ready"
+        elif rejected_fields.get("runtimeApproval"):
+            status = status if status.startswith("rejected_") else "rejected_process_launch_not_approved"
+            readiness_status = readiness_status or "subscription_launch_approval_rejected"
         elif rejected_fields.get("targetStatus"):
             status = "rejected_target_not_enabled"
             readiness_status = "subscription_launch_approval_rejected"
@@ -24563,14 +24597,23 @@ class SupervisorService:
         if accepted_runtime_path:
             if runtime_metadata.get("status") == "replayed_existing_attempt":
                 return launch_request
-            await self._record_subscription_agent_launch_runtime_attempt(
-                session,
-                item,
-                launch_request,
-                attempt_id=attempt_id,
-                preview=preview,
-            )
-            await session.commit()
+            try:
+                await self._record_subscription_agent_launch_runtime_attempt(
+                    session,
+                    item,
+                    launch_request,
+                    attempt_id=attempt_id,
+                    preview=preview,
+                )
+                await session.commit()
+            except ValueError:
+                await session.rollback()
+                raise
+            except SQLAlchemyError as exc:
+                await session.rollback()
+                raise ValueError(
+                    "Subscription-agent runtime finalization failed; the durable active attempt reservation remains in force."
+                ) from exc
             await session.refresh(item)
         elif accepted_fixture_path:
             existing_attempt = await session.get(ExecutionAttempt, attempt_id)
@@ -24931,6 +24974,82 @@ class SupervisorService:
             and bool(attempt.artifact_refs_json)
         )
 
+    async def _subscription_agent_runtime_attempt_matches_request(
+        self,
+        session: AsyncSession,
+        attempt: ExecutionAttempt,
+        *,
+        item: WorkItem,
+        payload: WorkItemSubscriptionAgentLaunchRequest,
+        preview: RoutingPreviewView,
+        target,
+    ) -> bool:
+        """Permit runtime replay only after the complete terminal evidence exists."""
+
+        requested_attempt_id = payload.executionAttemptId or payload.attemptId or preview.decision.decisionId
+        if (
+            attempt.id != requested_attempt_id
+            or attempt.work_item_id != item.id
+            or attempt.route_decision_id != preview.decision.decisionId
+            or attempt.worker_id != target.worker_id
+            or attempt.lane != ExecutionLane.SUBSCRIPTION_AGENT.value
+            or attempt.authority_mode != "operator_approval_required"
+            or attempt.launch_fence_token is None
+            or attempt.launch_claimed_at is None
+            or attempt.completed_at is None
+            or attempt.revision < 4
+            or attempt.status not in TERMINAL_EXECUTION_ATTEMPT_STATUSES
+        ):
+            return False
+
+        reservation = self._external_launch_reservation_ref(attempt)
+        fence_sha256 = hashlib.sha256(attempt.launch_fence_token.encode()).hexdigest()
+        if (
+            reservation is None
+            or reservation.get("operation") != f"subscription_agent_launch:{target.target_id}"
+            or reservation.get("workItemId") != item.id
+            or reservation.get("routeDecisionId") != preview.decision.decisionId
+            or reservation.get("workerId") != target.worker_id
+            or reservation.get("launchFenceSha256") != fence_sha256
+        ):
+            return False
+
+        runtime_results = [
+            ref
+            for ref in list(attempt.artifact_refs_json or [])
+            if isinstance(ref, dict) and ref.get("artifactType") == "subscription_agent_runtime_result"
+        ]
+        if len(runtime_results) != 1:
+            return False
+        runtime_result = runtime_results[0]
+        expected_status = {
+            "completed": ExecutionAttemptStatus.COMPLETED.value,
+            "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
+            "cancelled": ExecutionAttemptStatus.CANCELLED.value,
+            "failed": ExecutionAttemptStatus.FAILED.value,
+        }.get(str(runtime_result.get("status")))
+        if (
+            expected_status != attempt.status
+            or runtime_result.get("metadataOnly") is not True
+            or runtime_result.get("rawPayloadRetained") is not False
+        ):
+            return False
+
+        event_refs = [
+            ref.get("eventId")
+            for ref in list(attempt.event_refs_json or [])
+            if isinstance(ref, dict) and isinstance(ref.get("eventId"), str)
+        ]
+        if len(event_refs) < 3:
+            return False
+        event_rows = await session.execute(select(WorkflowEvent).where(WorkflowEvent.id.in_(event_refs)))
+        event_types = {event.event_type for event in event_rows.scalars()}
+        return {
+            "execution_attempt.external_launch_claimed",
+            f"execution_attempt.{attempt.status}",
+            "execution_attempt.subscription_launch_runtime_recorded",
+        }.issubset(event_types)
+
     def _subscription_agent_launch_rejection_fingerprint(
         self,
         launch_request: SubscriptionAgentLaunchRequestView,
@@ -25142,7 +25261,6 @@ class SupervisorService:
         attempt_id: str,
         preview: RoutingPreviewView,
     ) -> None:
-        await self._acquire_execute_admission_lock(session)
         now = datetime.now(timezone.utc)
         runtime_status = str(launch_request.runtimeEvidence.get("status") or "completed")
         terminal_status = {
@@ -25217,7 +25335,9 @@ class SupervisorService:
             },
         )
         await session.flush()
-        attempt.event_refs_json = [{"eventId": runtime_event.id, "eventType": runtime_event.event_type}]
+        attempt.event_refs_json = list(attempt.event_refs_json or []) + [
+            {"eventId": runtime_event.id, "eventType": runtime_event.event_type}
+        ]
 
     def _subscription_agent_launch_workspace_isolation_plan(self, workspace_contract: dict[str, object]) -> dict[str, object]:
         return {
@@ -25469,6 +25589,12 @@ class SupervisorService:
             reasons.add("approval_expiry_invalid")
         if "processLaunchPermission" in rejected_fields:
             reasons.add("process_launch_not_approved")
+        runtime_approval = rejected_fields.get("runtimeApproval")
+        if isinstance(runtime_approval, str) and (
+            runtime_approval.startswith("active-attempt-exists:")
+            or runtime_approval.startswith("replay_conflict_or_in_progress:")
+        ):
+            reasons.add("subscription_launch_runtime_in_progress")
         if "rollbackStatus" in rejected_fields:
             reasons.add("subscription_launch_rollback_triggered")
         return sorted(reasons)
@@ -26564,6 +26690,7 @@ class SupervisorService:
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             },
+            commit=False,
         )
         await self._record_event(
             session,
@@ -27059,8 +27186,8 @@ class SupervisorService:
                     payload.actorId,
                     payload.actorLabel,
                 )
+                await session.commit()
                 if utility_result.status != UtilityWorkerStatus.SUCCEEDED:
-                    await session.commit()
                     raise ValueError(f"Guarded utility worker rejected {next_action.actionId}: {utility_result.failure_reason}")
         if next_action.actionId == "prepare_recipe_branch":
             return await self.prepare_recipe_branch(
@@ -27322,34 +27449,41 @@ class SupervisorService:
                 payload.actorId,
                 payload.actorLabel,
             )
-            await session.commit()
             if launch_reservation is not None:
                 command_result = preparation_payload.get("command")
                 process_attempted = isinstance(command_result, dict)
-                await self._finalize_external_launch_attempt(
-                    session,
-                    item,
-                    launch_reservation,
-                    status=(
-                        ExecutionAttemptStatus.FAILED.value
-                        if process_attempted
-                        else ExecutionAttemptStatus.REJECTED.value
-                    ),
-                    operation=f"recipe_branch_preparation:{recipe.id}",
-                    failure_reason=(
-                        "recipe_branch_command_failed"
-                        if process_attempted
-                        else "recipe_branch_preflight_rejected"
-                    ),
-                    evidence={
-                        "artifactType": "recipe_branch_preparation_result",
-                        "recipeId": recipe.id,
-                        "processLaunchAttempted": process_attempted,
-                        "exitCode": command_result.get("exitCode") if isinstance(command_result, dict) else None,
-                        "metadataOnly": True,
-                        "rawPayloadRetained": False,
-                    },
-                )
+                try:
+                    await self._finalize_external_launch_attempt(
+                        session,
+                        item,
+                        launch_reservation,
+                        status=(
+                            ExecutionAttemptStatus.FAILED.value
+                            if process_attempted
+                            else ExecutionAttemptStatus.REJECTED.value
+                        ),
+                        operation=f"recipe_branch_preparation:{recipe.id}",
+                        failure_reason=(
+                            "recipe_branch_command_failed"
+                            if process_attempted
+                            else "recipe_branch_preflight_rejected"
+                        ),
+                        evidence={
+                            "artifactType": "recipe_branch_preparation_result",
+                            "recipeId": recipe.id,
+                            "processLaunchAttempted": process_attempted,
+                            "exitCode": command_result.get("exitCode") if isinstance(command_result, dict) else None,
+                            "metadataOnly": True,
+                            "rawPayloadRetained": False,
+                        },
+                        commit=False,
+                    )
+                    await session.commit()
+                except (SQLAlchemyError, ValueError):
+                    await session.rollback()
+                    raise
+            else:
+                await session.commit()
             await session.refresh(item)
             await self._publish_item(item)
             return item
@@ -27391,24 +27525,31 @@ class SupervisorService:
                 actor_id=payload.actorId,
                 actor_label=payload.actorLabel,
             )
-        await session.commit()
         if launch_reservation is not None:
             command_result = preparation_payload.get("command")
-            await self._finalize_external_launch_attempt(
-                session,
-                item,
-                launch_reservation,
-                status=ExecutionAttemptStatus.COMPLETED.value,
-                operation=f"recipe_branch_preparation:{recipe.id}",
-                evidence={
-                    "artifactType": "recipe_branch_preparation_result",
-                    "recipeId": recipe.id,
-                    "processLaunchAttempted": True,
-                    "exitCode": command_result.get("exitCode") if isinstance(command_result, dict) else 0,
-                    "metadataOnly": True,
-                    "rawPayloadRetained": False,
-                },
-            )
+            try:
+                await self._finalize_external_launch_attempt(
+                    session,
+                    item,
+                    launch_reservation,
+                    status=ExecutionAttemptStatus.COMPLETED.value,
+                    operation=f"recipe_branch_preparation:{recipe.id}",
+                    evidence={
+                        "artifactType": "recipe_branch_preparation_result",
+                        "recipeId": recipe.id,
+                        "processLaunchAttempted": True,
+                        "exitCode": command_result.get("exitCode") if isinstance(command_result, dict) else 0,
+                        "metadataOnly": True,
+                        "rawPayloadRetained": False,
+                    },
+                    commit=False,
+                )
+                await session.commit()
+            except (SQLAlchemyError, ValueError):
+                await session.rollback()
+                raise
+        else:
+            await session.commit()
         await session.refresh(item)
         await self._publish_item(item)
         return item
@@ -28805,6 +28946,7 @@ class SupervisorService:
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             },
+            commit=False,
         )
         return results
 
@@ -28964,6 +29106,7 @@ class SupervisorService:
                 ],
                 "rawPayloadRetained": False,
             },
+            commit=False,
         )
         return results
 
@@ -29166,6 +29309,7 @@ class SupervisorService:
                 "metadataOnly": True,
                 "rawPayloadRetained": False,
             },
+            commit=False,
         )
         return results
 

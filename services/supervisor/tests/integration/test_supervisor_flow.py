@@ -805,6 +805,72 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         assert "recipe.implementing" in run_event_types
 
 
+def test_recipe_branch_finalization_rejection_keeps_business_state_with_running_attempt(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-branch-finalization-rejection.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._git_output = lambda args: (  # type: ignore[method-assign]
+        (True, "main")
+        if args == ["git", "branch", "--show-current"]
+        else (True, "base-revision")
+    )
+    service._git_success = lambda _args: True  # type: ignore[method-assign]
+    service._run_git_command = lambda _args: {  # type: ignore[method-assign]
+        "command": "git switch -c recipe-finalization-rejection",
+        "exitCode": 0,
+        "stdout": "created",
+        "stderr": "",
+    }
+
+    async def reject_finalization(session, item, attempt, **kwargs):
+        raise ValueError("synthetic branch finalization fence rejection")
+
+    monkeypatch.setattr(service, "_finalize_external_launch_attempt", reject_finalization)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Branch finalization rejection",
+                "requestedOutcome": "Keep branch business state coherent when finalization rejects.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "recipe-finalization-rejection",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        asyncio.run(process_once_for_tests())
+        asyncio.run(process_once_for_tests())
+        response = client.post(f"/work-items/{work_item_id}/prepare-branch", json={})
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "invalid_branch_preparation"
+    assert response.json()["detail"]["error"]["message"] == "synthetic branch finalization fence rejection"
+    with sqlite3.connect(db_path) as conn:
+        branch_attempt = conn.execute(
+            "select status from execution_attempts where worker_id = 'recipe.branch.command' order by created_at desc limit 1"
+        ).fetchone()
+        branch_prepared_events = conn.execute(
+            "select count(*) from workflow_events where event_type = 'recipe.branch_prepared'"
+        ).fetchone()[0]
+        state = conn.execute("select state from work_items where id = ?", (work_item_id,)).fetchone()[0]
+    assert branch_attempt == ("running",)
+    assert branch_prepared_events == 0
+    assert state == "ready"
+    assert not any(event["eventType"] == "recipe.branch_prepared" for event in events)
+
+
 def test_recipe_branch_preparation_blocks_when_repo_is_dirty(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "recipe-branch-prep-dirty.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

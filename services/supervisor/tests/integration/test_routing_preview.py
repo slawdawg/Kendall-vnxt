@@ -1,4 +1,5 @@
 ﻿import asyncio
+import hashlib
 import json
 import os
 import sqlite3
@@ -4704,6 +4705,200 @@ def test_subscription_agent_runtime_replay_does_not_launch_second_process(tmp_pa
     assert len(attempts) == 1
 
 
+def _seed_subscription_runtime_attempt(
+    db_path: str,
+    *,
+    work_item_id: str,
+    attempt_id: str,
+    route_decision_id: str,
+    status: str,
+    worker_id: str = "subscription.agent.disabled",
+    revision: int = 2,
+    terminal_evidence: bool = False,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    launch_fence = f"fence-{attempt_id}"
+    reservation = {
+        "artifactType": "external_launch_reservation",
+        "operation": "subscription_agent_launch:codex.subscription.disabled",
+        "workItemId": work_item_id,
+        "routeDecisionId": route_decision_id,
+        "workerId": worker_id,
+        "launchFenceSha256": hashlib.sha256(launch_fence.encode()).hexdigest(),
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
+    artifacts = [reservation]
+    if terminal_evidence:
+        artifacts.append(
+            {
+                "artifactType": "subscription_agent_runtime_result",
+                "status": "completed",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "insert into execution_attempts "
+            "(id, work_item_id, route_decision_id, worker_id, lane, authority_mode, status, revision, "
+            "launch_fence_token, launch_claimed_at, completed_at, workspace_isolation_plan_json, "
+            "artifact_refs_json, event_refs_json, created_at, updated_at) "
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                attempt_id,
+                work_item_id,
+                route_decision_id,
+                worker_id,
+                "subscription_agent",
+                "operator_approval_required",
+                status,
+                revision,
+                launch_fence,
+                now,
+                now if terminal_evidence else None,
+                json.dumps({"operation": reservation["operation"]}),
+                json.dumps(artifacts),
+                json.dumps([]),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def test_subscription_agent_runtime_running_replay_is_in_progress_conflict(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-running-replay.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        raise AssertionError("A running deterministic attempt must not be relaunched.")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        _seed_subscription_runtime_attempt(
+            db_path,
+            work_item_id=work_item_id,
+            attempt_id=approval["executionAttemptId"],
+            route_decision_id=approval["routeDecisionId"],
+            status="running",
+        )
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["approvalAccepted"] is False
+    assert launch["status"] == "rejected_replay_conflict_or_in_progress"
+    assert launch["readinessStatus"] == "subscription_launch_runtime_in_progress"
+    assert "subscription_launch_runtime_in_progress" in launch["blockedReasonIds"]
+    assert adapter_calls["count"] == 0
+
+
+def test_subscription_agent_runtime_replay_rejects_mismatched_terminal_identity(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-mismatched-replay.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        _seed_subscription_runtime_attempt(
+            db_path,
+            work_item_id=work_item_id,
+            attempt_id=approval["executionAttemptId"],
+            route_decision_id=approval["routeDecisionId"],
+            status="completed",
+            worker_id="different-worker",
+            revision=4,
+            terminal_evidence=True,
+        )
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["approvalAccepted"] is False
+    assert launch["status"] == "rejected_replay_conflict_or_in_progress"
+    assert launch["processLaunchAttempted"] is False
+
+
+def test_subscription_agent_runtime_different_request_conflicts_without_replay(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-different-request.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        return SupervisedSubscriptionLaunchResult(status="completed", exit_code=0)
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        first = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        different_request = {**approval, "commandArgv": ["codex", "--help"]}
+        second = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **different_request},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["data"]["approvalAccepted"] is False
+    assert second.json()["data"]["processLaunchAttempted"] is False
+    assert "commandArgv-mismatch" in second.json()["data"]["rejectedEnvelopeFields"]["runtimeApproval"]
+    assert adapter_calls["count"] == 1
+
+
 def test_subscription_agent_runtime_rejects_artifact_only_approval_reuse(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "subscription-agent-runtime-artifact-reuse.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -5144,6 +5339,80 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
     assert blocked_launch["status"] == "rejected_rollback_triggered"
     assert blocked_launch["rejectedEnvelopeFields"]["rollbackStatus"] == "verification_failed"
     assert "subscription_launch_rollback_triggered" in blocked_launch["blockedReasonIds"]
+
+
+def test_verification_finalization_rejection_does_not_commit_evidence_alongside_running_attempt(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "verification-finalization-rejection.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    _reset_supervisor_modules()
+
+    from supervisor.api import main as api_main
+    from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
+
+    async def fake_run(self, **kwargs):
+        return SupervisedSubscriptionLaunchResult(status="completed", exit_code=0)
+
+    async def reject_finalization(session, item, attempt, **kwargs):
+        raise ValueError("synthetic finalization fence rejection")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    def fake_git_output(args: list[str]) -> tuple[bool, str]:
+        command = tuple(args)
+        if command == ("git", "branch", "--show-current"):
+            return True, "main"
+        if command == ("git", "rev-parse", "HEAD"):
+            return True, "abc1234"
+        return False, "unexpected git command"
+
+    monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
+    monkeypatch.setattr(api_main.service, "_run_execution_attempt_verification_command", lambda _shape: {
+        "status": "passed",
+        "exitCode": 0,
+        "durationMs": 1,
+        "summary": "bounded verification passed",
+        "recoveryAction": "retain metadata-only evidence",
+    })
+
+    with TestClient(api_main.app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        launch = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        assert launch.status_code == 200
+        attempt_id = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"][0]["attemptId"]
+        monkeypatch.setattr(api_main.service, "_finalize_external_launch_attempt", reject_finalization)
+        response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
+            json={
+                "commandId": "verification-finalization-rejection",
+                "label": "Bounded verification",
+                "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "status": "passed",
+                "summary": "bounded verification passed",
+            },
+        )
+
+    assert response.status_code == 409
+    with sqlite3.connect(db_path) as conn:
+        verification_attempt = conn.execute(
+            "select status from execution_attempts where worker_id = 'verification.command' order by created_at desc limit 1"
+        ).fetchone()
+        verification_events = conn.execute(
+            "select count(*) from workflow_events where event_type = 'execution_attempt.verification_recorded'"
+        ).fetchone()[0]
+    assert verification_attempt == ("running",)
+    assert verification_events == 0
 
 
 def test_subscription_agent_launch_stale_verification_is_metadata_only_and_blocks_delivery(tmp_path, monkeypatch) -> None:
