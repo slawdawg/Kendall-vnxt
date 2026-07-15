@@ -103,7 +103,7 @@ test("ordinary workflow and packet mutations honor the active external-launch fe
     ["prepare_recipe_branch", "get_local_worktree_plan"],
   ];
   for (const [name, nextName] of guardedMethods) {
-    assert.match(method(service, name, nextName), /_lock_work_item_mutation_admission\(session, work_item_id\)/, name);
+    assert.match(method(service, name, nextName), /_lock_work_item_mutation_admission\(\s*session,\s*work_item_id\b/s, name);
   }
   const guard = method(service, "_lock_work_item_mutation_admission", "_execution_attempt_has_task_kind");
   assertBefore(guard, "_acquire_execute_admission_lock(session)", "session.get(WorkItem", "mutation guard");

@@ -56,6 +56,7 @@ function contexts() {
       expectedActiveLeaseCount: 1,
       expectedRunningAttemptCount: 1,
     },
+    resume: { kind: "resume", expectedRuntimeMode: "paused", expectedRuntimeRevision: 3 },
     reassign: {
       kind: "reassign",
       linkedWorkItemId: "work-1",
@@ -138,6 +139,7 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
     retry_verification: { targetType: "execution_attempt", authorityState: "needs_authority_approval", riskTier: "medium" },
     pause: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
     drain: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "medium" },
+    resume: { targetType: "runtime", authorityState: "needs_authority_approval", riskTier: "low" },
     reassign: { targetType: "work_packet", authorityState: "needs_authority_approval", riskTier: "medium" },
   });
   for (const actionId of contract.PIPELINE_OPERATIONAL_ACTION_V1_IDS) {
@@ -451,6 +453,8 @@ test("v1 runtime success evidence is explicit while v0 request behavior remains 
       resultingRuntimeMode: "paused",
       resultingRuntimeRevision: 4,
       activeWorkCount: 2,
+      activeLeaseCount: 1,
+      runningAttemptCount: 1,
       intakeStopped: true,
       activeWorkPreserved: true,
     },
@@ -481,4 +485,28 @@ test("v1 runtime success evidence is explicit while v0 request behavior remains 
     metadataOnly: true,
     rawPayloadRetained: false,
   }), []);
+});
+
+test("v0 pause cannot be requested without authority approval", async () => {
+  const contract = await loadContract();
+  const issues = contract.validatePipelineOperationalActionRequestV0({
+    schemaVersion: "pipeline-operational-action/v0",
+    actionId: "pause",
+    targetType: "runtime",
+    targetId: "supervisor-runtime",
+    idempotencyKey: "idem-v0-pause",
+    correlationId: "corr-v0-pause",
+    requestedBy: { actorType: "manager", actorId: "manager-1" },
+    requestedAuthorityState: "not_required",
+    requestedRiskTier: "low",
+    evidenceRefs: ["verification:v0-pause-without-approval"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  });
+
+  assert.ok(
+    issues.some(
+      (issue) => issue.field === "requestedAuthorityState" && issue.code === "policy_violation",
+    ),
+  );
 });
