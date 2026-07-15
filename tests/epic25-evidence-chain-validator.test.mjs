@@ -1,15 +1,29 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import {
+const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
+const pipelineControlPlanePath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
+const pipelineControlPlaneSource = readFileSync(pipelineControlPlanePath, "utf8");
+// Reuse the repository's existing TypeScript compiler dependency without adding a second test runner.
+const ts = dashboardRequire("typescript");
+const compiledContract = ts.transpileModule(pipelineControlPlaneSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const contractModule = { exports: {} };
+Function("module", "exports", compiledContract)(contractModule, contractModule.exports);
+
+const {
   PIPELINE_EPIC_25_EVIDENCE_CHAIN_SCHEMA_VERSION,
   PIPELINE_EPIC_25_EVIDENCE_CHAIN_V1_SCHEMA_VERSION,
   validatePipelineOperationalActionRequestV0,
   validatePipelineEpic25EvidenceChainV0,
   validatePipelineEpic25EvidenceChainV1,
-} from "../packages/contracts/src/pipeline-control-plane/index.js";
-import type { PipelineEpic25EvidenceChainReadV1 } from "../packages/contracts/src/pipeline-control-plane/index.js";
+} = contractModule.exports;
 
 const now = Date.parse("2026-07-12T12:00:00Z");
 const schemas = {
@@ -23,7 +37,7 @@ const schemas = {
 const targetRevision = "a".repeat(40);
 const gateFamilies = ["security", "retention", "rollback", "runbook", "telemetry", "recovery"];
 
-function policyProfile(): any {
+function policyProfile() {
   return {
     schemaVersion: "pipeline-epic-25-policy-profile/v0",
     targetRevision,
@@ -63,13 +77,13 @@ function policyProfile(): any {
   };
 }
 
-function chain(): any {
-  const outcomes: Record<string, string> = { readiness: "no_go", canary: "hold", ramp: "hold", recovery: "hold", hardening: "hold", decision: "hold" };
-  const packets: Record<string, any> = {};
+function chain() {
+  const outcomes = { readiness: "no_go", canary: "hold", ramp: "hold", recovery: "hold", hardening: "hold", decision: "hold" };
+  const packets = {};
   let predecessorPacketId = null;
   for (const slot of Object.keys(schemas)) {
     const packetId = `epic-25-${slot}`;
-    let details: any;
+    let details;
     if (slot === "readiness") details = { kind: slot, backendTruth: "dry_run", authorityState: "blocked", gateCount: 10, thresholdsComplete: false, telemetryReady: false, rollbackReady: true, recoveryReady: true, configurationValid: true };
     else if (slot === "canary") details = { kind: slot, workerCount: 1, backendTruth: "dry_run", leaseState: "blocked", checkpointState: "blocked", measurementsComplete: false, canaryAuthorityProven: false, rampAllowed: false };
     else if (slot === "ramp") details = { kind: slot, canaryPacketId: packets.canary.packetId, canaryOutcome: packets.canary.outcome, stageWorkerCounts: [1, 2, 4, 6], stageOutcomes: ["hold", "hold", "hold", "hold"], scaleEvidenceReady: false };
@@ -77,7 +91,7 @@ function chain(): any {
     else if (slot === "hardening") details = { kind: slot, recoveryPacketId: packets.recovery.packetId, predecessorOutcome: packets.recovery.outcome, domainCount: 1, unresolvedHighRiskGap: true, readinessHandoffReady: false };
     else details = { kind: slot, predecessorPacketIds: Object.fromEntries(["canary", "ramp", "recovery", "hardening"].map((name) => [name, packets[name].packetId])), predecessorOutcomes: Object.fromEntries(["canary", "ramp", "recovery", "hardening"].map((name) => [name, packets[name].outcome])), authorityReady: false, simulatedEvidence: true, staleEvidence: false, fixtureEvidence: false };
     packets[slot] = {
-      slot, packetId, packetSchemaVersion: schemas[slot as keyof typeof schemas], predecessorPacketId,
+      slot, packetId, packetSchemaVersion: schemas[slot], predecessorPacketId,
       evidenceClass: "integrated_local", outcome: outcomes[slot], sourceRefs: ["prd:epic-25"], evidenceRefs: [`evidence:${slot}`],
       checkedAt: "2026-07-12T12:00:00Z", expiresAt: "2026-07-12T12:04:00Z", observedEvidenceAttestation: null,
       details, metadataOnly: true, rawPayloadRetained: false,
@@ -107,21 +121,21 @@ test("Epic 25 validator rejects naive time, duplicate identity, unsafe refs, mal
 });
 
 test("Epic 25 policy profile rejects missing gates, unexplained skips, stale targets, unsafe refs, expired or missing retention, and raw payloads", () => {
-  const cases: Array<[string, any]> = [];
-  const missingFamily = chain(); missingFamily.policyProfile.qualityGates = missingFamily.policyProfile.qualityGates.filter((gate: any) => gate.family !== "security"); cases.push(["missing family", missingFamily]);
-  const notApplicableWithoutReason = chain(); notApplicableWithoutReason.policyProfile.qualityGates.find((gate: any) => gate.family === "runbook").notApplicableReason = null; cases.push(["not-applicable reason", notApplicableWithoutReason]);
-  const staleTarget = chain(); staleTarget.policyProfile.qualityGates.find((gate: any) => gate.family === "telemetry").targetRevision = "b".repeat(40); cases.push(["stale target", staleTarget]);
-  const unsafeRef = chain(); unsafeRef.policyProfile.qualityGates.find((gate: any) => gate.family === "security").evidenceRefs = ["evidence:sk-proj-12345678901234567890"]; cases.push(["unsafe ref", unsafeRef]);
-  const awsRef = chain(); awsRef.policyProfile.qualityGates.find((gate: any) => gate.family === "security").evidenceRefs = ["evidence:AKIA1234567890ABCDEF"]; cases.push(["AWS-shaped ref", awsRef]);
+  const cases = [];
+  const missingFamily = chain(); missingFamily.policyProfile.qualityGates = missingFamily.policyProfile.qualityGates.filter((gate) => gate.family !== "security"); cases.push(["missing family", missingFamily]);
+  const notApplicableWithoutReason = chain(); notApplicableWithoutReason.policyProfile.qualityGates.find((gate) => gate.family === "runbook").notApplicableReason = null; cases.push(["not-applicable reason", notApplicableWithoutReason]);
+  const staleTarget = chain(); staleTarget.policyProfile.qualityGates.find((gate) => gate.family === "telemetry").targetRevision = "b".repeat(40); cases.push(["stale target", staleTarget]);
+  const unsafeRef = chain(); unsafeRef.policyProfile.qualityGates.find((gate) => gate.family === "security").evidenceRefs = ["evidence:sk-proj-12345678901234567890"]; cases.push(["unsafe ref", unsafeRef]);
+  const awsRef = chain(); awsRef.policyProfile.qualityGates.find((gate) => gate.family === "security").evidenceRefs = ["evidence:AKIA1234567890ABCDEF"]; cases.push(["AWS-shaped ref", awsRef]);
   const expiredRetention = chain(); expiredRetention.policyProfile.retentionPolicy.expiresAt = "2026-07-11T12:00:00Z"; cases.push(["expired retention", expiredRetention]);
   const missingRetention = chain(); delete missingRetention.policyProfile.retentionPolicy; cases.push(["missing retention", missingRetention]);
   const rawPayload = chain(); rawPayload.policyProfile.retentionPolicy.rawPayloadRetained = true; cases.push(["raw payload", rawPayload]);
   const executableReason = chain(); executableReason.policyProfile.retentionPolicy.policyReason = "git commit -am update"; cases.push(["executable policy reason", executableReason]);
-  const tokenReason = chain(); tokenReason.policyProfile.qualityGates.find((gate: any) => gate.family === "runbook").notApplicableReason = "ghp_123456789012345678901234567890123456"; cases.push(["token policy reason", tokenReason]);
-  const duplicateRefs = chain(); duplicateRefs.policyProfile.qualityGates.find((gate: any) => gate.family === "security").evidenceRefs = ["evidence:security-gate", "evidence:security-gate"]; cases.push(["duplicate refs", duplicateRefs]);
+  const tokenReason = chain(); tokenReason.policyProfile.qualityGates.find((gate) => gate.family === "runbook").notApplicableReason = "ghp_123456789012345678901234567890123456"; cases.push(["token policy reason", tokenReason]);
+  const duplicateRefs = chain(); duplicateRefs.policyProfile.qualityGates.find((gate) => gate.family === "security").evidenceRefs = ["evidence:security-gate", "evidence:security-gate"]; cases.push(["duplicate refs", duplicateRefs]);
   const invalidHour = chain(); invalidHour.policyProfile.checkedAt = "2026-07-12T24:00:00Z"; cases.push(["24:00 timestamp", invalidHour]);
   const invalidCalendarDate = chain(); invalidCalendarDate.policyProfile.checkedAt = "2026-02-30T12:00:00Z"; cases.push(["invalid calendar date", invalidCalendarDate]);
-  const downgraded = chain(); Object.assign(downgraded.policyProfile.qualityGates.find((gate: any) => gate.family === "security"), { requirement: "not_applicable", state: "not_applicable", notApplicableReason: "Caller downgrade." }); cases.push(["required downgrade", downgraded]);
+  const downgraded = chain(); Object.assign(downgraded.policyProfile.qualityGates.find((gate) => gate.family === "security"), { requirement: "not_applicable", state: "not_applicable", notApplicableReason: "Caller downgrade." }); cases.push(["required downgrade", downgraded]);
 
   for (const [label, candidate] of cases) {
     assert.ok(validatePipelineEpic25EvidenceChainV1(candidate, now).length > 0, label);
@@ -129,11 +143,11 @@ test("Epic 25 policy profile rejects missing gates, unexplained skips, stale tar
 });
 
 test("Epic 25 Python and TypeScript policy-text filters share conservative executable and control-character vectors", () => {
-  const cases = JSON.parse(readFileSync(new URL("./fixtures/epic25-policy-text-parity.json", import.meta.url), "utf8")) as Array<{ value: string; safe: boolean }>;
+  const cases = JSON.parse(readFileSync(new URL("./fixtures/epic25-policy-text-parity.json", import.meta.url), "utf8"));
   for (const candidate of cases) {
     const profileCandidate = chain();
     profileCandidate.policyProfile.retentionPolicy.policyReason = candidate.value;
-    profileCandidate.policyProfile.qualityGates.find((gate: any) => gate.family === "runbook").notApplicableReason = candidate.value;
+    profileCandidate.policyProfile.qualityGates.find((gate) => gate.family === "runbook").notApplicableReason = candidate.value;
     const issues = validatePipelineEpic25EvidenceChainV1(profileCandidate, now);
     assert.equal(issues.some((issue) => issue.field === "policyProfile.retentionPolicy.policyReason"), !candidate.safe, candidate.value);
     assert.equal(issues.some((issue) => issue.field === "policyProfile.qualityGates.3.notApplicableReason"), !candidate.safe, candidate.value);
@@ -165,7 +179,7 @@ test("Epic 25 packet expiry is evaluated at chain.checkedAt", () => {
   const candidate = chain();
   candidate.checkedAt = "2026-07-12T12:00:30Z";
   candidate.expiresAt = "2026-07-12T12:04:30Z";
-  for (const packet of Object.values(candidate.packets) as any[]) {
+  for (const packet of Object.values(candidate.packets)) {
     packet.checkedAt = "2026-07-12T12:00:00Z";
     packet.expiresAt = "2026-07-12T12:00:15Z";
   }
@@ -196,7 +210,8 @@ test("Epic 25 legacy v0 remains explicitly validatable without a policy profile"
 test("Epic 25 TypeScript readback preserves the source-revision hold blocker", () => {
   const readback = {
     typedBlockers: ["source_revision_attestation_required"],
-  } satisfies Pick<PipelineEpic25EvidenceChainReadV1, "typedBlockers">;
+  };
 
   assert.deepEqual(readback.typedBlockers, ["source_revision_attestation_required"]);
+  assert.match(pipelineControlPlaneSource, /interface PipelineEpic25EvidenceChainReadV1[\s\S]*source_revision_attestation_required/);
 });
