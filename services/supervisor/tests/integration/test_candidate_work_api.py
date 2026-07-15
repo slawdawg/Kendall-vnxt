@@ -250,7 +250,9 @@ def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, m
         assert work_item["metadata"]["candidateSortOrder"] == 2
 
         duplicate_promotion = client.post(f"/candidate-work/{candidate_id}/promote")
-        assert duplicate_promotion.status_code == 400
+        assert duplicate_promotion.status_code == 200
+        assert duplicate_promotion.json()["data"]["workItem"]["id"] == work_item["id"]
+        assert duplicate_promotion.json()["data"]["candidateWork"]["promotedWorkItemId"] == work_item["id"]
 
         work_items_response = client.get("/work-items")
         assert work_items_response.status_code == 200

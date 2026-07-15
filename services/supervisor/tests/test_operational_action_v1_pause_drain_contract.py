@@ -106,6 +106,20 @@ def test_runtime_admission_and_initialization_contracts_are_fenced_and_idempoten
     assert "runningAttemptCount" in status_source
 
 
+def test_alternate_intake_and_requeue_paths_share_the_runtime_admission_fence() -> None:
+    promotion_source = inspect.getsource(SupervisorService.promote_candidate_work)
+    retry_source = inspect.getsource(SupervisorService.retry_item)
+    action_source = inspect.getsource(SupervisorService._apply_action_to_item)
+
+    assert "_require_running_runtime_for_admission(session)" in promotion_source
+    assert "with_for_update=True" in promotion_source
+    assert "CandidateWork.promoted_work_item_id.is_(None)" in promotion_source
+    assert "require_running_runtime=True" in retry_source
+    assert "WorkflowAction.RETURN_TO_READY" in action_source
+    assert "WorkflowAction.REENTER_CAPTURE" in action_source
+    assert "admission_lock_acquired=True" in action_source
+
+
 def test_resume_contract_is_fenced_and_preserves_active_work() -> None:
     context = ResumeActionContextV1.model_validate(
         {"kind": "resume", "expectedRuntimeMode": "draining", "expectedRuntimeRevision": 3}

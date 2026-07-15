@@ -1123,8 +1123,14 @@ class SupervisorService:
             "runningAttemptCount": int(running_attempts or 0),
         }
 
-    async def _require_running_runtime_for_admission(self, session: AsyncSession) -> SupervisorControl:
-        await self._acquire_execute_admission_lock(session)
+    async def _require_running_runtime_for_admission(
+        self,
+        session: AsyncSession,
+        *,
+        admission_lock_acquired: bool = False,
+    ) -> SupervisorControl:
+        if not admission_lock_acquired:
+            await self._acquire_execute_admission_lock(session)
         control, _ = await self._runtime_control_snapshot(session, lock=True)
         if control.mode != RunMode.RUNNING.value:
             raise ValueError(
@@ -1650,10 +1656,14 @@ class SupervisorService:
         work_item_id: str,
         *,
         reject_pending_retry: bool = True,
+        require_running_runtime: bool = False,
     ) -> WorkItem | None:
         """Lock one WorkItem and honor the durable external-launch fence."""
 
-        await self._acquire_execute_admission_lock(session)
+        if require_running_runtime:
+            await self._require_running_runtime_for_admission(session)
+        else:
+            await self._acquire_execute_admission_lock(session)
         item = await session.get(WorkItem, work_item_id, with_for_update=True)
         if not item:
             return None
@@ -6707,13 +6717,23 @@ class SupervisorService:
         return candidate
 
     async def promote_candidate_work(self, session: AsyncSession, candidate_work_id: str) -> tuple[CandidateWork, WorkItem] | None:
-        candidate = await session.get(CandidateWork, candidate_work_id)
+        # Candidate promotion is runnable-work admission, not merely candidate
+        # metadata mutation. The singleton admission lock and runtime row lock
+        # must fence it with generic intake and launch reservations.
+        await self._require_running_runtime_for_admission(session)
+        candidate = await session.get(CandidateWork, candidate_work_id, with_for_update=True)
         if not candidate:
             return None
         if candidate.status != CandidateWorkStatus.APPROVED.value:
             raise ValueError("Candidate work must be approved before promotion.")
         if candidate.promoted_work_item_id:
-            raise ValueError("Candidate work has already been promoted.")
+            item = await session.get(WorkItem, candidate.promoted_work_item_id)
+            if not item:
+                raise ValueError("Candidate work promotion linkage is missing its WorkItem; refusing to create a duplicate.")
+            await session.commit()
+            await session.refresh(candidate)
+            await session.refresh(item)
+            return candidate, item
         if self._candidate_is_projection_metadata_only(candidate):
             raise ValueError("Projection metadata-only Candidate Work cannot be promoted into runnable WorkItems.")
 
@@ -6770,11 +6790,36 @@ class SupervisorService:
             requires_audit=candidate.risk_level in {"medium", "high"},
             audit_mode=AuditMode.NONE.value,
         )
+        before_state = {"candidateStatus": candidate.status, "promotedWorkItemId": candidate.promoted_work_item_id}
         session.add(item)
         await session.flush()
-        before_state = {"candidateStatus": candidate.status, "promotedWorkItemId": candidate.promoted_work_item_id}
+        now = datetime.now(timezone.utc)
+        candidate_link = await session.execute(
+            update(CandidateWork)
+            .execution_options(synchronize_session=False)
+            .where(
+                CandidateWork.id == candidate.id,
+                CandidateWork.status == CandidateWorkStatus.APPROVED.value,
+                CandidateWork.promoted_work_item_id.is_(None),
+            )
+            .values(promoted_work_item_id=item.id, updated_at=now)
+        )
+        if candidate_link.rowcount != 1:
+            await session.rollback()
+            linked_candidate = await session.get(CandidateWork, candidate_work_id)
+            linked_item = (
+                await session.get(WorkItem, linked_candidate.promoted_work_item_id)
+                if linked_candidate and linked_candidate.promoted_work_item_id
+                else None
+            )
+            if linked_candidate and linked_item:
+                await session.commit()
+                await session.refresh(linked_candidate)
+                await session.refresh(linked_item)
+                return linked_candidate, linked_item
+            raise ValueError("Candidate work promotion conflicted concurrently without a durable linkage.")
         candidate.promoted_work_item_id = item.id
-        candidate.updated_at = datetime.now(timezone.utc)
+        candidate.updated_at = now
         after_state = {"candidateStatus": candidate.status, "promotedWorkItemId": item.id}
         await self._record_event(
             session,
@@ -27222,7 +27267,11 @@ class SupervisorService:
         )
 
     async def retry_item(self, session: AsyncSession, work_item_id: str) -> WorkItem | None:
-        item = await self._lock_work_item_mutation_admission(session, work_item_id)
+        item = await self._lock_work_item_mutation_admission(
+            session,
+            work_item_id,
+            require_running_runtime=True,
+        )
         if not item:
             return None
         if item.state == WorkflowState.OPERATOR_OWNED.value:
@@ -28648,6 +28697,7 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.RETURN_TO_READY and current == WorkflowState.BLOCKED:
+            await self._require_running_runtime_for_admission(session, admission_lock_acquired=True)
             item.blocked_reason = None
             await self._transition(
                 session,
@@ -28664,6 +28714,7 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.REENTER_CAPTURE and current == WorkflowState.OPERATOR_OWNED:
+            await self._require_running_runtime_for_admission(session, admission_lock_acquired=True)
             item.blocked_reason = None
             await self._transition(
                 session,

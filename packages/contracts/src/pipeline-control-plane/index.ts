@@ -1828,7 +1828,7 @@ const PIPELINE_OPERATIONAL_ACTION_POLICY: Record<
   requeue: { targetTypes: ["work_item", "work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   mark_tested: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_product_approval"] },
   request_rework: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_product_approval"] },
-  pause: { targetTypes: ["runtime", "manager_run"], minimumRiskTier: "low", allowedAuthorityAllowed: true, requiredAuthorityStates: [] },
+  pause: { targetTypes: ["runtime", "manager_run"], minimumRiskTier: "low", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   drain: { targetTypes: ["runtime", "manager_run"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   reassign: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_authority_approval"] },
   reject: { targetTypes: ["work_packet"], minimumRiskTier: "medium", allowedAuthorityAllowed: false, requiredAuthorityStates: ["needs_product_approval"] },

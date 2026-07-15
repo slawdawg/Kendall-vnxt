@@ -486,3 +486,27 @@ test("v1 runtime success evidence is explicit while v0 request behavior remains 
     rawPayloadRetained: false,
   }), []);
 });
+
+test("v0 pause cannot be requested without authority approval", async () => {
+  const contract = await loadContract();
+  const issues = contract.validatePipelineOperationalActionRequestV0({
+    schemaVersion: "pipeline-operational-action/v0",
+    actionId: "pause",
+    targetType: "runtime",
+    targetId: "supervisor-runtime",
+    idempotencyKey: "idem-v0-pause",
+    correlationId: "corr-v0-pause",
+    requestedBy: { actorType: "manager", actorId: "manager-1" },
+    requestedAuthorityState: "not_required",
+    requestedRiskTier: "low",
+    evidenceRefs: ["verification:v0-pause-without-approval"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  });
+
+  assert.ok(
+    issues.some(
+      (issue) => issue.field === "requestedAuthorityState" && issue.code === "policy_violation",
+    ),
+  );
+});

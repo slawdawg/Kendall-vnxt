@@ -77,6 +77,27 @@ def _seed_active_work(client: TestClient, db_path: str) -> str:
     return work_item_id
 
 
+def _seed_quiescent_work(client: TestClient, db_path: str, state: str, title: str) -> str:
+    response = client.post(
+        "/work-items",
+        json={
+            "title": title,
+            "requestedOutcome": f"Keep {state} work available for admission fencing.",
+            "source": "pytest",
+            "metadata": {},
+        },
+    )
+    assert response.status_code == 200, response.text
+    work_item_id = response.json()["data"]["id"]
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "update work_items set state = ?, updated_at = ?, last_event_at = ? where id = ?",
+            (state, "2026-07-15 00:00:00.000000", "2026-07-15 00:00:00.000000", work_item_id),
+        )
+        connection.commit()
+    return work_item_id
+
+
 def _runtime_request(action_id: str, *, mode: str, revision: int, counts: dict[str, int], key: str, correlation: str) -> dict:
     from supervisor.api.schemas import (
         DrainActionContextV1,
@@ -145,6 +166,8 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
     db_path = (tmp_path / db_name).as_posix()
     with _client(tmp_path, monkeypatch, db_name) as client:
         work_item_id = _seed_active_work(client, db_path)
+        blocked_work_item_id = _seed_quiescent_work(client, db_path, "blocked", "P2.2 blocked retry")
+        operator_owned_work_item_id = _seed_quiescent_work(client, db_path, "operator_owned", "P2.2 operator-owned reentry")
         initial = client.get("/supervisor/status")
         assert initial.status_code == 200, initial.text
         assert initial.json()["data"]["mode"] == "running"
@@ -186,6 +209,44 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
         )
         assert blocked_intake.status_code == 409
         assert "New work and launch admission is blocked" in blocked_intake.text
+
+        candidate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "blocked paused candidate promotion",
+                "requestedOutcome": "must remain proposed while paused",
+                "source": "operator",
+                "sourceArtifactPath": "docs/workflows/implementation-evidence-boundary.md",
+                "sourceArtifactType": "manual_note",
+            },
+        )
+        assert candidate_response.status_code == 200, candidate_response.text
+        candidate_id = candidate_response.json()["data"]["id"]
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+        blocked_promotion = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert blocked_promotion.status_code == 400
+        assert "New work and launch admission is blocked" in blocked_promotion.text
+        assert len(client.get("/work-items").json()["data"]) == 3
+        listed_candidates = client.get("/candidate-work")
+        assert listed_candidates.status_code == 200
+        candidate_view = next(item for item in listed_candidates.json()["data"] if item["id"] == candidate_id)
+        assert candidate_view["promotedWorkItemId"] is None
+
+        blocked_retry = client.post(f"/work-items/{blocked_work_item_id}/retry")
+        assert blocked_retry.status_code == 409
+        assert "New work and launch admission is blocked" in blocked_retry.text
+        blocked_requeue = client.post(
+            f"/work-items/{blocked_work_item_id}/actions",
+            json={"action": "return_to_ready", "note": "Retry after runtime resumes."},
+        )
+        assert blocked_requeue.status_code == 409
+        assert "New work and launch admission is blocked" in blocked_requeue.text
+        blocked_reentry = client.post(
+            f"/work-items/{operator_owned_work_item_id}/actions",
+            json={"action": "reenter_capture", "note": "Re-enter after runtime resumes."},
+        )
+        assert blocked_reentry.status_code == 409
+        assert "New work and launch admission is blocked" in blocked_reentry.text
 
         stale_response = client.post("/pipeline-control-plane/actions/v1", json=stale_drain)
         assert stale_response.status_code == 400
