@@ -5395,7 +5395,7 @@ def test_verification_finalization_rejection_does_not_commit_evidence_alongside_
             json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
         )
         assert launch.status_code == 200
-        attempt_id = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"][0]["attemptId"]
+        attempt_id = approval["executionAttemptId"]
         monkeypatch.setattr(api_main.service, "_finalize_external_launch_attempt", reject_finalization)
         response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
@@ -5411,14 +5411,25 @@ def test_verification_finalization_rejection_does_not_commit_evidence_alongside_
 
     assert response.status_code == 409
     with sqlite3.connect(db_path) as conn:
-        verification_attempt = conn.execute(
-            "select status from execution_attempts where worker_id = 'verification.command' order by created_at desc limit 1"
-        ).fetchone()
+        verification_attempts = conn.execute(
+            "select count(*) from execution_attempts where worker_id = 'verification.command'"
+        ).fetchone()[0]
         verification_events = conn.execute(
             "select count(*) from workflow_events where event_type = 'execution_attempt.verification_recorded'"
         ).fetchone()[0]
-    assert verification_attempt == ("running",)
+        original_attempt = conn.execute(
+            "select worker_id, lane, status, artifact_refs_json from execution_attempts where id = ?",
+            (attempt_id,),
+        ).fetchone()
+    assert verification_attempts == 0
     assert verification_events == 0
+    assert original_attempt is not None
+    assert original_attempt[:3] == ("subscription.agent.disabled", "subscription_agent", "completed")
+    assert not any(
+        artifact.get("artifactType") == "verification_result"
+        and artifact.get("commandId") == "verification-finalization-rejection"
+        for artifact in json.loads(original_attempt[3])
+    )
 
 
 def test_subscription_agent_launch_stale_verification_is_metadata_only_and_blocks_delivery(tmp_path, monkeypatch) -> None:
