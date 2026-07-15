@@ -5,6 +5,7 @@ import type {
   PipelineGatedControlV0,
   PipelineCanonicalContractV1,
   PipelineOperationalActionCapabilityV0,
+  PipelineOperationalActionCapabilityV1,
   PipelineManagerSummaryV0,
   PipelineProductModeMappingV0,
   PipelineProjectionSourceLabelV0,
@@ -152,6 +153,7 @@ export type PipelineContextualActionStripItem = {
   riskTier: "low" | "medium" | "high" | "extreme";
   reason: string;
   expectedResult: string;
+  v1Capability?: PipelineOperationalActionCapabilityV1;
   result: PipelineContextualActionResult | null;
   metadataOnly: true;
 };
@@ -415,6 +417,7 @@ export function buildContextualActionStripForPacket(
       .filter((control) => control.packetId === packet.packetId)
       .map((control) => contextualActionFromGatedControl(control)),
     ...contextualActionsFromPacketState(packet, projection),
+    ...contextualActionsFromV1Capabilities(packet, projection),
   ];
   if (actions.length === 0) {
     return null;
@@ -426,6 +429,26 @@ export function buildContextualActionStripForPacket(
     actions,
     metadataOnly: true,
   };
+}
+
+export function buildRuntimeOperationalActionStrip(
+  projection: PipelineDashboardProjectionV0,
+): PipelineContextualActionStrip | null {
+  if (
+    projection.sourceLabel !== "live" ||
+    projection.freshnessState !== "live" ||
+    projection.fixtureMode.enabled !== false ||
+    !projection.runtimeReadiness ||
+    !projectionCanShowRuntimeOperationalActions(projection)
+  ) {
+    return null;
+  }
+  const actions = (projection.runtimeReadiness.actionCapabilitiesV1 ?? [])
+    .filter((capability) => isActionableV1Capability(capability, "supervisor_runtime"))
+    .map((capability) => contextualActionFromV1Capability(capability, "runtime"));
+  return actions.length > 0
+    ? { visible: true, selectionType: "stage", selectionId: "supervisor-runtime", actions, metadataOnly: true }
+    : null;
 }
 
 function buildContextualActionStrips(projection: PipelineDashboardProjectionV0) {
@@ -643,6 +666,94 @@ function contextualActionsFromPacketState(
     });
   }
   return actions;
+}
+
+function contextualActionsFromV1Capabilities(
+  packet: PipelineDashboardWorkPacketV0,
+  projection: PipelineDashboardProjectionV0,
+): PipelineContextualActionStripItem[] {
+  const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId);
+  if (!detail || packet.truthLabel !== "live") {
+    return [];
+  }
+  if (!projectionHasAvailableRuntimeCapability(projection)) {
+    return [];
+  }
+  return (detail.actionCapabilitiesV1 ?? [])
+    .filter((capability) => isActionableV1Capability(capability, "packet"))
+    .map((capability) => contextualActionFromV1Capability(capability, "packet"));
+}
+
+function projectionHasAvailableRuntimeCapability(projection: PipelineDashboardProjectionV0): boolean {
+  const readiness = projection.runtimeReadiness;
+  return Boolean(
+    readiness &&
+      readiness.capabilityState === "available" &&
+      (readiness.operationalMode === "local_proof" || readiness.operationalMode === "bounded_write"),
+  );
+}
+
+export function isLocalPausedOrDrainingSupervisorRuntime(
+  projection: PipelineDashboardProjectionV0,
+): boolean {
+  const readiness = projection.runtimeReadiness;
+  // The supervisor intentionally projects local paused/draining state as
+  // read_only. Ready + available + a server-projected Resume capability is
+  // the local supervisor boundary; remote read_only is degraded/unavailable.
+  return Boolean(
+    projection.sourceLabel === "live" &&
+    projection.freshnessState === "live" &&
+    projection.fixtureMode.enabled === false &&
+    readiness &&
+    readiness.operationalMode === "read_only" &&
+    readiness.readinessState === "ready" &&
+    readiness.capabilityState === "available" &&
+    readiness.actionCapabilitiesV1.some((capability) =>
+      capability.actionId === "resume" &&
+      isActionableV1Capability(capability, "supervisor_runtime")
+    )
+  );
+}
+
+function projectionCanShowRuntimeOperationalActions(projection: PipelineDashboardProjectionV0): boolean {
+  return projectionHasAvailableRuntimeCapability(projection) || isLocalPausedOrDrainingSupervisorRuntime(projection);
+}
+
+function contextualActionFromV1Capability(
+  capability: PipelineOperationalActionCapabilityV1,
+  source: "packet" | "runtime",
+): PipelineContextualActionStripItem {
+  const labels: Record<PipelineOperationalActionCapabilityV1["actionId"], string> = {
+    retry_verification: "Retry verification",
+    pause: "Pause intake",
+    drain: "Drain intake",
+    resume: "Resume intake",
+    reassign: "Reassign to pipeline operator",
+  };
+  return {
+    actionInstanceId: `${source}:${capability.actionId}:${capability.targetId}:${capability.actionContextDigestSha256}`,
+    actionId: capability.actionId,
+    label: labels[capability.actionId],
+    state: "available",
+    riskTier: capability.riskTier,
+    reason: capability.expectedResultSummary,
+    expectedResult: capability.expectedResultSummary,
+    v1Capability: capability,
+    result: null,
+    metadataOnly: true,
+  };
+}
+
+function isActionableV1Capability(
+  capability: PipelineOperationalActionCapabilityV1,
+  sourceMode: PipelineOperationalActionCapabilityV1["sourceMode"],
+): boolean {
+  return capability.sourceMode === sourceMode &&
+    capability.capabilityState === "available" &&
+    capability.serverBound === true &&
+    capability.targetId.length > 0 &&
+    capability.actionContextDigestSha256.length > 0 &&
+    Boolean(capability.actionContext);
 }
 
 function readyToTestResultControls(

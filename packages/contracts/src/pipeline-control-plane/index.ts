@@ -1362,6 +1362,7 @@ export type PipelineOperationalActionIdV1 = (typeof PIPELINE_OPERATIONAL_ACTION_
 export type PipelineOperationalActionAuthorityStateV1 = "needs_authority_approval";
 export type PipelineOperationalActionRiskTierV1 = "low" | "medium";
 export type PipelineOperationalActionTargetTypeV1 = "execution_attempt" | "runtime" | "work_packet";
+export type PipelineOperationalActionSourceModeV1 = "supervisor_runtime" | "packet";
 export type PipelineOperationalRuntimeControlModeV1 = "running" | "paused" | "draining" | "disabled";
 export type PipelineOperationalWorkItemStateV1 =
   | "queued"
@@ -1564,6 +1565,7 @@ interface PipelineOperationalActionCapabilityBaseV1<A extends PipelineOperationa
   targetId: string;
   actionContext: PipelineOperationalActionContextForV1<A>;
   actionContextDigestSha256: PipelineOperationalActionContextDigestV1;
+  sourceMode: PipelineOperationalActionSourceModeV1;
   capabilityState: PipelineOperationalActionCapabilityStateV0;
   authorityState: "needs_authority_approval" | "allowed" | "blocked";
   riskTier: PipelineOperationalActionRiskForV1<A>;
@@ -1707,6 +1709,7 @@ export interface PipelineOperationalRuntimeReadinessV0 {
   expiresAt: string;
   summary: string;
   actionCapabilities: PipelineOperationalActionCapabilityV0[];
+  actionCapabilitiesV1: PipelineOperationalActionCapabilityV1[];
   evidenceRefs: PipelineOperationalActionEvidenceRefsV0;
   metadataOnly: true;
   rawPayloadRetained: false;
@@ -2264,11 +2267,14 @@ export function validatePipelineOperationalActionCapabilityV1(capability: unknow
   const record = pipelineOperationalActionV1Record(capability, issues);
   validatePipelineOperationalActionV1Common(issues, record, [
     ...PIPELINE_OPERATIONAL_ACTION_V1_COMMON_KEYS,
-    "capabilityState", "authorityState", "riskTier", "typedReason", "expectedResultSummary",
+    "sourceMode", "capabilityState", "authorityState", "riskTier", "typedReason", "expectedResultSummary",
     "correlationRequired", "idempotencyRequired", "evidenceRefs",
   ], "capability");
   if (!isOneOfString(record.capabilityState, PIPELINE_OPERATIONAL_ACTION_CAPABILITY_STATES)) {
     pushPipelineOperationalActionV1Issue(issues, "capabilityState", "invalid_contract", "V1 capability state is invalid.");
+  }
+  if (!isOneOfString(record.sourceMode, ["supervisor_runtime", "packet"])) {
+    pushPipelineOperationalActionV1Issue(issues, "sourceMode", "invalid_contract", "V1 capabilities must identify the supervisor runtime or packet source mode.");
   }
   if (!isOneOfString(record.authorityState, ["needs_authority_approval", "allowed", "blocked"])) {
     pushPipelineOperationalActionV1Issue(issues, "authorityState", "policy_violation", "V1 capabilities use only the authority-approval family, allowed, or blocked.");
@@ -4544,7 +4550,9 @@ export interface PipelineSelectedPacketDetailV0 {
   operatorTestState?: "not_ready" | "ready" | "passed" | "failed" | "rework";
   operatorTestNote?: string | null;
   actionCapabilities?: PipelineOperationalActionCapabilityV0[];
+  actionCapabilitiesV1?: PipelineOperationalActionCapabilityV1[];
   actionResults?: PipelineOperationalActionResultV0[];
+  actionResultsV1?: PipelineOperationalActionResultV1[];
   workItemId?: string | null;
   queueLease?: PipelineQueueLeaseV0 | null;
   executionAttempts?: PipelineExecutionAttemptLineageV0[];
@@ -4714,6 +4722,7 @@ export interface PipelineDashboardProjectionV0 {
   gatedControls: PipelineGatedControlV0[];
   runtimeReadiness?: PipelineOperationalRuntimeReadinessV0;
   actionCapabilities?: PipelineOperationalActionCapabilityV0[];
+  actionCapabilitiesV1?: PipelineOperationalActionCapabilityV1[];
   executeAdmission: PipelineExecuteAdmissionV0;
   queueSummary: PipelineQueueSummaryV0;
   evidenceRefs: string[];

@@ -270,6 +270,21 @@ def test_retry_verification_preserves_attempt_and_queues_one_idempotent_metadata
         assert result["replayed"] is False
         projection = client.get("/pipeline-control-plane/projection")
         assert projection.status_code == 200
+        selected_detail = next(
+            detail
+            for detail in projection.json()["data"]["selectedPacketDetails"]
+            if detail["packetId"] == target["packetId"]
+        )
+        retry_capability = next(
+            capability
+            for capability in selected_detail["actionCapabilitiesV1"]
+            if capability["actionId"] == "retry_verification"
+        )
+        assert retry_capability["sourceMode"] == "packet"
+        assert retry_capability["targetId"] == target["attemptId"]
+        assert retry_capability["actionContextDigestSha256"].startswith("sha256:")
+        assert retry_capability["typedReason"] == "invalid_transition"
+        assert retry_capability["capabilityState"] == "unavailable"
         admission = projection.json()["data"]["executeAdmission"]
         assert admission["observed"]["verification"] == 1
         assert admission["capacityAvailable"] is False

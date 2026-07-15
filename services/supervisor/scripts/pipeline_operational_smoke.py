@@ -1909,6 +1909,20 @@ def main() -> int:
                 fail("final projection changed runtime mode unexpectedly")
             if projection["runtimeReadiness"]["capabilityState"] != "available":
                 fail("final projection did not report the attested local-proof capability as available")
+            runtime_action_capabilities = projection["runtimeReadiness"].get("actionCapabilitiesV1")
+            if not isinstance(runtime_action_capabilities, list) or not runtime_action_capabilities:
+                fail("final projection did not expose server-bound v1 runtime action capabilities")
+            for capability in runtime_action_capabilities:
+                if capability.get("sourceMode") != "supervisor_runtime" or capability.get("targetId") != "supervisor-runtime":
+                    fail("final projection v1 runtime capability lost its exact source mode or target")
+                if not capability.get("actionContextDigestSha256"):
+                    fail("final projection v1 runtime capability lost its exact context digest")
+            if not {
+                capability.get("actionId")
+                for capability in runtime_action_capabilities
+                if capability.get("capabilityState") == "available"
+            }.issuperset({"pause", "drain"}):
+                fail("final projection did not expose available pause and drain v1 capabilities")
 
             print(
                 json.dumps(
@@ -1917,6 +1931,7 @@ def main() -> int:
                         "status": "passed",
                         "evidenceLevel": "integrated_local",
                         "runtimeMode": projection["runtimeReadiness"]["operationalMode"],
+                        "operationalActionCapabilityProjectionVerified": True,
                         "packetId": packet["packetId"],
                         "reworkPacketId": rework_packet["packetId"],
                         "reworkChildPacketId": child_id,
