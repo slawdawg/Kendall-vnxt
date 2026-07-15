@@ -36,6 +36,15 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     return TestClient(app, client=("127.0.0.1", 50000))
 
 
+def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
+    return {
+        "attemptId": attempt["attemptId"],
+        "workItemId": attempt["workItemId"],
+        "expectedStatus": attempt["status"],
+        "expectedRevision": attempt["revision"],
+    }
+
+
 @dataclass(frozen=True)
 class _HttpResponse:
     status_code: int
@@ -2756,7 +2765,11 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         attempt = attempt_response.json()["data"]
         failed_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "failed", "reason": "Fixture failure for recovery drawer."},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "failed",
+                "reason": "Fixture failure for recovery drawer.",
+            },
         )
         assert failed_response.status_code == 200
         _update_execution_attempt_fixture(
@@ -2836,7 +2849,11 @@ def test_operator_owned_rework_exit_stops_automation_until_reenter_capture(tmp_p
         attempt = attempt_response.json()["data"]
         failed_attempt_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "failed", "reason": "Stale failed attempt before operator-owned exit."},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "failed",
+                "reason": "Stale failed attempt before operator-owned exit.",
+            },
         )
         assert failed_attempt_response.status_code == 200
         _update_work_item_fixture(
@@ -2974,7 +2991,11 @@ def test_done_delivery_work_packet_outranks_historical_execution_attempts(tmp_pa
         attempt = attempt_response.json()["data"]
         failed_attempt_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "failed", "reason": "Historical failed attempt before delivery."},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "failed",
+                "reason": "Historical failed attempt before delivery.",
+            },
         )
         assert failed_attempt_response.status_code == 200
 
@@ -4376,6 +4397,7 @@ def test_work_packet_gate_state_validation_matches_event_replay_without_mutation
         approval_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "operator gate approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -4436,6 +4458,7 @@ def test_work_packet_gate_state_validation_blocks_mismatch_from_event_replay(tmp
         approval_response = client.post(
             f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "operator gate approval",
                 "routeDecisionId": attempt["routeDecisionId"],

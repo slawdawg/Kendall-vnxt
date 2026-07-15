@@ -579,6 +579,9 @@ class WorkItemLocalProofLeaseRequest(BaseModel):
     correlationId: str = Field(min_length=1, max_length=120)
     operation: Literal["claim", "heartbeat", "stale_heartbeat", "expire"]
     fencingToken: int | None = None
+    expectedAttemptId: str | None = None
+    expectedAttemptStatus: ExecutionAttemptStatus | None = None
+    expectedAttemptRevision: int | None = Field(default=None, ge=1)
     actorId: str = "local-proof"
     actorLabel: str = "Integrated local proof"
 
@@ -593,6 +596,8 @@ class WorkItemLocalProofLeaseRequest(BaseModel):
 
 class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     status: ExecutionAttemptStatus
+    expectedStatus: ExecutionAttemptStatus | None = None
+    expectedRevision: int | None = Field(default=None, ge=1)
     reason: str | None = None
     workItemId: str | None = None
     attemptId: str | None = None
@@ -682,6 +687,9 @@ class ExecutionAttemptView(BaseModel):
     lane: str
     authorityMode: str
     status: ExecutionAttemptStatus
+    revision: int
+    launchFenceState: Literal["not_applicable", "reserved", "claimed"]
+    launchClaimedAt: datetime | None = None
     requestedById: str | None = None
     requestedByLabel: str | None = None
     createdAt: datetime
@@ -2289,6 +2297,9 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
 class AuthoritativeWorkPacketTransitionRequest(BaseModel):
     targetStage: AuthoritativePacketStage
     expectedCurrentEventId: str = Field(min_length=1, max_length=80)
+    expectedAttemptId: str | None = Field(default=None, max_length=36)
+    expectedAttemptStatus: ExecutionAttemptStatus | None = None
+    expectedAttemptRevision: int | None = Field(default=None, ge=1)
     status: AuthoritativePacketStatus = "active"
     truthLabel: AuthoritativePacketTruthLabel = "source_owned"
     actor: AuthoritativePacketActorView = Field(default_factory=AuthoritativePacketActorView)

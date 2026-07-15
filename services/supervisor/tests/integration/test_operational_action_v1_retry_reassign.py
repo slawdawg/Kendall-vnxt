@@ -674,7 +674,10 @@ def test_retry_and_reassign_reject_work_item_revision_or_packet_linkage_mutation
     action_id: str,
     work_item_mutation: str,
 ) -> None:
-    suffix = f"{action_id}-{work_item_mutation}"
+    suffix = (
+        f"{'retry' if action_id == 'retry_verification' else 'reassign'}-"
+        f"{'revision' if work_item_mutation == 'updated_at' else 'packet'}"
+    )
     db_name = f"p2-1-{suffix}.db"
     db_path = (tmp_path / db_name).as_posix()
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -701,6 +704,10 @@ def test_retry_and_reassign_reject_work_item_revision_or_packet_linkage_mutation
                 )
             else:
                 assert replacement is not None
+                conn.execute(
+                    "update work_items set authoritative_packet_id = null where id = ?",
+                    (replacement["workItemId"],),
+                )
                 conn.execute(
                     "update work_items set authoritative_packet_id = ? where id = ?",
                     (replacement["packetId"], target["workItemId"]),
@@ -813,7 +820,7 @@ def test_active_external_launch_reservation_fences_workflow_and_packet_mutations
     db_name = "p2-1-active-launch-mutation-fence.db"
     db_path = (tmp_path / db_name).as_posix()
     with _client(tmp_path, monkeypatch, db_name) as client:
-        target = _seed_target(client, db_path, suffix="active-launch-fence", attempt_status="failed")
+        target = _seed_target(client, db_path, suffix="active-launch-fence")
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(db_path) as conn:
             conn.execute(
@@ -863,6 +870,84 @@ def test_active_external_launch_reservation_fences_workflow_and_packet_mutations
             ).fetchone()[0]
         assert state == target["workItemState"]
         assert current_event_id == target["packetEventId"]
+
+
+def test_cancelled_reservation_fails_closed_before_supervised_side_effect(tmp_path, monkeypatch) -> None:
+    db_name = "p2-1-invalidated-launch-fence.db"
+    db_path = (tmp_path / db_name).as_posix()
+    launched: list[str] = []
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+        from supervisor.api.schemas import WorkItemExecutionAttemptTransitionRequest
+        from supervisor.domain.types import ExecutionAttemptStatus
+
+        original_claim = service._claim_external_launch_attempt
+
+        async def invalidate_before_claim(session, item, attempt, *, operation):
+            invalidated = await service.transition_execution_attempt(
+                session,
+                item.id,
+                attempt.id,
+                WorkItemExecutionAttemptTransitionRequest(
+                    status=ExecutionAttemptStatus.CANCELLED,
+                    expectedStatus=ExecutionAttemptStatus.STARTING,
+                    expectedRevision=attempt.revision,
+                    workItemId=item.id,
+                    attemptId=attempt.id,
+                    reason="Concurrent cancellation invalidated the unclaimed reservation.",
+                ),
+            )
+            assert invalidated is not None
+            assert invalidated.status == ExecutionAttemptStatus.CANCELLED
+            return await original_claim(session, item, attempt, operation=operation)
+
+        monkeypatch.setattr(service, "_claim_external_launch_attempt", invalidate_before_claim)
+        monkeypatch.setattr(
+            service,
+            "_run_supervised_codex_worker",
+            lambda _payload, attempt_id: launched.append(attempt_id),
+        )
+
+        item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Invalidate launch reservation before side effect",
+                "requestedOutcome": "Prove cancelled reservations fail closed.",
+                "source": "pytest",
+                "riskLevel": "low",
+            },
+        )
+        assert item_response.status_code == 200, item_response.text
+        work_item_id = item_response.json()["data"]["id"]
+        response = client.post(
+            f"/work-items/{work_item_id}/supervised-codex-launch",
+            json={
+                "taskId": "invalidated-reservation",
+                "dryRun": True,
+                "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
+                "blockedPaths": [".env*", ".git/**"],
+                "verificationCommand": "pnpm run check",
+                "outputSummary": "This runner must not be invoked.",
+            },
+        )
+
+        assert response.status_code == 409
+        assert "active-attempt fence changed" in response.text
+        assert launched == []
+        with sqlite3.connect(db_path) as conn:
+            attempt_row = conn.execute(
+                "select status, revision, launch_claimed_at from execution_attempts "
+                "where work_item_id = ? order by created_at desc limit 1",
+                (work_item_id,),
+            ).fetchone()
+            claimed_event_count = conn.execute(
+                "select count(*) from workflow_events where work_item_id = ? "
+                "and event_type = 'execution_attempt.external_launch_claimed'",
+                (work_item_id,),
+            ).fetchone()[0]
+        assert attempt_row == ("cancelled", 2, None)
+        assert claimed_event_count == 0
 
 
 def test_retry_and_reassign_are_mutually_exclusive_under_durable_admission(tmp_path, monkeypatch) -> None:
@@ -1157,6 +1242,7 @@ def test_p2_1_identifier_column_lengths_match_sqlite_and_cross_dialect_model_sch
                     "authoritative_work_packet_lifecycle_events",
                     "workflow_events",
                     "work_items",
+                    "execution_attempts",
                 )
             }
         assert sqlite_types["pipeline_operational_action_records"]["idempotency_key"] == "VARCHAR(160)"
@@ -1166,9 +1252,13 @@ def test_p2_1_identifier_column_lengths_match_sqlite_and_cross_dialect_model_sch
         assert sqlite_types["authoritative_work_packet_lifecycle_events"]["idempotency_key"] == "VARCHAR(120)"
         assert sqlite_types["workflow_events"]["correlation_id"] == "VARCHAR(36)"
         assert sqlite_types["work_items"]["assignee_id"] == "VARCHAR(100)"
+        assert sqlite_types["execution_attempts"]["revision"] == "INTEGER"
+        assert sqlite_types["execution_attempts"]["launch_fence_token"] == "VARCHAR(64)"
+        assert sqlite_types["execution_attempts"]["launch_claimed_at"] == "DATETIME"
 
         from supervisor.infrastructure.db.models import (
             AuthoritativeWorkPacketLifecycleEvent,
+            ExecutionAttempt,
             OperationalActionApprovalRecord,
             OperationalActionRecord,
             VerificationRetryIntent,
@@ -1185,6 +1275,24 @@ def test_p2_1_identifier_column_lengths_match_sqlite_and_cross_dialect_model_sch
         assert AuthoritativeWorkPacketLifecycleEvent.__table__.c.idempotency_key.type.length == 120
         assert WorkflowEvent.__table__.c.correlation_id.type.length == 36
         assert WorkItem.__table__.c.assignee_id.type.length == 100
+        assert ExecutionAttempt.__table__.c.revision.default.arg == 1
+        assert ExecutionAttempt.__table__.c.launch_fence_token.type.length == 64
+
+        from supervisor.infrastructure.db.database import (
+            EXECUTION_ATTEMPT_POSTGRES_COLUMNS,
+            EXECUTION_ATTEMPT_SQLITE_COLUMNS,
+        )
+
+        assert EXECUTION_ATTEMPT_POSTGRES_COLUMNS == (
+            ("revision", "INTEGER NOT NULL DEFAULT 1"),
+            ("launch_fence_token", "VARCHAR(64)"),
+            ("launch_claimed_at", "TIMESTAMPTZ"),
+        )
+        assert EXECUTION_ATTEMPT_SQLITE_COLUMNS == (
+            ("revision", "INTEGER NOT NULL DEFAULT 1"),
+            ("launch_fence_token", "VARCHAR(64)"),
+            ("launch_claimed_at", "DATETIME"),
+        )
 
 
 def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> None:
@@ -1222,7 +1330,9 @@ def test_postgres_cross_path_admission_uses_one_durable_row_lock_contract() -> N
         source = textwrap.dedent(inspect.getsource(method))
         assert source.index("await self._acquire_execute_admission_lock(session)") < source.index(first_admission_read)
     launch_source = textwrap.dedent(inspect.getsource(SupervisorService.launch_supervised_codex_worker))
-    assert launch_source.index("await session.commit()") < launch_source.index("self._run_supervised_codex_worker")
+    assert launch_source.index("_claim_external_launch_attempt") < launch_source.index(
+        "self._run_supervised_codex_worker"
+    )
     p2_1_apply_source = textwrap.dedent(inspect.getsource(SupervisorService.apply_pipeline_operational_action_v1))
     for work_item_cas_fence in (
         "WorkItem.updated_at == expected_work_item_updated_at",

@@ -83,6 +83,18 @@ POSTGRES_OPERATIONAL_APPROVAL_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
     ("action_context_digest_sha256", "VARCHAR(80)"),
 )
 
+EXECUTION_ATTEMPT_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("revision", "INTEGER NOT NULL DEFAULT 1"),
+    ("launch_fence_token", "VARCHAR(64)"),
+    ("launch_claimed_at", "TIMESTAMPTZ"),
+)
+
+EXECUTION_ATTEMPT_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("revision", "INTEGER NOT NULL DEFAULT 1"),
+    ("launch_fence_token", "VARCHAR(64)"),
+    ("launch_claimed_at", "DATETIME"),
+)
+
 
 async def _sqlite_table_columns(connection, table_name: str) -> set[str]:
     result = await connection.execute(text(f"PRAGMA table_info({table_name})"))
@@ -214,6 +226,10 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS workspace_isolation_plan_json JSON"))
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS queue_lease_id VARCHAR(36)"))
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS queue_fencing_token INTEGER"))
+            for column_name, column_type in EXECUTION_ATTEMPT_POSTGRES_COLUMNS:
+                await connection.execute(
+                    text(f"ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+                )
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS packet_title VARCHAR(255)"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS parent_packet_id VARCHAR(80)"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS lineage_kind VARCHAR(32)"))
@@ -280,6 +296,11 @@ async def init_db() -> None:
                 await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN queue_lease_id VARCHAR(36)"))
             if "queue_fencing_token" not in attempt_columns:
                 await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN queue_fencing_token INTEGER"))
+            for column_name, column_type in EXECUTION_ATTEMPT_SQLITE_COLUMNS:
+                if column_name not in attempt_columns:
+                    await connection.execute(
+                        text(f"ALTER TABLE execution_attempts ADD COLUMN {column_name} {column_type}")
+                    )
             result = await connection.execute(text("PRAGMA table_info(authoritative_work_packet_lifecycle_events)"))
             lifecycle_event_columns = {row[1] for row in result.fetchall()}
             if "packet_title" not in lifecycle_event_columns:

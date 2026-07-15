@@ -70,6 +70,15 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     return TestClient(app)
 
 
+def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
+    return {
+        "attemptId": attempt["attemptId"],
+        "workItemId": attempt["workItemId"],
+        "expectedStatus": attempt["status"],
+        "expectedRevision": attempt["revision"],
+    }
+
+
 def _assert_unique_related_docs(container: dict) -> None:
     related_docs = container["relatedDocs"]
     assert related_docs == list(dict.fromkeys(related_docs))
@@ -8649,15 +8658,18 @@ def test_execution_attempt_lifecycle_records_cancel_history_without_execution(tm
         cancel_requested_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "cancel_requested",
                 "reason": "operator paused the route",
                 "actorId": "operator-1",
                 "actorLabel": "Primary operator",
             },
         )
+        cancel_requested = cancel_requested_response.json()["data"]
         cancelled_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(cancel_requested),
                 "status": "cancelled",
                 "reason": "operator confirmed cancellation",
                 "actorId": "operator-1",
@@ -8666,7 +8678,7 @@ def test_execution_attempt_lifecycle_records_cancel_history_without_execution(tm
         )
         terminal_transition_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "completed"},
+            json={**_attempt_transition_fence(cancelled_response.json()["data"]), "status": "completed"},
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
@@ -8735,7 +8747,11 @@ def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_tran
         attempt = attempt_response.json()["data"]
         completed_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "completed", "reason": "mock lifecycle finished"},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "completed",
+                "reason": "mock lifecycle finished",
+            },
         )
         second_attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
 
@@ -8756,7 +8772,11 @@ def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_tran
         rejected_attempt = rejected_attempt_response.json()["data"]
         invalid_transition_response = client.post(
             f"/work-items/{rejected_work_item_id}/execution-attempts/{rejected_attempt['attemptId']}/lifecycle",
-            json={"status": "cancel_requested", "reason": "cannot cancel rejected attempt"},
+            json={
+                **_attempt_transition_fence(rejected_attempt),
+                "status": "cancel_requested",
+                "reason": "cannot cancel rejected attempt",
+            },
         )
         missing_attempt_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/missing/lifecycle",
@@ -8806,11 +8826,16 @@ def test_execution_attempt_approval_requires_route_worker_lane_and_authority_bin
         attempt = attempt_response.json()["data"]
         missing_binding_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={"status": "approved", "reason": "operator approves this attempt"},
+            json={
+                **_attempt_transition_fence(attempt),
+                "status": "approved",
+                "reason": "operator approves this attempt",
+            },
         )
         approved_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "route-bound operator approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -8885,6 +8910,7 @@ def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_
         stale_route_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "stale route approval",
                 "routeDecisionId": "route-stale",
@@ -8896,6 +8922,7 @@ def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_
         worker_mismatch_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "wrong worker approval",
                 "routeDecisionId": attempt["routeDecisionId"],
@@ -8969,6 +8996,9 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     assert response.status_code == 200
     attempt = response.json()["data"]
     assert attempt["status"] == "completed"
+    assert attempt["revision"] == 3
+    assert attempt["launchFenceState"] == "claimed"
+    assert attempt["launchClaimedAt"]
     assert attempt["workerId"] == "codex.local.supervised"
     assert attempt["lane"] == "utility"
     assert attempt["authorityMode"] == "operator_approved_bounded_source_mutation"
@@ -8976,7 +9006,9 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is True
     assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is True
     assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
-    launch_evidence = next(ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence")
+    launch_evidence = [
+        ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence"
+    ][-1]
     assert launch_evidence["dryRun"] is True
     assert launch_evidence["commandShape"] == "codex <bounded task packet> --cwd <isolated-worktree>"
     assert launch_evidence["verificationCommand"] == "pnpm run check"
@@ -8984,13 +9016,16 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     assert launch_evidence["terminalState"] == "completed"
     assert launch_evidence["recoveryPath"] == "inspect retained worktree evidence before retry, revert, or delivery"
     assert len(history_response.json()["data"]) == 1
-    assert len(after_events) == len(before_events) + 2
-    event_types = {event["eventType"] for event in after_events[:2]}
-    assert event_types == {"execution_attempt.completed", "execution_attempt.supervised_codex_launch_started"}
-    completed_event = next(event for event in after_events if event["eventType"] == "execution_attempt.completed")
-    assert completed_event["payload"]["prCreationAllowed"] is False
-    assert completed_event["payload"]["mergeAllowed"] is False
-    assert completed_event["payload"]["cleanupAllowed"] is False
+    assert len(after_events) == len(before_events) + 3
+    event_types = {event["eventType"] for event in after_events[:3]}
+    assert event_types == {
+        "execution_attempt.external_launch_reserved",
+        "execution_attempt.external_launch_claimed",
+        "execution_attempt.completed",
+    }
+    assert launch_evidence["prCreationAllowed"] is False
+    assert launch_evidence["mergeAllowed"] is False
+    assert launch_evidence["cleanupAllowed"] is False
 
 
 def test_supervised_codex_launch_real_mutation_requires_green_diff_guard(tmp_path, monkeypatch) -> None:
@@ -9145,9 +9180,9 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
             ).fetchone()
             started_event_count = conn.execute(
                 "select count(*) from workflow_events where event_type = ? and payload like ?",
-                ("execution_attempt.supervised_codex_launch_started", f'%"attemptId": "{attempt_id}"%'),
+                ("execution_attempt.external_launch_claimed", f'%"executionAttemptId": "{attempt_id}"%'),
             ).fetchone()[0]
-        assert reserved_status == ("starting",)
+        assert reserved_status == ("running",)
         assert started_event_count == 1
         durable_reservations.append((reserved_status[0], started_event_count))
         launched.append(attempt_id)
@@ -9196,8 +9231,10 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
     attempt = approved.json()["data"]
     assert attempt["status"] == "completed"
     assert launched == [attempt["attemptId"]]
-    assert durable_reservations == [("starting", 1)]
-    launch_evidence = next(ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence")
+    assert durable_reservations == [("running", 1)]
+    launch_evidence = [
+        ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence"
+    ][-1]
     assert launch_evidence["processLaunchAttempted"] is True
     assert launch_evidence["workspaceOrBranch"] == "repo_owned_codex_workspace"
 
@@ -9263,7 +9300,7 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
                 "select status, worker_id from execution_attempts "
                 "where worker_id = 'verification.command' order by created_at desc limit 1"
             ).fetchone()
-        assert reservation == ("starting", "verification.command")
+        assert reservation == ("running", "verification.command")
         return {
             "status": "passed",
             "exitCode": 0,
@@ -9423,6 +9460,7 @@ def test_subscription_launch_approval_rejection_records_non_executing_event(tmp_
         rejection_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "incomplete launch approval",
                 "workItemId": work_item_id,
@@ -9487,6 +9525,7 @@ def test_subscription_launch_approval_rejects_stale_policy_and_command_template(
         rejection_response = client.post(
             f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
             json={
+                **_attempt_transition_fence(attempt),
                 "status": "approved",
                 "reason": "stale launch approval",
                 "workItemId": work_item_id,

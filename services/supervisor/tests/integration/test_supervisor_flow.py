@@ -697,7 +697,7 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
                 "select status, worker_id from execution_attempts "
                 "where worker_id = 'recipe.branch.command' order by created_at desc limit 1"
             ).fetchone()
-        assert reservation == ("starting", "recipe.branch.command")
+        assert reservation == ("running", "recipe.branch.command")
         git_commands.append(args)
         current_branch["value"] = "e2e-branch-prep"
         return {"command": " ".join(args), "exitCode": 0, "stdout": "created", "stderr": ""}
@@ -719,7 +719,7 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
                 "select status, worker_id from execution_attempts "
                 "where worker_id = 'recipe.implementation.command' order by created_at desc limit 1"
             ).fetchone()
-        assert reservation == ("starting", "recipe.implementation.command")
+        assert reservation == ("running", "recipe.implementation.command")
         return [
             {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
             {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
@@ -1079,8 +1079,8 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert utility_event["payload"]["timeoutSeconds"] == 30
         assert utility_event["payload"]["status"] == "succeeded"
         assert utility_event["payload"]["failureReason"] is None
-        assert launch_reservations["utility"] == ("starting", "utility.internal")
-        assert launch_reservations["recipe"] == ("starting", "recipe.implementation.command")
+        assert launch_reservations["utility"] == ("running", "utility.internal")
+        assert launch_reservations["recipe"] == ("running", "recipe.implementation.command")
         assert any(
             attempt["workerId"] == "utility.internal" and attempt["status"] == "completed"
             for attempt in attempts
@@ -1341,7 +1341,7 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         assert path_scope_event["payload"]["changedPaths"] == ["tests/e2e/dashboard.spec.ts"]
         assert path_scope_event["payload"]["outOfScopePaths"] == []
         verification_event = next(event for event in events if event["eventType"] == "recipe.verification_passed")
-        assert verification_launch_reservation == ("starting", "recipe.verification.command")
+        assert verification_launch_reservation == ("running", "recipe.verification.command")
         verification_attempt = next(
             attempt for attempt in attempts if attempt["workerId"] == "recipe.verification.command"
         )
@@ -1663,7 +1663,7 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         )
         gh_log_entries = gh_log_path.read_text(encoding="utf-8").splitlines()
         assert "auth" in gh_log_entries
-        assert remote_launch_reservation == ("starting", "recipe.remote-delivery.command")
+        assert remote_launch_reservation == ("running", "recipe.remote-delivery.command")
         assert any(
             attempt["workerId"] == "recipe.remote-delivery.command" and attempt["status"] == "completed"
             for attempt in attempts

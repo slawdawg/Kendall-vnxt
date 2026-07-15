@@ -951,8 +951,30 @@ class SupervisorService:
             await self._reject_pending_verification_retry_admission(session, linked_item.id)
             active_attempt = await self._active_execution_attempt(session, linked_item.id, lock=True)
             if active_attempt:
+                if active_attempt.launch_fence_token:
+                    raise ValueError(
+                        f"Authoritative WorkPacket transition rejected while external launch attempt {active_attempt.id} is active."
+                    )
+                if (
+                    payload.expectedAttemptId != active_attempt.id
+                    or payload.expectedAttemptStatus is None
+                    or payload.expectedAttemptStatus.value != active_attempt.status
+                    or payload.expectedAttemptRevision != active_attempt.revision
+                ):
+                    raise ValueError(
+                        "Authoritative WorkPacket transition rejected because the active attempt status/revision fence "
+                        "is missing or stale."
+                    )
+            elif any(
+                value is not None
+                for value in (
+                    payload.expectedAttemptId,
+                    payload.expectedAttemptStatus,
+                    payload.expectedAttemptRevision,
+                )
+            ):
                 raise ValueError(
-                    f"Authoritative WorkPacket transition rejected while external launch attempt {active_attempt.id} is active."
+                    "Authoritative WorkPacket transition supplied an attempt fence but no active attempt exists."
                 )
         if packet.current_event_id != payload.expectedCurrentEventId:
             raise ValueError("Authoritative WorkPacket transition rejected because current event changed.")
@@ -1485,6 +1507,9 @@ class SupervisorService:
         admission_lock_acquired: bool = False,
         expected_snapshot: ExternalLaunchAdmissionSnapshot | None = None,
         task_kind: str | None = None,
+        attempt_id: str | None = None,
+        workspace_isolation_plan: dict[str, object] | None = None,
+        artifact_refs: list[dict[str, object]] | None = None,
     ) -> ExecutionAttempt:
         """Persist the one durable reservation that must precede an external side effect."""
 
@@ -1545,8 +1570,10 @@ class SupervisorService:
             if task_kind is not None
             else None
         )
+        resolved_attempt_id = attempt_id or str(uuid.uuid4())
+        launch_fence_token = uuid.uuid4().hex
         attempt = ExecutionAttempt(
-            id=str(uuid.uuid4()),
+            id=resolved_attempt_id,
             work_item_id=item.id,
             queue_lease_id=lease.id if lease else None,
             queue_fencing_token=lease.fencing_token if lease else None,
@@ -1555,9 +1582,13 @@ class SupervisorService:
             lane=lane,
             authority_mode=authority_mode,
             status=ExecutionAttemptStatus.STARTING.value,
+            revision=1,
+            launch_fence_token=launch_fence_token,
             requested_by_id=requested_by_id,
             requested_by_label=requested_by_label,
             workspace_isolation_plan_json={
+                **self._external_launch_workspace_isolation_plan(resolved_attempt_id, operation),
+                **(workspace_isolation_plan or {}),
                 "operation": operation,
                 "reservationBoundary": "durable_before_external_launch",
                 "metadataOnly": True,
@@ -1565,7 +1596,7 @@ class SupervisorService:
             },
             artifact_refs_json=(
                 [task_packet_ref] if task_packet_ref is not None else []
-            ) + [
+            ) + list(artifact_refs or []) + [
                 {
                     "artifactType": "external_launch_reservation",
                     "operation": operation,
@@ -1577,6 +1608,8 @@ class SupervisorService:
                     "workItemFenceUpdatedAt": now.isoformat(),
                     "workItemMetadataSha256": expected_snapshot.metadata_sha256,
                     "packetCurrentEventId": packet.current_event_id if packet else None,
+                    "launchFenceSha256": hashlib.sha256(launch_fence_token.encode()).hexdigest(),
+                    "attemptRevision": 1,
                     "metadataOnly": True,
                     "rawPayloadRetained": False,
                 }
@@ -1621,6 +1654,197 @@ class SupervisorService:
         await session.refresh(attempt)
         return attempt
 
+    def _external_launch_workspace_isolation_plan(
+        self,
+        attempt_id: str,
+        operation: str,
+    ) -> dict[str, object]:
+        source_mutation = operation.startswith("recipe_implementation_commands:") or operation.startswith(
+            "recipe_branch_preparation:"
+        )
+        network_allowed = operation.startswith("recipe_remote_delivery:") or operation == "ollama_provider_explanation"
+        return {
+            "planId": f"workspace-plan-{attempt_id}",
+            "sourceSnapshotStrategy": "authoritative_work_item_launch_fence",
+            "branchStrategy": "preserve_current_branch_unless_operation_contract_requires_isolation",
+            "readRoots": ["."],
+            "writeRoots": ["."] if source_mutation else [],
+            "artifactRoot": f"_bmad-output/execution-attempts/{attempt_id}",
+            "forbiddenPaths": [".env", ".git", ".ssh", "node_modules", "services/supervisor/.venv"],
+            "cleanupRule": "preserve_metadata_until_operator_inspection",
+            "rollbackRule": "inspect_claimed_attempt_evidence_before_retry_or_recovery",
+            "diffCaptureRule": "metadata_only_no_raw_output_retention",
+            "writesAllowed": source_mutation,
+            "sourceMutationAllowed": source_mutation,
+            "commandsAllowed": True,
+            "networkAllowed": network_allowed,
+            "credentialAccessAllowed": False,
+            "redactionBoundary": ["raw_prompt", "completion", "reasoning", "provider_payload", "secrets"],
+            "allowedCommandClasses": ["operation_bound_command"],
+            "blockedCommandClasses": ["unbounded_shell", "credential_access"],
+            "providerEndpointPolicy": (
+                "exact_approved_endpoint_only" if operation == "ollama_provider_explanation" else "deny_unbound_provider_endpoints"
+            ),
+            "promptConstructionPolicy": "approved_metadata_only",
+            "boundaryRejectionReason": "launch_fence_or_operation_contract_not_satisfied",
+            "materializationMode": "operation_bound_existing_workspace",
+            "environmentPolicy": "deny_inheritance_allowlist_only",
+            "environmentAllowlist": ["PATH"],
+            "sessionBoundary": "credentials_sessions_and_shell_profiles_forbidden",
+            "outputPolicy": "summary_only_no_raw_stdout_or_stderr_retention",
+        }
+
+    @staticmethod
+    def _external_launch_reservation_ref(attempt: ExecutionAttempt) -> dict[str, object] | None:
+        refs = attempt.artifact_refs_json if isinstance(attempt.artifact_refs_json, list) else []
+        reservations = [
+            ref
+            for ref in refs
+            if isinstance(ref, dict) and ref.get("artifactType") == "external_launch_reservation"
+        ]
+        return reservations[0] if len(reservations) == 1 else None
+
+    async def _claim_external_launch_attempt(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        *,
+        operation: str,
+    ) -> ExecutionAttempt:
+        """Consume one durable reservation immediately before its external side effect."""
+
+        expected_snapshot = self._external_launch_admission_snapshot(item)
+        expected_revision = attempt.revision
+        expected_fence_token = attempt.launch_fence_token
+        if not expected_fence_token:
+            raise ValueError("External launch claim rejected because the reservation has no server launch fence.")
+
+        await self._acquire_execute_admission_lock(session)
+        locked_item = await session.get(WorkItem, item.id, with_for_update=True, populate_existing=True)
+        locked_attempt = await session.get(
+            ExecutionAttempt,
+            attempt.id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if not locked_item or not locked_attempt or locked_attempt.work_item_id != item.id:
+            raise ValueError("External launch claim rejected because its exact WorkItem/attempt fence is missing.")
+        packet = await self._refresh_external_launch_target_for_admission(
+            session,
+            locked_item,
+            expected_snapshot,
+        )
+        await self._reject_pending_verification_retry_admission(session, locked_item.id)
+        active_attempt_rows = await session.execute(
+            select(ExecutionAttempt)
+            .where(
+                ExecutionAttempt.work_item_id == locked_item.id,
+                ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES),
+            )
+            .with_for_update()
+        )
+        active_attempts = list(active_attempt_rows.scalars())
+        if len(active_attempts) != 1 or active_attempts[0].id != locked_attempt.id:
+            raise ValueError("External launch claim rejected because the authoritative active-attempt fence changed.")
+
+        reservation = self._external_launch_reservation_ref(locked_attempt)
+        fence_sha256 = hashlib.sha256(expected_fence_token.encode()).hexdigest()
+        if (
+            reservation is None
+            or reservation.get("operation") != operation
+            or reservation.get("workItemId") != locked_item.id
+            or reservation.get("routeDecisionId") != locked_attempt.route_decision_id
+            or reservation.get("workerId") != locked_attempt.worker_id
+            or reservation.get("workItemFenceUpdatedAt") != expected_snapshot.updated_at.isoformat()
+            or reservation.get("workItemMetadataSha256") != expected_snapshot.metadata_sha256
+            or reservation.get("packetCurrentEventId") != (packet.current_event_id if packet else None)
+            or reservation.get("launchFenceSha256") != fence_sha256
+            or reservation.get("attemptRevision") != expected_revision
+        ):
+            raise ValueError("External launch claim rejected because its persisted launch fence is stale or ambiguous.")
+
+        active_lease_rows = await session.execute(
+            select(QueueLease)
+            .where(QueueLease.work_item_id == locked_item.id, QueueLease.active.is_(True))
+            .with_for_update()
+        )
+        active_leases = list(active_lease_rows.scalars())
+        expected_lease_id = reservation.get("queueLeaseId")
+        expected_fencing_token = reservation.get("queueFencingToken")
+        if expected_lease_id is None:
+            if active_leases or locked_attempt.queue_lease_id is not None or locked_attempt.queue_fencing_token is not None:
+                raise ValueError("External launch claim rejected because queue ownership appeared after reservation.")
+        else:
+            if len(active_leases) != 1:
+                raise ValueError("External launch claim rejected because queue ownership is missing or ambiguous.")
+            lease = active_leases[0]
+            if (
+                lease.id != expected_lease_id
+                or lease.fencing_token != expected_fencing_token
+                or locked_attempt.queue_lease_id != expected_lease_id
+                or locked_attempt.queue_fencing_token != expected_fencing_token
+                or self._ensure_aware(lease.lease_expires_at) <= datetime.now(timezone.utc)
+            ):
+                raise ValueError("External launch claim rejected because the queue lease fence changed.")
+
+        self._raise_execute_admission_blocked(
+            await self._evaluate_execute_admission(session, excluded_attempt_id=locked_attempt.id)
+        )
+        claimed_at = datetime.now(timezone.utc)
+        claim_result = await session.execute(
+            update(ExecutionAttempt)
+            .execution_options(synchronize_session=False)
+            .where(
+                ExecutionAttempt.id == locked_attempt.id,
+                ExecutionAttempt.work_item_id == locked_item.id,
+                ExecutionAttempt.status == ExecutionAttemptStatus.STARTING.value,
+                ExecutionAttempt.revision == expected_revision,
+                ExecutionAttempt.launch_fence_token == expected_fence_token,
+                ExecutionAttempt.launch_claimed_at.is_(None),
+                ExecutionAttempt.route_decision_id == locked_attempt.route_decision_id,
+                ExecutionAttempt.worker_id == locked_attempt.worker_id,
+            )
+            .values(
+                status=ExecutionAttemptStatus.RUNNING.value,
+                revision=expected_revision + 1,
+                launch_claimed_at=claimed_at,
+                heartbeat_at=claimed_at,
+                updated_at=claimed_at,
+            )
+        )
+        if claim_result.rowcount != 1:
+            await session.rollback()
+            raise ValueError("External launch claim rejected because its status/revision/fence changed concurrently.")
+        await session.refresh(locked_attempt)
+        event = await self._record_event(
+            session,
+            locked_item,
+            "execution_attempt.external_launch_claimed",
+            f"Claimed {operation} immediately before external launch.",
+            {
+                "executionAttemptId": locked_attempt.id,
+                "operation": operation,
+                "routeDecisionId": locked_attempt.route_decision_id,
+                "workerId": locked_attempt.worker_id,
+                "attemptRevision": locked_attempt.revision,
+                "launchFenceSha256": fence_sha256,
+                "externalLaunchStarted": True,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+            actor_type="supervisor",
+            actor_id=locked_attempt.requested_by_id,
+            actor_label=locked_attempt.requested_by_label,
+        )
+        locked_attempt.event_refs_json = list(locked_attempt.event_refs_json or []) + [
+            {"eventId": event.id, "eventType": event.event_type}
+        ]
+        await session.commit()
+        await session.refresh(locked_item)
+        await session.refresh(locked_attempt)
+        return locked_attempt
+
     async def _finalize_external_launch_attempt(
         self,
         session: AsyncSession,
@@ -1632,21 +1856,48 @@ class SupervisorService:
         failure_reason: str | None = None,
         evidence: dict[str, object] | None = None,
     ) -> None:
+        if status not in TERMINAL_EXECUTION_ATTEMPT_STATUSES:
+            raise ValueError("External launch finalization requires a terminal execution-attempt status.")
+        expected_revision = attempt.revision
+        expected_fence_token = attempt.launch_fence_token
+        await self._acquire_execute_admission_lock(session)
+        locked_item = await session.get(WorkItem, item.id, with_for_update=True, populate_existing=True)
+        locked_attempt = await session.get(
+            ExecutionAttempt,
+            attempt.id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if not locked_item or not locked_attempt or locked_attempt.work_item_id != item.id:
+            raise ValueError("External launch finalization rejected because its exact attempt fence is missing.")
+        if (
+            not expected_fence_token
+            or locked_attempt.status != ExecutionAttemptStatus.RUNNING.value
+            or locked_attempt.revision != expected_revision
+            or locked_attempt.launch_fence_token != expected_fence_token
+            or locked_attempt.launch_claimed_at is None
+        ):
+            raise ValueError("External launch finalization rejected because its claimed status/revision/fence changed.")
+        reservation = self._external_launch_reservation_ref(locked_attempt)
+        if reservation is None or reservation.get("operation") != operation:
+            raise ValueError("External launch finalization rejected because its operation fence is missing or stale.")
+        await self._validate_execution_attempt_lease(session, locked_attempt)
         terminal_at = datetime.now(timezone.utc)
-        attempt.status = status
-        attempt.failure_reason = failure_reason
-        attempt.completed_at = terminal_at
-        attempt.heartbeat_at = terminal_at
-        attempt.updated_at = terminal_at
+        locked_attempt.status = status
+        locked_attempt.revision = expected_revision + 1
+        locked_attempt.failure_reason = failure_reason
+        locked_attempt.completed_at = terminal_at
+        locked_attempt.heartbeat_at = terminal_at
+        locked_attempt.updated_at = terminal_at
         if evidence:
-            attempt.artifact_refs_json = list(attempt.artifact_refs_json or []) + [evidence]
+            locked_attempt.artifact_refs_json = list(locked_attempt.artifact_refs_json or []) + [evidence]
         event = await self._record_event(
             session,
-            item,
+            locked_item,
             f"execution_attempt.{status}",
             f"{operation} reached terminal {status} state.",
             {
-                "executionAttemptId": attempt.id,
+                "executionAttemptId": locked_attempt.id,
                 "operation": operation,
                 "attemptStatus": status,
                 "failureReason": failure_reason,
@@ -1654,10 +1905,10 @@ class SupervisorService:
                 "rawPayloadRetained": False,
             },
             actor_type="supervisor",
-            actor_id=attempt.requested_by_id,
-            actor_label=attempt.requested_by_label,
+            actor_id=locked_attempt.requested_by_id,
+            actor_label=locked_attempt.requested_by_label,
         )
-        attempt.event_refs_json = list(attempt.event_refs_json or []) + [
+        locked_attempt.event_refs_json = list(locked_attempt.event_refs_json or []) + [
             {"eventId": event.id, "eventType": event.event_type}
         ]
         try:
@@ -1667,8 +1918,8 @@ class SupervisorService:
             raise ValueError(
                 "External launch finalization failed; the durable active attempt reservation remains in force."
             ) from exc
-        await session.refresh(item)
-        await session.refresh(attempt)
+        await session.refresh(locked_item)
+        await session.refresh(locked_attempt)
 
     async def _verification_retry_intent_by_idempotency(
         self,
@@ -4396,7 +4647,12 @@ class SupervisorService:
             }
         return lineage
 
-    async def _evaluate_execute_admission(self, session: AsyncSession) -> PipelineExecuteAdmissionV0View:
+    async def _evaluate_execute_admission(
+        self,
+        session: AsyncSession,
+        *,
+        excluded_attempt_id: str | None = None,
+    ) -> PipelineExecuteAdmissionV0View:
         packet_rows = await session.execute(select(AuthoritativeWorkPacket))
         packets = list(packet_rows.scalars())
         item_rows = await session.execute(select(WorkItem))
@@ -4411,7 +4667,8 @@ class SupervisorService:
         active_verification_work_item_ids = {
             attempt.work_item_id
             for attempt in active_attempt_rows.scalars()
-            if self._execution_attempt_has_task_kind(attempt, TaskKind.VALIDATION_EXECUTION.value)
+            if attempt.id != excluded_attempt_id
+            and self._execution_attempt_has_task_kind(attempt, TaskKind.VALIDATION_EXECUTION.value)
         }
         validating_work_item_ids = {
             item.id for item in items if item.state == WorkflowState.VALIDATING.value
@@ -17740,10 +17997,8 @@ class SupervisorService:
             .where(ExecutionAttempt.work_item_id == work_item_id)
             .order_by(ExecutionAttempt.updated_at.desc(), ExecutionAttempt.created_at.desc())
         )
-        latest_attempt = result.scalars().first()
-        if latest_attempt is None:
-            return None
-        refs = [ref for ref in list(latest_attempt.artifact_refs_json or []) if isinstance(ref, dict)]
+        attempt = result.scalars().first()
+        refs = [ref for ref in list(attempt.artifact_refs_json or []) if isinstance(ref, dict)] if attempt else []
         verification_refs = [ref for ref in refs if ref.get("artifactType") == "verification_result"]
         return verification_refs[-1] if verification_refs else None
 
@@ -21424,12 +21679,18 @@ class SupervisorService:
         ready_to_test: OperationalReadyToTestRequest | None = None,
     ) -> None:
         await self._prepare_authoritative_local_proof_item(session, item, target_stage, status)
+        active_attempt = await self._active_execution_attempt(session, item.id)
         await self.transition_authoritative_work_packet(
             session,
             packet_id,
             AuthoritativeWorkPacketTransitionRequest(
                 targetStage=target_stage,
                 expectedCurrentEventId=packet.current_event_id,
+                expectedAttemptId=active_attempt.id if active_attempt else None,
+                expectedAttemptStatus=(
+                    ExecutionAttemptStatus(active_attempt.status) if active_attempt else None
+                ),
+                expectedAttemptRevision=active_attempt.revision if active_attempt else None,
                 status=status,
                 truthLabel="source_owned",
                 idempotencyKey=idempotency_key,
@@ -21477,7 +21738,17 @@ class SupervisorService:
         if item.state != WorkflowState.IMPLEMENTING.value:
             raise ValueError(f"Local proof requires an implementing WorkItem; current state is {item.state}.")
 
-        lease = await self._local_proof_lease(session, item.id)
+        await self._acquire_execute_admission_lock(session)
+        item = await session.get(WorkItem, item.id, with_for_update=True, populate_existing=True)
+        if not item:
+            raise ValueError("Local proof lost its authoritative WorkItem before lease admission.")
+        await self._reject_pending_verification_retry_admission(session, item.id)
+        active_attempt = await self._active_execution_attempt(session, item.id, lock=True)
+        if active_attempt:
+            raise ValueError(
+                f"Local proof lease admission rejected while execution attempt {active_attempt.id} is active."
+            )
+        lease = await self._local_proof_lease(session, item.id, lock=True)
         now = datetime.now(timezone.utc)
         if not lease or not lease.active or self._ensure_aware(lease.lease_expires_at) <= now:
             raise ValueError("Local proof requires an active, unexpired supervisor queue lease.")
@@ -21571,12 +21842,16 @@ class SupervisorService:
             raise ValueError("Local proof could not create a supervisor execution attempt.")
         transition_args = {"actorId": payload.actorId, "actorLabel": payload.actorLabel}
         for status in (ExecutionAttemptStatus.STARTING, ExecutionAttemptStatus.RUNNING):
-            await self.transition_execution_attempt(
+            attempt = await self.transition_execution_attempt(
                 session,
                 item.id,
                 attempt.attemptId,
                 WorkItemExecutionAttemptTransitionRequest(
                     status=status,
+                    expectedStatus=attempt.status,
+                    expectedRevision=attempt.revision,
+                    workItemId=item.id,
+                    attemptId=attempt.attemptId,
                     reason="Integrated local proof lifecycle transition.",
                     **transition_args,
                 ),
@@ -21643,6 +21918,10 @@ class SupervisorService:
                 attempt.attemptId,
                 WorkItemExecutionAttemptTransitionRequest(
                     status=ExecutionAttemptStatus.FAILED,
+                    expectedStatus=attempt.status,
+                    expectedRevision=attempt.revision,
+                    workItemId=item.id,
+                    attemptId=attempt.attemptId,
                     reason=result.failure_reason,
                     **transition_args,
                 ),
@@ -21676,6 +21955,10 @@ class SupervisorService:
                         attempt.attemptId,
                         WorkItemExecutionAttemptTransitionRequest(
                             status=ExecutionAttemptStatus.COMPLETED,
+                            expectedStatus=attempt.status,
+                            expectedRevision=attempt.revision,
+                            workItemId=item.id,
+                            attemptId=attempt.attemptId,
                             reason="Completion must be rejected after lease expiry.",
                             **transition_args,
                         ),
@@ -21724,6 +22007,10 @@ class SupervisorService:
                     attempt.attemptId,
                     WorkItemExecutionAttemptTransitionRequest(
                         status=ExecutionAttemptStatus.COMPLETED,
+                        expectedStatus=attempt.status,
+                        expectedRevision=attempt.revision,
+                        workItemId=item.id,
+                        attemptId=attempt.attemptId,
                         reason="Utility adapter completed without external authority.",
                         **transition_args,
                     ),
@@ -21985,15 +22272,39 @@ class SupervisorService:
         work_item_id: str,
         payload: WorkItemLocalProofLeaseRequest,
     ) -> dict[str, object] | None:
-        item = await session.get(WorkItem, work_item_id)
+        await self._acquire_execute_admission_lock(session)
+        item = await session.get(WorkItem, work_item_id, with_for_update=True)
         if not item:
             return None
         self._assert_local_proof_authority()
         if not isinstance(item.metadata_json, dict) or not item.metadata_json.get("authoritativePacketId"):
             raise ValueError("Queue lease action requires a WorkItem linked to an authoritative source-backed packet.")
-        lease = await self._local_proof_lease(session, item.id)
+        await self._reject_pending_verification_retry_admission(session, item.id)
+        lease = await self._local_proof_lease(session, item.id, lock=True)
         if not lease:
             raise ValueError("Queue lease action requires an existing supervisor lease.")
+        active_attempt = await self._active_execution_attempt(session, item.id, lock=True)
+        expected_attempt_fields = (
+            payload.expectedAttemptId,
+            payload.expectedAttemptStatus,
+            payload.expectedAttemptRevision,
+        )
+        if active_attempt:
+            if (
+                payload.expectedAttemptId != active_attempt.id
+                or payload.expectedAttemptStatus is None
+                or payload.expectedAttemptStatus.value != active_attempt.status
+                or payload.expectedAttemptRevision != active_attempt.revision
+            ):
+                raise ValueError(
+                    "Queue lease action rejected because the active attempt status/revision fence is missing or stale."
+                )
+            if active_attempt.launch_fence_token:
+                raise ValueError("Queue lease action cannot advance a reserved or claimed external launch fence.")
+            if payload.operation not in {"heartbeat", "stale_heartbeat"}:
+                raise ValueError("Queue lease claim/expiry is blocked while an execution attempt is active.")
+        elif any(value is not None for value in expected_attempt_fields):
+            raise ValueError("Queue lease action supplied an attempt fence but no active attempt exists.")
         now = datetime.now(timezone.utc)
         action_idempotency_key = (
             f"server-claim:{lease.id}:{lease.attempt_count}"
@@ -22095,6 +22406,29 @@ class SupervisorService:
                     session, item, lease, payload, reason, provided, idempotency_key=action_idempotency_key
                 )
                 raise ValueError(reason)
+            if active_attempt:
+                attempt_fence = await session.execute(
+                    update(ExecutionAttempt)
+                    .execution_options(synchronize_session=False)
+                    .where(
+                        ExecutionAttempt.id == active_attempt.id,
+                        ExecutionAttempt.status == payload.expectedAttemptStatus.value,
+                        ExecutionAttempt.revision == payload.expectedAttemptRevision,
+                        ExecutionAttempt.queue_lease_id == lease.id,
+                        ExecutionAttempt.queue_fencing_token == provided,
+                    )
+                    .values(
+                        queue_fencing_token=lease.fencing_token,
+                        revision=payload.expectedAttemptRevision + 1,
+                        heartbeat_at=now,
+                        updated_at=now,
+                    )
+                )
+                if attempt_fence.rowcount != 1:
+                    await session.rollback()
+                    raise ValueError(
+                        "Queue lease heartbeat rejected because the active attempt CAS fence changed."
+                    )
             await self._insert_queue_lease_action(
                 session,
                 lease,
@@ -22127,12 +22461,21 @@ class SupervisorService:
         await session.commit()
         return self._local_proof_lease_payload(lease)
 
-    async def _local_proof_lease(self, session: AsyncSession, work_item_id: str) -> QueueLease | None:
-        result = await session.execute(
+    async def _local_proof_lease(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        *,
+        lock: bool = False,
+    ) -> QueueLease | None:
+        query = (
             select(QueueLease)
             .where(QueueLease.work_item_id == work_item_id)
             .order_by(QueueLease.active.desc(), QueueLease.lease_expires_at.desc())
         )
+        if lock:
+            query = query.with_for_update()
+        result = await session.execute(query)
         return result.scalars().first()
 
     async def _validate_execution_attempt_lease(
@@ -22216,25 +22559,6 @@ class SupervisorService:
             authority_mode=authority_mode,
         )
 
-        now = datetime.now(timezone.utc)
-        work_item_fence = await session.execute(
-            update(WorkItem)
-            .execution_options(synchronize_session=False)
-            .where(
-                WorkItem.id == expected_snapshot.work_item_id,
-                WorkItem.state == expected_snapshot.state,
-                WorkItem.updated_at == expected_snapshot.updated_at,
-                WorkItem.assignee_id == expected_snapshot.assignee_id,
-                WorkItem.assignee_label == expected_snapshot.assignee_label,
-                WorkItem.authoritative_packet_id == expected_snapshot.authoritative_packet_id,
-            )
-            .values(updated_at=now, last_event_at=now)
-        )
-        if work_item_fence.rowcount != 1:
-            await session.rollback()
-            raise ValueError("Supervised Codex launch rejected because the WorkItem admission fence changed.")
-        item.updated_at = now
-        item.last_event_at = now
         workspace_isolation_plan = self._supervised_codex_workspace_isolation_plan(attempt_id, payload)
         reservation_result = {
             "status": ExecutionAttemptStatus.STARTING.value,
@@ -22250,81 +22574,57 @@ class SupervisorService:
             "processLaunchAttempted": False,
         }
         reservation_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, reservation_result)
-        attempt = ExecutionAttempt(
-            id=attempt_id,
-            work_item_id=item.id,
+        operation = f"supervised_codex_worker:{payload.taskId}"
+        attempt = await self._reserve_external_launch_attempt(
+            session,
+            item,
             route_decision_id=route_decision_id,
             worker_id=worker_id,
             lane=lane,
             authority_mode=authority_mode,
-            status=ExecutionAttemptStatus.STARTING.value,
             requested_by_id=payload.actorId,
             requested_by_label=payload.actorLabel or "Operator",
-            failure_reason=None,
-            workspace_isolation_plan_json=workspace_isolation_plan,
-            artifact_refs_json=[reservation_evidence],
-            event_refs_json=[],
-            started_at=now,
-            completed_at=None,
-            heartbeat_at=now,
-            created_at=now,
-            updated_at=now,
+            admission_lock_acquired=True,
+            expected_snapshot=expected_snapshot,
+            operation=operation,
+            task_kind=TaskKind.PATH_SCOPE_CHECK.value,
+            attempt_id=attempt_id,
+            workspace_isolation_plan=workspace_isolation_plan,
+            artifact_refs=[reservation_evidence],
         )
-        session.add(attempt)
-        try:
-            await session.flush()
-            started_event = await self._record_supervised_codex_launch_event(
-                session,
-                item,
-                attempt,
-                payload,
-                reservation_evidence,
-                event_type="execution_attempt.supervised_codex_launch_started",
-                summary="Supervised Codex launch reserved with bounded authority evidence.",
-            )
-            attempt.event_refs_json = [{"eventId": started_event.id, "eventType": started_event.event_type}]
-            await session.commit()
-        except SQLAlchemyError as exc:
-            await session.rollback()
-            raise ValueError(
-                "Supervised Codex launch rejected because its durable attempt reservation could not be established."
-            ) from exc
-
-        # External execution begins only after the active attempt reservation
-        # and its start event are durable. A failed finalization leaves that
-        # reservation active, so retry admission remains fail-closed.
-        launch_result = self._run_supervised_codex_worker(payload, attempt_id)
-        launch_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, launch_result)
-        terminal_status = launch_result["status"]
-        attempt.status = terminal_status
-        attempt.failure_reason = (
-            launch_result["summary"]
-            if terminal_status != ExecutionAttemptStatus.COMPLETED.value
-            else None
-        )
-        attempt.artifact_refs_json = [launch_evidence]
-        attempt.completed_at = datetime.now(timezone.utc)
-        attempt.heartbeat_at = attempt.completed_at
-        attempt.updated_at = attempt.completed_at
-        completed_event = await self._record_supervised_codex_launch_event(
+        attempt = await self._claim_external_launch_attempt(
             session,
             item,
             attempt,
-            payload,
-            launch_evidence,
-            event_type=f"execution_attempt.{terminal_status}",
-            summary=f"Supervised Codex launch reached terminal {terminal_status} state.",
+            operation=operation,
         )
-        attempt.event_refs_json = list(attempt.event_refs_json or []) + [
-            {"eventId": completed_event.id, "eventType": completed_event.event_type}
-        ]
         try:
-            await session.commit()
-        except SQLAlchemyError as exc:
-            await session.rollback()
-            raise ValueError(
-                "Supervised Codex launch finalization failed; the durable active attempt reservation remains in force."
-            ) from exc
+            launch_result = self._run_supervised_codex_worker(payload, attempt_id)
+        except Exception as exc:
+            await self._finalize_external_launch_attempt(
+                session,
+                item,
+                attempt,
+                status=ExecutionAttemptStatus.FAILED.value,
+                operation=operation,
+                failure_reason=f"supervised_codex_exception:{type(exc).__name__}",
+            )
+            raise ValueError("Supervised Codex worker failed after its launch fence was claimed.") from exc
+        launch_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, launch_result)
+        terminal_status = launch_result["status"]
+        await self._finalize_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            status=terminal_status,
+            operation=operation,
+            failure_reason=(
+                launch_result["summary"]
+                if terminal_status != ExecutionAttemptStatus.COMPLETED.value
+                else None
+            ),
+            evidence=launch_evidence,
+        )
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
@@ -22570,6 +22870,12 @@ class SupervisorService:
                 expected_snapshot=expected_snapshot,
                 task_kind=TaskKind.VALIDATION_EXECUTION.value,
             )
+            launch_reservation = await self._claim_external_launch_attempt(
+                session,
+                item,
+                launch_reservation,
+                operation=f"execution_attempt_verification:{payload.commandId}",
+            )
             try:
                 run_result = self._run_execution_attempt_verification_command(payload.commandShape)
             except Exception as exc:
@@ -22625,6 +22931,7 @@ class SupervisorService:
             )
         artifact_refs.append(evidence)
         attempt.artifact_refs_json = artifact_refs
+        attempt.revision += 1
         attempt.updated_at = recorded_at
         if run_result["status"] in {"failed", "timed_out", "could_not_run"}:
             attempt.failure_reason = run_result["summary"]
@@ -22651,15 +22958,7 @@ class SupervisorService:
                     if reservation_terminal_status == ExecutionAttemptStatus.COMPLETED.value
                     else f"verification_command_{run_result['status']}"
                 ),
-                evidence={
-                    "artifactType": "verification_command_result",
-                    "commandId": payload.commandId,
-                    "commandShape": payload.commandShape,
-                    "status": run_result["status"],
-                    "exitCode": run_result["exitCode"],
-                    "metadataOnly": True,
-                    "rawPayloadRetained": False,
-                },
+                evidence=evidence,
             )
         await session.refresh(attempt)
         await session.refresh(item)
@@ -22818,12 +23117,28 @@ class SupervisorService:
         *,
         correlation_id: str | None = None,
     ) -> ExecutionAttemptView | None:
-        item = await session.get(WorkItem, work_item_id)
+        await self._acquire_execute_admission_lock(session)
+        item = await session.get(WorkItem, work_item_id, with_for_update=True)
         if not item:
             return None
-        attempt = await session.get(ExecutionAttempt, attempt_id)
+        attempt = await session.get(ExecutionAttempt, attempt_id, with_for_update=True)
         if not attempt or attempt.work_item_id != work_item_id:
             return None
+
+        if (
+            payload.workItemId is not None
+            and payload.workItemId != work_item_id
+        ) or (
+            payload.attemptId is not None
+            and payload.attemptId != attempt_id
+        ):
+            raise ValueError("Execution attempt transition requires the exact WorkItem and attempt fence.")
+        if payload.expectedStatus is None or payload.expectedRevision is None:
+            raise ValueError("Execution attempt transition requires expectedStatus and expectedRevision fences.")
+        if attempt.status != payload.expectedStatus.value or attempt.revision != payload.expectedRevision:
+            raise ValueError(
+                "Execution attempt transition rejected because the expected status/revision fence is stale."
+            )
 
         await self._validate_execution_attempt_lease(session, attempt)
         current_status = attempt.status
@@ -22833,6 +23148,18 @@ class SupervisorService:
         allowed = EXECUTION_ATTEMPT_TRANSITIONS.get(current_status, set())
         if requested_status not in allowed:
             raise ValueError(f"Invalid execution attempt transition from {current_status} to {requested_status}.")
+        if attempt.launch_fence_token:
+            if attempt.launch_claimed_at is not None:
+                raise ValueError(
+                    "Claimed external launch attempts can only be finalized by the holder of the server launch fence."
+                )
+            if requested_status in {
+                ExecutionAttemptStatus.RUNNING.value,
+                ExecutionAttemptStatus.COMPLETED.value,
+            }:
+                raise ValueError(
+                    "Reserved external launch attempts must be claimed by the authoritative launch path."
+                )
         if requested_status == ExecutionAttemptStatus.APPROVED.value:
             try:
                 self._validate_execution_attempt_approval_binding(attempt, payload)
@@ -22848,34 +23175,55 @@ class SupervisorService:
                     event_refs = list(attempt.event_refs_json or [])
                     event_refs.append({"eventId": event.id, "eventType": event.event_type})
                     attempt.event_refs_json = event_refs
+                    attempt.revision += 1
+                    attempt.updated_at = datetime.now(timezone.utc)
                     await session.commit()
                 raise
 
         now = datetime.now(timezone.utc)
-        attempt.status = requested_status
-        attempt.updated_at = now
+        values: dict[str, object] = {
+            "status": requested_status,
+            "revision": payload.expectedRevision + 1,
+            "updated_at": now,
+        }
         if requested_status in {ExecutionAttemptStatus.STARTING.value, ExecutionAttemptStatus.RUNNING.value} and not attempt.started_at:
-            attempt.started_at = now
+            values["started_at"] = now
         if requested_status == ExecutionAttemptStatus.RUNNING.value:
-            attempt.heartbeat_at = now
+            values["heartbeat_at"] = now
         if requested_status == ExecutionAttemptStatus.CANCEL_REQUESTED.value:
-            attempt.cancel_requested_at = now
-            attempt.cancel_reason = payload.reason
+            values["cancel_requested_at"] = now
+            values["cancel_reason"] = payload.reason
         if requested_status == ExecutionAttemptStatus.CANCELLED.value:
-            attempt.cancel_requested_at = attempt.cancel_requested_at or now
-            attempt.completed_at = now
+            values["cancel_requested_at"] = attempt.cancel_requested_at or now
+            values["completed_at"] = now
             if payload.reason:
-                attempt.cancel_reason = payload.reason
+                values["cancel_reason"] = payload.reason
         if requested_status == ExecutionAttemptStatus.TIMED_OUT.value:
-            attempt.timeout_at = now
-            attempt.completed_at = now
+            values["timeout_at"] = now
+            values["completed_at"] = now
             if payload.reason:
-                attempt.failure_reason = payload.reason
+                values["failure_reason"] = payload.reason
         if requested_status == ExecutionAttemptStatus.FAILED.value:
-            attempt.completed_at = now
-            attempt.failure_reason = payload.reason
+            values["completed_at"] = now
+            values["failure_reason"] = payload.reason
         if requested_status == ExecutionAttemptStatus.COMPLETED.value:
-            attempt.completed_at = now
+            values["completed_at"] = now
+
+        transition_result = await session.execute(
+            update(ExecutionAttempt)
+            .execution_options(synchronize_session=False)
+            .where(
+                ExecutionAttempt.id == attempt_id,
+                ExecutionAttempt.work_item_id == work_item_id,
+                ExecutionAttempt.status == current_status,
+                ExecutionAttempt.revision == payload.expectedRevision,
+            )
+            .values(**values)
+        )
+        if transition_result.rowcount != 1:
+            await session.rollback()
+            raise ValueError("Execution attempt transition lost its status/revision CAS fence.")
+        await session.refresh(attempt)
 
         event = await self._record_execution_attempt_transition_event(
             session,
@@ -23227,8 +23575,6 @@ class SupervisorService:
         return any(
             value is not None and value != ""
             for value in (
-                payload.workItemId,
-                payload.attemptId,
                 payload.workspacePlanId,
                 payload.launchPolicyId,
                 payload.targetId,
@@ -24015,6 +24361,7 @@ class SupervisorService:
                     status = "rejected_process_launch_not_approved"
                     readiness_status = "subscription_launch_approval_rejected"
                 else:
+                    expected_snapshot = self._external_launch_admission_snapshot(item)
                     reserved = await self._reserve_subscription_agent_launch_runtime_attempt(
                         session,
                         item,
@@ -24028,6 +24375,8 @@ class SupervisorService:
                             attempt_id=attempt_id,
                         ),
                         admission_lock_acquired=True,
+                        expected_snapshot=expected_snapshot,
+                        operation=f"subscription_agent_launch:{target.target_id}",
                     )
                     if not reserved:
                         runtime_metadata = {
@@ -24038,17 +24387,60 @@ class SupervisorService:
                             "rawStderrRetained": False,
                         }
                     else:
+                        operation = f"subscription_agent_launch:{target.target_id}"
+                        reserved = await self._claim_external_launch_attempt(
+                            session,
+                            item,
+                            reserved,
+                            operation=operation,
+                        )
                         runtime_cwd = self._subscription_agent_runtime_cwd(attempt_id)
                         runtime_cwd.mkdir(parents=True, exist_ok=True)
-                        runtime_result = await self.supervised_subscription_launch_adapter.run(
-                            command_argv=list(payload.commandArgv),
-                            cwd=str(runtime_cwd),
-                            environment_allowlist=list(payload.environmentAllowlist),
-                            startup_timeout_seconds=int(payload.startupTimeoutSeconds or 10),
-                            run_timeout_seconds=int(payload.runTimeoutSeconds or 30),
-                            max_output_bytes=int((payload.artifactLimits or {}).get("rawOutputBytes", 0)),
-                        )
+                        try:
+                            runtime_result = await self.supervised_subscription_launch_adapter.run(
+                                command_argv=list(payload.commandArgv),
+                                cwd=str(runtime_cwd),
+                                environment_allowlist=list(payload.environmentAllowlist),
+                                startup_timeout_seconds=int(payload.startupTimeoutSeconds or 10),
+                                run_timeout_seconds=int(payload.runTimeoutSeconds or 30),
+                                max_output_bytes=int((payload.artifactLimits or {}).get("rawOutputBytes", 0)),
+                            )
+                        except Exception as exc:
+                            await self._finalize_external_launch_attempt(
+                                session,
+                                item,
+                                reserved,
+                                status=ExecutionAttemptStatus.FAILED.value,
+                                operation=operation,
+                                failure_reason=f"subscription_agent_exception:{type(exc).__name__}",
+                            )
+                            raise ValueError(
+                                "Subscription-agent runtime failed after its launch fence was claimed."
+                            ) from exc
                         runtime_metadata = runtime_result.to_metadata()
+                        terminal_status = {
+                            "completed": ExecutionAttemptStatus.COMPLETED.value,
+                            "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
+                            "cancelled": ExecutionAttemptStatus.CANCELLED.value,
+                        }.get(runtime_result.status, ExecutionAttemptStatus.FAILED.value)
+                        await self._finalize_external_launch_attempt(
+                            session,
+                            item,
+                            reserved,
+                            status=terminal_status,
+                            operation=operation,
+                            failure_reason=(
+                                None
+                                if terminal_status == ExecutionAttemptStatus.COMPLETED.value
+                                else f"subscription_agent_{runtime_result.status}"
+                            ),
+                            evidence={
+                                "artifactType": "subscription_agent_runtime_result",
+                                **runtime_metadata,
+                                "metadataOnly": True,
+                                "rawPayloadRetained": False,
+                            },
+                        )
                 if accepted_runtime_path:
                     status = f"accepted_supervised_runtime_{runtime_metadata['status']}"
                     readiness_status = f"subscription_launch_runtime_{runtime_metadata['status']}"
@@ -24716,44 +25108,30 @@ class SupervisorService:
         authority_mode: str,
         workspace_contract: dict[str, object],
         admission_lock_acquired: bool = False,
-    ) -> bool:
+        expected_snapshot: ExternalLaunchAdmissionSnapshot | None = None,
+        operation: str,
+    ) -> ExecutionAttempt | None:
         if not admission_lock_acquired:
             await self._acquire_execute_admission_lock(session)
         if await session.get(ExecutionAttempt, attempt_id):
-            return False
-        active_attempt = await self._active_execution_attempt(session, item.id)
-        if active_attempt:
-            return False
-        await self._reject_pending_verification_retry_admission(session, item.id)
-        self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
-
-        now = datetime.now(timezone.utc)
-        attempt = ExecutionAttempt(
-            id=attempt_id,
-            work_item_id=item.id,
+            return None
+        return await self._reserve_external_launch_attempt(
+            session,
+            item,
             route_decision_id=preview.decision.decisionId,
             worker_id=worker_id,
             lane=lane,
             authority_mode=authority_mode,
-            status=ExecutionAttemptStatus.STARTING.value,
             requested_by_label="Operator",
-            workspace_isolation_plan_json=self._subscription_agent_launch_workspace_isolation_plan(workspace_contract),
-            artifact_refs_json=[],
-            event_refs_json=[],
-            started_at=now,
-            completed_at=None,
-            heartbeat_at=now,
-            created_at=now,
-            updated_at=now,
+            admission_lock_acquired=True,
+            expected_snapshot=expected_snapshot,
+            operation=operation,
+            task_kind=preview.profile.taskKind,
+            attempt_id=attempt_id,
+            workspace_isolation_plan=self._subscription_agent_launch_workspace_isolation_plan(
+                workspace_contract
+            ),
         )
-        session.add(attempt)
-        try:
-            await session.flush()
-            await session.commit()
-        except IntegrityError:
-            await session.rollback()
-            return False
-        return True
 
     async def _record_subscription_agent_launch_runtime_attempt(
         self,
@@ -24764,6 +25142,7 @@ class SupervisorService:
         attempt_id: str,
         preview: RoutingPreviewView,
     ) -> None:
+        await self._acquire_execute_admission_lock(session)
         now = datetime.now(timezone.utc)
         runtime_status = str(launch_request.runtimeEvidence.get("status") or "completed")
         terminal_status = {
@@ -24771,47 +25150,37 @@ class SupervisorService:
             "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
             "cancelled": ExecutionAttemptStatus.CANCELLED.value,
         }.get(runtime_status, ExecutionAttemptStatus.FAILED.value)
-        attempt = await session.get(ExecutionAttempt, attempt_id)
-        if attempt:
-            if attempt.work_item_id != item.id or attempt.route_decision_id != preview.decision.decisionId:
-                raise ValueError(f"Subscription-agent launch attempt {attempt_id} does not match this request.")
-            attempt.worker_id = str(launch_request.approvalBinding["workerId"])
-            attempt.lane = str(launch_request.approvalBinding["lane"])
-            attempt.authority_mode = str(launch_request.approvalBinding["authorityMode"])
-            attempt.status = terminal_status
-            attempt.workspace_isolation_plan_json = self._subscription_agent_launch_workspace_isolation_plan(
-                launch_request.workspaceContract
-            )
-            attempt.artifact_refs_json = launch_request.outputArtifactSummary["artifactReferences"]
-            attempt.started_at = attempt.started_at or now
-            attempt.completed_at = now
-            attempt.heartbeat_at = now
-            attempt.updated_at = now
-        else:
-            active_attempt = await self._active_execution_attempt(session, item.id)
-            if active_attempt:
-                raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
-            attempt = ExecutionAttempt(
-                id=attempt_id,
-                work_item_id=item.id,
-                route_decision_id=preview.decision.decisionId,
-                worker_id=str(launch_request.approvalBinding["workerId"]),
-                lane=str(launch_request.approvalBinding["lane"]),
-                authority_mode=str(launch_request.approvalBinding["authorityMode"]),
-                status=terminal_status,
-                requested_by_label="Operator",
-                workspace_isolation_plan_json=self._subscription_agent_launch_workspace_isolation_plan(
-                    launch_request.workspaceContract
-                ),
-                artifact_refs_json=launch_request.outputArtifactSummary["artifactReferences"],
-                event_refs_json=[],
-                started_at=now,
-                completed_at=now,
-                heartbeat_at=now,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(attempt)
+        attempt = await session.get(
+            ExecutionAttempt,
+            attempt_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if not attempt:
+            raise ValueError(f"Subscription-agent launch attempt {attempt_id} is missing after finalization.")
+        if (
+            attempt.work_item_id != item.id
+            or attempt.route_decision_id != preview.decision.decisionId
+            or attempt.worker_id != str(launch_request.approvalBinding["workerId"])
+            or attempt.lane != str(launch_request.approvalBinding["lane"])
+            or attempt.authority_mode != str(launch_request.approvalBinding["authorityMode"])
+            or attempt.status != terminal_status
+            or attempt.launch_claimed_at is None
+        ):
+            raise ValueError(f"Subscription-agent launch attempt {attempt_id} does not match its claimed result.")
+        attempt.workspace_isolation_plan_json = self._subscription_agent_launch_workspace_isolation_plan(
+            launch_request.workspaceContract
+        ) | {
+            "operation": f"subscription_agent_launch:{launch_request.approvalBinding['targetId']}",
+            "reservationBoundary": "durable_before_external_launch",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+        attempt.artifact_refs_json = list(attempt.artifact_refs_json or []) + list(
+            launch_request.outputArtifactSummary["artifactReferences"]
+        )
+        attempt.revision += 1
+        attempt.updated_at = now
         await session.flush()
         runtime_event = await self._record_event(
             session,
@@ -25402,6 +25771,12 @@ class SupervisorService:
                         operation="ollama_provider_explanation",
                         requested_by_label="Operator",
                         admission_lock_acquired=True,
+                    )
+                    attempt = await self._claim_external_launch_attempt(
+                        session,
+                        item,
+                        attempt,
+                        operation="ollama_provider_explanation",
                     )
                     try:
                         provider_result = await self.ollama_provider_adapter.explain(
@@ -26150,6 +26525,12 @@ class SupervisorService:
             expected_snapshot=expected_snapshot,
             task_kind=profile.task_kind.value,
         )
+        attempt = await self._claim_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            operation=f"guarded_utility_worker:{function_id}",
+        )
         try:
             result = self.utility_worker.run(task)
         except Exception as exc:
@@ -26889,6 +27270,12 @@ class SupervisorService:
                 expected_snapshot=expected_snapshot,
                 task_kind=TaskKind.PATH_SCOPE_CHECK.value,
             )
+            launch_reservation = await self._claim_external_launch_attempt(
+                session,
+                item,
+                launch_reservation,
+                operation=f"recipe_branch_preparation:{recipe.id}",
+            )
         else:
             await self._record_event(
                 session,
@@ -27199,6 +27586,36 @@ class SupervisorService:
                     ),
                 )
                 return
+            if recipe:
+                events = await self.list_work_item_events(session, item.id)
+                branch_gate = next(
+                    (
+                        gate
+                        for gate in self._recipe_gate_audit_view(item, recipe, events).gates
+                        if gate.gateId == "branch-ownership"
+                    ),
+                    None,
+                )
+                if branch_gate is not None and branch_gate.status != "passed":
+                    await self._record_event(
+                        session,
+                        item,
+                        "recipe.branch_prepared",
+                        "Recipe execution branch already satisfies the branch ownership policy.",
+                        self._recipe_policy_payload(
+                            recipe,
+                            "branch-ownership",
+                            "branch-policy",
+                            branch_payload
+                            | {
+                                "processLaunchAttempted": False,
+                                "externalSideEffectRepresented": True,
+                                "metadataOnly": True,
+                                "rawPayloadRetained": False,
+                            },
+                        ),
+                        actor_type="supervisor",
+                    )
             command_results = await self._run_admitted_recipe_implementation_commands(
                 session,
                 recipe,
@@ -28347,6 +28764,12 @@ class SupervisorService:
             expected_snapshot=expected_snapshot,
             task_kind=TaskKind.VALIDATION_EXECUTION.value,
         )
+        attempt = await self._claim_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            operation=operation,
+        )
         try:
             results = self._run_recipe_verification_commands(current_recipe)
         except Exception as exc:
@@ -28497,6 +28920,12 @@ class SupervisorService:
             admission_lock_acquired=True,
             expected_snapshot=expected_snapshot,
             task_kind=routing_profile.task_kind.value,
+        )
+        attempt = await self._claim_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            operation=operation,
         )
         try:
             results = self._run_recipe_implementation_commands(recipe, item)
@@ -28696,6 +29125,12 @@ class SupervisorService:
             admission_lock_acquired=True,
             expected_snapshot=expected_snapshot,
             task_kind=decision.profile_snapshot.task_kind.value,
+        )
+        attempt = await self._claim_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            operation=operation,
         )
         try:
             results = self._remote_delivery_commands(item)
@@ -32157,6 +32592,19 @@ class SupervisorService:
             lane=attempt.lane,
             authorityMode=attempt.authority_mode,
             status=ExecutionAttemptStatus(attempt.status),
+            revision=attempt.revision,
+            launchFenceState=(
+                "not_applicable"
+                if attempt.launch_fence_token is None
+                else "claimed"
+                if attempt.launch_claimed_at is not None
+                else "reserved"
+            ),
+            launchClaimedAt=(
+                self._normalize_timestamp(attempt.launch_claimed_at)
+                if attempt.launch_claimed_at
+                else None
+            ),
             requestedById=attempt.requested_by_id,
             requestedByLabel=attempt.requested_by_label,
             createdAt=self._normalize_timestamp(attempt.created_at),
