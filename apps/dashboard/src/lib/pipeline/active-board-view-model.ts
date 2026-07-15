@@ -439,7 +439,7 @@ export function buildRuntimeOperationalActionStrip(
     projection.freshnessState !== "live" ||
     projection.fixtureMode.enabled !== false ||
     !projection.runtimeReadiness ||
-    !projectionHasAvailableRuntimeCapability(projection)
+    !projectionCanShowRuntimeOperationalActions(projection)
   ) {
     return null;
   }
@@ -691,6 +691,32 @@ function projectionHasAvailableRuntimeCapability(projection: PipelineDashboardPr
       readiness.capabilityState === "available" &&
       (readiness.operationalMode === "local_proof" || readiness.operationalMode === "bounded_write"),
   );
+}
+
+export function isLocalPausedOrDrainingSupervisorRuntime(
+  projection: PipelineDashboardProjectionV0,
+): boolean {
+  const readiness = projection.runtimeReadiness;
+  // The supervisor intentionally projects local paused/draining state as
+  // read_only. Ready + available + a server-projected Resume capability is
+  // the local supervisor boundary; remote read_only is degraded/unavailable.
+  return Boolean(
+    projection.sourceLabel === "live" &&
+    projection.freshnessState === "live" &&
+    projection.fixtureMode.enabled === false &&
+    readiness &&
+    readiness.operationalMode === "read_only" &&
+    readiness.readinessState === "ready" &&
+    readiness.capabilityState === "available" &&
+    readiness.actionCapabilitiesV1.some((capability) =>
+      capability.actionId === "resume" &&
+      isActionableV1Capability(capability, "supervisor_runtime")
+    )
+  );
+}
+
+function projectionCanShowRuntimeOperationalActions(projection: PipelineDashboardProjectionV0): boolean {
+  return projectionHasAvailableRuntimeCapability(projection) || isLocalPausedOrDrainingSupervisorRuntime(projection);
 }
 
 function contextualActionFromV1Capability(

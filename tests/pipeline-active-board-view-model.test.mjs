@@ -5,6 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const activeBoardViewModelPath = new URL("../apps/dashboard/src/lib/pipeline/active-board-view-model.ts", import.meta.url);
+const pipelineCockpitPath = new URL("../apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", import.meta.url);
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 
 async function loadActiveBoardViewModelModule() {
@@ -552,6 +553,97 @@ test("contextual action strips are selection scoped and return metadata-only act
   ), null);
   assert.equal(JSON.stringify(model.contextualActions).includes("raw prompt"), false);
   assert.equal(JSON.stringify(model.contextualActions).includes("provider payload"), false);
+});
+
+test("local paused or draining runtime exposes only server-projected runtime controls", async () => {
+  const {
+    buildRuntimeOperationalActionStrip,
+    isLocalPausedOrDrainingSupervisorRuntime,
+  } = await loadActiveBoardViewModelModule();
+
+  for (const [runtimeMode, expectedActions] of [
+    ["paused", ["drain", "resume"]],
+    ["draining", ["resume"]],
+  ]) {
+    const projection = projectionFixture({
+      runtimeReadiness: runtimeReadinessFixture({
+        operationalMode: "read_only",
+        actionCapabilitiesV1: [
+          runtimeCapabilityFixture("pause", {
+            capabilityState: "unavailable",
+            typedReason: "invalid_transition",
+            actionContext: { kind: "pause", expectedRuntimeMode: runtimeMode, expectedRuntimeRevision: 7 },
+          }),
+          runtimeCapabilityFixture("drain", {
+            capabilityState: runtimeMode === "paused" ? "available" : "unavailable",
+            typedReason: runtimeMode === "paused" ? null : "invalid_transition",
+            actionContext: { kind: "drain", expectedRuntimeMode: runtimeMode, expectedRuntimeRevision: 7 },
+          }),
+          runtimeCapabilityFixture("resume", {
+            actionContext: { kind: "resume", expectedRuntimeMode: runtimeMode, expectedRuntimeRevision: 7 },
+          }),
+        ],
+      }),
+    });
+
+    assert.equal(isLocalPausedOrDrainingSupervisorRuntime(projection), true);
+    const strip = buildRuntimeOperationalActionStrip(projection);
+    assert.ok(strip);
+    assert.deepEqual(strip.actions.map((action) => action.actionId), expectedActions);
+    const resume = strip.actions.find((action) => action.actionId === "resume");
+    assert.equal(resume.label, "Resume intake");
+    assert.equal(resume.v1Capability.targetId, "supervisor-runtime");
+    assert.deepEqual(resume.v1Capability.actionContext, {
+      kind: "resume",
+      expectedRuntimeMode: runtimeMode,
+      expectedRuntimeRevision: 7,
+    });
+    assert.equal(resume.v1Capability.actionContextDigestSha256, "sha256:resume-context");
+  }
+
+  const remoteReadOnly = projectionFixture({
+    runtimeReadiness: runtimeReadinessFixture({
+      readinessState: "degraded",
+      operationalMode: "read_only",
+      capabilityState: "unavailable",
+      actionCapabilitiesV1: [runtimeCapabilityFixture("resume")],
+    }),
+  });
+  const fixtureProjection = projectionFixture({
+    sourceLabel: "fixture",
+    fixtureMode: {
+      enabled: true,
+      reason: "demo fixture",
+      allowedForEnvironment: true,
+      visibleLabelRequired: true,
+      canSatisfyLiveProof: false,
+    },
+    runtimeReadiness: runtimeReadinessFixture({
+      operationalMode: "read_only",
+      actionCapabilitiesV1: [runtimeCapabilityFixture("resume")],
+    }),
+  });
+  const unavailableProjection = projectionFixture({
+    sourceLabel: "unavailable",
+    freshnessState: "unavailable",
+    runtimeReadiness: runtimeReadinessFixture({
+      operationalMode: "read_only",
+      actionCapabilitiesV1: [runtimeCapabilityFixture("resume")],
+    }),
+  });
+
+  for (const projection of [remoteReadOnly, fixtureProjection, unavailableProjection]) {
+    assert.equal(isLocalPausedOrDrainingSupervisorRuntime(projection), false);
+    assert.equal(buildRuntimeOperationalActionStrip(projection), null);
+  }
+
+  const cockpit = await readFile(pipelineCockpitPath, "utf8");
+  assert.match(cockpit, /if \(fixtureMode\.kind !== "runtime"\)/);
+  assert.match(cockpit, /capability\.sourceMode !== \(packetId === "supervisor-runtime" \? "supervisor_runtime" : "packet"\)/);
+  assert.match(cockpit, /targetId: capability\.targetId/);
+  assert.match(cockpit, /actionContext: capability\.actionContext/);
+  assert.match(cockpit, /actionContextDigestSha256: approval\.actionContextDigestSha256/);
+  assert.match(cockpit, /approvalId: approval\.approvalId/);
 });
 
 test("packet detail why diagnostics contract explains placement without retaining raw payloads", async () => {
@@ -1935,6 +2027,55 @@ function projectionFixture(overrides = {}) {
     evidenceRefs: [],
   };
   return { ...base, ...overrides };
+}
+
+function runtimeReadinessFixture(overrides = {}) {
+  return {
+    schemaVersion: "pipeline-operational-runtime-readiness/v0",
+    actionSchemaVersion: "pipeline-operational-action/v0",
+    readinessState: "ready",
+    operationalMode: "local_proof",
+    freshnessState: "live",
+    capabilityState: "available",
+    typedReason: null,
+    checkedAt: "2026-07-02T20:00:00.000Z",
+    expiresAt: "2026-07-02T20:05:00.000Z",
+    summary: "Runtime readiness fixture.",
+    actionCapabilities: [],
+    actionCapabilitiesV1: [],
+    evidenceRefs: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...overrides,
+  };
+}
+
+function runtimeCapabilityFixture(actionId, overrides = {}) {
+  return {
+    schemaVersion: "pipeline-operational-action/v1",
+    actionId,
+    targetType: "runtime",
+    targetId: "supervisor-runtime",
+    actionContext: {
+      kind: actionId,
+      expectedRuntimeMode: "paused",
+      expectedRuntimeRevision: 7,
+    },
+    actionContextDigestSha256: "sha256:resume-context",
+    sourceMode: "supervisor_runtime",
+    capabilityState: "available",
+    authorityState: "needs_authority_approval",
+    riskTier: "low",
+    typedReason: null,
+    expectedResultSummary: "Transition the supervisor runtime with the exact server-projected fence.",
+    correlationRequired: true,
+    idempotencyRequired: true,
+    serverBound: true,
+    evidenceRefs: ["operational-action:capability:runtime"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...overrides,
+  };
 }
 
 function executeAdmissionFixture(overrides = {}) {

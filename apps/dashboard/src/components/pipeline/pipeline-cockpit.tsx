@@ -245,6 +245,7 @@ export function PipelineCockpit({
         action.state !== "available" ||
         capability.capabilityState !== "available" ||
         capability.serverBound !== true ||
+        capability.sourceMode !== (packetId === "supervisor-runtime" ? "supervisor_runtime" : "packet") ||
         !capability.targetId ||
         !capability.actionContextDigestSha256
       ) {
