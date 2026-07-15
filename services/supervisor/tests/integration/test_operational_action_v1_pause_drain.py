@@ -200,6 +200,17 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
         assert initial.status_code == 200, initial.text
         assert initial.json()["data"]["mode"] == "running"
         assert initial.json()["data"]["revision"] == 1
+        initial_projection = client.get("/pipeline-control-plane/projection")
+        assert initial_projection.status_code == 200, initial_projection.text
+        runtime_capabilities = {
+            capability["actionId"]: capability
+            for capability in initial_projection.json()["data"]["runtimeReadiness"]["actionCapabilitiesV1"]
+        }
+        assert runtime_capabilities["pause"]["sourceMode"] == "supervisor_runtime"
+        assert runtime_capabilities["pause"]["targetId"] == "supervisor-runtime"
+        assert runtime_capabilities["pause"]["capabilityState"] == "available"
+        assert runtime_capabilities["drain"]["capabilityState"] == "available"
+        assert "resume" not in runtime_capabilities
 
         counts = {"activeWorkCount": 1, "activeLeaseCount": 1, "runningAttemptCount": 1}
         stale_drain = _runtime_request("drain", mode="running", revision=1, counts=counts, key="stale-drain", correlation="corr-stale-drain")

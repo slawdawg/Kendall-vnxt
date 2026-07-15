@@ -8,6 +8,8 @@ import type {
   PipelineGatedOperationalActionIdV0,
   PipelineOperationalActionApprovalRequestV0,
   PipelineOperationalActionRequestV0,
+  PipelineOperationalActionApprovalRequestV1,
+  PipelineOperationalActionRequestV1,
   PipelineStage,
 } from "@kendall/contracts";
 import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
@@ -19,6 +21,7 @@ import {
 } from "../../lib/pipeline/projection-truth";
 import {
   buildPipelineActiveBoardViewModel,
+  buildRuntimeOperationalActionStrip,
   type PipelineActiveBoardViewModel,
   type PipelineBackpressureState,
   type PipelineCanonicalPacketDetail,
@@ -38,7 +41,9 @@ import type {
 } from "../../lib/pipeline/manager-execution-lane-types";
 import {
   applyPipelineOperationalAction,
+  applyPipelineOperationalActionV1,
   requestPipelineOperationalApproval,
+  requestPipelineOperationalApprovalV1,
 } from "../../lib/pipeline-supervisor-actions";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 
@@ -182,6 +187,9 @@ export function PipelineCockpit({
   const selectedContextualActionStrip = selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
     : null;
+  const runtimeActionStrip = currentProjection && fixtureMode.kind === "runtime"
+    ? buildRuntimeOperationalActionStrip(currentProjection)
+    : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(dashboardPackets);
   const topAttentionPacket = findTopAttentionPacket(dashboardPackets);
@@ -229,6 +237,60 @@ export function PipelineCockpit({
   const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
     if (fixtureMode.kind !== "runtime") {
       setActionFeedback("Operational actions are unavailable outside supervisor runtime mode.");
+      return;
+    }
+    if (action.v1Capability) {
+      const capability = action.v1Capability;
+      if (
+        action.state !== "available" ||
+        capability.capabilityState !== "available" ||
+        capability.serverBound !== true ||
+        !capability.targetId ||
+        !capability.actionContextDigestSha256
+      ) {
+        return;
+      }
+      const requestedBy = { actorType: "operator", actorId: "pipeline-operator", actorLabel: "Pipeline operator" } as const;
+      const approvalRequest = {
+        schemaVersion: "pipeline-operational-action/v1",
+        actionId: capability.actionId,
+        targetType: capability.targetType,
+        targetId: capability.targetId,
+        actionContext: capability.actionContext,
+        actionContextDigestSha256: capability.actionContextDigestSha256,
+        requestedBy,
+        requestedAuthorityState: "needs_authority_approval",
+        requestedRiskTier: capability.riskTier,
+        serverBound: true,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      } as PipelineOperationalActionApprovalRequestV1;
+      try {
+        const approval = await requestPipelineOperationalApprovalV1(approvalRequest);
+        const request = {
+          schemaVersion: approval.schemaVersion,
+          actionId: approval.actionId,
+          targetType: approval.targetType,
+          targetId: approval.targetId,
+          actionContext: approval.actionContext,
+          actionContextDigestSha256: approval.actionContextDigestSha256,
+          idempotencyKey: `pipeline-ui-${crypto.randomUUID()}`,
+          correlationId: crypto.randomUUID(),
+          requestedBy: approval.requestedBy,
+          requestedAuthorityState: approval.requestedAuthorityState,
+          requestedRiskTier: approval.requestedRiskTier,
+          approvalId: approval.approvalId,
+          serverBound: true,
+          evidenceRefs: ["operational-action:dashboard-v1"],
+          metadataOnly: true,
+          rawPayloadRetained: false,
+        } as PipelineOperationalActionRequestV1;
+        const result = await applyPipelineOperationalActionV1(request);
+        setActionFeedback(`${result.actionId}: ${result.outcome}; ${result.typedReason ?? "state updated"}; correlation ${result.correlationId}`);
+        window.setTimeout(() => window.location.reload(), 250);
+      } catch (error) {
+        setActionFeedback(error instanceof Error ? error.message : "Operational v1 action failed.");
+      }
       return;
     }
     const gatedActionIds = ["mark_tested", "request_rework", "requeue", "reject"] as const satisfies readonly PipelineGatedOperationalActionIdV0[];
@@ -583,6 +645,12 @@ export function PipelineCockpit({
             projectionError={currentProjectionError}
             sourceState={fixtureMode}
           />
+          {runtimeActionStrip ? (
+            <ContextualActionStripPanel
+              onAction={(action) => handleOperationalAction(action, "supervisor-runtime")}
+              strip={runtimeActionStrip}
+            />
+          ) : null}
 
           <section
             aria-label="Pipeline board"

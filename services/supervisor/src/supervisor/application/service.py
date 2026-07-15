@@ -190,6 +190,7 @@ from supervisor.api.schemas import (
     PipelineRuntimeReadinessV0View,
     OperationalActionCapabilityView,
     OperationalActionCapabilityV1,
+    OperationalActionContextV1,
     OperationalActionApprovalRequest,
     OperationalActionApprovalRequestV1,
     OperationalActionApprovalView,
@@ -198,6 +199,12 @@ from supervisor.api.schemas import (
     OperationalActionRequestV1,
     OperationalActionResultView,
     OperationalActionResultV1,
+    PauseActionContextV1,
+    DrainActionContextV1,
+    ResumeActionContextV1,
+    RetryVerificationActionContextV1,
+    ReassignActionContextV1,
+    operational_action_context_digest_sha256_v1,
     OperationalReadyToTestRequest,
     PipelineManagerSummaryV0View,
     PipelineProductModeMappingV0View,
@@ -462,12 +469,9 @@ SERVER_APPLICABLE_OPERATIONAL_ACTIONS = {
     "requeue",
     "reject",
 }
-SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS = {
-    "retry_verification",
-    "pause",
-    "drain",
-    "reassign",
-}
+SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS: set[str] = set()
+    # Kept as an explicit compatibility seam for old v0 projection consumers.
+    # The server-bound v1 capability/apply paths below are authoritative.
 SERVER_OWNED_LOCAL_OPERATOR = {
     "actorType": "operator",
     "actorId": "pipeline-operator",
@@ -1350,6 +1354,7 @@ class SupervisorService:
             targetId=payload.targetId,
             actionContext=payload.actionContext,
             actionContextDigestSha256=payload.actionContextDigestSha256,
+            sourceMode="supervisor_runtime" if payload.targetType == "runtime" else "packet",
             serverBound=True,
             capabilityState=capability_state,
             authorityState=authority_state,
@@ -3054,7 +3059,7 @@ class SupervisorService:
         typed_reason = None
         capability_state = "gated"
         authority_state = policy["authority"]
-        if action_id in SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS:
+        if action_id in IMPLEMENTED_V1_OPERATIONAL_ACTIONS:
             capability_state = "unavailable"
             authority_state = "blocked"
             typed_reason = "unsupported_action"
@@ -3123,6 +3128,197 @@ class SupervisorService:
             self._operational_capability("reject", target_id=packet_id, packet=packet, mutation_access=mutation_access),
         ]
 
+    def _operational_action_revision_timestamp(self, value: datetime) -> str:
+        return self._ensure_aware(value).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _v1_capability_request(
+        self,
+        action_id: str,
+        target_type: str,
+        target_id: str,
+        action_context: OperationalActionContextV1,
+    ) -> OperationalActionApprovalRequestV1:
+        return OperationalActionApprovalRequestV1(
+            actionId=action_id,
+            targetType=target_type,
+            targetId=target_id,
+            actionContext=action_context,
+            actionContextDigestSha256=operational_action_context_digest_sha256_v1(
+                action_id,
+                target_type,
+                target_id,
+                action_context,
+            ),
+            requestedBy=dict(SERVER_OWNED_LOCAL_OPERATOR),
+            requestedAuthorityState="needs_authority_approval",
+            requestedRiskTier="low" if action_id in {"pause", "resume"} else "medium",
+            serverBound=True,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
+    async def _project_v1_capability(
+        self,
+        session: AsyncSession,
+        request: OperationalActionApprovalRequestV1,
+        *,
+        mutation_access: bool,
+    ) -> OperationalActionCapabilityV1:
+        source_mode = "supervisor_runtime" if request.targetType == "runtime" else "packet"
+        if mutation_access:
+            capability = await self.pipeline_operational_action_capability_v1(session, request)
+            return capability.model_copy(update={"sourceMode": source_mode})
+        return OperationalActionCapabilityV1(
+            schemaVersion=request.schemaVersion,
+            actionId=request.actionId,
+            targetType=request.targetType,
+            targetId=request.targetId,
+            actionContext=request.actionContext,
+            actionContextDigestSha256=request.actionContextDigestSha256,
+            serverBound=True,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+            sourceMode=source_mode,
+            capabilityState="unavailable",
+            authorityState="blocked",
+            riskTier=request.requestedRiskTier,
+            typedReason="authenticated_session_required",
+            expectedResultSummary="Server-bound v1 operational action requires a local supervisor session.",
+            correlationRequired=True,
+            idempotencyRequired=True,
+            evidenceRefs=[f"operational-action:capability:{request.actionId}:{request.targetId}"],
+        )
+
+    async def _runtime_operational_capabilities_v1(
+        self,
+        session: AsyncSession,
+        *,
+        mutation_access: bool,
+    ) -> list[OperationalActionCapabilityV1]:
+        control, counts = await self._runtime_control_snapshot(session)
+        contexts: list[tuple[str, OperationalActionContextV1]] = [
+            (
+                "pause",
+                PauseActionContextV1(
+                    kind="pause",
+                    expectedRuntimeMode=control.mode,
+                    expectedRuntimeRevision=control.revision,
+                ),
+            ),
+            (
+                "drain",
+                DrainActionContextV1(
+                    kind="drain",
+                    expectedRuntimeMode=control.mode,
+                    expectedRuntimeRevision=control.revision,
+                    expectedActiveWorkCount=counts["activeWorkCount"],
+                    expectedActiveLeaseCount=counts["activeLeaseCount"],
+                    expectedRunningAttemptCount=counts["runningAttemptCount"],
+                ),
+            ),
+        ]
+        if control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}:
+            contexts.append(
+                (
+                    "resume",
+                    ResumeActionContextV1(
+                        kind="resume",
+                        expectedRuntimeMode=control.mode,
+                        expectedRuntimeRevision=control.revision,
+                    ),
+                )
+            )
+        capabilities: list[OperationalActionCapabilityV1] = []
+        for action_id, context in contexts:
+            request = self._v1_capability_request(
+                action_id,
+                "runtime",
+                "supervisor-runtime",
+                context,
+            )
+            capabilities.append(
+                await self._project_v1_capability(session, request, mutation_access=mutation_access)
+            )
+        return capabilities
+
+    async def _packet_operational_capabilities_v1(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+        *,
+        mutation_access: bool,
+    ) -> list[OperationalActionCapabilityV1]:
+        item = await session.scalar(
+            select(WorkItem).where(WorkItem.authoritative_packet_id == packet_id)
+        )
+        packet = await session.get(AuthoritativeWorkPacket, packet_id)
+        if not item or not packet:
+            return []
+
+        capabilities: list[OperationalActionCapabilityV1] = []
+        terminal_attempt = await session.scalar(
+            select(ExecutionAttempt)
+            .where(
+                ExecutionAttempt.work_item_id == item.id,
+                ExecutionAttempt.status.in_({"failed", "timed_out", "rejected"}),
+            )
+            .order_by(ExecutionAttempt.updated_at.desc(), ExecutionAttempt.id.desc())
+        )
+        if terminal_attempt:
+            retry_context = RetryVerificationActionContextV1(
+                kind="retry_verification",
+                executionAttemptId=terminal_attempt.id,
+                linkedWorkItemId=item.id,
+                linkedPacketId=packet.id,
+                expectedWorkItemState=item.state,
+                expectedWorkItemUpdatedAt=self._operational_action_revision_timestamp(item.updated_at),
+                expectedAttemptStatus=terminal_attempt.status,
+                expectedAttemptUpdatedAt=self._operational_action_revision_timestamp(terminal_attempt.updated_at),
+                expectedPacketCurrentEventId=packet.current_event_id,
+                expectedLeaseId=terminal_attempt.queue_lease_id,
+                expectedLeaseFencingToken=terminal_attempt.queue_fencing_token,
+                expectedLeaseActive=False,
+            )
+            capabilities.append(
+                await self._project_v1_capability(
+                    session,
+                    self._v1_capability_request(
+                        "retry_verification",
+                        "execution_attempt",
+                        terminal_attempt.id,
+                        retry_context,
+                    ),
+                    mutation_access=mutation_access,
+                )
+            )
+
+        new_owner_id = "pipeline-operator"
+        if item.assignee_id != new_owner_id:
+            reassign_context = ReassignActionContextV1(
+                kind="reassign",
+                linkedWorkItemId=item.id,
+                expectedPacketCurrentEventId=packet.current_event_id,
+                expectedCurrentOwnerId=item.assignee_id,
+                newOwnerId=new_owner_id,
+                expectedWorkItemState=item.state,
+                expectedWorkItemUpdatedAt=self._operational_action_revision_timestamp(item.updated_at),
+                expectedActiveLeaseId=None,
+                expectedRunningAttemptId=None,
+            )
+            capabilities.append(
+                await self._project_v1_capability(
+                    session,
+                    self._v1_capability_request(
+                        "reassign",
+                        "work_packet",
+                        packet.id,
+                        reassign_context,
+                    ),
+                    mutation_access=mutation_access,
+                )
+            )
+        return capabilities
+
     async def _pipeline_runtime_readiness(
         self,
         session: AsyncSession,
@@ -3176,6 +3372,10 @@ class SupervisorService:
                 self._operational_capability("reassign", mutation_access=mutation_access),
                 self._operational_capability("reject", mutation_access=mutation_access),
             ],
+            actionCapabilitiesV1=await self._runtime_operational_capabilities_v1(
+                session,
+                mutation_access=mutation_access,
+            ),
             evidenceRefs=["runtime:database-reachable", "runtime:local-proof"],
             metadataOnly=True,
             rawPayloadRetained=False,
@@ -5069,17 +5269,28 @@ class SupervisorService:
                 generated_at,
                 mutation_access=mutation_access,
             )
+            v1_packet_capabilities_by_packet: dict[str, list[OperationalActionCapabilityV1]] = {
+                packet.packetId: await self._packet_operational_capabilities_v1(
+                    session,
+                    packet.packetId,
+                    mutation_access=mutation_access,
+                )
+                for packet in authoritative_packets
+            }
             execute_admission = await self._evaluate_execute_admission(session)
             action_result_rows = await session.execute(
                 select(OperationalActionRecord).order_by(OperationalActionRecord.created_at.asc())
             )
             action_results_by_packet: dict[str, list[OperationalActionRecord]] = {}
+            action_results_v1_by_packet: dict[str, list[OperationalActionRecord]] = {}
             for action_record in action_result_rows.scalars():
                 # P2.1 persists additive v1 results, but the v0 dashboard result
                 # shape cannot represent exact execution-attempt targets. Keep
                 # v1 records out of the legacy projection until P3 cutover.
                 if action_record.packet_id and action_record.schema_version == "pipeline-operational-action/v0":
                     action_results_by_packet.setdefault(action_record.packet_id, []).append(action_record)
+                elif action_record.packet_id and action_record.schema_version == "pipeline-operational-action/v1":
+                    action_results_v1_by_packet.setdefault(action_record.packet_id, []).append(action_record)
         except SQLAlchemyError:
             return self._unavailable_pipeline_dashboard_projection(generated_at, stale_after_seconds)
 
@@ -5285,6 +5496,8 @@ class SupervisorService:
                     correlationIds=packet_lineage.get("correlationIds", []),
                     actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=mutation_access),
                     actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]],
+                    actionCapabilitiesV1=v1_packet_capabilities_by_packet.get(packet.packetId, []),
+                    actionResultsV1=[self._operational_action_result_view_v1(item, replayed=False) for item in action_results_v1_by_packet.get(packet.packetId, [])[-12:]],
                     metadataOnly=True,
                 )
             )
@@ -5577,6 +5790,7 @@ class SupervisorService:
             gatedControls=gated_controls,
             runtimeReadiness=runtime_readiness,
             actionCapabilities=runtime_readiness.actionCapabilities,
+            actionCapabilitiesV1=runtime_readiness.actionCapabilitiesV1,
             executeAdmission=execute_admission,
             queueSummary=PipelineQueueSummaryV0View(
                 activeCount=active_count,
@@ -5698,11 +5912,13 @@ class SupervisorService:
                 expiresAt=generated_at,
                 summary="Operational runtime readiness is unavailable because the backend projection failed.",
                 actionCapabilities=[],
+                actionCapabilitiesV1=[],
                 evidenceRefs=["runtime:backend-unavailable"],
                 metadataOnly=True,
                 rawPayloadRetained=False,
             ),
             actionCapabilities=[],
+            actionCapabilitiesV1=[],
             executeAdmission=self._unavailable_execute_admission(),
             queueSummary=PipelineQueueSummaryV0View(
                 activeCount=None,

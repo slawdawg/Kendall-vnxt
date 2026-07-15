@@ -45,6 +45,10 @@ import type {
   PipelineOperationalActionApprovalRequestV0,
   PipelineOperationalActionApprovalV0,
   PipelineOperationalActionResultV0,
+  PipelineOperationalActionApprovalRequestV1,
+  PipelineOperationalActionApprovalV1,
+  PipelineOperationalActionRequestV1,
+  PipelineOperationalActionResultV1,
   RuntimeEvidenceReviewReportView,
   ReviewResourcePolicyReportView,
   RunnerAssignmentStatusReportView,
@@ -235,6 +239,40 @@ export async function issuePipelineOperationalApproval(
   if (!response.ok || !envelope.data) {
     const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
     throw new Error(detail.detail?.error?.message ?? `Operational approval failed: ${response.status}`);
+  }
+  return envelope.data;
+}
+
+export async function applyPipelineOperationalActionV1(
+  payload: PipelineOperationalActionRequestV1,
+): Promise<PipelineOperationalActionResultV1> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/actions/v1`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionResultV1>;
+  if (!response.ok || !envelope.data) {
+    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
+    throw new Error(detail.detail?.error?.message ?? `Operational v1 action failed: ${response.status}`);
+  }
+  return envelope.data;
+}
+
+export async function issuePipelineOperationalApprovalV1(
+  payload: PipelineOperationalActionApprovalRequestV1,
+): Promise<PipelineOperationalActionApprovalV1> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/approvals/v1`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionApprovalV1>;
+  if (!response.ok || !envelope.data) {
+    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
+    throw new Error(detail.detail?.error?.message ?? `Operational v1 approval failed: ${response.status}`);
   }
   return envelope.data;
 }

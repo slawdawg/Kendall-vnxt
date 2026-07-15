@@ -2,6 +2,7 @@ import {
   AUTHORITATIVE_PACKET_STAGES,
   isPipelineCanonicalContractV1,
   isPipelineProductModeMappingV0,
+  validatePipelineOperationalActionCapabilityV1,
 } from "@kendall/contracts";
 import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
@@ -47,13 +48,15 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
   );
   const reliabilityProblemsCurrent = "reliabilityProblems" in projection;
   const gatedControlsCurrent = "gatedControls" in projection;
+  const runtimeCapabilitiesCurrent = !projection.runtimeReadiness || "actionCapabilitiesV1" in projection.runtimeReadiness;
   if (
     sourceStatesCurrent &&
     queueSummaryCurrent &&
     managerSummaryCurrent &&
     workerSummaryCurrent &&
     reliabilityProblemsCurrent &&
-    gatedControlsCurrent
+    gatedControlsCurrent &&
+    runtimeCapabilitiesCurrent
   ) {
     return projection;
   }
@@ -138,6 +141,9 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     sourceStates: sourceStatesCurrent ? projection.sourceStates : [],
     reliabilityProblems: reliabilityProblemsCurrent ? projection.reliabilityProblems : [],
     gatedControls: gatedControlsCurrent ? projection.gatedControls : [],
+    runtimeReadiness: projection.runtimeReadiness && !runtimeCapabilitiesCurrent
+      ? { ...projection.runtimeReadiness, actionCapabilitiesV1: [] }
+      : projection.runtimeReadiness,
   };
 }
 
@@ -188,7 +194,17 @@ export function isPipelineDashboardProjection(value: unknown): value is Pipeline
     projection.selectedPacketDetails.every(isProjectionSelectedPacketDetail) &&
     selectedPacketDetailsMatchWorkPackets(projection.workPackets, projection.selectedPacketDetails) &&
     Array.isArray(projection.evidenceRefs) &&
-    projection.evidenceRefs.every(isSafeEvidenceRef)
+    projection.evidenceRefs.every(isSafeEvidenceRef) &&
+    isV1CapabilityArray(projection.actionCapabilitiesV1) &&
+    (!projection.runtimeReadiness || isV1CapabilityArray(projection.runtimeReadiness.actionCapabilitiesV1)) &&
+    projection.selectedPacketDetails.every((detail) => isV1CapabilityArray(detail.actionCapabilitiesV1))
+  );
+}
+
+function isV1CapabilityArray(value: unknown): boolean {
+  return value === undefined || (
+    Array.isArray(value) &&
+    value.every((capability) => validatePipelineOperationalActionCapabilityV1(capability).length === 0)
   );
 }
 

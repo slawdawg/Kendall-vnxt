@@ -3006,6 +3006,7 @@ class OperationalActionApprovalV1(OperationalActionApprovalRequestV1):
 
 
 class OperationalActionCapabilityV1(OperationalActionBindingV1):
+    sourceMode: Literal["supervisor_runtime", "packet"]
     capabilityState: OperationalActionCapabilityState
     authorityState: Literal["needs_authority_approval", "allowed", "blocked"]
     riskTier: Literal["low", "medium"]
@@ -3296,6 +3297,7 @@ class PipelineRuntimeReadinessV0View(BaseModel):
     expiresAt: datetime
     summary: str
     actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    actionCapabilitiesV1: list[OperationalActionCapabilityV1] = Field(default_factory=list)
     evidenceRefs: list[str] = Field(default_factory=list)
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
@@ -3468,7 +3470,9 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     operatorTestState: Literal["not_ready", "ready", "passed", "failed", "rework"] = "not_ready"
     operatorTestNote: str | None = None
     actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    actionCapabilitiesV1: list[OperationalActionCapabilityV1] = Field(default_factory=list)
     actionResults: list[OperationalActionResultView] = Field(default_factory=list)
+    actionResultsV1: list[OperationalActionResultV1] = Field(default_factory=list)
     workItemId: str | None = None
     queueLease: PipelineQueueLeaseV0View | None = None
     executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
@@ -3699,6 +3703,7 @@ class PipelineDashboardProjectionV0View(BaseModel):
     gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)
     runtimeReadiness: PipelineRuntimeReadinessV0View
     actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    actionCapabilitiesV1: list[OperationalActionCapabilityV1] = Field(default_factory=list)
     executeAdmission: PipelineExecuteAdmissionV0View
     queueSummary: PipelineQueueSummaryV0View
     evidenceRefs: list[str] = Field(default_factory=list)

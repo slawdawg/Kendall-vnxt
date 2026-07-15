@@ -428,10 +428,10 @@ def test_authorization_rejects_digest_context_actor_expiry_and_replay_drift() ->
         OperationalActionAuthorizationEnvelopeV1.model_validate(replay_conflict)
 
 
-def test_runtime_keeps_v0_action_flags_unavailable_and_preserves_v0_actions() -> None:
+def test_runtime_removes_v1_actions_from_unavailable_flags_and_preserves_v0_actions() -> None:
     v1_actions = set(EXPECTED_POLICY)
-    assert SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS == {"retry_verification", "pause", "drain", "reassign"}
-    assert "resume" not in SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS
+    assert SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS == set()
+    assert not v1_actions.intersection(SERVER_UNAVAILABLE_OPERATIONAL_ACTIONS)
     assert not v1_actions.intersection(SERVER_APPLICABLE_OPERATIONAL_ACTIONS)
     assert {"mark_tested", "request_rework", "requeue", "reject"} == SERVER_APPROVABLE_OPERATIONAL_ACTIONS
     assert {"inspect", "refresh_projection", "mark_tested", "request_rework", "requeue", "reject"} == SERVER_APPLICABLE_OPERATIONAL_ACTIONS
