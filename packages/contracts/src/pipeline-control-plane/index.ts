@@ -2549,7 +2549,15 @@ function pushPipelineOperationalActionV1Issue(
 }
 
 function pipelineOperationalActionV1Timestamp(value: unknown): number {
-  return typeof value === "string" && EPIC_25_RFC3339_TIMESTAMP.test(value) ? Date.parse(value) : NaN;
+  if (typeof value !== "string") return NaN;
+  const match = EPIC_25_RFC3339_TIMESTAMP.exec(value);
+  if (!match) return NaN;
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  if (year < 1 || month < 1 || month > 12) return NaN;
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day < 1 || day > daysInMonth[month - 1]) return NaN;
+  return Date.parse(value);
 }
 
 function isSafeOperationalActionV1Identifier(value: unknown, maxLength: number): value is string {

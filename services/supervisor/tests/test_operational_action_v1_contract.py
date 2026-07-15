@@ -498,3 +498,18 @@ def test_runtime_result_requires_explicit_mode_revision_and_preservation_evidenc
     result["successEvidence"]["resultingRuntimeRevision"] = 3  # type: ignore[index]
     with pytest.raises(ValidationError, match="advance the monotonic runtime revision"):
         OperationalActionResultV1.model_validate(result)
+
+
+def test_operational_action_v1_timestamp_parity_fixture() -> None:
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "pipeline-operational-action-v1-timestamps.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    context = deepcopy(_contexts()["reassign"])
+    for timestamp in fixture["accepted"]:
+        candidate = deepcopy(context)
+        candidate["expectedWorkItemUpdatedAt"] = timestamp
+        ReassignActionContextV1.model_validate(candidate)
+    for timestamp in fixture["rejected"]:
+        candidate = deepcopy(context)
+        candidate["expectedWorkItemUpdatedAt"] = timestamp
+        with pytest.raises(ValidationError, match="canonical RFC3339 timestamp"):
+            ReassignActionContextV1.model_validate(candidate)

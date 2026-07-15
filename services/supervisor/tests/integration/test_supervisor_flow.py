@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -942,10 +943,28 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
             "outOfScopePaths": [],
         },
     )
-    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
-        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
-        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
-    ]
+    launch_reservations = {"utility": None, "recipe": None}
+    original_utility_run = service.utility_worker.run
+
+    def guarded_utility_run(task):
+        with sqlite3.connect(db_path) as connection:
+            launch_reservations["utility"] = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts WHERE worker_id = 'utility.internal'"
+            ).fetchone()
+        return original_utility_run(task)
+
+    def recipe_implementation_commands(recipe, item):
+        with sqlite3.connect(db_path) as connection:
+            launch_reservations["recipe"] = connection.execute(
+                "SELECT status, worker_id FROM execution_attempts WHERE worker_id = 'recipe.implementation.command'"
+            ).fetchone()
+        return [
+            {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+            {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        ]
+
+    service.utility_worker.run = guarded_utility_run  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = recipe_implementation_commands  # type: ignore[method-assign]
 
     with TestClient(app) as client:
         created = client.post(
@@ -993,6 +1012,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
             json={"expectedActionId": "run_recipe_implementation"},
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
         profiles_response = client.get("/routing/lane-profiles")
 
@@ -1005,6 +1025,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert implemented.status_code == 200
         assert implemented.json()["data"]["state"] == "implementing"
         assert events_response.status_code == 200
+        assert attempts_response.status_code == 200
         assert audit_response.status_code == 200
         assert profiles_response.status_code == 200
 
@@ -1014,6 +1035,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         branch_event = next(event for event in events if event["eventType"] == "recipe.branch_prepared")
         implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_passed")
         audit = audit_response.json()["data"]
+        attempts = attempts_response.json()["data"]
 
         assert routing_event["actorType"] == "supervisor"
         assert routing_event["actorLabel"] == "Primary operator"
@@ -1037,6 +1059,16 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert utility_event["payload"]["timeoutSeconds"] == 30
         assert utility_event["payload"]["status"] == "succeeded"
         assert utility_event["payload"]["failureReason"] is None
+        assert launch_reservations["utility"] == ("starting", "utility.internal")
+        assert launch_reservations["recipe"] == ("starting", "recipe.implementation.command")
+        assert any(
+            attempt["workerId"] == "utility.internal" and attempt["status"] == "completed"
+            for attempt in attempts
+        )
+        assert any(
+            attempt["workerId"] == "recipe.implementation.command" and attempt["status"] == "completed"
+            for attempt in attempts
+        )
         assert branch_event["actorLabel"] == "Primary operator"
         assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
         assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
@@ -2397,7 +2429,7 @@ def test_work_item_creation_records_operator_identity_from_metadata(tmp_path, mo
         assert queued_event["actorLabel"] == "Jane Operator"
 
 
-def test_work_item_assignment_is_persisted_and_recorded(tmp_path, monkeypatch) -> None:
+def test_legacy_work_item_assignment_is_blocked_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "assignment.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -2428,31 +2460,19 @@ def test_work_item_assignment_is_persisted_and_recorded(tmp_path, monkeypatch) -
                 "actorLabel": "Jane Operator",
             },
         )
-        released = client.post(
-            f"/work-items/{work_item_id}/assignment",
-            json={
-                "assigneeId": None,
-                "assigneeLabel": None,
-                "actorId": "ops-jane",
-                "actorLabel": "Jane Operator",
-            },
-        )
         item_response = client.get(f"/work-items/{work_item_id}")
         events_response = client.get(f"/work-items/{work_item_id}/events")
 
-        assert assigned.status_code == 200
-        assert released.status_code == 200
+        assert assigned.status_code == 409
+        assert assigned.json()["detail"]["error"]["code"] == "legacy_assignment_disabled_use_canonical_reassign_v1"
+        assert "exact owner" in assigned.json()["detail"]["error"]["message"]
         assert item_response.status_code == 200
         assert events_response.status_code == 200
         assert item_response.json()["data"]["assigneeId"] is None
-
-        events = events_response.json()["data"]
-        assigned_event = next(event for event in events if event["eventType"] == "work_item.assigned")
-        released_event = next(event for event in events if event["eventType"] == "work_item.unassigned")
-
-        assert assigned_event["actorLabel"] == "Jane Operator"
-        assert assigned_event["payload"]["assigneeLabel"] == "Jane Operator"
-        assert released_event["payload"]["assigneeId"] is None
+        assert not any(
+            event["eventType"] in {"work_item.assigned", "work_item.unassigned"}
+            for event in events_response.json()["data"]
+        )
 
 
 def test_work_item_escalation_is_persisted_and_can_be_cleared(tmp_path, monkeypatch) -> None:

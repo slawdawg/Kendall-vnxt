@@ -1592,11 +1592,15 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     from supervisor.api.main import app
     from supervisor.domain.ollama_provider_adapter import OllamaProviderResult
 
-    captured_provider_prompt = {}
+    captured_provider_prompt = {"reservation": None}
 
     async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
         captured_provider_prompt["evidence_summary"] = evidence_summary
         captured_provider_prompt["evidence_count"] = evidence_count
+        with sqlite3.connect(db_path) as connection:
+            captured_provider_prompt["reservation"] = connection.execute(
+                "SELECT status, worker_id, authority_mode FROM execution_attempts"
+            ).fetchone()
         return OllamaProviderResult(
             status="completed",
             model_id="qwen3:14b",
@@ -1629,6 +1633,7 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
             },
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
 
     assert response.status_code == 200
     explanation = response.json()["data"]
@@ -1639,6 +1644,14 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     assert explanation["providerAttempt"]["responseCharacterCount"] == 3
     assert explanation["providerAttempt"]["reasoningCharacterCount"] == 42
     assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+    assert captured_provider_prompt["reservation"] == (
+        "starting",
+        "ollama.local.provider",
+        "operator_approved_bounded_provider_call",
+    )
+    attempts = attempts_response.json()["data"]
+    assert attempts[0]["status"] == "completed"
+    assert attempts[0]["workerId"] == "ollama.local.provider"
     assert (
         "Ollama approved endpoint: http://192.168.1.128:11434/v1/chat/completions with model qwen3:14b only."
         in explanation["boundaries"]
@@ -4530,11 +4543,15 @@ def test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_
     from supervisor.api.main import app
     from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
 
-    adapter_calls = {"count": 0, "kwargs": None}
+    adapter_calls = {"count": 0, "kwargs": None, "reservation": None}
 
     async def fake_run(self, **kwargs):
         adapter_calls["count"] += 1
         adapter_calls["kwargs"] = kwargs
+        with sqlite3.connect(db_path) as connection:
+            adapter_calls["reservation"] = connection.execute(
+                "SELECT status, worker_id, route_decision_id FROM execution_attempts"
+            ).fetchone()
         return SupervisedSubscriptionLaunchResult(
             status="completed",
             exit_code=0,
@@ -4564,6 +4581,11 @@ def test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_
     assert response.status_code == 200
     launch = response.json()["data"]
     assert adapter_calls["count"] == 1
+    assert adapter_calls["reservation"] == (
+        "starting",
+        "subscription.agent.disabled",
+        stub["approvalBinding"]["routeDecisionId"],
+    )
     assert adapter_calls["kwargs"]["command_argv"] == ["codex", "--version"]
     assert adapter_calls["kwargs"]["environment_allowlist"] == ["PATH"]
     assert adapter_calls["kwargs"]["cwd"].endswith(os.path.join("_bmad-output", "subscription-runtime", stub["approvalBinding"]["attemptId"]))

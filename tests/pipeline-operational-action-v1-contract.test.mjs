@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const contractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
+const timestampFixturePath = new URL("./fixtures/pipeline-operational-action-v1-timestamps.json", import.meta.url);
 const require = createRequire(import.meta.url);
 
 async function loadContract() {
@@ -176,6 +177,46 @@ test("v1 policy reconciles exact targets, authority families, risks, and context
     ...reassign,
     actionContext: { ...reassign.actionContext, expectedActiveLeaseId: "lease-1" },
   }).some((issue) => ["invalid_contract", "stale_fence"].includes(issue.code)));
+});
+
+test("v1 timestamps enforce the shared canonical RFC3339 parity fixture", async () => {
+  const contract = await loadContract();
+  const fixture = JSON.parse(await readFile(timestampFixturePath, "utf8"));
+  for (const timestamp of fixture.accepted) {
+    const request = requestFor(contract, "reassign");
+    request.actionContext.expectedWorkItemUpdatedAt = timestamp;
+    request.actionContextDigestSha256 = digest(
+      contract.pipelineOperationalActionContextDigestPayloadV1(
+        request.actionId,
+        request.targetType,
+        request.targetId,
+        request.actionContext,
+      ),
+    );
+    assert.deepEqual(
+      contract.validatePipelineOperationalActionRequestV1(request),
+      [],
+      `TypeScript rejected shared positive timestamp ${timestamp}`,
+    );
+  }
+  for (const timestamp of fixture.rejected) {
+    const request = requestFor(contract, "reassign");
+    request.actionContext.expectedWorkItemUpdatedAt = timestamp;
+    request.actionContextDigestSha256 = digest(
+      contract.pipelineOperationalActionContextDigestPayloadV1(
+        request.actionId,
+        request.targetType,
+        request.targetId,
+        request.actionContext,
+      ),
+    );
+    assert.ok(
+      contract.validatePipelineOperationalActionRequestV1(request).some(
+        (issue) => issue.field === "actionContext" || issue.field === "actionContext.expectedWorkItemUpdatedAt",
+      ),
+      `TypeScript accepted shared negative timestamp ${timestamp}`,
+    );
+  }
 });
 
 test("v1 request and approval reject valid-shaped incorrect context digests", async () => {

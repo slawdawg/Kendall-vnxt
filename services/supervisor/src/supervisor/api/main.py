@@ -927,14 +927,20 @@ async def assign_work_item(
     payload: WorkItemAssignmentRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    item = await service.assign_work_item(
-        session,
-        work_item_id,
-        payload.assigneeId,
-        payload.assigneeLabel,
-        payload.actorId,
-        payload.actorLabel,
-    )
+    try:
+        item = await service.assign_work_item(
+            session,
+            work_item_id,
+            payload.assigneeId,
+            payload.assigneeLabel,
+            payload.actorId,
+            payload.actorLabel,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "legacy_assignment_disabled_use_canonical_reassign_v1").model_dump(),
+        ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=service.to_work_item_view(item))

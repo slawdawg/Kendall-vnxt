@@ -2590,6 +2590,9 @@ OPERATIONAL_ACTION_V1_SECRET_LIKE_REF_RE = re.compile(
     r"\b(?:sk-[A-Za-z0-9_-]{8,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:api|secret|token|credential)[_-]?(?:key|token|secret)?[:=])",
     re.IGNORECASE,
 )
+OPERATIONAL_ACTION_V1_RFC3339_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
+)
 
 OPERATIONAL_ACTION_V1_ID_LENGTHS = {
     "execution_attempt": 36,
@@ -2631,11 +2634,13 @@ def _is_safe_operational_action_v1_evidence_ref(value: str) -> bool:
 
 
 def _validate_operational_action_v1_timestamp(value: str, *, label: str) -> str:
+    if not OPERATIONAL_ACTION_V1_RFC3339_TIMESTAMP_RE.fullmatch(value) or value.startswith("0000-"):
+        raise ValueError(f"{label} must be a canonical RFC3339 timestamp.")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError(f"{label} must be a canonical RFC3339 timestamp.") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None or "T" not in value:
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{label} must be a canonical RFC3339 timestamp.")
     return value
 

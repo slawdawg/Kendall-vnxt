@@ -1339,6 +1339,162 @@ class SupervisorService:
                 "new retry, reassign, active execution, or lease admission is blocked."
             )
 
+    async def _reserve_external_launch_attempt(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        *,
+        route_decision_id: str,
+        worker_id: str,
+        lane: str,
+        authority_mode: str,
+        operation: str,
+        requested_by_id: str | None = None,
+        requested_by_label: str | None = None,
+        admission_lock_acquired: bool = False,
+    ) -> ExecutionAttempt:
+        """Persist the one durable reservation that must precede an external side effect."""
+
+        if not admission_lock_acquired:
+            await self._acquire_execute_admission_lock(session)
+        await session.refresh(item)
+        await self._reject_pending_verification_retry_admission(session, item.id)
+        active_attempt = await self._active_execution_attempt(session, item.id)
+        if active_attempt:
+            raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
+
+        lease_rows = await session.execute(
+            select(QueueLease).where(QueueLease.work_item_id == item.id, QueueLease.active.is_(True))
+        )
+        active_leases = list(lease_rows.scalars())
+        if len(active_leases) > 1:
+            raise ValueError("External launch admission rejected because multiple active queue leases exist.")
+        lease = active_leases[0] if active_leases else None
+        if lease and self._ensure_aware(lease.lease_expires_at) <= datetime.now(timezone.utc):
+            raise ValueError("External launch admission rejected because the active queue lease is expired.")
+
+        self._raise_execute_admission_blocked(await self._evaluate_execute_admission(session))
+        now = datetime.now(timezone.utc)
+        attempt = ExecutionAttempt(
+            id=str(uuid.uuid4()),
+            work_item_id=item.id,
+            queue_lease_id=lease.id if lease else None,
+            queue_fencing_token=lease.fencing_token if lease else None,
+            route_decision_id=route_decision_id,
+            worker_id=worker_id,
+            lane=lane,
+            authority_mode=authority_mode,
+            status=ExecutionAttemptStatus.STARTING.value,
+            requested_by_id=requested_by_id,
+            requested_by_label=requested_by_label,
+            workspace_isolation_plan_json={
+                "operation": operation,
+                "reservationBoundary": "durable_before_external_launch",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+            artifact_refs_json=[
+                {
+                    "artifactType": "external_launch_reservation",
+                    "operation": operation,
+                    "workItemId": item.id,
+                    "routeDecisionId": route_decision_id,
+                    "workerId": worker_id,
+                    "queueLeaseId": lease.id if lease else None,
+                    "queueFencingToken": lease.fencing_token if lease else None,
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                }
+            ],
+            event_refs_json=[],
+            started_at=now,
+            heartbeat_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(attempt)
+        try:
+            await session.flush()
+            event = await self._record_event(
+                session,
+                item,
+                "execution_attempt.external_launch_reserved",
+                f"Reserved {operation} before external launch.",
+                {
+                    "executionAttemptId": attempt.id,
+                    "operation": operation,
+                    "routeDecisionId": route_decision_id,
+                    "workerId": worker_id,
+                    "lane": lane,
+                    "authorityMode": authority_mode,
+                    "queueLeaseId": attempt.queue_lease_id,
+                    "queueFencingToken": attempt.queue_fencing_token,
+                    "externalLaunchStarted": False,
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+                actor_type="supervisor",
+                actor_id=requested_by_id,
+                actor_label=requested_by_label,
+            )
+            attempt.event_refs_json = [{"eventId": event.id, "eventType": event.event_type}]
+            await session.commit()
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            raise ValueError("External launch rejected because its durable attempt reservation could not be established.") from exc
+        await session.refresh(item)
+        await session.refresh(attempt)
+        return attempt
+
+    async def _finalize_external_launch_attempt(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        *,
+        status: str,
+        operation: str,
+        failure_reason: str | None = None,
+        evidence: dict[str, object] | None = None,
+    ) -> None:
+        terminal_at = datetime.now(timezone.utc)
+        attempt.status = status
+        attempt.failure_reason = failure_reason
+        attempt.completed_at = terminal_at
+        attempt.heartbeat_at = terminal_at
+        attempt.updated_at = terminal_at
+        if evidence:
+            attempt.artifact_refs_json = list(attempt.artifact_refs_json or []) + [evidence]
+        event = await self._record_event(
+            session,
+            item,
+            f"execution_attempt.{status}",
+            f"{operation} reached terminal {status} state.",
+            {
+                "executionAttemptId": attempt.id,
+                "operation": operation,
+                "attemptStatus": status,
+                "failureReason": failure_reason,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+            actor_type="supervisor",
+            actor_id=attempt.requested_by_id,
+            actor_label=attempt.requested_by_label,
+        )
+        attempt.event_refs_json = list(attempt.event_refs_json or []) + [
+            {"eventId": event.id, "eventType": event.event_type}
+        ]
+        try:
+            await session.commit()
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            raise ValueError(
+                "External launch finalization failed; the durable active attempt reservation remains in force."
+            ) from exc
+        await session.refresh(item)
+        await session.refresh(attempt)
+
     async def _verification_retry_intent_by_idempotency(
         self,
         session: AsyncSession,
@@ -23365,9 +23521,12 @@ class SupervisorService:
         work_item_id: str,
         payload: WorkItemSubscriptionAgentLaunchRequest,
     ) -> SubscriptionAgentLaunchRequestView | None:
-        item = await session.get(WorkItem, work_item_id)
+        await self._acquire_execute_admission_lock(session)
+        item = await session.get(WorkItem, work_item_id, with_for_update=True)
         if not item:
+            await session.rollback()
             return None
+        await session.refresh(item)
         preview_payload = WorkItemRoutingPreviewRequest(
             stepId=payload.stepId,
             taskKind=payload.taskKind,
@@ -23506,7 +23665,7 @@ class SupervisorService:
             stale_fields = []
             rejected_fields = {}
             if record_event:
-                await self._acquire_execute_admission_lock(session)
+                await session.refresh(item)
                 existing_attempt = await session.get(ExecutionAttempt, attempt_id)
                 active_attempt = await self._active_execution_attempt(session, item.id)
                 if existing_attempt:
@@ -24871,9 +25030,12 @@ class SupervisorService:
         work_item_id: str,
         payload: WorkItemLocalEvidenceExplanationRequest,
     ) -> LocalEvidenceExplanationView | None:
-        item = await session.get(WorkItem, work_item_id)
+        await self._acquire_execute_admission_lock(session)
+        item = await session.get(WorkItem, work_item_id, with_for_update=True)
         if not item:
+            await session.rollback()
             return None
+        await session.refresh(item)
         preview_payload = WorkItemRoutingPreviewRequest(
             stepId=payload.stepId,
             taskKind=payload.taskKind,
@@ -24894,15 +25056,75 @@ class SupervisorService:
         if bool(ollama_state["enabled"]):
             approval_validation = self._validate_local_provider_approval(payload.localProviderApproval, ollama_state)
             if approval_validation.approved:
-                provider_result = await self.ollama_provider_adapter.explain(
-                    evidence_summary=provider_evidence_summary,
-                    evidence_count=len(events),
-                )
-                provider_attempt = LocalProviderAttemptMetadataView(
-                    **provider_result.to_metadata(),
-                    approvalId=approval_validation.approval_reference,
-                    approvalStatus="accepted",
-                )
+                if not payload.recordEvent:
+                    provider_attempt = self._local_provider_rejected_attempt(
+                        LocalProviderApprovalValidation(
+                            False,
+                            ["execution-attempt-recording-required"],
+                            approval_validation.approval_reference,
+                        ),
+                        ollama_state,
+                    )
+                else:
+                    attempt = await self._reserve_external_launch_attempt(
+                        session,
+                        item,
+                        route_decision_id=preview.decision.decisionId,
+                        worker_id="ollama.local.provider",
+                        lane=ExecutionLane.LOCAL_READONLY.value,
+                        authority_mode="operator_approved_bounded_provider_call",
+                        operation="ollama_provider_explanation",
+                        requested_by_label="Operator",
+                        admission_lock_acquired=True,
+                    )
+                    try:
+                        provider_result = await self.ollama_provider_adapter.explain(
+                            evidence_summary=provider_evidence_summary,
+                            evidence_count=len(events),
+                        )
+                    except Exception as exc:
+                        await self._finalize_external_launch_attempt(
+                            session,
+                            item,
+                            attempt,
+                            status=ExecutionAttemptStatus.FAILED.value,
+                            operation="ollama_provider_explanation",
+                            failure_reason=f"provider_adapter_exception:{type(exc).__name__}",
+                        )
+                        raise ValueError("Ollama provider execution failed after durable reservation.") from exc
+                    terminal_status = {
+                        "completed": ExecutionAttemptStatus.COMPLETED.value,
+                        "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
+                        "cancelled": ExecutionAttemptStatus.CANCELLED.value,
+                        "failed": ExecutionAttemptStatus.FAILED.value,
+                    }.get(provider_result.status, ExecutionAttemptStatus.FAILED.value)
+                    await self._finalize_external_launch_attempt(
+                        session,
+                        item,
+                        attempt,
+                        status=terminal_status,
+                        operation="ollama_provider_explanation",
+                        failure_reason=(
+                            None
+                            if terminal_status == ExecutionAttemptStatus.COMPLETED.value
+                            else f"ollama_provider_{provider_result.status}"
+                        ),
+                        evidence={
+                            "artifactType": "local_provider_attempt_metadata",
+                            "approvalId": approval_validation.approval_reference,
+                            "modelId": provider_result.model_id,
+                            "endpointFamily": provider_result.endpoint_family,
+                            "status": provider_result.status,
+                            "responseCharacterCount": provider_result.response_character_count,
+                            "reasoningCharacterCount": provider_result.reasoning_character_count,
+                            "rawPayloadRetained": False,
+                        },
+                    )
+                    provider_attempt = LocalProviderAttemptMetadataView(
+                        **provider_result.to_metadata(),
+                        approvalId=approval_validation.approval_reference,
+                        approvalStatus="accepted",
+                    )
             else:
                 provider_attempt = self._local_provider_rejected_attempt(approval_validation, ollama_state)
         explanation = LocalEvidenceExplanationView(
@@ -25546,11 +25768,12 @@ class SupervisorService:
         self,
         session: AsyncSession,
         item: WorkItem,
-        profile: RoutingProfile,
+        decision: RoutingDecision,
         function_id: str,
         actor_id: str | None,
         actor_label: str | None,
     ) -> UtilityWorkerResult:
+        profile = decision.profile_snapshot
         task = UtilityWorkerTask(
             work_item_id=item.id,
             step_id=profile.step_id,
@@ -25559,7 +25782,51 @@ class SupervisorService:
             allowed_paths=profile.allowed_paths,
             timeout_seconds=30,
         )
-        result = self.utility_worker.run(task)
+        attempt = await self._reserve_external_launch_attempt(
+            session,
+            item,
+            route_decision_id=decision.decision_id,
+            worker_id=self.utility_worker.worker_id,
+            lane=ExecutionLane.UTILITY.value,
+            authority_mode=RoutingAuthorityMode.GUARDED.value,
+            operation=f"guarded_utility_worker:{function_id}",
+            requested_by_id=actor_id,
+            requested_by_label=actor_label,
+        )
+        try:
+            result = self.utility_worker.run(task)
+        except Exception as exc:
+            await self._finalize_external_launch_attempt(
+                session,
+                item,
+                attempt,
+                status=ExecutionAttemptStatus.FAILED.value,
+                operation=f"guarded_utility_worker:{function_id}",
+                failure_reason=f"utility_worker_exception:{type(exc).__name__}",
+            )
+            raise ValueError("Guarded utility worker failed after durable reservation.") from exc
+        terminal_status = (
+            ExecutionAttemptStatus.COMPLETED.value
+            if result.status == UtilityWorkerStatus.SUCCEEDED
+            else ExecutionAttemptStatus.REJECTED.value
+        )
+        await self._finalize_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            status=terminal_status,
+            operation=f"guarded_utility_worker:{function_id}",
+            failure_reason=result.failure_reason,
+            evidence={
+                "artifactType": "guarded_utility_worker_result",
+                "workerId": result.worker_id,
+                "functionId": function_id,
+                "status": result.status.value,
+                "failureReason": result.failure_reason,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+        )
         await self._record_event(
             session,
             item,
@@ -25855,43 +26122,14 @@ class SupervisorService:
         actor_id: str | None = None,
         actor_label: str | None = None,
     ) -> WorkItem | None:
-        item = await session.get(WorkItem, work_item_id)
-        if not item:
-            return None
-
-        clean_assignee_id = assignee_id.strip() if assignee_id else None
-        clean_assignee_label = assignee_label.strip() if assignee_label else None
-        item.assignee_id = clean_assignee_id
-        item.assignee_label = clean_assignee_label
-        item.updated_at = datetime.now(timezone.utc)
-        item.last_event_at = item.updated_at
-
-        if clean_assignee_id or clean_assignee_label:
-            summary = f"Assigned to {clean_assignee_label or clean_assignee_id}."
-            event_type = "work_item.assigned"
-        else:
-            summary = "Ownership released."
-            event_type = "work_item.unassigned"
-
-        await self._record_event(
-            session,
-            item,
-            event_type,
-            summary,
-            {
-                "assigneeId": clean_assignee_id,
-                "assigneeLabel": clean_assignee_label,
-                "state": item.state,
-                "lane": item.lane,
-            },
-            actor_type="operator",
-            actor_id=actor_id,
-            actor_label=actor_label,
+        del work_item_id, assignee_id, assignee_label, actor_id, actor_label
+        await self._acquire_execute_admission_lock(session)
+        await session.rollback()
+        raise ValueError(
+            "Legacy assignment mutation is disabled. Use the canonical pipeline-operational-action/v1 "
+            "reassign capability, approval, and apply endpoints with exact owner, WorkItem revision, "
+            "authoritative packet linkage/current-event/state, lease, attempt, and packet CAS fences."
         )
-        await session.commit()
-        await session.refresh(item)
-        await self._publish_item(item)
-        return item
 
     async def set_escalation(
         self,
@@ -26072,7 +26310,7 @@ class SupervisorService:
                 utility_result = await self._run_guarded_utility_worker(
                     session,
                     item,
-                    decision.profile_snapshot,
+                    decision,
                     next_action.actionId,
                     payload.actorId,
                     payload.actorLabel,
@@ -26455,7 +26693,12 @@ class SupervisorService:
                     ),
                 )
                 return
-            command_results = self._run_recipe_implementation_commands(recipe, item)
+            command_results = await self._run_admitted_recipe_implementation_commands(
+                session,
+                recipe,
+                item,
+                checkpoint="implementation-command-run",
+            )
             if recipe and not all(result["exitCode"] == 0 for result in command_results):
                 item.blocked_reason = None
                 await self._record_event(
@@ -26911,7 +27154,14 @@ class SupervisorService:
                     actor_label=actor_label,
                 )
                 return
-            command_results = self._run_recipe_implementation_commands(recipe, item)
+            command_results = await self._run_admitted_recipe_implementation_commands(
+                session,
+                recipe,
+                item,
+                checkpoint="implementation-restart-command-run",
+                requested_by_id=actor_id,
+                requested_by_label=actor_label,
+            )
             if recipe and not all(result["exitCode"] == 0 for result in command_results):
                 item.blocked_reason = None
                 await self._record_event(
@@ -27486,6 +27736,92 @@ class SupervisorService:
             return []
 
         return [self._run_recipe_command(command, recipe, item) for command in recipe.implementation_commands]
+
+    async def _run_admitted_recipe_implementation_commands(
+        self,
+        session: AsyncSession,
+        recipe: ExecutionRecipe | None,
+        item: WorkItem,
+        *,
+        checkpoint: str,
+        requested_by_id: str | None = None,
+        requested_by_label: str | None = None,
+    ) -> list[dict]:
+        if not recipe:
+            return []
+        if not recipe.implementation_commands:
+            await self._record_event(
+                session,
+                item,
+                "recipe.implementation_no_launch",
+                f"Recipe {recipe.label} has no implementation command launch.",
+                {
+                    "recipeId": recipe.id,
+                    "operatorCheckpoint": checkpoint,
+                    "commandLaunchAllowed": False,
+                    "externalSideEffectRepresented": True,
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+                actor_type="supervisor",
+                actor_id=requested_by_id,
+                actor_label=requested_by_label,
+            )
+            await session.commit()
+            await session.refresh(item)
+            return []
+
+        operation = f"recipe_implementation_commands:{recipe.id}:{checkpoint}"
+        attempt = await self._reserve_external_launch_attempt(
+            session,
+            item,
+            route_decision_id=f"recipe-implementation-{uuid.uuid4()}",
+            worker_id="recipe.implementation.command",
+            lane=ExecutionLane.UTILITY.value,
+            authority_mode="guarded_recipe_implementation",
+            operation=operation,
+            requested_by_id=requested_by_id,
+            requested_by_label=requested_by_label,
+        )
+        try:
+            results = self._run_recipe_implementation_commands(recipe, item)
+        except Exception as exc:
+            await self._finalize_external_launch_attempt(
+                session,
+                item,
+                attempt,
+                status=ExecutionAttemptStatus.FAILED.value,
+                operation=operation,
+                failure_reason=f"recipe_command_exception:{type(exc).__name__}",
+            )
+            raise ValueError("Recipe implementation command failed after durable reservation.") from exc
+        terminal_status = (
+            ExecutionAttemptStatus.COMPLETED.value
+            if all(result.get("exitCode") == 0 for result in results)
+            else ExecutionAttemptStatus.FAILED.value
+        )
+        await self._finalize_external_launch_attempt(
+            session,
+            item,
+            attempt,
+            status=terminal_status,
+            operation=operation,
+            failure_reason=None if terminal_status == ExecutionAttemptStatus.COMPLETED.value else "recipe_command_nonzero_exit",
+            evidence={
+                "artifactType": "recipe_implementation_command_result",
+                "recipeId": recipe.id,
+                "operatorCheckpoint": checkpoint,
+                "commands": [
+                    {
+                        "command": result.get("command"),
+                        "exitCode": result.get("exitCode"),
+                    }
+                    for result in results
+                ],
+                "rawPayloadRetained": False,
+            },
+        )
+        return results
 
     def _run_recipe_command(self, command: RecipeCommand, recipe: ExecutionRecipe | None = None, item: WorkItem | None = None) -> dict:
         args = self._resolve_recipe_command_args(list(command.args))
