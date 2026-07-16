@@ -1,7 +1,9 @@
 import asyncio
 import socket
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from argon2 import PasswordHasher
@@ -49,8 +51,9 @@ def test_private_uds_path_requires_private_absolute_parent(tmp_path):
         validate_private_uds_path(str(private / "supervisor.sock"))
     private.chmod(0o700)
 
+    socket_private = Path(tempfile.mkdtemp(prefix="kuds-", dir="/tmp"))
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    socket_path = private / "bound.sock"
+    socket_path = socket_private / "bound.sock"
     listener.bind(str(socket_path))
     try:
         assert validate_private_uds_path(str(socket_path), allow_existing_socket=True) == socket_path
@@ -58,6 +61,8 @@ def test_private_uds_path_requires_private_absolute_parent(tmp_path):
             validate_private_uds_path(str(socket_path))
     finally:
         listener.close()
+        socket_path.unlink(missing_ok=True)
+        socket_private.rmdir()
 
 
 def test_bootstrap_identity_creates_once_rotates_and_revokes_sessions(tmp_path, monkeypatch):
@@ -234,7 +239,8 @@ def test_lan_auth_lifespan_accepts_private_bootstrap_and_uds(tmp_path, monkeypat
     private = tmp_path / "private"
     private.mkdir()
     private.chmod(0o700)
-    socket_path = private / "supervisor.sock"
+    socket_private = Path(tempfile.mkdtemp(prefix="kuds-", dir="/tmp"))
+    socket_path = socket_private / "supervisor.sock"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(socket_path))
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -261,6 +267,8 @@ def test_lan_auth_lifespan_accepts_private_bootstrap_and_uds(tmp_path, monkeypat
         asyncio.run(run())
     finally:
         listener.close()
+        socket_path.unlink(missing_ok=True)
+        socket_private.rmdir()
 
 
 def test_lan_auth_rejects_all_tcp_and_allows_uds_shaped_request(tmp_path, monkeypatch):
