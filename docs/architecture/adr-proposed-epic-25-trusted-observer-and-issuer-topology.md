@@ -1,16 +1,23 @@
-# ADR: Proposed Epic 25 Trusted Observer and Issuer Topology
+# ADR: Epic 25 Trusted Observer and Issuer Topology
 
 Date: 2026-07-15
-Status: **PROPOSED / BLOCKED** pending architecture, security, and operator authority approval
-Scope: P4.1 decision packet for trusted observation and receipt issuance; no implementation decision
+Status: **APPROVED FOR LOCAL DOGFOOD DESIGN / IMPLEMENTATION HOLD**
+Scope: P4.1 local-dogfood architecture and security decision; no source or live-operation authorization
 
 ## Decision status and non-authority
 
-This is a source-owned proposal and decision packet, not an approved decision.
-It records the questions, viable topology candidates, threat model, and
-fail-closed acceptance criteria that an approving architecture owner, security
-owner, and operator authority owner must resolve. It selects no topology,
-algorithm, issuer, key, or deployment boundary.
+This is a source-owned decision packet. On 2026-07-15, the Operator recorded
+the local-dogfood topology and security design baseline below. That record is
+not a substitute for separately named architecture or security approval of
+future source implementation. The decision is bounded to design and
+implementation-packet preparation; it does not grant source or runtime
+execution authority.
+
+Approval record: decision ID `epic-25-local-dogfood-design-2026-07-15`,
+approver `Operator`, effective date `2026-07-15`, with the companion worksheet
+at `_bmad-output/implementation-artifacts/epic-25-authority-decision-worksheet-2026-07-15.md`.
+The worksheet is local planning evidence; the source-owned boundary and stop
+rules in this ADR remain authoritative.
 
 This document enables none of the following: `live_observed` acceptance,
 `bounded_live` claims, `production_observed` claims, provider or worker launch,
@@ -22,7 +29,7 @@ live command or cryptographic code. The current ceiling remains
 The current authority decision remains the [current product slice and
 authority ADR](adr-current-product-slice-and-authority.md). Its source
 hierarchy, server-owned lifecycle truth, and separate approval boundaries
-continue to govern this proposal.
+continue to govern this decision.
 
 ## Current boundary
 
@@ -64,27 +71,82 @@ for planning/evidence context only. They are not repository sources, product
 truth, approval records, or clean-install dependencies; this ADR does not
 modify them.
 
-## Topology candidates
+## Approved local-dogfood design — 2026-07-15
 
-No candidate is selected. The following options are the minimum comparison set
-for the approval decision.
+Decision ID: `epic-25-local-dogfood-design-2026-07-15`
+Approver: `Operator`
+Decision boundary: local, non-production, default-disabled dogfood design only
 
-| Candidate | Independence | Authentication | Key/trust-root management | Replay, rotation, and revocation | Operational burden | Production boundary |
+The selected topology is a **trusted attestation service** running as a process
+separate from the caller and supervisor. It measures the exact authorized local
+subject and issues a versioned receipt. The supervisor owns verification,
+run-authorization, replay fencing, persistence, and readback. Loopback or
+proxy locality is transport only and is never evidence of observer
+independence.
+
+The approved security baseline is:
+
+- Ed25519 signatures over RFC 8785 canonical JSON bytes.
+- A versioned receipt that binds issuer/key/receipt IDs, observer identity,
+  run-authorization ID, nonce, issued and expiry times, environment, exact
+  target, packet schema, worker/assignment, source revision and refs, policy
+  profile, evidence digest and refs, and retention policy.
+- A supervisor-held public-key registry only; private keys remain in the
+  attestation service and are not retained in evidence.
+- Five-minute receipt TTL, 30-second maximum clock skew, and durable
+  supervisor uniqueness for receipt ID and nonce.
+- Existing v0 attestations remain parseable and metadata-only; every consumer
+  must route v0 through a version-gated metadata-only path. There is no silent
+  conversion or re-issuance to promotion-grade evidence.
+- Local dogfood trust material is ephemeral or locally provisioned, never
+  committed, and invalid outside the local-dogfood environment.
+
+This list is a design summary, not a complete implementation contract. A
+future implementation-readiness packet must bind observer identity,
+worker/assignment, policy profile, source/evidence reference sets, retention
+policy, and canonical set ordering as well as the fields listed above; omitted
+values must not be inferred. It must also define the startup-disabled default,
+the server-side environment/registry scope check, and negative tests proving a
+copied local trust root or stale configuration cannot enable acceptance.
+
+This decision is accompanied by a draft bounded source-implementation packet
+for a possible default-disabled verifier slice. That packet is not activated
+by this ADR. Provider/worker launch, source implementation, deployment,
+production mutation, commit, push, PR creation, merge, and cleanup remain
+separately `NOT AUTHORIZED`.
+
+For this local-dogfood decision only, the Operator is the named runtime,
+observer, issuer, key, trust-domain, incident, evidence/retention, run, and
+final-decision owner. This assignment expires at the local-dogfood boundary:
+it does not transfer to a provider, worker, deployment, staging, production,
+or any bounded-live operation. The concentrated local ownership is an explicit
+dogfood constraint, not evidence of independent production trust. If a future
+implementation cannot establish separate observer/issuer process identity,
+trust-domain control, and tamper-resistant measurement, it remains held.
+
+## Topology candidates considered
+
+The architecture decision selects the **trusted attestation service** for the
+local, non-production, default-disabled design boundary above. The alternatives
+remain recorded for auditability; none is approved for implementation or live
+operation by this ADR.
+
+| Candidate | Independence | Authentication | Key/trust-root management | Replay, rotation, and revocation | Operational burden | Production boundary | Decision |
 | --- | --- | --- | --- | --- | --- | --- |
-| Independent external observer and issuer | Strongest separation when the observer measures the exact target and the issuer is owned by a separate trust domain. Requires an explicit independence definition; a second process alone is insufficient. | Authenticated observer-to-issuer and issuer-to-supervisor channels; caller identity and transport locality cannot substitute for receipt provenance. | Separate issuer registry, trust roots, key IDs, protected private-key custody, distribution, and owner. | Central or server-enforced nonce/run uniqueness; expiry and clock policy; staged key rotation; revocation and compromise recovery must fail closed across the relevant run boundary. | Highest: service availability, secure deployment, monitoring, incident response, and cross-domain ownership. | Must explicitly identify non-production versus production identities and telemetry. Without separate production authority, the ceiling remains `bounded_live`. |
-| Trusted attestation service | Observer may be independent from the supervisor while a dedicated service owns issuance. Independence depends on who controls observation, issuance, and trust-root administration. | Service identity and authenticated API plus server validation of the exact run authorization and receipt payload. | Attestation service owns or brokers keys; supervisor keeps only verification metadata and revocation state, never secret values in evidence. | Service can provide global replay fencing, but the supervisor must still enforce run/nonce uniqueness, expiry, rotation overlap, revocation, and outage behavior. | Medium to high: shared service lifecycle, availability, tenant/environment isolation, and incident response. | Cross-environment attestations need explicit environment and production identity binding; service trust cannot itself grant production authority. |
-| Supervisor-local issuer | Weakest observer/issuer independence if the supervisor observes and issues its own receipt. It may be acceptable only if the approval decision explicitly accepts that trust model; it cannot be called independent by naming a local component. | Local authenticated component identity and server-owned authorization, with no acceptance of caller-supplied self-attestation. | Supervisor owns key custody, trust-root loading, key IDs, and audit state; compromise of the supervisor may compromise both observation and issuance. | Local durable uniqueness is simpler, but it must still enforce nonce/run uniqueness, expiry, rotation, revocation, and compromise recovery across restart and migration. | Lowest deployment burden, highest concentration of authority and blast radius. | Must not cross the production boundary merely because it is local. Production requires separately approved observer, issuer, deployment, telemetry, and incident authority. |
+| Independent external observer and issuer | Strongest separation when the observer measures the exact target and the issuer is owned by a separate trust domain. Requires an explicit independence definition; a second process alone is insufficient. | Authenticated observer-to-issuer and issuer-to-supervisor channels; caller identity and transport locality cannot substitute for receipt provenance. | Separate issuer registry, trust roots, key IDs, protected private-key custody, distribution, and owner. | Central or server-enforced nonce/run uniqueness; expiry and clock policy; staged key rotation; revocation and compromise recovery must fail closed across the relevant run boundary. | Highest: service availability, secure deployment, monitoring, incident response, and cross-domain ownership. | Must explicitly identify non-production versus production identities and telemetry. Without separate production authority, the ceiling remains `bounded_live`. | Not selected for local dogfood; retain as a future option. |
+| Trusted attestation service | Observer may be independent from the supervisor while a dedicated service owns issuance. Independence depends on who controls observation, issuance, and trust-root administration. | Service identity and authenticated API plus server validation of the exact run authorization and receipt payload. | Attestation service owns or brokers keys; supervisor keeps only verification metadata and revocation state, never secret values in evidence. | Service can provide global replay fencing, but the supervisor must still enforce run/nonce uniqueness, expiry, rotation overlap, revocation, and outage behavior. | Medium to high: shared service lifecycle, availability, tenant/environment isolation, and incident response. | Cross-environment attestations need explicit environment and production identity binding; service trust cannot itself grant production authority. | **Selected for local non-production design only.** |
+| Supervisor-local issuer | Weakest observer/issuer independence if the supervisor observes and issues its own receipt. It may be acceptable only if the approval decision explicitly accepts that trust model; it cannot be called independent by naming a local component. | Local authenticated component identity and server-owned authorization, with no acceptance of caller-supplied self-attestation. | Supervisor owns key custody, trust-root loading, key IDs, and audit state; compromise of the supervisor may compromise both observation and issuance. | Local durable uniqueness is simpler, but it must still enforce nonce/run uniqueness, expiry, rotation, revocation, and compromise recovery across restart and migration. | Lowest deployment burden, highest concentration of authority and blast radius. | Must not cross the production boundary merely because it is local. Production requires separately approved observer, issuer, deployment, telemetry, and incident authority. | Rejected for this design because observer/issuer independence is required. |
 
-The comparison is not a decision. Architecture and security approval must state
-whether observer independence is required, what trust-domain separation means,
-and which failure or outage behavior is acceptable. A topology that cannot
-answer every required field below remains `BLOCKED`.
+The comparison supports the local-dogfood design decision above. Any future
+implementation-readiness record must still state whether observer independence
+is sufficient, what trust-domain separation means, and which failure or outage
+behavior is acceptable. A topology that cannot answer every required field
+below remains `BLOCKED` for implementation.
 
 ## Recommended decision criteria
 
-The recommended next step is to approve the criteria and record one explicit
-candidate, not to infer a topology from existing code. The selected packet
-must demonstrate all of the following before implementation authority is
+The selected design does not waive these criteria. Any future implementation
+packet must demonstrate all of the following before implementation authority is
 granted:
 
 1. An observer that can measure the exact subject independently of the caller,
@@ -105,13 +167,15 @@ granted:
 
 ## Required decision fields
 
-The approval record must resolve each field explicitly. Blank, contradictory,
-caller-supplied, or inferred values are a hold.
+The future implementation-readiness approval record must resolve each field
+explicitly. Blank, contradictory, caller-supplied, or inferred values keep the
+implementation boundary on hold even though the local-dogfood topology choice
+is recorded above.
 
 | Field | Required resolution |
 | --- | --- |
 | Observer independence and issuer ownership | Observer location, independence boundary, observer identity, issuer identity, issuer owner, trust-domain owner, and who may revoke either. State why the observer is not merely the caller or the supervisor reporting its own result. |
-| Algorithm and canonical payload | Approved signature/MAC or equivalent verification algorithm, version, deterministic serialization/canonicalization rules, encoding, allowed fields, unknown-field behavior, and digest construction. Do not select these in this proposal. |
+| Algorithm and canonical payload | The local-dogfood design baseline is Ed25519 over RFC 8785 canonical JSON. A future implementation record must confirm the version, deterministic serialization rules, encoding, allowed fields, unknown-field behavior, and digest construction without treating this ADR as source authority. |
 | Key IDs, rotation, revocation, and compromise recovery | Key/issuer IDs, trust-root distribution, private-key custody, activation and overlap windows, revocation source and freshness, emergency disable behavior, historical receipt treatment, and recovery owner. Secret values must never enter evidence. |
 | Server-owned bounded-live run authorization | Persistent authorization record, exact authorizer, target and source revision, run/attempt ID, policy profile, allowed operations, scope, expiry, rollback, retention, and the server check that must precede issuance and acceptance. |
 | Nonce, replay, expiry, and clock policy | Nonce generation and scope, globally durable uniqueness, idempotency, allowed clock skew, trusted time source, observed/issued/checked/expiry ordering, maximum TTL, and behavior during clock or registry outage. |
@@ -136,9 +200,12 @@ Trust boundaries are: the observed runtime or provider; the observer; the
 issuer and its key custody; the supervisor verifier and persistence store; the
 manager/dashboard/caller; the proxy or loopback transport; and the separate
 operator authority process. The attacker may control caller input, copied
-receipts, transport routing, stale records, packet fields, or a compromised
-issuer key, but must not be assumed unable to exploit canonicalization,
-replay, clock, key-lifecycle, or target-confusion gaps.
+receipts, transport routing, stale records, packet fields, a compromised
+issuer key, or a compromised supervisor/store. Supervisor or store compromise
+is a fail-closed incident boundary: no promotion-grade result may be accepted
+until state integrity, trust material, and authorization are re-established.
+The attacker must not be assumed unable to exploit canonicalization, replay,
+clock, key-lifecycle, or target-confusion gaps.
 
 ### Acceptance matrix
 
@@ -172,10 +239,10 @@ uncertainty is `hold`.
 
 ## Smallest safe follow-on sequence
 
-This ADR is the only deliverable in this lane. If and only if it is approved
-by architecture and security, and a separate operator-authority record exists
-for the later bounded-live scope, the next source-owned sequence may be
-considered:
+This ADR is the only deliverable in this lane. If and only if a future
+implementation-readiness review confirms the design and a separate
+operator-authority record exists for the later source scope, the next
+source-owned sequence may be considered:
 
 Approval of this ADR records a topology/security decision only. It grants no
 source-implementation, live, deployment, production, merge, or cleanup
@@ -183,9 +250,9 @@ authority. The follow-on source sequence may be considered only after
 architecture/security approval plus that separate operator-authority record;
 neither condition authorizes runtime behavior or expands the recorded bounds.
 
-1. **Approved ADR and authority record.** Record the selected topology and
-   every required decision field, threat-model disposition, named owners, and
-   the separate live-authority boundary. No provider, worker, or live command.
+1. **Complete authority worksheet.** Resolve every required implementation
+   field, threat-model disposition, named owner, and separate live-authority
+   boundary. No provider, worker, or live command.
 2. **Default-disabled verifier, registry, and run-authorization records.** Add
    additive/versioned contracts and durable records for the approved trust
    root/issuer metadata, server-owned run authorization, signed receipt
@@ -212,9 +279,10 @@ protection, and recorded the result in supervisor-owned state.
 Required approvals are separate and named: architecture approves topology and
 ownership; security approves the threat model, cryptographic and key lifecycle
 controls; operator authority approves any later bounded-live scope. None may be
-inferred from this proposal, from the ignored hold artifact, or from existing
+inferred from this decision, from the ignored hold artifact, or from existing
 provider/worker approvals for other stories.
 
-Only a reviewed source-owned ADR may supersede this proposal. Its status must
-change explicitly from `PROPOSED / BLOCKED`; it must identify the selected
-topology, changed fields, migration impact, and effective authority boundary.
+Only a later reviewed source-owned ADR may supersede this decision. It must
+identify the selected topology, changed fields, migration impact, effective
+authority boundary, and links to the named architecture, security, and
+operator-authority records explicitly.
