@@ -305,10 +305,24 @@ function checkForbiddenCalls(displayPath, source) {
       ? ["network-eventsource"]
       : displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"
         ? ["network-fetch"]
+        : displayPath === "apps/dashboard/src/components/logout-button.tsx"
+          ? ["network-fetch"]
         : [],
   );
   if (displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {
     checkReadOnlyPipelineRuntimeFunctions(displayPath, source);
+  }
+  if (displayPath === "apps/dashboard/src/components/logout-button.tsx") {
+    const logoutFetch = /fetch\(\s*["']\/auth\/logout["']\s*,([\s\S]*?)\n?\s*\}\);/.exec(source)?.[1] || "";
+    if (
+      countMatches(executableSource, /\bfetch\s*\(/g) !== 1
+      || !logoutFetch
+      || !/method:\s*["']POST["']/.test(logoutFetch)
+      || !/credentials:\s*["']same-origin["']/.test(logoutFetch)
+      || !/["']x-csrf-token["']\s*:/.test(logoutFetch)
+    ) {
+      failures.push(`${displayPath}: auth logout fetch must be a single same-origin POST with CSRF header`);
+    }
   }
   for (const { id, pattern } of forbiddenCallPatterns) {
     if (id === "network-fetch" && displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {

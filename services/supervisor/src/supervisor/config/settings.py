@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     )
     poll_interval_seconds: int = Field(default=5, alias="SUPERVISOR_POLL_INTERVAL_SECONDS")
     enable_background: bool = Field(default=True, alias="SUPERVISOR_ENABLE_BACKGROUND")
+    supervisor_port: int = Field(default=8000, ge=1, le=65535, alias="SUPERVISOR_PORT")
+    lan_auth_enabled: bool = Field(default=False, alias="KENDALL_LAN_AUTH_ENABLED")
+    lan_auth_bootstrap_password_file: str | None = Field(
+        default=None,
+        alias="KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE",
+    )
+    supervisor_uds_path: str | None = Field(default=None, alias="KENDALL_SUPERVISOR_UDS_PATH")
+    supervisor_transport: str = Field(default="loopback", alias="KENDALL_SUPERVISOR_TRANSPORT")
     cors_origins: str = Field(
         default="http://localhost:3000,http://127.0.0.1:3000",
         alias="SUPERVISOR_CORS_ORIGINS",

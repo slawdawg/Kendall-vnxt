@@ -84,9 +84,13 @@ Default local URLs:
 - dashboard: `http://localhost:3000`
 - supervisor API: `http://localhost:8000`
 
-By default, the dev and start commands bind to `0.0.0.0`, so the dashboard is
-reachable from localhost and approved network interfaces configured after base
-install.
+By default, both services bind to loopback for local-only use. LAN dashboard
+access requires the authenticated HTTPS runtime: configure an explicit numeric
+LAN bind, private certificate/key files, a supervisor-owned bootstrap password
+file, and a private supervisor UDS path with `KENDALL_LAN_AUTH_ENABLED=true`.
+The supervisor validates the bootstrap file and the dashboard must complete the
+supervisor UDS startup gate before it accepts traffic; no plain HTTP LAN
+listener is created.
 
 Important environment variables:
 
@@ -95,6 +99,17 @@ Important environment variables:
 - `SUPERVISOR_DATABASE_URL`: SQLite by default for local use, PostgreSQL supported via `asyncpg`
 - `SUPERVISOR_CORS_ORIGINS`: comma-separated allowed dashboard origins for browser calls and SSE
 - `SUPERVISOR_CORS_ORIGIN_REGEX`: regex fallback for browser origins such as LAN IPs or Tailscale hostnames on port `3000`
+
+The checked-in Docker Compose profile is a container-only exception to the
+loopback defaults: it sets `SUPERVISOR_CONTAINER_MODE=true` with
+`SUPERVISOR_HOST=0.0.0.0` for the dashboard-to-supervisor service network and
+`KENDALL_DASHBOARD_CONTAINER_MODE=true` with `KENDALL_DASHBOARD_HOST=0.0.0.0`
+for the dashboard container. These values are ignored unless the matching
+container mode flag is present; local runs remain loopback-only. This compose
+profile is not LAN authentication: protected LAN access still requires the
+explicit numeric HTTPS dashboard bind and private supervisor UDS gate. Compose
+publishes both convenience ports on host loopback only; the `0.0.0.0` binds
+exist solely on the private compose network.
 
 ## Post-Install Authentication
 

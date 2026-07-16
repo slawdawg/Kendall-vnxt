@@ -96,6 +96,22 @@ EXECUTION_ATTEMPT_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("launch_claimed_at", "DATETIME"),
 )
 
+DASHBOARD_SESSION_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("token_hash", "VARCHAR(64)"),
+    ("csrf_token_hash", "VARCHAR(64)"),
+    ("last_seen_at", "TIMESTAMPTZ"),
+    ("expires_at", "TIMESTAMPTZ"),
+    ("revoked_at", "TIMESTAMPTZ"),
+)
+
+DASHBOARD_SESSION_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("token_hash", "VARCHAR(64)"),
+    ("csrf_token_hash", "VARCHAR(64)"),
+    ("last_seen_at", "DATETIME"),
+    ("expires_at", "DATETIME"),
+    ("revoked_at", "DATETIME"),
+)
+
 SUPERVISOR_CONTROL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
     ("revision", "INTEGER NOT NULL DEFAULT 1"),
 )
@@ -245,6 +261,14 @@ async def init_db() -> None:
             )
         )
         if dialect == "postgresql":
+            for column_name, column_type in DASHBOARD_SESSION_POSTGRES_COLUMNS:
+                await connection.execute(text(f"ALTER TABLE dashboard_sessions ADD COLUMN IF NOT EXISTS {column_name} {column_type}"))
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_sessions_token_hash "
+                    "ON dashboard_sessions(token_hash)"
+                )
+            )
             for column_name, column_type in SUPERVISOR_CONTROL_POSTGRES_COLUMNS:
                 await connection.execute(
                     text(f"ALTER TABLE supervisor_control ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
@@ -306,6 +330,13 @@ async def init_db() -> None:
                 )
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
+            await _sqlite_add_columns(connection, "dashboard_sessions", DASHBOARD_SESSION_SQLITE_COLUMNS)
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_sessions_token_hash "
+                    "ON dashboard_sessions(token_hash)"
+                )
+            )
             await _sqlite_add_columns(
                 connection,
                 "supervisor_control",

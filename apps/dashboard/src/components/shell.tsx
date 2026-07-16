@@ -3,6 +3,7 @@ import type { NavStats } from "../lib/nav-stats";
 import { DashboardGraphBackground } from "./dashboard-graph-background";
 import { OperationalNav } from "./operational-nav";
 import { RealtimeRefresh } from "./realtime-refresh";
+import { LogoutButton } from "./logout-button";
 
 export function Shell({
   children,
@@ -40,6 +41,7 @@ export function Shell({
                 Monitoring, evidence, queue, audit, and deliberate controls for BMAD orchestration.
               </p>
             </div>
+            <LogoutButton />
           </div>
         </header>
         {children}

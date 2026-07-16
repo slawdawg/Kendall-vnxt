@@ -1,11 +1,13 @@
 ﻿import asyncio
+import os
+import re
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
@@ -58,17 +60,42 @@ from supervisor.application.manager_terminal_events import (
     get_manager_terminal_event,
     persist_manager_terminal_event,
 )
+from supervisor.application.operator_auth import (
+    GENERIC_LOGIN_FAILURE,
+    SESSION_ABSOLUTE_SECONDS,
+    SESSION_COOKIE_NAME,
+    authenticate_operator,
+    consume_login_csrf_challenge,
+    create_login_csrf_challenge,
+    exact_https_origin,
+    load_valid_session,
+    logout_session,
+    record_auth_audit,
+    revoke_all_sessions,
+)
 from supervisor.application.service import SupervisorService
+from supervisor.application.lan_auth_bootstrap import (
+    LanAuthConfigurationError,
+    ensure_bootstrap_operator,
+    read_private_bootstrap_password,
+    validate_private_uds_path,
+)
 from supervisor.config.settings import get_settings
 from supervisor.domain.bmad_import import BmadImportError
 from supervisor.domain.obsidian_metadata_import import ObsidianMetadataImportError
 from supervisor.domain.types import ErrorCategory, WorkItemFilterScope
-from supervisor.infrastructure.db.database import get_session, init_db
-from supervisor.infrastructure.db.models import WorkItem
+from supervisor.infrastructure.db.database import SessionLocal, get_session, init_db
+from supervisor.infrastructure.db.models import DashboardOperator, WorkItem
 from supervisor.infrastructure.streaming.bus import EventBus
 from supervisor.worker.poller import Poller
+from pydantic import BaseModel
+
+
+class OperatorLoginRequest(BaseModel):
+    password: str
 
 settings = get_settings()
+startup_gate_ready = False
 bus = EventBus()
 service = SupervisorService(settings, bus)
 poller = Poller(service, settings.poll_interval_seconds)
@@ -76,12 +103,25 @@ poller = Poller(service, settings.poll_interval_seconds)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global startup_gate_ready
     await init_db()
+    if settings.lan_auth_enabled:
+        if settings.supervisor_transport != "private_uds":
+            raise LanAuthConfigurationError("LAN auth requires the private supervisor UDS transport.")
+        if not settings.lan_auth_bootstrap_password_file or not settings.supervisor_uds_path:
+            raise LanAuthConfigurationError("LAN auth bootstrap or supervisor UDS configuration is missing.")
+        validate_private_uds_path(settings.supervisor_uds_path, allow_existing_socket=True)
+        bootstrap_password = read_private_bootstrap_password(settings.lan_auth_bootstrap_password_file)
+        async with SessionLocal.begin() as session:
+            await ensure_bootstrap_operator(session, bootstrap_password)
+            await revoke_all_sessions(session, outcome="runtime_restart")
+        startup_gate_ready = True
     if settings.enable_background:
         await poller.start()
     try:
         yield
     finally:
+        startup_gate_ready = False
         await poller.stop()
 
 
@@ -94,6 +134,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_private_lan_transport(request: Request, call_next):
+    if settings.lan_auth_enabled:
+        client_host = request.client.host if request.client else None
+        # UDS requests have no TCP client host. Every TCP request, including
+        # loopback and reverse-proxy traffic, is rejected at the API edge.
+        if client_host is not None:
+            return JSONResponse(status_code=503, content={"detail": "Supervisor private transport is required."})
+    return await call_next(request)
 
 
 def request_has_local_operational_transport(request: Request) -> bool:
@@ -130,6 +181,154 @@ def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiE
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _auth_source_key(request: Request) -> str:
+    return request.client.host if request.client and request.client.host else "uds"
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict")
+
+
+PACKET_DETAIL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
+PACKET_DETAIL_MEDIATOR = "packet-detail/v1"
+
+
+def _packet_detail_view(packet) -> dict[str, object]:
+    evidence = packet.evidenceChain
+    evidence_view = None
+    if evidence is not None:
+        evidence_view = {
+            "schemaVersion": evidence.schemaVersion,
+            "evidenceClass": evidence.evidenceClass,
+            "checkedAt": evidence.checkedAt,
+            "expiresAt": evidence.expiresAt,
+            "freshnessState": evidence.freshnessState,
+            "effectiveDecision": evidence.effectiveDecision,
+            "typedBlockers": list(evidence.typedBlockers),
+        }
+    return {
+        "schemaVersion": "kendall-authenticated-packet-detail/v1",
+        "state": "available",
+        "packet": {
+            "packetId": packet.packetId,
+            "title": packet.title,
+            "currentStage": packet.currentStage,
+            "status": packet.status,
+            "truthLabel": packet.truthLabel,
+            "evidence": evidence_view,
+        },
+    }
+
+
+def _packet_detail_error(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/auth/login")
+async def operator_login(payload: OperatorLoginRequest, request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    if not settings.lan_auth_enabled or not exact_https_origin(request.headers.get("origin"), settings):
+        await record_auth_audit(session, "login_failure", "origin_denied")
+        raise HTTPException(status_code=403, detail=GENERIC_LOGIN_FAILURE)
+    if not await consume_login_csrf_challenge(session, request.headers.get("x-csrf-token")):
+        await record_auth_audit(session, "login_failure", "csrf_denied")
+        raise HTTPException(status_code=403, detail=GENERIC_LOGIN_FAILURE)
+    success, raw_token, raw_csrf = await authenticate_operator(session, payload.password, _auth_source_key(request), settings)
+    if not success or raw_token is None or raw_csrf is None:
+        raise HTTPException(status_code=401, detail=GENERIC_LOGIN_FAILURE)
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        raw_token,
+        max_age=SESSION_ABSOLUTE_SECONDS,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": True, "csrfToken": raw_csrf, "role": "operator"}
+
+
+@app.get("/auth/login-csrf")
+async def login_csrf(response: Response, session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    return {"csrfToken": await create_login_csrf_challenge(session)}
+
+
+@app.get("/auth/session")
+async def operator_session(request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    stored, reason = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    if stored is None:
+        _clear_session_cookie(response)
+        raise HTTPException(status_code=401, detail="Your session ended. Sign in to continue.")
+    return {"authenticated": True, "role": "operator", "sessionState": "active"}
+
+
+@app.post("/auth/logout")
+async def operator_logout(request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    _clear_session_cookie(response)
+    if not settings.lan_auth_enabled or not exact_https_origin(request.headers.get("origin"), settings):
+        await record_auth_audit(session, "logout", "origin_denied")
+        raise HTTPException(status_code=403, detail="Logout was not accepted.")
+    csrf_token = request.headers.get("x-csrf-token")
+    if not await logout_session(session, request.cookies.get(SESSION_COOKIE_NAME), csrf_token):
+        await record_auth_audit(session, "logout", "denied")
+        raise HTTPException(status_code=403, detail="Logout was not accepted.")
+    return {"signedOut": True}
+
+
+@app.get("/internal/dashboard/packet-detail/{packet_id}")
+async def authenticated_packet_detail(
+    packet_id: str,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Fixed, read-only UDS target for the dashboard's authenticated mediator."""
+
+    response.headers["Cache-Control"] = "no-store"
+    if request.headers.get("x-kendall-dashboard-mediator") != PACKET_DETAIL_MEDIATOR:
+        return _packet_detail_error(404, "Not found.")
+    if not settings.lan_auth_enabled or not PACKET_DETAIL_ID.fullmatch(packet_id):
+        await record_auth_audit(session, "packet_detail_read", "denied")
+        return _packet_detail_error(404, "Packet detail is unavailable.")
+    if any(request.headers.get(name) for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port")):
+        await record_auth_audit(session, "packet_detail_read", "denied")
+        return _packet_detail_error(403, "Packet detail is unavailable.")
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator":
+        await record_auth_audit(session, "packet_detail_read", "denied")
+        return _packet_detail_error(401, "Sign-in required.")
+    try:
+        packet = await service.get_authoritative_work_packet(session, packet_id)
+    except Exception:
+        await record_auth_audit(session, "packet_detail_read", "unavailable")
+        return _packet_detail_error(503, "Packet detail is unavailable.")
+    if packet is None:
+        await record_auth_audit(session, "packet_detail_read", "unavailable")
+        return {"schemaVersion": "kendall-authenticated-packet-detail/v1", "state": "unavailable"}
+    await record_auth_audit(session, "packet_detail_read", "allowed", target_ref=packet.packetId)
+    return _packet_detail_view(packet)
+
+
+@app.get("/internal/lan-auth/startup-gate")
+async def lan_auth_startup_gate() -> dict[str, object]:
+    if not settings.lan_auth_enabled or not startup_gate_ready or not settings.supervisor_uds_path:
+        raise HTTPException(status_code=503, detail="LAN auth startup gate is unavailable.")
+    return {
+        "schemaVersion": "kendall-lan-auth-startup-gate/v1",
+        "transport": "private_uds",
+        "bootstrapValidated": True,
+        "supervisorUdsPath": settings.supervisor_uds_path,
+    }
 
 
 @app.post("/work-items", response_model=ApiEnvelope)
@@ -1276,7 +1475,18 @@ async def stream_events():
 
 
 def main() -> None:
-    uvicorn.run("supervisor.api.main:app", host="0.0.0.0", port=8000, reload=True)
+    container_bind = os.environ.get("SUPERVISOR_CONTAINER_MODE") == "true" and os.environ.get("SUPERVISOR_HOST") == "0.0.0.0"
+    kwargs = {"host": "0.0.0.0" if container_bind else "127.0.0.1", "port": settings.supervisor_port, "reload": False}
+    if settings.lan_auth_enabled:
+        if not settings.supervisor_uds_path:
+            raise LanAuthConfigurationError("LAN auth supervisor UDS configuration is missing.")
+        kwargs["uds"] = str(validate_private_uds_path(settings.supervisor_uds_path))
+        settings.supervisor_transport = "private_uds"
+    uvicorn.run("supervisor.api.main:app", **kwargs)
+
+
+if __name__ == "__main__":
+    main()
 
 
 async def process_once_for_tests() -> None:

@@ -12,6 +12,71 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class DashboardOperator(Base):
+    """The sole app-owned operator record; plaintext credentials never persist."""
+
+    __tablename__ = "dashboard_operators"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    role: Mapped[str] = mapped_column(String(32), unique=True, default="operator")
+    password_hash: Mapped[str] = mapped_column(Text)
+    password_policy_version: Mapped[str] = mapped_column(String(32), default="argon2id/v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class DashboardSession(Base):
+    """Opaque server-side operator session; raw token/CSRF values never persist."""
+
+    __tablename__ = "dashboard_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    operator_id: Mapped[str] = mapped_column(ForeignKey("dashboard_operators.id"), index=True)
+    # Uniqueness is installed by the dialect-specific startup migration so
+    # legacy tables receive the same invariant as fresh databases.
+    token_hash: Mapped[str] = mapped_column(String(64))
+    csrf_token_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DashboardLoginRateLimit(Base):
+    """Metadata-only login abuse state keyed by source IP or operator account."""
+
+    __tablename__ = "dashboard_login_rate_limits"
+
+    dimension_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class DashboardLoginCsrfChallenge(Base):
+    """Short-lived pre-auth synchronizer challenge; only its hash persists."""
+
+    __tablename__ = "dashboard_login_csrf_challenges"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DashboardAuditEvent(Base):
+    """Metadata-only auth audit record; no credentials, hashes, cookies or tokens."""
+
+    __tablename__ = "dashboard_audit_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_type: Mapped[str] = mapped_column(String(48))
+    outcome: Mapped[str] = mapped_column(String(32))
+    correlation_id: Mapped[str] = mapped_column(String(36), index=True, default=lambda: str(uuid.uuid4()))
+    target_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    policy_version: Mapped[str] = mapped_column(String(32), default="epic-26-auth/v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class WorkItem(Base):
     __tablename__ = "work_items"
     __table_args__ = (UniqueConstraint("authoritative_packet_id", name="uq_work_items_authoritative_packet"),)
