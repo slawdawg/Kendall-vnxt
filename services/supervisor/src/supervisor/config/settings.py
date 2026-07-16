@@ -75,6 +75,32 @@ class Settings(BaseSettings):
         pattern=r"^[a-f0-9]{40}$",
         alias="SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION",
     )
+    enable_local_dogfood_attestation: bool = Field(
+        default=False,
+        alias="SUPERVISOR_ENABLE_LOCAL_DOGFOOD_ATTESTATION",
+    )
+    local_dogfood_attestation_issuer_registry: str = Field(
+        default="[]",
+        alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY",
+    )
+    local_dogfood_attestation_socket_path: str | None = Field(
+        default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_SOCKET_PATH"
+    )
+    local_dogfood_attestation_api_socket_path: str | None = Field(
+        default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_API_SOCKET_PATH"
+    )
+    local_dogfood_attestation_envelope_secret_file: str | None = Field(
+        default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ENVELOPE_SECRET_FILE"
+    )
+    local_dogfood_attestation_bind_host: str = Field(
+        default="127.0.0.1", alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_BIND_HOST"
+    )
+    local_dogfood_attestation_trust_proxy_headers: bool = Field(
+        default=False, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_TRUST_PROXY_HEADERS"
+    )
+    local_dogfood_attestation_no_proxy: bool = Field(
+        default=True, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_NO_PROXY"
+    )
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
@@ -87,6 +113,42 @@ class Settings(BaseSettings):
     def ensure_data_dir(self) -> None:
         if self.database_url.startswith("sqlite"):
             Path(".data").mkdir(exist_ok=True)
+
+    def validate_local_dogfood_attestation_deployment(self) -> None:
+        """Fail startup closed; this feature is private-UDS and local-only."""
+        if not self.enable_local_dogfood_attestation:
+            return
+        if self.lan_auth_enabled:
+            raise ValueError("Local dogfood attestation is not enabled alongside LAN authentication; use the local-only profile.")
+        from ipaddress import ip_address
+        try:
+            loopback = ip_address(self.local_dogfood_attestation_bind_host).is_loopback
+        except ValueError:
+            loopback = False
+        if (
+            not loopback
+            or not self.local_dogfood_attestation_no_proxy
+            or self.local_dogfood_attestation_trust_proxy_headers
+            or not self.local_dogfood_attestation_envelope_secret_file
+            or not (self.local_dogfood_attestation_api_socket_path or self.supervisor_uds_path)
+        ):
+            raise ValueError(
+                "local dogfood attestation requires a private API UDS, loopback configuration, "
+                "no proxy headers, and an envelope secret file"
+            )
+        if self.lan_auth_enabled and self.local_dogfood_attestation_api_socket_path and self.local_dogfood_attestation_api_socket_path != self.supervisor_uds_path:
+            raise ValueError("LAN-auth local dogfood attestation must use the authenticated supervisor UDS")
+        secret_path = Path(self.local_dogfood_attestation_envelope_secret_file)
+        if not secret_path.is_file() or secret_path.stat().st_mode & 0o077:
+            raise ValueError("local dogfood attestation envelope secret file must exist and be owner-readable only")
+        api_socket = Path(self.local_dogfood_attestation_api_socket_path or self.supervisor_uds_path or "")
+        parent = api_socket.parent
+        try:
+            stat = parent.lstat()
+        except OSError as exc:
+            raise ValueError("local dogfood attestation API socket parent must exist") from exc
+        if parent.is_symlink() or stat.st_uid != __import__("os").geteuid() or stat.st_mode & 0o077:
+            raise ValueError("local dogfood attestation API socket parent must be private and owner-controlled")
 
     @property
     def cors_origin_list(self) -> list[str]:

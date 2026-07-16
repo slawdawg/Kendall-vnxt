@@ -1607,6 +1607,13 @@ class PipelineCanonicalContractV1View(BaseModel):
         return self
 
 
+class LocalDogfoodAttestationReceiptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    receipt: dict[str, str]
+    signatureB64: str = Field(min_length=1, max_length=200)
+
+
 PipelineOperationalEvidenceClass = Literal["fixture", "integrated_local", "live_observed"]
 PipelineEpic25EvidenceSlot = Literal["readiness", "canary", "ramp", "recovery", "hardening", "decision"]
 PipelineEpic25PacketSchemaVersion = Literal[

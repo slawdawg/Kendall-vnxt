@@ -1,5 +1,6 @@
 ﻿import asyncio
 import os
+import hmac
 import re
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
@@ -60,6 +61,7 @@ from supervisor.application.manager_terminal_events import (
     get_manager_terminal_event,
     persist_manager_terminal_event,
 )
+from supervisor.application import local_dogfood_attestation
 from supervisor.application.operator_auth import (
     GENERIC_LOGIN_FAILURE,
     SESSION_ABSOLUTE_SECONDS,
@@ -69,6 +71,7 @@ from supervisor.application.operator_auth import (
     create_login_csrf_challenge,
     exact_https_origin,
     load_valid_session,
+    digest_secret,
     logout_session,
     record_auth_audit,
     revoke_all_sessions,
@@ -86,7 +89,7 @@ from supervisor.domain.bmad_import import BmadImportError
 from supervisor.domain.obsidian_metadata_import import ObsidianMetadataImportError
 from supervisor.domain.types import ErrorCategory, WorkItemFilterScope
 from supervisor.infrastructure.db.database import SessionLocal, get_session, init_db
-from supervisor.infrastructure.db.models import DashboardOperator, WorkItem
+from supervisor.infrastructure.db.models import DashboardOperator, LocalDogfoodAuthorization, WorkItem
 from supervisor.infrastructure.streaming.bus import EventBus
 from supervisor.worker.poller import Poller
 from pydantic import BaseModel
@@ -105,7 +108,12 @@ poller = Poller(service, settings.poll_interval_seconds)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global startup_gate_ready
+    settings.validate_local_dogfood_attestation_deployment()
     await init_db()
+    if settings.enable_local_dogfood_attestation:
+        socket_path = settings.supervisor_uds_path if settings.lan_auth_enabled else settings.local_dogfood_attestation_api_socket_path
+        if socket_path and os.path.exists(socket_path):
+            os.chmod(socket_path, 0o600)
     if settings.lan_auth_enabled:
         if settings.supervisor_transport != "private_uds":
             raise LanAuthConfigurationError("LAN auth requires the private supervisor UDS transport.")
@@ -177,6 +185,151 @@ def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiE
             correlationId=correlation_id,
         )
     )
+
+
+def require_local_dogfood_attestation(request: Request) -> None:
+    if not settings.enable_local_dogfood_attestation:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Local dogfood attestation is disabled.", "local_dogfood_disabled").model_dump(),
+        )
+    # Never trust a loopback TCP peer for this feature: a same-host proxy can
+    # strip forwarding headers. The private Unix socket is the transport.
+    if request.client is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=error_response(
+                "Local dogfood attestation requires the supervisor-owned private Unix socket.",
+                "local_dogfood_private_transport_required",
+            ).model_dump(),
+        )
+    if any(name in request.headers for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip")):
+        raise HTTPException(
+            status_code=403,
+            detail=error_response(
+                "Local dogfood attestation does not accept proxied requests.",
+                "local_dogfood_no_proxy_required",
+            ).model_dump(),
+        )
+
+
+async def require_local_dogfood_operator(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Bind LAN-authenticated attestation routes to the operator session."""
+    require_local_dogfood_attestation(request)
+    if not settings.lan_auth_enabled:
+        return
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator":
+        raise HTTPException(status_code=401, detail="Sign-in required.")
+    if request.method != "GET":
+        if not exact_https_origin(request.headers.get("origin"), settings):
+            raise HTTPException(status_code=403, detail="Authenticated origin required.")
+        csrf = request.headers.get("x-csrf-token")
+        if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
+            raise HTTPException(status_code=403, detail="CSRF validation failed.")
+
+
+@app.post("/local-dogfood/attestations/packets/{packet_id}/authorizations", response_model=ApiEnvelope)
+async def authorize_local_dogfood_attestation(
+    packet_id: str,
+    _: None = Depends(require_local_dogfood_operator),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        return ApiEnvelope(
+            data=await local_dogfood_attestation.authorize_for_packet(
+                session, packet_id, settings.local_dogfood_attestation_issuer_registry,
+            )
+        )
+    except local_dogfood_attestation.ReceiptRejected as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), exc.reason).model_dump()) from exc
+
+
+@app.post("/local-dogfood/attestations/receipts", response_model=ApiEnvelope)
+async def verify_local_dogfood_attestation(
+    request: Request,
+    _: None = Depends(require_local_dogfood_operator),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        receipt, signature_b64 = local_dogfood_attestation.parse_receipt_submission(await request.body())
+        return ApiEnvelope(
+            data=await local_dogfood_attestation.verify(
+                session,
+                receipt,
+                signature_b64,
+                registry_json=settings.local_dogfood_attestation_issuer_registry,
+            )
+        )
+    except local_dogfood_attestation.ReceiptRejected as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), exc.reason).model_dump()) from exc
+
+
+@app.post("/local-dogfood/attestations/authorizations/{authorization_id}/observe", response_model=ApiEnvelope)
+async def observe_local_dogfood_attestation(
+    authorization_id: str,
+    _: None = Depends(require_local_dogfood_operator),
+    session: AsyncSession = Depends(get_session),
+):
+    if not settings.local_dogfood_attestation_socket_path or not settings.local_dogfood_attestation_envelope_secret_file:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Local observer socket is not configured.", "local_observer_unavailable").model_dump(),
+        )
+    try:
+        secret = local_dogfood_attestation.read_owner_private_secret(
+            settings.local_dogfood_attestation_envelope_secret_file
+        )
+        return ApiEnvelope(
+            data=await local_dogfood_attestation.observe_and_verify(
+                session,
+                authorization_id,
+                settings.local_dogfood_attestation_socket_path,
+                settings.local_dogfood_attestation_issuer_registry,
+                secret,
+            )
+        )
+    except local_dogfood_attestation.ReceiptRejected as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), exc.reason).model_dump()) from exc
+
+
+@app.get("/local-dogfood/attestations/authorizations/{authorization_id}", response_model=ApiEnvelope)
+async def read_local_dogfood_attestation(
+    authorization_id: str,
+    _: None = Depends(require_local_dogfood_operator),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        return ApiEnvelope(data=await local_dogfood_attestation.readback(session, authorization_id))
+    except local_dogfood_attestation.ReceiptRejected as exc:
+        raise HTTPException(status_code=404, detail=error_response(str(exc), exc.reason).model_dump()) from exc
+
+
+@app.post("/local-dogfood/attestations/authorizations/{authorization_id}/revoke", response_model=ApiEnvelope)
+async def revoke_local_dogfood_attestation(
+    authorization_id: str,
+    _: None = Depends(require_local_dogfood_operator),
+    session: AsyncSession = Depends(get_session),
+):
+    authorization = await session.get(LocalDogfoodAuthorization, authorization_id)
+    if authorization is None:
+        raise HTTPException(status_code=404, detail=error_response("Authorization not found.", "authorization_not_found").model_dump())
+    authorization.revoked = True
+    await session.commit()
+    return ApiEnvelope(data={"authorizationId": authorization_id, "revoked": True, "evidenceClass": "integrated_local"})
+
+
+@app.get("/local-dogfood/attestations/targets/{target_ref}", response_model=ApiEnvelope)
+async def read_local_dogfood_attestation_for_target(
+    target_ref: str,
+    _: None = Depends(require_local_dogfood_operator),
+    session: AsyncSession = Depends(get_session),
+):
+    return ApiEnvelope(data=await local_dogfood_attestation.readback_for_target(session, target_ref))
 
 
 @app.get("/health")
@@ -1487,6 +1640,12 @@ async def stream_events():
 def main() -> None:
     container_bind = os.environ.get("SUPERVISOR_CONTAINER_MODE") == "true" and os.environ.get("SUPERVISOR_HOST") == "0.0.0.0"
     kwargs = {"host": "0.0.0.0" if container_bind else "127.0.0.1", "port": settings.supervisor_port, "reload": os.environ.get("SUPERVISOR_RELOAD") == "true"}
+    if settings.enable_local_dogfood_attestation and not settings.lan_auth_enabled:
+        settings.validate_local_dogfood_attestation_deployment()
+        socket_path = settings.local_dogfood_attestation_api_socket_path
+        if not socket_path:
+            raise ValueError("local dogfood attestation API socket configuration is missing")
+        kwargs = {"uds": str(prepare_private_uds_path(socket_path)), "reload": False, "proxy_headers": False}
     if settings.lan_auth_enabled:
         if not settings.supervisor_uds_path:
             raise LanAuthConfigurationError("LAN auth supervisor UDS configuration is missing.")
