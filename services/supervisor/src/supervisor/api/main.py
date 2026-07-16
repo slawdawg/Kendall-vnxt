@@ -78,6 +78,7 @@ from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
     ensure_bootstrap_operator,
     read_private_bootstrap_password,
+    prepare_private_uds_path,
     validate_private_uds_path,
 )
 from supervisor.config.settings import get_settings
@@ -191,6 +192,16 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict")
 
 
+def _expired_session_response() -> JSONResponse:
+    response = JSONResponse(
+        status_code=401,
+        content={"detail": "Your session ended. Sign in to continue."},
+        headers={"Cache-Control": "no-store"},
+    )
+    _clear_session_cookie(response)
+    return response
+
+
 PACKET_DETAIL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 PACKET_DETAIL_MEDIATOR = "packet-detail/v1"
 
@@ -265,15 +276,13 @@ async def operator_session(request: Request, response: Response, session: AsyncS
     response.headers["Cache-Control"] = "no-store"
     stored, reason = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
     if stored is None:
-        _clear_session_cookie(response)
-        raise HTTPException(status_code=401, detail="Your session ended. Sign in to continue.")
+        return _expired_session_response()
     return {"authenticated": True, "role": "operator", "sessionState": "active"}
 
 
 @app.post("/auth/logout")
 async def operator_logout(request: Request, response: Response, session: AsyncSession = Depends(get_session)):
     response.headers["Cache-Control"] = "no-store"
-    _clear_session_cookie(response)
     if not settings.lan_auth_enabled or not exact_https_origin(request.headers.get("origin"), settings):
         await record_auth_audit(session, "logout", "origin_denied")
         raise HTTPException(status_code=403, detail="Logout was not accepted.")
@@ -281,6 +290,7 @@ async def operator_logout(request: Request, response: Response, session: AsyncSe
     if not await logout_session(session, request.cookies.get(SESSION_COOKIE_NAME), csrf_token):
         await record_auth_audit(session, "logout", "denied")
         raise HTTPException(status_code=403, detail="Logout was not accepted.")
+    _clear_session_cookie(response)
     return {"signedOut": True}
 
 
@@ -1476,11 +1486,11 @@ async def stream_events():
 
 def main() -> None:
     container_bind = os.environ.get("SUPERVISOR_CONTAINER_MODE") == "true" and os.environ.get("SUPERVISOR_HOST") == "0.0.0.0"
-    kwargs = {"host": "0.0.0.0" if container_bind else "127.0.0.1", "port": settings.supervisor_port, "reload": False}
+    kwargs = {"host": "0.0.0.0" if container_bind else "127.0.0.1", "port": settings.supervisor_port, "reload": os.environ.get("SUPERVISOR_RELOAD") == "true"}
     if settings.lan_auth_enabled:
         if not settings.supervisor_uds_path:
             raise LanAuthConfigurationError("LAN auth supervisor UDS configuration is missing.")
-        kwargs["uds"] = str(validate_private_uds_path(settings.supervisor_uds_path))
+        kwargs["uds"] = str(prepare_private_uds_path(settings.supervisor_uds_path))
         settings.supervisor_transport = "private_uds"
     uvicorn.run("supervisor.api.main:app", **kwargs)
 

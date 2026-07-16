@@ -8,6 +8,7 @@ const AUTH_PATHS = new Map([
 ]);
 const MAX_BODY_BYTES = 16 * 1024;
 const AUTH_TIMEOUT_MS = 2000;
+const AUTH_BODY_TIMEOUT_MS = 2000;
 
 export function isAuthProxyPath(pathname, method) {
   return AUTH_PATHS.get(pathname) === method;
@@ -50,10 +51,10 @@ export function createAuthProxy({ supervisorUdsPath, expectedOrigin, timeoutMs =
       if (url.pathname === "/auth/login" && upstream.statusCode === 200) {
         try {
           const csrfToken = JSON.parse(upstream.body.toString("utf8")).csrfToken;
-          if (typeof csrfToken === "string" && csrfToken.length > 0) setCookies.push(`kendall_operator_csrf=${encodeURIComponent(csrfToken)}; Secure; SameSite=Strict; Path=/`);
+          if (typeof csrfToken === "string" && csrfToken.length > 0) setCookies.push(`kendall_operator_csrf=${encodeURIComponent(csrfToken)}; Max-Age=28800; Secure; SameSite=Strict; Path=/`);
         } catch { /* upstream body remains the authoritative response */ }
       }
-      if (url.pathname === "/auth/logout") setCookies.push("kendall_operator_csrf=; Max-Age=0; Secure; SameSite=Strict; Path=/");
+      if (url.pathname === "/auth/logout" && upstream.statusCode === 200) setCookies.push("kendall_operator_csrf=; Max-Age=0; Secure; SameSite=Strict; Path=/");
       if (setCookies.length) headers["set-cookie"] = setCookies;
       response.writeHead(upstream.statusCode, headers);
       response.end(upstream.body);
@@ -84,12 +85,28 @@ function readBody(request) {
   return new Promise((resolve) => {
     const chunks = [];
     let total = 0;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve(value);
+    };
+    const deadline = setTimeout(() => {
+      request.destroy();
+      finish(null);
+    }, AUTH_BODY_TIMEOUT_MS);
     request.on("data", (chunk) => {
       total += chunk.length;
-      if (total <= MAX_BODY_BYTES) chunks.push(chunk);
+      if (total > MAX_BODY_BYTES) {
+        request.destroy();
+        finish(null);
+        return;
+      }
+      chunks.push(chunk);
     });
-    request.on("end", () => resolve(total <= MAX_BODY_BYTES ? Buffer.concat(chunks) : null));
-    request.on("error", () => resolve(null));
+    request.on("end", () => finish(Buffer.concat(chunks)));
+    request.on("error", () => finish(null));
   });
 }
 

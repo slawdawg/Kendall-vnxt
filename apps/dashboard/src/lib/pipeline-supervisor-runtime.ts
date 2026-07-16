@@ -17,6 +17,10 @@ function getRuntimeSupervisorBaseUrl(): string {
     return publicBaseUrl;
   }
 
+  if (window.location.protocol === "https:") {
+    return `${window.location.origin}/api/supervisor`;
+  }
+
   if (!configuredPublicBaseUrl) {
     return `${window.location.protocol}//${window.location.hostname}:8000`;
   }

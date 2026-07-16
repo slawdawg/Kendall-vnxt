@@ -6,8 +6,10 @@ import https from "node:https";
 import net from "node:net";
 import path from "node:path";
 import next from "next";
+import { fileURLToPath } from "node:url";
 import { createPacketDetailMediator } from "./packet-detail-mediator.mjs";
 import { createAuthProxy, safeReturnPath, supervisorSessionIsValid } from "./dashboard-auth-proxy.mjs";
+import { createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
 
 export class LanAuthConfigurationError extends Error {}
 
@@ -38,11 +40,21 @@ const DASHBOARD_PAGE_PATHS = new Set([
 function parseDashboardPath(request) {
   const rawUrl = request.url || "/";
   const rawPath = rawUrl.split(/[?#]/, 1)[0];
-  if (!rawPath.startsWith("/") || /[%\\]/.test(rawPath)) return null;
-  try { return new URL(rawUrl, "https://dashboard.invalid").pathname; } catch { return null; }
+  if (!rawPath.startsWith("/") || /\\/.test(rawPath)) return null;
+  let pathname;
+  try {
+    pathname = new URL(rawUrl, "https://dashboard.invalid").pathname;
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  if (pathname.includes("\\") || pathname.includes("/../") || pathname.includes("/./")) return null;
+  return pathname;
 }
 
 export function isDashboardStaticAsset(request) {
+  const rawPath = (request.url || "/").split(/[?#]/, 1)[0];
+  if (/%/.test(rawPath)) return false;
   const pathname = parseDashboardPath(request);
   return pathname === "/favicon.ico" || pathname?.startsWith("/_next/") === true;
 }
@@ -115,7 +127,7 @@ export function signInPageSafe(returnPath, message = "") {
         password.focus();
       }
     });`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secure operator access</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1018;color:#eef2f7;font:16px system-ui,sans-serif}.card{width:min(28rem,calc(100% - 2rem));padding:2rem;background:#141c28;border:1px solid #314052;border-radius:.5rem}label{display:block;margin-top:1rem;font-size:.9rem}input,button{box-sizing:border-box;width:100%;margin-top:.5rem;padding:.7rem;border:1px solid #536579;border-radius:.375rem;background:#0e1622;color:inherit;font:inherit}button{cursor:pointer;background:#2b6de0;border-color:#2b6de0}.message{min-height:1.5rem;color:#ffb4ab}h1{font-size:1.5rem}</style></head><body><main class="card" aria-labelledby="sign-in-heading"><h1 id="sign-in-heading" tabindex="-1">Secure operator access</h1><p>Sign in to continue to the Kendall dashboard.</p><form id="sign-in-form"><label for="password">Operator password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus aria-describedby="auth-message"><button type="submit">Sign in</button></form>${messageHtml}</main><script>${script}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secure operator access</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1018;color:#eef2f7;font:16px system-ui,sans-serif}.card{width:min(28rem,calc(100% - 2rem));padding:2rem;background:#141c28;border:1px solid #314052;border-radius:.5rem}label{display:block;margin-top:1rem;font-size:.9rem}input,button{box-sizing:border-box;width:100%;margin-top:.5rem;padding:.7rem;border:1px solid #536579;border-radius:.375rem;background:#0e1622;color:inherit;font:inherit}button{cursor:pointer;background:#2b6de0;border-color:#2b6de0}.message{min-height:1.5rem;color:#ffb4ab}h1{font-size:1.5rem}</style></head><body><main class="card" aria-labelledby="sign-in-heading"><h1 id="sign-in-heading" tabindex="-1">Secure operator access</h1><p>Sign in to continue to the Kendall dashboard.</p><form id="sign-in-form" method="post" action="/auth/login"><label for="password">Operator password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus aria-describedby="auth-message"><button type="submit">Sign in</button></form>${messageHtml}</main><script>${script}</script></body></html>`;
 }
 
 // Preserve the original helper name while routing all callers to the
@@ -166,6 +178,10 @@ export function parseNumericLanBind(value) {
   return address;
 }
 
+function formatDashboardHost(host, port) {
+  return net.isIP(host) === 6 ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
 function validatePrivateDirectory(value) {
   let current = path.dirname(value);
   while (true) {
@@ -197,6 +213,28 @@ function validatePrivateFile(value, label) {
   }
 }
 
+export function validatePrivateSupervisorUds(value) {
+  if (typeof value !== "string" || !path.isAbsolute(value) || value === path.parse(value).root) fail("LAN auth supervisor UDS path is invalid.");
+  let current = path.dirname(value);
+  while (true) {
+    let details;
+    try { details = fs.lstatSync(current); } catch { fail("LAN auth supervisor UDS parent is unavailable or unsafe."); }
+    const stickySharedTemp = (details.mode & 0o1000) !== 0 && (details.mode & 0o022) === 0o022 && current !== path.dirname(value);
+    if (details.isSymbolicLink() || !details.isDirectory() || ((details.mode & 0o022) !== 0 && !stickySharedTemp)) fail("LAN auth supervisor UDS parent is unsafe.");
+    if (current === path.parse(current).root) break;
+    current = path.dirname(current);
+  }
+  try {
+    const parent = fs.lstatSync(path.dirname(value));
+    if (parent.uid !== process.getuid() || (parent.mode & 0o077) !== 0) fail("LAN auth supervisor UDS parent is unsafe.");
+    const socket = fs.lstatSync(value);
+    if (socket.isSymbolicLink() || !socket.isSocket() || socket.uid !== process.getuid()) fail("LAN auth supervisor UDS path is unsafe.");
+  } catch (error) {
+    if (error?.code !== "ENOENT") fail("LAN auth supervisor UDS path is unavailable or unsafe.");
+  }
+  return value;
+}
+
 export function resolveDashboardRuntime(environment = process.env) {
   const lanAuthEnabled = environment.KENDALL_LAN_AUTH_ENABLED === "true";
   if (!lanAuthEnabled) {
@@ -218,6 +256,7 @@ export function createDashboardServer(handler, environment = process.env) {
 
 export function assertSupervisorStartupGate(config) {
   if (!config.lanAuthEnabled) return Promise.resolve();
+  validatePrivateSupervisorUds(config.supervisorUdsPath);
   return new Promise((resolve, reject) => {
     const request = http.request({
       socketPath: config.supervisorUdsPath,
@@ -244,7 +283,9 @@ export function assertSupervisorStartupGate(config) {
 async function main() {
   const config = resolveDashboardRuntime(process.env);
   await assertSupervisorStartupGate(config);
-  const port = Number.parseInt(process.env.KENDALL_DASHBOARD_PORT || "3000", 10);
+  const rawPort = process.env.KENDALL_DASHBOARD_PORT || "3000";
+  if (!/^\d+$/.test(rawPort)) fail("Dashboard port is invalid.");
+  const port = Number(rawPort);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) fail("Dashboard port is invalid.");
   const { server } = createDashboardServer(() => {}, process.env);
   const dashboard = next({ dev: process.argv.includes("--dev") });
@@ -252,18 +293,22 @@ async function main() {
   const mediator = config.lanAuthEnabled
     ? createPacketDetailMediator({
       supervisorUdsPath: config.supervisorUdsPath,
-      expectedHost: process.env.KENDALL_DASHBOARD_ALLOWED_HOST || `${config.host}:${port}`,
+      expectedHost: process.env.KENDALL_DASHBOARD_ALLOWED_HOST || formatDashboardHost(config.host, port),
       expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN,
     })
     : null;
   const authProxy = config.lanAuthEnabled
     ? createAuthProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
     : null;
+  const supervisorProxy = config.lanAuthEnabled
+    ? createSupervisorProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
+    : null;
   server.removeAllListeners("request");
   const nextHandler = dashboard.getRequestHandler();
   server.on("request", async (request, response) => {
     if (mediator && await mediator(request, response)) return;
     if (authProxy && await authProxy(request, response)) return;
+    if (supervisorProxy && await supervisorProxy(request, response)) return;
     if (config.lanAuthEnabled && isDashboardEntryRoute(request)) {
       const cookie = request.headers.cookie;
       const valid = await supervisorSessionIsValid({ supervisorUdsPath: config.supervisorUdsPath, cookie });
@@ -283,7 +328,7 @@ async function main() {
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : "Dashboard startup failed."}\n`);
     process.exitCode = 1;

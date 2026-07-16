@@ -48,7 +48,11 @@ def digest_secret(value: str) -> str:
 
 
 def exact_https_origin(origin: str | None, settings: Settings) -> bool:
-    return bool(origin and origin.startswith("https://") and origin in settings.cors_origin_list)
+    return bool(
+        origin
+        and origin.startswith("https://")
+        and (origin in settings.cors_origin_list or settings.cors_origin_pattern.fullmatch(origin))
+    )
 
 
 def _audit(session: AsyncSession, event_type: str, outcome: str, *, target_ref: str | None = None) -> None:
@@ -74,6 +78,11 @@ async def record_auth_audit(
 
 
 async def create_login_csrf_challenge(session: AsyncSession) -> str:
+    await session.execute(
+        delete(DashboardLoginCsrfChallenge).where(
+            DashboardLoginCsrfChallenge.expires_at <= now_utc()
+        )
+    )
     raw_token = secrets.token_urlsafe(32)
     session.add(
         DashboardLoginCsrfChallenge(

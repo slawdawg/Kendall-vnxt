@@ -8,6 +8,7 @@ stories.
 from __future__ import annotations
 
 import os
+import socket
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,6 +91,28 @@ def validate_private_uds_path(path_value: str, *, allow_existing_socket: bool = 
     return path
 
 
+def prepare_private_uds_path(path_value: str) -> Path:
+    """Validate and remove only an owned, unbound stale socket before bind."""
+
+    path = validate_private_uds_path(path_value, allow_existing_socket=True)
+    if not path.exists():
+        return path
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.2)
+        probe.connect(str(path))
+    except (ConnectionRefusedError, FileNotFoundError, NotADirectoryError, socket.timeout):
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise LanAuthConfigurationError("LAN auth supervisor socket path is unavailable or unsafe.") from exc
+    else:
+        raise LanAuthConfigurationError("LAN auth supervisor socket path is already in use.")
+    finally:
+        probe.close()
+    return path
+
+
 def _assert_private_regular_file(path: Path) -> None:
     """Validate a secret file without following links or exposing its path."""
 
@@ -148,19 +171,19 @@ async def ensure_bootstrap_operator(session: AsyncSession, bootstrap_password: b
     password = _validate_bootstrap_password(bootstrap_password).decode("utf-8")
     record = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "operator"))).scalar_one_or_none()
     if record is None:
-        session.add(
-            DashboardOperator(
-                role="operator",
-                password_hash=PASSWORD_HASHER.hash(password),
-                password_policy_version="argon2id/v1",
-            )
-        )
         try:
-            await session.flush()
+            async with session.begin_nested():
+                session.add(
+                    DashboardOperator(
+                        role="operator",
+                        password_hash=PASSWORD_HASHER.hash(password),
+                        password_policy_version="argon2id/v1",
+                    )
+                )
+                await session.flush()
         except IntegrityError:
             # Another supervisor won the unique operator insert race. Do not
             # overwrite its credential during this startup attempt.
-            await session.rollback()
             return BootstrapIdentityResult(created=False, rotated=False)
         return BootstrapIdentityResult(created=True, rotated=False)
     try:
