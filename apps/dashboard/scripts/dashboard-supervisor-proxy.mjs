@@ -4,6 +4,16 @@ const PREFIX = "/api/supervisor/";
 const MAX_BODY_BYTES = 256 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const ALLOWED_SUPERVISOR_PATHS = [
+  /^\/supervisor\/status$/,
+  /^\/events$/,
+  /^\/audit-events$/,
+  /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
+  /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
+  /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
+  /^\/pipeline-control-plane\/(?:projection|actions(?:\/v1)?|approvals(?:\/v1)?)$/,
+  /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
+];
 
 function sendJson(response, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -60,16 +70,37 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       let targetPath;
       try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+      if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath))) { sendJson(response, 404, { state: "unavailable" }); return true; }
+      if (targetPath === "/events") {
+        await streamSupervisor(supervisorUdsPath, targetPath, request.headers, response, timeoutMs);
+        return true;
+      }
       const upstream = await requestSupervisor(supervisorUdsPath, targetPath, request.method, request.headers, body, timeoutMs);
       const headers = { "cache-control": "no-store", "content-type": upstream.contentType || "application/json; charset=utf-8" };
       if (upstream.setCookie) headers["set-cookie"] = upstream.setCookie;
       response.writeHead(upstream.statusCode, headers);
       response.end(upstream.body);
     } catch {
-      sendJson(response, 503, { state: "unavailable" });
+      if (response.headersSent) response.destroy();
+      else sendJson(response, 503, { state: "unavailable" });
     }
     return true;
   };
+}
+
+function streamSupervisor(socketPath, targetPath, headers, response, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ socketPath, path: targetPath, method: "GET", headers: { accept: "text/event-stream", cookie: headers.cookie } }, (upstream) => {
+      response.writeHead(upstream.statusCode || 503, { "cache-control": "no-store", "content-type": upstream.headers["content-type"] || "text/event-stream" });
+      upstream.pipe(response);
+      upstream.on("end", resolve);
+      upstream.on("error", reject);
+    });
+    const deadline = setTimeout(() => request.destroy(new Error("Supervisor stream startup timed out.")), timeoutMs);
+    request.on("error", (error) => { clearTimeout(deadline); reject(error); });
+    request.on("response", () => clearTimeout(deadline));
+    request.end();
+  });
 }
 
 function requestSupervisor(socketPath, targetPath, method, headers, body, timeoutMs) {

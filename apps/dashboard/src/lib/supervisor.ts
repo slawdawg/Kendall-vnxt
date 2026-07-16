@@ -97,6 +97,9 @@ export function getSupervisorBaseUrl(): string {
 }
 
 async function requestJson<T>(path: string): Promise<T> {
+  if (typeof window === "undefined" && process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    throw new Error("LAN-auth supervisor reads require the authenticated UDS boundary.");
+  }
   const baseUrl = typeof window === "undefined" ? internalBaseUrl : getSupervisorBaseUrl();
   const response = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
   if (!response.ok) {

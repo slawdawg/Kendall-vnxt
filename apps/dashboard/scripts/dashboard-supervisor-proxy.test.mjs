@@ -42,6 +42,8 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
   assert.equal(denied.status, 401);
   const forwarded = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok", "x-forwarded-for": "127.0.0.1" } });
   assert.equal(forwarded.status, 400);
+  const unknown = await request(port, "/api/supervisor/private-admin", { headers: { cookie: "session=ok" } });
+  assert.equal(unknown.status, 404);
   await close(dashboard);
   await close(supervisor);
 });
