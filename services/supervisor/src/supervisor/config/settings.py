@@ -1,6 +1,8 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 import re
+import stat
 from typing import Literal
 
 from pydantic import Field
@@ -118,8 +120,6 @@ class Settings(BaseSettings):
         """Fail startup closed; this feature is private-UDS and local-only."""
         if not self.enable_local_dogfood_attestation:
             return
-        if self.lan_auth_enabled:
-            raise ValueError("Local dogfood attestation is not enabled alongside LAN authentication; use the local-only profile.")
         from ipaddress import ip_address
         try:
             loopback = ip_address(self.local_dogfood_attestation_bind_host).is_loopback
@@ -139,15 +139,35 @@ class Settings(BaseSettings):
         if self.lan_auth_enabled and self.local_dogfood_attestation_api_socket_path and self.local_dogfood_attestation_api_socket_path != self.supervisor_uds_path:
             raise ValueError("LAN-auth local dogfood attestation must use the authenticated supervisor UDS")
         secret_path = Path(self.local_dogfood_attestation_envelope_secret_file)
-        if not secret_path.is_file() or secret_path.stat().st_mode & 0o077:
+        try:
+            secret_info = secret_path.lstat()
+            parent_info = secret_path.parent.lstat()
+        except OSError as exc:
+            raise ValueError("local dogfood attestation envelope secret file must exist and be owner-readable only") from exc
+        if (
+            stat.S_ISLNK(secret_info.st_mode)
+            or not stat.S_ISREG(secret_info.st_mode)
+            or secret_info.st_uid != os.geteuid()
+            or secret_info.st_mode & 0o077
+            or stat.S_ISLNK(parent_info.st_mode)
+            or not stat.S_ISDIR(parent_info.st_mode)
+            or parent_info.st_uid != os.geteuid()
+            or parent_info.st_mode & 0o077
+        ):
             raise ValueError("local dogfood attestation envelope secret file must exist and be owner-readable only")
+        try:
+            from supervisor.application.local_dogfood_attestation import _issuer_registry, read_owner_private_secret
+            read_owner_private_secret(str(secret_path))
+            _issuer_registry(self.local_dogfood_attestation_issuer_registry)
+        except Exception as exc:
+            raise ValueError("local dogfood attestation issuer registry or envelope secret is invalid") from exc
         api_socket = Path(self.local_dogfood_attestation_api_socket_path or self.supervisor_uds_path or "")
         parent = api_socket.parent
         try:
-            stat = parent.lstat()
+            parent_details = parent.lstat()
         except OSError as exc:
             raise ValueError("local dogfood attestation API socket parent must exist") from exc
-        if parent.is_symlink() or stat.st_uid != __import__("os").geteuid() or stat.st_mode & 0o077:
+        if parent.is_symlink() or parent_details.st_uid != os.geteuid() or parent_details.st_mode & 0o077:
             raise ValueError("local dogfood attestation API socket parent must be private and owner-controlled")
 
     @property

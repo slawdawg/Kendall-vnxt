@@ -221,6 +221,11 @@ async def require_local_dogfood_operator(
     require_local_dogfood_attestation(request)
     if not settings.lan_auth_enabled:
         return
+    # The read-only bridge is a same-user process on the authenticated private
+    # supervisor UDS and cannot forward the browser's session cookie. Mutating
+    # routes below still require the operator session and CSRF token.
+    if request.method == "GET":
+        return
     stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
     operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
     if stored is None or operator is None or operator.role != "operator":
@@ -1642,10 +1647,10 @@ def main() -> None:
     kwargs = {"host": "0.0.0.0" if container_bind else "127.0.0.1", "port": settings.supervisor_port, "reload": os.environ.get("SUPERVISOR_RELOAD") == "true"}
     if settings.enable_local_dogfood_attestation and not settings.lan_auth_enabled:
         settings.validate_local_dogfood_attestation_deployment()
-        socket_path = settings.local_dogfood_attestation_api_socket_path
-        if not socket_path:
-            raise ValueError("local dogfood attestation API socket configuration is missing")
-        kwargs = {"uds": str(prepare_private_uds_path(socket_path)), "reload": False, "proxy_headers": False}
+        raise LanAuthConfigurationError(
+            "Local dogfood attestation requires LAN-auth private UDS mode; refusing to replace the normal dashboard TCP listener. "
+            "Disable SUPERVISOR_ENABLE_LOCAL_DOGFOOD_ATTESTATION for the normal loopback profile."
+        )
     if settings.lan_auth_enabled:
         if not settings.supervisor_uds_path:
             raise LanAuthConfigurationError("LAN auth supervisor UDS configuration is missing.")

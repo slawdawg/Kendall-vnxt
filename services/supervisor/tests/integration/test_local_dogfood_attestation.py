@@ -26,7 +26,7 @@ def _reset() -> None:
             sys.modules.pop(name, None)
 
 
-def _client(tmp_path, monkeypatch, key: Ed25519PrivateKey, *, enabled: bool = True) -> TestClient:
+def _client(tmp_path, monkeypatch, key: Ed25519PrivateKey, *, enabled: bool = True, registry_json: str | None = None) -> TestClient:
     secret_path = tmp_path / "observer-envelope.secret"
     secret_path.write_text(base64.b64encode(b"s" * 32).decode(), encoding="ascii")
     os.chmod(secret_path, 0o600)
@@ -36,7 +36,7 @@ def _client(tmp_path, monkeypatch, key: Ed25519PrivateKey, *, enabled: bool = Tr
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{(tmp_path / 'attestation.db').as_posix()}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
     monkeypatch.setenv("SUPERVISOR_ENABLE_LOCAL_DOGFOOD_ATTESTATION", str(enabled).lower())
-    monkeypatch.setenv("SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY", json.dumps([{
+    monkeypatch.setenv("SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY", registry_json or json.dumps([{
         "issuerId": "issuer-local", "keyId": "dev-key-1",
         "publicKeyB64": base64.b64encode(key.public_key().public_bytes_raw()).decode(),
     }]))
@@ -77,6 +77,27 @@ def _authorize(client: TestClient, packet_id: str = "packet-local-1") -> dict:
     return response.json()["data"]
 
 
+def test_api_created_packet_persists_explicit_local_binding(tmp_path, monkeypatch):
+    key = Ed25519PrivateKey.generate()
+    with _client(tmp_path, monkeypatch, key) as client:
+        response = client.post("/pipeline-control-plane/work-packets", json={
+            "packetId": "packet-api-local",
+            "title": "API local packet",
+            "sourceRef": {
+                "refId": "source:api-local",
+                "sourceType": "operator_input",
+                "environment": "local_dogfood",
+                "sourceRevision": "b" * 40,
+                "sourceRefs": ["source:api-local"],
+                "evidenceRefs": ["evidence:api-local"],
+            },
+        })
+        assert response.status_code == 200, response.text
+        authorization = client.post("/local-dogfood/attestations/packets/packet-api-local/authorizations")
+        assert authorization.status_code == 200, authorization.text
+        assert authorization.json()["data"]["receiptBindings"]["sourceRevision"] == "b" * 40
+
+
 def _receipt(authorization: dict, now: datetime) -> dict:
     return {
         "schemaVersion": "pipeline-local-dogfood-attestation/v1", "receiptId": "receipt-local-1",
@@ -96,6 +117,13 @@ def test_local_dogfood_attestation_is_default_disabled(tmp_path, monkeypatch):
     key = Ed25519PrivateKey.generate()
     with _client(tmp_path, monkeypatch, key, enabled=False) as client:
         assert client.get("/local-dogfood/attestations/authorizations/missing").status_code == 404
+
+
+def test_enabled_local_attestation_rejects_invalid_registry_at_startup(tmp_path, monkeypatch):
+    key = Ed25519PrivateKey.generate()
+    with pytest.raises(ValueError, match="issuer registry or envelope secret is invalid"):
+        with _client(tmp_path, monkeypatch, key, registry_json="[]"):
+            pass
 
 
 def test_server_mints_authorization_from_packet_and_configured_issuer(tmp_path, monkeypatch):
@@ -158,6 +186,28 @@ def test_enabled_local_attestation_fails_startup_for_proxy_or_remote_bind(tmp_pa
             raise AssertionError("unsafe deployment must not start")
     except ValueError as exc:
         assert "loopback configuration" in str(exc)
+
+
+def test_local_attestation_main_refuses_to_replace_normal_tcp_listener(tmp_path, monkeypatch):
+    key = Ed25519PrivateKey.generate()
+    secret_path = tmp_path / "envelope.secret"
+    secret_path.write_text(base64.b64encode(b"s" * 32).decode(), encoding="ascii")
+    os.chmod(secret_path, 0o600)
+    api_dir = tmp_path / "api-private"
+    api_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("SUPERVISOR_ENABLE_LOCAL_DOGFOOD_ATTESTATION", "true")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ENVELOPE_SECRET_FILE", str(secret_path))
+    monkeypatch.setenv("SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_API_SOCKET_PATH", str(api_dir / "supervisor.sock"))
+    monkeypatch.setenv("SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY", json.dumps([{
+        "issuerId": "issuer-local", "keyId": "dev-key-1",
+        "publicKeyB64": base64.b64encode(key.public_key().public_bytes_raw()).decode(),
+    }]))
+    _reset()
+    from supervisor.application.lan_auth_bootstrap import LanAuthConfigurationError
+    from supervisor.api import main
+    with pytest.raises(LanAuthConfigurationError, match="refusing to replace"):
+        main.main()
 
 
 def test_local_receipt_success_replay_and_binding_rejections(tmp_path, monkeypatch):

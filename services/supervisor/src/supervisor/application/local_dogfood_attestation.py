@@ -439,6 +439,8 @@ async def observe_and_verify(session: AsyncSession, authorization_id: str, socke
         writer.close()
         await writer.wait_closed()
         receipt, signature = parse_receipt_submission(raw)
+        if not isinstance(receipt.get("receiptId"), str) or not receipt["receiptId"]:
+            raise ReceiptRejected("invalid_receipt_request")
     except (OSError, asyncio.TimeoutError, ValueError, ReceiptRejected) as exc:
         # Release only this lease on an unavailable observer.  Waiting callers
         # see the durable retryable state instead of a misleading consumed

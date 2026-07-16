@@ -32,6 +32,10 @@ Replace the observation placeholders with the exact packet source/evidence
 metadata and canonical `sourceRevision` used by the packet. The observation
 JSON must be byte-for-byte equivalent as canonical metadata or observation is
 rejected; ordinary packets without this explicit local metadata remain blocked.
+When creating an authoritative packet, put the same binding fields inside its
+`sourceRef` object (`environment`, `sourceRevision`, `sourceRefs`, and
+`evidenceRefs`); the supervisor persists and snapshots those fields as the
+server-owned authorization contract.
 
 Set these values in the supervisor environment:
 
@@ -45,9 +49,15 @@ SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY='[{"issuerId":"issuer-local
 NEXT_PUBLIC_LOCAL_DOGFOOD_ATTESTATION_BRIDGE_ORIGIN=http://127.0.0.1:8102
 ```
 
-Do not enable this feature alongside LAN authentication. The supervisor fails
-closed for that combination because the numeric-loopback bridge is intentionally
-a local-only readback surface and has no LAN session handoff.
+The normal supervisor startup intentionally refuses this flag in the loopback
+TCP profile: this release does not run two Uvicorn listeners, so it fails closed
+instead of replacing the dashboard's normal TCP listener. Keep the flag false
+for the normal loopback dashboard, or enable it with LAN authentication where
+the attestation API socket is exactly the authenticated `SUPERVISOR_UDS_PATH`.
+In LAN-auth mode, read-only attestation readbacks are available only through
+that private UDS; browser mutations still require the operator session and CSRF
+token. Do not expose the attestation socket directly or use this pre-alpha
+profile for production evidence.
 
 The API socket parent must be an owner-only directory (`0700`) and the socket
 must be owner-only. The supervisor refuses to start when the feature is enabled
@@ -62,7 +72,7 @@ listener; it does not expose the supervisor over LAN and does not accept
 forwarding headers.
 
 ```bash
-uv run --directory services/supervisor python services/supervisor/scripts/local_dogfood_attestation_issuer.py \
+uv run --directory services/supervisor python scripts/local_dogfood_attestation_issuer.py \
   --socket "$HOME/.cache/kendall/supervisor/local-dogfood-observer.sock" \
   --observation-json "$HOME/.config/kendall/local-dogfood-observation.json" \
   --private-key-file "$HOME/.config/kendall/local-dogfood-private-key.b64" \
@@ -75,15 +85,14 @@ SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_API_SOCKET_PATH="$HOME/.cache/kendall/super
 node apps/dashboard/scripts/local-dogfood-attestation-bridge.mjs
 ```
 
-After the supervisor and issuer are running, authorize and observe the exact
-packet through the private supervisor UDS, then open its packet detail page from
-the local dashboard browser. The
-attestation panel appears only
-there; pipeline cards remain limited to packet name and status. A successful
-readback is still labelled integrated local, and missing, expired, replayed,
-revoked, rotated, or malformed receipts remain blocked.
+The disposable demo (`uv run --directory services/supervisor python scripts/local_dogfood_attestation_demo.py`)
+starts an isolated supervisor test app and issuer, authorizes and observes one
+explicitly bound packet, then prints readback evidence. A successful readback is
+labelled integrated local; missing, expired, replayed, revoked, rotated, or
+malformed receipts remain blocked. The dashboard panel is reserved for a future
+dual-listener slice; pipeline cards remain limited to packet name and status.
 
-The request sequence is:
+For a manually hosted test app, the request sequence is:
 
 ```bash
 curl --silent --fail --unix-socket "$HOME/.cache/kendall/supervisor/local-dogfood-api.sock" \
@@ -91,7 +100,7 @@ curl --silent --fail --unix-socket "$HOME/.cache/kendall/supervisor/local-dogfoo
 curl --silent --fail --unix-socket "$HOME/.cache/kendall/supervisor/local-dogfood-api.sock" \
   -X POST "http://localhost/local-dogfood/attestations/authorizations/<authorization-id>/observe"
 curl --silent --fail --unix-socket "$HOME/.cache/kendall/supervisor/local-dogfood-api.sock" \
-  "http://localhost/local-dogfood/attestations/targets/packet:<packet-id>"
+  "http://localhost/local-dogfood/attestations/targets/<packet-id>"
 ```
 
 For a clean reset, stop the issuer and bridge, remove only the local socket and
