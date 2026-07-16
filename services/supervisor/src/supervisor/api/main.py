@@ -309,7 +309,9 @@ async def read_local_dogfood_attestation(
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        return ApiEnvelope(data=await local_dogfood_attestation.readback(session, authorization_id))
+        return ApiEnvelope(data=await local_dogfood_attestation.readback(
+            session, authorization_id, registry_json=settings.local_dogfood_attestation_issuer_registry,
+        ))
     except local_dogfood_attestation.ReceiptRejected as exc:
         raise HTTPException(status_code=404, detail=error_response(str(exc), exc.reason).model_dump()) from exc
 
@@ -334,7 +336,9 @@ async def read_local_dogfood_attestation_for_target(
     _: None = Depends(require_local_dogfood_operator),
     session: AsyncSession = Depends(get_session),
 ):
-    return ApiEnvelope(data=await local_dogfood_attestation.readback_for_target(session, target_ref))
+    return ApiEnvelope(data=await local_dogfood_attestation.readback_for_target(
+        session, target_ref, registry_json=settings.local_dogfood_attestation_issuer_registry,
+    ))
 
 
 @app.get("/health")

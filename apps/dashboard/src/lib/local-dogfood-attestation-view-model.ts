@@ -47,6 +47,11 @@ const rejectedStateByReason: Record<string, Pick<LocalDogfoodAttestationViewMode
     reason: "The local authorization is unknown or revoked.",
     nextSafeAction: "Create a new local authorization with the approved development key.",
   },
+  unknown_or_revoked_key: {
+    result: "Wrong key or issuer",
+    reason: "The local issuer key is no longer in the configured trust registry.",
+    nextSafeAction: "Rotate the local authorization and issue a receipt with the current development key.",
+  },
   authorization_not_found: {
     result: "Unavailable",
     reason: "No local attestation authorization is available for this packet.",
@@ -96,7 +101,7 @@ export function buildLocalDogfoodAttestationViewModel(
       nextSafeAction: "Verify a locally issued receipt for this exact packet target.",
       expiry,
       replay,
-      blocking: false,
+      blocking: true,
       liveObserved: false,
     };
   }

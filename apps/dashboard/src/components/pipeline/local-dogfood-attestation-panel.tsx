@@ -9,12 +9,12 @@ import { readLocalDogfoodAttestation } from "../../lib/local-dogfood-attestation
 
 type ReadbackState =
   | { kind: "loading" }
-  | { kind: "ready"; readback: LocalDogfoodAttestationReadback }
+  | { kind: "ready"; targetRef: string; readback: LocalDogfoodAttestationReadback }
   | { kind: "unavailable" };
 
 export function LocalDogfoodAttestationPanel({ enabled = true, targetRef }: { enabled?: boolean; targetRef: string }) {
   const bridgeOrigin = process.env.NEXT_PUBLIC_LOCAL_DOGFOOD_ATTESTATION_BRIDGE_ORIGIN;
-  const bridgeAvailable = Boolean(bridgeOrigin && /^http:\/\/(127\.0\.0\.1|\[::1\]):8102$/.test(bridgeOrigin));
+  const bridgeAvailable = Boolean(bridgeOrigin && isNumericLoopbackOrigin(bridgeOrigin));
   const [state, setState] = useState<ReadbackState>(enabled && bridgeAvailable ? { kind: "loading" } : { kind: "unavailable" });
 
   useEffect(() => {
@@ -22,6 +22,7 @@ export function LocalDogfoodAttestationPanel({ enabled = true, targetRef }: { en
       return;
     }
     const controller = new AbortController();
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     async function load() {
       setState({ kind: "loading" });
       const origin = bridgeOrigin;
@@ -33,7 +34,13 @@ export function LocalDogfoodAttestationPanel({ enabled = true, targetRef }: { en
         if (!readback) {
           throw new Error("Local attestation readback was malformed.");
         }
-        setState({ kind: "ready", readback });
+        setState({ kind: "ready", targetRef, readback });
+        if (readback.expiresAt) {
+          const expiresAt = Date.parse(readback.expiresAt);
+          if (Number.isFinite(expiresAt)) {
+            refreshTimer = setTimeout(() => void load(), Math.max(1000, expiresAt - Date.now() + 50));
+          }
+        }
       } catch {
         if (!controller.signal.aborted) {
           setState({ kind: "unavailable" });
@@ -41,10 +48,13 @@ export function LocalDogfoodAttestationPanel({ enabled = true, targetRef }: { en
       }
     }
     void load();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
   }, [bridgeAvailable, bridgeOrigin, enabled, targetRef]);
 
-  const readback = enabled && bridgeAvailable && state.kind === "ready" ? state.readback : null;
+  const readback = enabled && bridgeAvailable && state.kind === "ready" && state.targetRef === targetRef ? state.readback : null;
   const view = buildLocalDogfoodAttestationViewModel(readback);
   const announcement = state.kind === "loading"
     ? "Loading local attestation readback."
@@ -92,6 +102,19 @@ function parseReadback(value: unknown): LocalDogfoodAttestationReadback | null {
       || (candidate.receiptState !== null && candidate.receiptState !== undefined && !states.has(String(candidate.receiptState)))
       || (candidate.replayState !== null && candidate.replayState !== undefined && !replays.has(String(candidate.replayState)))) return null;
   return candidate as LocalDogfoodAttestationReadback;
+}
+
+function isNumericLoopbackOrigin(value: string): boolean {
+  try {
+    if (!/^http:\/\/(127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(value)) return false;
+    const origin = new URL(value);
+    return origin.protocol === "http:"
+      && (origin.hostname === "127.0.0.1" || origin.hostname === "[::1]")
+      && !origin.username && !origin.password
+      && origin.pathname === "/" && !origin.search && !origin.hash;
+  } catch {
+    return false;
+  }
 }
 
 function AttestationRow({ label, value }: { label: string; value: string }) {

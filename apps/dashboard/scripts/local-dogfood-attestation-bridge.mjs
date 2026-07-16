@@ -5,8 +5,8 @@ import { dirname } from "node:path";
 import process from "node:process";
 
 const NUMERIC_LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
-const TARGET_REF = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const REQUEST_TIMEOUT_MS = 2000;
 
 function ownerPrivate(stat, label, expectedType) {
   if (stat.uid !== process.getuid() || stat.mode & 0o077) throw new Error(`${label} must be owner-controlled and private.`);
@@ -55,20 +55,35 @@ export function isLoopbackPeer(address) {
 async function readTarget(socketPath, targetRef, requestHeaders = {}) {
   await validatePrivateSupervisorSocket(socketPath);
   return await new Promise((resolve, reject) => {
-      const request = httpRequest({ socketPath, method: "GET", path: `/local-dogfood/attestations/targets/${encodeURIComponent(targetRef)}`, headers: { accept: "application/json", ...(requestHeaders ?? {}) } }, (response) => {
+      const request = httpRequest({ socketPath, method: "GET", path: `/local-dogfood/attestations/targets/${encodeURIComponent(targetRef)}`, headers: { accept: "application/json", ...(requestHeaders ?? {}) }, timeout: REQUEST_TIMEOUT_MS }, (response) => {
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
       let body = "";
       let bytes = 0;
       response.setEncoding("utf8");
       response.on("data", (chunk) => {
         bytes += Buffer.byteLength(chunk);
-        if (bytes > MAX_RESPONSE_BYTES) request.destroy(new Error("supervisor response exceeds bridge limit"));
+        if (bytes > MAX_RESPONSE_BYTES) {
+          const error = new Error("supervisor response exceeds bridge limit");
+          response.destroy(error);
+          fail(error);
+        }
         else body += chunk;
       });
+      response.once("aborted", () => fail(new Error("supervisor response aborted")));
+      response.once("error", fail);
       response.on("end", () => {
-        try { JSON.parse(body); } catch { reject(new Error("supervisor returned malformed JSON")); return; }
+        if (settled) return;
+        try { JSON.parse(body); } catch { fail(new Error("supervisor returned malformed JSON")); return; }
+        settled = true;
         resolve({ status: response.statusCode ?? 502, body });
       });
     });
+    request.once("timeout", () => request.destroy(new Error("supervisor request timed out")));
     request.once("error", reject);
     request.end();
   });
@@ -85,7 +100,7 @@ export function createBridgeServer(config) {
     const match = /^\/local-dogfood-attestations\/targets\/([^/?#]+)$/.exec(request.url ?? "");
     let targetRef;
     try { targetRef = match ? decodeURIComponent(match[1]) : ""; } catch { targetRef = ""; }
-    if (!match || !TARGET_REF.test(targetRef)) { response.writeHead(404); response.end(); return; }
+    if (!match || !isTargetRef(targetRef)) { response.writeHead(404); response.end(); return; }
     try {
       const result = await readTarget(config.socketPath, targetRef, request.headers.cookie ? { cookie: request.headers.cookie } : {});
       response.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": config.dashboardOrigin, "access-control-allow-credentials": "true", vary: "Origin" });
@@ -95,6 +110,11 @@ export function createBridgeServer(config) {
       response.end(JSON.stringify({ error: { code: "local_observer_unavailable" } }));
     }
   });
+}
+
+function isTargetRef(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= 80
+    && value === value.trim() && !/[\s/\\\0]/u.test(value);
 }
 
 export async function startBridge(config = resolveBridgeConfig()) {

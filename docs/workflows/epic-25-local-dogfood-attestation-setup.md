@@ -103,6 +103,7 @@ curl --silent --fail --unix-socket "$HOME/.cache/kendall/supervisor/local-dogfoo
   "http://localhost/local-dogfood/attestations/targets/<packet-id>"
 ```
 
-For a clean reset, stop the issuer and bridge, remove only the local socket and
-metadata database, and leave any source/evidence fixtures untouched. Do not use
-this setup for LAN exposure or production evidence.
+For a clean reset, stop the issuer and bridge, remove only their local socket
+files, and use targeted attestation-row cleanup in the supervisor database; do
+not delete the shared supervisor database. Leave any source/evidence fixtures
+untouched. Do not use this setup for production evidence.

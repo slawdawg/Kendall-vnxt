@@ -267,13 +267,15 @@ def _snapshot(packet: AuthoritativeWorkPacket) -> tuple[str, str, str, str]:
         raise ReceiptRejected("missing_source_evidence_binding")
     source_refs_value = sorted(set(source_refs_value))
     evidence_refs_value = sorted(set(evidence_refs_value))
+    source_refs = json.dumps(source_refs_value, separators=(",", ":"), ensure_ascii=True)
+    evidence_refs = json.dumps(evidence_refs_value, separators=(",", ":"), ensure_ascii=True)
+    if len(source_refs) > MAX_FIELD_LENGTH or len(evidence_refs) > MAX_FIELD_LENGTH:
+        raise ReceiptRejected("invalid_metadata")
     normalized = dict(source_meta)
     normalized["sourceRefs"] = source_refs_value
     normalized["evidenceRefs"] = evidence_refs_value
     source_json = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     evidence_digest = f"sha256:{hashlib.sha256(source_json.encode()).hexdigest()}"
-    source_refs = json.dumps(source_refs_value, separators=(",", ":"), ensure_ascii=True)
-    evidence_refs = json.dumps(evidence_refs_value, separators=(",", ":"), ensure_ascii=True)
     return source_revision, source_refs, evidence_digest, evidence_refs
 
 
@@ -404,6 +406,8 @@ async def observe_and_verify(session: AsyncSession, authorization_id: str, socke
         for _ in range(60):
             await asyncio.sleep(0.1)
             current = await session.get(LocalDogfoodAuthorization, authorization_id)
+            if current is not None:
+                await session.refresh(current)
             if current and current.accepted_receipt_id:
                 return {"evidenceClass": "integrated_local", "accepted": True, "rejectionReason": None,
                         "issuerId": current.issuer_id, "keyId": current.key_id, "receiptId": current.accepted_receipt_id}
@@ -466,7 +470,7 @@ async def observe_and_verify(session: AsyncSession, authorization_id: str, socke
     return await verify(session, receipt, signature, registry_json=registry_json)
 
 
-async def readback(session: AsyncSession, authorization_id: str) -> dict:
+async def readback(session: AsyncSession, authorization_id: str, registry_json: str | None = None) -> dict:
     authorization = await session.get(LocalDogfoodAuthorization, authorization_id)
     if authorization is None:
         raise ReceiptRejected("authorization_not_found")
@@ -480,9 +484,23 @@ async def readback(session: AsyncSession, authorization_id: str) -> dict:
         receipt_state, rejection_reason = "rejected", "unknown_or_revoked_authorization"
     elif datetime.now(timezone.utc) > _utc(authorization.expires_at):
         receipt_state, rejection_reason = "rejected", "expired_or_future_receipt"
+    elif registry_json is not None:
+        try:
+            current_issuer, current_key, current_public_key = _issuer_registry(registry_json)
+        except ReceiptRejected:
+            current_issuer = current_key = current_public_key = None
+        if (authorization.issuer_id, authorization.key_id, authorization.public_key_b64) != (
+            current_issuer, current_key, current_public_key
+        ):
+            receipt_state, rejection_reason = "rejected", "unknown_or_revoked_key"
+        elif latest and latest.accepted:
+            receipt_state, rejection_reason = "accepted", None
+        else:
+            receipt_state = "rejected" if latest else "pending"
+            rejection_reason = latest.rejection_reason if latest else None
     else:
-        receipt_state = "accepted" if accepted else "rejected" if latest else "pending"
-        rejection_reason = None if accepted else latest.rejection_reason if latest else None
+        receipt_state = "accepted" if latest and latest.accepted else "rejected" if latest else "pending"
+        rejection_reason = None if latest and latest.accepted else latest.rejection_reason if latest else None
     return {"authorizationId": authorization.id, "issuerId": authorization.issuer_id, "keyId": authorization.key_id,
             "receiptId": accepted.receipt_id if accepted else latest.receipt_id if latest else None, "receiptState": receipt_state,
             "rejectionReason": rejection_reason, "expiresAt": _utc(authorization.expires_at).isoformat().replace("+00:00", "Z"),
@@ -490,7 +508,7 @@ async def readback(session: AsyncSession, authorization_id: str) -> dict:
             "evidenceClass": "integrated_local", "liveEvidenceAccepted": False}
 
 
-async def readback_for_target(session: AsyncSession, target_ref: str) -> dict:
+async def readback_for_target(session: AsyncSession, target_ref: str, registry_json: str | None = None) -> dict:
     authorization = (await session.execute(select(LocalDogfoodAuthorization).where(
         LocalDogfoodAuthorization.target_ref == target_ref
     ).order_by(LocalDogfoodAuthorization.created_at.desc()).limit(1))).scalar_one_or_none()
@@ -498,4 +516,4 @@ async def readback_for_target(session: AsyncSession, target_ref: str) -> dict:
         return {"authorizationId": None, "issuerId": None, "keyId": None, "receiptId": None,
                 "receiptState": "unavailable", "rejectionReason": "authorization_not_found", "expiresAt": None,
                 "replayState": "unknown", "evidenceClass": "integrated_local", "liveEvidenceAccepted": False}
-    return await readback(session, authorization.id)
+    return await readback(session, authorization.id, registry_json=registry_json)

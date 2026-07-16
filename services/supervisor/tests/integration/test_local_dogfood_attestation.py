@@ -220,7 +220,8 @@ def test_local_receipt_success_replay_and_binding_rejections(tmp_path, monkeypat
         replay = client.post("/local-dogfood/attestations/receipts", json={"receipt": receipt, "signatureB64": _signed(key, receipt)})
         assert replay.json()["data"]["rejectionReason"] == "replay"
         readback = client.get(f"/local-dogfood/attestations/authorizations/{authorization['authorizationId']}").json()["data"]
-        assert readback["receiptState"] == "accepted"
+        assert readback["receiptState"] == "rejected"
+        assert readback["rejectionReason"] == "replay"
         assert readback["replayState"] == "replayed"
         assert readback["evidenceClass"] == "integrated_local"
         assert readback["liveEvidenceAccepted"] is False
