@@ -96,12 +96,14 @@ export function getSupervisorBaseUrl(): string {
   return configuredPublicBaseUrl;
 }
 
-async function requestJson<T>(path: string): Promise<T> {
+type RequestOptions = { signal?: AbortSignal };
+
+async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (typeof window === "undefined" && process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
     throw new Error("LAN-auth supervisor reads require the authenticated UDS boundary.");
   }
   const baseUrl = typeof window === "undefined" ? internalBaseUrl : getSupervisorBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
+  const response = await fetch(`${baseUrl}${path}`, { cache: "no-store", signal: options.signal });
   if (!response.ok) {
     throw new Error(`Request failed for ${path} (${response.status})`);
   }
@@ -112,12 +114,12 @@ async function requestJson<T>(path: string): Promise<T> {
   return payload.data;
 }
 
-export async function getRunStatus(): Promise<RunStatusView> {
-  return requestJson<RunStatusView>("/supervisor/status");
+export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {
+  return requestJson<RunStatusView>("/supervisor/status", options);
 }
 
-export async function getWorkItems(): Promise<WorkItemView[]> {
-  return requestJson<WorkItemView[]>("/work-items");
+export async function getWorkItems(options?: RequestOptions): Promise<WorkItemView[]> {
+  return requestJson<WorkItemView[]>("/work-items", options);
 }
 
 export async function getCandidateWork(): Promise<CandidateWorkView[]> {

@@ -1,4 +1,5 @@
 import { Shell } from "../components/shell";
+import { LanOverview } from "../components/lan-overview";
 import { LiveFeed } from "../components/live-feed";
 import { MonitoringHome } from "../components/monitoring-home";
 import { PageIntro } from "../components/page-intro";
@@ -6,6 +7,13 @@ import { buildNavStats } from "../lib/nav-stats";
 import { getRunStatus, getWorkItems } from "../lib/supervisor";
 
 export default async function Home() {
+  if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    return (
+      <Shell>
+        <LanOverview />
+      </Shell>
+    );
+  }
   const [status, items] = await Promise.all([getRunStatus(), getWorkItems()]);
   const navStats = buildNavStats(items);
 

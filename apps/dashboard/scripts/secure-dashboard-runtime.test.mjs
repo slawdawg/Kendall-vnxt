@@ -4,7 +4,17 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { LanAuthConfigurationError, assertSupervisorStartupGate, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, parseNumericLanBind, resolveDashboardRuntime } from "./secure-dashboard-runtime.mjs";
+import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, parseNumericLanBind, resolveDashboardRuntime } from "./secure-dashboard-runtime.mjs";
+
+test("LAN auth responses include HSTS while local HTTP stays unchanged", () => {
+  const headers = new Map();
+  const response = { setHeader(name, value) { headers.set(name, value); } };
+  applyLanAuthSecurityHeaders(response, { lanAuthEnabled: true });
+  assert.equal(headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains");
+  headers.clear();
+  applyLanAuthSecurityHeaders(response, { lanAuthEnabled: false });
+  assert.equal(headers.has("strict-transport-security"), false);
+});
 
 test("disabled LAN auth is loopback-only HTTP", () => {
   assert.deepEqual(resolveDashboardRuntime({}), { lanAuthEnabled: false, host: "127.0.0.1", protocol: "http" });
@@ -25,6 +35,11 @@ test("LAN auth gates every dashboard page and defaults unknown app paths to deny
   assert.equal(isProtectedNextRoute({ url: "/api/packet-detail/packet-1" }), false);
   assert.equal(isProtectedNextRoute({ url: "/_next/static/app.js" }), false);
   assert.equal(isDashboardStaticAsset({ url: "/_next/static/app.js" }), true);
+  assert.equal(isDashboardStaticAsset({ url: "/_next/static/chunks/%5Bturbopack%5D-client.js" }), true);
+  assert.equal(isDashboardStaticAsset({ url: "/_next/static/%2e%2e/secret.js" }), false);
+  assert.equal(isDashboardStaticAsset({ url: "/_next/static/..%2fsecret.js" }), false);
+  assert.equal(isDashboardStaticAsset({ url: "/_next/static/%5Csecret.js" }), false);
+  assert.equal(isDashboardStaticAsset({ url: "/_next/%252e%252e%252fsecret.js" }), false);
   assert.equal(isDashboardStaticAsset({ url: "/favicon.ico?cache=1" }), true);
   for (const url of ["/pipeline%2Fpackets%2Fpacket-1", "/pipeline%2fpackets%2fpacket-1", "/pipeline%5Cpackets%5Cpacket-1", "/pipeline%2e%2e%2fadmin", "/foo/%2e%2e/pipeline", "/foo/%2e%2e%2fpipeline", "/pipeline%ZZ"]) {
     assert.equal(isProtectedNextRoute({ url }), true, url);
