@@ -689,7 +689,7 @@ export function PipelineCockpit({
                 </button>
               </div>
             </div>
-            <OperationalStrip packets={dashboardPackets} usageVisibility={usageVisibility} />
+            <OperationalStrip usageVisibility={usageVisibility} />
             {currentProjectionError ? (
               <p className="mb-2 rounded-[0.375rem] border border-[color-mix(in_srgb,var(--blocked)_38%,var(--line))] bg-[color-mix(in_srgb,var(--blocked)_10%,transparent)] p-2 text-sm text-[var(--foreground)]">
                 Backend projection refresh unavailable. No runtime packet fallback is shown; inspect supervisor state before trusting the board.
@@ -2105,13 +2105,11 @@ function MissionControlStrip({
 }
 
 function OperationalStrip({
-  packets,
   usageVisibility,
 }: {
-  packets: PipelineFixturePacket[];
   usageVisibility: { claude: boolean; codex: boolean };
 }) {
-  const usageItems = globalUsageItems(packets).filter((item) => usageVisibility[item.providerKey]);
+  const usageItems = globalUsageItems().filter((item) => usageVisibility[item.providerKey]);
   return (
     <div aria-label="Pipeline operational strip" className="pipeline-operational-strip">
       <StatusKey />
@@ -2352,58 +2350,21 @@ function PacketMiniCard({
   const statusClass = statusClassForPacket(packet);
   return (
     <button
-      aria-label={packet.activeBoardCard?.attention
-        ? `Action needed: ${packet.title}; ${packetCardAttentionReasonLabel(packet)}; ${packetCardOperatorActionLabel(packet)}`
-        : packet.activeBoardCard?.readyToTest
-          ? `Ready to test: ${packet.title}`
-        : `Inspect packet: ${packet.title}`}
+      aria-label={`${miniCardLabel(packet)}; ${packetCardStatusLabel(packet)}`}
       aria-pressed={selected}
       className={`pipeline-mini-packet ${statusClass} ${selected ? "pipeline-mini-packet-selected" : ""}`}
       onClick={(event) => onSelect(event.currentTarget)}
       ref={(node) => registerPacketButton(packet.packetId, node)}
-      title={`${packet.title} - ${plainStageLabel(packet.currentStage)}`}
+      title={`${miniCardLabel(packet)}; ${packetCardStatusLabel(packet)}`}
       type="button"
     >
       <span aria-hidden="true" className="pipeline-mini-packet-dot" />
       <span className="pipeline-mini-packet-body">
         <span className="pipeline-mini-packet-label">{miniCardLabel(packet)}</span>
-        <span className="pipeline-mini-packet-meta">
-          {packetCardStatusLabel(packet)}; {packetCardStageLabel(packet)}; {packetCardTruthLabel(packet)}
-        </span>
-        <span className="pipeline-mini-packet-meta">
-          {packetCardNextLabel(packet)}
-        </span>
-        <span className="pipeline-mini-packet-meta">
-          {authoritativePacketLine(packet)}
-        </span>
-        {packet.activeBoardCard?.attention ? (
-          <span className="pipeline-mini-packet-meta pipeline-mini-packet-action-needed-text">
-            {packetCardAttentionReasonLabel(packet)}; {packetCardOperatorActionLabel(packet)}
-          </span>
-        ) : null}
+        <span className="pipeline-mini-packet-meta">{packetCardStatusLabel(packet)}</span>
       </span>
-      {packet.activeBoardCard?.readyToTest ? (
-        <span aria-label={`Ready to test: ${packet.title}`} className="pipeline-mini-packet-ready">Test</span>
-      ) : null}
-      {packet.sourceKind === "demo-fixture" ? (
-        <span className="pipeline-mini-packet-proof">non-live fixture</span>
-      ) : null}
-      {packet.activeBoardCard?.attention || packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate" ? (
-        packet.activeBoardCard?.attention ? (
-          <span aria-label="Action needed packet" className="pipeline-mini-packet-alert pipeline-mini-packet-action-needed">
-            <span aria-hidden="true">!</span>
-            <span>Need</span>
-          </span>
-        ) : (
-          <span aria-hidden="true" className="pipeline-mini-packet-alert">!</span>
-        )
-      ) : null}
     </button>
   );
-}
-
-function authoritativePacketLine(packet: ActiveBoardCockpitPacket): string {
-  return packet.activeBoardCard?.canonicalPostureLabel ?? "canonical posture unavailable";
 }
 
 function StaleHistoryPanel({
@@ -3230,7 +3191,7 @@ function overflowSummary(packets: PipelineFixturePacket[]) {
   return packets.length === 1 ? "1 low-risk packet" : `${packets.length} low-risk packets`;
 }
 
-function globalUsageItems(_packets: PipelineFixturePacket[]) {
+function globalUsageItems() {
   const disconnectedUsageDetail = "Usage source is not connected. Configure a read-only source in Settings.";
   return [
     {
@@ -3277,14 +3238,7 @@ function miniCardLabel(packet: ActiveBoardCockpitPacket) {
 }
 
 function packetCardStatusLabel(packet: ActiveBoardCockpitPacket) {
-  if (packet.activeBoardCard) {
-    return packet.activeBoardCard.statusLabel;
-  }
   return `status ${packet.status}`;
-}
-
-function packetCardStageLabel(packet: ActiveBoardCockpitPacket) {
-  return `stage ${plainStageLabel(packet.currentStage)}`;
 }
 
 function packetCardTruthLabel(packet: ActiveBoardCockpitPacket) {
@@ -3295,37 +3249,6 @@ function packetCardTruthLabel(packet: ActiveBoardCockpitPacket) {
     ? packet.fixtureLabel.replace(/^backend projection:\s*/, "")
     : packet.sourceTrustState;
   return `truth ${truth}; source ${packet.freshnessLabel}`;
-}
-
-function packetCardEvidenceLabel(packet: PipelineFixturePacket) {
-  const count = packet.evidenceRefs.length;
-  if (count === 0) {
-    return "no evidence refs";
-  }
-  return count === 1 ? "1 evidence ref" : `${count} evidence refs`;
-}
-
-function packetCardNextLabel(packet: ActiveBoardCockpitPacket) {
-  if (packet.activeBoardCard) {
-    return packet.activeBoardCard.nextActionLabel ? `next ${packet.activeBoardCard.nextActionLabel}` : "next action not named";
-  }
-  if (packet.status === "blocked" || packet.status === "failed") {
-    return `next ${packet.nextAction.trim() || "blocker not named"}`;
-  }
-  const nextAction = packet.nextAction.trim() || "next action not named";
-  return `next ${nextAction}`;
-}
-
-function packetCardAttentionReasonLabel(packet: ActiveBoardCockpitPacket) {
-  return packet.activeBoardCard?.attentionReasonLabel
-    ? `reason ${packet.activeBoardCard.attentionReasonLabel}`
-    : "reason attention needed";
-}
-
-function packetCardOperatorActionLabel(packet: ActiveBoardCockpitPacket) {
-  return packet.activeBoardCard?.nextOperatorActionLabel
-    ? `operator ${packet.activeBoardCard.nextOperatorActionLabel}`
-    : "operator inspect detail";
 }
 
 function packetCardTestabilityLabel(packet: ActiveBoardCockpitPacket) {
@@ -3559,18 +3482,6 @@ function plainStageLabel(stage: PipelineStage) {
   return labels[stage];
 }
 
-function plainNextStageLabel(packet: PipelineFixturePacket) {
-  if (packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate") {
-    return packet.nextAction;
-  }
-  const currentIndex = pipelineStages.indexOf(packet.currentStage);
-  if (packet.status === "complete" || currentIndex === pipelineStages.length - 1) {
-    return "Done for now";
-  }
-  const nextStage = pipelineStages[currentIndex + 1];
-  return nextStage ? plainStageLabel(nextStage) : "Next step not named yet";
-}
-
 function originLabel(packet: PipelineFixturePacket) {
   if (packet.sourceKind === "supervisor-runtime") {
     return "Supervisor runtime";
@@ -3604,19 +3515,6 @@ function arrivalLabel(packet: PipelineFixturePacket) {
     return `From backend projection metadata (${packet.freshnessLabel})`;
   }
   return "From dashboard source metadata";
-}
-
-function blockerLabel(packet: PipelineFixturePacket) {
-  if (packet.currentStage === "human_gate") {
-    return "Approval required before work can move forward";
-  }
-  if (packet.status === "blocked" || packet.status === "failed") {
-    return packet.riskFlags[0] ?? packet.nextAction;
-  }
-  if (packet.sourceTrustStates.includes("stale")) {
-    return "Source freshness needs review";
-  }
-  return "No blocker named";
 }
 
 function plainStatusLabel(packet: PipelineFixturePacket) {

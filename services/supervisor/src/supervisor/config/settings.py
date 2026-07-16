@@ -1,6 +1,8 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 import re
+import stat
 from typing import Literal
 
 from pydantic import Field
@@ -75,6 +77,32 @@ class Settings(BaseSettings):
         pattern=r"^[a-f0-9]{40}$",
         alias="SUPERVISOR_PIPELINE_EPIC_25_SOURCE_REVISION",
     )
+    enable_local_dogfood_attestation: bool = Field(
+        default=False,
+        alias="SUPERVISOR_ENABLE_LOCAL_DOGFOOD_ATTESTATION",
+    )
+    local_dogfood_attestation_issuer_registry: str = Field(
+        default="[]",
+        alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY",
+    )
+    local_dogfood_attestation_socket_path: str | None = Field(
+        default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_SOCKET_PATH"
+    )
+    local_dogfood_attestation_api_socket_path: str | None = Field(
+        default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_API_SOCKET_PATH"
+    )
+    local_dogfood_attestation_envelope_secret_file: str | None = Field(
+        default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ENVELOPE_SECRET_FILE"
+    )
+    local_dogfood_attestation_bind_host: str = Field(
+        default="127.0.0.1", alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_BIND_HOST"
+    )
+    local_dogfood_attestation_trust_proxy_headers: bool = Field(
+        default=False, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_TRUST_PROXY_HEADERS"
+    )
+    local_dogfood_attestation_no_proxy: bool = Field(
+        default=True, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_NO_PROXY"
+    )
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
@@ -87,6 +115,60 @@ class Settings(BaseSettings):
     def ensure_data_dir(self) -> None:
         if self.database_url.startswith("sqlite"):
             Path(".data").mkdir(exist_ok=True)
+
+    def validate_local_dogfood_attestation_deployment(self) -> None:
+        """Fail startup closed; this feature is private-UDS and local-only."""
+        if not self.enable_local_dogfood_attestation:
+            return
+        from ipaddress import ip_address
+        try:
+            loopback = ip_address(self.local_dogfood_attestation_bind_host).is_loopback
+        except ValueError:
+            loopback = False
+        if (
+            not loopback
+            or not self.local_dogfood_attestation_no_proxy
+            or self.local_dogfood_attestation_trust_proxy_headers
+            or not self.local_dogfood_attestation_envelope_secret_file
+            or not (self.local_dogfood_attestation_api_socket_path or self.supervisor_uds_path)
+        ):
+            raise ValueError(
+                "local dogfood attestation requires a private API UDS, loopback configuration, "
+                "no proxy headers, and an envelope secret file"
+            )
+        if self.lan_auth_enabled and self.local_dogfood_attestation_api_socket_path and self.local_dogfood_attestation_api_socket_path != self.supervisor_uds_path:
+            raise ValueError("LAN-auth local dogfood attestation must use the authenticated supervisor UDS")
+        secret_path = Path(self.local_dogfood_attestation_envelope_secret_file)
+        try:
+            secret_info = secret_path.lstat()
+            parent_info = secret_path.parent.lstat()
+        except OSError as exc:
+            raise ValueError("local dogfood attestation envelope secret file must exist and be owner-readable only") from exc
+        if (
+            stat.S_ISLNK(secret_info.st_mode)
+            or not stat.S_ISREG(secret_info.st_mode)
+            or secret_info.st_uid != os.geteuid()
+            or secret_info.st_mode & 0o077
+            or stat.S_ISLNK(parent_info.st_mode)
+            or not stat.S_ISDIR(parent_info.st_mode)
+            or parent_info.st_uid != os.geteuid()
+            or parent_info.st_mode & 0o077
+        ):
+            raise ValueError("local dogfood attestation envelope secret file must exist and be owner-readable only")
+        try:
+            from supervisor.application.local_dogfood_attestation import _issuer_registry, read_owner_private_secret
+            read_owner_private_secret(str(secret_path))
+            _issuer_registry(self.local_dogfood_attestation_issuer_registry)
+        except Exception as exc:
+            raise ValueError("local dogfood attestation issuer registry or envelope secret is invalid") from exc
+        api_socket = Path(self.local_dogfood_attestation_api_socket_path or self.supervisor_uds_path or "")
+        parent = api_socket.parent
+        try:
+            parent_details = parent.lstat()
+        except OSError as exc:
+            raise ValueError("local dogfood attestation API socket parent must exist") from exc
+        if parent.is_symlink() or parent_details.st_uid != os.geteuid() or parent_details.st_mode & 0o077:
+            raise ValueError("local dogfood attestation API socket parent must be private and owner-controlled")
 
     @property
     def cors_origin_list(self) -> list[str]:

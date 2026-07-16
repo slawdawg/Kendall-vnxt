@@ -20,3 +20,6 @@ pnpm run test:supervisor
 Use `pnpm run test:supervisor -- <pytest args>` for focused checks. The wrapper and pytest config disable pytest cache writes and default collection to `tests`, which keeps generated temp/cache paths from blocking worktree cleanup.
 
 `uv sync --directory services/supervisor` keeps the local virtualenv aligned with `services/supervisor/uv.lock`.
+
+For the default-disabled local attestation issuer, observer, and private-socket
+setup, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).

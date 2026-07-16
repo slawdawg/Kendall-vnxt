@@ -1607,6 +1607,13 @@ class PipelineCanonicalContractV1View(BaseModel):
         return self
 
 
+class LocalDogfoodAttestationReceiptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    receipt: dict[str, str]
+    signatureB64: str = Field(min_length=1, max_length=200)
+
+
 PipelineOperationalEvidenceClass = Literal["fixture", "integrated_local", "live_observed"]
 PipelineEpic25EvidenceSlot = Literal["readiness", "canary", "ramp", "recovery", "hardening", "decision"]
 PipelineEpic25PacketSchemaVersion = Literal[
@@ -2222,6 +2229,10 @@ class AuthoritativePacketSourceRefView(BaseModel):
     pathOrUrl: str | None = Field(default=None, max_length=500)
     title: str | None = Field(default=None, max_length=255)
     contentSha256: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
+    environment: Literal["local_dogfood"] | None = None
+    sourceRevision: str | None = Field(default=None, min_length=40, max_length=40, pattern=r"^[0-9a-f]{40}$")
+    sourceRefs: list[str] | None = Field(default=None, min_length=1, max_length=24)
+    evidenceRefs: list[str] | None = Field(default=None, min_length=1, max_length=24)
 
     @field_validator("refId")
     @classmethod
@@ -2236,6 +2247,18 @@ class AuthoritativePacketSourceRefView(BaseModel):
     def _normalize_content_digest(cls, value: str | None) -> str | None:
         return value.lower() if value is not None else None
 
+    @field_validator("sourceRefs", "evidenceRefs")
+    @classmethod
+    def _attestation_refs_must_be_safe(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        normalized = [value.strip() for value in values]
+        if any(not value or len(value) > 200 or not value.isascii() or not value.isprintable() for value in normalized):
+            raise ValueError("attestation references must be printable ASCII metadata")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("attestation references must not contain duplicates")
+        return normalized
+
     @field_validator("title")
     @classmethod
     def _source_title_must_be_safe_metadata(cls, value: str | None) -> str | None:
@@ -2249,8 +2272,9 @@ class AuthoritativePacketSourceRefView(BaseModel):
     @model_serializer(mode="wrap")
     def _omit_unset_content_digest(self, handler):
         serialized = handler(self)
-        if self.contentSha256 is None:
-            serialized.pop("contentSha256", None)
+        for field in ("contentSha256", "environment", "sourceRevision", "sourceRefs", "evidenceRefs"):
+            if getattr(self, field) is None:
+                serialized.pop(field, None)
         return serialized
 
 

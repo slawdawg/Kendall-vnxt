@@ -120,6 +120,58 @@ SUPERVISOR_CONTROL_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("revision", "INTEGER NOT NULL DEFAULT 1"),
 )
 
+LOCAL_DOGFOOD_AUTHORIZATION_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("issuer_id", "VARCHAR(120) DEFAULT 'legacy-untrusted'"),
+    ("key_id", "VARCHAR(120) DEFAULT 'legacy-untrusted'"),
+    ("public_key_b64", "VARCHAR(120) DEFAULT ''"),
+    ("packet_schema", "VARCHAR(160) DEFAULT 'legacy-untrusted'"),
+    ("target_ref", "VARCHAR(200) DEFAULT 'legacy-untrusted'"),
+    ("source_revision", "VARCHAR(80) DEFAULT 'legacy-untrusted'"),
+    ("source_refs", "VARCHAR(512) DEFAULT '[]'"),
+    ("evidence_digest", "VARCHAR(80) DEFAULT 'legacy-untrusted'"),
+    ("evidence_refs", "VARCHAR(512) DEFAULT '[]'"),
+    ("run_id", "VARCHAR(80) DEFAULT 'legacy-untrusted'"),
+    ("attempt_id", "VARCHAR(80) DEFAULT 'legacy-untrusted'"),
+    ("policy_version", "VARCHAR(64) DEFAULT 'local-dogfood/v1'"),
+    ("retention_policy", "VARCHAR(64) DEFAULT 'metadata_only'"),
+    ("observer_id", "VARCHAR(120) DEFAULT 'local_unix_observer/v1'"),
+    ("environment", "VARCHAR(32) DEFAULT 'local_dogfood'"),
+    ("expires_at", "TIMESTAMPTZ DEFAULT '1970-01-01'"),
+    ("revoked", "BOOLEAN DEFAULT TRUE"),
+    ("observation_requested", "BOOLEAN DEFAULT TRUE"),
+    ("observation_state", "VARCHAR(24) DEFAULT 'ready'"),
+    ("observation_receipt_id", "VARCHAR(200)"),
+    ("accepted_receipt_id", "VARCHAR(200)"),
+    ("observation_lease_expires_at", "TIMESTAMPTZ"),
+    ("created_at", "TIMESTAMPTZ DEFAULT NOW()"),
+)
+
+LOCAL_DOGFOOD_AUTHORIZATION_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("issuer_id", "VARCHAR(120) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("key_id", "VARCHAR(120) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("public_key_b64", "VARCHAR(120) NOT NULL DEFAULT ''"),
+    ("packet_schema", "VARCHAR(160) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("target_ref", "VARCHAR(200) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("source_revision", "VARCHAR(80) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("source_refs", "VARCHAR(512) NOT NULL DEFAULT '[]'"),
+    ("evidence_digest", "VARCHAR(80) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("evidence_refs", "VARCHAR(512) NOT NULL DEFAULT '[]'"),
+    ("run_id", "VARCHAR(80) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("attempt_id", "VARCHAR(80) NOT NULL DEFAULT 'legacy-untrusted'"),
+    ("policy_version", "VARCHAR(64) DEFAULT 'local-dogfood/v1'"),
+    ("retention_policy", "VARCHAR(64) DEFAULT 'metadata_only'"),
+    ("observer_id", "VARCHAR(120) DEFAULT 'local_unix_observer/v1'"),
+    ("environment", "VARCHAR(32) NOT NULL DEFAULT 'local_dogfood'"),
+    ("expires_at", "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'"),
+    ("revoked", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("observation_requested", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("observation_state", "VARCHAR(24) NOT NULL DEFAULT 'ready'"),
+    ("observation_receipt_id", "VARCHAR(200)"),
+    ("accepted_receipt_id", "VARCHAR(200)"),
+    ("observation_lease_expires_at", "DATETIME"),
+    ("created_at", "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'"),
+)
+
 
 async def _sqlite_table_columns(connection, table_name: str) -> set[str]:
     result = await connection.execute(text(f"PRAGMA table_info({table_name})"))
@@ -328,6 +380,19 @@ async def init_db() -> None:
                         f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
                     )
                 )
+            for column_name, column_type in LOCAL_DOGFOOD_AUTHORIZATION_POSTGRES_COLUMNS:
+                await connection.execute(text(
+                    "ALTER TABLE local_dogfood_attestation_authorizations "
+                    f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                ))
+            await connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_local_dogfood_authorizations_target_created "
+                "ON local_dogfood_attestation_authorizations(target_ref, created_at)"
+            ))
+            await connection.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_local_dogfood_accepted_receipt_per_authorization "
+                "ON local_dogfood_attestation_receipt_decisions(authorization_id) WHERE accepted"
+            ))
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
             await _sqlite_add_columns(connection, "dashboard_sessions", DASHBOARD_SESSION_SQLITE_COLUMNS)
@@ -434,6 +499,19 @@ async def init_db() -> None:
                 ),
             )
             await _ensure_sqlite_memory_proposals_schema(connection)
+            await _sqlite_add_columns(
+                connection,
+                "local_dogfood_attestation_authorizations",
+                LOCAL_DOGFOOD_AUTHORIZATION_SQLITE_COLUMNS,
+            )
+            await connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_local_dogfood_authorizations_target_created "
+                "ON local_dogfood_attestation_authorizations(target_ref, created_at)"
+            ))
+            await connection.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_local_dogfood_accepted_receipt_per_authorization "
+                "ON local_dogfood_attestation_receipt_decisions(authorization_id) WHERE accepted = 1"
+            ))
         # Seed the singleton after dialect-specific migrations so this is also
         # safe for an older database that needs the revision column added first.
         # The conflict clause makes repeated startup and concurrent first

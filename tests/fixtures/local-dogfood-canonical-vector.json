@@ -1,0 +1,22 @@
+{
+  "attemptId": "attempt",
+  "authorizationId": "auth",
+  "environment": "local_dogfood",
+  "evidenceDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "evidenceRefs": "[\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]",
+  "expiresAt": "2026-01-01T00:01:00Z",
+  "issuedAt": "2026-01-01T00:00:00Z",
+  "issuerId": "issuer",
+  "keyId": "key",
+  "nonce": "nonce",
+  "observerId": "observer",
+  "packetSchema": "packet/v1",
+  "policyVersion": "local-dogfood/v1",
+  "receiptId": "receipt",
+  "retentionPolicy": "metadata_only",
+  "runId": "run",
+  "schemaVersion": "pipeline-local-dogfood-attestation/v1",
+  "sourceRefs": "[\"packet:target\"]",
+  "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetRef": "target"
+}

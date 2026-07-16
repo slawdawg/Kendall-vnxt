@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { LocalDogfoodAttestationPanel } from "./local-dogfood-attestation-panel";
 import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 
@@ -80,6 +81,8 @@ export function PacketDetailPage({
         <DetailBlock title="What proof exists?" body={`${packet.evidenceRefs.length} evidence refs, ${packet.artifactRefs.length} artifact refs, ${packet.sourceRefs.length} source refs.`} />
         <DetailBlock title="What happens next?" body={snapshot?.whatHappensNext ?? packet.nextAction} />
       </section>
+
+      <LocalDogfoodAttestationPanel enabled={!isDemoPacket} targetRef={packet.packetId} />
 
       <section className="grid gap-4 xl:grid-cols-2">
         <DetailSection title="Route">

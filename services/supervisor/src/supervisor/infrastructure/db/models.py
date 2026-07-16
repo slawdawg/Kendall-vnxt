@@ -175,6 +175,62 @@ class AuthoritativeWorkPacket(Base):
     )
 
 
+class LocalDogfoodAuthorization(Base):
+    """Local-only, server-owned receipt authorization; never a live-evidence record."""
+
+    __tablename__ = "local_dogfood_attestation_authorizations"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    issuer_id: Mapped[str] = mapped_column(String(120))
+    key_id: Mapped[str] = mapped_column(String(120))
+    public_key_b64: Mapped[str] = mapped_column(String(120))
+    packet_schema: Mapped[str] = mapped_column(String(160))
+    target_ref: Mapped[str] = mapped_column(String(200))
+    source_revision: Mapped[str] = mapped_column(String(80))
+    source_refs: Mapped[str] = mapped_column(String(512), default="[]")
+    evidence_digest: Mapped[str] = mapped_column(String(80))
+    evidence_refs: Mapped[str] = mapped_column(String(512), default="[]")
+    run_id: Mapped[str] = mapped_column(String(80))
+    attempt_id: Mapped[str] = mapped_column(String(80))
+    policy_version: Mapped[str] = mapped_column(String(64), default="local-dogfood/v1")
+    retention_policy: Mapped[str] = mapped_column(String(64), default="metadata_only")
+    observer_id: Mapped[str] = mapped_column(String(120), default="local_unix_observer/v1")
+    environment: Mapped[str] = mapped_column(String(32), default="local_dogfood")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    observation_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    observation_state: Mapped[str] = mapped_column(String(24), default="ready")
+    observation_receipt_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    accepted_receipt_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    observation_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LocalDogfoodReplayFence(Base):
+    __tablename__ = "local_dogfood_attestation_replay_fences"
+    __table_args__ = (UniqueConstraint("fence_kind", "value", name="uq_local_dogfood_attestation_fence"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    authorization_id: Mapped[str] = mapped_column(ForeignKey("local_dogfood_attestation_authorizations.id"))
+    fence_kind: Mapped[str] = mapped_column(String(16))
+    value: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LocalDogfoodReceiptDecision(Base):
+    __tablename__ = "local_dogfood_attestation_receipt_decisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    authorization_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    receipt_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    issuer_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    key_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejection_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_class: Mapped[str] = mapped_column(String(32), default="integrated_local")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AuthoritativeWorkPacketLifecycleEvent(Base):
     __tablename__ = "authoritative_work_packet_lifecycle_events"
     __table_args__ = (UniqueConstraint("packet_id", "idempotency_key", name="uq_authoritative_work_packet_event_idempotency"),)

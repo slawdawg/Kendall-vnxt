@@ -27,6 +27,8 @@ See the repository's [Authenticated LAN dashboard setup](../../docs/workflows/au
 for first-time host configuration, private-file permissions, certificate setup,
 startup order, and failure diagnosis.
 
+For the default-disabled local attestation detail panel, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).
+
 Docker Compose explicitly opts into `KENDALL_DASHBOARD_CONTAINER_MODE=true`
 and `KENDALL_DASHBOARD_HOST=0.0.0.0` so the dashboard can reach the compose
 network and host-published port. Do not copy those container-only values into

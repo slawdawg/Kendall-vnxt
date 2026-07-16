@@ -962,6 +962,7 @@ test("operational action loop proof artifact records current backend action trut
 
 test("fixture-as-live regressions are blocked by explicit projection truth predicates", async () => {
   const cockpitSource = await readFile(cockpitPath, "utf8");
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
   const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
   const contractSource = await readFile(pipelineContractPath, "utf8");
   const projectionTruthSource = await readFile(projectionTruthPath, "utf8");
@@ -1052,7 +1053,8 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.doesNotMatch(cockpitSource, /ProjectionTruthChip label="Fixture mode"/);
   assert.match(cockpitSource, /Open Diagnostics only when you need debug details/);
   assert.doesNotMatch(cockpitSource, /Diagnostics contain proof, fixture, catalog, and manager internals when needed/);
-  assert.match(cockpitSource, /non-live fixture/);
+  assert.doesNotMatch(cockpitSource, /non-live fixture/);
+  assert.match(packetDetailSource, /non-live fixture/);
   assert.match(cockpitSource, /Fixture\/non-live packet; cannot satisfy live proof/);
 
   const liveProjection = projectionFixture();
@@ -1456,8 +1458,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   ]) {
     assert.doesNotMatch(defaultDashboardSurfaceSource, bannedDefaultSurfacePattern);
   }
-  assert.match(defaultDashboardSurfaceSource, /Ready to test: \$\{packet\.title\}/);
-  assert.match(defaultDashboardSurfaceSource, /pipeline-mini-packet-ready/);
+  assert.doesNotMatch(defaultDashboardSurfaceSource, /Ready to test: \$\{packet\.title\}/);
+  assert.doesNotMatch(defaultDashboardSurfaceSource, /pipeline-mini-packet-ready/);
   assert.match(defaultDashboardSurfaceSource, /Stale history/);
   assert.match(defaultDashboardSurfaceSource, /Diagnostics/);
   for (const bannedMiniCardPattern of [
@@ -1546,7 +1548,6 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /canonicalSourceTrustState\(canonicalDetail\.source\.trust, packetSourceLabel, packetFreshness\)/);
   assert.match(cockpitSource, /projectionState === "stale" \|\| projectionState === "unavailable"/);
   assert.match(cockpitSource, /canonicalDetail\.source\.sourceRef/);
-  assert.match(cockpitSource, /packet\.activeBoardCard\?\.canonicalPostureLabel \?\? "canonical posture unavailable"/);
   assert.match(cockpitSource, /Backpressure next/);
   assert.match(cockpitSource, /aria-disabled="true"/);
   assert.doesNotMatch(cockpitSource, /disabled\s*\n\s*title=\{`\$\{action\.reason/);
@@ -2524,19 +2525,10 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /selectedPacketInStage/);
   assert.match(cockpitSource, /expanded \? sortedPackets : sortedPackets\.slice\(0, visibleLimit\)/);
   assert.match(cockpitSource, /packet\.activeBoardCard\?\.attention/);
-  assert.match(cockpitSource, /aria-label="Action needed packet"/);
-  assert.match(cockpitSource, /Action needed: \$\{packet\.title\}/);
-  assert.match(cockpitSource, /pipeline-mini-packet-action-needed/);
-  assert.match(cockpitSource, /<span aria-hidden="true">!<\/span>/);
-  assert.match(cockpitSource, /<span>Need<\/span>/);
-  assert.match(cockpitSource, /packetCardAttentionReasonLabel/);
-  assert.match(cockpitSource, /packetCardOperatorActionLabel/);
+  assert.match(cockpitSource, /aria-label=\{`\$\{miniCardLabel\(packet\)\}; \$\{packetCardStatusLabel\(packet\)\}`\}/);
   assert.match(cockpitSource, /stageKnownTotalCount = stageRenderedCount/);
-  assert.match(cockpitSource, /return packet\.nextAction/);
   assert.match(cockpitSource, /plainStageLabel/);
   assert.match(cockpitSource, /onSelectStage/);
-  assert.match(cockpitSource, /aria-label=\{packet\.activeBoardCard\?\.attention/);
-  assert.match(cockpitSource, /: `Inspect packet: \$\{packet\.title\}`/);
   assert.match(pipelineComponentSource, /packet\.sourceKind === "demo-fixture" \? "\/pipeline\/demo\/packets" : "\/pipeline\/packets"/);
   assert.match(pipelineComponentSource, /encodeURIComponent\(packet\.packetId\)/);
   assert.match(packetDetailRouteSource, /decodeURIComponent\(packetId\)/);
@@ -2594,26 +2586,18 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.doesNotMatch(cockpitSource, /stageToneForPackets/);
   assert.doesNotMatch(cockpitSource, /pipeline-route-station-\$\{stageTone\}/);
   assert.doesNotMatch(globalsSource, /\.pipeline-route-connector-pulse|pipeline-route-flow|\.pipeline-route-station-active|\.pipeline-route-station-approval|\.pipeline-route-station-blocked|\.pipeline-route-station-complete/);
-  assert.match(cockpitSource, /pipeline-mini-packet-proof/);
   assert.match(cockpitSource, /pipeline-mini-packet-body/);
   assert.match(cockpitSource, /pipeline-mini-packet-meta/);
   assert.match(globalsSource, /\.pipeline-mini-packet-body/);
   assert.match(globalsSource, /\.pipeline-mini-packet-meta/);
   for (const packetCardHelper of [
     "packetCardStatusLabel",
-    "packetCardStageLabel",
     "packetCardTruthLabel",
-    "packetCardEvidenceLabel",
-    "packetCardNextLabel",
     "packetCardTestabilityLabel",
   ]) {
     assert.match(cockpitSource, new RegExp(packetCardHelper));
   }
   assert.match(cockpitSource, /status \$\{packet\.status\}/);
-  assert.match(cockpitSource, /stage \$\{plainStageLabel\(packet\.currentStage\)\}/);
-  assert.match(cockpitSource, /truth \$\{truth\}; source \$\{packet\.freshnessLabel\}/);
-  assert.match(cockpitSource, /function packetCardEvidenceLabel/);
-  assert.doesNotMatch(cockpitSource, /packetCardEvidenceLabel\(packet\)/);
   assert.match(cockpitSource, /next action not named/);
   assert.match(cockpitSource, /blocker not named/);
   assert.match(cockpitSource, /testability unknown/);
@@ -2625,8 +2609,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /packet\.activeBoardCard\?\.nextOperatorActionLabel/);
   assert.match(cockpitSource, /detailBlocker !== "blocker not named"/);
   assert.match(cockpitSource, /detailNextAction !== "next action not named"/);
-  assert.match(cockpitSource, /aria-label=\{`Ready to test: \$\{packet\.title\}`\}/);
-  assert.match(cockpitSource, /pipeline-mini-packet-ready/);
+  assert.doesNotMatch(cockpitSource, /aria-label=\{`Ready to test: \$\{packet\.title\}`\}/);
+  assert.doesNotMatch(cockpitSource, /pipeline-mini-packet-ready/);
   assert.doesNotMatch(cockpitSource, /packetCardNextLabel\(packet\)}; \{packetCardTestabilityLabel\(packet\)/);
   assert.match(cockpitSource, /Testing and risk/);
   assert.match(cockpitSource, /projectionDetailMovementSummary/);
@@ -2639,11 +2623,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(activeBoardViewModelSource, /kill state/);
   assert.match(cockpitSource, /backend projection: packet truth live/);
   assert.match(cockpitSource, /backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}/);
-  assert.match(cockpitSource, /const nextAction = packet\.nextAction\.trim\(\) \|\| "next action not named"/);
   assert.doesNotMatch(cockpitSource, /Inspect backend projection packet/);
   assert.doesNotMatch(cockpitSource, /miniCardReasonLabel/);
-  assert.match(globalsSource, /\.pipeline-mini-packet-proof/);
-  assert.match(cockpitSource, /non-live fixture/);
   assert.match(cockpitSource, /Fixture\/non-live packet; cannot satisfy live proof/);
   assert.match(packetDetailSource, /Demo fixture; cannot satisfy live proof/);
   assert.match(packetDetailSource, /non-live fixture/);
