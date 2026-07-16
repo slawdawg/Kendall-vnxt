@@ -35,7 +35,9 @@ export function LocalDogfoodAttestationPanel({ enabled = true, targetRef }: { en
           throw new Error("Local attestation readback was malformed.");
         }
         setState({ kind: "ready", targetRef, readback });
-        if (readback.expiresAt) {
+        if (readback.receiptState === "pending") {
+          refreshTimer = setTimeout(() => void load(), 1000);
+        } else if (readback.expiresAt) {
           const expiresAt = Date.parse(readback.expiresAt);
           if (Number.isFinite(expiresAt)) {
             refreshTimer = setTimeout(() => void load(), Math.max(1000, expiresAt - Date.now() + 50));

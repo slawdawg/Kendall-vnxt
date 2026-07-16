@@ -85,6 +85,23 @@ def canonical_authorization_envelope_bytes(envelope: dict) -> bytes:
     return json.dumps(envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def canonical_source_binding_digest(
+    environment: str,
+    source_revision: str,
+    source_refs: list[str],
+    evidence_refs: list[str],
+) -> str:
+    """Hash only the documented source/evidence binding contract."""
+    binding = {
+        "environment": environment,
+        "sourceRevision": source_revision,
+        "sourceRefs": sorted(set(source_refs)),
+        "evidenceRefs": sorted(set(evidence_refs)),
+    }
+    payload = json.dumps(binding, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
 def sign_authorization_envelope(envelope: dict, secret: bytes) -> str:
     if len(secret) < 32:
         raise ReceiptRejected("local_observer_auth_unavailable")
@@ -271,11 +288,9 @@ def _snapshot(packet: AuthoritativeWorkPacket) -> tuple[str, str, str, str]:
     evidence_refs = json.dumps(evidence_refs_value, separators=(",", ":"), ensure_ascii=True)
     if len(source_refs) > MAX_FIELD_LENGTH or len(evidence_refs) > MAX_FIELD_LENGTH:
         raise ReceiptRejected("invalid_metadata")
-    normalized = dict(source_meta)
-    normalized["sourceRefs"] = source_refs_value
-    normalized["evidenceRefs"] = evidence_refs_value
-    source_json = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    evidence_digest = f"sha256:{hashlib.sha256(source_json.encode()).hexdigest()}"
+    evidence_digest = canonical_source_binding_digest(
+        ENVIRONMENT, source_revision, source_refs_value, evidence_refs_value,
+    )
     return source_revision, source_refs, evidence_digest, evidence_refs
 
 

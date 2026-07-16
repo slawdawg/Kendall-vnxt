@@ -96,6 +96,10 @@ def test_api_created_packet_persists_explicit_local_binding(tmp_path, monkeypatc
         authorization = client.post("/local-dogfood/attestations/packets/packet-api-local/authorizations")
         assert authorization.status_code == 200, authorization.text
         assert authorization.json()["data"]["receiptBindings"]["sourceRevision"] == "b" * 40
+        from supervisor.application.local_dogfood_attestation import canonical_source_binding_digest
+        assert authorization.json()["data"]["receiptBindings"]["evidenceDigest"] == canonical_source_binding_digest(
+            "local_dogfood", "b" * 40, ["source:api-local"], ["evidence:api-local"],
+        )
 
 
 def _receipt(authorization: dict, now: datetime) -> dict:

@@ -9,7 +9,6 @@ canonical metadata digest is the server-authorized evidence digest.
 import argparse
 import asyncio
 import base64
-import hashlib
 import hmac
 import json
 import os
@@ -23,7 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from supervisor.application.local_dogfood_attestation import (
     MAX_RECEIPT_REQUEST_BYTES, SCHEMA, ReceiptRejected, canonical_authorization_envelope_bytes, canonical_receipt_bytes,
-    read_owner_private_secret,
+    canonical_source_binding_digest, read_owner_private_secret,
 )
 
 
@@ -45,8 +44,12 @@ def _canonical_source_digest(path: Path) -> str:
         if not isinstance(source.get(field), list) or not all(isinstance(value, str) for value in source[field]):
             raise ValueError("observation references are invalid")
         source[field] = sorted(set(source[field]))
-    payload = json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    return canonical_source_binding_digest(
+        source.get("environment", ""),
+        source.get("sourceRevision", ""),
+        source["sourceRefs"],
+        source["evidenceRefs"],
+    )
 
 
 def _receipt(envelope: dict, observation_path: Path, key: Ed25519PrivateKey) -> dict:
