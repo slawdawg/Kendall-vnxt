@@ -2272,8 +2272,9 @@ class AuthoritativePacketSourceRefView(BaseModel):
     @model_serializer(mode="wrap")
     def _omit_unset_content_digest(self, handler):
         serialized = handler(self)
-        if self.contentSha256 is None:
-            serialized.pop("contentSha256", None)
+        for field in ("contentSha256", "environment", "sourceRevision", "sourceRefs", "evidenceRefs"):
+            if getattr(self, field) is None:
+                serialized.pop(field, None)
         return serialized
 
 
