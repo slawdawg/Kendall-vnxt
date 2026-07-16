@@ -9,6 +9,8 @@ import sys
 import socket
 import stat
 import struct
+import shutil
+import tempfile
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -450,25 +452,29 @@ def test_issuer_refuses_shared_or_existing_socket_paths(tmp_path):
 
 def test_supervisor_refuses_shared_or_wrong_type_observer_socket(tmp_path):
     from supervisor.application.local_dogfood_attestation import ReceiptRejected, _validate_owner_private_observer_socket
-    private = tmp_path / "private"
-    private.mkdir(mode=0o700)
-    os.chmod(private, 0o700)
-    wrong_type = private / "observer.sock"
-    wrong_type.write_text("not a socket", encoding="ascii")
-    os.chmod(wrong_type, 0o600)
-    with pytest.raises(ReceiptRejected, match="local_observer_unavailable"):
-        _validate_owner_private_observer_socket(str(wrong_type))
-    wrong_type.unlink()
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(wrong_type))
+    private = None
+    listener = None
     try:
+        private = Path(tempfile.mkdtemp(prefix="knx-obs-", dir="/tmp"))
+        os.chmod(private, 0o700)
+        wrong_type = private / "observer.sock"
+        wrong_type.write_text("not a socket", encoding="ascii")
+        os.chmod(wrong_type, 0o600)
+        with pytest.raises(ReceiptRejected, match="local_observer_unavailable"):
+            _validate_owner_private_observer_socket(str(wrong_type))
+        wrong_type.unlink()
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(wrong_type))
         os.chmod(wrong_type, 0o666)
         with pytest.raises(ReceiptRejected, match="local_observer_unavailable"):
             _validate_owner_private_observer_socket(str(wrong_type))
         os.chmod(wrong_type, 0o600)
         _validate_owner_private_observer_socket(str(wrong_type))
     finally:
-        listener.close()
+        if listener is not None:
+            listener.close()
+        if private is not None:
+            shutil.rmtree(private, ignore_errors=True)
 
 
 def test_supervisor_requires_kernel_same_uid_observer_peer(monkeypatch):
