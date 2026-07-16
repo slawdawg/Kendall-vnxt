@@ -19,6 +19,7 @@ test("LAN auth gates every dashboard page and defaults unknown app paths to deny
   }
   assert.equal(isDashboardEntryRoute({ url: "/api/work-items" }), true);
   assert.equal(isProtectedNextRoute({ url: "/api/work-items" }), true);
+  assert.equal(isDashboardEntryRoute({ url: "/pipeline/packets/rework%3Aabc" }), true);
   assert.equal(isDashboardEntryRoute({ url: "/unknown-app-route" }), false);
   assert.equal(isProtectedNextRoute({ url: "/unknown-app-route" }), true);
   assert.equal(isProtectedNextRoute({ url: "/api/packet-detail/packet-1" }), false);
