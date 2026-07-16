@@ -23,6 +23,10 @@ In LAN-auth mode the custom runtime serves the standalone sign-in surface and
 proxies only the fixed authentication routes over the supervisor UDS. Protected
 Next routes are session-gated; Packet Detail reads use the bounded read mediator.
 
+See the repository's [Authenticated LAN dashboard setup](../../docs/workflows/authenticated-lan-dashboard-setup.md)
+for first-time host configuration, private-file permissions, certificate setup,
+startup order, and failure diagnosis.
+
 Docker Compose explicitly opts into `KENDALL_DASHBOARD_CONTAINER_MODE=true`
 and `KENDALL_DASHBOARD_HOST=0.0.0.0` so the dashboard can reach the compose
 network and host-published port. Do not copy those container-only values into

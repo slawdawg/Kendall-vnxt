@@ -290,6 +290,10 @@ not as permission to skip BMAD quality gates.
 - For each alpha slice, define the smallest useful outcome, the BMAD artifacts
   required for that slice, the verification needed to dogfood it, and the next
   slice it unlocks.
+- Every new user-facing or operational feature must update a source-owned
+  setup/runbook in the same slice and link it from the nearest README. Include
+  prerequisites, configuration and startup, failure/recovery, and
+  secret-handling boundaries so a new operator can get it running safely.
 - Treat "pre-alpha" as permission to accept rough edges and fixture-backed or
   read-only starts, but not hidden mutation, unclear ownership, missing
   recovery paths, or undocumented authority expansion.

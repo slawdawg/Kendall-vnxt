@@ -92,6 +92,10 @@ The supervisor validates the bootstrap file and the dashboard must complete the
 supervisor UDS startup gate before it accepts traffic; no plain HTTP LAN
 listener is created.
 
+For a first-time, copy-paste setup (including safe private-file permissions,
+certificate creation, startup order, and troubleshooting), see
+[Authenticated LAN dashboard setup](docs/workflows/authenticated-lan-dashboard-setup.md).
+
 Important environment variables:
 
 - `NEXT_PUBLIC_SUPERVISOR_URL`: browser-visible supervisor base URL

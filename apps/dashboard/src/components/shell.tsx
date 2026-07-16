@@ -32,7 +32,7 @@ export function Shell({
           width: "100%",
         }}
       >
-        <header className={`min-w-0 rounded-[0.5rem] border shadow-sm ${compactHeader ? "bg-transparent p-2" : "bg-[var(--panel)] p-4"}`}>
+        <header className={`min-w-0 rounded-[0.5rem] border shadow-sm ${compactHeader ? "bg-transparent p-2" : "bg-[var(--panel)] p-4"} ${lanAuthEnabled ? "xl:pr-14" : ""}`}>
           <div className={compactHeader ? "flex items-start justify-between gap-3" : "flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between"}>
             <div className="min-w-0">
               <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent)]">

@@ -19,6 +19,7 @@ export async function startEpic26AuthHarness(port = 3102) {
   chmodSync(certPath, 0o600);
   chmodSync(keyPath, 0o600);
   let sessionValid = false;
+  const readCookie = (header, name) => header.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) ?? "";
   const supervisor = http.createServer((request, response) => {
     const cookie = request.headers.cookie || "";
     if (request.url === "/internal/lan-auth/startup-gate") {
@@ -47,18 +48,23 @@ export async function startEpic26AuthHarness(port = 3102) {
       return;
     }
     if (request.url === "/auth/session") {
-      response.writeHead(sessionValid && cookie.includes("harness-session") ? 200 : 401);
+      response.writeHead(sessionValid && readCookie(cookie, "kendall_operator_session") === "harness-session" ? 200 : 401);
       response.end(JSON.stringify({ authenticated: sessionValid, role: "operator" }));
       return;
     }
     if (request.url === "/auth/logout" && request.method === "POST") {
+      if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session" || request.headers["x-csrf-token"] !== "harness-session-csrf") {
+        response.writeHead(403);
+        response.end(JSON.stringify({ detail: "Logout was not accepted." }));
+        return;
+      }
       sessionValid = false;
-      response.setHeader("set-cookie", ["kendall_operator_session=; Max-Age=0; Secure; HttpOnly; SameSite=Strict; Path=/"]);
+      response.setHeader("set-cookie", ["kendall_operator_session=; Max-Age=0; Secure; HttpOnly; SameSite=Strict; Path=/", "kendall_operator_csrf=; Max-Age=0; Secure; SameSite=Strict; Path=/"]);
       response.end(JSON.stringify({ signedOut: true }));
       return;
     }
     if (request.url === "/internal/dashboard/packet-detail/packet-1") {
-      if (!sessionValid || !cookie.includes("harness-session")) { response.writeHead(401); response.end(JSON.stringify({ detail: "Sign-in required." })); return; }
+      if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session") { response.writeHead(401); response.end(JSON.stringify({ detail: "Sign-in required." })); return; }
       response.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId: "packet-1", title: "Packet 1 detail", currentStage: "shaping", status: "ready", truthLabel: "integrated_local", evidence: { freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] } } }));
       return;
     }

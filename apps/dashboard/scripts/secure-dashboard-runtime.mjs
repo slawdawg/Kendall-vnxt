@@ -48,13 +48,13 @@ function parseDashboardPath(request) {
   } catch {
     return null;
   }
-  if (pathname.includes("\\") || pathname.includes("/../") || pathname.includes("/./")) return null;
+  if (pathname.includes("\\") || pathname.includes("/../") || pathname.includes("/./") || /%(?:25|2e|2f|5c)/i.test(pathname)) return null;
   return pathname;
 }
 
 export function isDashboardStaticAsset(request) {
   const rawPath = (request.url || "/").split(/[?#]/, 1)[0];
-  if (/%/.test(rawPath)) return false;
+  if (/%(?:2e|2f|5c|25)/i.test(rawPath)) return false;
   const pathname = parseDashboardPath(request);
   return pathname === "/favicon.ico" || pathname?.startsWith("/_next/") === true;
 }
@@ -137,6 +137,12 @@ export const signInPage = signInPageSafe;
 function sendHtml(response, statusCode, html) {
   response.writeHead(statusCode, { "cache-control": "no-store", "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html) });
   response.end(html);
+}
+
+export function applyLanAuthSecurityHeaders(response, config) {
+  if (config?.lanAuthEnabled) {
+    response.setHeader("strict-transport-security", "max-age=31536000; includeSubDomains");
+  }
 }
 
 function expandIpv6(value) {
@@ -306,6 +312,7 @@ async function main() {
   server.removeAllListeners("request");
   const nextHandler = dashboard.getRequestHandler();
   server.on("request", async (request, response) => {
+    applyLanAuthSecurityHeaders(response, config);
     if (mediator && await mediator(request, response)) return;
     if (authProxy && await authProxy(request, response)) return;
     if (supervisorProxy && await supervisorProxy(request, response)) return;
