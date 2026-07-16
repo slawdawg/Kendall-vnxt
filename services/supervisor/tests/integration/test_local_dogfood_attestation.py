@@ -472,7 +472,13 @@ def test_supervisor_refuses_shared_or_wrong_type_observer_socket(tmp_path):
         _validate_owner_private_observer_socket(str(wrong_type))
     finally:
         if listener is not None:
+            try:
+                listener.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             listener.close()
+        if private is not None:
+            (private / "observer.sock").unlink(missing_ok=True)
         if private is not None:
             shutil.rmtree(private, ignore_errors=True)
 
