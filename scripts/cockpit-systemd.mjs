@@ -43,10 +43,11 @@ Type=simple
 WorkingDirectory=${repoRoot}
 Environment=SUPERVISOR_ALLOW_DIRTY_REPO=true
 Environment=SUPERVISOR_POLL_INTERVAL_SECONDS=1
+Environment=SUPERVISOR_PORT=${supervisorPort}
 Environment=UV_CACHE_DIR=${uvCacheDir}
 Environment=TEMP=${tmpDir}
 Environment=TMP=${tmpDir}
-ExecStart=${uvPath} run --directory services/supervisor uvicorn supervisor.api.main:app --host 0.0.0.0 --port ${supervisorPort}
+ExecStart=${uvPath} run --directory services/supervisor supervisor
 Restart=always
 RestartSec=5
 
@@ -66,7 +67,8 @@ Environment=SUPERVISOR_INTERNAL_URL=${supervisorUrl}
 Environment=TEMP=${tmpDir}
 Environment=TMP=${tmpDir}
 Environment=KENDALL_PIPELINE_WORKER_EVIDENCE_DIR=${workerEvidenceDir}
-ExecStart=${pnpmPath} --filter @kendall/dashboard exec next dev --hostname 0.0.0.0 --port ${dashboardPort}
+Environment=KENDALL_DASHBOARD_PORT=${dashboardPort}
+ExecStart=${pnpmPath} --filter @kendall/dashboard dev
 Restart=always
 RestartSec=5
 

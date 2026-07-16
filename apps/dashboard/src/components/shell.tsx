@@ -3,6 +3,7 @@ import type { NavStats } from "../lib/nav-stats";
 import { DashboardGraphBackground } from "./dashboard-graph-background";
 import { OperationalNav } from "./operational-nav";
 import { RealtimeRefresh } from "./realtime-refresh";
+import { LogoutButton } from "./logout-button";
 
 export function Shell({
   children,
@@ -17,6 +18,7 @@ export function Shell({
   realtimeRefresh?: boolean;
   wide?: boolean;
 }) {
+  const lanAuthEnabled = process.env.KENDALL_LAN_AUTH_ENABLED === "true";
   return (
     <div className="relative isolate min-h-screen overflow-hidden bg-[var(--background)]">
       <DashboardGraphBackground />
@@ -40,6 +42,7 @@ export function Shell({
                 Monitoring, evidence, queue, audit, and deliberate controls for BMAD orchestration.
               </p>
             </div>
+            {lanAuthEnabled ? <LogoutButton /> : null}
           </div>
         </header>
         {children}

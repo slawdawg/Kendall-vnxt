@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --hostname 0.0.0.0",
+    "dev": "node scripts/secure-dashboard-runtime.mjs --dev",
     "build": "next build",
-    "start": "next start --hostname 0.0.0.0",
+    "start": "node scripts/secure-dashboard-runtime.mjs",
     "lint": "eslint"
   },
   "dependencies": {
