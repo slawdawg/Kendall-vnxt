@@ -16,6 +16,7 @@
     "codex:workspace:doctor": "node ./scripts/codex-workspace.mjs doctor",
     "test:codex-workspace": "node ./scripts/test-codex-workspace.mjs",
     "test:review-gated-low-risk-automation": "node --test tests/review-gated-low-risk-automation.test.mjs",
+    "test:review-gated-low-risk-fake-adapter": "node --test tests/review-gated-low-risk-fake-adapter.test.mjs",
     "tmux:orientation": "node ./scripts/tmux-orientation-report.mjs",
     "test:tmux-orientation-report": "node --test tests/tmux-orientation-report.test.mjs",
     "check:tmux-orientation-report": "node ./scripts/check-tmux-orientation-report.mjs",
