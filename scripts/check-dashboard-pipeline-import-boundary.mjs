@@ -50,8 +50,8 @@ const readOnlyPipelineRuntimeFunctions = [
 
 const readOnlyPipelineRuntimeEndpoints = new Map([
   ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
-  ["getWorkPacket", "/work-packets/${encodeURIComponent(packetId)}"],
-  ["getWorkPackets", "/work-packets"],
+  ["getWorkPacket", "/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}"],
+  ["getWorkPackets", "/pipeline-control-plane/work-packets"],
 ]);
 
 const disabledNormalPipelineRouteImports = new Set([

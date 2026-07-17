@@ -1070,10 +1070,10 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path, options) => {
-            assert.equal(path, "/work-packets");
+            assert.equal(path, "/pipeline-control-plane/work-packets");
             assert.equal(options.timeoutMs, 10_000);
             assert.equal(options.rejectServerLanAuth, true);
-            throw new Error("Request timed out for /work-packets");
+            throw new Error("Request timed out for /pipeline-control-plane/work-packets");
           },
         };
       }
@@ -1084,8 +1084,57 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
   await assert.rejects(
     () => context.module.exports.getWorkPackets(),
-    /Request timed out for \/work-packets/,
+    /Request timed out for \/pipeline-control-plane\/work-packets/,
   );
+});
+
+test("dedicated runtime falls back to legacy work-packet reads only on canonical 404", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") {
+              throw new Error("Request failed for /pipeline-control-plane/work-packets (404)");
+            }
+            if (path === "/pipeline-control-plane/work-packets/packet-1") {
+              throw new Error("Request failed for /pipeline-control-plane/work-packets/packet-1 (404)");
+            }
+            if (path === "/work-packets/packet-1") {
+              return { packetId: "legacy-packet-1" };
+            }
+            return [{ packetId: "legacy-packet" }];
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  const packets = await context.module.exports.getWorkPackets();
+  assert.deepEqual(packets, [{ packetId: "legacy-packet" }]);
+  const packet = await context.module.exports.getWorkPacket("packet-1");
+  assert.deepEqual(packet, { packetId: "legacy-packet-1" });
+  assert.deepEqual(calls, [
+    "/pipeline-control-plane/work-packets",
+    "/work-packets",
+    "/pipeline-control-plane/work-packets/packet-1",
+    "/work-packets/packet-1",
+  ]);
 });
 
 function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {

@@ -53,7 +53,7 @@ export async function startEpic26NextLanHarness(port = 3103) {
     }
     if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session") return json(401, { detail: "Sign-in required." });
     if (request.url === "/pipeline-control-plane/projection") return json(200, { data: {} });
-    if (request.url === "/work-packets") return json(200, { data: [] });
+    if (request.url === "/pipeline-control-plane/work-packets") return json(200, { data: [] });
     if (request.url === "/internal/dashboard/packet-detail/packet-1") return json(200, { schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId: "packet-1", title: "Packet 1 detail", currentStage: "shaping", status: "ready", truthLabel: "integrated_local", evidence: { freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] } } });
     return json(404, { detail: "Not found." });
   });

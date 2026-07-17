@@ -9,12 +9,32 @@ function requestJson<T>(path: string): Promise<T> {
   return requestSupervisorJson<T>(path, { timeoutMs: 10_000, rejectServerLanAuth: true });
 }
 
+function requestLegacyJson<T>(path: string): Promise<T> {
+  return requestJson<T>(path);
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "message" in error && typeof error.message === "string" && /\(404\)$/.test(error.message));
+}
+
 export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {
-  return requestJson<WorkPacketV0View>(`/work-packets/${encodeURIComponent(packetId)}`);
+  const canonicalPath = `/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`;
+  const legacyPath = `/work-packets/${encodeURIComponent(packetId)}`;
+  try {
+    return await requestJson<WorkPacketV0View>(canonicalPath);
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+    return requestLegacyJson<WorkPacketV0View>(legacyPath);
+  }
 }
 
 export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
-  return requestJson<WorkPacketV0View[]>("/work-packets");
+  try {
+    return await requestJson<WorkPacketV0View[]>("/pipeline-control-plane/work-packets");
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+    return requestLegacyJson<WorkPacketV0View[]>("/work-packets");
+  }
 }
 
 export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {
