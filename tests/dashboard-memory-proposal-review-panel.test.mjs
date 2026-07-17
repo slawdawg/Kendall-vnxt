@@ -12,7 +12,7 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(runtimeSource, /export async function getWorkPacket\(packetId: string\)/);
   assert.match(runtimeSource, /\/pipeline-control-plane\/work-packets\/\$\{encodeURIComponent\(packetId\)\}/);
   assert.match(runtimeSource, /export async function getWorkPackets\(\): Promise<WorkPacketV0View\[\]>/);
-  assert.match(runtimeSource, /requestJson<WorkPacketV0View\[\]>\("\/pipeline-control-plane\/work-packets"\)/);
+  assert.match(runtimeSource, /canonicalPackets\(await requestJson<unknown>\("\/pipeline-control-plane\/work-packets"\)\)/);
   assert.match(pageSource, /getWorkPacket\(`work_item:\$\{workItemId\}`\)/);
   assert.match(pageSource, /<MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/>/);
   assert.match(pageSource, /href="#memory-proposals"/);

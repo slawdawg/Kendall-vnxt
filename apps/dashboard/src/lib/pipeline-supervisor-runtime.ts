@@ -57,7 +57,7 @@ export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View>
 export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
   let canonical: WorkPacketV0View[];
   try {
-    canonical = canonicalPackets(await requestJson<WorkPacketV0View[]>("/pipeline-control-plane/work-packets"));
+    canonical = canonicalPackets(await requestJson<unknown>("/pipeline-control-plane/work-packets"));
   } catch (error) {
     if (!isNotFoundError(error) && !isCanonicalShapeError(error)) throw error;
     return requestLegacyJson<WorkPacketV0View[]>("/work-packets");
