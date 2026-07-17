@@ -75,10 +75,11 @@ export function classifySandboxBoundaryResult(input = {}) {
   const observation = normalizeInput(input);
   const text = observationText(observation);
 
-  if (isSpawnSyncPermissionBoundary(observation, text)) {
+  const spawnSyncPermissionCode = spawnSyncPermissionBoundaryCode(observation);
+  if (spawnSyncPermissionCode) {
     return boundaryPacket(observation, {
-      signature: "spawnSync EPERM sandbox boundary",
-      evidenceSummary: "Child process spawn was blocked by an EPERM sandbox boundary.",
+      signature: `spawnSync ${spawnSyncPermissionCode} sandbox boundary`,
+      evidenceSummary: `Child process spawn was blocked by a ${spawnSyncPermissionCode} sandbox boundary.`,
     });
   }
 
@@ -191,8 +192,19 @@ function observationText(observation) {
     .toLowerCase();
 }
 
-function isSpawnSyncPermissionBoundary(observation, text) {
-  return /spawnsync .*eperm|spawn .*eperm|\beperm\b.*spawnsync|\beperm\b.*spawn/.test(text);
+function spawnSyncPermissionBoundaryCode(observation) {
+  const processEvidence = [observation.stdout, observation.stderr, observation.output, observation.errorCode, observation.errorMessage]
+    .join("\n")
+    .toLowerCase();
+  if (!processEvidence.includes("spawnsync")) {
+    return null;
+  }
+  const structuredCode = observation.errorCode.toUpperCase();
+  if (["EPERM", "EACCES", "EROFS"].includes(structuredCode)) {
+    return structuredCode;
+  }
+  const matchedCode = processEvidence.match(/spawnsync .*?(eperm|eacces|erofs)|\b(eperm|eacces|erofs)\b.*spawnsync/);
+  return (matchedCode?.[1] || matchedCode?.[2])?.toUpperCase() || null;
 }
 
 function isReadOnlyFilesystemBoundary(text) {

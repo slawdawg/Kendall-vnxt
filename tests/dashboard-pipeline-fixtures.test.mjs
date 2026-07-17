@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import vm from "node:vm";
 
+import { classifySandboxBoundaryResult } from "../scripts/lib/sandbox-boundary-classifier.mjs";
+
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const nextConfigPath = new URL("../apps/dashboard/next.config.ts", import.meta.url);
 const routePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
@@ -40,6 +42,8 @@ const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", 
 const setupE2ePath = new URL("../scripts/setup-e2e.mjs", import.meta.url);
 const pipelineImportBoundaryCheckPath = new URL("../scripts/check-dashboard-pipeline-import-boundary.mjs", import.meta.url);
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
+
+class NestedProcessBlocked extends Error {}
 
 function loadManagerExecutionLaneSummaryModule(source) {
   const ts = dashboardRequire("typescript");
@@ -2778,7 +2782,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(navSource, /href:\s*"\/pipeline"/);
 });
 
-test("pipeline import boundary follows shared dashboard-local runtime intermediaries", async () => {
+test("pipeline import boundary follows shared dashboard-local runtime intermediaries", async (t) => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "pipeline-import-boundary-"));
   const fixtureFiles = {
     "scripts/check-dashboard-pipeline-import-boundary.mjs": await readFile(pipelineImportBoundaryCheckPath, "utf8"),
@@ -2825,7 +2829,32 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     }
 
     const checkerPath = join(fixtureRoot, "scripts/check-dashboard-pipeline-import-boundary.mjs");
-    const leakingRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const runChecker = () => {
+      const result = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+      const nestedProcessBoundary = classifySandboxBoundaryResult({
+        command: [process.execPath, checkerPath],
+        readOnly: true,
+        result,
+      });
+      const nestedProcessErrorCode = result.error?.code ?? null;
+      if (nestedProcessBoundary && ["EPERM", "EACCES", "EROFS"].includes(nestedProcessErrorCode)) {
+        console.log(
+          JSON.stringify({
+            marker: "SANDBOX_NESTED_PROCESS_BLOCKED",
+            command: nestedProcessBoundary.command,
+            signature: nestedProcessBoundary.signature,
+            error_code: nestedProcessErrorCode,
+            evidence_summary: nestedProcessBoundary.evidence_summary,
+            next_action: nestedProcessBoundary.next_action,
+          }),
+        );
+        t.skip(`nested import-boundary checker blocked by ${nestedProcessBoundary.signature}`);
+        throw new NestedProcessBlocked(nestedProcessBoundary.signature);
+      }
+      return result;
+    };
+
+    const leakingRun = runChecker();
     assert.equal(leakingRun.status, 1);
     assert.match(leakingRun.stderr, /normal \/pipeline route graph must not reach apps\/dashboard\/src\/lib\/pipeline-fixtures\.ts/);
     assert.match(leakingRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
@@ -2836,7 +2865,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "export const sharedPipelineRuntime = true;\n",
       "utf8",
     );
-    const cleanRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const cleanRun = runChecker();
     assert.equal(cleanRun.status, 0, cleanRun.stderr);
     const report = JSON.parse(cleanRun.stdout);
     assert.equal(report.normalFixtureCatalogReachable, false);
@@ -2861,7 +2890,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const unapprovedRuntimeExportRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const unapprovedRuntimeExportRun = runChecker();
     assert.equal(unapprovedRuntimeExportRun.status, 1);
     assert.match(unapprovedRuntimeExportRun.stderr, /only the approved read-only runtime functions may be exported/);
     assert.match(unapprovedRuntimeExportRun.stderr, /getCandidateWork/);
@@ -2884,7 +2913,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       'import "node:fs";\nimport { applyPipelineOperationalAction } from "./supervisor";\nexport { applyPipelineOperationalAction };\n',
       "utf8",
     );
-    const actionImportRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const actionImportRun = runChecker();
     assert.equal(actionImportRun.status, 1);
     assert.match(actionImportRun.stderr, /pipeline-supervisor-actions\.ts: forbidden import boundary node-fs: node:fs/);
 
@@ -2893,7 +2922,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       'import { applyPipelineOperationalAction } from "./supervisor";\nexport function unsafeAction() { return fetch("/forbidden"); }\nexport { applyPipelineOperationalAction };\n',
       "utf8",
     );
-    const actionCallRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const actionCallRun = runChecker();
     assert.equal(actionCallRun.status, 1);
     assert.match(actionCallRun.stderr, /pipeline-supervisor-actions\.ts: forbidden call boundary network-fetch/);
 
@@ -2903,7 +2932,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "utf8",
     );
 
-    const mutationSupervisorRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const mutationSupervisorRun = runChecker();
     assert.equal(mutationSupervisorRun.status, 0, mutationSupervisorRun.stderr);
 
     await writeFile(
@@ -2918,7 +2947,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const mutationRuntimeRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const mutationRuntimeRun = runChecker();
     assert.equal(mutationRuntimeRun.status, 1);
     assert.match(mutationRuntimeRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
 
@@ -2934,7 +2963,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "utf8",
     );
 
-    const endpointMismatchRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const endpointMismatchRun = runChecker();
     assert.equal(endpointMismatchRun.status, 1);
     assert.match(endpointMismatchRun.stderr, /approved endpoint mismatch for getWorkPackets/);
 
@@ -2949,7 +2978,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const computedMethodRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const computedMethodRun = runChecker();
     assert.equal(computedMethodRun.status, 1);
     assert.match(computedMethodRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
 
@@ -2964,7 +2993,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const spreadMethodRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const spreadMethodRun = runChecker();
     assert.equal(spreadMethodRun.status, 1);
     assert.match(spreadMethodRun.stderr, /pipeline-supervisor-runtime\.ts: forbidden call boundary network-fetch/);
 
@@ -3011,7 +3040,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       'import "node:fs";\n',
       "utf8",
     );
-    const staticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const staticDynamicRun = runChecker();
     assert.equal(staticDynamicRun.status, 1);
     assert.match(staticDynamicRun.stderr, /static-module\.ts: forbidden import boundary node-fs: node:fs/);
 
@@ -3020,7 +3049,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       "export const staticModule = true;\n",
       "utf8",
     );
-    const cleanStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const cleanStaticDynamicRun = runChecker();
     assert.equal(cleanStaticDynamicRun.status, 0, cleanStaticDynamicRun.stderr);
 
     await writeFile(
@@ -3034,7 +3063,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const ordinaryQuotedDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const ordinaryQuotedDynamicRun = runChecker();
     assert.equal(ordinaryQuotedDynamicRun.status, 1);
     assert.match(ordinaryQuotedDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
     assert.match(ordinaryQuotedDynamicRun.stderr, /normal \/pipeline route graph must not reach apps\/dashboard\/src\/lib\/pipeline-fixtures\.ts/);
@@ -3044,7 +3073,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       'const commentedImport = import(/* webpackIgnore: true */ "node:fs");\nvoid commentedImport;\n',
       "utf8",
     );
-    const commentedStaticDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const commentedStaticDynamicRun = runChecker();
     assert.equal(commentedStaticDynamicRun.status, 1);
     assert.match(commentedStaticDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
 
@@ -3053,7 +3082,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       'const commentedTemplateImport = import(/* webpackIgnore: true */ `node:fs`);\nvoid commentedTemplateImport;\n',
       "utf8",
     );
-    const commentedTemplateDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const commentedTemplateDynamicRun = runChecker();
     assert.equal(commentedTemplateDynamicRun.status, 1);
     assert.match(commentedTemplateDynamicRun.stderr, /shared-pipeline-runtime\.ts: forbidden import boundary node-fs: node:fs/);
 
@@ -3067,10 +3096,15 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       ].join("\n"),
       "utf8",
     );
-    const unresolvedDynamicRun = spawnSync(process.execPath, [checkerPath], { cwd: fixtureRoot, encoding: "utf8" });
+    const unresolvedDynamicRun = runChecker();
     assert.equal(unresolvedDynamicRun.status, 1);
     assert.match(unresolvedDynamicRun.stderr, /shared-pipeline-runtime\.ts: unresolved dynamic module boundary: import\(runtimeModule\)/);
     assert.match(unresolvedDynamicRun.stderr, /shared-pipeline-runtime\.ts: unresolved dynamic module boundary: require\(runtimeModule\)/);
+  } catch (error) {
+    if (error instanceof NestedProcessBlocked) {
+      return;
+    }
+    throw error;
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }

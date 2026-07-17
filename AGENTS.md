@@ -74,6 +74,12 @@
     Codex sandbox before invoking Turbopack. Treat that skip as boundary
     evidence, not a failed build. Run the exact same command outside the
     sandbox only when full dashboard build coverage is required.
+  - `pnpm run test:dashboard-pipeline-fixtures`: the nested import-boundary
+    checker can hit a spawnSync EPERM/EACCES/EROFS sandbox boundary. The test
+    emits the structured `SANDBOX_NESTED_PROCESS_BLOCKED` marker and skips only
+    that subtest; treat the skip as boundary evidence, not full fixture
+    coverage. Stop sandbox retries and run this exact command outside the
+    sandbox for the complete 18-subtest result.
   - `pnpm run check:manager-control-plane` from a managed worktree may fail
     before invoking the check script with `[ERR_SQLITE_ERROR] unable to open
     database file` while pnpm prepares managed store state. Treat that as the
