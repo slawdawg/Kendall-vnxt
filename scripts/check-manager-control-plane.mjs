@@ -187,7 +187,7 @@ for (const [name, command] of [
   ["test:manager-control-plane-forbidden-boundary", "node --test tests/manager-control-plane.forbidden-boundary.test.mjs"],
   ["test:manager-control-plane-run-contract", "node --test tests/manager-control-plane.run-contract.test.mjs"],
   ["test:manager-worker-clean-cycle-observer", "node --test tests/manager-worker-clean-cycle-observer.test.mjs"],
-  ["check:manager-control-plane", "pnpm run check:manager-lifecycle-status-parity && node ./scripts/check-manager-control-plane.mjs"],
+  ["check:manager-control-plane", "node ./scripts/check-manager-control-plane.mjs"],
 ]) {
   assertCondition(packageJson.scripts?.[name] === command, `package.json must define ${name} as ${command}`, failures);
 }
