@@ -25,7 +25,7 @@ export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View>
   try {
     return await requestJson<WorkPacketV0View>(canonicalPath);
   } catch (error) {
-    if (!isNotFoundError(error) || !SAFE_PACKET_ID.test(packetId)) throw error;
+    if (!isNotFoundError(error) || typeof packetId !== "string" || !SAFE_PACKET_ID.test(packetId)) throw error;
     return requestLegacyJson<WorkPacketV0View>(legacyPath);
   }
 }
