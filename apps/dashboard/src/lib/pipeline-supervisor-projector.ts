@@ -224,7 +224,7 @@ export function projectSupervisorWorkPacketsToCockpitPackets(
     return { kind: "invalid", packets: [], error: "Supervisor WorkPacketV0 projection failed validation." };
   }
 }
-function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
+export function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
   if (!value || typeof value !== "object") {
     return false;
   }

@@ -20,8 +20,8 @@ test.describe("Epic 26 real Next LAN pipeline path", () => {
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
     await expect(page.locator("body")).toContainText("Pipeline");
     await page.waitForTimeout(1500);
-    await page.evaluate(() => fetch("/api/supervisor/work-packets", { credentials: "same-origin" }));
-    expect(supervisorRequests).toEqual(expect.arrayContaining(["/api/supervisor/pipeline-control-plane/projection", "/api/supervisor/work-packets"]));
+    await page.evaluate(() => fetch("/api/supervisor/pipeline-control-plane/work-packets", { credentials: "same-origin" }));
+    expect(supervisorRequests).toEqual(expect.arrayContaining(["/api/supervisor/pipeline-control-plane/projection", "/api/supervisor/pipeline-control-plane/work-packets"]));
 
     await page.goto(`${harness.origin}/pipeline/packets/packet-1`);
     await expect(page.getByRole("heading", { name: "Packet 1 detail" })).toBeVisible();

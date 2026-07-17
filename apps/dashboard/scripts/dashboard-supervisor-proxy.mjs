@@ -4,6 +4,10 @@ const PREFIX = "/api/supervisor/";
 const MAX_BODY_BYTES = 256 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const READ_ONLY_SUPERVISOR_PATHS = [
+  /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?)$/,
+];
 const ALLOWED_SUPERVISOR_PATHS = [
   /^\/supervisor\/status$/,
   /^\/events$/,
@@ -11,7 +15,7 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
-  /^\/pipeline-control-plane\/(?:projection|actions(?:\/v1)?|approvals(?:\/v1)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
 
@@ -71,6 +75,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath))) { sendJson(response, 404, { state: "unavailable" }); return true; }
+      if (READ_ONLY_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !["GET", "HEAD"].includes(request.method)) {
+        sendJson(response, 405, { state: "unavailable" });
+        return true;
+      }
       if (targetPath === "/events") {
         await streamSupervisor(supervisorUdsPath, targetPath, request.headers, response, timeoutMs);
         return true;
