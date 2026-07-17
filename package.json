@@ -154,6 +154,8 @@
     "test:manager-control-plane:shard:ledger-recovery": "node ./scripts/run-manager-control-plane-shards.mjs ledger-recovery",
     "test:manager-control-plane:shard:misc": "node ./scripts/run-manager-control-plane-shards.mjs misc",
     "test:manager-control-plane-contract": "node --test tests/manager-control-plane.contract.test.mjs",
+    "test:manager-lifecycle-status-parity": "node --test tests/manager-lifecycle-status-parity.test.mjs",
+    "check:manager-lifecycle-status-parity": "node ./scripts/check-manager-lifecycle-status-parity.mjs",
     "test:manager-control-plane-dispatcher-port": "node --test tests/manager-control-plane.dispatcher-port.test.mjs",
     "test:manager-control-plane-forbidden-boundary": "node --test tests/manager-control-plane.forbidden-boundary.test.mjs",
     "test:manager-control-plane-run-contract": "node --test tests/manager-control-plane.run-contract.test.mjs",

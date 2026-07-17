@@ -3,7 +3,7 @@ import { isValidSupervisorTerminalEventMetadata } from "./terminal-event-contrac
 export const DEFAULT_SUMMARY_STALE_AFTER_MS = 300_000;
 export const SIMULATED_WARNING = "backend_proof_simulated_no_live_worker_execution";
 
-const WORK_STATUSES = [
+export const WORK_STATUSES = [
   "eligible",
   "queued",
   "leased",

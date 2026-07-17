@@ -15,6 +15,22 @@ class WorkflowState(StrEnum):
     DONE = "done"
 
 
+class ManagerWorkItemStatus(StrEnum):
+    """Manager control-plane work-item statuses shared with JS projections."""
+
+    ELIGIBLE = "eligible"
+    QUEUED = "queued"
+    LEASED = "leased"
+    RUNNING = "running"
+    REFILLING = "refilling"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+    QUARANTINED = "quarantined"
+    BLOCKED = "blocked"
+    CLOSED = "closed"
+
+
 class BmadLane(StrEnum):
     INTAKE = "intake"
     IMPLEMENTATION = "implementation"
