@@ -1,17 +1,24 @@
 # ADR: Epic 25 Trusted Observer and Issuer Topology
 
-Date: 2026-07-15
-Status: **APPROVED FOR LOCAL DOGFOOD DESIGN / IMPLEMENTATION HOLD**
-Scope: P4.1 local-dogfood architecture and security decision; no source or live-operation authorization
+Date: 2026-07-17
+Status: **APPROVED FOR DEFAULT-DISABLED `integrated_local` SOURCE IMPLEMENTATION / LIVE OPERATION HOLD**
+Scope: P4.1 local-dogfood architecture and security decision plus the bounded source slice; no live-operation authorization
 
 ## Decision status and non-authority
 
-This is a source-owned decision packet. On 2026-07-15, the Operator recorded
-the local-dogfood topology and security design baseline below. That record is
-not a substitute for separately named architecture or security approval of
-future source implementation. The decision is bounded to design and
-implementation-packet preparation; it does not grant source or runtime
-execution authority.
+This is a source-owned decision packet. The 2026-07-17 Epic 25 authority
+reconciliation and the Operator's 2026-07-16 source-implementation authority
+packet are local planning provenance at
+`_bmad-output/implementation-artifacts/epic-25-authority-reconciliation-2026-07-17.md`
+and
+`_bmad-output/implementation-artifacts/epic-25-source-implementation-authority-2026-07-16.md`;
+they are intentionally not tracked source links. They place the current
+source-slice decision ahead of older worksheet and feasibility-hold wording.
+The decision authorizes only additive, default-disabled, non-production
+`integrated_local` source implementation, with the readiness conditions below
+as mandatory in-lane acceptance gates. It does not authorize live operation or
+implementation work in this documentation lane; no verifier, issuer, or
+runtime is being implemented here.
 
 Approval record: decision ID `epic-25-local-dogfood-design-2026-07-15`,
 approver `Operator`, effective date `2026-07-15`, with the companion worksheet
@@ -21,10 +28,11 @@ rules in this ADR remain authoritative.
 
 This document enables none of the following: `live_observed` acceptance,
 `bounded_live` claims, `production_observed` claims, provider or worker launch,
-or live operation. It does not grant run, merge, deployment, production,
-credential, cleanup, or mutation authority. It does not authorize a generic
-live command or cryptographic code. The current ceiling remains
-`integrated_local` only.
+deployment, credentials, external network expansion, or live operation. It
+does not grant run, merge, production, cleanup, or mutation authority. It does
+not authorize a generic live command. The evidence ceiling remains
+`integrated_local` only, and every missing or contradictory readiness field
+returns the source slice to `HOLD`.
 
 The current authority decision remains the [current product slice and
 authority ADR](adr-current-product-slice-and-authority.md). Its source
@@ -82,7 +90,8 @@ separate from the caller and supervisor. It measures the exact authorized local
 subject and issues a versioned receipt. The supervisor owns verification,
 run-authorization, replay fencing, persistence, and readback. Loopback or
 proxy locality is transport only and is never evidence of observer
-independence.
+independence. This topology is approved only for the default-disabled,
+non-production `integrated_local` source slice and remains held for live use.
 
 The approved security baseline is:
 
@@ -109,45 +118,77 @@ values must not be inferred. It must also define the startup-disabled default,
 the server-side environment/registry scope check, and negative tests proving a
 copied local trust root or stale configuration cannot enable acceptance.
 
-This decision is accompanied by a draft bounded source-implementation packet
-for a possible default-disabled verifier slice. That packet is not activated
-by this ADR. Provider/worker launch, source implementation, deployment,
-production mutation, commit, push, PR creation, merge, and cleanup remain
-separately `NOT AUTHORIZED`.
+The reconciled authority activates only the bounded default-disabled
+`integrated_local` source slice, subject to the readiness conditions below. It
+does not activate provider/worker launch, deployment, credentials, live or
+production mutation, merge, or cleanup. This ADR update itself is
+documentation-only; it does not implement a verifier, issuer, runtime, or
+cryptographic acceptance path.
 
-For this local-dogfood decision only, the Operator is the named runtime,
-observer, issuer, key, trust-domain, incident, evidence/retention, run, and
-final-decision owner. This assignment expires at the local-dogfood boundary:
-it does not transfer to a provider, worker, deployment, staging, production,
-or any bounded-live operation. The concentrated local ownership is an explicit
-dogfood constraint, not evidence of independent production trust. If a future
-implementation cannot establish separate observer/issuer process identity,
-trust-domain control, and tamper-resistant measurement, it remains held.
+For this local-dogfood decision only, the Operator owns and approves the
+runtime, observer, issuer, key, trust-domain, incident, evidence/retention,
+run, and final-decision boundaries. These are ownership and authority roles,
+not component identities: the observer and issuer remain separate local
+processes, and the supervisor must not self-attest. This assignment expires at
+the local-dogfood boundary; it does not transfer to a provider, worker,
+deployment, staging, production, or any bounded-live operation. The concentrated
+local ownership is an explicit dogfood constraint, not evidence of independent
+production trust. If a future implementation cannot establish separate
+observer/issuer process identity, trust-domain control, and tamper-resistant
+measurement, it remains held.
 
 ## Topology candidates considered
 
 The architecture decision selects the **trusted attestation service** for the
-local, non-production, default-disabled design boundary above. The alternatives
-remain recorded for auditability; none is approved for implementation or live
-operation by this ADR.
+local, non-production, default-disabled `integrated_local` source boundary
+above. The alternatives remain recorded for auditability; none is approved for
+live or production operation by this ADR.
 
 | Candidate | Independence | Authentication | Key/trust-root management | Replay, rotation, and revocation | Operational burden | Production boundary | Decision |
 | --- | --- | --- | --- | --- | --- | --- |
 | Independent external observer and issuer | Strongest separation when the observer measures the exact target and the issuer is owned by a separate trust domain. Requires an explicit independence definition; a second process alone is insufficient. | Authenticated observer-to-issuer and issuer-to-supervisor channels; caller identity and transport locality cannot substitute for receipt provenance. | Separate issuer registry, trust roots, key IDs, protected private-key custody, distribution, and owner. | Central or server-enforced nonce/run uniqueness; expiry and clock policy; staged key rotation; revocation and compromise recovery must fail closed across the relevant run boundary. | Highest: service availability, secure deployment, monitoring, incident response, and cross-domain ownership. | Must explicitly identify non-production versus production identities and telemetry. Without separate production authority, the ceiling remains `bounded_live`. | Not selected for local dogfood; retain as a future option. |
-| Trusted attestation service | Observer may be independent from the supervisor while a dedicated service owns issuance. Independence depends on who controls observation, issuance, and trust-root administration. | Service identity and authenticated API plus server validation of the exact run authorization and receipt payload. | Attestation service owns or brokers keys; supervisor keeps only verification metadata and revocation state, never secret values in evidence. | Service can provide global replay fencing, but the supervisor must still enforce run/nonce uniqueness, expiry, rotation overlap, revocation, and outage behavior. | Medium to high: shared service lifecycle, availability, tenant/environment isolation, and incident response. | Cross-environment attestations need explicit environment and production identity binding; service trust cannot itself grant production authority. | **Selected for local non-production design only.** |
+| Trusted attestation service | Observer may be independent from the supervisor while a dedicated service owns issuance. Independence depends on who controls observation, issuance, and trust-root administration. | Service identity and authenticated API plus server validation of the exact run authorization and receipt payload. | Attestation service owns or brokers keys; supervisor keeps only verification metadata and revocation state, never secret values in evidence. | Service can provide global replay fencing, but the supervisor must still enforce run/nonce uniqueness, expiry, rotation overlap, revocation, and outage behavior. | Medium to high: shared service lifecycle, availability, tenant/environment isolation, and incident response. | Cross-environment attestations need explicit environment and production identity binding; service trust cannot itself grant production authority. | **Selected for default-disabled `integrated_local` source implementation only; live use remains held.** |
 | Supervisor-local issuer | Weakest observer/issuer independence if the supervisor observes and issues its own receipt. It may be acceptable only if the approval decision explicitly accepts that trust model; it cannot be called independent by naming a local component. | Local authenticated component identity and server-owned authorization, with no acceptance of caller-supplied self-attestation. | Supervisor owns key custody, trust-root loading, key IDs, and audit state; compromise of the supervisor may compromise both observation and issuance. | Local durable uniqueness is simpler, but it must still enforce nonce/run uniqueness, expiry, rotation, revocation, and compromise recovery across restart and migration. | Lowest deployment burden, highest concentration of authority and blast radius. | Must not cross the production boundary merely because it is local. Production requires separately approved observer, issuer, deployment, telemetry, and incident authority. | Rejected for this design because observer/issuer independence is required. |
 
 The comparison supports the local-dogfood design decision above. Any future
 implementation-readiness record must still state whether observer independence
 is sufficient, what trust-domain separation means, and which failure or outage
 behavior is acceptable. A topology that cannot answer every required field
-below remains `BLOCKED` for implementation.
+below remains `BLOCKED` for acceptance and enablement; implementation remains
+default-disabled and cannot claim stronger evidence.
+
+## Reconciled source-implementation boundary — 2026-07-17
+
+The reconciliation record and the 2026-07-16 source-implementation authority
+packet authorize only this narrow source lane:
+
+- additive, versioned contracts and metadata-only records for the local
+  attestation slice;
+- default-disabled configuration and private, owner-controlled local
+  transport for `integrated_local` only; and
+- deterministic canonical vectors, fail-closed negative tests, and
+  supervisor-owned readback that preserves `live_evidence_unavailable`.
+
+As part of that source lane, it must implement and prove RFC 8785/JCS-compatible
+canonical vectors, exact server-owned run-authorization binding, atomic
+replay/nonce/receipt persistence, key registry and revocation behavior, v0
+version gating, and threat-model negative tests before any acceptance path is
+enabled. Missing, contradictory, or unverifiable evidence returns the slice to
+`HOLD` and keeps it default-disabled.
+
+This reconciliation does not authorize `live_observed`, `bounded_live`, or
+`production_observed` evidence; provider or worker execution; deployment;
+credentials; external network expansion; or merge/cleanup. It also does not
+authorize this lane to implement the verifier, issuer, or runtime. Those
+remain future source work behind the readiness gates and separate live
+authority.
 
 ## Recommended decision criteria
 
-The selected design does not waive these criteria. Any future implementation
-packet must demonstrate all of the following before implementation authority is
-granted:
+The selected design does not waive these criteria. The authorized source slice
+must implement and verify all of the following before local acceptance or
+enablement, and a separate authority packet is still required for any live
+scope:
 
 1. An observer that can measure the exact subject independently of the caller,
    and an issuer owner whose authority is explicit and reviewable.
@@ -170,7 +211,8 @@ granted:
 The future implementation-readiness approval record must resolve each field
 explicitly. Blank, contradictory, caller-supplied, or inferred values keep the
 implementation boundary on hold even though the local-dogfood topology choice
-is recorded above.
+is recorded above. The source lane must not infer missing values from caller
+prose, transport locality, fixtures, or UI state.
 
 | Field | Required resolution |
 | --- | --- |
@@ -239,25 +281,29 @@ uncertainty is `hold`.
 
 ## Smallest safe follow-on sequence
 
-This ADR is the only deliverable in this lane. If and only if a future
-implementation-readiness review confirms the design and a separate
-operator-authority record exists for the later source scope, the next
-source-owned sequence may be considered:
+This ADR is the only deliverable in this lane. The reconciliation and
+source-implementation authority record permit the bounded default-disabled
+`integrated_local` source sequence below. Its readiness conditions are
+in-lane implementation and acceptance gates, and a separate operator-authority
+record remains mandatory for any live scope:
 
-Approval of this ADR records a topology/security decision only. It grants no
-source-implementation, live, deployment, production, merge, or cleanup
-authority. The follow-on source sequence may be considered only after
-architecture/security approval plus that separate operator-authority record;
-neither condition authorizes runtime behavior or expands the recorded bounds.
+Approval of this ADR plus the reconciliation grants only the bounded
+default-disabled `integrated_local` source-slice authority described above. It
+grants no live, bounded-live, production, provider, worker, deployment,
+credential, merge, or cleanup authority. This documentation lane implements no
+verifier, issuer, or runtime behavior; any future source implementation must
+remain fail-closed until every readiness gate passes.
 
 1. **Complete authority worksheet.** Resolve every required implementation
    field, threat-model disposition, named owner, and separate live-authority
    boundary. No provider, worker, or live command.
-2. **Default-disabled verifier, registry, and run-authorization records.** Add
-   additive/versioned contracts and durable records for the approved trust
-   root/issuer metadata, server-owned run authorization, signed receipt
-   verification, exact bindings, and replay fencing. Keep capability disabled
-   by default; do not remove `live_evidence_unavailable`.
+2. **Default-disabled source records (future lane).** Implement
+   additive/versioned contracts and durable records for approved trust-root/
+   issuer metadata, server-owned run authorization, signed-receipt
+   verification, exact bindings, and replay fencing. Prove the readiness gates
+   before any acceptance or enablement; keep capability disabled by default and
+   do not remove `live_evidence_unavailable`. This ADR lane does not implement
+   those records, the verifier, the issuer, or runtime behavior.
 3. **Adversarial tests and security review.** Exercise every matrix row,
    migration behavior, concurrency/restart replay, key lifecycle, clock
    policy, canonical vectors, and production-boundary separation. Require
