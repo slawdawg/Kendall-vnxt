@@ -2087,6 +2087,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-manager-live-worker-proof",
         "check-manager-throughput",
         "check-manager-live-worker-proof",
+        "check-manager-lifecycle-status-parity",
         "check-manager-control-plane",
         "check-mise-workflow",
         "check-linux-install-lane",
