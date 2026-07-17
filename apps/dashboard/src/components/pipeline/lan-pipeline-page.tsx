@@ -7,23 +7,39 @@ import { loadPipelineCockpitPackets, type PipelineCockpitPacketLoad } from "../.
 
 export function LanPipelinePage() {
   const [result, setResult] = useState<PipelineCockpitPacketLoad | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<"expired" | "unavailable" | null>(null);
 
   useEffect(() => {
     let active = true;
     void loadPipelineCockpitPackets()
       .then((value) => {
-        if (active) setResult(value);
+        if (!active) return;
+        if (value.projectionError && /\(401\)/.test(value.projectionError)) {
+          setError("expired");
+          return;
+        }
+        setResult(value);
       })
       .catch((reason) => {
-        if (active) setError(reason instanceof Error ? reason.message : "Authenticated pipeline read failed.");
+        if (active) setError(reason instanceof Error && /\(401\)/.test(reason.message) ? "expired" : "unavailable");
       });
     return () => {
       active = false;
     };
   }, []);
 
-  if (error) {
+  if (error === "expired") {
+    return (
+      <Shell compactHeader realtimeRefresh={false} wide>
+        <section className="rounded-[0.5rem] border bg-[var(--panel)] p-6 shadow-sm" role="alert">
+          <h1 className="text-lg font-semibold">Session expired</h1>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">Your authenticated pipeline session ended. Return to the dashboard to sign in again.</p>
+          <a className="mt-4 inline-block rounded-[0.375rem] border px-3 py-2 text-xs font-medium" href="/">Return to sign in</a>
+        </section>
+      </Shell>
+    );
+  }
+  if (error === "unavailable") {
     return (
       <Shell compactHeader realtimeRefresh={false} wide>
         <section className="rounded-[0.5rem] border bg-[var(--panel)] p-6 shadow-sm" role="alert">

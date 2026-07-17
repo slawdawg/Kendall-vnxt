@@ -22,13 +22,19 @@ type PacketDetail = {
 
 export function LanPacketDetailPage({ packetId }: { packetId: string }) {
   const [packet, setPacket] = useState<PacketDetail | null>(null);
-  const [state, setState] = useState<"loading" | "unavailable" | "expired">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "unavailable" | "expired">("loading");
 
   useEffect(() => {
     const controller = new AbortController();
+    let active = true;
+    const timeout = window.setTimeout(() => controller.abort(), 5000);
+    setPacket(null);
+    setState("loading");
     void fetch(`/api/packet-detail/${encodeURIComponent(packetId)}`, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json().catch(() => null) as { state?: string; packet?: PacketDetail } | null;
+        window.clearTimeout(timeout);
+        if (!active) return;
         if (response.status === 401 || payload?.state === "sign_in_required") {
           setState("expired");
           return;
@@ -38,12 +44,17 @@ export function LanPacketDetailPage({ packetId }: { packetId: string }) {
           return;
         }
         setPacket(payload.packet);
-        setState("loading");
+        setState("ready");
       })
       .catch(() => {
-        if (!controller.signal.aborted) setState("unavailable");
+        window.clearTimeout(timeout);
+        if (active) setState("unavailable");
       });
-    return () => controller.abort();
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [packetId]);
 
   if (state === "expired") {
@@ -52,7 +63,7 @@ export function LanPacketDetailPage({ packetId }: { packetId: string }) {
   if (state === "unavailable") {
     return <Shell compactHeader realtimeRefresh={false} wide><Message title="Packet detail unavailable" body="The authenticated Packet Detail read could not be completed." action="Back to pipeline" /></Shell>;
   }
-  if (!packet) {
+  if (state === "loading" || !packet) {
     return <Shell compactHeader realtimeRefresh={false} wide><Message title="Loading packet detail" body="Reading the authenticated Packet Detail mediator." action="" /></Shell>;
   }
 

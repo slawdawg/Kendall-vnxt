@@ -21,6 +21,17 @@ test("LAN Packet Detail uses the authenticated mediator with explicit expiry and
   assert.match(source, /KENDALL_LAN_AUTH_ENABLED/);
   assert.match(source, /LanPacketDetailPage/);
   assert.match(client, /\/api\/packet-detail\//);
+  assert.match(client, /setPacket\(null\)/);
+  assert.match(client, /setState\("ready"\)/);
+  assert.match(client, /setTimeout\(\(\) => controller\.abort\(\), 5000\)/);
+  assert.match(client, /if \(active\) setState\("unavailable"\)/);
   assert.match(client, /Session expired/);
   assert.match(client, /Packet detail unavailable/);
+});
+
+test("LAN pipeline client distinguishes expired sessions from unavailable reads", async () => {
+  const client = await readFile(pipelineClient, "utf8");
+  assert.match(client, /Session expired/);
+  assert.match(client, /401/);
+  assert.match(client, /Return to sign in/);
 });

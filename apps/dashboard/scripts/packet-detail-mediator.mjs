@@ -32,7 +32,9 @@ export function parsePacketDetailRequest(request, { expectedHost, expectedOrigin
   }
   if (!url.pathname.startsWith(PACKET_DETAIL_PATH_PREFIX) || url.search) return { handled: false };
   if (request.method !== "GET") return { handled: true, status: 405, body: { state: "unavailable" } };
-  const packetId = url.pathname.slice(PACKET_DETAIL_PATH_PREFIX.length);
+  const encodedPacketId = url.pathname.slice(PACKET_DETAIL_PATH_PREFIX.length);
+  let packetId;
+  try { packetId = decodeURIComponent(encodedPacketId); } catch { return { handled: true, status: 404, body: { state: "unavailable" } }; }
   if (!PACKET_DETAIL_ID.test(packetId) || packetId.includes("/")) return { handled: true, status: 404, body: { state: "unavailable" } };
   if (!safeHostHeader(request.headers.host) || (expectedHost && request.headers.host !== expectedHost)) {
     return { handled: true, status: 400, body: { state: "unavailable" } };
