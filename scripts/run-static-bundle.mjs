@@ -21,6 +21,7 @@ export const STATIC_BUNDLES = Object.freeze({
     "test:static-bundle-summary",
   ],
   manager: [
+    "check:manager-lifecycle-status-parity",
     "test:manager-quality-gate",
     "test:runner-handoff-audit-json-validation",
     "test:tmux-orientation-report",

@@ -20,13 +20,17 @@ export async function checkManagerLifecycleStatusParity() {
   ));
   const managerStatuses = extractTsArray(sources.lifecycle, "WORK_ITEM_STATUSES");
   const summaryStatuses = extractJsArray(sources.summary, "WORK_STATUSES");
-  const workflowStatuses = extractQuotedBlock(sources.workflow, "const allowedTransitions");
+  const workflowTransitionMap = extractTransitionMap(sources.workflow, "const allowedTransitions");
+  const workflowStatuses = workflowTransitionMap.values;
   const pythonManagerStatuses = extractPythonEnum(sources.pythonDomain, "ManagerWorkItemStatus");
   const authoritativeStatuses = extractTsArray(sources.pipeline, "AUTHORITATIVE_PACKET_STATUSES");
   const pythonAuthoritativeStatuses = extractLiteral(sources.pythonApi, "AuthoritativePacketStatus");
 
   assert.deepEqual(summaryStatuses, managerStatuses, "summary projection statuses must match contracts");
   assert.deepEqual(pythonManagerStatuses, managerStatuses, "Python manager statuses must match contracts");
+  assert.equal(new Set(managerStatuses).size, managerStatuses.length, "manager status contract must not contain duplicates");
+  assert.equal(new Set(workflowTransitionMap.sourceStatuses).size, workflowTransitionMap.sourceStatuses.length, "workflow transition map source keys must be unique");
+  assert.deepEqual([...workflowTransitionMap.sourceStatuses].sort(), [...managerStatuses].sort(), "workflow transition map source keys must cover each manager status exactly");
   assert.deepEqual([...new Set(workflowStatuses)].sort(), [...managerStatuses].sort(), "workflow transition map must cover each manager status exactly");
   assert.deepEqual(pythonAuthoritativeStatuses, authoritativeStatuses, "Python API packet statuses must match pipeline contract");
 
@@ -37,6 +41,7 @@ export async function checkManagerLifecycleStatusParity() {
     parity: {
       summaryProjection: true,
       workflowTransitions: true,
+      workflowTransitionSources: true,
       pythonDomain: true,
       pythonApi: true,
     },
@@ -59,12 +64,17 @@ function extractJsArray(source, name) {
   return [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]);
 }
 
-function extractQuotedBlock(source, marker) {
+function extractTransitionMap(source, marker) {
   const start = source.indexOf(marker);
   assert.ok(start >= 0, `missing block ${marker}`);
   const end = source.indexOf("]);", start);
   assert.ok(end > start, `unterminated block ${marker}`);
-  return [...source.slice(start, end).matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]);
+  const block = source.slice(start, end);
+  const entries = [...block.matchAll(/\[\s*"([^"]+)"\s*,\s*\[([^\]]*)\]\s*\]/g)];
+  assert.ok(entries.length > 0, `missing transition entries in ${marker}`);
+  const sourceStatuses = entries.map((entry) => entry[1]);
+  const values = entries.flatMap((entry) => [entry[1], ...[...entry[2].matchAll(/"([^"]+)"/g)].map((value) => value[1])]);
+  return { sourceStatuses, values };
 }
 
 function extractPythonEnum(source, name) {

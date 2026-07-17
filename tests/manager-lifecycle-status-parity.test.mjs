@@ -8,6 +8,7 @@ test("manager lifecycle statuses remain in parity across TypeScript, projection,
   assert.deepEqual(summary.parity, {
     summaryProjection: true,
     workflowTransitions: true,
+    workflowTransitionSources: true,
     pythonDomain: true,
     pythonApi: true,
   });
