@@ -1137,6 +1137,44 @@ test("dedicated runtime falls back to legacy work-packet reads only on canonical
   ]);
 });
 
+test("dedicated runtime does not legacy-fallback unsafe slash-containing packet ids", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets/foo%2Flearn-follow-up-candidate-work") {
+              throw new Error(`Request failed for ${path} (404)`);
+            }
+            throw new Error(`Unexpected legacy fallback for ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("foo/learn-follow-up-candidate-work"),
+    /Request failed for \/pipeline-control-plane\/work-packets\/foo%2Flearn-follow-up-candidate-work \(404\)/,
+  );
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/foo%2Flearn-follow-up-candidate-work"]);
+});
+
 function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {
   const now = new Date().toISOString();
   const workPackets = packetIds.map((packetId) => ({

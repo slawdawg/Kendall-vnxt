@@ -13,6 +13,8 @@ function requestLegacyJson<T>(path: string): Promise<T> {
   return requestJson<T>(path);
 }
 
+const SAFE_PACKET_ID = /^[A-Za-z0-9._:%-]+$/;
+
 function isNotFoundError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "message" in error && typeof error.message === "string" && /\(404\)$/.test(error.message));
 }
@@ -23,7 +25,7 @@ export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View>
   try {
     return await requestJson<WorkPacketV0View>(canonicalPath);
   } catch (error) {
-    if (!isNotFoundError(error)) throw error;
+    if (!isNotFoundError(error) || !SAFE_PACKET_ID.test(packetId)) throw error;
     return requestLegacyJson<WorkPacketV0View>(legacyPath);
   }
 }
