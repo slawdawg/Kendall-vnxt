@@ -38,6 +38,7 @@ Status: current navigation index
 ## Proposed / Blocked
 
 - `adr-proposed-epic-25-trusted-observer-and-issuer-topology.md`: approved only for the default-disabled, non-production `integrated_local` source slice after readiness gates; trusted attestation service topology selected, while live/bounded-live/production operation remains held.
+- `adr-staged-epic-delivery-pilot.md`: provisional opt-in `epic-batch` contract; `standard-delivery` remains the default and no implementation behavior is authorized.
 
 ## Current Authority Status
 
