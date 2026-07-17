@@ -79,6 +79,10 @@
     database file` while pnpm prepares managed store state. Treat that as the
     known managed-worktree pnpm filesystem boundary; request approval to rerun
     the exact same read-only verification command outside the sandbox.
+  - `git fetch origin dev` (and other fetches that update `.git/FETCH_HEAD`)
+    may fail with a read-only `.git` boundary in the Codex sandbox. Do not
+    retry with a different fetch shape or mutate the checkout to work around
+    it; request approval for the exact read-only fetch outside the sandbox.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying

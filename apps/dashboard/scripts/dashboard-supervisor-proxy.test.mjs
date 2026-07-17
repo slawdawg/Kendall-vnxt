@@ -24,36 +24,92 @@ function request(port, path, options = {}) {
 test("session-aware supervisor proxy forwards authenticated LAN API traffic over the fixed UDS", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kendall-supervisor-proxy-"));
   const socketPath = join(directory, "supervisor.sock");
-  const supervisor = http.createServer((request, response) => {
-    if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true })); return; }
-    if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "packet-1" }] })); return; }
-    if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
-    response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
-  });
-  await listen(supervisor, socketPath);
+  let supervisor;
   let proxy;
-  const dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(); });
-  await listen(dashboard, 0);
-  const port = dashboard.address().port;
-  proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: `https://127.0.0.1:${port}` });
-  const allowed = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { headers: { cookie: "session=ok" } });
-  assert.equal(allowed.status, 200);
-  assert.deepEqual(allowed.body.data, [{ packetId: "packet-1" }]);
-  const canonicalMutation = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
-  assert.equal(canonicalMutation.status, 405);
-  const projectionMutation = await request(port, "/api/supervisor/pipeline-control-plane/projection", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
-  assert.equal(projectionMutation.status, 405);
-  const legacy = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok" } });
-  assert.equal(legacy.status, 200);
-  assert.deepEqual(legacy.body.data, [{ packetId: "legacy-packet-1" }]);
-  const legacyMutation = await request(port, "/api/supervisor/work-packets/legacy-packet-1", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
-  assert.equal(legacyMutation.status, 405);
-  const denied = await request(port, "/api/supervisor/pipeline-control-plane/work-packets");
-  assert.equal(denied.status, 401);
-  const forwarded = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok", "x-forwarded-for": "127.0.0.1" } });
-  assert.equal(forwarded.status, 400);
-  const unknown = await request(port, "/api/supervisor/private-admin", { headers: { cookie: "session=ok" } });
-  assert.equal(unknown.status, 404);
-  await close(dashboard);
-  await close(supervisor);
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true })); return; }
+      if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "packet-1" }] })); return; }
+      if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
+      response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+    });
+    await listen(supervisor, socketPath);
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: `https://127.0.0.1:${port}` });
+    const allowed = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { headers: { cookie: "session=ok" } });
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(allowed.body.data, [{ packetId: "packet-1" }]);
+    const canonicalMutation = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(canonicalMutation.status, 405);
+    const projectionMutation = await request(port, "/api/supervisor/pipeline-control-plane/projection", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(projectionMutation.status, 405);
+    const legacy = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok" } });
+    assert.equal(legacy.status, 200);
+    assert.deepEqual(legacy.body.data, [{ packetId: "legacy-packet-1" }]);
+    const legacyMutation = await request(port, "/api/supervisor/work-packets/legacy-packet-1", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(legacyMutation.status, 405);
+    const denied = await request(port, "/api/supervisor/pipeline-control-plane/work-packets");
+    assert.equal(denied.status, 401);
+    const forwarded = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok", "x-forwarded-for": "127.0.0.1" } });
+    assert.equal(forwarded.status, 400);
+    const unknown = await request(port, "/api/supervisor/private-admin", { headers: { cookie: "session=ok" } });
+    assert.equal(unknown.status, 404);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("authenticated POST forwards the follow-up subresource exactly and rejects unknown targets", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-supervisor-proxy-follow-up-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let proxy;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if (request.url === "/auth/session") {
+          response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true }));
+          return;
+        }
+        forwarded.push({ method: request.method, url: request.url, body, origin: request.headers.origin || null, csrf: request.headers["x-csrf-token"] || null });
+        if (request.url === "/work-packets/packet-1/learn-follow-up-candidate-work") {
+          response.end(JSON.stringify({ data: { candidateWorkId: "candidate-1" } }));
+          return;
+        }
+        response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+      });
+    });
+    await listen(supervisor, socketPath);
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: `https://127.0.0.1:${port}` });
+    const postBody = JSON.stringify({ source: "dashboard" });
+
+    const unauthenticatedMutation = await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", body: postBody, headers: { origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok" } });
+    assert.equal(unauthenticatedMutation.status, 401);
+    assert.deepEqual(forwarded, []);
+
+    const mutation = await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", body: postBody, headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok", "content-type": "application/json" } });
+    assert.equal(mutation.status, 200);
+    assert.deepEqual(mutation.body.data, { candidateWorkId: "candidate-1" });
+    assert.deepEqual(forwarded, [{ method: "POST", url: "/work-packets/packet-1/learn-follow-up-candidate-work", body: postBody, origin: `https://127.0.0.1:${port}`, csrf: "csrf-ok" }]);
+
+    const unknown = await request(port, "/api/supervisor/work-packets/packet-1/unknown", { method: "POST", body: postBody, headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok", "content-type": "application/json" } });
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(forwarded, [{ method: "POST", url: "/work-packets/packet-1/learn-follow-up-candidate-work", body: postBody, origin: `https://127.0.0.1:${port}`, csrf: "csrf-ok" }]);
+
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
 });
