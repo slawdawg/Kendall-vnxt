@@ -178,6 +178,7 @@ embed them in bootstrap scripts.
 - `pnpm run test:manager-control-plane-run-contract` verifies Implementation Run Contract schema, backend-proof defaults, and authority operation classification
 - `pnpm run test:manager-worker-clean-cycle-observer` verifies ten-clean-cycle worker observation, question handling, restart resets, missing sessions, and blocked checkpoints
 - `pnpm run check:manager-control-plane` verifies manager control-plane script wiring, source policy, skill presence, and runtime contract drift
+- `pnpm run check:manager-lifecycle-status-parity` verifies lifecycle status parity across TypeScript, workflow transitions, summary projection, and Python supervisor contracts
 - `pnpm run test:runner-handoff-audit-json-validation` verifies filtered runner handoff audit JSON malformed-input and metadata-only retention fixture coverage
 - `pnpm run check:delivery-readiness` verifies delivery readiness policy contract/schema/service/dashboard/story alignment
 - `pnpm run check:github-workflow-policy` verifies Git/GCM, Codex connector, optional gh auth, connector probe, and plaintext-token stop-line alignment
