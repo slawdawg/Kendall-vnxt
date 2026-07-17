@@ -18,6 +18,7 @@
     "test:review-gated-low-risk-automation": "node --test tests/review-gated-low-risk-automation.test.mjs",
     "test:review-gated-low-risk-fake-adapter": "node --test tests/review-gated-low-risk-fake-adapter.test.mjs",
     "test:review-gated-low-risk-dry-run-adapter": "node --test tests/review-gated-low-risk-dry-run-adapter.test.mjs",
+    "test:review-gated-low-risk-read-only-review": "node --test tests/review-gated-low-risk-read-only-review.test.mjs",
     "tmux:orientation": "node ./scripts/tmux-orientation-report.mjs",
     "test:tmux-orientation-report": "node --test tests/tmux-orientation-report.test.mjs",
     "check:tmux-orientation-report": "node ./scripts/check-tmux-orientation-report.mjs",
