@@ -154,6 +154,13 @@ The dashboard performs a supervisor startup-gate check before listening. Open
 certificate warning for dogfood use, then sign in as `operator` with the
 password entered in step 2. The authenticated root is the Overview page and
 loads its monitoring data through the session-aware dashboard proxy. The
+authenticated `/pipeline` route loads its packet list in the browser through
+that same session-aware proxy, so Next server rendering never reads the
+supervisor directly. Opening a runtime packet uses the fixed
+`/api/packet-detail/<packet-id>` mediator over the private supervisor UDS; an
+expired session shows a sign-in prompt, while an unavailable packet read stays
+an explicit unavailable state. Demo routes remain fixture-only and are not
+used by the authenticated LAN path.
 runtime sends HSTS on every LAN-auth response after HTTPS is established;
 because this host is dedicated to the dashboard, that policy includes
 subdomains. It intentionally does not start an HTTP redirect listener. The compact pipeline

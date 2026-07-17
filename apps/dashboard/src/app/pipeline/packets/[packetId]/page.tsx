@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Shell } from "../../../../components/shell";
 import { PacketDetailPage } from "../../../../components/pipeline/packet-detail-page";
+import { LanPacketDetailPage } from "../../../../components/pipeline/lan-packet-detail-page";
 import { loadPipelineCockpitPacket } from "../../../../lib/pipeline-packet-loader";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,9 @@ export default async function PipelinePacketPage({
     decodedPacketId = decodeURIComponent(packetId);
   } catch {
     notFound();
+  }
+  if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    return <LanPacketDetailPage packetId={decodedPacketId} />;
   }
   const { fixtureMode, packet } = await loadPipelineCockpitPacket(decodedPacketId);
 

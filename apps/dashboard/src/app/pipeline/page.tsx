@@ -1,10 +1,14 @@
 import { Shell } from "../../components/shell";
 import { PipelineCockpit } from "../../components/pipeline/pipeline-cockpit";
+import { LanPipelinePage } from "../../components/pipeline/lan-pipeline-page";
 import { loadPipelineCockpitPackets } from "../../lib/pipeline-packet-loader";
 
 export const dynamic = "force-dynamic";
 
 export default async function PipelinePage() {
+  if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    return <LanPipelinePage />;
+  }
   const { fixtureMode, packets, projection, projectionError } = await loadPipelineCockpitPackets();
   const selectedPacket = packets[0] ?? null;
   return (

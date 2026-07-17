@@ -305,7 +305,9 @@ function checkForbiddenCalls(displayPath, source) {
       ? ["network-eventsource"]
       : displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"
         ? ["network-fetch"]
-        : displayPath === "apps/dashboard/src/components/logout-button.tsx"
+      : displayPath === "apps/dashboard/src/components/logout-button.tsx"
+          ? ["network-fetch"]
+        : displayPath === "apps/dashboard/src/components/pipeline/lan-packet-detail-page.tsx"
           ? ["network-fetch"]
         : [],
   );
@@ -322,6 +324,17 @@ function checkForbiddenCalls(displayPath, source) {
       || !/["']x-csrf-token["']\s*:/.test(logoutFetch)
     ) {
       failures.push(`${displayPath}: auth logout fetch must be a single same-origin POST with CSRF header`);
+    }
+  }
+  if (displayPath === "apps/dashboard/src/components/pipeline/lan-packet-detail-page.tsx") {
+    const mediatorFetch = /fetch\(\s*`\/api\/packet-detail\/\$\{encodeURIComponent\(packetId\)\}`([\s\S]*?)\);/.exec(source)?.[1] || "";
+    if (
+      countMatches(executableSource, /\bfetch\s*\(/g) !== 1
+      || !mediatorFetch
+      || !/credentials:\s*["']same-origin["']/.test(mediatorFetch)
+      || !/cache:\s*["']no-store["']/.test(mediatorFetch)
+    ) {
+      failures.push(`${displayPath}: Packet Detail fetch must be a single same-origin no-store mediator read`);
     }
   }
   for (const { id, pattern } of forbiddenCallPatterns) {
