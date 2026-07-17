@@ -209,6 +209,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Current architecture index: [docs/architecture/index.md](docs/architecture/index.md)
 - Product requirements boundary: [docs/workflows/product-requirements-boundary.md](docs/workflows/product-requirements-boundary.md)
 - Implementation evidence boundary: [docs/workflows/implementation-evidence-boundary.md](docs/workflows/implementation-evidence-boundary.md)
+- Legacy dashboard fixture/fallback audit: [docs/workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md](docs/workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md)
 - Adaptive scoring decision preparation: [docs/workflows/adaptive-scoring-decision-prep.md](docs/workflows/adaptive-scoring-decision-prep.md)
 - Current implementation checkpoint: [docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md](docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md)
 
