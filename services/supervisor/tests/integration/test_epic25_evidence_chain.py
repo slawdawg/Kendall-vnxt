@@ -150,7 +150,9 @@ def _chain(
     ttl: timedelta = timedelta(minutes=4),
     policy_ttl: timedelta | None = None,
 ) -> dict:
-    now = now or datetime.now(timezone.utc).replace(microsecond=0)
+    # Preserve sub-second precision so short expiry tests do not expire during
+    # request setup merely because the fixture timestamp was rounded down.
+    now = now or datetime.now(timezone.utc)
     expires_at = (now + ttl).isoformat()
     policy_expires_at = (now + (policy_ttl or ttl)).isoformat()
     policy_profile = {
