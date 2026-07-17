@@ -1067,6 +1067,7 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
           isPipelineDashboardProjection: () => true,
         };
       }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path, options) => {
@@ -1103,6 +1104,7 @@ test("dedicated runtime falls back to legacy work-packet reads only on canonical
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -1152,6 +1154,7 @@ test("dedicated runtime does not legacy-fallback unsafe slash-containing packet 
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -1173,6 +1176,83 @@ test("dedicated runtime does not legacy-fallback unsafe slash-containing packet 
     /Request failed for \/pipeline-control-plane\/work-packets\/foo%2Flearn-follow-up-candidate-work \(404\)/,
   );
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/foo%2Flearn-follow-up-candidate-work"]);
+});
+
+test("dedicated runtime falls back when canonical packet payload shape is incompatible", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets/packet-1") return { packetId: "packet-1", lifecycle: [] };
+            if (path === "/work-packets/packet-1") return { shape: "valid", packetId: "packet-1" };
+            throw new Error(`Unexpected request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  assert.deepEqual(await context.module.exports.getWorkPacket("packet-1"), { shape: "valid", packetId: "packet-1" });
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/packet-1", "/work-packets/packet-1"]);
+});
+
+test("dedicated runtime merges legacy-only packets when canonical list succeeds", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [{ shape: "valid", packetId: "canonical-1", title: "Canonical" }];
+            if (path === "/work-packets") return [
+              { shape: "legacy", packetId: "canonical-1", title: "Legacy duplicate" },
+              { shape: "valid", packetId: "legacy-only-1", title: "Legacy only" },
+            ];
+            throw new Error(`Unexpected request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  const merged = await context.module.exports.getWorkPackets();
+  assert.deepEqual(JSON.parse(JSON.stringify(merged)), [
+    { shape: "valid", packetId: "canonical-1", title: "Canonical" },
+    { shape: "valid", packetId: "legacy-only-1", title: "Legacy only" },
+  ]);
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets", "/work-packets"]);
 });
 
 function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {
