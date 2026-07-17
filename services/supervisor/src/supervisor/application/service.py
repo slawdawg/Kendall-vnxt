@@ -8064,6 +8064,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-manager-lifecycle-status-parity",
+                label="Manager lifecycle status parity",
+                command="pnpm run check:manager-lifecycle-status-parity",
+                status="required",
+                requiredFor=["manager control plane changes", "verification command changes"],
+                evidence=[
+                    "Compares manager lifecycle statuses across TypeScript contracts, workflow transitions, summary projection, and Python supervisor contracts.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-manager-control-plane",
                 label="Manager control plane drift",
                 command="pnpm run check:manager-control-plane",
@@ -8599,6 +8610,7 @@ class SupervisorService:
                     "test-manager-live-worker-proof",
                     "check-manager-throughput",
                     "check-manager-live-worker-proof",
+                    "check-manager-lifecycle-status-parity",
                     "check-manager-control-plane",
                     "check-mise-workflow",
                     "check-linux-install-lane",
