@@ -7,6 +7,19 @@ import {
   getPipelineDashboardProjection as getRuntimePipelineDashboardProjection,
 } from "./pipeline-supervisor-runtime";
 export { getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";
+import {
+  isPipelineDashboardProjection as canonicalIsPipelineDashboardProjection,
+  normalizePipelineDashboardProjection as canonicalNormalizePipelineDashboardProjection,
+} from "./pipeline-supervisor-projection";
+import {
+  getSupervisorBaseUrl as canonicalGetSupervisorBaseUrl,
+  requestSupervisorJson,
+  type SupervisorReadOptions,
+} from "./dashboard-supervisor-transport";
+export {
+  isPipelineDashboardProjection,
+  normalizePipelineDashboardProjection,
+} from "./pipeline-supervisor-projection";
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
@@ -76,42 +89,19 @@ import type {
   WorkerRegistryEntryView,
 } from "@kendall/contracts";
 
-const configuredPublicBaseUrl = process.env.NEXT_PUBLIC_SUPERVISOR_URL;
-const publicBaseUrl = configuredPublicBaseUrl ?? "http://localhost:8000";
-const internalBaseUrl = process.env.SUPERVISOR_INTERNAL_URL ?? publicBaseUrl;
-
 export function getSupervisorBaseUrl(): string {
-  if (typeof window === "undefined") {
-    return publicBaseUrl;
-  }
-
-  if (window.location.protocol === "https:") {
-    return `${window.location.origin}/api/supervisor`;
-  }
-
-  if (!configuredPublicBaseUrl) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
-  }
-
-  return configuredPublicBaseUrl;
+  return canonicalGetSupervisorBaseUrl();
 }
 
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = SupervisorReadOptions;
 
 async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if (typeof window === "undefined" && process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
-    throw new Error("LAN-auth supervisor reads require the authenticated UDS boundary.");
-  }
-  const baseUrl = typeof window === "undefined" ? internalBaseUrl : getSupervisorBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, { cache: "no-store", signal: options.signal });
-  if (!response.ok) {
-    throw new Error(`Request failed for ${path} (${response.status})`);
-  }
-  const payload = (await response.json()) as ApiEnvelope<T>;
-  if (!payload || !("data" in payload)) {
-    throw new Error(`Malformed response for ${path}`);
-  }
-  return payload.data;
+  return requestSupervisorJson<T>(path, {
+    ...options,
+    // Preserve the pre-consolidation server-side LAN-auth guard for every
+    // supervisor reader; pipeline runtime opts into the same policy explicitly.
+    rejectServerLanAuth: options.rejectServerLanAuth ?? true,
+  });
 }
 
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {
@@ -209,10 +199,12 @@ export async function createLearnFollowUpCandidateWork(
 }
 
 export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {
-  const projection = normalizePipelineDashboardProjection(
+  const projection = canonicalNormalizePipelineDashboardProjection(
     await getRuntimePipelineDashboardProjection(),
   );
-  if (!isPipelineDashboardProjection(projection)) {
+  // Keep the legacy supervisor API tolerant of additive/partial payloads while
+  // the dedicated pipeline runtime enforces the canonical projection contract.
+  if (!canonicalIsPipelineDashboardProjection(projection) && !isPipelineDashboardProjection(projection)) {
     throw new Error("Invalid projection payload");
   }
   return projection;

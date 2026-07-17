@@ -1,63 +1,12 @@
-import type {
-  ApiEnvelope,
-  PipelineDashboardProjectionV0,
-  WorkPacketV0View,
-} from "@kendall/contracts";
+import type { PipelineDashboardProjectionV0, WorkPacketV0View } from "@kendall/contracts";
 import {
   isPipelineDashboardProjection,
   normalizePipelineDashboardProjection,
 } from "./pipeline-supervisor-projection";
+import { requestSupervisorJson } from "./dashboard-supervisor-transport";
 
-const configuredPublicBaseUrl = process.env.NEXT_PUBLIC_SUPERVISOR_URL;
-const publicBaseUrl = configuredPublicBaseUrl ?? "http://localhost:8000";
-const internalBaseUrl = process.env.SUPERVISOR_INTERNAL_URL ?? publicBaseUrl;
-
-function getRuntimeSupervisorBaseUrl(): string {
-  if (typeof window === "undefined") {
-    return publicBaseUrl;
-  }
-
-  if (window.location.protocol === "https:") {
-    return `${window.location.origin}/api/supervisor`;
-  }
-
-  if (!configuredPublicBaseUrl) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
-  }
-
-  return configuredPublicBaseUrl;
-}
-
-async function requestJson<T>(path: string): Promise<T> {
-  if (typeof window === "undefined" && process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
-    throw new Error("LAN-auth supervisor reads require the authenticated UDS boundary.");
-  }
-  const baseUrl = typeof window === "undefined" ? internalBaseUrl : getRuntimeSupervisorBaseUrl();
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timeout = controller ? setTimeout(() => controller.abort(), 10_000) : null;
-  try {
-    const response = await fetch(`${baseUrl}${path}`, {
-      cache: "no-store",
-      ...(controller ? { signal: controller.signal } : {}),
-    });
-    if (!response.ok) {
-      throw new Error(`Request failed for ${path} (${response.status})`);
-    }
-    const payload = (await response.json()) as ApiEnvelope<T>;
-    if (!payload || !("data" in payload)) {
-      throw new Error(`Malformed response for ${path}`);
-    }
-    return payload.data;
-  } catch (error) {
-    if (controller?.signal.aborted) {
-      throw new Error(`Request timed out for ${path}`);
-    }
-    throw error;
-  } finally {
-    if (timeout !== null) {
-      clearTimeout(timeout);
-    }
-  }
+function requestJson<T>(path: string): Promise<T> {
+  return requestSupervisorJson<T>(path, { timeoutMs: 10_000, rejectServerLanAuth: true });
 }
 
 export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {

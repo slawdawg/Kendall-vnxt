@@ -1046,7 +1046,7 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoDetailRouteSource, /cannot satisfy live proof or invoke supervisor authority/);
 });
 
-test("dedicated runtime aborts a stalled supervisor read", async () => {
+test("dedicated runtime delegates timeout and LAN-auth policy to shared transport", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1060,22 +1060,21 @@ test("dedicated runtime aborts a stalled supervisor read", async () => {
     exports: {},
     module: { exports: {} },
     process: { env: {} },
-    setTimeout(callback) {
-      callback();
-      return 1;
-    },
-    clearTimeout() {},
-    AbortController,
-    fetch: async (_url, options) => {
-      assert.equal(options.cache, "no-store");
-      assert.equal(options.signal.aborted, true);
-      throw new Error("aborted");
-    },
     require: (specifier) => {
       if (specifier === "./pipeline-supervisor-projection") {
         return {
           normalizePipelineDashboardProjection: (projection) => projection,
           isPipelineDashboardProjection: () => true,
+        };
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path, options) => {
+            assert.equal(path, "/work-packets");
+            assert.equal(options.timeoutMs, 10_000);
+            assert.equal(options.rejectServerLanAuth, true);
+            throw new Error("Request timed out for /work-packets");
+          },
         };
       }
       throw new Error(`Unexpected runtime import: ${specifier}`);

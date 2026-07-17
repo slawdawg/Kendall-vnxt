@@ -305,6 +305,8 @@ function checkForbiddenCalls(displayPath, source) {
       ? ["network-eventsource"]
       : displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"
         ? ["network-fetch"]
+        : displayPath === "apps/dashboard/src/lib/dashboard-supervisor-transport.ts"
+          ? ["network-fetch"]
       : displayPath === "apps/dashboard/src/components/logout-button.tsx"
           ? ["network-fetch"]
         : displayPath === "apps/dashboard/src/components/pipeline/lan-packet-detail-page.tsx"
@@ -313,6 +315,9 @@ function checkForbiddenCalls(displayPath, source) {
   );
   if (displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts") {
     checkReadOnlyPipelineRuntimeFunctions(displayPath, source);
+  }
+  if (displayPath === "apps/dashboard/src/lib/dashboard-supervisor-transport.ts") {
+    checkDashboardSupervisorTransport(displayPath, source);
   }
   if (displayPath === "apps/dashboard/src/components/logout-button.tsx") {
     const logoutFetch = /fetch\(\s*["']\/auth\/logout["']\s*,([\s\S]*?)\n?\s*\}\);/.exec(source)?.[1] || "";
@@ -347,6 +352,17 @@ function checkForbiddenCalls(displayPath, source) {
   }
 }
 
+function checkDashboardSupervisorTransport(displayPath, source) {
+  const executableSource = stripCommentsAndStrings(source);
+  if (
+    countMatches(executableSource, /\bfetch\s*\(/g) !== 1 ||
+    !/cache:\s*["']no-store["']/.test(source) ||
+    /\bmethod\s*:/.test(stripComments(source))
+  ) {
+    failures.push(`${displayPath}: shared supervisor transport must remain a single read-only no-store fetch`);
+  }
+}
+
 function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
   const exportedFunctions = extractRuntimeExportNames(source);
   const unexpectedExports = exportedFunctions.filter((exportName) => !readOnlyPipelineRuntimeFunctions.includes(exportName));
@@ -365,20 +381,31 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
     failures.push(`${displayPath}: missing audited read-only helper requestJson`);
     return;
   }
-  const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
   const requestJsonSourceWithoutComments = stripComments(requestJsonSource);
-  const allowedSignalSpread = /\.\.\.\s*\(\s*controller\s*\?\s*\{\s*signal\s*:\s*controller\.signal\s*\}\s*:\s*\{\s*\}\s*\)/g;
-  const requestJsonSourceWithoutAllowedSpread = requestJsonSourceWithoutComments.replace(allowedSignalSpread, "");
-  const requestJsonHasHiddenMethod = /\bmethod\s*:|\[[^\]]+\]\s*:/.test(requestJsonSourceWithoutComments);
-  const requestJsonHasUnsafeSpread = /\.\.\./.test(requestJsonSourceWithoutAllowedSpread);
+  const usesSharedTransport = /\brequestSupervisorJson(?:<[^;\n]*>)?\s*\(/.test(requestJsonSourceWithoutComments);
+  if (!usesSharedTransport) {
+    const executableRequestJsonSource = stripCommentsAndStrings(requestJsonSource);
+    const allowedSignalSpread = /\.\.\.\s*\(\s*controller\s*\?\s*\{\s*signal\s*:\s*controller\.signal\s*\}\s*:\s*\{\s*\}\s*\)/g;
+    const requestJsonSourceWithoutAllowedSpread = requestJsonSourceWithoutComments.replace(allowedSignalSpread, "");
+    const requestJsonHasHiddenMethod = /\bmethod\s*:|\[[^\]]+\]\s*:/.test(requestJsonSourceWithoutComments);
+    const requestJsonHasUnsafeSpread = /\.\.\./.test(requestJsonSourceWithoutAllowedSpread);
+    if (
+      countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 1 ||
+      countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
+      requestJsonHasHiddenMethod ||
+      requestJsonHasUnsafeSpread ||
+      !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*["']no-store["']/.test(requestJsonSourceWithoutComments)
+    ) {
+      failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+    }
+  }
   if (
-    countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 1 ||
-    countMatches(executableRequestJsonSource, /\bfetch\s*\(/g) !== 1 ||
-    requestJsonHasHiddenMethod ||
-    requestJsonHasUnsafeSpread ||
-    !/\bfetch\s*\([\s\S]*\{\s*cache\s*:\s*["']no-store["']/.test(requestJsonSourceWithoutComments)
+    (usesSharedTransport && countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 0) ||
+    (usesSharedTransport && countMatches(stripCommentsAndStrings(requestJsonSource), /\brequestSupervisorJson(?:<[^;\n]*>)?\s*\(/g) !== 1) ||
+    (usesSharedTransport && !/timeoutMs:\s*10_000/.test(requestJsonSourceWithoutComments)) ||
+    (usesSharedTransport && !/rejectServerLanAuth:\s*true/.test(requestJsonSourceWithoutComments))
   ) {
-    failures.push(`${displayPath}: forbidden call boundary network-fetch`);
+    if (usesSharedTransport) failures.push(`${displayPath}: pipeline runtime must delegate reads to the shared authenticated transport`);
   }
 
   for (const functionName of readOnlyPipelineRuntimeFunctions) {

@@ -1364,6 +1364,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   const fixtureSource = await readFile(fixturesPath, "utf8");
   const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
   const pipelineSupervisorRuntimeSource = await readFile(pipelineSupervisorRuntimePath, "utf8");
+  const dashboardSupervisorTransportSource = await readFile(new URL("../apps/dashboard/src/lib/dashboard-supervisor-transport.ts", import.meta.url), "utf8");
   const contractSource = await readFile(pipelineContractPath, "utf8");
   const projectionTruthSource = await readFile(projectionTruthPath, "utf8");
   const activeBoardViewModelSource = await readFile(activeBoardViewModelPath, "utf8");
@@ -1443,7 +1444,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.doesNotMatch(pipelineSupervisorRuntimeSource, /export\s+(?:async\s+)?function\s+requestJson/);
   assert.match(pipelineSupervisorRuntimeSource, /normalizePipelineDashboardProjection/);
   assert.match(pipelineSupervisorRuntimeSource, /Invalid projection payload/);
-  assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 1);
+  assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 0);
+  assert.match(pipelineSupervisorRuntimeSource, /requestSupervisorJson/);
+  assert.equal((dashboardSupervisorTransportSource.match(/\bfetch\s*\(/g) ?? []).length, 1);
+  assert.match(dashboardSupervisorTransportSource, /cache:\s*["']no-store["']/);
+  assert.doesNotMatch(dashboardSupervisorTransportSource, /method\s*:/);
   assert.match(cockpitSource, /ProjectionTruthSummary/);
   for (const bannedDefaultSurfacePattern of [
     /route id/i,
@@ -1762,7 +1767,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
   assert.doesNotMatch(packetDetailRouteSource, /generateStaticParams/);
   assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
-  assert.match(pipelineSupervisorRuntimeSource, /Malformed response for \$\{path\}/);
+  assert.match(dashboardSupervisorTransportSource, /Malformed response for \$\{path\}/);
   assert.match(supervisorLibSource, /Invalid projection payload/);
   assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
   assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);

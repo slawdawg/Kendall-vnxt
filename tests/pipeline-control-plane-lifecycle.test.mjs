@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ const corePath = new URL("../packages/workflow-core/src/pipeline-control-plane/i
 const contractsIndexPath = new URL("../packages/contracts/src/index.ts", import.meta.url);
 const workflowCoreIndexPath = new URL("../packages/workflow-core/src/index.ts", import.meta.url);
 const dashboardSupervisorPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
+const dashboardProjectionPath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-projection.ts", import.meta.url);
 const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
 const repoRequire = createRequire(new URL("../package.json", import.meta.url));
 const repoRootPath = process.cwd();
@@ -2699,11 +2701,11 @@ function projectionContractFixture(overrides = {}) {
       freshnessState: "live",
       activeLeaseCount: 0,
       activeWorkerCount: 0,
-      warmWorkerCount: 0,
+      warmWorkerCount: 1,
       blockedQueueCount: 0,
       dispatchableQueueCount: 1,
       closedQueueCount: 0,
-      healthySourceCount: 0,
+      healthySourceCount: 1,
       exhaustedSourceCount: 0,
       blockedSourceCount: 0,
       gatedSourceCount: 0,
@@ -2842,6 +2844,31 @@ function loadDashboardSupervisorModule(source) {
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
+  const projectionOutput = ts.transpileModule(readFileSync(dashboardProjectionPath, "utf8"), {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const projectionContext = {
+    exports: {},
+    module: { exports: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") {
+        return {
+          AUTHORITATIVE_PACKET_STAGES: ["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"],
+          isPipelineCanonicalContractV1: (value) => value === null || (typeof value === "object" && !Array.isArray(value)),
+          isPipelineProductModeMappingV0: (value) => value === null || (typeof value === "object" && !Array.isArray(value)),
+          validatePipelineOperationalActionCapabilityV1: () => [],
+        };
+      }
+      throw new Error(`Unexpected projection import: ${specifier}`);
+    },
+  };
+  projectionContext.exports = projectionContext.module.exports;
+  vm.runInNewContext(projectionOutput, projectionContext, { filename: "pipeline-supervisor-projection.ts" });
+  const canonicalProjectionModule = projectionContext.module.exports;
   let projectionPayload = projectionContractFixture();
   let projectionEnvelope = { data: projectionPayload };
   let workPacketsPayload = [];
@@ -2899,6 +2926,15 @@ function loadDashboardSupervisorModule(source) {
           getPipelineDashboardProjection: () => runtimeRequestJson("/pipeline-control-plane/projection"),
           getWorkPacket: (packetId) => runtimeRequestJson(`/work-packets/${encodeURIComponent(packetId)}`),
           getWorkPackets: () => runtimeRequestJson("/work-packets"),
+        };
+      }
+      if (specifier === "./pipeline-supervisor-projection") {
+        return canonicalProjectionModule;
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          getSupervisorBaseUrl: () => "http://supervisor.test",
+          requestSupervisorJson: (path) => runtimeRequestJson(path),
         };
       }
       if (specifier === "@kendall/contracts") {
