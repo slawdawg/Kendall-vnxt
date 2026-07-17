@@ -61,6 +61,19 @@ Tool Churn RCA Packet
 - Durable fix recommendation: Keep the command result in the lane evidence and add a wrapper/preflight only if the same EROFS signature recurs in ordinary non-sandbox runs.
 ```
 
+## Dashboard Fixture Nested Process Permission Boundary
+
+```text
+Tool Churn RCA Packet
+- What failed: `pnpm run test:dashboard-pipeline-fixtures` reached the import-boundary fixture, but its nested `spawnSync` checker was blocked before producing the expected stderr diagnostics.
+- Failure class: sandbox
+- Most likely cause: The Codex sandbox denied the nested Node process with EPERM, EACCES, or EROFS; this is an execution boundary, not a product or fixture-contract failure.
+- Evidence: The fixture emits a structured `SANDBOX_NESTED_PROCESS_BLOCKED` marker containing the shared classifier signature and child command; no import-boundary assertions are evaluated for that one subtest.
+- Retry stop line: Do not retry the nested checker or alter fixture assertions inside the sandbox after this marker appears.
+- One next safe action: Request approval to rerun the exact same read-only command, `pnpm run test:dashboard-pipeline-fixtures`, outside the sandbox.
+- Durable fix recommendation: Keep the scoped self-skip and marker as boundary evidence, then retain the outside-sandbox 18/18 result as the full coverage record. Ordinary child failures must remain unsuppressed.
+```
+
 ## Git Metadata Lock EROFS
 
 ```text

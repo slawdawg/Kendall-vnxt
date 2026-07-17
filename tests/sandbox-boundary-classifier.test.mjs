@@ -26,6 +26,37 @@ test("classifies spawnSync EPERM as a metadata-only sandbox boundary packet", ()
   assert.match(packet.evidence_summary, /Child process spawn/);
 });
 
+test("classifies spawnSync EACCES and EROFS as sandbox boundaries", () => {
+  for (const code of ["EACCES", "EROFS"]) {
+    const packet = classifySandboxBoundaryResult({
+      command: ["node", "/tmp/check-dashboard-pipeline-import-boundary.mjs"],
+      readOnly: true,
+      result: {
+        error: Object.assign(new Error(`spawnSync node ${code}`), { code }),
+        stdout: null,
+        stderr: null,
+        status: null,
+        signal: null,
+      },
+    });
+
+    assertSandboxPacket(packet, {
+      signature: `spawnSync ${code} sandbox boundary`,
+      command: "node /tmp/check-dashboard-pipeline-import-boundary.mjs",
+    });
+  }
+
+  const reversedPacket = classifySandboxBoundaryResult({
+    command: "node /tmp/check-dashboard-pipeline-import-boundary.mjs",
+    readOnly: true,
+    stderr: "EPERM while starting spawnSync",
+  });
+  assertSandboxPacket(reversedPacket, {
+    signature: "spawnSync EPERM sandbox boundary",
+    command: "node /tmp/check-dashboard-pipeline-import-boundary.mjs",
+  });
+});
+
 test("classifies EPERM and EACCES probes for known manager dependencies", () => {
   const cases = [
     {
@@ -241,6 +272,15 @@ test("does not classify normal product or successful JSON output as a sandbox bo
   );
 
   assert.equal(isKnownSandboxBoundary({ stderr: "AssertionError: failed product check" }), false);
+
+  assert.equal(
+    classifySandboxBoundaryResult({
+      command: "node ./scripts/check-dashboard-pipeline-import-boundary.mjs EROFS",
+      stderr: "AssertionError: fixture output mentioned spawn and EROFS",
+      status: 1,
+    }),
+    null,
+  );
 });
 
 function assertSandboxPacket(packet, expected) {
