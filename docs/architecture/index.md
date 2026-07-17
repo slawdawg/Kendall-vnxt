@@ -37,7 +37,7 @@ Status: current navigation index
 
 ## Proposed / Blocked
 
-- `adr-proposed-epic-25-trusted-observer-and-issuer-topology.md`: proposed and blocked pending approval; it selects no topology and grants no authority.
+- `adr-proposed-epic-25-trusted-observer-and-issuer-topology.md`: approved only for the default-disabled, non-production `integrated_local` source slice after readiness gates; trusted attestation service topology selected, while live/bounded-live/production operation remains held.
 
 ## Current Authority Status
 
