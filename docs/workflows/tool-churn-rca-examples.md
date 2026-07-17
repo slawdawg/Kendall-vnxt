@@ -177,3 +177,16 @@ Tool Churn RCA Packet
 - One next safe action: Run a read-only status or config inspection from the intended worktree and capture the exact permission message.
 - Durable fix recommendation: Use a narrow approval packet for any credential, GitHub mutation, cleanup, branch deletion, or safe-directory change.
 ```
+
+## Managed Workspace Finish Wrapper Hang
+
+```text
+Tool Churn RCA Packet
+- What failed: `codex-workspace finish-pr --verify scoped` hung twice without child output after the lane's direct focused checks had already completed.
+- Failure class: wrapper boundary (the cause remains unknown until bounded diagnostics are captured).
+- Most likely cause: hypothesis only—finish-pr's nested verification/manifest path may have stalled independently of the direct test command; a stale ephemeral lane lock is possible but must not be inferred without diagnostics.
+- Evidence: two no-output hangs; direct focused verification and review evidence already passed; no source/runtime failure was reported.
+- Retry stop line: Do not retry the same finish-pr verification wrapper or change test scope to hide the hang.
+- One next safe action: preserve the recorded direct verification evidence, inspect the lock path read-only, verify lane ownership, compare its mtime/heartbeat to a configured stale threshold (fail closed on missing or invalid timestamps), and verify no active process or descendants remain; if inspection is denied, missing, or sandbox-incomplete, stop, capture the exact error, and request the same read-only inspection outside the sandbox. Classify network, credential, or provider diagnostics separately and forbid Git fallback until that recovery is resolved; if bounded timeout/exit diagnostics remain unavailable or the cause remains unknown, fail closed and do not fall back. Only then clear a stale lane-owned lock with an approval packet naming authority family, operation, scope, and evidence refs. Use explicit scoped Git commit/push/PR commands only after reconciling the lane owner, worktree, branch/base, allowlisted diff, exact HEAD, checks, and review evidence; require pass evidence for each manifest-lock, anti-churn-finalization, authority-decision, intentional-staging, push-before-PR, and stop-line gate, and hold the manifest lock and anti-churn gate through finalization and every delivery mutation (commit, push, and PR creation) rather than recording equivalent gates after the fact.
+- Durable fix recommendation: Add a bounded finish-pr child timeout that captures elapsed timeout, exit code or signal, stderr, child process tree, and lock state; terminates only verified lane-owned process identities with matching start times (fail closed on ownership or PID-reuse ambiguity), verifies descendants exited, re-reads the manifest and lock, verifies owner/path/age before any stale-lock cleanup, preserves the manifest, and fails with a recoverable diagnostic instead of waiting indefinitely.
+```
