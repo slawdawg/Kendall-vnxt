@@ -29,6 +29,7 @@ export function evaluateBoundedWritePlan(input = {}, options = {}) {
         route: source.route,
         result: source.result,
         sourcePacket: source.sourcePacket,
+        retryCount: source.retryCount,
         now,
       };
   const readOnlyReview = evaluateGovernedReadOnlyReview(reviewInput, { now });
@@ -68,6 +69,7 @@ export function evaluateBoundedWritePlan(input = {}, options = {}) {
   return {
     schemaVersion: 1,
     mode: "bounded-write-plan",
+    operation: text(reviewInput.operation) || null,
     status,
     eligible: status === "ready",
     blockers: uniqueBlockers,
@@ -78,11 +80,11 @@ export function evaluateBoundedWritePlan(input = {}, options = {}) {
     },
     deterministicGates: {
       status: deterministic.status,
-      exactState: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("exact base/head/diff/owner/worktree binding")),
-      allowlist: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("exact changed-file allowlist")),
+      exactState: deterministic.status === "eligible" && ["baseSha", "headSha", "diffHash", "owner", "worktree"].every((field) => deterministic.satisfiedGates.some((gate) => gate.includes(`exact ${field} binding`))),
+      allowlist: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("changed files are exactly allowlisted")),
       checks: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("status checks passed")),
       reviewThreads: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("review threads resolved")),
-      rollback: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("rollback and authority evidence")),
+      rollback: deterministic.status === "eligible" && deterministic.satisfiedGates.some((gate) => gate.includes("rollback path recorded")),
     },
     writeAuthority: {
       recorded: writeAuthority.recorded === true,
@@ -182,7 +184,7 @@ function validateWriteAuthority(authority, state, blockers) {
 }
 
 function validateActivation(activation, state, now, blockers) {
-  if (activation.type !== undefined && text(activation.type) !== "human") blockers.push("human activation checkpoint is required");
+  if (text(activation.type) !== "human") blockers.push("human activation checkpoint is required");
   if (activation.required !== true) blockers.push("human activation checkpoint is required");
   if (activation.approved !== true) blockers.push("human activation checkpoint has not been approved");
   if (!safeText(activation.approvedBy, 120)) blockers.push("human activation approver identity is missing or unsafe");

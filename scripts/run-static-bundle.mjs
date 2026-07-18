@@ -41,6 +41,13 @@ export const STATIC_BUNDLES = Object.freeze({
     "test:workspace-command-resolution",
   ],
   policy: [
+    "test:review-gated-low-risk-automation",
+    "test:review-gated-low-risk-fake-adapter",
+    "test:review-gated-low-risk-dry-run-adapter",
+    "test:review-gated-low-risk-read-only-review",
+    "test:review-gated-low-risk-bounded-write",
+    "test:review-gated-low-risk-pilot-admission",
+    "test:review-gated-low-risk-policy-eligibility",
     "check:governed-worker-execution-dry-run",
     "check:documentation-authority",
     "check:legacy-planning-inventory",

@@ -32,7 +32,9 @@ const DEFAULT_STOP_LINES = [
   "no check, review-thread, or scope bypass",
 ];
 
-const HIGH_RISK_OPERATION_PATTERN = /auth|security|secret|credential|provider|deploy|release|schema|migration|production|customer|external[-_ ]send|epic[-_ ]?25|epic[-_ ]?26|argon2id|force[-_ ]?push|history[-_ ]?rewrite/i;
+const HIGH_RISK_OPERATION_PATTERN = /(?:^|[\s_:/-])(auth|security|secret|credential|provider|deploy|release|schema|migration|production|customer|external[-_ ]send|epic[-_ ]?25|epic[-_ ]?26|argon2id|force[-_ ]?push|history[-_ ]?rewrite)(?:$|[\s_:/-])/i;
+const HIGH_RISK_OPERATION_COMPACT_PATTERN = /(?:^|[\s_:/-])(?:auth|security|secret|credential|provider|deploy|release|schema|migration|production|customer|external[-_ ]?send|argon2id|force[-_ ]?push|history[-_ ]?rewrite)(?:[0-9]+[a-z0-9]*|(?=$|[\s_:/-]))/i;
+const HIGH_RISK_EPIC_OPERATION_PATTERN = /(?:^|[\s_:/-])epic[-_ ]?(?:25|26)[a-z0-9]*/i;
 const HIGH_RISK_FILE_PATTERN = /(^|\/)(auth|security|secrets?|credentials?|migrations?|deploy|release|production|provider|openai)(\/|\.|$)|(^|\/)\.env(?:\.|$)|\.?(?:pem|key|p12|pfx|cer|der)$|(^|\/)\.github\/workflows(\/|$)|argon2id|epic[-_ ]?25|epic[-_ ]?26|api[-_ ]?key|password|token/i;
 const SENSITIVE_METADATA_PATTERN = /raw\s*prompt|completion|reasoning|provider\s*payload|(?:api|access|refresh)?[_ -]?token|password|secret|credential/i;
 const STOP_SEMANTIC_PATTERN = /\b(no|never|must\s+not|do\s+not|forbid|block|stop|without|disallow|prohibit|deny)\b/i;
@@ -81,13 +83,14 @@ export function evaluateReviewGatedLowRiskAutomation(input = {}, options = {}) {
   }
   const model = text(review.model);
   const effort = text(review.effort).toLowerCase();
-  const governedModel = ["5.6 luna", "gpt-5.3-codex-spark"].includes(model.toLowerCase());
+  const governedModel = /^(?:gpt[- ]?5\.6(?:[- ][a-z0-9._-]+)?|gpt-5\.3-codex-spark|5\.6 luna)$/i.test(model);
+  const supportedEffort = /^(?:low|medium|high|xhigh)$/i.test(effort);
   if (!model || !effort) {
     blockers.push("governed review model and effort are missing");
-  } else if (!governedModel || effort !== "high") {
+  } else if (!governedModel || !supportedEffort) {
     blockers.push("review model or effort is outside the governed high-effort route");
-  } else if (model.toLowerCase() !== "5.6 luna" && (!text(review.routeRationale) || text(review.routeRationale).length > 300 || hasSensitiveMetadata(review.routeRationale))) {
-    blockers.push("non-default review route rationale is missing");
+  } else if ((model.toLowerCase() !== "5.6 luna" || effort !== "high") && (!text(review.routeRationale) || text(review.routeRationale).length > 300 || hasSensitiveMetadata(review.routeRationale))) {
+    blockers.push("non-default review route or effort rationale is missing");
   } else {
     satisfiedGates.push("governed review model and effort recorded");
   }
@@ -182,47 +185,48 @@ export function evaluateReviewGatedLowRiskAutomation(input = {}, options = {}) {
     satisfiedGates.push("review attempt is unique");
   }
 
-  const normalizedOperation = operation.toLowerCase().replace(/[\s_/:]+/g, "-");
-  if (HIGH_RISK_OPERATION_PATTERN.test(operation)) {
+  const normalizedOperation = normalizeOperationForRisk(operation);
+  if (HIGH_RISK_OPERATION_PATTERN.test(normalizedOperation) || HIGH_RISK_OPERATION_COMPACT_PATTERN.test(normalizedOperation) || HIGH_RISK_EPIC_OPERATION_PATTERN.test(normalizedOperation)) {
     blockers.push("operation is an excluded high-risk class");
-  } else if (/^cleanup(?:-|$)/.test(normalizedOperation) && state.cleanupWithinNamedLane !== true) {
+  } else if (/^cleanup(?:[\s-]|$)/.test(normalizedOperation) && state.cleanupWithinNamedLane !== true) {
     blockers.push("cleanup is outside the named managed lane");
   } else {
     satisfiedGates.push("operation remains within named lane or is not cleanup");
   }
 
-  const eligible = blockers.length === 0;
-  const stopLines = normalizeStringList(authority.stopLines).length
-    ? normalizeStringList(authority.stopLines)
+  const safeBlockers = unique(blockers).map(redactBlocker);
+  const eligible = safeBlockers.length === 0;
+  const stopLines = redactStringList(normalizeStringList(authority.stopLines)).length
+    ? redactStringList(normalizeStringList(authority.stopLines))
     : DEFAULT_STOP_LINES;
-  const recoveryPath = text(authority.recoveryPath) || "Preserve this packet, fix the blocker, refresh exact-state evidence, and rerun report-only evaluation.";
-  const authorityFamily = text(input.authorityFamily) || "source-governance/review-gated-low-risk-automation";
+  const recoveryPath = redactSensitiveText(text(authority.recoveryPath) || "Preserve this packet, fix the blocker, refresh exact-state evidence, and rerun report-only evaluation.");
+  const authorityFamily = redactSensitiveText(text(input.authorityFamily) || "source-governance/review-gated-low-risk-automation");
 
   return {
     schemaVersion: 1,
     mode: "report-only",
     status: eligible ? "eligible" : "hold",
     eligible,
-    operation,
+    operation: redactSensitiveText(operation),
     authorityFamily,
     review: {
       status: status || "missing",
-      reviewId: text(review.reviewId) || null,
-      packetId: text(review.packetId) || null,
-      model: text(review.model) || null,
-      effort: text(review.effort) || null,
+      reviewId: redactSensitiveText(text(review.reviewId)),
+      packetId: redactSensitiveText(text(review.packetId)),
+      model: redactSensitiveText(text(review.model)),
+      effort: redactSensitiveText(text(review.effort)),
       reviewedAt: reviewedAt ? reviewedAt.toISOString() : null,
     },
     binding: {
-      baseSha: expected.baseSha || null,
-      headSha: expected.headSha || null,
-      diffHash: expected.diffHash || null,
-      owner: expected.owner || null,
-      worktree: expected.worktree || null,
-      changedFiles,
-      allowlistedFiles,
+      baseSha: redactSensitiveText(expected.baseSha),
+      headSha: redactSensitiveText(expected.headSha),
+      diffHash: redactSensitiveText(expected.diffHash),
+      owner: redactSensitiveText(expected.owner),
+      worktree: redactSensitiveText(expected.worktree),
+      changedFiles: redactStringList(changedFiles),
+      allowlistedFiles: redactStringList(allowlistedFiles),
     },
-    blockers: unique(blockers),
+    blockers: safeBlockers,
     requiredGates: [
       "bounded review PASS",
       "exact base/head/diff/owner/worktree binding",
@@ -242,7 +246,7 @@ export function evaluateReviewGatedLowRiskAutomation(input = {}, options = {}) {
       authorityFamily,
       decision: eligible ? "eligible-report-only" : "hold",
       allowed: false,
-      blockedReasons: unique(blockers),
+      blockedReasons: safeBlockers,
       stopLines,
       recoveryPath,
       metadataOnly: true,
@@ -318,21 +322,27 @@ function checkStopLines(value, blockers, satisfiedGates) {
     [/bypass|override/i, "bypass stop line"],
   ];
   for (const [pattern, label] of requirements) {
-    if (!lines.some((line) => pattern.test(line) && STOP_SEMANTIC_PATTERN.test(line))) blockers.push(`${label} is missing`);
+    if (!lines.some((line) => isCanonicalDenyStopLine(line, pattern))) blockers.push(`${label} is missing`);
   }
   if (lines.every((line) => line.length <= 240)
-    && requirements.every(([pattern]) => lines.some((line) => pattern.test(line) && STOP_SEMANTIC_PATTERN.test(line)))) {
+    && requirements.every(([pattern]) => lines.some((line) => isCanonicalDenyStopLine(line, pattern)))) {
     satisfiedGates.push("authority stop lines recorded");
   }
 }
 
 function checkRecoveryPath(value, blockers, satisfiedGates) {
   const recovery = text(value);
-  if (!recovery || recovery.length > 300 || hasSensitiveMetadata(recovery) || !/preserve|fix|rerun|request|inspect/i.test(recovery) || /delete|provider|merge|cleanup|mutation|run\s+command/i.test(recovery)) {
+  if (!recovery || recovery.length > 300 || hasSensitiveMetadata(recovery) || !/preserve|fix|rerun|request|inspect/i.test(recovery) || /delete|provider|merge|cleanup|mutation|run\s+command|execute|shell|spawn|worker|push|commit|write|apply|patch|network|https?|git|curl|scp|chmod|\b(?:mv|cp|rm)\b/i.test(recovery)) {
     blockers.push("authority recovery path is missing, oversized, or unsafe");
   } else {
     satisfiedGates.push("authority recovery path recorded");
   }
+}
+
+function isCanonicalDenyStopLine(line, actionPattern) {
+  const normalized = text(line);
+  if (!actionPattern.test(normalized) || !STOP_SEMANTIC_PATTERN.test(normalized)) return false;
+  return !/\b(?:allow|allowed|permit|permitted|okay|ok|fine|is\s+safe|do\s+not\s+(?:block|stop|forbid|prohibit|deny|disallow))\b/i.test(normalized);
 }
 
 function checkNonEmptyGate(value, label, blockers, satisfiedGates) {
@@ -403,6 +413,28 @@ function text(value) {
 
 function unique(values) {
   return [...new Set(values)];
+}
+
+function redactSensitiveText(value) {
+  const normalized = text(value);
+  return normalized && SENSITIVE_METADATA_PATTERN.test(normalized) ? "[redacted]" : normalized || null;
+}
+
+function redactBlocker(value) {
+  const normalized = text(value);
+  if (/metadata contains forbidden|review record contains forbidden|recovery path is missing|authority recovery path/i.test(normalized)) return normalized;
+  return redactSensitiveText(normalized);
+}
+
+function redactStringList(values) {
+  return normalizeStringList(values).map(redactSensitiveText).filter(Boolean);
+}
+
+function normalizeOperationForRisk(value) {
+  return text(value)
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .toLowerCase();
 }
 
 export const REVIEW_GATED_LOW_RISK_DEFAULTS = Object.freeze({

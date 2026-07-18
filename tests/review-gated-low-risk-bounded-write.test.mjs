@@ -32,6 +32,19 @@ test("all gates plus human activation produce an allowed metadata-only write pla
   assert.equal(packet.authorityDecision.allowed, false);
   assert.equal(packet.writePlan.applyEligible, true);
   assert.equal(packet.execution.mutation, "none");
+  assert.equal(packet.deterministicGates.exactState, true);
+  assert.equal(packet.deterministicGates.allowlist, true);
+  assert.equal(packet.deterministicGates.rollback, true);
+});
+
+test("flat bounded-write input forwards retryCount and requires an explicit human type", () => {
+  const retry = runBoundedWriteFakeExecutor({ ...validInput(), retryCount: 1, activationCheckpoint: activation() }, { now });
+  assert.equal(retry.status, "hold");
+  assert.match(retry.blockers.join("; "), /duplicate review retry/);
+
+  const untyped = runBoundedWriteFakeExecutor({ ...validInput(), activationCheckpoint: { ...activation(), type: undefined } }, { now });
+  assert.equal(untyped.status, "hold");
+  assert.match(untyped.blockers.join("; "), /human activation checkpoint/);
 });
 
 test("high-risk, ambiguous, stale, rollback, and owner evidence fail closed", () => {

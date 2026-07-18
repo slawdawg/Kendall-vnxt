@@ -114,7 +114,7 @@ test("contradictory record, route, and result metadata holds", () => {
   assert.match(modelPacket.blockers.join("; "), /models contradict/);
 
   const effort = validInput();
-  effort.reviewRecord.effort = "low";
+  effort.reviewRecord.effort = "unsupported";
   const effortPacket = evaluateGovernedReadOnlyReview(effort, { now });
   assert.equal(effortPacket.status, "hold");
   assert.match(effortPacket.blockers.join("; "), /efforts contradict/);
@@ -137,6 +137,29 @@ test("contradictory record, route, and result metadata holds", () => {
   const malformedPacket = evaluateGovernedReadOnlyReview(malformedFlag, { now });
   assert.equal(malformedPacket.status, "hold");
   assert.match(malformedPacket.blockers.join("; "), /timeout flag is malformed/);
+});
+
+test("accepts governed GPT-5.6 variants and supported effort levels", () => {
+  for (const [model, effort] of [["GPT-5.6 Sol", "low"], ["gpt-5.6-codex", "medium"], ["gpt-5.3-codex-spark", "xhigh"]]) {
+    const input = validInput();
+    input.route.model = model;
+    input.route.effort = effort;
+    input.route.rationale = "Independent governed route.";
+    input.reviewRecord.model = model;
+    input.reviewRecord.effort = effort;
+    const packet = evaluateGovernedReadOnlyReview(input, { now });
+    assert.equal(packet.status, "eligible", `${model}/${effort}`);
+  }
+});
+
+test("requires explicit rationale for non-default model or effort routes", () => {
+  const input = validInput();
+  input.route.effort = "low";
+  input.reviewRecord.effort = "low";
+  delete input.route.rationale;
+  const packet = evaluateGovernedReadOnlyReview(input, { now });
+  assert.equal(packet.status, "hold");
+  assert.match(packet.blockers.join("; "), /rationale/);
 });
 
 test("exact binding and freshness mismatches hold", () => {

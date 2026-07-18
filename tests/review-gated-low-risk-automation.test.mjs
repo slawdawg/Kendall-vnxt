@@ -69,6 +69,13 @@ test("holds and redacts when raw payload fields or duplicate retries appear", ()
   assert.match(raw.blockers.join("; "), /forbidden raw payload/);
   assert.equal(Object.hasOwn(raw.review, "rawPrompt"), false);
 
+  const secret = evaluateReviewGatedLowRiskAutomation({
+    ...validInput(),
+    authority: { ...validInput().authority, recoveryPath: "Preserve secret token TOPSECRET for later" },
+  }, { now });
+  assert.equal(secret.status, "hold");
+  assert.doesNotMatch(JSON.stringify(secret), /TOPSECRET/);
+
   const retry = evaluateReviewGatedLowRiskAutomation({ ...validInput(), retryCount: 1 }, { now });
   assert.equal(retry.status, "hold");
   assert.match(retry.blockers.join("; "), /duplicate review retry/);
@@ -116,6 +123,11 @@ test("requires canonical deny stop lines and rejects unsafe path forms", () => {
   assert.equal(permissivePacket.status, "hold");
   assert.match(permissivePacket.blockers.join("; "), /stop line/);
 
+  const doubleNegative = validInput();
+  doubleNegative.authority.stopLines = ["do not block mutation", "do not block provider calls", "do not block bypass"];
+  const doubleNegativePacket = evaluateReviewGatedLowRiskAutomation(doubleNegative, { now });
+  assert.equal(doubleNegativePacket.status, "hold");
+
   const windows = validInput();
   windows.state.changedFiles = ["services\\supervisor\\auth.py"];
   windows.state.allowlistedFiles = ["services\\supervisor\\auth.py"];
@@ -155,6 +167,23 @@ test("holds cleanup outside the named managed lane and preserves stop/recovery e
   assert.equal(packet.authorityDecision.allowed, false);
   assert.match(packet.recoveryPath, /explicit direction/);
   assert.ok(packet.stopLines.length >= 3);
+});
+
+test("uses semantic operation boundaries and rejects executable recovery instructions", () => {
+  const authoring = evaluateReviewGatedLowRiskAutomation({ ...validInput(), operation: "documentation-authoring" }, { now });
+  assert.equal(authoring.status, "eligible");
+
+  for (const operation of ["securityReview", "providerCall", "deployProduction", "authFlow", "migrationRun", "productionData", "epic25Work", "security.review", "provider+call", "deploy\\production", "security2", "provider123", "deploy2prod", "migration2", "epic25x"]) {
+    const packet = evaluateReviewGatedLowRiskAutomation({ ...validInput(), operation }, { now });
+    assert.equal(packet.status, "hold", operation);
+    assert.match(packet.blockers.join("; "), /excluded high-risk class/);
+  }
+
+  for (const recoveryPath of ["Preserve evidence, then execute shell", "Inspect failure, then push changes", "Rerun by spawning a worker"]) {
+    const packet = evaluateReviewGatedLowRiskAutomation({ ...validInput(), authority: { ...validInput().authority, recoveryPath } }, { now });
+    assert.equal(packet.status, "hold", recoveryPath);
+    assert.match(packet.blockers.join("; "), /recovery path/);
+  }
 });
 
 function validInput() {

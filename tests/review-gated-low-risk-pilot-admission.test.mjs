@@ -4,6 +4,7 @@ import test from "node:test";
 import { buildFakeReviewInput } from "../scripts/lib/review-gated-low-risk-fake-adapter.mjs";
 import { evaluateBoundedWritePlan } from "../scripts/lib/review-gated-low-risk-bounded-write.mjs";
 import { evaluatePilotAdmission } from "../scripts/lib/review-gated-low-risk-pilot-admission.mjs";
+import { evaluatePolicyActivationEligibility } from "../scripts/lib/review-gated-low-risk-policy-eligibility.mjs";
 
 const now = "2026-07-17T12:00:00.000Z";
 
@@ -30,43 +31,102 @@ test("stale or mismatched checkpoint evidence holds", () => {
   assert.match(mismatchPacket.blockers.join("; "), /headSha/);
 });
 
-test("synthetic-only pilot result and missing retrospective hold", () => {
+test("first pilot admission does not require post-pilot artifacts", () => {
   const synthetic = validInput();
   synthetic.admissionPacket.approval = approval();
   synthetic.admissionPacket.pilotResult.synthetic = true;
   const syntheticPacket = evaluatePilotAdmission(synthetic, { now });
-  assert.equal(syntheticPacket.status, "HOLD");
-  assert.match(syntheticPacket.blockers.join("; "), /real pilot result.*synthetic/);
+  assert.equal(syntheticPacket.status, "READY");
+  assert.equal(syntheticPacket.execution.attempted, false);
+
+  const policyPacket = evaluatePolicyActivationEligibility({
+    state: synthetic.boundedWriteInput.state,
+    pilotResult: synthetic.admissionPacket.pilotResult,
+    retrospective: synthetic.admissionPacket.retrospective,
+    policy: synthetic.admissionPacket.policy,
+  }, { now });
+  assert.equal(policyPacket.status, "HOLD");
+  assert.match(policyPacket.blockers.join("; "), /non-synthetic/);
 
   const fixture = validInput();
   fixture.admissionPacket.approval = approval();
   fixture.admissionPacket.pilotResult.evidenceClass = "fixture";
   const fixturePacket = evaluatePilotAdmission(fixture, { now });
-  assert.equal(fixturePacket.status, "HOLD");
-  assert.match(fixturePacket.blockers.join("; "), /real pilot result.*synthetic/);
+  assert.equal(fixturePacket.status, "READY");
 
   const missingRetro = validInput();
   missingRetro.admissionPacket.approval = approval();
   delete missingRetro.admissionPacket.retrospective;
   const missingRetroPacket = evaluatePilotAdmission(missingRetro, { now });
-  assert.equal(missingRetroPacket.status, "HOLD");
-  assert.match(missingRetroPacket.blockers.join("; "), /retrospective/);
+  assert.equal(missingRetroPacket.status, "READY");
 
   const mismatchedResult = validInput();
   mismatchedResult.admissionPacket.approval = approval();
   mismatchedResult.admissionPacket.pilotResult.headSha = "other-head";
   const mismatchedResultPacket = evaluatePilotAdmission(mismatchedResult, { now });
-  assert.equal(mismatchedResultPacket.status, "HOLD");
-  assert.match(mismatchedResultPacket.blockers.join("; "), /pilot result headSha/);
+  assert.equal(mismatchedResultPacket.status, "READY");
 
   for (const reference of ["retrospectiv:foo", `retrospective:${"a".repeat(161)}`, "retrospective:secret-token"]) {
     const unsafeReference = validInput();
     unsafeReference.admissionPacket.approval = approval();
     unsafeReference.admissionPacket.retrospective.reference = reference;
     const unsafeReferencePacket = evaluatePilotAdmission(unsafeReference, { now });
-    assert.equal(unsafeReferencePacket.status, "HOLD", reference);
-    assert.match(unsafeReferencePacket.blockers.join("; "), /retrospective reference/, reference);
+    assert.equal(unsafeReferencePacket.status, "READY", reference);
   }
+});
+
+test("policy activation eligibility requires a real exact-bound pilot and retrospective", () => {
+  const input = validInput();
+  const state = input.boundedWriteInput.state;
+  input.admissionPacket.approval = approval();
+  const admission = evaluatePilotAdmission(input, { now });
+  assert.equal(admission.status, "READY");
+  const eligible = evaluatePolicyActivationEligibility({
+    state,
+    admission,
+    pilotResult: input.admissionPacket.pilotResult,
+    retrospective: input.admissionPacket.retrospective,
+    policy: input.admissionPacket.policy,
+  }, { now });
+  assert.equal(eligible.status, "READY");
+  assert.equal(eligible.active, false);
+  assert.equal(eligible.allowed, false);
+
+  const mismatch = input.admissionPacket.pilotResult;
+  const blocked = evaluatePolicyActivationEligibility({
+    state,
+    pilotResult: { ...mismatch, headSha: "other-head" },
+    retrospective: input.admissionPacket.retrospective,
+    policy: input.admissionPacket.policy,
+  }, { now });
+  assert.equal(blocked.status, "HOLD");
+  assert.match(blocked.blockers.join("; "), /headSha/);
+});
+
+test("pilot objective must match the reviewed operation", () => {
+  const input = validInput();
+  input.admissionPacket.approval = approval();
+  input.admissionPacket.objective = "documentation-deploy-production";
+  const packet = evaluatePilotAdmission(input, { now });
+  assert.equal(packet.status, "HOLD");
+  assert.match(packet.blockers.join("; "), /objective/);
+});
+
+test("nested read-only review state remains exact-bound", () => {
+  const input = validInput();
+  input.boundedWriteInput.readOnlyReviewInput = {
+    operation: input.boundedWriteInput.operation,
+    reviewRecord: input.boundedWriteInput.reviewRecord,
+    state: input.boundedWriteInput.state,
+    authority: input.boundedWriteInput.authority,
+    route: input.boundedWriteInput.route,
+    result: input.boundedWriteInput.result,
+    sourcePacket: input.boundedWriteInput.sourcePacket,
+  };
+  delete input.boundedWriteInput.state;
+  input.admissionPacket.approval = approval();
+  const packet = evaluatePilotAdmission(input, { now });
+  assert.equal(packet.status, "READY");
 });
 
 test("high-risk scope and expired approval fail closed", () => {

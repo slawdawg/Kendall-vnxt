@@ -1,6 +1,5 @@
 import { evaluateReviewGatedLowRiskAutomation } from "./review-gated-low-risk-automation.mjs";
 
-const GOVERNED_MODELS = new Set(["5.6 luna", "gpt-5.3-codex-spark"]);
 const RESULT_STATUSES = new Set(["PASS", "CONCERNS", "BLOCKED"]);
 const FORBIDDEN_KEYS = /raw|payload|prompt|completion|reasoning|secret|credential|token|password|provider.?call|live.?model.?call/i;
 const SENSITIVE_TEXT = /raw\s*prompt|raw\s*completion|reasoning\s*trace|provider\s*payload|(?:api|access|refresh)?[_ -]?token|password|secret|credential/i;
@@ -35,11 +34,11 @@ export function evaluateGovernedReadOnlyReview(input = {}, options = {}) {
   }
   const model = text(route.model).toLowerCase();
   const effort = text(route.effort).toLowerCase();
-  if (!GOVERNED_MODELS.has(model) || effort !== "high") {
+  if (!isGovernedModel(model) || !isSupportedEffort(effort)) {
     blockers.push("review route model or effort is not governed");
   }
-  if (model !== "5.6 luna" && (!text(route.rationale) || text(route.rationale).length > 300)) {
-    blockers.push("non-default review route rationale is missing or oversized");
+  if ((model !== "5.6 luna" || effort !== "high") && (!text(route.rationale) || text(route.rationale).length > 300)) {
+    blockers.push("non-default review route or effort rationale is missing or oversized");
   }
   const resultStatus = text(result.status).toUpperCase();
   if (!RESULT_STATUSES.has(resultStatus)) {
@@ -170,6 +169,14 @@ function safeMetadataText(value, maxLength) {
   const normalized = text(value);
   if (!normalized || normalized.length > maxLength || hasSensitiveText(normalized)) return null;
   return normalized;
+}
+
+function isGovernedModel(model) {
+  return /^(?:gpt[- ]?5\.6(?:[- ][a-z0-9._-]+)?|gpt-5\.3-codex-spark|5\.6 luna)$/i.test(model);
+}
+
+function isSupportedEffort(effort) {
+  return /^(?:low|medium|high|xhigh)$/i.test(effort);
 }
 
 function parseTimestamp(value) {

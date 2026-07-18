@@ -17,7 +17,9 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
     ? source.boundedWriteInput
     : source;
   const boundedPlan = evaluateBoundedWritePlan(boundedInput, { now });
-  const state = boundedInput.state && typeof boundedInput.state === "object" ? boundedInput.state : {};
+  const state = boundedInput.readOnlyReviewInput?.state && typeof boundedInput.readOnlyReviewInput.state === "object"
+    ? boundedInput.readOnlyReviewInput.state
+    : boundedInput.state && typeof boundedInput.state === "object" ? boundedInput.state : {};
   const packet = source.admissionPacket && typeof source.admissionPacket === "object" ? source.admissionPacket : {};
   const approval = packet.approval && typeof packet.approval === "object" ? packet.approval : {};
   const limits = packet.provisionalLimits && typeof packet.provisionalLimits === "object" ? packet.provisionalLimits : {};
@@ -30,6 +32,7 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
   if (boundedPlan.status !== "ready") blockers.push("bounded-write plan is not ready");
   const objective = safeText(packet.objective, 160) || "";
   if (!objective || !LOW_RISK_OBJECTIVE.test(objective)) blockers.push("pilot objective is missing or not low-risk");
+  if (objective && text(boundedPlan.operation) && objective.toLowerCase() !== text(boundedPlan.operation).toLowerCase()) blockers.push("pilot objective does not match the reviewed operation");
   const allowlistedFiles = normalizeStringList(packet.allowlistedFiles);
   const plannedFiles = normalizeStringList(boundedPlan.writePlan?.files);
   if (!Array.isArray(packet.allowlistedFiles) || packet.allowlistedFiles.some((file) => typeof file !== "string")) blockers.push("pilot allowlisted files are malformed");
@@ -43,9 +46,6 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
   if (!Array.isArray(packet.splitTriggers) || packet.splitTriggers.length === 0 || packet.splitTriggers.length > 10 || packet.splitTriggers.some((trigger) => !safeText(trigger, 200))) blockers.push("pilot split triggers are missing, malformed, unsafe, or unbounded");
   if (!safeText(recovery.owner, 120) || recovery.owner !== text(state.owner) || !isSafeRecoveryPath(recovery.path)) blockers.push("pilot recovery owner or path is missing, unsafe, or unbound");
   validateApproval(approval, packet, state, now, blockers);
-  validatePilotResult(pilotResult, state, packet, now, blockers);
-  validateRetrospective(retrospective, now, blockers);
-  validatePolicy(policy, blockers);
 
   const uniqueBlockers = unique(blockers);
   const approved = approval.approved === true;
@@ -165,6 +165,8 @@ function validateApproval(approval, packet, state, now, blockers) {
   }
 }
 
+/* Post-pilot checks live in the separate policy-activation evaluator. */
+/*
 function validatePilotResult(result, state, packet, now, blockers) {
   const provenance = text(result.provenance).toLowerCase();
   const evidenceClass = text(result.evidenceClass).toLowerCase();
@@ -188,6 +190,7 @@ function validateRetrospective(retrospective, now, blockers) {
 function validatePolicy(policy, blockers) {
   if (policy.explicit !== true || text(policy.mode) !== "standard-delivery" || text(policy.batchMode) !== "per-epic") blockers.push("standard-delivery per-epic batch policy is missing or ambiguous");
 }
+*/
 
 function parseTimestamp(value) {
   if (!value) return null;
