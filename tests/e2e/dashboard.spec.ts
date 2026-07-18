@@ -1744,6 +1744,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:check-plan", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:supervisor-runner", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:static-bundles", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-automation", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-fake-adapter", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-dry-run-adapter", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-read-only-review", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-bounded-write", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-pilot-admission", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-policy-eligibility", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:static-bundle-summary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:governed-worker-execution-dry-run", { exact: true })).toBeVisible();

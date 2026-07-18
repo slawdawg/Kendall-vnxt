@@ -2047,6 +2047,13 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-check-plan",
         "test-supervisor-runner",
         "test-static-bundles",
+        "test-review-gated-low-risk-automation",
+        "test-review-gated-low-risk-fake-adapter",
+        "test-review-gated-low-risk-dry-run-adapter",
+        "test-review-gated-low-risk-read-only-review",
+        "test-review-gated-low-risk-bounded-write",
+        "test-review-gated-low-risk-pilot-admission",
+        "test-review-gated-low-risk-policy-eligibility",
         "test-static-bundle-summary",
         "check-authority-readiness",
         "check-branch-protection-readiness",
@@ -2146,6 +2153,13 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-check-plan" in static_group["commandIds"]
     assert "test-supervisor-runner" in static_group["commandIds"]
     assert "test-static-bundles" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-automation" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-fake-adapter" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-dry-run-adapter" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-read-only-review" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-bounded-write" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-pilot-admission" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-policy-eligibility" in static_group["commandIds"]
     assert "test-static-bundle-summary" in static_group["commandIds"]
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-review-resource-policy" in static_group["commandIds"]
