@@ -50,3 +50,13 @@ URLs, or destructive instructions.
 ```bash
 pnpm run test:review-gated-low-risk-pilot-admission
 ```
+
+## Policy-activation eligibility
+
+Eligibility is a separate, inactive policy decision. It requires a completed
+non-synthetic `PASS` pilot result bound to the exact owner/worktree/base/head/
+diff, an accepted fresh retrospective reference, every prior gate, and an
+explicit `standard-delivery` / `per-epic` batch policy. Missing or synthetic
+readiness, stale evidence, high-risk scope, or a mismatched pilot result keeps
+the decision at `HOLD`. Even a fully evidenced result emits
+`active: false`, `allowed: false`, and `execution.mutation: none`.

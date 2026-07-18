@@ -22,6 +22,9 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
   const approval = packet.approval && typeof packet.approval === "object" ? packet.approval : {};
   const limits = packet.provisionalLimits && typeof packet.provisionalLimits === "object" ? packet.provisionalLimits : {};
   const recovery = packet.recovery && typeof packet.recovery === "object" ? packet.recovery : {};
+  const pilotResult = packet.pilotResult && typeof packet.pilotResult === "object" ? packet.pilotResult : {};
+  const retrospective = packet.retrospective && typeof packet.retrospective === "object" ? packet.retrospective : {};
+  const policy = packet.policy && typeof packet.policy === "object" ? packet.policy : {};
   const blockers = [];
 
   if (boundedPlan.status !== "ready") blockers.push("bounded-write plan is not ready");
@@ -40,6 +43,9 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
   if (!Array.isArray(packet.splitTriggers) || packet.splitTriggers.length === 0 || packet.splitTriggers.length > 10 || packet.splitTriggers.some((trigger) => !safeText(trigger, 200))) blockers.push("pilot split triggers are missing, malformed, unsafe, or unbounded");
   if (!safeText(recovery.owner, 120) || recovery.owner !== text(state.owner) || !isSafeRecoveryPath(recovery.path)) blockers.push("pilot recovery owner or path is missing, unsafe, or unbound");
   validateApproval(approval, packet, state, now, blockers);
+  validatePilotResult(pilotResult, state, packet, now, blockers);
+  validateRetrospective(retrospective, now, blockers);
+  validatePolicy(policy, blockers);
 
   const uniqueBlockers = unique(blockers);
   const approved = approval.approved === true;
@@ -49,6 +55,9 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
     mode: "pilot-admission-checkpoint",
     status,
     approved: status === "READY",
+    activationEligible: status === "READY",
+    active: false,
+    allowed: false,
     blockers: uniqueBlockers,
     objective: objective || null,
     scope: {
@@ -82,6 +91,23 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
       owner: safeText(recovery.owner, 120),
       path: safeText(recovery.path, 300),
     },
+    pilotResult: {
+      completed: pilotResult.completed === true,
+      synthetic: pilotResult.synthetic === true,
+      status: text(pilotResult.status) || null,
+      resultId: safeText(pilotResult.resultId, 120),
+      completedAt: parseTimestamp(pilotResult.completedAt)?.toISOString() || null,
+    },
+    retrospective: {
+      accepted: retrospective.accepted === true,
+      reference: safeText(retrospective.reference, 160),
+      acceptedBy: safeText(retrospective.acceptedBy, 120),
+      acceptedAt: parseTimestamp(retrospective.acceptedAt)?.toISOString() || null,
+    },
+    policy: {
+      mode: text(policy.mode) || null,
+      batchMode: text(policy.batchMode) || null,
+    },
     execution: {
       attempted: false,
       applied: false,
@@ -90,6 +116,13 @@ export function evaluatePilotAdmission(input = {}, options = {}) {
       gitMutations: false,
       providerCalls: false,
       workerLaunch: false,
+    },
+    authorityDecision: {
+      decision: status === "READY" ? "eligible-policy-activation" : "hold",
+      allowed: false,
+      active: false,
+      metadataOnly: true,
+      blockedReasons: uniqueBlockers,
     },
     metadataOnly: true,
     rawPayloadRetained: false,
@@ -130,6 +163,30 @@ function validateApproval(approval, packet, state, now, blockers) {
   for (const field of ["owner", "worktree", "baseSha", "headSha", "diffHash"]) {
     if (approval[field] !== text(state[field]) || packet[field] !== text(state[field])) blockers.push(`pilot approval ${field} is not exact-bound`);
   }
+}
+
+function validatePilotResult(result, state, packet, now, blockers) {
+  const provenance = text(result.provenance).toLowerCase();
+  const evidenceClass = text(result.evidenceClass).toLowerCase();
+  if (result.completed !== true || result.synthetic !== false || ["synthetic", "fixture", "readiness"].includes(provenance) || ["synthetic", "fixture", "readiness"].includes(evidenceClass) || text(result.status).toUpperCase() !== "PASS") blockers.push("completed real pilot result is missing or synthetic");
+  if (!safeText(result.resultId, 120)) blockers.push("real pilot result ID is missing or unsafe");
+  for (const field of ["owner", "worktree", "baseSha", "headSha", "diffHash"]) {
+    if (result[field] !== text(state[field]) || packet[field] !== text(state[field])) blockers.push(`real pilot result ${field} is not exact-bound`);
+  }
+  const completedAt = parseTimestamp(result.completedAt);
+  const parsedNow = parseTimestamp(now);
+  if (!completedAt || !parsedNow || completedAt > parsedNow || parsedNow - completedAt > MAX_APPROVAL_AGE_MS) blockers.push("real pilot result is stale, future-dated, or invalid");
+}
+
+function validateRetrospective(retrospective, now, blockers) {
+  if (retrospective.accepted !== true || !/^retrospective:[A-Za-z0-9._-]+$/i.test(text(retrospective.reference)) || !safeText(retrospective.reference, 160) || !safeText(retrospective.acceptedBy, 120)) blockers.push("accepted retrospective reference is missing or unsafe");
+  const acceptedAt = parseTimestamp(retrospective.acceptedAt);
+  const parsedNow = parseTimestamp(now);
+  if (!acceptedAt || !parsedNow || acceptedAt > parsedNow || parsedNow - acceptedAt > MAX_APPROVAL_AGE_MS) blockers.push("accepted retrospective is stale, future-dated, or invalid");
+}
+
+function validatePolicy(policy, blockers) {
+  if (policy.explicit !== true || text(policy.mode) !== "standard-delivery" || text(policy.batchMode) !== "per-epic") blockers.push("standard-delivery per-epic batch policy is missing or ambiguous");
 }
 
 function parseTimestamp(value) {

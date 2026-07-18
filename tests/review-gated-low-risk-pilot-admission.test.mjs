@@ -30,6 +30,45 @@ test("stale or mismatched checkpoint evidence holds", () => {
   assert.match(mismatchPacket.blockers.join("; "), /headSha/);
 });
 
+test("synthetic-only pilot result and missing retrospective hold", () => {
+  const synthetic = validInput();
+  synthetic.admissionPacket.approval = approval();
+  synthetic.admissionPacket.pilotResult.synthetic = true;
+  const syntheticPacket = evaluatePilotAdmission(synthetic, { now });
+  assert.equal(syntheticPacket.status, "HOLD");
+  assert.match(syntheticPacket.blockers.join("; "), /real pilot result.*synthetic/);
+
+  const fixture = validInput();
+  fixture.admissionPacket.approval = approval();
+  fixture.admissionPacket.pilotResult.evidenceClass = "fixture";
+  const fixturePacket = evaluatePilotAdmission(fixture, { now });
+  assert.equal(fixturePacket.status, "HOLD");
+  assert.match(fixturePacket.blockers.join("; "), /real pilot result.*synthetic/);
+
+  const missingRetro = validInput();
+  missingRetro.admissionPacket.approval = approval();
+  delete missingRetro.admissionPacket.retrospective;
+  const missingRetroPacket = evaluatePilotAdmission(missingRetro, { now });
+  assert.equal(missingRetroPacket.status, "HOLD");
+  assert.match(missingRetroPacket.blockers.join("; "), /retrospective/);
+
+  const mismatchedResult = validInput();
+  mismatchedResult.admissionPacket.approval = approval();
+  mismatchedResult.admissionPacket.pilotResult.headSha = "other-head";
+  const mismatchedResultPacket = evaluatePilotAdmission(mismatchedResult, { now });
+  assert.equal(mismatchedResultPacket.status, "HOLD");
+  assert.match(mismatchedResultPacket.blockers.join("; "), /pilot result headSha/);
+
+  for (const reference of ["retrospectiv:foo", `retrospective:${"a".repeat(161)}`, "retrospective:secret-token"]) {
+    const unsafeReference = validInput();
+    unsafeReference.admissionPacket.approval = approval();
+    unsafeReference.admissionPacket.retrospective.reference = reference;
+    const unsafeReferencePacket = evaluatePilotAdmission(unsafeReference, { now });
+    assert.equal(unsafeReferencePacket.status, "HOLD", reference);
+    assert.match(unsafeReferencePacket.blockers.join("; "), /retrospective reference/, reference);
+  }
+});
+
 test("high-risk scope and expired approval fail closed", () => {
   const highRisk = validInput();
   highRisk.admissionPacket.allowlistedFiles = ["config/.env"];
@@ -77,6 +116,10 @@ test("synthetic approved checkpoint remains metadata-only evidence", () => {
   assert.equal(packet.execution.attempted, false);
   assert.equal(packet.execution.applied, false);
   assert.equal(packet.execution.mutation, "none");
+  assert.equal(packet.active, false);
+  assert.equal(packet.allowed, false);
+  assert.equal(packet.authorityDecision.allowed, false);
+  assert.equal(packet.authorityDecision.active, false);
   assert.equal(packet.metadataOnly, true);
   assert.equal(packet.rawPayloadRetained, false);
 });
@@ -121,6 +164,9 @@ function validInput() {
       splitTriggers: ["more than 5 files", "any high-risk path"],
       recovery: { owner: fake.state.owner, path: fake.state.rollbackPath },
       approval: { required: true, approved: false },
+      pilotResult: { completed: true, synthetic: false, status: "PASS", resultId: "pilot-result-1", completedAt: now, owner: fake.state.owner, worktree: fake.state.worktree, baseSha: fake.state.baseSha, headSha: fake.state.headSha, diffHash: fake.state.diffHash },
+      retrospective: { accepted: true, reference: "retrospective:pilot-1", acceptedBy: "operator@example.test", acceptedAt: now },
+      policy: { explicit: true, mode: "standard-delivery", batchMode: "per-epic" },
     },
   };
 }
