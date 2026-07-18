@@ -36,3 +36,17 @@ High-risk paths, stale or ambiguous reviews, missing rollback evidence,
 contradictory ownership, external-action intents, and malformed checkpoints
 fail closed. Do not add provider credentials, raw prompts/completions, or
 activation evidence containing secret values to the packet.
+
+## Pilot admission checkpoint
+
+The pilot-admission layer wraps the bounded plan with one low-risk objective,
+an exact file scope, review/check/rollback receipts, provisional file/time/
+retry limits, split triggers, a recovery reference, and a fresh human approval.
+It defaults to `HOLD`; an approved synthetic checkpoint still returns only
+metadata (`execution.attempted: false`, `mutation: none`). Recovery references
+must be safe IDs such as `revert:abc123` or `inspect:foo.bar`, never commands,
+URLs, or destructive instructions.
+
+```bash
+pnpm run test:review-gated-low-risk-pilot-admission
+```

@@ -20,6 +20,7 @@
     "test:review-gated-low-risk-dry-run-adapter": "node --test tests/review-gated-low-risk-dry-run-adapter.test.mjs",
     "test:review-gated-low-risk-read-only-review": "node --test tests/review-gated-low-risk-read-only-review.test.mjs",
     "test:review-gated-low-risk-bounded-write": "node --test tests/review-gated-low-risk-bounded-write.test.mjs",
+    "test:review-gated-low-risk-pilot-admission": "node --test tests/review-gated-low-risk-pilot-admission.test.mjs",
     "tmux:orientation": "node ./scripts/tmux-orientation-report.mjs",
     "test:tmux-orientation-report": "node --test tests/tmux-orientation-report.test.mjs",
     "check:tmux-orientation-report": "node ./scripts/check-tmux-orientation-report.mjs",
