@@ -130,6 +130,8 @@
     "manager:codex-advisor": "node ./scripts/manager-codex-advisor-packet.mjs --summary-json",
     "manager:cycle": "node ./scripts/manager-cycle-packet.mjs --summary-json",
     "manager:refill": "node ./scripts/manager-refill-plan.mjs --summary-json",
+    "manager:terminal-event-dogfood": "node ./scripts/manager-terminal-event-dogfood.mjs",
+    "test:manager-terminal-event-dogfood": "node --test tests/manager-terminal-event-dogfood.test.mjs",
     "manager:source-intake-cycle": "node ./scripts/manager-source-intake-cycle.mjs",
     "manager:supervisor-terminal-event-sync": "node ./scripts/manager-supervisor-terminal-event-sync.mjs",
     "manager:supervisor-source-intake": "node ./scripts/manager-supervisor-source-intake.mjs",
