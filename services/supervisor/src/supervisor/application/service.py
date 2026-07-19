@@ -24,6 +24,8 @@ UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
 CANONICAL_OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions"
 CANONICAL_OLLAMA_MODEL = "qwen3:14b"
 CANONICAL_OLLAMA_SOURCE_VM = "192.168.1.8"
+CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS = 2
+CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS = 120
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -20574,6 +20576,8 @@ class SupervisorService:
             approved_endpoint_url != CANONICAL_OLLAMA_ENDPOINT
             or approved_model_id != CANONICAL_OLLAMA_MODEL
             or approved_source_vm != CANONICAL_OLLAMA_SOURCE_VM
+            or self.settings.ollama_connect_timeout_seconds != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS
+            or self.settings.ollama_total_timeout_seconds != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS
         )
 
         if route_policy_mismatch:

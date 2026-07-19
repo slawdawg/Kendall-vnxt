@@ -111,6 +111,8 @@ assertAllIncludes(serviceSource, [
   "self.settings.allow_automatic_ollama_local_evidence",
   "endpoint_approved = endpoint_url == approved_endpoint_url",
   "model_id_approved = model_id == approved_model_id",
+  "self.settings.ollama_connect_timeout_seconds != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS",
+  "self.settings.ollama_total_timeout_seconds != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS",
   "\"provider_calls_allowed\": enabled",
   "\"model_calls_allowed\": enabled",
   `Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model `,
