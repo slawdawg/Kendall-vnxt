@@ -94,8 +94,12 @@ assertAllIncludes(approvalPacket, [
 ], "Approval packet must preserve the local-provider execution contract", failures);
 
 assertAllIncludes(settingsSource, [
-  "allow_local_provider_calls: bool = Field(default=False, alias=\"SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS\")",
-  "allow_ollama_provider_calls: bool = Field(default=False, alias=\"SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS\")",
+  "allow_local_provider_calls: bool = Field(default=True, alias=\"SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS\")",
+  "allow_ollama_provider_calls: bool = Field(default=True, alias=\"SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS\")",
+  "allow_automatic_ollama_local_evidence: bool = Field(default=True, alias=\"SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE\")",
+  `ollama_endpoint_url: str | None = Field(\n        default=\"${approvedEndpoint}\"`,
+  `ollama_model_id: str | None = Field(default=\"${approvedModel}\"`,
+  "ollama_approved_source_vm: str = Field(default=\"192.168.1.8\"",
   `default="${approvedEndpoint}"`,
   "alias=\"SUPERVISOR_OLLAMA_APPROVED_ENDPOINT_URL\"",
   `ollama_approved_model_id: str = Field(default="${approvedModel}", alias="SUPERVISOR_OLLAMA_APPROVED_MODEL_ID")`,
@@ -104,6 +108,7 @@ assertAllIncludes(settingsSource, [
 assertAllIncludes(serviceSource, [
   "self.settings.allow_local_provider_calls",
   "self.settings.allow_ollama_provider_calls",
+  "self.settings.allow_automatic_ollama_local_evidence",
   "endpoint_approved = endpoint_url == approved_endpoint_url",
   "model_id_approved = model_id == approved_model_id",
   "\"provider_calls_allowed\": enabled",
@@ -118,6 +123,7 @@ assertOrderedIncludes(localProviderApprovalSchema, [
   "authorityFamily: str | None = None",
   "operation: str | None = None",
   "endpointUrl: str | None = None",
+  "sourceVm: str | None = None",
   "modelId: str | None = None",
   "promptSourceId: str | None = None",
   "promptTemplateId: str | None = None",
@@ -168,6 +174,7 @@ assertOrderedIncludes(localProviderValidation, [
   "(\"authorityFamily\", approval.authorityFamily, \"local-provider-execution\", \"approval-authority-family-mismatch\")",
   "(\"operation\", approval.operation, \"one bounded Ollama provider operation\", \"approval-operation-mismatch\")",
   "(\"endpointUrl\", approval.endpointUrl, expected_endpoint, \"approval-endpoint-mismatch\")",
+  "(\"sourceVm\", approval.sourceVm, self.settings.ollama_approved_source_vm.strip(), \"approval-source-vm-mismatch\")",
   "(\"modelId\", approval.modelId, expected_model, \"approval-model-mismatch\")",
   "(\"retainedEvidencePolicy\", approval.retainedEvidencePolicy, \"metadata-only\", \"approval-retention-policy-mismatch\")",
   "connect_timeout_2s_total_timeout_120s",
@@ -190,6 +197,7 @@ assertAllIncludes(supervisorTests, [
   "test_ollama_provider_gate_enables_only_approved_host_endpoint_and_model",
   "test_ollama_provider_gate_rejects_unapproved_endpoint",
   "test_ollama_local_evidence_explanation_rejects_missing_approval_before_adapter_call",
+  "test_ollama_local_evidence_explanation_runs_with_policy_approval_by_default",
   "test_ollama_local_evidence_explanation_records_metadata_without_raw_provider_text",
   "test_ollama_local_evidence_explanation_rejects_mismatched_or_expired_approval",
   "test_ollama_local_evidence_explanation_rejects_unsafe_placeholder_approval_text",

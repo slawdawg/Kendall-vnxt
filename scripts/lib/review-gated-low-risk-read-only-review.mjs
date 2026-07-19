@@ -1,8 +1,11 @@
 import { evaluateReviewGatedLowRiskAutomation } from "./review-gated-low-risk-automation.mjs";
+import { evaluateBoundedReviewRoute, isApprovedFallbackFailure } from "./review-gated-low-risk-route-policy.mjs";
+import { evaluatePrivateEvidencePacket } from "./private-evidence-packet-policy.mjs";
 
 const RESULT_STATUSES = new Set(["PASS", "CONCERNS", "BLOCKED"]);
 const FORBIDDEN_KEYS = /raw|payload|prompt|completion|reasoning|secret|credential|token|password|provider.?call|live.?model.?call/i;
 const SENSITIVE_TEXT = /raw\s*prompt|raw\s*completion|reasoning\s*trace|provider\s*payload|(?:api|access|refresh)?[_ -]?token|password|secret|credential/i;
+const SAFE_FALSE_ROUTE_CONTROLS = new Set(["rawPayloadRetained", "providerPayloadRetained", "credentialsRead", "providerMemory", "broadDump", "forbiddenClassesPresent", "publicExposure", "modelDiscovery", "endpointDiscovery"]);
 
 /**
  * Validate an already-produced review result through the governed route.
@@ -32,9 +35,19 @@ export function evaluateGovernedReadOnlyReview(input = {}, options = {}) {
   if (route.available !== true || route.mode !== "metadata-only") {
     blockers.push("governed read-only route is unavailable or not metadata-only");
   }
+  const routeValidationStart = blockers.length;
+  validateOrderedRoute(route, blockers);
+  const provider = text(route.provider).toLowerCase();
+  let privateEvidencePacketValidated = false;
+  if (provider === "claude" || provider === "ollama") {
+    const packetGate = evaluatePrivateEvidencePacket(source.privateEvidencePacket, { now: opts.now });
+    privateEvidencePacketValidated = packetGate.eligible;
+    if (!packetGate.eligible) blockers.push(...packetGate.blockers.map((blocker) => `private evidence packet: ${blocker}`));
+  }
+  const routeValidated = blockers.length === routeValidationStart;
   const model = text(route.model).toLowerCase();
   const effort = text(route.effort).toLowerCase();
-  if (!isGovernedModel(model) || !isSupportedEffort(effort)) {
+  if (!isGovernedModel(model, text(route.provider).toLowerCase()) || !isSupportedEffort(effort)) {
     blockers.push("review route model or effort is not governed");
   }
   if ((model !== "5.6 luna" || effort !== "high") && (!text(route.rationale) || text(route.rationale).length > 300)) {
@@ -83,6 +96,12 @@ export function evaluateGovernedReadOnlyReview(input = {}, options = {}) {
   const review = {
     ...reviewRecord,
     status: resultStatus,
+    provider: route.provider,
+    routeRole: route.role,
+    fallbackUsed: route.fallbackUsed,
+    primaryFailure: route.primaryFailure,
+    routeValidated,
+    privateEvidencePacketValidated,
     model: route.model,
     effort: route.effort,
     routeRationale: route.rationale,
@@ -109,6 +128,23 @@ export function evaluateGovernedReadOnlyReview(input = {}, options = {}) {
       route: {
         available: route.available === true,
         mode: text(route.mode) || null,
+        provider: safeMetadataText(route.provider, 80),
+        role: safeMetadataText(route.role, 80),
+        fallbackUsed: route.fallbackUsed === true,
+        primaryFailure: safeMetadataText(route.primaryFailure, 40),
+        validated: routeValidated,
+        privateEvidencePacketValidated,
+        endpoint: safeMetadataText(route.endpoint, 160),
+        sourceVm: safeMetadataText(route.sourceVm, 80),
+        connectTimeoutSeconds: Number.isFinite(route.connectTimeoutSeconds) ? route.connectTimeoutSeconds : null,
+        totalTimeoutSeconds: Number.isFinite(route.totalTimeoutSeconds) ? route.totalTimeoutSeconds : null,
+        executable: safeMetadataText(route.executable, 80),
+        cliMode: safeMetadataText(route.cliMode, 40),
+        authenticated: route.authenticated === true,
+        maxBudgetUsd: Number.isFinite(route.maxBudgetUsd) ? route.maxBudgetUsd : null,
+        allowedTools: Array.isArray(route.allowedTools) ? route.allowedTools.map((tool) => safeMetadataText(tool, 40)).filter(Boolean) : [],
+        disallowedTools: Array.isArray(route.disallowedTools) ? route.disallowedTools.map((tool) => safeMetadataText(tool, 40)).filter(Boolean) : [],
+        sourceScope: safeMetadataText(route.sourceScope, 80),
         model: safeMetadataText(route.model, 120),
         effort: safeMetadataText(route.effort, 40),
         rationale: safeMetadataText(route.rationale, 300),
@@ -139,7 +175,7 @@ function findForbiddenMetadata(value, path = "input") {
   if (!value || typeof value !== "object") return [];
   const findings = [];
   for (const [key, nested] of Object.entries(value)) {
-    if (FORBIDDEN_KEYS.test(key)) findings.push(`${path}.${key}`);
+    if (nested !== undefined && !(SAFE_FALSE_ROUTE_CONTROLS.has(key) && nested === false) && FORBIDDEN_KEYS.test(key)) findings.push(`${path}.${key}`);
     if (nested && typeof nested === "object") findings.push(...findForbiddenMetadata(nested, `${path}.${key}`));
   }
   return findings;
@@ -171,8 +207,43 @@ function safeMetadataText(value, maxLength) {
   return normalized;
 }
 
-function isGovernedModel(model) {
+function isGovernedModel(model, provider = "") {
+  if (provider === "claude") return model === "claude";
+  if (provider === "ollama") return model === "qwen3:14b";
   return /^(?:gpt[- ]?5\.6(?:[- ][a-z0-9._-]+)?|gpt-5\.3-codex-spark|5\.6 luna)$/i.test(model);
+}
+
+function validateOrderedRoute(route, blockers) {
+  const provider = text(route.provider).toLowerCase();
+  const role = text(route.role).toLowerCase();
+  if (provider === "claude") {
+    const policy = evaluateBoundedReviewRoute({
+      role: "primary-review", provider, model: route.model, executable: route.executable, mode: route.cliMode || route.mode,
+      authenticated: route.authenticated, maxBudgetUsd: route.maxBudgetUsd, allowedTools: route.allowedTools,
+      disallowedTools: route.disallowedTools, metadataOnly: route.metadataOnly, rawPayloadRetained: route.rawPayloadRetained,
+      sourceScope: route.sourceScope, activationAllowed: route.activationAllowed, reviewPass: route.reviewPass,
+      fallbackUsed: route.fallbackUsed, primaryFailure: route.primaryFailure,
+    });
+    if (role !== "primary-review" || route.fallbackUsed === true || !policy.eligible) {
+      blockers.push("Claude must be selected as the primary review route");
+      blockers.push(...policy.blockers);
+    }
+  } else if (provider === "ollama") {
+    const policy = evaluateBoundedReviewRoute({
+      role: "backup-review", provider, endpoint: route.endpoint, model: route.model, sourceVm: route.sourceVm,
+      connectTimeoutSeconds: route.connectTimeoutSeconds, totalTimeoutSeconds: route.totalTimeoutSeconds,
+      metadataOnly: route.metadataOnly, rawPayloadRetained: route.rawPayloadRetained, publicExposure: route.publicExposure,
+      credentialsRead: route.credentialsRead, modelDiscovery: route.modelDiscovery, endpointDiscovery: route.endpointDiscovery,
+      reviewPass: route.reviewPass, activationAllowed: route.activationAllowed, fallbackUsed: route.fallbackUsed,
+      primaryFailure: route.primaryFailure,
+    });
+    if (role !== "backup-review" || route.fallbackUsed !== true || !isApprovedFallbackFailure(route.primaryFailure) || !policy.eligible) {
+      blockers.push("Ollama is eligible only as the ordered backup after an approved Claude failure");
+      blockers.push(...policy.blockers);
+    }
+  } else if (provider || role || /^(?:claude|qwen3:14b)$/i.test(text(route.model))) {
+    blockers.push("ordered review route provider is unknown or missing");
+  }
 }
 
 function isSupportedEffort(effort) {

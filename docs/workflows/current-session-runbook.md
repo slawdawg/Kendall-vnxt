@@ -43,6 +43,32 @@ asks for takeover.
 Autonomous best-judgment choices must be recorded through metadata-only heartbeat decision evidence.
 Include the decision, rationale, and next safe action before the runner continues.
 
+## Optional local Ollama review lane
+
+The approved LAN route is `http://192.168.1.128:11434/v1/chat/completions` using
+`qwen3:14b`, from the current VM source `192.168.1.8`. Ollama must be running on
+the host and reachable on TCP port `11434` before enabling the lane. The
+supervisor enables the exact local Ollama gates by default in this local profile.
+Automatic local-policy consent replaces a per-call operator prompt for this
+local-only explanation capability; it is separate from the Claude-primary,
+Ollama-backup review route and never fabricates a Claude fallback. The exact
+route, metadata-only boundary, redaction, size, timeout, and rollback guards
+remain mandatory. Set the two `SUPERVISOR_ALLOW_*` gates or
+`SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE` to `false` to disable it:
+
+```bash
+export SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=true
+export SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS=true
+export SUPERVISOR_OLLAMA_ENDPOINT_URL=http://192.168.1.128:11434/v1/chat/completions
+export SUPERVISOR_OLLAMA_MODEL_ID=qwen3:14b
+export SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM=192.168.1.8
+```
+
+The local evidence explanation endpoint can run under the automatic policy when
+the request records its workflow event. Response bodies, prompts, completions,
+and reasoning are not retained. Disable the gates or automatic policy flag to
+roll back the lane.
+
 Run `pnpm run check:fast` before long local or CI-style gates when changes touch
 workflow policy, workspace delivery, sandbox-boundary handling, anti-churn
 routing, dashboard E2E runners, or manager-control-plane verification. Use
@@ -62,6 +88,9 @@ first pass when only one surface changed.
 `pnpm run test:review-gated-low-risk-bounded-write`,
 `pnpm run test:review-gated-low-risk-pilot-admission`,
 `pnpm run test:review-gated-low-risk-policy-eligibility`,
+`pnpm run test:review-gated-low-risk-route-policy`,
+`pnpm run test:metadata-only-provider-result`,
+`pnpm run test:private-evidence-packet-policy`,
 `pnpm run test:static-bundle-summary`,
 `pnpm run check:governed-worker-execution-dry-run`,
 `pnpm run check:documentation-authority`,

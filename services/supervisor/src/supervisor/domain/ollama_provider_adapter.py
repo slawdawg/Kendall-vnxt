@@ -1,10 +1,26 @@
 import asyncio
+import http.client
 import json
-import urllib.error
-import urllib.request
+import socket
+import time
 from dataclasses import dataclass
 from threading import Event
 from typing import Any
+from urllib.parse import urlsplit
+
+MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1024
+
+
+class OllamaProviderHTTPError(OSError):
+    def __init__(self, status: int) -> None:
+        self.status = status
+        if status == 429:
+            self.status_label = "rate-limited"
+        elif 500 <= status <= 599:
+            self.status_label = "unavailable"
+        else:
+            self.status_label = "failed"
+        super().__init__(f"Ollama provider returned HTTP {status}.")
 
 
 @dataclass(frozen=True)
@@ -94,7 +110,17 @@ class OllamaProviderAdapter:
                 timeout_state="not_timed_out",
                 cancellation_state="cancel_requested_request_abort_recorded",
             )
-        except (OSError, urllib.error.URLError, ValueError) as exc:
+        except OllamaProviderHTTPError as exc:
+            return self._terminal_result(
+                status=exc.status_label,
+                prompt=prompt,
+                response_summary=(
+                    f"Provider returned HTTP {exc.status}; raw provider payload was not retained."
+                ),
+                timeout_state="not_timed_out",
+                cancellation_state="not_cancelled",
+            )
+        except (http.client.HTTPException, OSError, ValueError) as exc:
             return self._terminal_result(
                 status="failed",
                 prompt=prompt,
@@ -125,14 +151,34 @@ class OllamaProviderAdapter:
                 "stream": False,
             }
         ).encode("utf-8")
-        request = urllib.request.Request(
-            self.endpoint_url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        parsed = urlsplit(self.endpoint_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Ollama endpoint must be an HTTP(S) URL with a host")
+        connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        connection = connection_type(
+            parsed.hostname,
+            parsed.port,
+            timeout=self.connect_timeout_seconds,
         )
-        with urllib.request.urlopen(request, timeout=self.connect_timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        started = time.monotonic()
+        try:
+            connection.connect()
+            remaining = max(0.1, self.total_timeout_seconds - (time.monotonic() - started))
+            if connection.sock is not None:
+                connection.sock.settimeout(remaining)
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            connection.request("POST", path, body=body, headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            if not 200 <= response.status < 300:
+                raise OllamaProviderHTTPError(response.status)
+            response_body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+            if len(response_body) > MAX_PROVIDER_RESPONSE_BYTES:
+                raise ValueError("Ollama provider response exceeded the metadata-only bound")
+            payload = json.loads(response_body.decode("utf-8"))
+        finally:
+            connection.close()
         choice = (payload.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         content = message.get("content") if isinstance(message.get("content"), str) else ""

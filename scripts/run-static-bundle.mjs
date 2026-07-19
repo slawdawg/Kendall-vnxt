@@ -48,6 +48,7 @@ export const STATIC_BUNDLES = Object.freeze({
     "test:review-gated-low-risk-bounded-write",
     "test:review-gated-low-risk-pilot-admission",
     "test:review-gated-low-risk-policy-eligibility",
+    "test:review-gated-low-risk-route-policy",
     "check:governed-worker-execution-dry-run",
     "check:documentation-authority",
     "check:legacy-planning-inventory",

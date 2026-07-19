@@ -17,6 +17,15 @@ test("returns report-only eligibility when model PASS and deterministic gates ma
   assert.deepEqual(packet.blockers, []);
 });
 
+test("holds unknown provider metadata instead of using the generic model path", () => {
+  const packet = evaluateReviewGatedLowRiskAutomation({
+    ...validInput(),
+    review: { ...validInput().review, provider: "untrusted-provider" },
+  }, { now });
+  assert.equal(packet.status, "hold");
+  assert.match(packet.blockers.join("; "), /provider allowlist/);
+});
+
 test("holds when review is missing, ambiguous, failed, or stale", () => {
   for (const review of [
     {},

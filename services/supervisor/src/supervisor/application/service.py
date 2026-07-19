@@ -21,6 +21,9 @@ UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
     re.IGNORECASE,
 )
+CANONICAL_OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions"
+CANONICAL_OLLAMA_MODEL = "qwen3:14b"
+CANONICAL_OLLAMA_SOURCE_VM = "192.168.1.8"
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -7505,6 +7508,7 @@ class SupervisorService:
             VerificationCommandView(commandId="test-review-gated-low-risk-bounded-write", label="Review-gated bounded-write tests", command="pnpm run test:review-gated-low-risk-bounded-write", status="required", requiredFor=["review-gated bounded-write changes"]),
             VerificationCommandView(commandId="test-review-gated-low-risk-pilot-admission", label="Review-gated pilot admission tests", command="pnpm run test:review-gated-low-risk-pilot-admission", status="required", requiredFor=["review-gated pilot admission changes"]),
             VerificationCommandView(commandId="test-review-gated-low-risk-policy-eligibility", label="Review-gated policy eligibility tests", command="pnpm run test:review-gated-low-risk-policy-eligibility", status="required", requiredFor=["review-gated policy eligibility changes"]),
+            VerificationCommandView(commandId="test-review-gated-low-risk-route-policy", label="Review-gated route policy tests", command="pnpm run test:review-gated-low-risk-route-policy", status="required", requiredFor=["review-gated bounded route policy changes"]),
             VerificationCommandView(
                 commandId="test-static-bundle-summary",
                 label="Static bundle summary tests",
@@ -8573,6 +8577,7 @@ class SupervisorService:
                     "test-review-gated-low-risk-bounded-write",
                     "test-review-gated-low-risk-pilot-admission",
                     "test-review-gated-low-risk-policy-eligibility",
+                    "test-review-gated-low-risk-route-policy",
                     "test-static-bundle-summary",
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
@@ -20559,12 +20564,23 @@ class SupervisorService:
         approved_endpoint_url = self.settings.ollama_approved_endpoint_url.strip()
         model_id = (self.settings.ollama_model_id or "").strip()
         approved_model_id = self.settings.ollama_approved_model_id.strip()
+        approved_source_vm = self.settings.ollama_approved_source_vm.strip()
         endpoint_configured = bool(endpoint_url)
         endpoint_approved = endpoint_url == approved_endpoint_url
         model_id_configured = bool(model_id)
         model_id_approved = model_id == approved_model_id
 
-        if not broad_gate_enabled and not provider_gate_enabled:
+        route_policy_mismatch = (
+            approved_endpoint_url != CANONICAL_OLLAMA_ENDPOINT
+            or approved_model_id != CANONICAL_OLLAMA_MODEL
+            or approved_source_vm != CANONICAL_OLLAMA_SOURCE_VM
+        )
+
+        if route_policy_mismatch:
+            registry_state = "disabled"
+            disabled_reason = "ollama_approved_route_policy_mismatch"
+            adapter_ready = False
+        elif not broad_gate_enabled and not provider_gate_enabled:
             registry_state = "disabled"
             disabled_reason = "ollama_provider_gate_not_enabled"
             adapter_ready = False
@@ -26431,8 +26447,23 @@ class SupervisorService:
         ollama_state = self._ollama_provider_gate_state()
         evidence_summary = self._local_evidence_summary(item, preview, events)
         provider_evidence_summary = self._local_provider_evidence_summary(item, preview, events)
+        private_evidence_packet = self._private_local_provider_evidence_packet(
+            item,
+            preview,
+            events,
+            provider_evidence_summary,
+        )
         if bool(ollama_state["enabled"]):
-            approval_validation = self._validate_local_provider_approval(payload.localProviderApproval, ollama_state)
+            approval = payload.localProviderApproval
+            automatic_approval = approval is None and self.settings.allow_automatic_ollama_local_evidence
+            if automatic_approval:
+                approval = self._automatic_local_provider_approval(item.id, preview.decision.decisionId)
+            approval_validation = self._validate_local_provider_approval(
+                approval,
+                ollama_state,
+                provider_evidence_summary,
+                private_evidence_packet,
+            )
             if approval_validation.approved:
                 if not payload.recordEvent:
                     provider_attempt = self._local_provider_rejected_attempt(
@@ -26450,7 +26481,11 @@ class SupervisorService:
                         route_decision_id=preview.decision.decisionId,
                         worker_id="ollama.local.provider",
                         lane=ExecutionLane.LOCAL_READONLY.value,
-                        authority_mode="operator_approved_bounded_provider_call",
+                        authority_mode=(
+                            "policy_approved_automatic_local_provider_call"
+                            if automatic_approval
+                            else "operator_approved_bounded_provider_call"
+                        ),
                         operation="ollama_provider_explanation",
                         requested_by_label="Operator",
                         admission_lock_acquired=True,
@@ -26501,13 +26536,18 @@ class SupervisorService:
                             "status": provider_result.status,
                             "responseCharacterCount": provider_result.response_character_count,
                             "reasoningCharacterCount": provider_result.reasoning_character_count,
+                            "sourceVm": self.settings.ollama_approved_source_vm,
+                            "contextBytes": len(provider_evidence_summary.encode("utf-8")),
+                            "contextDigest": hashlib.sha256(provider_evidence_summary.encode("utf-8")).hexdigest(),
+                            "contextDigestAlgorithm": "sha256",
+                            "retentionMode": "metadata-only",
                             "rawPayloadRetained": False,
                         },
                     )
                     provider_attempt = LocalProviderAttemptMetadataView(
                         **provider_result.to_metadata(),
                         approvalId=approval_validation.approval_reference,
-                        approvalStatus="accepted",
+                        approvalStatus="policy-approved" if automatic_approval else "accepted",
                     )
             else:
                 provider_attempt = self._local_provider_rejected_attempt(approval_validation, ollama_state)
@@ -26551,15 +26591,52 @@ class SupervisorService:
             await session.refresh(item)
         return explanation
 
+    def _automatic_local_provider_approval(self, work_item_id: str, decision_id: str) -> LocalProviderApprovalInstance:
+        now = datetime.now(timezone.utc)
+        return LocalProviderApprovalInstance(
+            approvalId=f"automatic-ollama-{work_item_id}-{decision_id}",
+            status="accepted",
+            authorityFamily="local-provider-execution",
+            operation="one bounded Ollama provider operation",
+            endpointUrl=self.settings.ollama_approved_endpoint_url,
+            sourceVm=self.settings.ollama_approved_source_vm,
+            modelId=self.settings.ollama_approved_model_id,
+            promptSourceId="work-item-local-evidence-summary",
+            promptTemplateId="local-evidence-explanation-v1",
+            redactionPolicy="metadata_only_no_raw_prompt_completion_reasoning_or_provider_payload",
+            timeoutCancellationPolicy="connect_timeout_2s_total_timeout_120s",
+            retainedEvidencePolicy="metadata-only",
+            retainedEvidence=["work_item_metadata", "workflow_event_summaries"],
+            approvedBy="system-local-ollama-policy",
+            approvedAt=now,
+            expiresAt=now + timedelta(minutes=10),
+            rollbackPath=["disable local-provider and Ollama-specific gates"],
+            stopLines=[
+                f"Do not call any endpoint other than {self.settings.ollama_approved_endpoint_url}.",
+                f"Do not use any model other than {self.settings.ollama_approved_model_id}.",
+                f"Only use source VM metadata {self.settings.ollama_approved_source_vm}.",
+                "Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.",
+            ],
+        )
+
     def _validate_local_provider_approval(
         self,
         approval: LocalProviderApprovalInstance | None,
         ollama_state: dict[str, object],
+        evidence_summary: str | None = None,
+        private_evidence_packet: dict[str, object] | None = None,
     ) -> LocalProviderApprovalValidation:
         if approval is None:
             return LocalProviderApprovalValidation(False, ["approval-instance-missing"])
 
         blockers: list[str] = []
+        if evidence_summary is not None:
+            evidence_bytes = len(evidence_summary.encode("utf-8"))
+            if evidence_bytes > 1024 * 1024:
+                blockers.append("private-evidence-context-exceeds-1MiB")
+            if UNSAFE_LIFECYCLE_TEXT_RE.search(evidence_summary):
+                blockers.append("private-evidence-redaction-boundary-rejected-sensitive-marker")
+        blockers.extend(self._private_local_provider_evidence_blockers(private_evidence_packet))
         expected_endpoint = self.settings.ollama_approved_endpoint_url.strip()
         expected_model = self.settings.ollama_approved_model_id.strip()
         expected_fields = [
@@ -26567,6 +26644,7 @@ class SupervisorService:
             ("authorityFamily", approval.authorityFamily, "local-provider-execution", "approval-authority-family-mismatch"),
             ("operation", approval.operation, "one bounded Ollama provider operation", "approval-operation-mismatch"),
             ("endpointUrl", approval.endpointUrl, expected_endpoint, "approval-endpoint-mismatch"),
+            ("sourceVm", approval.sourceVm, self.settings.ollama_approved_source_vm.strip(), "approval-source-vm-mismatch"),
             ("modelId", approval.modelId, expected_model, "approval-model-mismatch"),
             ("retainedEvidencePolicy", approval.retainedEvidencePolicy, "metadata-only", "approval-retention-policy-mismatch"),
             (
@@ -26635,6 +26713,95 @@ class SupervisorService:
             blockers=unique_blockers,
             approval_reference=approval.approvalId if not unique_blockers else approval.approvalId,
         )
+
+    def _private_local_provider_evidence_packet(
+        self,
+        item: WorkItem,
+        preview: RoutingPreviewView,
+        events: list[WorkflowEvent],
+        evidence_summary: str,
+    ) -> dict[str, object]:
+        evidence_bytes = evidence_summary.encode("utf-8")
+        return {
+            "packetId": f"work-item:{item.id}:decision:{preview.decision.decisionId}",
+            "purpose": "bounded local evidence review",
+            "taskType": "review",
+            "dataClassification": "work-item-evidence",
+            "sourceClass": "work-item-evidence",
+            "scopeRef": f"work-item:{item.id}",
+            "authorityEvidenceRef": "authority:local-ollama-policy",
+            "sourceRefs": [f"work-item:{item.id}", "evidence:workflow-events"],
+            "provider": "ollama",
+            "routeRole": "local-policy-review",
+            "operatorConsent": False,
+            "policyConsent": True,
+            "policyConsentRef": "policy:automatic-local-ollama",
+            "boundaryExceptionVerified": True,
+            "platformDisclosureVeto": False,
+            "boundaryVerificationStatus": "verified",
+            "boundaryVerificationRef": "verify:local-ollama-metadata-only",
+            "redactionApplied": True,
+            "redactionStatus": "applied",
+            "redactionRef": "redact:local-provider-metadata-only",
+            "forbiddenClassesPresent": False,
+            "broadDump": False,
+            "providerMemory": False,
+            "rawPayloadRetained": False,
+            "providerPayloadRetained": False,
+            "retentionMode": "metadata-only",
+            "contextBytes": len(evidence_bytes),
+            "contextDigest": hashlib.sha256(evidence_bytes).hexdigest(),
+            "contextDigestAlgorithm": "sha256",
+            "expiresAt": datetime.now(timezone.utc) + timedelta(minutes=10),
+            "revocationRef": "revoke:local-ollama-policy",
+            "revocationStatus": "active",
+            "revoked": False,
+            "rollbackRef": "rollback:disable-local-ollama",
+            "rollbackReady": True,
+            "destinationAllowlist": ["ollama"],
+            "eventCount": len(events),
+        }
+
+    def _private_local_provider_evidence_blockers(self, packet: dict[str, object] | None) -> list[str]:
+        if not packet:
+            return ["private-evidence-packet-missing"]
+        blockers: list[str] = []
+        if packet.get("taskType") != "review":
+            blockers.append("private-evidence-task-type-mismatch")
+        if packet.get("sourceClass") != "work-item-evidence" or packet.get("dataClassification") != "work-item-evidence":
+            blockers.append("private-evidence-source-class-mismatch")
+        if packet.get("routeRole") != "local-policy-review":
+            blockers.append("private-evidence-route-role-mismatch")
+        policy_consent = packet.get("policyConsent") is True and packet.get("policyConsentRef") == "policy:automatic-local-ollama"
+        if packet.get("operatorConsent") is not True and not policy_consent:
+            blockers.append("private-evidence-boundary-consent-missing")
+        if packet.get("platformDisclosureVeto") is not False or packet.get("boundaryVerificationStatus") != "verified":
+            blockers.append("private-evidence-boundary-not-verified")
+        if packet.get("redactionApplied") is not True or packet.get("redactionStatus") != "applied":
+            blockers.append("private-evidence-redaction-not-applied")
+        if packet.get("forbiddenClassesPresent") is not False or packet.get("broadDump") is not False:
+            blockers.append("private-evidence-forbidden-scope-present")
+        if packet.get("providerMemory") is not False or packet.get("rawPayloadRetained") is not False or packet.get("providerPayloadRetained") is not False:
+            blockers.append("private-evidence-retention-policy-mismatch")
+        if packet.get("retentionMode") != "metadata-only":
+            blockers.append("private-evidence-retention-mode-mismatch")
+        context_bytes = packet.get("contextBytes")
+        if not isinstance(context_bytes, int) or context_bytes < 0 or context_bytes > 1024 * 1024:
+            blockers.append("private-evidence-context-exceeds-1MiB")
+        if not isinstance(packet.get("contextDigest"), str) or not re.fullmatch(r"[a-f0-9]{64}", packet["contextDigest"], re.IGNORECASE):
+            blockers.append("private-evidence-context-digest-missing")
+        if packet.get("contextDigestAlgorithm") != "sha256":
+            blockers.append("private-evidence-context-digest-algorithm-mismatch")
+        expires_at = packet.get("expiresAt")
+        if not isinstance(expires_at, datetime) or expires_at <= datetime.now(timezone.utc):
+            blockers.append("private-evidence-expiry-invalid")
+        if packet.get("revocationStatus") != "active" or packet.get("revoked") is True:
+            blockers.append("private-evidence-revocation-inactive")
+        if packet.get("rollbackReady") is not True:
+            blockers.append("private-evidence-rollback-not-ready")
+        if packet.get("destinationAllowlist") != ["ollama"]:
+            blockers.append("private-evidence-destination-not-allowlisted")
+        return list(dict.fromkeys(blockers))
 
     def _local_provider_rejected_attempt(
         self,
@@ -26775,14 +26942,29 @@ class SupervisorService:
         )
 
     def _local_provider_evidence_summary(self, item: WorkItem, preview: RoutingPreviewView, events: list[WorkflowEvent]) -> str:
-        base_summary = self._local_evidence_summary(item, preview, events)
+        task_kind = self._safe_provider_task_kind(preview.profile.taskKind)
+        base_summary = (
+            f"Bounded work-item evidence review for task kind {task_kind}; "
+            f"recorded workflow event count {len(events)}."
+        )
         event_lines = [
-            f"- {event.event_type}: {event.summary}"
+            f"- event type {self._safe_provider_event_type(event.event_type)}; recorded at {self._normalize_timestamp(event.created_at).isoformat()}"
             for event in events[:8]
         ]
         if not event_lines:
             return f"{base_summary}\nApproved workflow event summaries: none recorded."
         return f"{base_summary}\nApproved workflow event summaries:\n" + "\n".join(event_lines)
+
+    def _safe_provider_event_type(self, event_type: str) -> str:
+        if isinstance(event_type, str) and re.fullmatch(r"[a-z0-9_.:-]{1,80}", event_type, re.IGNORECASE):
+            return event_type
+        return "untrusted-event-type-redacted"
+
+    def _safe_provider_task_kind(self, task_kind: str) -> str:
+        try:
+            return TaskKind(task_kind).value
+        except (TypeError, ValueError):
+            return "unknown-task-kind-redacted"
 
     def _local_evidence_boundaries(self, item: WorkItem) -> list[str]:
         boundaries = [

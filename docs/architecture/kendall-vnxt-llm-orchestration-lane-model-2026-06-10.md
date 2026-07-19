@@ -8,7 +8,7 @@ The approved local provider implementation gives Kendall_vNxt one automated mode
 
 - Host Ollama endpoint: `http://192.168.1.128:11434/v1/chat/completions`
 - Approved model: `qwen3:14b`
-- Approved VM source: `192.168.1.118`
+- Approved VM source: `192.168.1.8` (current routed source observed 2026-07-18)
 
 The operator may also have subscription or local-tool access to Codex, Claude Code, and GitHub Pro. Those are not currently normal model API providers in Kendall. They should be modeled as worker/workflow lanes unless separate API access is added later.
 

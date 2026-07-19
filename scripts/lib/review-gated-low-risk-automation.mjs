@@ -38,6 +38,7 @@ const HIGH_RISK_EPIC_OPERATION_PATTERN = /(?:^|[\s_:/-])epic[-_ ]?(?:25|26)[a-z0
 const HIGH_RISK_FILE_PATTERN = /(^|\/)(auth|security|secrets?|credentials?|migrations?|deploy|release|production|provider|openai)(\/|\.|$)|(^|\/)\.env(?:\.|$)|\.?(?:pem|key|p12|pfx|cer|der)$|(^|\/)\.github\/workflows(\/|$)|argon2id|epic[-_ ]?25|epic[-_ ]?26|api[-_ ]?key|password|token/i;
 const SENSITIVE_METADATA_PATTERN = /raw\s*prompt|completion|reasoning|provider\s*payload|(?:api|access|refresh)?[_ -]?token|password|secret|credential/i;
 const STOP_SEMANTIC_PATTERN = /\b(no|never|must\s+not|do\s+not|forbid|block|stop|without|disallow|prohibit|deny)\b/i;
+import { isApprovedFallbackFailure } from "./review-gated-low-risk-route-policy.mjs";
 
 /**
  * Evaluate a bounded review packet without executing the proposed operation.
@@ -83,7 +84,8 @@ export function evaluateReviewGatedLowRiskAutomation(input = {}, options = {}) {
   }
   const model = text(review.model);
   const effort = text(review.effort).toLowerCase();
-  const governedModel = /^(?:gpt[- ]?5\.6(?:[- ][a-z0-9._-]+)?|gpt-5\.3-codex-spark|5\.6 luna)$/i.test(model);
+  const provider = text(review.provider).toLowerCase();
+  const governedModel = isGovernedReviewModel(model, provider);
   const supportedEffort = /^(?:low|medium|high|xhigh)$/i.test(effort);
   if (!model || !effort) {
     blockers.push("governed review model and effort are missing");
@@ -94,6 +96,7 @@ export function evaluateReviewGatedLowRiskAutomation(input = {}, options = {}) {
   } else {
     satisfiedGates.push("governed review model and effort recorded");
   }
+  validateOrderedReviewRoute(review, blockers, satisfiedGates);
 
   const expected = {
     baseSha: text(state.baseSha),
@@ -254,6 +257,37 @@ export function evaluateReviewGatedLowRiskAutomation(input = {}, options = {}) {
     metadataOnly: true,
     rawPayloadRetained: false,
   };
+}
+
+function isGovernedReviewModel(model, provider = "") {
+  if (provider === "claude") return model.toLowerCase() === "claude";
+  if (provider === "ollama") return model.toLowerCase() === "qwen3:14b";
+  return /^(?:gpt[- ]?5\.6(?:[- ][a-z0-9._-]+)?|gpt-5\.3-codex-spark|5\.6 luna)$/i.test(model);
+}
+
+function validateOrderedReviewRoute(review, blockers, satisfiedGates) {
+  const provider = text(review.provider).toLowerCase();
+  const role = text(review.routeRole).toLowerCase();
+  if ((provider === "claude" || provider === "ollama") && review.routeValidated !== true) {
+    blockers.push("provider review evidence lacks a validated ordered route packet");
+    return;
+  }
+  if ((provider === "claude" || provider === "ollama") && review.privateEvidencePacketValidated !== true) {
+    blockers.push("provider review evidence lacks a validated private-evidence packet");
+    return;
+  }
+  if (provider === "claude") {
+    if (role !== "primary-review" || review.fallbackUsed === true) blockers.push("Claude review evidence is not bound to the primary route");
+    else satisfiedGates.push("Claude review evidence is bound to the primary route");
+  } else if (provider === "ollama") {
+    if (role !== "backup-review" || review.fallbackUsed !== true || !isApprovedFallbackFailure(review.primaryFailure)) {
+      blockers.push("Ollama review evidence lacks approved Claude-failure fallback binding");
+    } else {
+      satisfiedGates.push("Ollama review evidence is bound to the approved fallback route");
+    }
+  } else if (provider && provider !== "codex") {
+    blockers.push("review provider is not on the governed provider allowlist");
+  }
 }
 
 function checkBooleanGate(value, label, blockers, satisfiedGates) {

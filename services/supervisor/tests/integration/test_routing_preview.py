@@ -1088,6 +1088,7 @@ def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monke
     db_path = (tmp_path / "routing-lane-profiles.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
 
     _reset_supervisor_modules()
 
@@ -1214,6 +1215,9 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
     db_path = (tmp_path / "execution-configuration-checks.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
 
     _reset_supervisor_modules()
 
@@ -1315,6 +1319,8 @@ def test_ollama_provider_gate_stays_non_executing_when_broad_gate_is_enabled(tmp
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "")
 
     _reset_supervisor_modules()
 
@@ -1347,6 +1353,7 @@ def test_ollama_provider_gate_stays_disabled_when_broad_gate_is_disabled(tmp_pat
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "false")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "llama3.2:fixture")
 
     _reset_supervisor_modules()
@@ -1382,6 +1389,7 @@ def test_ollama_provider_gate_requires_model_id_before_adapter_readiness(tmp_pat
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "")
 
     _reset_supervisor_modules()
 
@@ -1425,6 +1433,7 @@ def test_ollama_provider_gate_requires_approved_endpoint_before_execution(tmp_pa
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "llama3.2:fixture")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "")
 
     _reset_supervisor_modules()
 
@@ -1521,6 +1530,7 @@ def _accepted_local_provider_approval(**overrides):
         "authorityFamily": "local-provider-execution",
         "operation": "one bounded Ollama provider operation",
         "endpointUrl": "http://192.168.1.128:11434/v1/chat/completions",
+        "sourceVm": "192.168.1.8",
         "modelId": "qwen3:14b",
         "promptSourceId": "work-item-local-evidence-summary",
         "promptTemplateId": "local-evidence-explanation-v1",
@@ -1548,6 +1558,7 @@ def test_ollama_local_evidence_explanation_rejects_missing_approval_before_adapt
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
 
@@ -1586,6 +1597,45 @@ def test_ollama_local_evidence_explanation_rejects_missing_approval_before_adapt
     assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "approval-instance-missing"
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
+
+
+def test_ollama_local_evidence_explanation_runs_with_policy_approval_by_default(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-local-evidence-automatic.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    from supervisor.domain.ollama_provider_adapter import OllamaProviderResult
+
+    async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
+        return OllamaProviderResult(
+            status="completed", model_id="qwen3:14b", endpoint_family="approved_vm_to_host_ollama_openai_compatible",
+            finish_reason="stop", prompt_summary="Synthetic metadata-only prompt.",
+            response_summary="Synthetic response metadata; raw text redacted.", response_character_count=2,
+            reasoning_character_count=0, prompt_character_count=len(evidence_summary), completion_tokens=1,
+            prompt_tokens=1, total_tokens=2, redaction_applied=True, raw_payload_retained=False,
+            timeout_state="completed_before_total_timeout", cancellation_state="not_cancelled",
+        )
+
+    monkeypatch.setattr("supervisor.domain.ollama_provider_adapter.OllamaProviderAdapter.explain", fake_explain)
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={"taskKind": "evidence_summary", "recordEvent": True},
+        )
+
+    assert response.status_code == 200
+    explanation = response.json()["data"]
+    assert explanation["providerAttempt"]["status"] == "completed"
+    assert explanation["providerAttempt"]["approvalStatus"] == "policy-approved"
+    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
 
 
 def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider_text(tmp_path, monkeypatch) -> None:
@@ -1779,21 +1829,35 @@ def test_ollama_provider_request_uses_connect_timeout_without_global_socket_muta
     captured_timeout = {}
     original_default_timeout = socket.getdefaulttimeout()
 
+    class FakeSocket:
+        def settimeout(self, timeout):
+            captured_timeout["read_timeout"] = timeout
+
     class FakeResponse:
-        def __enter__(self):
-            return self
+        status = 200
 
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def read(self):
+        def read(self, _limit=None):
             return b'{"model":"qwen3:14b","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}],"usage":{"completion_tokens":1,"prompt_tokens":2,"total_tokens":3}}'
 
-    def fake_urlopen(request, timeout):
-        captured_timeout["timeout"] = timeout
-        return FakeResponse()
+    class FakeConnection:
+        sock = FakeSocket()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        def __init__(self, host, port, timeout):
+            captured_timeout["connect_timeout"] = timeout
+
+        def connect(self):
+            captured_timeout["connected"] = True
+
+        def request(self, method, path, body, headers):
+            captured_timeout["request"] = (method, path, headers)
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            captured_timeout["closed"] = True
+
+    monkeypatch.setattr("http.client.HTTPConnection", FakeConnection)
 
     adapter = OllamaProviderAdapter(
         endpoint_url="http://192.168.1.128:11434/v1/chat/completions",
@@ -1805,14 +1869,62 @@ def test_ollama_provider_request_uses_connect_timeout_without_global_socket_muta
     result = adapter._post_chat_completion("approved evidence", None)
 
     assert result.status == "completed"
-    assert captured_timeout["timeout"] == 2
+    assert captured_timeout["connect_timeout"] == 2
+    assert captured_timeout["read_timeout"] <= 120
+    assert captured_timeout["closed"] is True
     assert socket.getdefaulttimeout() == original_default_timeout
+
+
+def test_ollama_provider_http_statuses_do_not_report_success(monkeypatch) -> None:
+    from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
+
+    class FakeResponse:
+        def __init__(self, status):
+            self.status = status
+
+        def read(self, _limit=None):
+            return b'{"choices":[{"message":{"content":"misleading"}}]}'
+
+    class FakeConnection:
+        sock = None
+
+        def __init__(self, host, port, timeout):
+            pass
+
+        def connect(self):
+            pass
+
+        def request(self, method, path, body, headers):
+            pass
+
+        def getresponse(self):
+            return FakeResponse(429)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("http.client.HTTPConnection", FakeConnection)
+    adapter = OllamaProviderAdapter(
+        endpoint_url="http://192.168.1.128:11434/v1/chat/completions",
+        model_id="qwen3:14b",
+        connect_timeout_seconds=2,
+        total_timeout_seconds=120,
+    )
+
+    result = asyncio.run(adapter.explain(evidence_summary="bounded metadata", evidence_count=1))
+
+    assert result.status == "rate-limited"
+    assert result.response_character_count == 0
+    assert result.raw_payload_retained is False
 
 
 def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "execution-readiness-report.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
 
     _reset_supervisor_modules()
 
@@ -2054,6 +2166,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-review-gated-low-risk-bounded-write",
         "test-review-gated-low-risk-pilot-admission",
         "test-review-gated-low-risk-policy-eligibility",
+        "test-review-gated-low-risk-route-policy",
         "test-static-bundle-summary",
         "check-authority-readiness",
         "check-branch-protection-readiness",
@@ -2160,6 +2273,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-review-gated-low-risk-bounded-write" in static_group["commandIds"]
     assert "test-review-gated-low-risk-pilot-admission" in static_group["commandIds"]
     assert "test-review-gated-low-risk-policy-eligibility" in static_group["commandIds"]
+    assert "test-review-gated-low-risk-route-policy" in static_group["commandIds"]
     assert "test-static-bundle-summary" in static_group["commandIds"]
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-review-resource-policy" in static_group["commandIds"]
@@ -3423,6 +3537,10 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
     db_path = (tmp_path / "disabled-provider-proofs.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "")
 
     _reset_supervisor_modules()
 
@@ -3653,6 +3771,7 @@ def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeyp
     db_path = (tmp_path / "local-evidence-explanation.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
 
     _reset_supervisor_modules()
 
@@ -3691,6 +3810,7 @@ def test_local_evidence_explanation_can_record_workflow_event(tmp_path, monkeypa
     db_path = (tmp_path / "local-evidence-explanation-event.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
 
     _reset_supervisor_modules()
 
