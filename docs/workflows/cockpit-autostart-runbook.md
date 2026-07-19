@@ -80,3 +80,21 @@ This autostart setup only keeps the local alpha cockpit running. It does not
 grant authority for provider/model calls, real worker launch, GitHub delivery,
 canonical Obsidian mutation, source mutation, network egress beyond the local
 services, or secret access.
+
+## LAN-auth mutual exclusion
+
+The loopback cockpit and the authenticated LAN target are separate modes. Do
+not enable both at once because both claim dashboard port `3000`:
+
+```bash
+pnpm run cockpit:stop
+pnpm run lan-auth:install
+```
+
+To return to the loopback cockpit, stop the LAN target before starting the
+loopback target:
+
+```bash
+pnpm run lan-auth:stop
+pnpm run cockpit:start
+```
