@@ -1751,6 +1751,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-bounded-write", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-pilot-admission", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-policy-eligibility", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:review-gated-low-risk-route-policy", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:static-bundle-summary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:governed-worker-execution-dry-run", { exact: true })).toBeVisible();

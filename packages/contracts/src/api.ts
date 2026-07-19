@@ -635,6 +635,7 @@ export interface LocalProviderApprovalInstance {
   authorityFamily?: string | null;
   operation?: string | null;
   endpointUrl?: string | null;
+  sourceVm?: string | null;
   modelId?: string | null;
   promptSourceId?: string | null;
   promptTemplateId?: string | null;

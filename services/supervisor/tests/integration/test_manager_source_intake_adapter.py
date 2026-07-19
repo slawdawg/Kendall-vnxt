@@ -263,6 +263,9 @@ console.log(action.applyCommand);
 def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_projection(
     tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
     db_path = tmp_path / "manager-source-intake.db"
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -466,6 +469,9 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
 def test_worker_result_loop_continues_reconciled_manager_intake_through_supervisor_and_dashboard(
     tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "false")
     local_proof_root = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
     local_proof_root.mkdir(parents=True, exist_ok=True)
     db_path = local_proof_root / f"gate4-manager-worker-result-{os.getpid()}-{time.time_ns()}.db"

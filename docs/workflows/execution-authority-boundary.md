@@ -12,7 +12,9 @@ Authority family: `local-provider-execution`
 
 Operation candidate: one bounded metadata-only Ollama provider operation
 
-It does not call Ollama, discover models, expand provider support, mutate source, or retain raw provider content.
+It does not call Ollama, discover models, expand provider support, mutate source, or retain raw provider content. Automatic local policy approval is a separate
+runtime path guarded by the exact settings, packet redaction, timeout, and
+rollback controls below.
 
 Endpoint: `http://192.168.1.128:11434/v1/chat/completions`
 
@@ -20,13 +22,51 @@ Model: `qwen3:14b`
 
 Retention: metadata-only event evidence and artifact references only.
 
+Do not call this provider from this packet alone.
+
+Required controls:
+
+- Source VM metadata must be `192.168.1.8`; the endpoint and model must match exactly.
+- Connect timeout is 2 seconds and total timeout is 120 seconds.
+- Keep public exposure, endpoint/model discovery, credentials, and raw payload retention disabled.
+- A READY route is not a review PASS and cannot activate a pilot.
+
 Stop lines:
 
-- Do not call this provider from this packet alone.
+- Do not call any endpoint other than the exact bounded route from an approved pilot.
 - Do not discover endpoints or models.
 - Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.
 - Do not read credentials or external sessions.
 - Do not mutate source, launch processes, merge PRs, clean worktrees, or bypass failed checks.
+
+## Private Evidence External-Processing Boundary
+
+Status: explicitly approved bounded exception; non-activating
+
+Approved source classes are `private-operator-evidence` and
+`work-item-evidence` only. Each packet must carry operator consent, a named
+provider allowlist, `taskType=review`, matching data classification, named
+scope, explicit authority evidence, redaction proof, bounded source references,
+a context limit of 1 MiB, metadata-only local retention, provider-memory
+disabled, an expiry no more than 24 hours ahead, and typed revocation/rollback
+references. The trusted caller supplies current time; a packet cannot set its
+own clock. The gate carries only a SHA-256 digest and byte count, never raw
+context, so digest recomputation belongs to the redaction boundary before
+packet construction.
+
+Claude may receive a primary-review packet. Ollama may receive a packet only as
+the exact qwen3:14b backup after an approved Claude unavailable/empty/429 result.
+Credentials, secrets, tokens, MFA/account-security data, excluded vault
+folders, customer/production data, broad repository/vault dumps, raw prompts,
+raw completions, and raw provider payloads remain forbidden.
+
+This exception permits packet send eligibility only. The local Ollama evidence
+explanation path is a separate `local-policy-review` capability: it may use
+the recorded automatic local-policy consent after the exact safety gates pass,
+but it is not the Claude-to-Ollama ordered review route and cannot claim a
+Claude fallback. It does not activate a review, authorize source mutation,
+delivery, merge, cleanup, or persistent provider memory. Revocation or either
+disabled gate stops the path and preserves only the metadata receipt.
 
 ## Premium Execution Contract
 
@@ -143,6 +183,14 @@ Required controls:
 - Ask for findings and recommendations only.
 - Retain only summarized findings, file paths, line references, command
   metadata, budget cap, verification results, and follow-up decisions.
+- The bounded role is the primary review route for this approved lane. It may
+  satisfy the governed review-model contract only after a valid PASS is
+  returned; it never grants activation or mutation authority.
+- Use the normal authenticated Claude CLI session with `claude -p`, a named
+  evidence-only scope, `--max-budget-usd 1`, and only `Read`, `Grep`, and `Glob`.
+- If Claude is unavailable, empty, or rate-limited, the exact approved Ollama
+  `qwen3:14b` VM-to-host route is the sole backup. Unknown or malformed Claude
+  failures do not trigger fallback.
 
 Stop lines:
 

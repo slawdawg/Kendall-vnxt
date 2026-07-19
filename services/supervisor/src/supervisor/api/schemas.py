@@ -518,6 +518,7 @@ class LocalProviderApprovalInstance(BaseModel):
     authorityFamily: str | None = None
     operation: str | None = None
     endpointUrl: str | None = None
+    sourceVm: str | None = None
     modelId: str | None = None
     promptSourceId: str | None = None
     promptTemplateId: str | None = None
