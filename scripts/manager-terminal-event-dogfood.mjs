@@ -19,10 +19,10 @@ export const DEFAULT_DOGFOOD_SOURCE_REVISION = "manager-terminal-event-dogfood-2
  */
 export function buildManagerTerminalEventDogfoodPacket({
   runId = createDogfoodRunId(),
-  sourceIdentity = DEFAULT_DOGFOOD_SOURCE_IDENTITY,
   sourceRevision = DEFAULT_DOGFOOD_SOURCE_REVISION,
   now,
 } = {}) {
+  const sourceIdentity = DEFAULT_DOGFOOD_SOURCE_IDENTITY;
   const authoritativeSourceBundle = {
     sourceIdentity,
     sourceRevision,
@@ -141,7 +141,6 @@ export function parseDogfoodArgs(argv = []) {
   const options = {
     supervisorUrl: "",
     runId: createDogfoodRunId(),
-    sourceIdentity: DEFAULT_DOGFOOD_SOURCE_IDENTITY,
     sourceRevision: DEFAULT_DOGFOOD_SOURCE_REVISION,
   };
   for (let index = 0; index < argv.length; index += 1) {

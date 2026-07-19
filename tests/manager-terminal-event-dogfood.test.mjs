@@ -101,7 +101,6 @@ test("dogfood parser failures stay structured and metadata-only", async () => {
   assert.deepEqual(options, {
     supervisorUrl: "http://localhost:8000",
     runId: "manager-terminal-dogfood-test",
-    sourceIdentity: "doc:docs/architecture/manager-supervisor-terminal-event-sync-boundary.md",
     sourceRevision: "dogfood-test-revision",
   });
   assert.throws(() => parseDogfoodArgs(["--supervisor-url", "http://localhost:8000", "--source-identity", "doc:arbitrary"]), /Unknown option/);
