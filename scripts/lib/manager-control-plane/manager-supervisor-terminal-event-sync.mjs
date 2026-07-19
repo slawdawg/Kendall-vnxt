@@ -338,6 +338,22 @@ function validateRequestShape(request) {
   if (!Array.isArray(request.evidenceRefs) || request.evidenceRefs.length === 0 || request.evidenceRefs.length > 12) throw new TypeError("terminalDisposition.evidenceRefs is invalid.");
   if (request.metadataOnly !== true) throw new TypeError("terminalDisposition must be metadata-only.");
   if (request.rawPayloadRetained !== false) throw new TypeError("terminalDisposition must prohibit raw payload retention.");
+  assertCanonicalMetadataStrings(request);
+}
+
+function assertCanonicalMetadataStrings(value, path = "terminalDisposition") {
+  if (typeof value === "string") {
+    if (value !== value.trim()) throw new TypeError(`${path} must not contain leading or trailing whitespace.`);
+    if (/[\u0000-\u001f\u007f]/.test(value)) throw new TypeError(`${path} contains control characters.`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertCanonicalMetadataStrings(item, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, nested]) => assertCanonicalMetadataStrings(nested, `${path}.${key}`));
+  }
 }
 
 function validPersistedAt(value) {

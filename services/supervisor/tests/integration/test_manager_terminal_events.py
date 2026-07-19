@@ -313,6 +313,14 @@ def test_terminal_event_rejects_non_exact_unsafe_or_non_exhausted_metadata(
     executable_action["nextManagerAction"] = "bash -c refill-the-backlog"
     invalid_payloads.append(executable_action)
 
+    padded_identity = _payload()
+    padded_identity["sourceIdentity"] = " source:accepted-product-backlog "
+    invalid_payloads.append(padded_identity)
+
+    padded_evidence = _payload()
+    padded_evidence["evidenceRefs"] = [" evidence:reconciliation-17"]
+    invalid_payloads.append(padded_evidence)
+
     with _running_supervisor(tmp_path, monkeypatch) as (_, base_url, db_path):
         for payload in invalid_payloads:
             response = _post(base_url, "/manager-control-plane/terminal-events", payload)

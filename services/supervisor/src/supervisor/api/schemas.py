@@ -6129,6 +6129,8 @@ class ManagerTerminalEventRequest(BaseModel):
     @field_validator("eventId", "runId", "sourceIdentity", "sourceRevision", "idempotencyKey")
     @classmethod
     def _identity_metadata_must_be_safe(cls, value: str, info) -> str:
+        if value != value.strip():
+            raise ValueError(f"{info.field_name} must not contain leading or trailing whitespace.")
         safe = _validate_authoritative_metadata_text(value, path=info.field_name)
         if info.field_name == "eventId" and not re.fullmatch(
             r"manager-terminal-event:[0-9a-f]{40}", safe
@@ -6150,6 +6152,8 @@ class ManagerTerminalEventRequest(BaseModel):
     @field_validator("evidenceRefs")
     @classmethod
     def _evidence_refs_must_be_safe(cls, values: list[str]) -> list[str]:
+        if any(value != value.strip() for value in values):
+            raise ValueError("evidenceRefs must not contain leading or trailing whitespace.")
         safe = [
             _validate_authoritative_metadata_text(value, path="evidenceRefs[]")
             for value in values

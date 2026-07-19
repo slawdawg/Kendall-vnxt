@@ -125,6 +125,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.deepEqual(tsFields, [requestFields, viewFields]);
   assert.deepEqual(schemaJsonFields, [requestFields, viewFields]);
   assert.deepEqual(pyFields, [requestFields, viewFields]);
+  assert.deepEqual(extractRequiredFieldsByContract(schemaJsonSource, "ManagerTerminalEventRequest"), requestFields);
+  assert.deepEqual(extractRequiredFieldsByContract(schemaJsonSource, "ManagerTerminalEventView"), viewFields);
 });
 
 test("Manager Control Plane contracts define canonical objects and ids without runtime imports", async () => {
