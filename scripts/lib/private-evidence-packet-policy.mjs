@@ -61,6 +61,9 @@ export function evaluatePrivateEvidencePacket(input = {}, options = {}) {
 
   if (provider === "claude") {
     if (routeRole !== "primary-review" || packet.fallbackUsed !== false) blockers.push("Claude private evidence must bind to the primary route");
+    if (["endpoint", "model", "primaryFailure"].some((key) => Object.hasOwn(packet, key) && packet[key] !== undefined)) {
+      blockers.push("Claude private evidence must not include Ollama destination or fallback metadata");
+    }
     validateClaudeProof(packet.routeProof, blockers);
   } else if (provider === "ollama") {
     if (routeRole !== "backup-review" || packet.fallbackUsed !== true || !isApprovedFallbackFailure(packet.primaryFailure)) blockers.push("Ollama private evidence requires an approved Claude fallback outcome");

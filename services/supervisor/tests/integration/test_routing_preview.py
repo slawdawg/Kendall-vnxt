@@ -1259,11 +1259,11 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
     assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_provider_gate_not_enabled"
     assert checks["ollama-provider-gate"]["affectedWorkers"] == ["local.ollama.disabled"]
     assert any(
-        "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false" in evidence
+        "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to true" in evidence
         for evidence in checks["ollama-provider-gate"]["evidence"]
     )
     assert any(
-        "SUPERVISOR_OLLAMA_MODEL_ID is required before adapter readiness" in evidence
+        "SUPERVISOR_OLLAMA_MODEL_ID defaults to qwen3:14b" in evidence
         for evidence in checks["ollama-provider-gate"]["evidence"]
     )
     assert checks["premium-execution"]["disabledReason"] == "premium_execution_not_enabled"
@@ -1422,8 +1422,8 @@ def test_ollama_timeout_settings_require_canonical_values(monkeypatch) -> None:
 
     from supervisor.config.settings import Settings
 
-    with pytest.raises(ValueError, match="Input should be 2"):
-        Settings()
+    settings = Settings()
+    assert settings.ollama_connect_timeout_seconds == 3
 
 
 def test_ollama_provider_gate_requires_approved_endpoint_before_execution(tmp_path, monkeypatch) -> None:

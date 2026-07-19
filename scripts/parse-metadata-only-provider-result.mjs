@@ -21,6 +21,10 @@ export function summarizeProviderResult(raw) {
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       return { ...summary, parse: "ok", shape: "invalid-envelope" };
     }
+    const allowedEnvelopeKeys = new Set(["is_error", "result", "session_id"]);
+    if (Object.keys(data).some((key) => !allowedEnvelopeKeys.has(key))) {
+      return { ...summary, parse: "ok", shape: "invalid-envelope" };
+    }
     if (Object.hasOwn(data, "is_error") && typeof data.is_error !== "boolean") {
       return { ...summary, parse: "ok", shape: "invalid-error-flag" };
     }

@@ -90,12 +90,22 @@ test("requires a valid bounded review envelope and rejects sensitive or ambiguou
   assert.equal(invalidCalendar.usable, false);
   const invalidMonth = summarizeProviderResult(JSON.stringify({ is_error: false, result: JSON.stringify({ status: "PASS", resultId: "id", reviewedAt: "2026-13-01T12:00:00Z", summary: "summary" }) }));
   assert.equal(invalidMonth.usable, false);
-  const repeatedNestedKey = summarizeProviderResult(JSON.stringify({
+  const unknownOuterField = summarizeProviderResult(JSON.stringify({
     is_error: false,
     metadata: { is_error: false },
     result: JSON.stringify({ status: "PASS", resultId: "id", reviewedAt: "2026-07-18T12:00:00Z", summary: "summary" }),
   }));
-  assert.equal(repeatedNestedKey.usable, true);
+  assert.equal(unknownOuterField.usable, false);
+  assert.equal(unknownOuterField.shape, "invalid-envelope");
+  for (const key of ["providerPayload", "rawPrompt", "reasoningTrace"]) {
+    const summary = summarizeProviderResult(JSON.stringify({
+      is_error: false,
+      result: JSON.stringify({ status: "PASS", resultId: "id", reviewedAt: "2026-07-18T12:00:00Z", summary: "summary" }),
+      [key]: "sensitive metadata",
+    }));
+    assert.equal(summary.usable, false, key);
+    assert.equal(summary.shape, "invalid-envelope", key);
+  }
 });
 
 test("rejects valid-but-wrong envelopes and oversized input fail-closed", () => {

@@ -20472,8 +20472,8 @@ class SupervisorService:
                 affected_workers=["local.ollama.disabled"],
                 evidence=[
                     "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS is the broad local-provider gate.",
-                    "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false and gates only Ollama.",
-                    "SUPERVISOR_OLLAMA_MODEL_ID is required before adapter readiness; there is no hardcoded default model.",
+                    "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to true in the approved local-only profile; set it to false to disable Ollama.",
+                    f"SUPERVISOR_OLLAMA_MODEL_ID defaults to {self.settings.ollama_model_id or self.settings.ollama_approved_model_id} and must match the approved model before adapter readiness.",
                     "SUPERVISOR_OLLAMA_ENDPOINT_URL must match the approved VM-to-host endpoint exactly.",
                     f"Approved endpoint: {self.settings.ollama_approved_endpoint_url}.",
                     f"Approved model id: {self.settings.ollama_approved_model_id}.",

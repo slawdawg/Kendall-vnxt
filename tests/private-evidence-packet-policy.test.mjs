@@ -74,6 +74,14 @@ test("requires the exact Ollama backup route and approved Claude failure", () =>
   assert.equal(packet.status, "READY");
 });
 
+test("rejects Ollama destination and fallback metadata on Claude packets", () => {
+  for (const key of ["endpoint", "model", "primaryFailure"]) {
+    const packet = evaluatePrivateEvidencePacket(valid({ [key]: key === "primaryFailure" ? "HTTP 429" : "ollama-only" }), { now: NOW });
+    assert.equal(packet.status, "HOLD", key);
+    assert.ok(packet.blockers.some((blocker) => blocker.includes("Ollama destination")), key);
+  }
+});
+
 test("holds forbidden classes, broad dumps, missing consent, and unsafe retention", () => {
   for (const mutate of [
     (input) => { input.forbiddenClassesPresent = true; },
