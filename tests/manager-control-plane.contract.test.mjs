@@ -18,6 +18,7 @@ const expectedModules = [
   "authority.ts",
   "operational-action.ts",
   "events.ts",
+  "terminal-event.ts",
   "refill.ts",
   "summary.ts",
   "schema-json.ts"
@@ -95,6 +96,39 @@ test("Manager Control Plane contract namespace is exported from the package boun
   }
 });
 
+test("supervisor terminal-event request and view fields stay aligned with the TypeScript contract", async () => {
+  const terminalEventSource = await readFile(new URL("terminal-event.ts", managerRoot), "utf8");
+  const schemaJsonSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
+  const supervisorSchemaSource = await readFile(new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url), "utf8");
+  const requestFields = [
+    "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
+    "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
+    "idempotencyKey", "metadataOnly", "rawPayloadRetained",
+  ];
+  const viewFields = [...requestFields, "createdAt"];
+  for (const field of requestFields) {
+    assert.match(terminalEventSource, new RegExp(`\\b${field}:`), `TypeScript request is missing ${field}`);
+    assert.match(supervisorSchemaSource, new RegExp(`^    ${field}:`, "m"), `Python request is missing ${field}`);
+  }
+  assert.match(terminalEventSource, /interface ManagerTerminalEventView extends ManagerTerminalEventRequest/);
+  assert.match(supervisorSchemaSource, /class ManagerTerminalEventView\(ManagerTerminalEventRequest\)/);
+  assert.match(supervisorSchemaSource, /^    createdAt:/m);
+  assert.match(terminalEventSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
+  assert.match(supervisorSchemaSource, /eventType: Literal\["authoritative_backlog_exhausted"\]/);
+  assert.match(supervisorSchemaSource, /model_config = ConfigDict\(extra="forbid", strict=True\)/);
+  const tsFields = [...terminalEventSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \[((?:.|\n)*?)\] as const;/g)]
+    .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
+  const schemaJsonFields = [...schemaJsonSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_SERIALIZED_FIELDS = \[((?:.|\n)*?)\] as const;/g)]
+    .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
+  const pyFields = [...supervisorSchemaSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \(([^)]*)\)/g)]
+    .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
+  assert.deepEqual(tsFields, [requestFields, viewFields]);
+  assert.deepEqual(schemaJsonFields, [requestFields, viewFields]);
+  assert.deepEqual(pyFields, [requestFields, viewFields]);
+  assert.deepEqual(extractRequiredFieldsByContract(schemaJsonSource, "ManagerTerminalEventRequest"), requestFields);
+  assert.deepEqual(extractRequiredFieldsByContract(schemaJsonSource, "ManagerTerminalEventView"), viewFields);
+});
+
 test("Manager Control Plane contracts define canonical objects and ids without runtime imports", async () => {
   const allSources = await Promise.all(
     expectedModules.map(async (moduleName) => ({
@@ -106,6 +140,16 @@ test("Manager Control Plane contracts define canonical objects and ids without r
   const sourceByModule = new Map(allSources.map(({ moduleName, source }) => [moduleName, stripComments(source)]));
 
   for (const [moduleName, exportedNames] of Object.entries({
+    "terminal-event.ts": [
+      "ManagerTerminalEventId",
+      "ManagerTerminalEventType",
+      "ManagerTerminalEventRequest",
+      "ManagerTerminalEventView",
+      "ManagerSupervisorCanonicalEventMetadata",
+      "MANAGER_TERMINAL_EVENT_TYPE",
+      "MANAGER_TERMINAL_EVENT_REQUEST_FIELDS",
+      "MANAGER_TERMINAL_EVENT_VIEW_FIELDS",
+    ],
     "types.ts": [
       "CandidateWorkPacket",
       "WorkItem",
@@ -123,7 +167,8 @@ test("Manager Control Plane contracts define canonical objects and ids without r
     "summary.ts": ["ManagerExecutionLaneSummary"],
     "authority.ts": ["ManagerAuthorityStage", "ManagerAuthorityDecision", "ManagerRunPreauthorization"],
     "operational-action.ts": ["ManagerOperationalActionPolicy", "ManagerOperationalActionEvaluation"],
-    "events.ts": ["ManagerControlPlaneEvent", "ManagerControlPlaneEventName"]
+    "events.ts": ["ManagerControlPlaneEvent", "ManagerControlPlaneEventName"],
+    "schema-json.ts": ["MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS", "MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS"]
   })) {
     const source = sourceByModule.get(moduleName);
     assert.ok(source, `missing source for ${moduleName}`);
@@ -520,11 +565,22 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `import { MANAGER_CONTROL_PLANE_EVENT_NAMES } from "${importPrefix}/events.ts";`,
       `import type { EvidenceRefId, ManagerEventId, ManagerRunId } from "${importPrefix}/ids.ts";`,
       `import type { RefillResult } from "${importPrefix}/refill.ts";`,
+      `import { MANAGER_TERMINAL_EVENT_TYPE } from "${importPrefix}/terminal-event.ts";`,
+      `import type { ManagerTerminalEventRequest, ManagerTerminalEventView } from "${importPrefix}/terminal-event.ts";`,
       `import type { ManagerExecutionLaneStateCounts, ManagerExecutionLaneSummary } from "${importPrefix}/summary.ts";`,
       "",
       `const eventNames: readonly string[] = MANAGER_CONTROL_PLANE_EVENT_NAMES;`,
       `if (!eventNames.includes("dispatcher.review.required")) throw new Error("missing event export");`,
       `const result: RefillResult = "queued_with_gated_candidates";`,
+      `const terminalRequest: ManagerTerminalEventRequest = {`,
+      `  eventId: "manager-terminal-event:${"a".repeat(40)}" as ManagerTerminalEventRequest["eventId"], eventType: MANAGER_TERMINAL_EVENT_TYPE,`,
+      `  runId: "run-1", sourceIdentity: "source:accepted", sourceRevision: "git:abc1234",`,
+      `  reconciliationCounts: { totalItems: 1, reconciledItems: 1, eligible: 0, queued: 0, leased: 0, running: 0, reviewFix: 0, requiredRetrospective: 0, otherwiseRequired: 0, completed: 1, closed: 0, approvalGated: 0 },`,
+      `  unresolvedApprovalGatedWork: [], evidenceRefs: ["evidence:terminal" as EvidenceRefId], resumeRequirement: "Wait for new accepted source-owned backlog.",`,
+      `  nextManagerAction: "Stop refill until new accepted source-owned backlog exists.", idempotencyKey: "authoritative-backlog-exhausted:run-1", metadataOnly: true, rawPayloadRetained: false`,
+      `};`,
+      `const terminalView: ManagerTerminalEventView = { ...terminalRequest, createdAt: "2026-07-19T00:00:00.000Z" };`,
+      `if (terminalView.eventType !== "authoritative_backlog_exhausted") throw new Error("terminal event type mismatch");`,
       `const stateCounts: ManagerExecutionLaneStateCounts = {`,
       `  totalWorkItems: 0, totalLeases: 0, totalAttempts: 0, eligible: 0, queued: 0, leased: 0, running: 0, refilling: 0,`,
       `  completed: 0, failed: 0, expired: 0, quarantined: 0, blocked: 0, closed: 0, metadataOnlyQueuedCandidates: 2,`,

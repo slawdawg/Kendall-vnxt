@@ -5,6 +5,15 @@ Status: source-owned architecture contract
 
 ## Decision
 
+The request and response shapes are a source-owned cross-language contract in
+`packages/contracts/src/manager-control-plane/terminal-event.ts` and
+`schema-json.ts`. The supervisor's strict Pydantic
+`ManagerTerminalEventRequest`/`ManagerTerminalEventView` models mirror those
+camelCase fields and are checked for field-set parity by the manager contract
+tests. This keeps the supervisor-owned persistence boundary explicit without
+making manager planning networked or allowing the manager to claim persistence
+from an unverified local packet.
+
 Manager refill planning remains deterministic and network-free. `buildRefillPlan`
 and `scripts/manager-refill-plan.mjs` may produce an
 `authoritative_backlog_exhausted` packet whose terminal dispositions remain in

@@ -1,50 +1,22 @@
 import type { ManagerAuthorityDecisionClass } from "./authority";
 import type { EvidenceRefId, ManagerSourceRefId, RefillJobId } from "./ids";
 import type { ManagerRefillJobStatus } from "./lifecycle";
+import type {
+  ManagerAuthoritativeBacklogReconciliationCounts,
+  ManagerSupervisorCanonicalEventMetadata,
+  ManagerTerminalEventId,
+  ManagerUnresolvedApprovalGatedWork,
+} from "./terminal-event";
+
+export type {
+  ManagerAuthoritativeBacklogReconciliationCounts,
+  ManagerSupervisorCanonicalEventMetadata,
+  ManagerTerminalEventId,
+  ManagerUnresolvedApprovalGatedWork,
+} from "./terminal-event";
 
 export type RefillTriggerReason = "low_watermark" | "manual_bootstrap" | "source_exhaustion_check" | "recovery";
 export type RefillResult = "queued_work" | "queued_with_gated_candidates" | "no_safe_work" | "authoritative_backlog_exhausted" | "needs_review" | "blocked" | "failed";
-
-export interface ManagerAuthoritativeBacklogReconciliationCounts {
-  totalItems: number;
-  reconciledItems: number;
-  eligible: number;
-  queued: number;
-  leased: number;
-  running: number;
-  reviewFix: number;
-  requiredRetrospective: number;
-  otherwiseRequired: number;
-  completed: number;
-  closed: number;
-  approvalGated: number;
-}
-
-export interface ManagerUnresolvedApprovalGatedWork {
-  workId: string;
-  title: string;
-  reason: string;
-  sourceRefs: readonly string[];
-  evidenceRefs: readonly EvidenceRefId[];
-}
-
-declare const managerTerminalEventIdBrand: unique symbol;
-
-/** Runtime-validated as exactly `manager-terminal-event:<40 lowercase hex>`. */
-export type ManagerTerminalEventId = `manager-terminal-event:${string}` & {
-  readonly [managerTerminalEventIdBrand]: true;
-};
-
-export interface ManagerSupervisorCanonicalEventMetadata<
-  TEventId extends ManagerTerminalEventId = ManagerTerminalEventId,
-> {
-  eventId: TEventId;
-  evidenceRef: `supervisor-event:${TEventId}` & EvidenceRefId;
-  status: "persisted";
-  persistedAt: string;
-  metadataOnly: true;
-  rawPayloadRetained: false;
-}
 
 export interface AuthoritativeBacklogExhaustedDisposition {
   disposition: "authoritative_backlog_exhausted";

@@ -31884,6 +31884,57 @@ test("manager supervisor terminal sync derives deterministic replay identity", a
   assert.deepEqual(first, replay);
 });
 
+test("manager supervisor terminal sync rejects padded metadata before contacting supervisor", async () => {
+  for (const invalidAction of [" Wait for newly accepted source-owned backlog. ", "Wait for newly accepted\nsource-owned backlog."]) {
+    const packet = managerSupervisorSyncPacket();
+    packet.summary.terminalDisposition.nextManagerAction = invalidAction;
+    let fetchCalls = 0;
+    await assert.rejects(
+      syncManagerSupervisorTerminalEvent(packet, "http://127.0.0.1:8000", {
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error("fetch must not run for noncanonical metadata");
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, "manager_supervisor_sync_input_invalid");
+        assert.equal(error.packet.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract");
+        return true;
+      },
+    );
+    assert.equal(fetchCalls, 0);
+  }
+});
+
+test("manager supervisor terminal sync rejects malformed nested approval-gated metadata before contacting supervisor", async () => {
+  const scenarios = [
+    (item) => ({ ...item, unexpected: true }),
+    (item) => ({ ...item, title: " padded title" }),
+    (item) => ({ ...item, sourceRefs: ["source:approval-1", 42] }),
+    (item) => ({ ...item, evidenceRefs: ["evidence:approval-1\n"] }),
+    (item) => ({ ...item, evidenceRefs: ["evidence:approval-1", "evidence:approval-1"] }),
+  ];
+  for (const mutate of scenarios) {
+    const packet = managerSupervisorSyncPacket();
+    const work = packet.summary.terminalDisposition.unresolvedApprovalGatedWork[0];
+    packet.summary.terminalDisposition.unresolvedApprovalGatedWork = [mutate(work)];
+    let fetchCalls = 0;
+    await assert.rejects(
+      syncManagerSupervisorTerminalEvent(packet, "http://127.0.0.1:8000", {
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error("fetch must not run for malformed nested metadata");
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, "manager_supervisor_sync_input_invalid");
+        return true;
+      },
+    );
+    assert.equal(fetchCalls, 0);
+  }
+});
+
 test("manager supervisor terminal sync rejects non-loopback URLs before fetch and fails closed", async () => {
   let fetchCalls = 0;
   await assert.rejects(
