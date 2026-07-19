@@ -68,6 +68,15 @@ export function createDogfoodRunId(now = new Date()) {
 export function projectDogfoodEvidence({ packet, supervisorUrl, persisted = null, error = null } = {}) {
   const disposition = packet?.summary?.terminalDisposition || packet?.summary?.refillJob?.terminalDisposition || null;
   const supervisorEvent = persisted || disposition?.supervisorEvent || null;
+  let supervisorEndpoint = null;
+  let endpointError = null;
+  if (supervisorUrl) {
+    try {
+      supervisorEndpoint = resolveLoopbackSupervisorEndpoint(supervisorUrl);
+    } catch {
+      endpointError = "manager_terminal_event_dogfood_url_invalid";
+    }
+  }
   return {
     status: error ? "blocked" : supervisorEvent?.status || "prepared",
     runId: disposition?.runId || null,
@@ -75,16 +84,29 @@ export function projectDogfoodEvidence({ packet, supervisorUrl, persisted = null
     sourceRevision: disposition?.sourceRevision || null,
     idempotencyKey: disposition?.idempotencyKey || null,
     eventId: supervisorEvent?.eventId || null,
-    supervisorEndpoint: supervisorUrl ? resolveLoopbackSupervisorEndpoint(supervisorUrl) : null,
+    supervisorEndpoint,
     persistedAt: supervisorEvent?.persistedAt || null,
     metadataOnly: true,
     rawPayloadRetained: false,
-    ...(error ? { errorCode: error.code || "manager_terminal_event_dogfood_failed" } : {}),
+    ...(error
+      ? { errorCode: error.code || endpointError || "manager_terminal_event_dogfood_failed" }
+      : endpointError
+        ? { errorCode: endpointError }
+        : {}),
   };
 }
 
 export async function runManagerTerminalEventDogfood(argv = process.argv.slice(2), context = {}) {
-  const options = parseDogfoodArgs(argv);
+  let options;
+  try {
+    options = parseDogfoodArgs(argv);
+  } catch {
+    return {
+      ok: false,
+      evidence: projectDogfoodEvidence({ error: { code: "manager_terminal_event_dogfood_args_invalid" } }),
+      blockers: [{ code: "manager_terminal_event_dogfood_args_invalid", message: "Manager terminal-event dogfood arguments are invalid." }],
+    };
+  }
   let packet;
   try {
     packet = buildManagerTerminalEventDogfoodPacket(options);
@@ -129,8 +151,6 @@ export function parseDogfoodArgs(argv = []) {
     else if (arg.startsWith("--supervisor-url=")) options.supervisorUrl = arg.slice("--supervisor-url=".length);
     else if (arg === "--run-id") options.runId = requiredValue(argv, ++index, arg);
     else if (arg.startsWith("--run-id=")) options.runId = arg.slice("--run-id=".length);
-    else if (arg === "--source-identity") options.sourceIdentity = requiredValue(argv, ++index, arg);
-    else if (arg.startsWith("--source-identity=")) options.sourceIdentity = arg.slice("--source-identity=".length);
     else if (arg === "--source-revision") options.sourceRevision = requiredValue(argv, ++index, arg);
     else if (arg.startsWith("--source-revision=")) options.sourceRevision = arg.slice("--source-revision=".length);
     else if (arg === "--summary-json") continue;
@@ -146,8 +166,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 64;
+    console.log(JSON.stringify({
+      ok: false,
+      evidence: projectDogfoodEvidence({ error: { code: "manager_terminal_event_dogfood_failed" } }),
+      blockers: [{ code: "manager_terminal_event_dogfood_failed", message: "Manager terminal-event dogfood failed closed." }],
+    }, null, 2));
+    process.exitCode = 1;
   }
 }
 

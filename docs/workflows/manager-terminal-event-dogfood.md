@@ -25,9 +25,11 @@ idempotency key, canonical event ID, persistence timestamp, endpoint, and the
 run and idempotency key. Use `--run-id` only when intentionally reproducing a
 known idempotent replay.
 
-Optional bounded overrides are `--source-identity`, `--source-revision`, and
-`--run-id`. The supervisor URL must be `localhost`, `127.0.0.1`, or `::1`, with
-no credentials, path, query, or fragment.
+Optional bounded overrides are `--source-revision` and `--run-id`. The helper
+uses the canonical terminal-event boundary document as its synthetic source;
+arbitrary source identities are not accepted. The supervisor URL must be
+`localhost`, `127.0.0.1`, or `::1`, with no credentials, path, query, or
+fragment.
 
 ## Failure and recovery
 

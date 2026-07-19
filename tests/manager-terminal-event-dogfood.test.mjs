@@ -68,8 +68,30 @@ test("dogfood failure stays metadata-only and does not start a supervisor", asyn
   assert.doesNotMatch(JSON.stringify(result), /supervisor unavailable|provider payload|raw prompt/i);
 });
 
-test("dogfood parser requires an explicit supervisor URL and preserves bounded overrides", () => {
+test("dogfood invalid loopback URL stays structured and never reaches fetch", async () => {
+  const result = await runManagerTerminalEventDogfood(["--supervisor-url", "https://example.com"] , {
+    fetchImpl: async () => {
+      throw new Error("fetch must not run for non-loopback URL");
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.evidence.status, "blocked");
+  assert.equal(result.evidence.supervisorEndpoint, null);
+  assert.equal(result.evidence.errorCode, "manager_supervisor_sync_non_loopback_url");
+  assert.equal(result.evidence.metadataOnly, true);
+  assert.equal(result.evidence.rawPayloadRetained, false);
+});
+
+test("dogfood parser failures stay structured and metadata-only", async () => {
   assert.throws(() => parseDogfoodArgs([]), /--supervisor-url/);
+  const invalid = await runManagerTerminalEventDogfood(["--supervisor-url", "http://127.0.0.1:8000", "--unknown"]);
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.evidence.status, "blocked");
+  assert.equal(invalid.evidence.errorCode, "manager_terminal_event_dogfood_args_invalid");
+  assert.equal(invalid.evidence.metadataOnly, true);
+  assert.equal(invalid.evidence.rawPayloadRetained, false);
+
   const options = parseDogfoodArgs([
     "--",
     "--supervisor-url=http://localhost:8000",
@@ -82,6 +104,7 @@ test("dogfood parser requires an explicit supervisor URL and preserves bounded o
     sourceIdentity: "doc:docs/architecture/manager-supervisor-terminal-event-sync-boundary.md",
     sourceRevision: "dogfood-test-revision",
   });
+  assert.throws(() => parseDogfoodArgs(["--supervisor-url", "http://localhost:8000", "--source-identity", "doc:arbitrary"]), /Unknown option/);
   assert.equal(projectDogfoodEvidence({ packet: null, supervisorUrl: options.supervisorUrl }).metadataOnly, true);
 });
 
