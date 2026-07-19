@@ -6060,11 +6060,15 @@ class ManagerUnresolvedApprovalGatedWork(BaseModel):
     @field_validator("workId", "title", "reason")
     @classmethod
     def _scalar_metadata_must_be_safe(cls, value: str, info) -> str:
+        if value != value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError(f"{info.field_name} must use canonical metadata without padding or control characters.")
         return _validate_authoritative_metadata_text(value, path=info.field_name)
 
     @field_validator("sourceRefs", "evidenceRefs")
     @classmethod
     def _refs_must_be_safe(cls, values: list[str], info) -> list[str]:
+        if any(value != value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value) for value in values):
+            raise ValueError(f"{info.field_name} must use canonical metadata without padding or control characters.")
         safe = [
             _validate_authoritative_metadata_text(value, path=f"{info.field_name}[]")
             for value in values

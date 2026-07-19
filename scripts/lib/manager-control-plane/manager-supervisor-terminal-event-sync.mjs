@@ -15,6 +15,8 @@ const RECONCILIATION_COUNT_KEYS = [
   "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
   "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
 ];
+const UNRESOLVED_APPROVAL_GATED_WORK_KEYS = ["workId", "title", "reason", "sourceRefs", "evidenceRefs"];
+const FORBIDDEN_TERMINAL_METADATA = /\b(?:raw[ _-]?(?:prompt|completion|payload|transcript)|provider[ _-]?payload|reasoning[ _-]?trace|terminal[ _-]?scrollback|tmux[ _-]?scrollback|pane[ _-]?scrollback|secret|credential|api[ _-]?key|access[ _-]?token)\b/i;
 
 export class ManagerSupervisorTerminalEventSyncError extends Error {
   constructor(code, message, packet, options = {}) {
@@ -334,11 +336,40 @@ function validateRequestShape(request) {
   if (!hasExactKeys(request, REQUEST_KEYS)) throw new TypeError("terminalDisposition request metadata keys are invalid.");
   if (!request.reconciliationCounts || typeof request.reconciliationCounts !== "object" || Array.isArray(request.reconciliationCounts) || !hasExactKeys(request.reconciliationCounts, RECONCILIATION_COUNT_KEYS)) throw new TypeError("terminalDisposition.reconciliationCounts must contain only the bounded canonical keys.");
   if (RECONCILIATION_COUNT_KEYS.some((key) => !Number.isInteger(request.reconciliationCounts[key]) || request.reconciliationCounts[key] < 0)) throw new TypeError("terminalDisposition.reconciliationCounts values must be non-negative integers.");
-  if (!Array.isArray(request.unresolvedApprovalGatedWork) || request.unresolvedApprovalGatedWork.length > 24) throw new TypeError("terminalDisposition.unresolvedApprovalGatedWork is invalid.");
-  if (!Array.isArray(request.evidenceRefs) || request.evidenceRefs.length === 0 || request.evidenceRefs.length > 12) throw new TypeError("terminalDisposition.evidenceRefs is invalid.");
+  validateUnresolvedApprovalGatedWork(request.unresolvedApprovalGatedWork);
+  validateStringList(request.evidenceRefs, "terminalDisposition.evidenceRefs", 12);
   if (request.metadataOnly !== true) throw new TypeError("terminalDisposition must be metadata-only.");
   if (request.rawPayloadRetained !== false) throw new TypeError("terminalDisposition must prohibit raw payload retention.");
   assertCanonicalMetadataStrings(request);
+}
+
+function validateUnresolvedApprovalGatedWork(value) {
+  if (!Array.isArray(value) || value.length > 24) throw new TypeError("terminalDisposition.unresolvedApprovalGatedWork is invalid.");
+  value.forEach((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !hasExactKeys(item, UNRESOLVED_APPROVAL_GATED_WORK_KEYS)) {
+      throw new TypeError(`terminalDisposition.unresolvedApprovalGatedWork[${index}] must contain the exact bounded metadata keys.`);
+    }
+    requiredSafeString(item.workId, `terminalDisposition.unresolvedApprovalGatedWork[${index}].workId`, 140);
+    requiredSafeString(item.title, `terminalDisposition.unresolvedApprovalGatedWork[${index}].title`, 180);
+    requiredSafeString(item.reason, `terminalDisposition.unresolvedApprovalGatedWork[${index}].reason`, 240);
+    validateStringList(item.sourceRefs, `terminalDisposition.unresolvedApprovalGatedWork[${index}].sourceRefs`, 8);
+    validateStringList(item.evidenceRefs, `terminalDisposition.unresolvedApprovalGatedWork[${index}].evidenceRefs`, 8);
+    if (new Set(item.sourceRefs).size !== item.sourceRefs.length || new Set(item.evidenceRefs).size !== item.evidenceRefs.length) {
+      throw new TypeError(`terminalDisposition.unresolvedApprovalGatedWork[${index}] references must be unique.`);
+    }
+  });
+}
+
+function validateStringList(value, field, maxLength) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > maxLength) throw new TypeError(`${field} is invalid.`);
+  value.forEach((item, index) => requiredSafeString(item, `${field}[${index}]`, 255));
+}
+
+function requiredSafeString(value, field, maxLength) {
+  requiredString(value, field, maxLength);
+  if (FORBIDDEN_TERMINAL_METADATA.test(value)) throw new TypeError(`${field} contains forbidden non-metadata content.`);
+  if (/[\u0000-\u001f\u007f]/.test(value)) throw new TypeError(field + " contains control characters.");
+  return value;
 }
 
 function assertCanonicalMetadataStrings(value, path = "terminalDisposition") {

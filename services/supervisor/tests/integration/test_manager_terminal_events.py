@@ -321,6 +321,14 @@ def test_terminal_event_rejects_non_exact_unsafe_or_non_exhausted_metadata(
     padded_evidence["evidenceRefs"] = [" evidence:reconciliation-17"]
     invalid_payloads.append(padded_evidence)
 
+    nested_extra = _payload()
+    nested_extra["unresolvedApprovalGatedWork"][0]["unexpected"] = True
+    invalid_payloads.append(nested_extra)
+
+    nested_control = _payload()
+    nested_control["unresolvedApprovalGatedWork"][0]["title"] = "approval\nwork"
+    invalid_payloads.append(nested_control)
+
     with _running_supervisor(tmp_path, monkeypatch) as (_, base_url, db_path):
         for payload in invalid_payloads:
             response = _post(base_url, "/manager-control-plane/terminal-events", payload)
