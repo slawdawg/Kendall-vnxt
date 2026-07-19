@@ -103,9 +103,9 @@ systemctl --user stop kendall-cockpit-dashboard.service kendall-cockpit-supervis
 ```
 
 `pnpm run cockpit:install` configures the local loopback cockpit; it does not
-enable this authenticated LAN runtime. Persistent LAN startup needs separate
-user-systemd units carrying the LAN-auth environment below (or an equivalent
-explicit unit configuration). Do not run both sets of units on the same port.
+enable this authenticated LAN runtime. Persistent LAN startup is supported by
+the separate `lan-auth:*` user-systemd commands below. Do not run both sets of
+units on the same port.
 
 In terminal 1, from the repository root, export the same auth directory and
 start the supervisor:
@@ -200,3 +200,53 @@ cards remain name/status-only; packet detail is available after authentication.
 
 The LAN runtime does not provide self-signup, multiple roles, or SSO. Those are
 future extensions behind the same supervisor-owned authentication boundary.
+
+## Durable user-systemd startup
+
+After completing steps 1–3, set the bind address and install the LAN-auth
+target from the repository root. The installer reads only metadata for the
+existing private password, certificate, key, and auth directory; it never
+copies the password contents into a unit file:
+
+```bash
+cd "$HOME/Kendall_Nxt"
+export KENDALL_LAN_AUTH_BIND_ADDRESS="$LAN_IP"
+export KENDALL_LAN_AUTH_DIR="$AUTH_DIR"
+pnpm run lan-auth:install
+```
+
+The installer writes a user-scoped target and two services under
+`~/.config/systemd/user/`, plus a mode-600 environment file (by default under
+`$KENDALL_LAN_AUTH_DIR`) containing paths and non-secret LAN settings. It stops
+the legacy loopback cockpit target and child services before enabling the LAN
+target. The dashboard service waits for the supervisor and
+enforces the private-UDS startup gate before listening.
+
+Use these commands for lifecycle operations:
+
+```bash
+pnpm run lan-auth:status
+pnpm run lan-auth:restart
+pnpm run lan-auth:stop
+pnpm run lan-auth:logs
+pnpm run lan-auth:uninstall
+```
+
+`lan-auth:uninstall` removes only the generated user units and environment
+file; it preserves the password, certificate, key, and auth directory. For
+boot-before-login startup, enable user lingering if needed:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Preview the generated units without installing them with:
+
+```bash
+pnpm run lan-auth:print
+```
+
+If a stale socket remains after an unclean stop, stop the LAN target first and
+remove only the user-owned `$AUTH_DIR/supervisor.sock`, then run
+`pnpm run lan-auth:restart`. Never remove an unknown socket or terminate a
+process by a broad name match.
