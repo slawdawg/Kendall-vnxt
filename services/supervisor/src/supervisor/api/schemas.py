@@ -6076,6 +6076,39 @@ class ManagerUnresolvedApprovalGatedWork(BaseModel):
         return safe
 
 
+MANAGER_TERMINAL_EVENT_REQUEST_FIELDS = (
+    "eventId",
+    "eventType",
+    "runId",
+    "sourceIdentity",
+    "sourceRevision",
+    "reconciliationCounts",
+    "unresolvedApprovalGatedWork",
+    "evidenceRefs",
+    "resumeRequirement",
+    "nextManagerAction",
+    "idempotencyKey",
+    "metadataOnly",
+    "rawPayloadRetained",
+)
+MANAGER_TERMINAL_EVENT_VIEW_FIELDS = (
+    "eventId",
+    "eventType",
+    "runId",
+    "sourceIdentity",
+    "sourceRevision",
+    "reconciliationCounts",
+    "unresolvedApprovalGatedWork",
+    "evidenceRefs",
+    "resumeRequirement",
+    "nextManagerAction",
+    "idempotencyKey",
+    "metadataOnly",
+    "rawPayloadRetained",
+    "createdAt",
+)
+
+
 class ManagerTerminalEventRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

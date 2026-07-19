@@ -1,5 +1,39 @@
 export const MANAGER_CONTROL_PLANE_SCHEMA_VERSION = "manager_control_plane.v1" as const;
 
+/** API boundary fields for the supervisor-owned terminal-event contract. */
+export const MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS = [
+  "eventId",
+  "eventType",
+  "runId",
+  "sourceIdentity",
+  "sourceRevision",
+  "reconciliationCounts",
+  "unresolvedApprovalGatedWork",
+  "evidenceRefs",
+  "resumeRequirement",
+  "nextManagerAction",
+  "idempotencyKey",
+  "metadataOnly",
+  "rawPayloadRetained",
+] as const;
+
+export const MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS = [
+  "eventId",
+  "eventType",
+  "runId",
+  "sourceIdentity",
+  "sourceRevision",
+  "reconciliationCounts",
+  "unresolvedApprovalGatedWork",
+  "evidenceRefs",
+  "resumeRequirement",
+  "nextManagerAction",
+  "idempotencyKey",
+  "metadataOnly",
+  "rawPayloadRetained",
+  "createdAt",
+] as const;
+
 export const CANDIDATE_WORK_PACKET_SERIALIZED_FIELDS = [
   "candidate_work_packet_id",
   "run_id",
@@ -420,7 +454,9 @@ export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
   ImplementationRunContract: IMPLEMENTATION_RUN_CONTRACT_SERIALIZED_FIELDS,
   ManagerExecutionLaneSummary: MANAGER_EXECUTION_LANE_SUMMARY_SERIALIZED_FIELDS,
   ManagerAuthorityDecision: MANAGER_AUTHORITY_DECISION_SERIALIZED_FIELDS,
-  ManagerControlPlaneEvent: MANAGER_CONTROL_PLANE_EVENT_SERIALIZED_FIELDS
+  ManagerControlPlaneEvent: MANAGER_CONTROL_PLANE_EVENT_SERIALIZED_FIELDS,
+  ManagerTerminalEventRequest: MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS,
+  ManagerTerminalEventView: MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS,
 } as const;
 
 export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
