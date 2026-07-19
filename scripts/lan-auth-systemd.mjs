@@ -243,9 +243,16 @@ function commandPath(name) {
   return value;
 }
 
-function systemctlUser(args, { allowNotLoaded = false } = {}) {
+function systemctlUser(args, { allowNotLoaded = false, allowInactive = false, allowDisabled = false } = {}) {
   const result = spawnSync("systemctl", ["--user", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  if (result.status !== 0 && !(allowNotLoaded && /not loaded|not found|could not be found/i.test(`${result.stdout}\n${result.stderr}`))) {
+  if (
+    result.status !== 0 &&
+    !(
+      (allowNotLoaded && /not loaded|not found|could not be found/i.test(`${result.stdout}\n${result.stderr}`)) ||
+      (allowInactive && /inactive/i.test(`${result.stdout}\n${result.stderr}`)) ||
+      (allowDisabled && /disabled/i.test(`${result.stdout}\n${result.stderr}`))
+    )
+  ) {
     throw new Error((result.stderr || result.stdout || `systemctl ${args.join(" ")} failed`).trim());
   }
   return result;
@@ -288,15 +295,21 @@ function removeManagedFile(pathValue) {
   return true;
 }
 
-function legacyWasActive() {
-  const result = systemctlUser(["is-active", legacyTarget], { allowNotLoaded: true });
+export function legacyWasActive({ systemctl = systemctlUser } = {}) {
+  const result = systemctl(["is-active", legacyTarget], { allowNotLoaded: true, allowInactive: true });
   return result.status === 0 && result.stdout.trim() === "active";
 }
 
-function stopLegacyCockpit() {
+export function legacyWasEnabled({ systemctl = systemctlUser } = {}) {
+  const result = systemctl(["is-enabled", legacyTarget], { allowNotLoaded: true, allowDisabled: true });
+  return result.status === 0 && result.stdout.trim() === "enabled";
+}
+
+export function stopLegacyCockpit({ systemctl = systemctlUser } = {}) {
   for (const service of ["kendall-cockpit-supervisor.service", "kendall-cockpit-dashboard.service", legacyTarget]) {
-    systemctlUser(["stop", service], { allowNotLoaded: true });
+    systemctl(["stop", service], { allowNotLoaded: true });
   }
+  systemctl(["disable", legacyTarget], { allowNotLoaded: true });
 }
 
 export function installLanAuth({ enable = true } = {}) {
@@ -306,6 +319,7 @@ export function installLanAuth({ enable = true } = {}) {
   const files = [[config.systemdEnvFile, renderLanAuthEnvironment(config), 0o600], ...Object.entries(units).map(([name, contents]) => [join(userSystemdDir(), name), contents, 0o644])];
   const previous = new Map();
   const legacyActive = legacyWasActive();
+  const legacyEnabled = legacyWasEnabled();
   const lanActive = (() => { const result = systemctlUser(["is-active", unitNames.target], { allowNotLoaded: true }); return result.status === 0 && result.stdout.trim() === "active"; })();
   try {
     for (const [pathValue, contents, mode] of files) {
@@ -323,6 +337,7 @@ export function installLanAuth({ enable = true } = {}) {
     }
     try { systemctlUser(["daemon-reload"]); } catch {}
     if (lanActive) { try { systemctlUser(["start", unitNames.target]); } catch {} }
+    if (legacyEnabled) { try { systemctlUser(["enable", legacyTarget], { allowNotLoaded: true }); } catch {} }
     if (legacyActive) { try { systemctlUser(["start", legacyTarget]); } catch {} }
     throw error;
   }

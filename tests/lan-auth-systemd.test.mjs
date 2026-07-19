@@ -7,6 +7,9 @@ import {
   renderLanAuthEnvironment,
   renderLanAuthUnits,
   resolveLanAuthConfig,
+  legacyWasActive,
+  legacyWasEnabled,
+  stopLegacyCockpit,
   unitNames,
 } from "../scripts/lan-auth-systemd.mjs";
 
@@ -50,6 +53,50 @@ test("renders mutually exclusive user units with the private UDS environment", (
   assert.match(units[unitNames.target], /^# Managed by Kendall_Nxt LAN-auth systemd integration v1/m);
   assert.match(units[unitNames.dashboard], /ExecStart=\/usr\/bin\/pnpm run dev:dashboard/);
   assert.doesNotMatch(Object.values(units).join("\n"), /bootstrap-password.*=/);
+});
+
+test("tolerates an installed but inactive legacy cockpit target", () => {
+  const calls = [];
+  const active = legacyWasActive({
+    systemctl(args, options) {
+      calls.push({ args, options });
+      return { status: 3, stdout: "inactive\n", stderr: "" };
+    },
+  });
+  assert.equal(active, false);
+  assert.deepEqual(calls, [
+    {
+      args: ["is-active", "kendall-cockpit.target"],
+      options: { allowNotLoaded: true, allowInactive: true },
+    },
+  ]);
+});
+
+test("stops and disables every legacy cockpit unit before LAN-auth startup", () => {
+  const calls = [];
+  stopLegacyCockpit({
+    systemctl(args, options) {
+      calls.push({ args, options });
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.deepEqual(calls, [
+    { args: ["stop", "kendall-cockpit-supervisor.service"], options: { allowNotLoaded: true } },
+    { args: ["stop", "kendall-cockpit-dashboard.service"], options: { allowNotLoaded: true } },
+    { args: ["stop", "kendall-cockpit.target"], options: { allowNotLoaded: true } },
+    { args: ["disable", "kendall-cockpit.target"], options: { allowNotLoaded: true } },
+  ]);
+});
+
+test("records whether the legacy target was enabled for rollback", () => {
+  const enabled = legacyWasEnabled({
+    systemctl(args, options) {
+      assert.deepEqual(args, ["is-enabled", "kendall-cockpit.target"]);
+      assert.deepEqual(options, { allowNotLoaded: true, allowDisabled: true });
+      return { status: 0, stdout: "enabled\n", stderr: "" };
+    },
+  });
+  assert.equal(enabled, true);
 });
 
 test("rejects non-canonical ports and unsafe unit paths", () => {

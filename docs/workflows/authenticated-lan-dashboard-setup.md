@@ -99,7 +99,8 @@ older HTTP dashboard on port `3000` and a separate TCP supervisor. Stop those
 units before this manual LAN-auth run:
 
 ```bash
-systemctl --user stop kendall-cockpit-dashboard.service kendall-cockpit-supervisor.service
+systemctl --user stop kendall-cockpit-dashboard.service kendall-cockpit-supervisor.service kendall-cockpit.target
+systemctl --user disable kendall-cockpit.target
 ```
 
 `pnpm run cockpit:install` configures the local loopback cockpit; it does not
