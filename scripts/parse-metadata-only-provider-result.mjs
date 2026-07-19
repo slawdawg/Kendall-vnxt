@@ -52,6 +52,8 @@ function parseReviewEnvelope(resultText) {
     return { usable: false, shape: "invalid-review-envelope" };
   }
   if (!review || typeof review !== "object" || Array.isArray(review)) return { usable: false, shape: "invalid-review-envelope" };
+  const allowedKeys = new Set(["status", "resultId", "reviewedAt", "summary"]);
+  if (Object.keys(review).some((key) => !allowedKeys.has(key))) return { usable: false, shape: "invalid-review-envelope" };
   const status = typeof review.status === "string" ? review.status.trim().toUpperCase() : "";
   const resultId = typeof review.resultId === "string" ? review.resultId.trim() : "";
   const reviewedAt = typeof review.reviewedAt === "string" ? review.reviewedAt.trim() : "";

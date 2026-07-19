@@ -115,3 +115,10 @@ test("requires trusted caller time and rejects separator-obfuscated sensitive ma
   const sensitive = valid({ purpose: "review raw/prompt metadata" });
   assert.equal(evaluatePrivateEvidencePacket(sensitive, { now: NOW }).status, "HOLD");
 });
+
+test("typed references require a non-empty suffix", () => {
+  const input = valid({ authorityEvidenceRef: "authority:" });
+  const packet = evaluatePrivateEvidencePacket(input, { now: NOW });
+  assert.equal(packet.status, "HOLD");
+  assert.ok(packet.blockers.some((blocker) => blocker.includes("authorityEvidenceRef")));
+});

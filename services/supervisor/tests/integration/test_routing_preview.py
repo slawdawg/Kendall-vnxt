@@ -1415,14 +1415,14 @@ def test_ollama_provider_gate_requires_model_id_before_adapter_readiness(tmp_pat
     assert ollama["registryState"] == "configured_ollama_gate_missing_model"
 
 
-def test_ollama_timeout_settings_require_positive_values(monkeypatch) -> None:
-    monkeypatch.setenv("SUPERVISOR_OLLAMA_CONNECT_TIMEOUT_SECONDS", "0")
+def test_ollama_timeout_settings_require_canonical_values(monkeypatch) -> None:
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_CONNECT_TIMEOUT_SECONDS", "3")
 
     _reset_supervisor_modules()
 
     from supervisor.config.settings import Settings
 
-    with pytest.raises(ValueError, match="greater than 0"):
+    with pytest.raises(ValueError, match="Input should be 2"):
         Settings()
 
 

@@ -104,6 +104,7 @@ function validateClaudeRoute(route, blockers) {
   if (route.metadataOnly !== true || route.rawPayloadRetained !== false) blockers.push("Claude route must retain metadata only");
   if (route.sourceScope !== "named-evidence-only") blockers.push("Claude route scope must be named evidence only");
   if (route.activationAllowed !== false || route.reviewPass !== false) blockers.push("primary-review authority controls must be explicit false");
+  if (route.fallbackUsed !== false || route.primaryFailure != null) blockers.push("Claude primary route must have fallbackUsed=false and no primaryFailure");
 }
 
 function isExactToolSet(value, expected) {

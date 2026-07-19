@@ -75,12 +75,24 @@ test("approved Claude primary route is review eligible but cannot grant activati
     rawPayloadRetained: false,
     reviewPass: false,
     activationAllowed: false,
+    fallbackUsed: false,
   });
   assert.equal(packet.status, "READY");
   assert.equal(packet.reviewEligible, true);
   assert.equal(packet.activationEligible, false);
   assert.equal(packet.allowed, true);
   assert.equal(packet.priority, 1);
+});
+
+test("Claude primary route requires explicit no-fallback metadata", () => {
+  const base = {
+    role: "primary-review", provider: "claude", model: "claude", executable: "claude", mode: "print", authenticated: true,
+    maxBudgetUsd: 1, allowedTools: ["Read", "Grep", "Glob"], disallowedTools: ["Edit", "Write", "Bash", "WebFetch", "WebSearch"],
+    sourceScope: "named-evidence-only", metadataOnly: true, rawPayloadRetained: false, reviewPass: false, activationAllowed: false,
+  };
+  assert.equal(evaluateBoundedReviewRoute({ ...base, fallbackUsed: true }).status, "HOLD");
+  assert.equal(evaluateBoundedReviewRoute({ ...base, fallbackUsed: false, primaryFailure: "rate-limited" }).status, "HOLD");
+  assert.equal(evaluateBoundedReviewRoute({ ...base, fallbackUsed: false }).status, "READY");
 });
 
 test("ordered selection prefers Claude and falls back to Ollama only on bounded failures", () => {

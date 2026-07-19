@@ -101,7 +101,7 @@ for (const ollamaText of [
   "SUPERVISOR_OLLAMA_MODEL_ID",
   "ollama-provider-gate",
   "test_ollama_provider_gate_stays_disabled_when_broad_gate_is_disabled",
-  "test_ollama_timeout_settings_require_positive_values",
+  "test_ollama_timeout_settings_require_canonical_values",
   "configured_ollama_gate_missing_model",
   "configured_ollama_gate_missing_endpoint",
   "enabled_approved_host_endpoint",

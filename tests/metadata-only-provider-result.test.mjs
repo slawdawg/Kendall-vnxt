@@ -62,6 +62,14 @@ test("requires a valid bounded review envelope and rejects sensitive or ambiguou
     assert.equal(summary.usable, false);
     assert.equal(summary.shape, "invalid-review-envelope");
   }
+  for (const key of ["providerPayload", "rawPrompt", "reasoningTrace", "unexpected"]) {
+    const summary = summarizeProviderResult(JSON.stringify({
+      is_error: false,
+      result: JSON.stringify({ status: "PASS", resultId: "id", reviewedAt: "2026-07-18T12:00:00Z", summary: "summary", [key]: "metadata" }),
+    }));
+    assert.equal(summary.usable, false, key);
+    assert.equal(summary.shape, "invalid-review-envelope", key);
+  }
   const duplicate = summarizeProviderResult(JSON.stringify({
     is_error: false,
     result: '{"status":"PASS","status":"BLOCKED","resultId":"id","reviewedAt":"2026-07-18T12:00:00Z","summary":"summary"}',

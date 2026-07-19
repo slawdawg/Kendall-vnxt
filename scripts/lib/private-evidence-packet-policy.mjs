@@ -144,7 +144,7 @@ function safeId(value, max) {
 
 function safeTypedRef(value, prefix, max) {
   const normalized = text(value);
-  return normalized.startsWith(prefix) && safeId(normalized, max);
+  return normalized.length > prefix.length && normalized.startsWith(prefix) && safeId(normalized, max);
 }
 
 function safeText(value, max) {

@@ -40,7 +40,7 @@ export function evaluateGovernedReadOnlyReview(input = {}, options = {}) {
   const provider = text(route.provider).toLowerCase();
   let privateEvidencePacketValidated = false;
   if (provider === "claude" || provider === "ollama") {
-    const packetGate = evaluatePrivateEvidencePacket(source.privateEvidencePacket, { now: opts.now });
+    const packetGate = evaluatePrivateEvidencePacket(source.privateEvidencePacket, { now: opts.now ?? source.now });
     privateEvidencePacketValidated = packetGate.eligible;
     if (!packetGate.eligible) blockers.push(...packetGate.blockers.map((blocker) => `private evidence packet: ${blocker}`));
   }
