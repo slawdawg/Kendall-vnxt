@@ -100,6 +100,7 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   const terminalEventSource = await readFile(new URL("terminal-event.ts", managerRoot), "utf8");
   const schemaJsonSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
   const terminalEventSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs", import.meta.url), "utf8");
+  const sourceIntakeSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs", import.meta.url), "utf8");
   const supervisorSchemaSource = await readFile(new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url), "utf8");
   const requestFields = [
     "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
@@ -125,6 +126,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(terminalEventSyncSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_ID_PATTERN,[\s\S]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_ID_PATTERN\.test\(request\.eventId\)/);
   assert.doesNotMatch(terminalEventSyncSource, /\/\^manager-terminal-event:\[0-9a-f\]\{40\}\$\//);
+  assert.match(terminalEventSyncSource, /import \{ parseLoopbackSupervisorUrl \} from "\.\/loopback-supervisor\.mjs";/);
+  assert.match(sourceIntakeSyncSource, /import \{ parseLoopbackSupervisorUrl \} from "\.\/loopback-supervisor\.mjs";/);
   const schemaJsonAliases = [...schemaJsonSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_SERIALIZED_FIELDS = (MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS);/g)]
     .map((match) => match[1] === "MANAGER_TERMINAL_EVENT_REQUEST_FIELDS" ? requestFields : viewFields);
   const schemaJsonFields = schemaJsonAliases;
