@@ -1,4 +1,8 @@
-import type { PipelineDashboardProjectionV0, WorkPacketV0View } from "@kendall/contracts";
+import type {
+  AuthoritativeWorkPacketLifecycleView,
+  PipelineDashboardProjectionV0,
+  WorkPacketV0View,
+} from "@kendall/contracts";
 import {
   isPipelineDashboardProjection,
   normalizePipelineDashboardProjection,
@@ -21,11 +25,40 @@ function isCanonicalShapeError(error: unknown): boolean {
 }
 
 function canonicalPacket(value: unknown): WorkPacketV0View {
+  if (isAuthoritativeWorkPacketLifecycleView(value)) {
+    throw authoritativeLifecycleFallbackError();
+  }
   if (!isWorkPacketV0View(value)) throw new Error("Canonical WorkPacket response is not WorkPacketV0-shaped.");
   return value;
 }
 
+function isAuthoritativeWorkPacketLifecycleView(value: unknown): value is AuthoritativeWorkPacketLifecycleView {
+  if (!value || typeof value !== "object") return false;
+  const packet = value as Partial<AuthoritativeWorkPacketLifecycleView>;
+  return (
+    typeof packet.packetId === "string" &&
+    typeof packet.title === "string" &&
+    typeof packet.currentStage === "string" &&
+    typeof packet.status === "string" &&
+    typeof packet.truthLabel === "string" &&
+    typeof packet.sourceRef === "object" &&
+    packet.sourceRef !== null &&
+    typeof packet.createdAt === "string" &&
+    typeof packet.updatedAt === "string" &&
+    typeof packet.currentEventId === "string" &&
+    Array.isArray(packet.history) &&
+    packet.metadataOnly === true
+  );
+}
+
+function authoritativeLifecycleFallbackError(): Error {
+  return new Error("Canonical WorkPacket response is authoritative lifecycle-shaped; using legacy WorkPacketV0 fallback.");
+}
+
 function canonicalPackets(value: unknown): WorkPacketV0View[] {
+  if (Array.isArray(value) && value.some((packet) => isAuthoritativeWorkPacketLifecycleView(packet))) {
+    throw authoritativeLifecycleFallbackError();
+  }
   if (!Array.isArray(value) || value.some((packet) => !isWorkPacketV0View(packet))) {
     throw new Error("Canonical WorkPacket response is not WorkPacketV0-shaped.");
   }
