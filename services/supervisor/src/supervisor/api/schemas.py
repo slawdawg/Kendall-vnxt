@@ -5034,6 +5034,15 @@ class RunnerAssignmentStatusReportView(BaseModel):
     degradedInputs: list[RunnerAssignmentDegradedInputView] = Field(default_factory=list)
 
 
+class RunnerAssignmentStatusReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned runner assignment status."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: RunnerAssignmentStatusReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class MaintenanceActionPlanStepView(BaseModel):
     stepId: str
     label: str
