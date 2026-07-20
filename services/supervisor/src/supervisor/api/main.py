@@ -39,6 +39,7 @@ from supervisor.api.schemas import (
     CodexImplementationApprovalReportApiEnvelope,
     ClaudeReviewReadinessReportApiEnvelope,
     ClaudeReviewApprovalReportApiEnvelope,
+    ExecutionStateBoundaryApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1600,9 +1601,9 @@ async def list_disabled_provider_proofs():
     return ApiEnvelope(data=service.list_disabled_provider_proofs())
 
 
-@app.get("/supervisor/execution-state-boundary", response_model=ApiEnvelope)
+@app.get("/supervisor/execution-state-boundary", response_model=ExecutionStateBoundaryApiEnvelope)
 async def get_execution_state_boundary():
-    return ApiEnvelope(data=service.get_execution_state_boundary())
+    return ExecutionStateBoundaryApiEnvelope(data=service.get_execution_state_boundary())
 
 
 @app.get("/supervisor/threat-boundary", response_model=ApiEnvelope)

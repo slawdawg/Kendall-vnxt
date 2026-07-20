@@ -66,8 +66,11 @@ for (const serviceText of [
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Execution evidence service must include ${serviceText}`, failures);
 }
-for (const schemaText of ["queueLeaseGrantsExecutionAuthority: bool = False", "executionAttemptLaunchesWorkers: bool = False"]) {
-  assertCondition(schemaSource.includes(schemaText), `Execution state boundary schema must include ${schemaText}`, failures);
+for (const schemaText of ["queueLeaseGrantsExecutionAuthority: Literal[False] = False", "executionAttemptLaunchesWorkers: Literal[False] = False"]) {
+  assertCondition(schemaSource.includes(schemaText), `Execution state boundary schema must keep ${schemaText}`, failures);
+}
+for (const contractText of ["queueLeaseGrantsExecutionAuthority: false;", "executionAttemptLaunchesWorkers: false;"]) {
+  assertCondition(contractSource.includes(contractText), `Shared execution state contract must keep ${contractText}`, failures);
 }
 for (const workerId of ["local.ollama.disabled", "local.lmstudio.disabled", "local.vllm.disabled", "local.llamacpp.disabled"]) {
   assertCondition(workerRegistrySource.includes(workerId), `Worker registry must include disabled provider ${workerId}`, failures);

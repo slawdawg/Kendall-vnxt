@@ -4440,6 +4440,8 @@ class DisabledProviderProofView(BaseModel):
 
 
 class ExecutionStateBoundaryView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     boundaryId: str
     generatedAt: datetime
     summary: str
@@ -4447,8 +4449,17 @@ class ExecutionStateBoundaryView(BaseModel):
     executionAttemptRole: list[str]
     forbiddenQueueLeaseFields: list[str]
     futureProcessLifecycleAttachments: list[str]
-    queueLeaseGrantsExecutionAuthority: bool = False
-    executionAttemptLaunchesWorkers: bool = False
+    queueLeaseGrantsExecutionAuthority: Literal[False] = False
+    executionAttemptLaunchesWorkers: Literal[False] = False
+
+
+class ExecutionStateBoundaryApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned execution-state boundary."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ExecutionStateBoundaryView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class ExecutionReadinessReportView(BaseModel):
