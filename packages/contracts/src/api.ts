@@ -361,6 +361,8 @@ export interface WorkspaceIsolationPlanView {
 export interface ExecutionAttemptView {
   attemptId: string;
   workItemId: string;
+  leaseId?: string | null;
+  fencingToken?: number | null;
   routeDecisionId: string;
   workerId: string;
   lane: string;
@@ -384,6 +386,11 @@ export interface ExecutionAttemptView {
   workspaceIsolationPlan: WorkspaceIsolationPlanView;
   artifactRefs: Record<string, unknown>[];
   eventRefs: Record<string, unknown>[];
+}
+
+export interface ExecutionAttemptApiEnvelope {
+  data: ExecutionAttemptView[];
+  meta?: Record<string, string | number | boolean | null>;
 }
 
 export interface RoutingProfileView {
