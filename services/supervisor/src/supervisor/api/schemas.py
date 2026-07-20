@@ -4239,6 +4239,15 @@ class WorkerRegistryEntryView(BaseModel):
     disabledReason: str | None = None
 
 
+class WorkerRegistryListApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned worker registry."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[WorkerRegistryEntryView]
+    meta: dict[str, Any] | None = None
+
+
 class ExecutionConfigurationCheckView(BaseModel):
     checkId: str
     label: str
