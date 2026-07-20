@@ -4835,6 +4835,15 @@ class SafeDevelopmentBacklogReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class SafeDevelopmentBacklogReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned safe development backlog."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: SafeDevelopmentBacklogReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class RunnerAssignmentWarningView(BaseModel):
     code: str
     severity: str

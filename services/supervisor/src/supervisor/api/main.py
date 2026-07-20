@@ -33,6 +33,7 @@ from supervisor.api.schemas import (
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
+    SafeDevelopmentBacklogReportApiEnvelope,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
@@ -1431,9 +1432,9 @@ async def get_maintenance_action_plan_report():
     return MaintenanceActionPlanReportApiEnvelope(data=service.get_maintenance_action_plan_report())
 
 
-@app.get("/supervisor/safe-development-backlog", response_model=ApiEnvelope)
+@app.get("/supervisor/safe-development-backlog", response_model=SafeDevelopmentBacklogReportApiEnvelope)
 async def get_safe_development_backlog_report():
-    return ApiEnvelope(data=service.get_safe_development_backlog_report())
+    return SafeDevelopmentBacklogReportApiEnvelope(data=service.get_safe_development_backlog_report())
 
 
 @app.get("/supervisor/runner-assignment-status-report", response_model=ApiEnvelope)
