@@ -158,6 +158,11 @@ export interface TaskPacketPreviewView {
   commandExecutionAllowed: boolean;
 }
 
+export interface TaskPacketPreviewApiEnvelope {
+  data: TaskPacketPreviewView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface WorkItemPolicyGateView {
   id: string;
   label: string;
