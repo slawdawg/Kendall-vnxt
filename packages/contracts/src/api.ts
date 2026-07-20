@@ -245,6 +245,11 @@ export interface WorkItemRecipeGateAuditView {
   nextManagedAction: WorkItemManagedActionView;
 }
 
+export interface WorkItemRecipeGateAuditApiEnvelope {
+  data: WorkItemRecipeGateAuditView;
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export type ExecutionAttemptStatus =
   | "planned"
   | "approved"

@@ -58,6 +58,7 @@ from supervisor.api.schemas import (
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemListApiEnvelope,
     WorkItemManagedActionRequest,
+    WorkItemRecipeGateAuditApiEnvelope,
     WorkItemPremiumApprovalRequest,
     WorkPacketLearnFollowUpCandidateWorkRequest,
     WorkPacketApiEnvelope,
@@ -1044,12 +1045,12 @@ async def record_work_item_execution_attempt_verification_evidence(
     return ApiEnvelope(data=attempt)
 
 
-@app.get("/work-items/{work_item_id}/recipe-gate-audit", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/recipe-gate-audit", response_model=WorkItemRecipeGateAuditApiEnvelope)
 async def get_work_item_recipe_gate_audit(work_item_id: str, session: AsyncSession = Depends(get_session)):
     audit = await service.get_recipe_gate_audit(session, work_item_id)
     if not audit:
         raise HTTPException(status_code=404, detail=error_response("Recipe gate audit not found.", "recipe_gate_audit_not_found").model_dump())
-    return ApiEnvelope(data=audit)
+    return WorkItemRecipeGateAuditApiEnvelope(data=audit)
 
 
 @app.get("/work-items/{work_item_id}/routing-preview", response_model=ApiEnvelope)

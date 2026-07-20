@@ -440,6 +440,15 @@ class WorkItemRecipeGateAuditView(BaseModel):
     nextManagedAction: WorkItemManagedActionView
 
 
+class WorkItemRecipeGateAuditApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned recipe gate audits."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: WorkItemRecipeGateAuditView
+    meta: dict[str, Any] | None = None
+
+
 class WorkItemRoutingPreviewRequest(BaseModel):
     stepId: str | None = None
     taskKind: str | None = None
