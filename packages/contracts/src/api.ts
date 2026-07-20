@@ -1042,6 +1042,11 @@ export interface VerificationReadinessReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface VerificationReadinessReportApiEnvelope {
+  data: VerificationReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface AuthorityReadinessFamilyView {
   familyId: string;
   label: string;
