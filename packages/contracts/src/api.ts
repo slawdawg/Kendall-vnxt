@@ -1311,6 +1311,11 @@ export interface DevelopmentRunwayReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface DevelopmentRunwayReportApiEnvelope {
+  data: DevelopmentRunwayReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface RuntimeEvidenceReviewWorkItemView {
   workItemId: string;
   title: string;

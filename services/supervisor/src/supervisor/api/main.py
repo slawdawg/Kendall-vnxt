@@ -30,6 +30,7 @@ from supervisor.api.schemas import (
     VerificationReadinessReportApiEnvelope,
     AuthorityReadinessMatrixReportApiEnvelope,
     DashboardE2EReportApiEnvelope,
+    DevelopmentRunwayReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1443,9 +1444,9 @@ async def get_runner_assignment_status_report():
     return RunnerAssignmentStatusReportApiEnvelope(data=service.get_runner_assignment_status_report())
 
 
-@app.get("/supervisor/development-runway-report", response_model=ApiEnvelope)
+@app.get("/supervisor/development-runway-report", response_model=DevelopmentRunwayReportApiEnvelope)
 async def get_development_runway_report():
-    return ApiEnvelope(data=service.get_development_runway_report())
+    return DevelopmentRunwayReportApiEnvelope(data=service.get_development_runway_report())
 
 
 @app.get("/supervisor/runtime-evidence-review-report", response_model=ApiEnvelope)
