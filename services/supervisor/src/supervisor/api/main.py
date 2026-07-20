@@ -47,6 +47,7 @@ from supervisor.api.schemas import (
     RoutingLaneProfileListApiEnvelope,
     WorkerRegistryListApiEnvelope,
     LlmWikiArtifactSearchResultView,
+    LocalEvidencePacketApiEnvelope,
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
@@ -1115,12 +1116,12 @@ async def record_work_item_routing_override(
     return ApiEnvelope(data=override)
 
 
-@app.get("/work-items/{work_item_id}/local-evidence-packet", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/local-evidence-packet", response_model=LocalEvidencePacketApiEnvelope)
 async def get_work_item_local_evidence_packet(work_item_id: str, session: AsyncSession = Depends(get_session)):
     packet = await service.get_local_evidence_packet(session, work_item_id)
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=packet)
+    return LocalEvidencePacketApiEnvelope(data=packet)
 
 
 @app.post("/work-items/{work_item_id}/local-readonly-worker-preview", response_model=ApiEnvelope)

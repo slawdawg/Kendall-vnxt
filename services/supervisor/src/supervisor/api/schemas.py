@@ -4216,6 +4216,15 @@ class LocalEvidencePacketView(BaseModel):
     commandsAllowed: bool = False
 
 
+class LocalEvidencePacketApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned local evidence packets."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalEvidencePacketView
+    meta: dict[str, Any] | None = None
+
+
 class LocalReadonlyWorkerPreviewView(BaseModel):
     workerId: str
     runId: str
