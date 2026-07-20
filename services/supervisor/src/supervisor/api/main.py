@@ -17,6 +17,7 @@ from supervisor.api.schemas import (
     ApiErrorEnvelope,
     ApiErrorShape,
     AuthoritativeWorkPacketCreateRequest,
+    AuthoritativeWorkPacketListApiEnvelope,
     AuthoritativeWorkPacketTransitionRequest,
     CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
@@ -593,9 +594,9 @@ async def create_authoritative_work_packet(
     return ApiEnvelope(data=packet)
 
 
-@app.get("/pipeline-control-plane/work-packets", response_model=ApiEnvelope)
+@app.get("/pipeline-control-plane/work-packets", response_model=AuthoritativeWorkPacketListApiEnvelope)
 async def list_authoritative_work_packets(session: AsyncSession = Depends(get_session)):
-    return ApiEnvelope(data=await service.list_authoritative_work_packets(session))
+    return AuthoritativeWorkPacketListApiEnvelope(data=await service.list_authoritative_work_packets(session))
 
 
 @app.get("/pipeline-control-plane/projection", response_model=ApiEnvelope)

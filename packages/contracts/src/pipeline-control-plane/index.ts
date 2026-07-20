@@ -222,6 +222,11 @@ export interface AuthoritativeWorkPacketLifecycleView {
   metadataOnly: true;
 }
 
+export interface AuthoritativeWorkPacketListApiEnvelope {
+  data: AuthoritativeWorkPacketLifecycleView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface CreateAuthoritativeWorkPacketRequest {
   packetId?: string;
   title: string;

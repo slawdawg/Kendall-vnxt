@@ -987,3 +987,8 @@ export interface WorkPacketV0View {
   reviewSummaries: WorkPacketReviewSummaryV0[];
   recoveryActions: RecoveryActionV0[];
 }
+
+export interface WorkPacketListApiEnvelope {
+  data: WorkPacketV0View[];
+  meta?: Record<string, string | number | boolean | null>;
+}
