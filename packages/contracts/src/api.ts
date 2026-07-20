@@ -2212,12 +2212,22 @@ export interface WorkItemListApiEnvelope {
 
 export interface RunStatusView {
   mode: RunMode;
+  revision: number;
   pollIntervalSeconds: number;
   queueCount: number;
   activeCount: number;
+  activeWorkCount: number;
+  activeLeaseCount: number;
+  runningAttemptCount: number;
+  drainConverged: boolean;
   blockedCount: number;
   doneCount: number;
   summary: string;
+}
+
+export interface RunStatusApiEnvelope {
+  data: RunStatusView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface ApiEnvelope<T> {

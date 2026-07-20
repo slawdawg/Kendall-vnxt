@@ -6037,6 +6037,15 @@ class RunStatusView(BaseModel):
     summary: str
 
 
+class RunStatusApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned runtime status."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: RunStatusView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class ApiErrorShape(BaseModel):
     code: str
     message: str

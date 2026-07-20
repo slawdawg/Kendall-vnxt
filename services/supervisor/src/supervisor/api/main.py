@@ -78,6 +78,7 @@ from supervisor.api.schemas import (
     WorkItemSubscriptionHandoffRequest,
     WorkItemVerificationEvidenceRequest,
     RuntimeEvidenceExportApiEnvelope,
+    RunStatusApiEnvelope,
     WorkflowEventApiEnvelope,
 )
 from supervisor.application.manager_terminal_events import (
@@ -1366,9 +1367,9 @@ async def escalate_work_item(
     return ApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.get("/supervisor/status", response_model=ApiEnvelope)
+@app.get("/supervisor/status", response_model=RunStatusApiEnvelope)
 async def get_status(session: AsyncSession = Depends(get_session)):
-    return ApiEnvelope(data=await service.get_status(session))
+    return RunStatusApiEnvelope(data=await service.get_status(session))
 
 
 @app.get("/supervisor/execution-configuration-checks", response_model=ExecutionConfigurationChecksApiEnvelope)
