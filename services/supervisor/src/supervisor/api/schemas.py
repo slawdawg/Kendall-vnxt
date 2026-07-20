@@ -5866,6 +5866,13 @@ class WorkItemView(BaseModel):
     auditMode: AuditMode
 
 
+class WorkItemListApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[WorkItemView]
+    meta: dict[str, Any] | None = None
+
+
 class RunStatusView(BaseModel):
     mode: RunMode
     revision: PositiveInt

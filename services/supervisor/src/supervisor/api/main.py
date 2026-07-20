@@ -49,6 +49,7 @@ from supervisor.api.schemas import (
     WorkItemLocalProofRequest,
     WorkItemEscalationRequest,
     WorkItemLocalEvidenceExplanationRequest,
+    WorkItemListApiEnvelope,
     WorkItemManagedActionRequest,
     WorkItemPremiumApprovalRequest,
     WorkPacketLearnFollowUpCandidateWorkRequest,
@@ -786,10 +787,10 @@ async def promote_candidate_work(candidate_work_id: str, session: AsyncSession =
     return ApiEnvelope(data={"candidateWork": service.to_candidate_work_view(candidate), "workItem": service.to_work_item_view(item)})
 
 
-@app.get("/work-items", response_model=ApiEnvelope)
+@app.get("/work-items", response_model=WorkItemListApiEnvelope)
 async def list_work_items(session: AsyncSession = Depends(get_session)):
     items = await service.list_work_items(session)
-    return ApiEnvelope(data=[service.to_work_item_view(item) for item in items])
+    return WorkItemListApiEnvelope(data=[service.to_work_item_view(item) for item in items])
 
 
 @app.get("/execution-recipes", response_model=ApiEnvelope)
