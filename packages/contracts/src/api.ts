@@ -2317,6 +2317,11 @@ export interface RuntimeEvidenceExportView {
   subscriptionLaunch: RuntimeEvidenceSubscriptionLaunchView;
 }
 
+export interface RuntimeEvidenceExportApiEnvelope {
+  data: RuntimeEvidenceExportView;
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface OperatorProfile {
   actorId: string;
   actorLabel: string;

@@ -6085,6 +6085,15 @@ class RuntimeEvidenceExportView(BaseModel):
     subscriptionLaunch: RuntimeEvidenceSubscriptionLaunchView = Field(default_factory=RuntimeEvidenceSubscriptionLaunchView)
 
 
+class RuntimeEvidenceExportApiEnvelope(BaseModel):
+    """Typed response boundary for a supervisor-owned runtime evidence export."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: RuntimeEvidenceExportView
+    meta: dict[str, Any] | None = None
+
+
 class WorkItemAssignmentRequest(BaseModel):
     assigneeId: str | None = None
     assigneeLabel: str | None = None

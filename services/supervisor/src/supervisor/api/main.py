@@ -69,6 +69,7 @@ from supervisor.api.schemas import (
     WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
     WorkItemVerificationEvidenceRequest,
+    RuntimeEvidenceExportApiEnvelope,
     WorkflowEventApiEnvelope,
 )
 from supervisor.application.manager_terminal_events import (
@@ -938,12 +939,12 @@ async def get_work_item_execution_attempts(work_item_id: str, session: AsyncSess
     return ExecutionAttemptApiEnvelope(data=attempts)
 
 
-@app.get("/work-items/{work_item_id}/runtime-evidence-export", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/runtime-evidence-export", response_model=RuntimeEvidenceExportApiEnvelope)
 async def get_work_item_runtime_evidence_export(work_item_id: str, session: AsyncSession = Depends(get_session)):
     export = await service.get_runtime_evidence_export(session, work_item_id)
     if not export:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=export)
+    return RuntimeEvidenceExportApiEnvelope(data=export)
 
 
 @app.post("/work-items/{work_item_id}/execution-attempts", response_model=ApiEnvelope)
