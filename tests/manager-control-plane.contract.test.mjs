@@ -123,6 +123,9 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(supervisorSchemaSource, /class ManagerTerminalEventView\(ManagerTerminalEventRequest\)/);
   assert.match(supervisorSchemaSource, /^    createdAt:/m);
   assert.match(terminalEventSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
+  assert.match(terminalEventSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract"/);
+  assert.match(terminalEventSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event"/);
+  assert.match(terminalEventSource, /ManagerSupervisorTerminalIntegration/);
   assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
   assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract"/);
   assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event"/);
@@ -130,6 +133,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.doesNotMatch(lifecycleSource.replace(/[\s"'`+]/g, ""), /authoritative_backlog_exhausted/);
   assert.match(refillSource, /import\s*\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s*from\s*["']\.\/terminal-event["']/);
   assert.doesNotMatch(refillSource.replace(/[\s"'`+]/g, ""), /authoritative_backlog_exhausted/);
+  assert.match(refillSource, /ManagerSupervisorTerminalIntegration/);
+  assert.doesNotMatch(refillSource.replace(/[\s"'`+]/g, ""), /missing_supervisor_contract|supervisor_canonical_event/);
   assert.match(summaryProjectionSource, /import \{[^}]*MANAGER_TERMINAL_EVENT_TYPE[^}]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
   assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
@@ -608,6 +613,9 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
   const managerRootPath = fileURLToPath(managerRoot);
   const importRoot = relative(tempDir, managerRootPath).replace(/\\/g, "/");
   const importPrefix = importRoot.startsWith(".") ? importRoot : `./${importRoot}`;
+  const contractsRootPath = fileURLToPath(contractsRoot);
+  const contractsImportRoot = relative(tempDir, contractsRootPath).replace(/\\/g, "/");
+  const contractsImportPrefix = contractsImportRoot.startsWith(".") ? contractsImportRoot : `./${contractsImportRoot}`;
   const behaviorPath = join(tempDir, "contract-behavior.ts");
   writeFileSync(
     behaviorPath,
@@ -618,6 +626,7 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `import type { RefillResult } from "${importPrefix}/refill.ts";`,
       `import { MANAGER_TERMINAL_EVENT_TYPE } from "${importPrefix}/terminal-event.ts";`,
       `import type { ManagerTerminalEventRequest, ManagerTerminalEventView } from "${importPrefix}/terminal-event.ts";`,
+      `import { ManagerControlPlane } from "${contractsImportPrefix}/index.ts";`,
       `import type { ManagerExecutionLaneStateCounts, ManagerExecutionLaneSummary } from "${importPrefix}/summary.ts";`,
       "",
       `const eventNames: readonly string[] = MANAGER_CONTROL_PLANE_EVENT_NAMES;`,
@@ -628,6 +637,10 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `const nonTerminalResult: Exclude<RefillResult, typeof MANAGER_TERMINAL_EVENT_TYPE> = "queued_work";`,
       `// @ts-expect-error terminal result must remain excluded from non-terminal refill jobs`,
       `const invalidNonTerminalResult: Exclude<RefillResult, typeof MANAGER_TERMINAL_EVENT_TYPE> = MANAGER_TERMINAL_EVENT_TYPE;`,
+      `const integration: ManagerControlPlane.ManagerSupervisorTerminalIntegration = ManagerControlPlane.SUPERVISOR_TERMINAL_INTEGRATION_MISSING;`,
+      `if (integration !== "missing_supervisor_contract") throw new Error("missing supervisor integration export");`,
+      `// @ts-expect-error unknown supervisor integration state must remain rejected`,
+      `const invalidIntegration: ManagerControlPlane.ManagerSupervisorTerminalIntegration = "unknown_integration";`,
       `const terminalRequest: ManagerTerminalEventRequest = {`,
       `  eventId: "manager-terminal-event:${"a".repeat(40)}" as ManagerTerminalEventRequest["eventId"], eventType: MANAGER_TERMINAL_EVENT_TYPE,`,
       `  runId: "run-1", sourceIdentity: "source:accepted", sourceRevision: "git:abc1234",`,

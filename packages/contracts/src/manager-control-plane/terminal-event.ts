@@ -9,6 +9,11 @@ export type ManagerTerminalEventId = `manager-terminal-event:${string}` & {
 
 export const MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted" as const;
 export type ManagerTerminalEventType = typeof MANAGER_TERMINAL_EVENT_TYPE;
+export const SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract" as const;
+export const SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event" as const;
+export type ManagerSupervisorTerminalIntegration =
+  | typeof SUPERVISOR_TERMINAL_INTEGRATION_MISSING
+  | typeof SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED;
 
 /** Serialized API keys are intentionally camelCase to match the supervisor boundary. */
 export const MANAGER_TERMINAL_EVENT_REQUEST_FIELDS = [

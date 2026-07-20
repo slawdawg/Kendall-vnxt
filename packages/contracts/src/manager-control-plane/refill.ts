@@ -5,6 +5,7 @@ import type { ManagerRefillJobStatus } from "./lifecycle";
 import type {
   ManagerAuthoritativeBacklogReconciliationCounts,
   ManagerSupervisorCanonicalEventMetadata,
+  ManagerSupervisorTerminalIntegration,
   ManagerTerminalEventId,
   ManagerUnresolvedApprovalGatedWork,
 } from "./terminal-event";
@@ -14,6 +15,7 @@ export type {
   ManagerSupervisorCanonicalEventMetadata,
   ManagerTerminalEventId,
   ManagerUnresolvedApprovalGatedWork,
+  ManagerSupervisorTerminalIntegration,
 } from "./terminal-event";
 
 export type RefillTriggerReason = "low_watermark" | "manual_bootstrap" | "source_exhaustion_check" | "recovery";
@@ -29,7 +31,7 @@ export interface AuthoritativeBacklogExhaustedDisposition {
   evidenceRefs: readonly EvidenceRefId[];
   resumeRequirement: string;
   nextManagerAction: string;
-  canonicalEventIntegration: "missing_supervisor_contract" | "supervisor_canonical_event";
+  canonicalEventIntegration: ManagerSupervisorTerminalIntegration;
   supervisorEvent?: ManagerSupervisorCanonicalEventMetadata;
   idempotencyKey: string;
   rawPayloadRetained: false;
