@@ -2176,11 +2176,16 @@ export interface EpicCompletionAuditReportView {
   requiredEvidence: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  epicComplete: boolean;
-  remoteDeliveryApproved: boolean;
-  providerExecutionApproved: boolean;
-  cleanupApproved: boolean;
+  readOnly: true;
+  epicComplete: true;
+  remoteDeliveryApproved: true;
+  providerExecutionApproved: false;
+  cleanupApproved: true;
+}
+
+export interface EpicCompletionAuditReportApiEnvelope {
+  data: EpicCompletionAuditReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface MvpProofTrialStepView {
