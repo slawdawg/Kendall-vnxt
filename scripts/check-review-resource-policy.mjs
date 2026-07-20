@@ -41,6 +41,11 @@ const contractEnvelopeEnd = contractSource.indexOf("\nexport interface GitHubDel
 const contractEnvelope = contractEnvelopeStart >= 0 && contractEnvelopeEnd > contractEnvelopeStart
   ? contractSource.slice(contractEnvelopeStart, contractEnvelopeEnd)
   : "";
+const contractReportViewStart = contractSource.indexOf("export interface ReviewResourcePolicyReportView");
+const contractReportViewEnd = contractSource.indexOf("\nexport interface ReviewResourcePolicyReportApiEnvelope", contractReportViewStart);
+const contractReportView = contractReportViewStart >= 0 && contractReportViewEnd > contractReportViewStart
+  ? contractSource.slice(contractReportViewStart, contractReportViewEnd)
+  : "";
 
 const failures = [];
 
@@ -93,7 +98,11 @@ for (const safetyLiteral of [
   "rawProviderPayloadsRetained: false;",
   "rawReasoningRetained: false;",
 ]) {
-  assertCondition(contractSource.includes(safetyLiteral), `Shared contracts must include ${safetyLiteral}`, failures);
+  assertCondition(
+    contractReportView.includes(safetyLiteral),
+    `Review resource policy report contract must include ${safetyLiteral}`,
+    failures,
+  );
 }
 for (const safetyLiteral of [
   "readOnly: Literal[True]",
