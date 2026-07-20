@@ -4617,6 +4617,15 @@ class VerificationReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class VerificationReadinessReportApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned verification readiness reports."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: VerificationReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class AuthorityReadinessFamilyView(BaseModel):
     familyId: str
     label: str
