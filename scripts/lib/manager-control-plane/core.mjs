@@ -28106,7 +28106,8 @@ const RECONCILE_EVENT_IMMUTABLE_FIELDS = Object.freeze([
   "projectionBehavior",
   "actionFingerprintVersion",
   "actionFingerprint",
-  "reconciliationTimestamp",
+  // Observation time can change between fresh preflight replays; evidence and
+  // pre/post state digests remain the idempotent identity and conflict guards.
   "reconciliationScope",
   "reconciliationPreStateDigest",
   "reconciliationPostStateDigest",
@@ -28236,6 +28237,9 @@ function reconcileStateCommand(options = {}, paths, runId, preflight, context = 
     const lockedPostStateDigest = reconcileRuntimeStateDigest(lockedMissionAfter, lockedDispatcherAfter);
     const duplicate = findDuplicateLedgerEvent(paths.events, idempotencyKey);
     if (duplicate) {
+      if (typeof duplicate.reconciliationTimestamp !== "string" || !Number.isFinite(Date.parse(duplicate.reconciliationTimestamp))) {
+        return reconcileStateBlocker(runId, "reconcile-event-idempotency-conflict", "The existing replay event does not carry a valid reconciliation timestamp.");
+      }
       const expectedDuplicate = buildReconcileEventRecord(runId, eventOptions, timestamp, {
         preStateDigest: duplicate.reconciliationPreStateDigest,
         postStateDigest: duplicate.reconciliationPostStateDigest,
