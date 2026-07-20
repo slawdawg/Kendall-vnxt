@@ -136,10 +136,21 @@ def test_delivery_readiness_policy_getter_is_sync_static_and_non_executing() -> 
 
     tree = ast.parse(textwrap.dedent(getter))
     assert len(tree.body) == 1 and isinstance(tree.body[0], ast.FunctionDef)
-    assert not any(
-        isinstance(node, (ast.AsyncFunctionDef, ast.Await, ast.With, ast.AsyncWith, ast.AsyncFor, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
-        for node in ast.walk(tree)
+    allowed_nodes = (
+        ast.Attribute,
+        ast.Call,
+        ast.Constant,
+        ast.FunctionDef,
+        ast.List,
+        ast.Load,
+        ast.Module,
+        ast.Name,
+        ast.Return,
+        ast.arg,
+        ast.arguments,
+        ast.keyword,
     )
+    assert all(isinstance(node, allowed_nodes) for node in ast.walk(tree))
     calls = {
         ast.unparse(node.func)
         for node in ast.walk(tree)
