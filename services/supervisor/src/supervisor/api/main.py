@@ -30,6 +30,7 @@ from supervisor.api.schemas import (
     OperationalActionApprovalRequestV1,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
+    PipelineDashboardProjectionApiEnvelope,
     PipelineEpic25EvidenceChainIngestRequest,
     WorkItemActionRequest,
     WorkItemApiEnvelope,
@@ -604,9 +605,9 @@ async def list_authoritative_work_packets(session: AsyncSession = Depends(get_se
     return AuthoritativeWorkPacketListApiEnvelope(data=await service.list_authoritative_work_packets(session))
 
 
-@app.get("/pipeline-control-plane/projection", response_model=ApiEnvelope)
+@app.get("/pipeline-control-plane/projection", response_model=PipelineDashboardProjectionApiEnvelope)
 async def get_pipeline_dashboard_projection(request: Request, session: AsyncSession = Depends(get_session)):
-    return ApiEnvelope(
+    return PipelineDashboardProjectionApiEnvelope(
         data=await service.get_pipeline_dashboard_projection(
             session,
             mutation_access=request_has_local_operational_transport(request),

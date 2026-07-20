@@ -4732,3 +4732,8 @@ export interface PipelineDashboardProjectionV0 {
   queueSummary: PipelineQueueSummaryV0;
   evidenceRefs: string[];
 }
+
+export interface PipelineDashboardProjectionApiEnvelope {
+  data: PipelineDashboardProjectionV0;
+  meta?: Record<string, string | number | boolean | null>;
+}
