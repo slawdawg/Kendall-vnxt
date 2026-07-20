@@ -1128,6 +1128,11 @@ export interface DashboardE2EReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface DashboardE2EReportApiEnvelope {
+  data: DashboardE2EReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface SupervisorReportCatalogEntryView {
   reportId: string;
   label: string;
