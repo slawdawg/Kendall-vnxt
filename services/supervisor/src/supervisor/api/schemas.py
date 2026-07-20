@@ -4756,6 +4756,15 @@ class SupervisorReportCatalogView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class SupervisorReportCatalogApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned report catalog."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: SupervisorReportCatalogView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class MaintenanceReadinessTrackView(BaseModel):
     trackId: str
     label: str
