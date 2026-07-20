@@ -4,6 +4,8 @@ import test from "node:test";
 import { buildAuthoritativeBacklogExhaustedDisposition } from "../scripts/lib/manager-control-plane/core.mjs";
 import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
 import {
+  MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS,
+  MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS,
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
   MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
   MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS,
@@ -62,6 +64,10 @@ test("shared canonical terminal-event contract keeps both consumers aligned and 
   ]);
   assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_REQUEST_FIELDS), true);
   assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_VIEW_FIELDS), true);
+  assert.deepEqual(MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS, ["data", "meta"]);
+  assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS), true);
+  assert.deepEqual(MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS, ["data"]);
+  assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS), true);
   assert.deepEqual(MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS, [
     "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
     "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",

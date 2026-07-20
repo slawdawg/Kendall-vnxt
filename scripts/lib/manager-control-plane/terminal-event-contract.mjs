@@ -30,6 +30,13 @@ export const MANAGER_TERMINAL_EVENT_VIEW_FIELDS = Object.freeze([
   ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
   "createdAt",
 ]);
+export const MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = Object.freeze([
+  "data",
+  "meta",
+]);
+export const MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = Object.freeze([
+  "data",
+]);
 export const MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS = Object.freeze([
   "totalItems",
   "reconciledItems",

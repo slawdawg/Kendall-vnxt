@@ -49,6 +49,15 @@ export const MANAGER_TERMINAL_EVENT_VIEW_FIELDS = [
   "createdAt",
 ] as const;
 
+/** Serialized supervisor API envelope fields for the canonical terminal-event view. */
+export const MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = [
+  "data",
+  "meta",
+] as const;
+export const MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = [
+  "data",
+] as const;
+
 export interface ManagerAuthoritativeBacklogReconciliationCounts {
   totalItems: number;
   reconciledItems: number;
@@ -103,4 +112,9 @@ export interface ManagerTerminalEventRequest {
 /** Supervisor response adds only its canonical persistence timestamp. */
 export interface ManagerTerminalEventView extends ManagerTerminalEventRequest {
   createdAt: string;
+}
+
+export interface ManagerTerminalEventApiEnvelope {
+  data: ManagerTerminalEventView;
+  meta?: Readonly<Record<string, unknown>> | null;
 }

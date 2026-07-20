@@ -6112,6 +6112,13 @@ MANAGER_TERMINAL_EVENT_VIEW_FIELDS = (
     "rawPayloadRetained",
     "createdAt",
 )
+MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = (
+    "data",
+    "meta",
+)
+MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = (
+    "data",
+)
 MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"
 
 
