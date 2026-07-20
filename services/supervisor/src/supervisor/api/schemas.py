@@ -4788,6 +4788,15 @@ class MaintenanceReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class MaintenanceReadinessReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned maintenance readiness report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MaintenanceReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class NextLaneRecommendationView(BaseModel):
     laneTitle: str
     laneSlug: str

@@ -1184,6 +1184,11 @@ export interface MaintenanceReadinessReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface MaintenanceReadinessReportApiEnvelope {
+  data: MaintenanceReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface SafeDevelopmentBacklogItemView {
   itemId: string;
   label: string;

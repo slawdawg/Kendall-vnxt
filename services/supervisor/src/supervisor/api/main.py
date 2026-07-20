@@ -31,6 +31,7 @@ from supervisor.api.schemas import (
     AuthorityReadinessMatrixReportApiEnvelope,
     DashboardE2EReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
+    MaintenanceReadinessReportApiEnvelope,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
@@ -1419,9 +1420,9 @@ async def get_supervisor_report_catalog():
     return SupervisorReportCatalogApiEnvelope(data=service.get_supervisor_report_catalog())
 
 
-@app.get("/supervisor/maintenance-readiness-report", response_model=ApiEnvelope)
+@app.get("/supervisor/maintenance-readiness-report", response_model=MaintenanceReadinessReportApiEnvelope)
 async def get_maintenance_readiness_report():
-    return ApiEnvelope(data=service.get_maintenance_readiness_report())
+    return MaintenanceReadinessReportApiEnvelope(data=service.get_maintenance_readiness_report())
 
 
 @app.get("/supervisor/maintenance-action-plan-report", response_model=ApiEnvelope)
