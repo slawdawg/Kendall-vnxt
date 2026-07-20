@@ -4364,6 +4364,15 @@ class ExecutionConfigurationChecksView(BaseModel):
     checks: list[ExecutionConfigurationCheckView]
 
 
+class ExecutionConfigurationChecksApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned execution configuration checks."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ExecutionConfigurationChecksView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class ProviderEnablementPolicyStepView(BaseModel):
     stepId: str
     label: str

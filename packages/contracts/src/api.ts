@@ -805,6 +805,11 @@ export interface ExecutionConfigurationChecksView {
   checks: ExecutionConfigurationCheckView[];
 }
 
+export interface ExecutionConfigurationChecksApiEnvelope {
+  data: ExecutionConfigurationChecksView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface ProviderEnablementPolicyStepView {
   stepId: string;
   label: string;
