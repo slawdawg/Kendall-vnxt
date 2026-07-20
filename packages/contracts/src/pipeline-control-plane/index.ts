@@ -227,6 +227,11 @@ export interface AuthoritativeWorkPacketListApiEnvelope {
   meta?: Record<string, string | number | boolean | null>;
 }
 
+export interface AuthoritativeWorkPacketApiEnvelope {
+  data: AuthoritativeWorkPacketLifecycleView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface CreateAuthoritativeWorkPacketRequest {
   packetId?: string;
   title: string;

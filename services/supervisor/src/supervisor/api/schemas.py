@@ -2420,6 +2420,15 @@ class AuthoritativeWorkPacketListApiEnvelope(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+class AuthoritativeWorkPacketApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned authoritative packet detail."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: AuthoritativeWorkPacketLifecycleView
+    meta: dict[str, Any] | None = None
+
+
 OperationalActionId = Literal[
     "inspect",
     "refresh_projection",

@@ -17,6 +17,7 @@ from supervisor.api.schemas import (
     ApiErrorEnvelope,
     ApiErrorShape,
     AuthoritativeWorkPacketCreateRequest,
+    AuthoritativeWorkPacketApiEnvelope,
     AuthoritativeWorkPacketListApiEnvelope,
     AuthoritativeWorkPacketTransitionRequest,
     CandidateWorkBmadImportRequest,
@@ -615,12 +616,12 @@ async def get_pipeline_dashboard_projection(request: Request, session: AsyncSess
     )
 
 
-@app.get("/pipeline-control-plane/work-packets/{packet_id}", response_model=ApiEnvelope)
+@app.get("/pipeline-control-plane/work-packets/{packet_id}", response_model=AuthoritativeWorkPacketApiEnvelope)
 async def get_authoritative_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
     packet = await service.get_authoritative_work_packet(session, packet_id)
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
-    return ApiEnvelope(data=packet)
+    return AuthoritativeWorkPacketApiEnvelope(data=packet)
 
 
 @app.post("/pipeline-control-plane/work-packets/{packet_id}/epic-25-evidence-chain", response_model=ApiEnvelope)
