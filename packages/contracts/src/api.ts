@@ -1705,12 +1705,12 @@ export interface ReviewResourcePolicyPacketEvaluationView {
   decisionBasis: string;
   retainedEvidence: string[];
   stopLines: string[];
-  readOnly: boolean;
-  processLaunchApproved: boolean;
-  sourceMutationApproved: boolean;
-  githubMutationApproved: boolean;
-  rawProviderPayloadsRetained: boolean;
-  rawReasoningRetained: boolean;
+  readOnly: true;
+  processLaunchApproved: false;
+  sourceMutationApproved: false;
+  githubMutationApproved: false;
+  rawProviderPayloadsRetained: false;
+  rawReasoningRetained: false;
 }
 
 export interface ReviewResourcePolicyReportView {
@@ -1725,12 +1725,17 @@ export interface ReviewResourcePolicyReportView {
   retentionPolicy: string;
   stopLines: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  processLaunchApproved: boolean;
-  sourceMutationApproved: boolean;
-  githubMutationApproved: boolean;
-  rawProviderPayloadsRetained: boolean;
-  rawReasoningRetained: boolean;
+  readOnly: true;
+  processLaunchApproved: false;
+  sourceMutationApproved: false;
+  githubMutationApproved: false;
+  rawProviderPayloadsRetained: false;
+  rawReasoningRetained: false;
+}
+
+export interface ReviewResourcePolicyReportApiEnvelope {
+  data: ReviewResourcePolicyReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface GitHubDeliveryAuthorityStepView {

@@ -5601,6 +5601,8 @@ class ClaudeReviewApprovalReportApiEnvelope(BaseModel):
 
 
 class ReviewResourcePolicyTriggerView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     triggerId: str
     label: str
     status: str
@@ -5610,6 +5612,8 @@ class ReviewResourcePolicyTriggerView(BaseModel):
 
 
 class ReviewResourcePolicyRouteView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     routeId: str
     label: str
     authorityFamily: str
@@ -5623,6 +5627,8 @@ class ReviewResourcePolicyRouteView(BaseModel):
 
 
 class ReviewResourcePolicyScenarioView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     scenarioId: str
     label: str
     triggerIds: list[str]
@@ -5633,6 +5639,8 @@ class ReviewResourcePolicyScenarioView(BaseModel):
 
 
 class ReviewResourcePolicyPacketEvaluationView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     packetId: str
     packetKind: str
     triggerIds: list[str]
@@ -5640,15 +5648,17 @@ class ReviewResourcePolicyPacketEvaluationView(BaseModel):
     decisionBasis: str
     retainedEvidence: list[str]
     stopLines: list[str]
-    readOnly: bool = True
-    processLaunchApproved: bool = False
-    sourceMutationApproved: bool = False
-    githubMutationApproved: bool = False
-    rawProviderPayloadsRetained: bool = False
-    rawReasoningRetained: bool = False
+    readOnly: Literal[True]
+    processLaunchApproved: Literal[False]
+    sourceMutationApproved: Literal[False]
+    githubMutationApproved: Literal[False]
+    rawProviderPayloadsRetained: Literal[False]
+    rawReasoningRetained: Literal[False]
 
 
 class ReviewResourcePolicyReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -5660,12 +5670,21 @@ class ReviewResourcePolicyReportView(BaseModel):
     retentionPolicy: str
     stopLines: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    processLaunchApproved: bool = False
-    sourceMutationApproved: bool = False
-    githubMutationApproved: bool = False
-    rawProviderPayloadsRetained: bool = False
-    rawReasoningRetained: bool = False
+    readOnly: Literal[True]
+    processLaunchApproved: Literal[False]
+    sourceMutationApproved: Literal[False]
+    githubMutationApproved: Literal[False]
+    rawProviderPayloadsRetained: Literal[False]
+    rawReasoningRetained: Literal[False]
+
+
+class ReviewResourcePolicyReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned review resource policy."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ReviewResourcePolicyReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class GitHubDeliveryAuthorityStepView(BaseModel):

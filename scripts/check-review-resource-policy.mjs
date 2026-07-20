@@ -26,6 +26,21 @@ const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcu
 const reportCatalogCheck = readWorkspaceFile("scripts/check-supervisor-report-catalog.mjs");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
+const envelopeStart = schemaSource.indexOf("class ReviewResourcePolicyReportApiEnvelope");
+const envelopeEnd = schemaSource.indexOf("\n\nclass GitHubDeliveryAuthorityStepView", envelopeStart);
+const envelopeSchema = envelopeStart >= 0 && envelopeEnd > envelopeStart
+  ? schemaSource.slice(envelopeStart, envelopeEnd)
+  : "";
+const reportViewStart = schemaSource.indexOf("class ReviewResourcePolicyReportView");
+const reportViewEnd = schemaSource.indexOf("\n\nclass ReviewResourcePolicyReportApiEnvelope", reportViewStart);
+const reportViewSchema = reportViewStart >= 0 && reportViewEnd > reportViewStart
+  ? schemaSource.slice(reportViewStart, reportViewEnd)
+  : "";
+const contractEnvelopeStart = contractSource.indexOf("export interface ReviewResourcePolicyReportApiEnvelope");
+const contractEnvelopeEnd = contractSource.indexOf("\nexport interface GitHubDeliveryAuthorityStepView", contractEnvelopeStart);
+const contractEnvelope = contractEnvelopeStart >= 0 && contractEnvelopeEnd > contractEnvelopeStart
+  ? contractSource.slice(contractEnvelopeStart, contractEnvelopeEnd)
+  : "";
 
 const failures = [];
 
@@ -54,6 +69,45 @@ for (const typeName of [
 ]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
+}
+assertCondition(
+  contractEnvelope.includes("export interface ReviewResourcePolicyReportApiEnvelope") &&
+    contractEnvelope.includes("data: ReviewResourcePolicyReportView;") &&
+    contractEnvelope.includes("meta?: Record<string, string | number | boolean | null> | null;"),
+  "Shared contracts must include the strict review resource policy API envelope",
+  failures,
+);
+assertCondition(
+  envelopeSchema.includes("class ReviewResourcePolicyReportApiEnvelope") &&
+    envelopeSchema.includes('model_config = ConfigDict(extra="forbid", strict=True)') &&
+    envelopeSchema.includes("data: ReviewResourcePolicyReportView") &&
+    envelopeSchema.includes("meta: dict[str, str | int | float | bool | None] | None = None"),
+  "Supervisor schemas must keep the review resource policy envelope strict and non-executing",
+  failures,
+);
+for (const safetyLiteral of [
+  "readOnly: true;",
+  "processLaunchApproved: false;",
+  "sourceMutationApproved: false;",
+  "githubMutationApproved: false;",
+  "rawProviderPayloadsRetained: false;",
+  "rawReasoningRetained: false;",
+]) {
+  assertCondition(contractSource.includes(safetyLiteral), `Shared contracts must include ${safetyLiteral}`, failures);
+}
+for (const safetyLiteral of [
+  "readOnly: Literal[True]",
+  "processLaunchApproved: Literal[False]",
+  "sourceMutationApproved: Literal[False]",
+  "githubMutationApproved: Literal[False]",
+  "rawProviderPayloadsRetained: Literal[False]",
+  "rawReasoningRetained: Literal[False]",
+]) {
+  assertCondition(
+    reportViewSchema.includes(safetyLiteral),
+    `Review resource policy report view must include ${safetyLiteral}`,
+    failures,
+  );
 }
 
 for (const requiredText of [
@@ -136,6 +190,13 @@ assertCondition(
     reportCatalogCheck.includes("GET /supervisor/review-resource-policy-report") &&
     reportCatalogCheck.includes('id="review-resource-policy-report"'),
   "Report catalog drift check must cover review resource policy report",
+  failures,
+);
+assertCondition(
+  apiSource.includes(
+    '@app.get("/supervisor/review-resource-policy-report", response_model=ReviewResourcePolicyReportApiEnvelope)',
+  ) && apiSource.includes("return ReviewResourcePolicyReportApiEnvelope(data=service.get_review_resource_policy_report())"),
+  "Supervisor route must return the typed review resource policy envelope",
   failures,
 );
 assertCondition(
