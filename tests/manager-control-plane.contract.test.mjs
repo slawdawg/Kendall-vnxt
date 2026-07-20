@@ -100,6 +100,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   const terminalEventSource = await readFile(new URL("terminal-event.ts", managerRoot), "utf8");
   const schemaJsonSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
   const terminalEventContractSource = await readFile(new URL("../scripts/lib/manager-control-plane/terminal-event-contract.mjs", import.meta.url), "utf8");
+  const lifecycleSource = await readFile(new URL("../packages/contracts/src/manager-control-plane/lifecycle.ts", import.meta.url), "utf8");
+  const refillSource = await readFile(new URL("../packages/contracts/src/manager-control-plane/refill.ts", import.meta.url), "utf8");
   const terminalEventSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs", import.meta.url), "utf8");
   const summaryProjectionSource = await readFile(new URL("../scripts/lib/manager-control-plane/summary-projection.mjs", import.meta.url), "utf8");
   const managerCoreSource = await readFile(new URL("../scripts/lib/manager-control-plane/core.mjs", import.meta.url), "utf8");
@@ -124,6 +126,10 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
   assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract"/);
   assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event"/);
+  assert.match(lifecycleSource, /import\s*\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s*from\s*["']\.\/terminal-event["']/);
+  assert.doesNotMatch(lifecycleSource.replace(/[\s"'`+]/g, ""), /authoritative_backlog_exhausted/);
+  assert.match(refillSource, /import\s*\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s*from\s*["']\.\/terminal-event["']/);
+  assert.doesNotMatch(refillSource.replace(/[\s"'`+]/g, ""), /authoritative_backlog_exhausted/);
   assert.match(summaryProjectionSource, /import \{[^}]*MANAGER_TERMINAL_EVENT_TYPE[^}]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
   assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
@@ -608,6 +614,7 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
     [
       `import { MANAGER_CONTROL_PLANE_EVENT_NAMES } from "${importPrefix}/events.ts";`,
       `import type { EvidenceRefId, ManagerEventId, ManagerRunId } from "${importPrefix}/ids.ts";`,
+      `import { MANAGER_SUMMARY_PHASES } from "${importPrefix}/lifecycle.ts";`,
       `import type { RefillResult } from "${importPrefix}/refill.ts";`,
       `import { MANAGER_TERMINAL_EVENT_TYPE } from "${importPrefix}/terminal-event.ts";`,
       `import type { ManagerTerminalEventRequest, ManagerTerminalEventView } from "${importPrefix}/terminal-event.ts";`,
@@ -616,6 +623,11 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `const eventNames: readonly string[] = MANAGER_CONTROL_PLANE_EVENT_NAMES;`,
       `if (!eventNames.includes("dispatcher.review.required")) throw new Error("missing event export");`,
       `const result: RefillResult = "queued_with_gated_candidates";`,
+      `const terminalResult: RefillResult = MANAGER_TERMINAL_EVENT_TYPE;`,
+      `if (!MANAGER_SUMMARY_PHASES.includes(MANAGER_TERMINAL_EVENT_TYPE)) throw new Error("summary phase missing terminal event type");`,
+      `const nonTerminalResult: Exclude<RefillResult, typeof MANAGER_TERMINAL_EVENT_TYPE> = "queued_work";`,
+      `// @ts-expect-error terminal result must remain excluded from non-terminal refill jobs`,
+      `const invalidNonTerminalResult: Exclude<RefillResult, typeof MANAGER_TERMINAL_EVENT_TYPE> = MANAGER_TERMINAL_EVENT_TYPE;`,
       `const terminalRequest: ManagerTerminalEventRequest = {`,
       `  eventId: "manager-terminal-event:${"a".repeat(40)}" as ManagerTerminalEventRequest["eventId"], eventType: MANAGER_TERMINAL_EVENT_TYPE,`,
       `  runId: "run-1", sourceIdentity: "source:accepted", sourceRevision: "git:abc1234",`,

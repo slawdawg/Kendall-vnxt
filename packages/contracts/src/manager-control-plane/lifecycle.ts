@@ -1,3 +1,5 @@
+import { MANAGER_TERMINAL_EVENT_TYPE } from "./terminal-event";
+
 export const CANDIDATE_WORK_PACKET_STATUSES = ["eligible", "needs_review", "blocked"] as const;
 export type ManagerCandidateWorkPacketStatus = (typeof CANDIDATE_WORK_PACKET_STATUSES)[number];
 
@@ -39,7 +41,7 @@ export const MANAGER_SUMMARY_PHASES = [
   "manager_only",
   "unknown",
   "no_safe_work",
-  "authoritative_backlog_exhausted",
+  MANAGER_TERMINAL_EVENT_TYPE,
   "unverified",
   "simulated"
 ] as const;
