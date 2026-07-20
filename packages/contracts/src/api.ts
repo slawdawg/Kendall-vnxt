@@ -1589,6 +1589,11 @@ export interface CodexImplementationApprovalReportView {
   approvalBindingImplemented: boolean;
 }
 
+export interface CodexImplementationApprovalReportApiEnvelope {
+  data: CodexImplementationApprovalReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface ClaudeReadinessCheckView {
   checkId: string;
   label: string;

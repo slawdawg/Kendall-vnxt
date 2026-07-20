@@ -36,6 +36,7 @@ from supervisor.api.schemas import (
     GitHubWorkflowPolicyReportApiEnvelope,
     GitHygieneReportApiEnvelope,
     CodexReadinessReportApiEnvelope,
+    CodexImplementationApprovalReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1479,9 +1480,9 @@ async def get_codex_readiness_report():
     return CodexReadinessReportApiEnvelope(data=service.get_codex_readiness_report())
 
 
-@app.get("/supervisor/codex-implementation-approval-report", response_model=ApiEnvelope)
+@app.get("/supervisor/codex-implementation-approval-report", response_model=CodexImplementationApprovalReportApiEnvelope)
 async def get_codex_implementation_approval_report():
-    return ApiEnvelope(data=service.get_codex_implementation_approval_report())
+    return CodexImplementationApprovalReportApiEnvelope(data=service.get_codex_implementation_approval_report())
 
 
 @app.get("/supervisor/claude-review-readiness-report", response_model=ApiEnvelope)

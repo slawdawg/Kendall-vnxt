@@ -5506,6 +5506,15 @@ class CodexImplementationApprovalReportView(BaseModel):
     approvalBindingImplemented: bool = False
 
 
+class CodexImplementationApprovalReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned Codex approval report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: CodexImplementationApprovalReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class ClaudeReadinessCheckView(BaseModel):
     checkId: str
     label: str
