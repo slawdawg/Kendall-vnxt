@@ -38,6 +38,7 @@ from supervisor.api.schemas import (
     CodexReadinessReportApiEnvelope,
     CodexImplementationApprovalReportApiEnvelope,
     ClaudeReviewReadinessReportApiEnvelope,
+    ClaudeReviewApprovalReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1491,9 +1492,9 @@ async def get_claude_review_readiness_report():
     return ClaudeReviewReadinessReportApiEnvelope(data=service.get_claude_review_readiness_report())
 
 
-@app.get("/supervisor/claude-review-approval-report", response_model=ApiEnvelope)
+@app.get("/supervisor/claude-review-approval-report", response_model=ClaudeReviewApprovalReportApiEnvelope)
 async def get_claude_review_approval_report():
-    return ApiEnvelope(data=service.get_claude_review_approval_report())
+    return ClaudeReviewApprovalReportApiEnvelope(data=service.get_claude_review_approval_report())
 
 
 @app.get("/supervisor/review-resource-policy-report", response_model=ApiEnvelope)

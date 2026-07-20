@@ -5580,6 +5580,15 @@ class ClaudeReviewApprovalReportView(BaseModel):
     approvalBindingImplemented: bool = False
 
 
+class ClaudeReviewApprovalReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned Claude approval report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ClaudeReviewApprovalReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class ReviewResourcePolicyTriggerView(BaseModel):
     triggerId: str
     label: str
