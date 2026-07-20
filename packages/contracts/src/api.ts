@@ -1381,6 +1381,11 @@ export interface LocalWorktreePlanView {
   remoteOperationsAllowed: boolean;
 }
 
+export interface LocalWorktreePlanApiEnvelope {
+  data: LocalWorktreePlanView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface CodexReadinessCheckView {
   checkId: string;
   label: string;

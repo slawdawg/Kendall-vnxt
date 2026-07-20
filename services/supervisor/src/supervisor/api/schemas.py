@@ -5208,6 +5208,15 @@ class LocalWorktreePlanView(BaseModel):
     remoteOperationsAllowed: bool = False
 
 
+class LocalWorktreePlanApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned local worktree plans."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalWorktreePlanView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class CodexReadinessCheckView(BaseModel):
     checkId: str
     label: str
