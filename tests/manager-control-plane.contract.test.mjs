@@ -102,6 +102,7 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   const terminalEventContractSource = await readFile(new URL("../scripts/lib/manager-control-plane/terminal-event-contract.mjs", import.meta.url), "utf8");
   const terminalEventSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs", import.meta.url), "utf8");
   const summaryProjectionSource = await readFile(new URL("../scripts/lib/manager-control-plane/summary-projection.mjs", import.meta.url), "utf8");
+  const managerCoreSource = await readFile(new URL("../scripts/lib/manager-control-plane/core.mjs", import.meta.url), "utf8");
   const sourceIntakeSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs", import.meta.url), "utf8");
   const supervisorSchemaSource = await readFile(new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url), "utf8");
   const requestFields = [
@@ -119,7 +120,14 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(supervisorSchemaSource, /^    createdAt:/m);
   assert.match(terminalEventSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
   assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
+  assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract"/);
+  assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event"/);
   assert.match(summaryProjectionSource, /import \{[^}]*MANAGER_TERMINAL_EVENT_TYPE[^}]*\} from "\.\/terminal-event-contract\.mjs";/);
+  assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
+  assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
+  assert.match(managerCoreSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
+  assert.match(managerCoreSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
+  assert.doesNotMatch(managerCoreSource, /"missing_supervisor_contract"|"supervisor_canonical_event"/);
   assert.doesNotMatch(summaryProjectionSource, /"authoritative_backlog_exhausted"/);
   assert.match(supervisorSchemaSource, /eventType: Literal\["authoritative_backlog_exhausted"\]/);
   assert.match(supervisorSchemaSource, /model_config = ConfigDict\(extra="forbid", strict=True\)/);
@@ -130,6 +138,9 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_VIEW_FIELDS;/);
   assert.match(terminalEventSyncSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_ID_PATTERN,[\s\S]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_TYPE/);
+  assert.match(terminalEventSyncSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
+  assert.match(terminalEventSyncSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
+  assert.doesNotMatch(terminalEventSyncSource, /"missing_supervisor_contract"|"supervisor_canonical_event"/);
   assert.doesNotMatch(terminalEventSyncSource, /eventType: "authoritative_backlog_exhausted"/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_ID_PATTERN\.test\(request\.eventId\)/);
   assert.doesNotMatch(terminalEventSyncSource, /\/\^manager-terminal-event:\[0-9a-f\]\{40\}\$\//);

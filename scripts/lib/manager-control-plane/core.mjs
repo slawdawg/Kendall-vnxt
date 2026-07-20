@@ -13,6 +13,8 @@ import { planManagerSourcePacketIntake, resolveLoopbackSourceIntakeEndpoint } fr
 import {
   isValidSupervisorTerminalEventMetadata,
   normalizeSupervisorTerminalEventMetadata,
+  SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
+  SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
 } from "./terminal-event-contract.mjs";
 import {
   buildOperationalReadinessContract,
@@ -14222,7 +14224,7 @@ function evaluateAuthoritativeBacklogExhaustion(input = {}) {
       evidenceRefs,
       resumeRequirement,
       nextManagerAction,
-      canonicalEventIntegration: supervisorEvent ? "supervisor_canonical_event" : "missing_supervisor_contract",
+      canonicalEventIntegration: supervisorEvent ? SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED : SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
       ...(supervisorEvent ? { supervisorEvent } : {}),
       idempotencyKey,
       rawPayloadRetained: false,
@@ -14781,16 +14783,16 @@ function refillJobSummary({
 
 function isValidAuthoritativeBacklogExhaustedDisposition(disposition) {
   if (!isPlainObject(disposition) || disposition.disposition !== "authoritative_backlog_exhausted") return false;
-  if (!sanitizeLedgerField(disposition.runId || "", "", 120) || !sanitizeLedgerField(disposition.sourceIdentity || "", "", 240) || !sanitizeLedgerField(disposition.sourceRevision || "", "", 160) || !["missing_supervisor_contract", "supervisor_canonical_event"].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false || !sanitizeLedgerField(disposition.idempotencyKey || "", "", 180) || !sanitizeLedgerField(disposition.resumeRequirement || "", "", 360) || !sanitizeLedgerField(disposition.nextManagerAction || "", "", 360) || !isPlainObject(disposition.reconciliationCounts) || !Array.isArray(disposition.unresolvedApprovalGatedWork) || !disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord) || !Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0) return false;
+  if (!sanitizeLedgerField(disposition.runId || "", "", 120) || !sanitizeLedgerField(disposition.sourceIdentity || "", "", 240) || !sanitizeLedgerField(disposition.sourceRevision || "", "", 160) || ![SUPERVISOR_TERMINAL_INTEGRATION_MISSING, SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false || !sanitizeLedgerField(disposition.idempotencyKey || "", "", 180) || !sanitizeLedgerField(disposition.resumeRequirement || "", "", 360) || !sanitizeLedgerField(disposition.nextManagerAction || "", "", 360) || !isPlainObject(disposition.reconciliationCounts) || !Array.isArray(disposition.unresolvedApprovalGatedWork) || !disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord) || !Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0) return false;
   const counts = disposition.reconciliationCounts;
   if (["totalItems", "reconciledItems", ...AUTHORITATIVE_RECONCILIATION_STATUS_KEYS].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
   if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== AUTHORITATIVE_RECONCILIATION_STATUS_KEYS.reduce((total, key) => total + counts[key], 0)) return false;
   if (AUTHORITATIVE_EXHAUSTION_REMAINING_COUNT_KEYS.some((key) => counts[key] !== 0) || counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
-  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorTerminalEventMetadata(disposition.supervisorEvent);
+  return disposition.canonicalEventIntegration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED || isValidSupervisorTerminalEventMetadata(disposition.supervisorEvent);
 }
 
 function normalizeSupervisorCanonicalEventMetadata(integration, event) {
-  if (integration !== "supervisor_canonical_event") return null;
+  if (integration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED) return null;
   return normalizeSupervisorTerminalEventMetadata(event);
 }
 
@@ -14805,7 +14807,7 @@ function authoritativeTerminalSupervisorProjection(disposition) {
   return {
     supervisorPersistence: "not_claimed; canonical supervisor terminal event integration is missing",
     blockers: [{
-      code: "missing_supervisor_contract",
+      code: SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
       message: "Manager terminal disposition is not a persisted supervisor-owned canonical event in the current contract.",
       nextAction: "Keep this manager packet metadata-only and implement/test the supervisor canonical event contract before claiming integrated persistence.",
     }],
@@ -17070,7 +17072,7 @@ function discoverValidatedTerminalReconciliationBundle({ root, sourceIdentity, s
     nextManagerAction: sanitizeLedgerField(disposition.nextManagerAction, "", 360),
     ...(supervisorEvent
       ? {
-          canonicalEventIntegration: "supervisor_canonical_event",
+          canonicalEventIntegration: SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
           supervisorEvent,
         }
       : {}),
@@ -22571,7 +22573,7 @@ function validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview = {}
   if (
     refill?.status !== "authoritative_backlog_exhausted" ||
     !isValidAuthoritativeBacklogExhaustedDisposition(disposition) ||
-    disposition.canonicalEventIntegration !== "supervisor_canonical_event" ||
+    disposition.canonicalEventIntegration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED ||
     !normalizeSupervisorCanonicalEventMetadata(disposition.canonicalEventIntegration, disposition.supervisorEvent)
   ) return null;
   const summary = dispatchPreview.summary || dispatchPreview;
@@ -22599,7 +22601,7 @@ function validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview = {}
     status: "authoritative_backlog_exhausted",
     sourceIdentity: disposition.sourceIdentity,
     sourceRevision: disposition.sourceRevision,
-    canonicalEventIntegration: "supervisor_canonical_event",
+    canonicalEventIntegration: SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
     supervisorEvent: normalizeSupervisorCanonicalEventMetadata(disposition.canonicalEventIntegration, disposition.supervisorEvent),
     supervisorPersistence: "persisted; supervisor canonical terminal event recorded",
     noActiveWork: true,
@@ -26497,7 +26499,7 @@ function buildTerminalContinuationProjection({ dispatcherState = {}, preflight =
   if (
     dispatcher.status !== "authoritative_backlog_exhausted" ||
     dispatcher.terminalState?.status !== "authoritative_backlog_exhausted" ||
-    dispatcher.terminalState?.canonicalEventIntegration !== "supervisor_canonical_event" ||
+    dispatcher.terminalState?.canonicalEventIntegration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED ||
     preflight.ok !== true ||
     preflight.status !== "ready" ||
     preflightBlockers.length > 0 ||
