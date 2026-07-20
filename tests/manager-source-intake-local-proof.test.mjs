@@ -83,4 +83,13 @@ test("manager local-proof continuation requires persisted intake and remains exp
     continueManagerSourcePacketWithLocalProof({ summary: { seedPacket: {} } }, "http://127.0.0.1:8000", { idempotencyKey: "result" }),
     (error) => error instanceof ManagerSupervisorLocalProofError && error.code === "manager_supervisor_local_proof_input_invalid" && error.packet.status === "blocked",
   );
+  await assert.rejects(
+    continueManagerSourcePacketWithLocalProof(
+      { summary: { seedPacket: { supervisorIntake: { status: "persisted", packetId: "manager-packet", metadataOnly: true, rawPayloadRetained: false } } } },
+      "http://127.0.0.1:8000",
+      { idempotencyKey: "result" },
+      { timeoutMs: 0, fetchImpl: async () => { throw new Error("fetch must not run"); } },
+    ),
+    (error) => error instanceof ManagerSupervisorLocalProofError && error.code === "manager_supervisor_local_proof_network_error" && /timeoutMs must be an integer from 1 through/.test(error.cause?.message ?? ""),
+  );
 });

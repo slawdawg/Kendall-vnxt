@@ -1,5 +1,5 @@
 import { resolveLoopbackSourceIntakeEndpoint } from "./manager-supervisor-source-intake.mjs";
-import { normalizeSupervisorTimeoutMs, SUPERVISOR_MAX_TIMEOUT_MS } from "./supervisor-timeout.mjs";
+import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 
 const SAFE_METADATA = /^[a-zA-Z0-9._:/@ -]{1,160}$/;
 const UNSAFE_ERROR_DETAIL = /raw|prompt|completion|provider|reasoning|secret|credential|token|scrollback|transcript/i;
@@ -67,7 +67,7 @@ export async function continueManagerSourcePacketWithLocalProof(packet, supervis
         actorLabel: request.actorLabel,
       }),
       redirect: "error",
-      signal: AbortSignal.timeout(normalizeSupervisorTimeoutMs(context.timeoutMs, `timeoutMs must be an integer between 1 and ${SUPERVISOR_MAX_TIMEOUT_MS}.`)),
+      signal: AbortSignal.timeout(normalizeSupervisorTimeoutMs(context.timeoutMs)),
     });
   } catch (error) {
     throw new ManagerSupervisorLocalProofError(
