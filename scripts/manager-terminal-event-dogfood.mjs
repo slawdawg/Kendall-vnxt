@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import { buildRefillPlan } from "./lib/manager-control-plane/core.mjs";
+import { MANAGER_TERMINAL_EVENT_TYPE } from "./lib/manager-control-plane/terminal-event-contract.mjs";
 import {
   ManagerSupervisorTerminalEventSyncError,
   resolveLoopbackSupervisorEndpoint,
@@ -117,7 +118,7 @@ export async function runManagerTerminalEventDogfood(argv = process.argv.slice(2
       blockers: [{ code: "manager_terminal_event_dogfood_packet_invalid", message: error instanceof Error ? error.message : String(error) }],
     };
   }
-  if (!packet || packet.status !== "authoritative_backlog_exhausted" || !packet.summary?.terminalDisposition) {
+  if (!packet || packet.status !== MANAGER_TERMINAL_EVENT_TYPE || !packet.summary?.terminalDisposition) {
     return {
       ok: false,
       evidence: projectDogfoodEvidence({ packet, supervisorUrl: options.supervisorUrl, error: { code: "manager_terminal_event_dogfood_packet_not_exhausted" } }),

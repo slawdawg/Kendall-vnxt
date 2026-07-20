@@ -103,6 +103,7 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   const terminalEventSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs", import.meta.url), "utf8");
   const summaryProjectionSource = await readFile(new URL("../scripts/lib/manager-control-plane/summary-projection.mjs", import.meta.url), "utf8");
   const managerCoreSource = await readFile(new URL("../scripts/lib/manager-control-plane/core.mjs", import.meta.url), "utf8");
+  const terminalEventDogfoodSource = await readFile(new URL("../scripts/manager-terminal-event-dogfood.mjs", import.meta.url), "utf8");
   const dashboardSummarySource = await readFile(new URL("../apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts", import.meta.url), "utf8");
   const sourceIntakeSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs", import.meta.url), "utf8");
   const supervisorSchemaSource = await readFile(new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url), "utf8");
@@ -131,6 +132,9 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(managerCoreSource, /MANAGER_TERMINAL_EVENT_TYPE/);
   assert.doesNotMatch(managerCoreSource, /authoritative_backlog_exhausted/);
   assert.doesNotMatch(managerCoreSource, /"missing_supervisor_contract"|"supervisor_canonical_event"/);
+  assert.match(terminalEventDogfoodSource, /MANAGER_TERMINAL_EVENT_TYPE/);
+  assert.doesNotMatch(terminalEventDogfoodSource, /authoritative_backlog_exhausted/);
+  assert.doesNotMatch(terminalEventDogfoodSource.replace(/[\s"'`+]/g, ""), /authoritative_backlog_exhausted/);
   assert.match(dashboardSummarySource, /import \{ ManagerControlPlane \} from "@kendall\/contracts";/);
   assert.match(dashboardSummarySource, /ManagerControlPlane\.MANAGER_TERMINAL_EVENT_TYPE/);
   assert.doesNotMatch(dashboardSummarySource, /authoritative_backlog_exhausted/);
