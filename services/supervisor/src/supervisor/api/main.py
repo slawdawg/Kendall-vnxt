@@ -24,6 +24,7 @@ from supervisor.api.schemas import (
     CandidateWorkCreate,
     CandidateWorkListApiEnvelope,
     ExecutionConfigurationChecksApiEnvelope,
+    ExecutionReadinessReportApiEnvelope,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
@@ -1377,9 +1378,9 @@ async def get_execution_configuration_checks():
     return ExecutionConfigurationChecksApiEnvelope(data=service.get_execution_configuration_checks())
 
 
-@app.get("/supervisor/execution-readiness-report", response_model=ApiEnvelope)
+@app.get("/supervisor/execution-readiness-report", response_model=ExecutionReadinessReportApiEnvelope)
 async def get_execution_readiness_report(session: AsyncSession = Depends(get_session)):
-    return ApiEnvelope(data=await service.get_execution_readiness_report(session))
+    return ExecutionReadinessReportApiEnvelope(data=await service.get_execution_readiness_report(session))
 
 
 @app.get("/supervisor/documentation-authority-report", response_model=ApiEnvelope)

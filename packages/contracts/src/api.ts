@@ -904,6 +904,11 @@ export interface ExecutionReadinessReportView {
   sourceMutationAllowed: boolean;
 }
 
+export interface ExecutionReadinessReportApiEnvelope {
+  data: ExecutionReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DocumentationAuthorityDocumentView {
   path: string;
   label: string;

@@ -4467,6 +4467,15 @@ class ExecutionReadinessReportView(BaseModel):
     sourceMutationAllowed: bool = False
 
 
+class ExecutionReadinessReportApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned execution readiness reports."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ExecutionReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class DocumentationAuthorityDocumentView(BaseModel):
     path: str
     label: str
