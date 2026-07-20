@@ -1087,6 +1087,15 @@ class LlmWikiArtifactSearchResultView(BaseModel):
     sourceMutationAllowed: Literal[False] = False
 
 
+class LlmWikiArtifactApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned LLM wiki artifact reads."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LlmWikiArtifactSearchResultView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class MemoryProposalV0View(BaseModel):
     proposalId: str
     packetId: str
