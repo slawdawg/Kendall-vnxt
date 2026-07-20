@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
+import supervisor.api.main as main_module
 from supervisor.api.main import app
-from supervisor.api.schemas import ManagerTerminalEventApiEnvelope, ManagerTerminalEventView
+from supervisor.api.schemas import ManagerTerminalEventApiEnvelope, ManagerTerminalEventRequest, ManagerTerminalEventView
 
 
 def _route(path: str) -> APIRoute:
@@ -69,8 +72,30 @@ def test_terminal_event_envelope_is_strict_and_typed():
         ManagerTerminalEventApiEnvelope.model_validate({"data": _valid_view(), "meta": {"nested": {"blocked": True}}})
 
 
-def test_terminal_event_read_route_uses_declared_supervisor_envelope():
+def test_terminal_event_routes_use_declared_supervisor_envelope():
+    assert _route("/manager-control-plane/terminal-events").response_model is ManagerTerminalEventApiEnvelope
     assert _route("/manager-control-plane/terminal-events/{event_id}").response_model is ManagerTerminalEventApiEnvelope
+
+
+def test_terminal_event_post_handler_returns_declared_supervisor_envelope(monkeypatch):
+    view = ManagerTerminalEventView.model_validate(_valid_view())
+    request = ManagerTerminalEventRequest.model_validate(
+        {key: value for key, value in _valid_view().items() if key not in {"owner", "createdAt"}}
+    )
+    persist = AsyncMock(return_value=view)
+    monkeypatch.setattr(main_module, "persist_manager_terminal_event", persist)
+
+    envelope = asyncio.run(
+        main_module.record_manager_terminal_event(
+            payload=request,
+            _=None,
+            session=object(),
+        )
+    )
+
+    assert isinstance(envelope, ManagerTerminalEventApiEnvelope)
+    assert envelope.data == view
+    persist.assert_awaited_once()
 
 
 def test_shared_terminal_event_contract_matches_python_boundary():

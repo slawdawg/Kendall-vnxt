@@ -772,7 +772,7 @@ async def record_manager_terminal_event(
             status_code=409,
             detail=error_response(str(exc), "manager_terminal_event_conflict").model_dump(),
         ) from exc
-    return ApiEnvelope(data=event)
+    return ManagerTerminalEventApiEnvelope(data=event)
 
 
 @app.get(
