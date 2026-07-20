@@ -3,6 +3,8 @@ import { isDeepStrictEqual } from "node:util";
 import {
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
   MANAGER_TERMINAL_EVENT_TYPE,
+  SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
+  SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
   isCanonicalTerminalEventTimestamp,
   normalizeSupervisorTerminalEventMetadata,
 } from "./terminal-event-contract.mjs";
@@ -10,8 +12,8 @@ import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
 import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 
 const TERMINAL_EVENT_PATH = "/manager-control-plane/terminal-events";
-const INTEGRATION_MISSING = "missing_supervisor_contract";
-const INTEGRATION_PERSISTED = "supervisor_canonical_event";
+const INTEGRATION_MISSING = SUPERVISOR_TERMINAL_INTEGRATION_MISSING;
+const INTEGRATION_PERSISTED = SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED;
 const REQUEST_KEYS = [
   "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
   "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
@@ -51,7 +53,7 @@ export function buildManagerTerminalEventRequest(packet) {
   }
   const disposition = dispositions[0];
   if (disposition.canonicalEventIntegration !== INTEGRATION_MISSING) {
-    throw new TypeError("Manager terminalDisposition must be in missing_supervisor_contract state before sync.");
+    throw new TypeError(`Manager terminalDisposition must be in ${INTEGRATION_MISSING} state before sync.`);
   }
   const request = {
     eventId: deriveManagerTerminalEventId(disposition.idempotencyKey),

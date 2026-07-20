@@ -1,4 +1,9 @@
-import { isValidSupervisorTerminalEventMetadata, MANAGER_TERMINAL_EVENT_TYPE } from "./terminal-event-contract.mjs";
+import {
+  isValidSupervisorTerminalEventMetadata,
+  MANAGER_TERMINAL_EVENT_TYPE,
+  SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
+  SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
+} from "./terminal-event-contract.mjs";
 
 export const DEFAULT_SUMMARY_STALE_AFTER_MS = 300_000;
 export const SIMULATED_WARNING = "backend_proof_simulated_no_live_worker_execution";
@@ -46,7 +51,7 @@ export function buildManagerExecutionLaneSummary({
   const terminalSelection = selectTerminalRefillJob(refillJobs, runId);
   const currentPhase = derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refillJobs, stateCounts, terminalJob: terminalSelection.job, terminalHistoryConflict: terminalSelection.contradiction });
   const terminalDisposition = terminalSelection.job?.terminalDisposition ?? null;
-  const supervisorIntegrationMissing = terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract" || refillJobs.some((job) => job?.terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract");
+  const supervisorIntegrationMissing = terminalDisposition?.canonicalEventIntegration === SUPERVISOR_TERMINAL_INTEGRATION_MISSING || refillJobs.some((job) => job?.terminalDisposition?.canonicalEventIntegration === SUPERVISOR_TERMINAL_INTEGRATION_MISSING);
   const actualAuthorityBlockedCandidates = blockedCandidates.filter((candidate) => candidate.authorityClass && candidate.authorityClass !== "allowed_unattended");
   const blockedAuthorityClasses = unique(actualAuthorityBlockedCandidates.map((candidate) => candidate.authorityClass).filter(Boolean));
   const authorityBlockedReason = blockedAuthorityClasses[0] ?? null;
@@ -63,7 +68,7 @@ export function buildManagerExecutionLaneSummary({
     unknownBlocker,
     ...unsafeStateReasons,
     terminalSelection.contradiction ? "terminal_refill_history_conflict" : null,
-    supervisorIntegrationMissing ? "missing_supervisor_contract" : null,
+    supervisorIntegrationMissing ? SUPERVISOR_TERMINAL_INTEGRATION_MISSING : null,
   ].filter(Boolean));
   const warnings = [
     proofMode === "backend_proof" ? SIMULATED_WARNING : null,
@@ -405,15 +410,15 @@ function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsR
     duplicateCandidates.length > 0 ? "candidate:duplicate" : null,
     currentPhase === "no_safe_work" ? "supply:no_safe_work" : null,
     terminalDisposition?.disposition === MANAGER_TERMINAL_EVENT_TYPE ? `terminal:${MANAGER_TERMINAL_EVENT_TYPE}` : null,
-    terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract" ? "terminal:missing_supervisor_contract" : null,
-    terminalDisposition?.canonicalEventIntegration === "supervisor_canonical_event" ? "terminal:supervisor_canonical_event" : null,
+    terminalDisposition?.canonicalEventIntegration === SUPERVISOR_TERMINAL_INTEGRATION_MISSING ? `terminal:${SUPERVISOR_TERMINAL_INTEGRATION_MISSING}` : null,
+    terminalDisposition?.canonicalEventIntegration === SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED ? `terminal:${SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED}` : null,
     blockers.includes("terminal_refill_history_conflict") ? "terminal:history_conflict" : null,
     `freshness:${freshness}`
   ].filter(Boolean));
 }
 
 function isValidatedTerminalDisposition(disposition) {
-  if (!disposition || disposition.disposition !== MANAGER_TERMINAL_EVENT_TYPE || !["missing_supervisor_contract", "supervisor_canonical_event"].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false) return false;
+  if (!disposition || disposition.disposition !== MANAGER_TERMINAL_EVENT_TYPE || ![SUPERVISOR_TERMINAL_INTEGRATION_MISSING, SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false) return false;
   if (!String(disposition.runId || "").trim() || !String(disposition.sourceIdentity || "").trim() || !String(disposition.sourceRevision || "").trim() || !String(disposition.idempotencyKey || "").trim() || !String(disposition.resumeRequirement || "").trim() || !String(disposition.nextManagerAction || "").trim()) return false;
   if (!Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0 || !Array.isArray(disposition.unresolvedApprovalGatedWork)) return false;
   if (!disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord)) return false;
@@ -424,7 +429,7 @@ function isValidatedTerminalDisposition(disposition) {
   if (counts.totalItems !== counts.reconciledItems || counts.totalItems !== keys.reduce((total, key) => total + counts[key], 0)) return false;
   if (["eligible", "queued", "leased", "running", "reviewFix", "requiredRetrospective", "otherwiseRequired"].some((key) => counts[key] !== 0)) return false;
   if (counts.approvalGated !== disposition.unresolvedApprovalGatedWork.length) return false;
-  return disposition.canonicalEventIntegration !== "supervisor_canonical_event" || isValidSupervisorTerminalEventMetadata(disposition.supervisorEvent);
+  return disposition.canonicalEventIntegration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED || isValidSupervisorTerminalEventMetadata(disposition.supervisorEvent);
 }
 
 function isValidUnresolvedApprovalGatedWorkRecord(record) {
