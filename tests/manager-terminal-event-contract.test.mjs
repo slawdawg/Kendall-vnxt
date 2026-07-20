@@ -28,6 +28,7 @@ const VALID_EVENT = Object.freeze({
   eventId: EVENT_ID,
   evidenceRef: `supervisor-event:${EVENT_ID}`,
   status: "persisted",
+  owner: "supervisor",
   persistedAt: "2026-07-12T14:28:15.078Z",
   metadataOnly: true,
   rawPayloadRetained: false,
@@ -38,6 +39,7 @@ const EVENT_CASES = [
   ["noncanonical event ID delimiter", false, (event) => ({ ...event, eventId: `manager-terminal-event-${"a".repeat(40)}` })],
   ["uppercase event ID", false, (event) => ({ ...event, eventId: `manager-terminal-event:${"A".repeat(40)}` })],
   ["mismatched evidence reference", false, (event) => ({ ...event, evidenceRef: "supervisor-event:copied-proof" })],
+  ["wrong owner", false, (event) => ({ ...event, owner: "manager" })],
   ["non-persisted status", false, (event) => ({ ...event, status: "copied" })],
   ["noncanonical ISO timestamp", false, (event) => ({ ...event, persistedAt: "2026-07-12T14:28:15Z" })],
   ["metadata-only violation", false, (event) => ({ ...event, metadataOnly: false })],
@@ -60,7 +62,7 @@ test("shared canonical terminal-event contract keeps both consumers aligned and 
     "idempotencyKey", "metadataOnly", "rawPayloadRetained",
   ]);
   assert.deepEqual(MANAGER_TERMINAL_EVENT_VIEW_FIELDS, [
-    ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS, "createdAt",
+    ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS, "owner", "createdAt",
   ]);
   assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_REQUEST_FIELDS), true);
   assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_VIEW_FIELDS), true);
@@ -81,6 +83,7 @@ test("shared canonical terminal-event contract keeps both consumers aligned and 
     "eventId",
     "evidenceRef",
     "status",
+    "owner",
     "persistedAt",
     "metadataOnly",
     "rawPayloadRetained",

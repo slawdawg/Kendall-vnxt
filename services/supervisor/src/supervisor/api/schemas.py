@@ -6152,6 +6152,7 @@ MANAGER_TERMINAL_EVENT_VIEW_FIELDS = (
     "idempotencyKey",
     "metadataOnly",
     "rawPayloadRetained",
+    "owner",
     "createdAt",
 )
 MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = (
@@ -6261,6 +6262,9 @@ class ManagerTerminalEventRequest(BaseModel):
 
 
 class ManagerTerminalEventView(ManagerTerminalEventRequest):
+    """Supervisor-owned canonical terminal-event read model."""
+
+    owner: Literal["supervisor"]
     createdAt: str = Field(
         max_length=64,
         pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",

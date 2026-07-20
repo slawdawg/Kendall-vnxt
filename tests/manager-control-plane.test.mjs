@@ -31850,7 +31850,7 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
     fetchImpl: async (url, options) => {
       const body = options.method === "POST" ? JSON.parse(options.body) : null;
       calls.push({ url, options, body });
-      if (body) persisted = { ...structuredClone(body), eventType: MANAGER_TERMINAL_EVENT_TYPE, createdAt: "2026-07-12T01:02:03.000Z" };
+      if (body) persisted = { ...structuredClone(body), eventType: MANAGER_TERMINAL_EVENT_TYPE, owner: "supervisor", createdAt: "2026-07-12T01:02:03.000Z" };
       return managerSupervisorResponseData(persisted);
     },
   });
@@ -31875,11 +31875,12 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
   assert.equal(result.summary.terminalDisposition.canonicalEventIntegration, "supervisor_canonical_event");
   assert.deepEqual(result.summary.terminalDisposition.supervisorEvent, result.summary.refillJob.terminalDisposition.supervisorEvent);
   assert.equal(result.summary.terminalDisposition.supervisorEvent.status, "persisted");
+  assert.equal(result.summary.terminalDisposition.supervisorEvent.owner, "supervisor");
   assert.match(result.summary.terminalDisposition.supervisorEvent.evidenceRef, /^supervisor-event:manager-terminal-event:[0-9a-f]{40}$/);
   assert.equal(result.summary.terminalDisposition.supervisorEvent.metadataOnly, true);
   assert.equal(result.summary.terminalDisposition.supervisorEvent.rawPayloadRetained, false);
   assert.deepEqual(Object.keys(result.summary.terminalDisposition.supervisorEvent).sort(), [
-    "eventId", "evidenceRef", "metadataOnly", "persistedAt", "rawPayloadRetained", "status",
+    "eventId", "evidenceRef", "metadataOnly", "owner", "persistedAt", "rawPayloadRetained", "status",
   ].sort());
   assert.equal(result.summary.supervisorPersistence, "persisted; supervisor canonical terminal event recorded");
   assert.deepEqual(result.blockers.map((blocker) => blocker.code), ["unrelated-stop-line"]);
@@ -31895,7 +31896,7 @@ test("manager supervisor terminal sync derives deterministic replay identity", a
     if (options.method === "POST") {
       const request = JSON.parse(options.body);
       requests.push(request);
-      persisted ??= { ...structuredClone(request), createdAt: "2026-07-12T02:00:00.000Z" };
+      persisted ??= { ...structuredClone(request), owner: "supervisor", createdAt: "2026-07-12T02:00:00.000Z" };
     }
     return managerSupervisorResponseData(persisted);
   };
@@ -31996,6 +31997,14 @@ test("manager supervisor terminal sync fails closed for unavailable malformed an
       fetchImpl: async (_url, options) => {
         const request = JSON.parse(options.body);
         return managerSupervisorResponse(request, "2026-07-12T01:02:03Z");
+      },
+    },
+    {
+      name: "non-supervisor owner",
+      code: "manager_supervisor_sync_response_malformed",
+      fetchImpl: async (_url, options) => {
+        const request = JSON.parse(options.body);
+        return managerSupervisorResponseData({ ...request, owner: "manager", createdAt: "2026-07-12T01:02:03.000Z" });
       },
     },
     {
@@ -32122,7 +32131,7 @@ function managerSupervisorSyncPacket() {
 }
 
 function managerSupervisorResponse(request, createdAt = "2026-07-12T01:02:03.000Z") {
-  return managerSupervisorResponseData({ ...structuredClone(request), createdAt });
+  return managerSupervisorResponseData({ ...structuredClone(request), owner: "supervisor", createdAt });
 }
 
 function managerSupervisorResponseData(data, status = 200) {
@@ -32138,7 +32147,7 @@ function managerSupervisorReadbackFetch({ readbackStatus = 200, readbackData, mu
   return async (_url, options) => {
     if (options.method === "POST") {
       const request = JSON.parse(options.body);
-      persisted = { ...structuredClone(request), createdAt: "2026-07-12T01:02:03.000Z" };
+      persisted = { ...structuredClone(request), owner: "supervisor", createdAt: "2026-07-12T01:02:03.000Z" };
       return managerSupervisorResponseData(persisted);
     }
     const data = readbackData ?? (mutateReadback ? mutateReadback(structuredClone(persisted)) : persisted);

@@ -141,7 +141,7 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
     "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
     "idempotencyKey", "metadataOnly", "rawPayloadRetained",
   ];
-  const viewFields = [...requestFields, "createdAt"];
+  const viewFields = [...requestFields, "owner", "createdAt"];
   const envelopeFields = ["data", "meta"];
   const envelopeRequiredFields = ["data"];
   const reconciliationCountFields = [
@@ -754,7 +754,7 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `  unresolvedApprovalGatedWork: [], evidenceRefs: ["evidence:terminal" as EvidenceRefId], resumeRequirement: "Wait for new accepted source-owned backlog.",`,
       `  nextManagerAction: "Stop refill until new accepted source-owned backlog exists.", idempotencyKey: "authoritative-backlog-exhausted:run-1", metadataOnly: true, rawPayloadRetained: false`,
       `};`,
-      `const terminalView: ManagerTerminalEventView = { ...terminalRequest, createdAt: "2026-07-19T00:00:00.000Z" };`,
+      `const terminalView: ManagerTerminalEventView = { ...terminalRequest, owner: "supervisor", createdAt: "2026-07-19T00:00:00.000Z" };`,
       `const terminalEnvelope: ManagerTerminalEventApiEnvelope = { data: terminalView, meta: null };`,
       `if (terminalEnvelope.data.eventId !== terminalView.eventId) throw new Error("terminal envelope view mismatch");`,
       `if (terminalView.eventType !== "authoritative_backlog_exhausted") throw new Error("terminal event type mismatch");`,

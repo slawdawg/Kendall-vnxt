@@ -765,6 +765,7 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
     "idempotencyKey",
     "metadataOnly",
     "rawPayloadRetained",
+    "owner",
     "createdAt",
   ],
 } as const;

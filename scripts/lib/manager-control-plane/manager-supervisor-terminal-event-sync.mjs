@@ -237,6 +237,7 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
     eventId: request.eventId,
     evidenceRef: `supervisor-event:${request.eventId}`,
     status: "persisted",
+    owner: readbackEvent.owner,
     persistedAt: readbackEvent.createdAt,
     metadataOnly: true,
     rawPayloadRetained: false,
@@ -390,7 +391,7 @@ function assertCanonicalMetadataStrings(value, path = "terminalDisposition") {
 
 function isExactPersistedEvent(event) {
   return Boolean(event && typeof event === "object" && !Array.isArray(event) &&
-    hasExactKeys(event, MANAGER_TERMINAL_EVENT_VIEW_FIELDS) && isCanonicalTerminalEventTimestamp(event.createdAt));
+    hasExactKeys(event, MANAGER_TERMINAL_EVENT_VIEW_FIELDS) && event.owner === "supervisor" && isCanonicalTerminalEventTimestamp(event.createdAt));
 }
 
 function hasExactKeys(value, expectedKeys) {
