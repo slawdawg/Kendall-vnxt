@@ -57,6 +57,12 @@ function loadManagerExecutionLaneSummaryModule(source) {
   const context = {
     exports: {},
     module: { exports: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") {
+        return { ManagerControlPlane: { MANAGER_TERMINAL_EVENT_TYPE: "authoritative_backlog_exhausted" } };
+      }
+      throw new Error(`Unexpected manager summary import: ${specifier}`);
+    },
   };
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "manager-execution-lane-summary.ts" });

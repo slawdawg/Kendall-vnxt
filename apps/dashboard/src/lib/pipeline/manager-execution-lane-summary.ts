@@ -1,4 +1,4 @@
-import type { ManagerControlPlane } from "@kendall/contracts";
+import { ManagerControlPlane } from "@kendall/contracts";
 import type {
   PipelineManagerAuthorityOperationRow,
   PipelineManagerDeliveryControlRow,
@@ -124,7 +124,7 @@ export function projectManagerExecutionLaneSummary(
       authorityReason: authorityReason(summary, "Resource and usage governance is summary-only on this surface."),
       nextAction: summary.nextAction
     },
-    sourceExhausted: summary.currentPhase === "closed" || summary.currentPhase === "authoritative_backlog_exhausted" || summary.rawStateLabels.includes("source_exhausted"),
+    sourceExhausted: summary.currentPhase === "closed" || summary.currentPhase === ManagerControlPlane.MANAGER_TERMINAL_EVENT_TYPE || summary.rawStateLabels.includes("source_exhausted"),
     fixtureBacked: summary.stateSource === "fixture",
     displayStates
   };
@@ -460,7 +460,7 @@ function operationAuthorityReason(
 }
 
 function refillPanelReason(summary: ManagerControlPlane.ManagerExecutionLaneSummary): string {
-  if (summary.currentPhase === "authoritative_backlog_exhausted") {
+  if (summary.currentPhase === ManagerControlPlane.MANAGER_TERMINAL_EVENT_TYPE) {
     const gatedCount = summary.terminalDisposition?.unresolvedApprovalGatedWork.length ?? 0;
     return gatedCount > 0
       ? `Authoritative backlog exhausted; ${gatedCount} approval-gated item(s) remain visible. Resume requires a new source-bound manager run.`
@@ -483,7 +483,7 @@ function refillPanelReason(summary: ManagerControlPlane.ManagerExecutionLaneSumm
 }
 
 function refillPanelState(summary: ManagerControlPlane.ManagerExecutionLaneSummary): string {
-  if (summary.currentPhase === "authoritative_backlog_exhausted") return "authoritative_backlog_exhausted";
+  if (summary.currentPhase === ManagerControlPlane.MANAGER_TERMINAL_EVENT_TYPE) return ManagerControlPlane.MANAGER_TERMINAL_EVENT_TYPE;
   if (summary.stateCounts.refilling > 0) return "refilling";
   if ((summary.stateCounts.blockedCandidates ?? 0) > 0 || summary.blockers.includes("dispatcher_has_blocked_candidates")) {
     return "blocked";
@@ -512,7 +512,7 @@ function liveWorkerAuthorityReason(summary: ManagerControlPlane.ManagerExecution
 }
 
 function laneStatusText(summary: ManagerControlPlane.ManagerExecutionLaneSummary) {
-  if (summary.currentPhase === "authoritative_backlog_exhausted") return "Authoritative backlog exhausted";
+  if (summary.currentPhase === ManagerControlPlane.MANAGER_TERMINAL_EVENT_TYPE) return "Authoritative backlog exhausted";
   if (summary.currentPhase === "no_safe_work") return "No safe work";
   if (summary.currentPhase === "manager_only") return "Manager-only";
   if (summary.currentPhase === "unverified") return "Unverified";
@@ -546,7 +546,7 @@ function explicitDisplayStates(summary: ManagerControlPlane.ManagerExecutionLane
   if (summary.stateCounts.blocked > 0 || summary.blockers.length > 0) states.add("blocked");
   if (summary.currentPhase === "manager_only") states.add("manager_only");
   if (summary.currentPhase === "no_safe_work") states.add("empty");
-  if (summary.currentPhase === "closed" || summary.currentPhase === "authoritative_backlog_exhausted" || summary.rawStateLabels.includes("source_exhausted")) states.add("source_exhausted");
+  if (summary.currentPhase === "closed" || summary.currentPhase === ManagerControlPlane.MANAGER_TERMINAL_EVENT_TYPE || summary.rawStateLabels.includes("source_exhausted")) states.add("source_exhausted");
   if (summary.rawStateLabels.includes("resource:critical")) states.add("resource_critical");
   if ((summary.feedbackRoutes ?? []).some((route) => route.classification === "blocking")) states.add("feedback_blocking");
   if ((summary.feedbackRoutes ?? []).some((route) => route.classification === "correction")) states.add("feedback_correction");
