@@ -8,6 +8,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
+  MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS,
+  MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS,
   MANAGER_TERMINAL_EVENT_VIEW_FIELDS,
 } from "../scripts/lib/manager-control-plane/terminal-event-contract.mjs";
 
@@ -86,6 +88,18 @@ function extractRequiredFieldsByContract(source, contractName) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
+function extractTypeScriptInterfaceFields(source, interfaceName) {
+  const match = source.match(new RegExp(`interface ${interfaceName} \\{([\\s\\S]*?)\\}`));
+  assert.ok(match, `missing TypeScript interface ${interfaceName}`);
+  return [...match[1].matchAll(/^\s+([A-Za-z][A-Za-z0-9]*):/gm)].map((entry) => entry[1]);
+}
+
+function extractPythonModelFields(source, className) {
+  const match = source.match(new RegExp(`class ${className}\\(BaseModel\\):([\\s\\S]*?)(?=\\n\\nclass |$)`));
+  assert.ok(match, `missing Python model ${className}`);
+  return [...match[1].matchAll(/^\s+([A-Za-z][A-Za-z0-9]*):/gm)].map((entry) => entry[1]);
+}
+
 test("Manager Control Plane contract namespace is exported from the package boundary", async () => {
   const indexSource = await readFile(new URL("index.ts", contractsRoot), "utf8");
   assert.match(indexSource, /export \* as ManagerControlPlane from "\.\/manager-control-plane";/);
@@ -119,8 +133,25 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
     "idempotencyKey", "metadataOnly", "rawPayloadRetained",
   ];
   const viewFields = [...requestFields, "createdAt"];
+  const reconciliationCountFields = [
+    "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
+    "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
+  ];
+  const unresolvedWorkFields = [
+    "workId", "title", "reason", "sourceRefs", "evidenceRefs",
+  ];
+  const tsReconciliationCountFields = extractTypeScriptInterfaceFields(terminalEventSource, "ManagerAuthoritativeBacklogReconciliationCounts");
+  const tsUnresolvedWorkFields = extractTypeScriptInterfaceFields(terminalEventSource, "ManagerUnresolvedApprovalGatedWork");
+  const pyReconciliationCountFields = extractPythonModelFields(supervisorSchemaSource, "ManagerAuthoritativeBacklogReconciliationCounts");
+  const pyUnresolvedWorkFields = extractPythonModelFields(supervisorSchemaSource, "ManagerUnresolvedApprovalGatedWork");
   assert.deepEqual([...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS], requestFields, "JS request fields must match the shared serialized contract");
   assert.deepEqual([...MANAGER_TERMINAL_EVENT_VIEW_FIELDS], viewFields, "JS view fields must match the shared serialized contract");
+  assert.deepEqual([...MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS], reconciliationCountFields, "JS reconciliation-count fields must remain canonical");
+  assert.deepEqual([...MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS], unresolvedWorkFields, "JS unresolved-work fields must remain canonical");
+  assert.deepEqual(tsReconciliationCountFields, reconciliationCountFields, "TypeScript reconciliation-count fields must remain aligned");
+  assert.deepEqual(tsUnresolvedWorkFields, unresolvedWorkFields, "TypeScript unresolved-work fields must remain aligned");
+  assert.deepEqual(pyReconciliationCountFields, reconciliationCountFields, "Python reconciliation-count fields must remain aligned");
+  assert.deepEqual(pyUnresolvedWorkFields, unresolvedWorkFields, "Python unresolved-work fields must remain aligned");
   for (const field of requestFields) {
     assert.match(terminalEventSource, new RegExp(`\\b${field}:`), `TypeScript request is missing ${field}`);
     assert.match(supervisorSchemaSource, new RegExp(`^    ${field}:`, "m"), `Python request is missing ${field}`);
@@ -192,8 +223,10 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(terminalEventSyncSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_ID_PATTERN,[\s\S]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_TYPE/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_REQUEST_FIELDS/);
+  assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS/);
+  assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_VIEW_FIELDS/);
-  assert.doesNotMatch(terminalEventSyncSource, /const REQUEST_KEYS\s*=|const PERSISTED_EVENT_KEYS\s*=/);
+  assert.doesNotMatch(terminalEventSyncSource, /const REQUEST_KEYS\s*=|const PERSISTED_EVENT_KEYS\s*=|const RECONCILIATION_COUNT_KEYS\s*=|const UNRESOLVED_APPROVAL_GATED_WORK_KEYS\s*=/);
   assert.match(terminalEventSyncSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
   assert.match(terminalEventSyncSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
   assert.doesNotMatch(terminalEventSyncSource, /"missing_supervisor_contract"|"supervisor_canonical_event"/);

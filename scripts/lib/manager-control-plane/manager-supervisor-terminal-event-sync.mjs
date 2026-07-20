@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
+  MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS,
+  MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS,
   MANAGER_TERMINAL_EVENT_VIEW_FIELDS,
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
   MANAGER_TERMINAL_EVENT_TYPE,
@@ -16,11 +18,6 @@ import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 const TERMINAL_EVENT_PATH = "/manager-control-plane/terminal-events";
 const INTEGRATION_MISSING = SUPERVISOR_TERMINAL_INTEGRATION_MISSING;
 const INTEGRATION_PERSISTED = SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED;
-const RECONCILIATION_COUNT_KEYS = [
-  "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
-  "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
-];
-const UNRESOLVED_APPROVAL_GATED_WORK_KEYS = ["workId", "title", "reason", "sourceRefs", "evidenceRefs"];
 const FORBIDDEN_TERMINAL_METADATA = /\b(?:raw[ _-]?(?:prompt|completion|payload|transcript)|provider[ _-]?payload|reasoning[ _-]?trace|terminal[ _-]?scrollback|tmux[ _-]?scrollback|pane[ _-]?scrollback|secret|credential|api[ _-]?key|access[ _-]?token)\b/i;
 
 export class ManagerSupervisorTerminalEventSyncError extends Error {
@@ -338,8 +335,8 @@ function validateRequestShape(request) {
   }
   if (!MANAGER_TERMINAL_EVENT_ID_PATTERN.test(request.eventId)) throw new TypeError("terminalDisposition.eventId must be canonical manager terminal-event identity.");
   if (!hasExactKeys(request, MANAGER_TERMINAL_EVENT_REQUEST_FIELDS)) throw new TypeError("terminalDisposition request metadata keys are invalid.");
-  if (!request.reconciliationCounts || typeof request.reconciliationCounts !== "object" || Array.isArray(request.reconciliationCounts) || !hasExactKeys(request.reconciliationCounts, RECONCILIATION_COUNT_KEYS)) throw new TypeError("terminalDisposition.reconciliationCounts must contain only the bounded canonical keys.");
-  if (RECONCILIATION_COUNT_KEYS.some((key) => !Number.isInteger(request.reconciliationCounts[key]) || request.reconciliationCounts[key] < 0)) throw new TypeError("terminalDisposition.reconciliationCounts values must be non-negative integers.");
+  if (!request.reconciliationCounts || typeof request.reconciliationCounts !== "object" || Array.isArray(request.reconciliationCounts) || !hasExactKeys(request.reconciliationCounts, MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS)) throw new TypeError("terminalDisposition.reconciliationCounts must contain only the bounded canonical keys.");
+  if (MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS.some((key) => !Number.isInteger(request.reconciliationCounts[key]) || request.reconciliationCounts[key] < 0)) throw new TypeError("terminalDisposition.reconciliationCounts values must be non-negative integers.");
   validateUnresolvedApprovalGatedWork(request.unresolvedApprovalGatedWork);
   validateStringList(request.evidenceRefs, "terminalDisposition.evidenceRefs", 12);
   if (request.metadataOnly !== true) throw new TypeError("terminalDisposition must be metadata-only.");
@@ -350,7 +347,7 @@ function validateRequestShape(request) {
 function validateUnresolvedApprovalGatedWork(value) {
   if (!Array.isArray(value) || value.length > 24) throw new TypeError("terminalDisposition.unresolvedApprovalGatedWork is invalid.");
   value.forEach((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item) || !hasExactKeys(item, UNRESOLVED_APPROVAL_GATED_WORK_KEYS)) {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !hasExactKeys(item, MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS)) {
       throw new TypeError(`terminalDisposition.unresolvedApprovalGatedWork[${index}] must contain the exact bounded metadata keys.`);
     }
     requiredSafeString(item.workId, `terminalDisposition.unresolvedApprovalGatedWork[${index}].workId`, 140);

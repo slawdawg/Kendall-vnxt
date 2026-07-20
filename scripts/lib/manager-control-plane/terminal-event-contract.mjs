@@ -30,6 +30,27 @@ export const MANAGER_TERMINAL_EVENT_VIEW_FIELDS = Object.freeze([
   ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
   "createdAt",
 ]);
+export const MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS = Object.freeze([
+  "totalItems",
+  "reconciledItems",
+  "eligible",
+  "queued",
+  "leased",
+  "running",
+  "reviewFix",
+  "requiredRetrospective",
+  "otherwiseRequired",
+  "completed",
+  "closed",
+  "approvalGated",
+]);
+export const MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS = Object.freeze([
+  "workId",
+  "title",
+  "reason",
+  "sourceRefs",
+  "evidenceRefs",
+]);
 
 export function isCanonicalTerminalEventTimestamp(value) {
   return typeof value === "string" &&
