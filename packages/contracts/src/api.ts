@@ -2699,3 +2699,8 @@ export interface RunnerAssignmentStatusReportView {
   backlogCandidates: RunnerBacklogCandidateView[];
   degradedInputs: RunnerAssignmentDegradedInputView[];
 }
+
+export interface RunnerAssignmentStatusReportApiEnvelope {
+  data: RunnerAssignmentStatusReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
