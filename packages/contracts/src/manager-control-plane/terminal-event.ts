@@ -120,5 +120,5 @@ export interface ManagerTerminalEventView extends ManagerTerminalEventRequest {
 
 export interface ManagerTerminalEventApiEnvelope {
   data: ManagerTerminalEventView;
-  meta?: Readonly<Record<string, unknown>> | null;
+  meta?: Readonly<Record<string, string | number | boolean | null>> | null;
 }

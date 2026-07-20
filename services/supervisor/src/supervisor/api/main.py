@@ -790,7 +790,7 @@ async def read_manager_terminal_event(
                 "manager_terminal_event_not_found",
             ).model_dump(),
         )
-    return ApiEnvelope(data=event)
+    return ManagerTerminalEventApiEnvelope(data=event)
 
 
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
