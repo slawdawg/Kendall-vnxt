@@ -1386,24 +1386,6 @@ export interface LocalWorktreePlanApiEnvelope {
   meta?: Record<string, string | number | boolean | null> | null;
 }
 
-export interface LlmWikiArtifactSearchResultView {
-  targetVaultPath: string;
-  query: string;
-  matched: boolean;
-  excerpts: string[];
-  metadata: Record<string, string>;
-  retentionClass: "metadata_only";
-  rawPayloadRetained: false;
-  sourceContentCopied: false;
-  canonicalMutationAllowed: false;
-  sourceMutationAllowed: false;
-}
-
-export interface LlmWikiArtifactApiEnvelope {
-  data: LlmWikiArtifactSearchResultView;
-  meta?: Record<string, string | number | boolean | null> | null;
-}
-
 export interface CodexReadinessCheckView {
   checkId: string;
   label: string;

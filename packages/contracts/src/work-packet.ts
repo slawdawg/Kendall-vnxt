@@ -997,3 +997,21 @@ export interface WorkPacketListApiEnvelope {
   data: WorkPacketV0View[];
   meta?: Record<string, string | number | boolean | null>;
 }
+
+export interface LlmWikiArtifactSearchResultView {
+  targetVaultPath: string;
+  query: string;
+  matched: boolean;
+  excerpts: string[];
+  metadata: Record<string, string>;
+  retentionClass: "metadata_only";
+  rawPayloadRetained: false;
+  sourceContentCopied: false;
+  canonicalMutationAllowed: false;
+  sourceMutationAllowed: false;
+}
+
+export interface LlmWikiArtifactApiEnvelope {
+  data: LlmWikiArtifactSearchResultView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}

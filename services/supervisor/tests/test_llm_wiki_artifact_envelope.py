@@ -51,7 +51,7 @@ def test_llm_wiki_artifact_route_uses_typed_envelope() -> None:
 
 
 def test_shared_typescript_llm_wiki_artifact_contract_matches_python_model() -> None:
-    contract_source = (Path(__file__).parents[3] / "packages/contracts/src/api.ts").read_text(encoding="utf-8")
+    contract_source = (Path(__file__).parents[3] / "packages/contracts/src/work-packet.ts").read_text(encoding="utf-8")
 
     assert "export interface LlmWikiArtifactSearchResultView" in contract_source
     assert "export interface LlmWikiArtifactApiEnvelope" in contract_source
