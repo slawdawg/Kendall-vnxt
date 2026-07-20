@@ -11,6 +11,25 @@ export const MANAGER_TERMINAL_EVENT_ID_PATTERN = /^manager-terminal-event:[0-9a-
 export const MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted";
 export const SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract";
 export const SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event";
+export const MANAGER_TERMINAL_EVENT_REQUEST_FIELDS = Object.freeze([
+  "eventId",
+  "eventType",
+  "runId",
+  "sourceIdentity",
+  "sourceRevision",
+  "reconciliationCounts",
+  "unresolvedApprovalGatedWork",
+  "evidenceRefs",
+  "resumeRequirement",
+  "nextManagerAction",
+  "idempotencyKey",
+  "metadataOnly",
+  "rawPayloadRetained",
+]);
+export const MANAGER_TERMINAL_EVENT_VIEW_FIELDS = Object.freeze([
+  ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
+  "createdAt",
+]);
 
 export function isCanonicalTerminalEventTimestamp(value) {
   return typeof value === "string" &&

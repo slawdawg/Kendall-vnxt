@@ -5,7 +5,9 @@ import { buildAuthoritativeBacklogExhaustedDisposition } from "../scripts/lib/ma
 import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
 import {
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
+  MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
   MANAGER_TERMINAL_EVENT_TYPE,
+  MANAGER_TERMINAL_EVENT_VIEW_FIELDS,
   SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
   SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
   SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS,
@@ -48,6 +50,16 @@ test("shared canonical terminal-event contract keeps both consumers aligned and 
   assert.equal(MANAGER_TERMINAL_EVENT_TYPE, "authoritative_backlog_exhausted");
   assert.equal(SUPERVISOR_TERMINAL_INTEGRATION_MISSING, "missing_supervisor_contract");
   assert.equal(SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED, "supervisor_canonical_event");
+  assert.deepEqual(MANAGER_TERMINAL_EVENT_REQUEST_FIELDS, [
+    "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
+    "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
+    "idempotencyKey", "metadataOnly", "rawPayloadRetained",
+  ]);
+  assert.deepEqual(MANAGER_TERMINAL_EVENT_VIEW_FIELDS, [
+    ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS, "createdAt",
+  ]);
+  assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_REQUEST_FIELDS), true);
+  assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_VIEW_FIELDS), true);
   assert.deepEqual(SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS, [
     "eventId",
     "evidenceRef",
