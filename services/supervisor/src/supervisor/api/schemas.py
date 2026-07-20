@@ -809,6 +809,15 @@ class RoutingPreviewView(BaseModel):
     decision: RoutingDecisionView
 
 
+class RoutingPreviewApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned routing previews."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: RoutingPreviewView
+    meta: dict[str, Any] | None = None
+
+
 class TaskPacketV0View(BaseModel):
     workItemId: str
     title: str
