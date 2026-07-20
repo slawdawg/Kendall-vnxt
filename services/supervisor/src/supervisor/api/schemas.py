@@ -4552,6 +4552,15 @@ class LegacyPlanningArtifactInventoryReportView(BaseModel):
     artifactBodyRetained: Literal[False] = False
 
 
+class LegacyPlanningArtifactInventoryApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned legacy planning inventory."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LegacyPlanningArtifactInventoryReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class VerificationCommandView(BaseModel):
     commandId: str
     label: str
