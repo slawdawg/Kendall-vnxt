@@ -3,10 +3,9 @@ import { isDeepStrictEqual } from "node:util";
 
 import { projectCanonicalSupervisorPacket } from "./operational-readiness.mjs";
 import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
+import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 
 const SOURCE_INTAKE_PATH = "/pipeline-control-plane/work-packets";
-const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_TIMEOUT_MS = 30_000;
 const MAX_PACKET_BYTES = 256 * 1024;
 const FORBIDDEN_METADATA = /\b(raw[ _-]?(prompt|completion|payload|transcript)|provider[ _-]?payload|reasoning[ _-]?trace|terminal[ _-]?scrollback|tmux[ _-]?scrollback|pane[ _-]?scrollback|secret|credential|api[ _-]?key|access[ _-]?token)\b/i;
 const FORBIDDEN_FIELD = /(raw(?!payloadretained)|prompt|completion|provider.*payload|reasoning|secret|credential|token|scrollback|transcript)/i;
@@ -166,7 +165,7 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   let response;
   let timeoutMs;
   try {
-    timeoutMs = normalizeTimeoutMs(context.timeoutMs);
+    timeoutMs = normalizeSupervisorTimeoutMs(context.timeoutMs);
   } catch (error) {
     throw intakeError("manager_supervisor_source_intake_input_invalid", error, sourcePacket);
   }
@@ -546,14 +545,6 @@ function validateBoundedMetadataOnlyValue(value, field, maxBytes = MAX_PACKET_BY
     }
   };
   walk(value, field, 0);
-}
-
-function normalizeTimeoutMs(value) {
-  if (value === undefined) return DEFAULT_TIMEOUT_MS;
-  if (!Number.isInteger(value) || value < 1 || value > MAX_TIMEOUT_MS) {
-    throw new TypeError(`timeoutMs must be an integer from 1 through ${MAX_TIMEOUT_MS}.`);
-  }
-  return value;
 }
 
 function requiredString(value, field, maxLength = Number.MAX_SAFE_INTEGER) {

@@ -1,7 +1,6 @@
 import { resolveLoopbackSourceIntakeEndpoint } from "./manager-supervisor-source-intake.mjs";
+import { normalizeSupervisorTimeoutMs, SUPERVISOR_MAX_TIMEOUT_MS } from "./supervisor-timeout.mjs";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_TIMEOUT_MS = 30_000;
 const SAFE_METADATA = /^[a-zA-Z0-9._:/@ -]{1,160}$/;
 const UNSAFE_ERROR_DETAIL = /raw|prompt|completion|provider|reasoning|secret|credential|token|scrollback|transcript/i;
 
@@ -68,7 +67,7 @@ export async function continueManagerSourcePacketWithLocalProof(packet, supervis
         actorLabel: request.actorLabel,
       }),
       redirect: "error",
-      signal: AbortSignal.timeout(normalizeTimeoutMs(context.timeoutMs)),
+      signal: AbortSignal.timeout(normalizeSupervisorTimeoutMs(context.timeoutMs, `timeoutMs must be an integer between 1 and ${SUPERVISOR_MAX_TIMEOUT_MS}.`)),
     });
   } catch (error) {
     throw new ManagerSupervisorLocalProofError(
@@ -162,12 +161,6 @@ function validateProofResponse(proof, request) {
 
 function requiredMetadata(value, name, maxLength = 160) {
   if (typeof value !== "string" || value.length > maxLength || !SAFE_METADATA.test(value)) throw new TypeError(`${name} must be bounded safe metadata-only text.`);
-  return value;
-}
-
-function normalizeTimeoutMs(value) {
-  if (value === undefined) return DEFAULT_TIMEOUT_MS;
-  if (!Number.isInteger(value) || value <= 0 || value > MAX_TIMEOUT_MS) throw new TypeError(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
   return value;
 }
 
