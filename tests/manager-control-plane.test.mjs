@@ -32004,7 +32004,7 @@ test("manager supervisor terminal sync fails closed for unavailable malformed an
       code: "manager_supervisor_sync_response_malformed",
       fetchImpl: async (_url, options) => {
         const request = JSON.parse(options.body);
-        return managerSupervisorResponse({ ...request, owner: "manager" });
+        return managerSupervisorResponseData({ ...request, owner: "manager", createdAt: "2026-07-12T01:02:03.000Z" });
       },
     },
     {
@@ -32131,7 +32131,7 @@ function managerSupervisorSyncPacket() {
 }
 
 function managerSupervisorResponse(request, createdAt = "2026-07-12T01:02:03.000Z") {
-  return managerSupervisorResponseData({ ...structuredClone(request), createdAt });
+  return managerSupervisorResponseData({ ...structuredClone(request), owner: "supervisor", createdAt });
 }
 
 function managerSupervisorResponseData(data, status = 200) {
