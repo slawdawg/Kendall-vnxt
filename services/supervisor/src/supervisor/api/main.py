@@ -48,6 +48,7 @@ from supervisor.api.schemas import (
     WorkerRegistryListApiEnvelope,
     LlmWikiArtifactSearchResultView,
     LocalEvidencePacketApiEnvelope,
+    LocalWorktreePlanApiEnvelope,
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
@@ -1234,7 +1235,7 @@ async def prepare_work_item_branch(
     return ApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.get("/work-items/{work_item_id}/local-worktree-plan", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/local-worktree-plan", response_model=LocalWorktreePlanApiEnvelope)
 async def get_work_item_local_worktree_plan(work_item_id: str, session: AsyncSession = Depends(get_session)):
     try:
         plan = await service.get_local_worktree_plan(session, work_item_id)
@@ -1245,7 +1246,7 @@ async def get_work_item_local_worktree_plan(work_item_id: str, session: AsyncSes
         ) from exc
     if not plan:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=plan)
+    return LocalWorktreePlanApiEnvelope(data=plan)
 
 
 @app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
