@@ -39,6 +39,7 @@ from supervisor.api.schemas import (
     ExecutionAttemptApiEnvelope,
     ExecutionRecipeListApiEnvelope,
     RoutingLaneProfileListApiEnvelope,
+    WorkerRegistryListApiEnvelope,
     LlmWikiArtifactSearchResultView,
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
@@ -807,9 +808,9 @@ async def list_routing_lane_profiles(session: AsyncSession = Depends(get_session
 
 
 
-@app.get("/routing/worker-registry", response_model=ApiEnvelope)
+@app.get("/routing/worker-registry", response_model=WorkerRegistryListApiEnvelope)
 async def list_worker_registry():
-    return ApiEnvelope(data=service.list_worker_registry())
+    return WorkerRegistryListApiEnvelope(data=service.list_worker_registry())
 
 @app.get("/work-items/{work_item_id}", response_model=ApiEnvelope)
 async def get_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):

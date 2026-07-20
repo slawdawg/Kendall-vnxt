@@ -754,6 +754,11 @@ export interface WorkerRegistryEntryView {
   disabledReason?: string | null;
 }
 
+export interface WorkerRegistryListApiEnvelope {
+  data: WorkerRegistryEntryView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface ExecutionConfigurationCheckView {
   checkId: string;
   label: string;
