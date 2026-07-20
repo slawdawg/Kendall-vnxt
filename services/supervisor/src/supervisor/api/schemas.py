@@ -3766,6 +3766,15 @@ class PipelineDashboardProjectionV0View(BaseModel):
     evidenceRefs: list[str] = Field(default_factory=list)
 
 
+class PipelineDashboardProjectionApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned pipeline projections."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: PipelineDashboardProjectionV0View
+    meta: dict[str, Any] | None = None
+
+
 class WorkPacketRouteSummaryV0View(BaseModel):
     recommendation: str
     confidenceScore: float | None = None
