@@ -59,6 +59,7 @@ from supervisor.api.schemas import (
     WorkItemManagedActionRequest,
     WorkItemPremiumApprovalRequest,
     WorkPacketLearnFollowUpCandidateWorkRequest,
+    WorkPacketApiEnvelope,
     WorkPacketListApiEnvelope,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
@@ -563,12 +564,12 @@ async def list_work_packets(session: AsyncSession = Depends(get_session)):
     return WorkPacketListApiEnvelope(data=packets)
 
 
-@app.get("/work-packets/{packet_id}", response_model=ApiEnvelope)
+@app.get("/work-packets/{packet_id}", response_model=WorkPacketApiEnvelope)
 async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
     packet = await service.get_work_packet(session, packet_id)
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Work Packet not found.", "work_packet_not_found").model_dump())
-    return ApiEnvelope(data=packet)
+    return WorkPacketApiEnvelope(data=packet)
 
 
 @app.post("/work-packets/{packet_id}/learn-follow-up-candidate-work", response_model=ApiEnvelope)

@@ -988,6 +988,11 @@ export interface WorkPacketV0View {
   recoveryActions: RecoveryActionV0[];
 }
 
+export interface WorkPacketApiEnvelope {
+  data: WorkPacketV0View;
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface WorkPacketListApiEnvelope {
   data: WorkPacketV0View[];
   meta?: Record<string, string | number | boolean | null>;
