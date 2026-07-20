@@ -123,9 +123,11 @@ def _remote_asgi_request(app, path: str, *, method: str, headers: dict[str, str]
 
 
 def _payload() -> dict[str, object]:
+    from supervisor.api.schemas import MANAGER_TERMINAL_EVENT_TYPE
+
     return {
         "eventId": f"manager-terminal-event:{'a' * 40}",
-        "eventType": "authoritative_backlog_exhausted",
+        "eventType": MANAGER_TERMINAL_EVENT_TYPE,
         "runId": "manager-run-17",
         "sourceIdentity": "source-bundle:accepted-product-backlog",
         "sourceRevision": "git:abc1234",
@@ -159,6 +161,12 @@ def _payload() -> dict[str, object]:
         "metadataOnly": True,
         "rawPayloadRetained": False,
     }
+
+
+def test_terminal_event_type_matches_independent_cross_language_contract() -> None:
+    from supervisor.api.schemas import MANAGER_TERMINAL_EVENT_TYPE
+
+    assert MANAGER_TERMINAL_EVENT_TYPE == "authoritative_backlog_exhausted"
 
 
 def _table_count(db_path: Path, table_name: str) -> int:
