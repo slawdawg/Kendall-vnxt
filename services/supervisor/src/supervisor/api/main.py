@@ -26,6 +26,7 @@ from supervisor.api.schemas import (
     ExecutionConfigurationChecksApiEnvelope,
     ExecutionReadinessReportApiEnvelope,
     DocumentationAuthorityReportApiEnvelope,
+    LegacyPlanningArtifactInventoryApiEnvelope,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
@@ -1389,9 +1390,9 @@ async def get_documentation_authority_report():
     return DocumentationAuthorityReportApiEnvelope(data=service.get_documentation_authority_report())
 
 
-@app.get("/supervisor/legacy-planning-artifact-inventory", response_model=ApiEnvelope)
+@app.get("/supervisor/legacy-planning-artifact-inventory", response_model=LegacyPlanningArtifactInventoryApiEnvelope)
 async def get_legacy_planning_artifact_inventory_report():
-    return ApiEnvelope(data=service.get_legacy_planning_artifact_inventory_report())
+    return LegacyPlanningArtifactInventoryApiEnvelope(data=service.get_legacy_planning_artifact_inventory_report())
 
 
 @app.get("/supervisor/verification-readiness-report", response_model=ApiEnvelope)

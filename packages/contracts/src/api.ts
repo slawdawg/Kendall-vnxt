@@ -978,7 +978,12 @@ export interface LegacyPlanningArtifactInventoryReportView {
   nextSafeActions: string[];
   readOnly: boolean;
   executionAuthorityApproved: boolean;
-  artifactBodyRetained: boolean;
+  artifactBodyRetained: false;
+}
+
+export interface LegacyPlanningArtifactInventoryApiEnvelope {
+  data: LegacyPlanningArtifactInventoryReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface VerificationCommandView {
