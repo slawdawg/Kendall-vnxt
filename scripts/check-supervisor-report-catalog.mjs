@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -580,4 +581,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
+execFileSync(process.execPath, [join(rootDir, "scripts/check-github-delivery-authority-report.mjs")], { stdio: "inherit" });
 console.log("OK: supervisor report catalog drift checks passed.");

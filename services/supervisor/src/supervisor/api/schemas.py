@@ -5688,6 +5688,8 @@ class ReviewResourcePolicyReportApiEnvelope(BaseModel):
 
 
 class GitHubDeliveryAuthorityStepView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     stepId: str
     label: str
     status: str
@@ -5697,6 +5699,8 @@ class GitHubDeliveryAuthorityStepView(BaseModel):
 
 
 class GitHubDeliveryEligibilityStageView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     stageId: str
     label: str
     status: str
@@ -5708,6 +5712,8 @@ class GitHubDeliveryEligibilityStageView(BaseModel):
 
 
 class GitHubDeliveryAuthorityReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -5720,14 +5726,40 @@ class GitHubDeliveryAuthorityReportView(BaseModel):
     rollbackPlan: list[str]
     stopConditions: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    pushApproved: bool = False
-    pullRequestApproved: bool = False
-    ciWaitApproved: bool = False
-    reviewResolutionApproved: bool = False
-    mergeApproved: bool = False
-    remoteCleanupApproved: bool = False
-    automaticDeliveryApproved: bool = False
+    readOnly: Literal[True]
+    pushApproved: Literal[False]
+    pullRequestApproved: Literal[False]
+    ciWaitApproved: Literal[False]
+    reviewResolutionApproved: Literal[False]
+    mergeApproved: Literal[False]
+    remoteCleanupApproved: Literal[False]
+    automaticDeliveryApproved: Literal[False]
+
+    @field_validator(
+        "readOnly",
+        "pushApproved",
+        "pullRequestApproved",
+        "ciWaitApproved",
+        "reviewResolutionApproved",
+        "mergeApproved",
+        "remoteCleanupApproved",
+        "automaticDeliveryApproved",
+        mode="before",
+    )
+    @classmethod
+    def _require_exact_boolean_safety_flags(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("GitHub delivery authority safety flags must be exact JSON booleans")
+        return value
+
+
+class GitHubDeliveryAuthorityReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned GitHub authority report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: GitHubDeliveryAuthorityReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class TrustedDeliveryEligibilityCheckView(BaseModel):

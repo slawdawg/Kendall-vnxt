@@ -1771,14 +1771,19 @@ export interface GitHubDeliveryAuthorityReportView {
   rollbackPlan: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  pushApproved: boolean;
-  pullRequestApproved: boolean;
-  ciWaitApproved: boolean;
-  reviewResolutionApproved: boolean;
-  mergeApproved: boolean;
-  remoteCleanupApproved: boolean;
-  automaticDeliveryApproved: boolean;
+  readOnly: true;
+  pushApproved: false;
+  pullRequestApproved: false;
+  ciWaitApproved: false;
+  reviewResolutionApproved: false;
+  mergeApproved: false;
+  remoteCleanupApproved: false;
+  automaticDeliveryApproved: false;
+}
+
+export interface GitHubDeliveryAuthorityReportApiEnvelope {
+  data: GitHubDeliveryAuthorityReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface TrustedDeliveryEligibilityCheckView {
