@@ -4,7 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import ManagerTerminalEventRequest, ManagerTerminalEventView
+from supervisor.api.schemas import (
+    MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
+    ManagerTerminalEventRequest,
+    ManagerTerminalEventView,
+)
 from supervisor.infrastructure.db.models import ManagerTerminalEvent
 
 
@@ -14,7 +18,7 @@ def _validated_payload(payload: ManagerTerminalEventRequest) -> ManagerTerminalE
 
 
 def _record_payload(record: ManagerTerminalEvent) -> dict[str, object]:
-    return {
+    values = {
         "eventId": record.event_id,
         "eventType": record.event_type,
         "runId": record.run_id,
@@ -29,6 +33,7 @@ def _record_payload(record: ManagerTerminalEvent) -> dict[str, object]:
         "metadataOnly": record.metadata_only,
         "rawPayloadRetained": record.raw_payload_retained,
     }
+    return {field: values[field] for field in MANAGER_TERMINAL_EVENT_REQUEST_FIELDS}
 
 
 def _to_view(record: ManagerTerminalEvent) -> ManagerTerminalEventView:

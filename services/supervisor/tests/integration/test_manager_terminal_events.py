@@ -177,6 +177,8 @@ def _table_count(db_path: Path, table_name: str) -> int:
 def test_terminal_event_persists_exact_metadata_without_work_creation_or_dispatch(
     tmp_path, monkeypatch
 ) -> None:
+    from supervisor.api.schemas import MANAGER_TERMINAL_EVENT_VIEW_FIELDS
+
     with _running_supervisor(tmp_path, monkeypatch) as (main, base_url, db_path):
         main.service.create_work_item = AsyncMock(side_effect=AssertionError("work creation is forbidden"))
         main.service.process_once = AsyncMock(side_effect=AssertionError("dispatch is forbidden"))
@@ -185,6 +187,7 @@ def test_terminal_event_persists_exact_metadata_without_work_creation_or_dispatc
         assert response.status_code == 200, response.text
         event = response.json()["data"]
         expected = _payload()
+        assert set(event) == set(MANAGER_TERMINAL_EVENT_VIEW_FIELDS)
         assert {key: event[key] for key in expected} == expected
         assert event["createdAt"]
         assert _table_count(db_path, "manager_terminal_events") == 1
