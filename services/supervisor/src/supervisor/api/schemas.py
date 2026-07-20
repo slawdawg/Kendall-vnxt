@@ -2402,6 +2402,15 @@ class AuthoritativeWorkPacketLifecycleView(BaseModel):
     metadataOnly: Literal[True] = True
 
 
+class AuthoritativeWorkPacketListApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned authoritative packets."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[AuthoritativeWorkPacketLifecycleView]
+    meta: dict[str, Any] | None = None
+
+
 OperationalActionId = Literal[
     "inspect",
     "refresh_projection",
@@ -4011,15 +4020,6 @@ class WorkPacketV0View(BaseModel):
     loopStopStates: list[WorkPacketLoopStopStateV0View] = Field(default_factory=list)
     reviewSummaries: list[WorkPacketReviewSummaryV0View] = Field(default_factory=list)
     recoveryActions: list[RecoveryActionV0View] = Field(default_factory=list)
-
-
-class WorkPacketListApiEnvelope(BaseModel):
-    """Typed response boundary for supervisor-owned WorkPacketV0 rows."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    data: list[WorkPacketV0View]
-    meta: dict[str, Any] | None = None
 
 
 class SubscriptionHandoffEvidenceView(BaseModel):
