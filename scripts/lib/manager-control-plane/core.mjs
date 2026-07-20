@@ -11,6 +11,7 @@ import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-re
 import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
 import { planManagerSourcePacketIntake, resolveLoopbackSourceIntakeEndpoint } from "./manager-supervisor-source-intake.mjs";
 import {
+  MANAGER_TERMINAL_EVENT_TYPE,
   isValidSupervisorTerminalEventMetadata,
   normalizeSupervisorTerminalEventMetadata,
   SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
@@ -11726,7 +11727,7 @@ export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
       lockId,
       timestamp,
       state: "completed",
-      result: "authoritative_backlog_exhausted",
+      result: MANAGER_TERMINAL_EVENT_TYPE,
       candidateCount: exhaustedDisposition.reconciliationCounts.totalItems,
       needsReviewCount: exhaustedDisposition.unresolvedApprovalGatedWork.length,
       evidenceRefs: exhaustedDisposition.evidenceRefs,
@@ -11734,7 +11735,7 @@ export function buildDispatcherRefillWatermarkPlan(options = {}, context = {}) {
       nextActions: [nextAction],
     });
     return packet({
-      status: "authoritative_backlog_exhausted",
+      status: MANAGER_TERMINAL_EVENT_TYPE,
       summary: {
         ...baseSummary,
         sourceExhausted: true,
@@ -14215,7 +14216,7 @@ function evaluateAuthoritativeBacklogExhaustion(input = {}) {
   const supervisorEvent = normalizeSupervisorCanonicalEventMetadata(bundle.canonicalEventIntegration, bundle.supervisorEvent);
   return {
     disposition: {
-      disposition: "authoritative_backlog_exhausted",
+      disposition: MANAGER_TERMINAL_EVENT_TYPE,
       runId,
       sourceIdentity,
       sourceRevision,
@@ -14462,7 +14463,7 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     lockId: `refill:${resolveManagerRunId(options, context)}:${refillSourceKey(sourceRefs)}:source_exhaustion_check`,
     timestamp,
     state: "completed",
-    result: "authoritative_backlog_exhausted",
+    result: MANAGER_TERMINAL_EVENT_TYPE,
     candidateCount: disposition.reconciliationCounts.totalItems,
     queuedCount: 0,
     needsReviewCount: unresolvedCount,
@@ -14512,7 +14513,7 @@ function buildAuthoritativeBacklogExhaustedRefillPacket({
     stopLines: REFILL_STOP_LINES,
   };
   return packet({
-    status: "authoritative_backlog_exhausted",
+    status: MANAGER_TERMINAL_EVENT_TYPE,
     summary,
     blockers: supervisorProjection.blockers,
     warnings: unresolvedCount > 0
@@ -14730,10 +14731,10 @@ function refillJobSummary({
 } = {}) {
   const normalizedState = ["planned", "running", "completed", "blocked", "failed"].includes(String(state)) ? String(state) : "running";
   const requestedResult = String(result);
-  const terminalDispositionValid = requestedResult === "authoritative_backlog_exhausted" && isValidAuthoritativeBacklogExhaustedDisposition(terminalDisposition);
-  const normalizedResult = requestedResult === "authoritative_backlog_exhausted" && !terminalDispositionValid
+  const terminalDispositionValid = requestedResult === MANAGER_TERMINAL_EVENT_TYPE && isValidAuthoritativeBacklogExhaustedDisposition(terminalDisposition);
+  const normalizedResult = requestedResult === MANAGER_TERMINAL_EVENT_TYPE && !terminalDispositionValid
     ? "blocked"
-    : ["queued_work", "queued_with_gated_candidates", "no_safe_work", "authoritative_backlog_exhausted", "needs_review", "blocked", "failed"].includes(requestedResult)
+    : ["queued_work", "queued_with_gated_candidates", "no_safe_work", MANAGER_TERMINAL_EVENT_TYPE, "needs_review", "blocked", "failed"].includes(requestedResult)
       ? requestedResult
       : "queued_work";
   const terminalSourceIdentity = terminalDispositionValid ? terminalDisposition.sourceIdentity : sanitizeLedgerField(sourceIdentity, "", 240);
@@ -14751,7 +14752,7 @@ function refillJobSummary({
   return {
     refillJobId: id,
     sourceRefs: sourceRefs.map((ref) => sanitizeLedgerField(ref, "", 180)).filter(Boolean).slice(0, 12),
-    ...(normalizedResult === "authoritative_backlog_exhausted" && terminalDispositionValid
+    ...(normalizedResult === MANAGER_TERMINAL_EVENT_TYPE && terminalDispositionValid
       ? { sourceIdentity: terminalSourceIdentity, sourceRevision: terminalSourceRevision }
       : {}),
     triggerReason,
@@ -14767,11 +14768,11 @@ function refillJobSummary({
     startedAt: sanitizeLedgerField(startedAt || timestamp, timestamp, 80),
     finishedAt: finishedAt === undefined ? (normalizedState === "completed" || normalizedState === "blocked" || normalizedState === "failed" ? sanitizeLedgerField(timestamp, timestamp, 80) : null) : finishedAt,
     result: normalizedResult,
-    terminalDisposition: normalizedResult === "authoritative_backlog_exhausted" && terminalDispositionValid ? terminalDisposition : null,
+    terminalDisposition: normalizedResult === MANAGER_TERMINAL_EVENT_TYPE && terminalDispositionValid ? terminalDisposition : null,
     evidenceRefs: compactRefillEvidenceRefs(suppliedEvidenceRefs.length > 0 ? suppliedEvidenceRefs : sourceRefs.map((ref) => `source:${ref}`)),
     blockers: compactRefillBlockers([
       ...blockers,
-      ...(requestedResult === "authoritative_backlog_exhausted" && !terminalDispositionValid
+      ...(requestedResult === MANAGER_TERMINAL_EVENT_TYPE && !terminalDispositionValid
         ? [{ code: "authoritative-terminal-disposition-invalid", message: "Terminal refill result requires a valid authoritative backlog exhaustion disposition.", nextAction: "Discard the bare terminal result and rerun authoritative source reconciliation." }]
         : []),
     ]),
@@ -14782,7 +14783,7 @@ function refillJobSummary({
 }
 
 function isValidAuthoritativeBacklogExhaustedDisposition(disposition) {
-  if (!isPlainObject(disposition) || disposition.disposition !== "authoritative_backlog_exhausted") return false;
+  if (!isPlainObject(disposition) || disposition.disposition !== MANAGER_TERMINAL_EVENT_TYPE) return false;
   if (!sanitizeLedgerField(disposition.runId || "", "", 120) || !sanitizeLedgerField(disposition.sourceIdentity || "", "", 240) || !sanitizeLedgerField(disposition.sourceRevision || "", "", 160) || ![SUPERVISOR_TERMINAL_INTEGRATION_MISSING, SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false || !sanitizeLedgerField(disposition.idempotencyKey || "", "", 180) || !sanitizeLedgerField(disposition.resumeRequirement || "", "", 360) || !sanitizeLedgerField(disposition.nextManagerAction || "", "", 360) || !isPlainObject(disposition.reconciliationCounts) || !Array.isArray(disposition.unresolvedApprovalGatedWork) || !disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord) || !Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0) return false;
   const counts = disposition.reconciliationCounts;
   if (["totalItems", "reconciledItems", ...AUTHORITATIVE_RECONCILIATION_STATUS_KEYS].some((key) => !Number.isInteger(counts[key]) || counts[key] < 0)) return false;
@@ -14974,7 +14975,7 @@ function refillWatermarkNextActions(result, sourceExhausted) {
   if (result === "queued_with_gated_candidates") {
     return [{ code: "dispatcher-refill-mixed-gated", summary: "Refill queued eligible work and retained gated candidates for attention.", nextAction: "Record queued work and surface review-needed or blocked refill candidates." }];
   }
-  if (result === "authoritative_backlog_exhausted") {
+  if (result === MANAGER_TERMINAL_EVENT_TYPE) {
     return [{ code: "authoritative-backlog-exhausted", summary: "Authoritative source bundle is fully reconciled with no required executable work remaining.", nextAction: "Stop and await a new source-bound manager run." }];
   }
   if (sourceExhausted || result === "no_safe_work") {
@@ -17124,7 +17125,7 @@ function isValidTerminalReconciliationPacketShape(packet, { sourceIdentity, sour
   const evidenceRefs = disposition?.evidenceRefs;
   return terminalMetadataIsBounded(packet) &&
     packet.proofMode === "metadata_only" &&
-    packet.status === "authoritative_backlog_exhausted" &&
+    packet.status === MANAGER_TERMINAL_EVENT_TYPE &&
     packet.ok === true &&
     packet.noNewEpic === true &&
     packet.noFillerWork === true &&
@@ -17138,7 +17139,7 @@ function isValidTerminalReconciliationPacketShape(packet, { sourceIdentity, sour
     bundle.noSeparatelyApprovedSource === true &&
     Array.isArray(bundle.remainingCandidates) && bundle.remainingCandidates.length === 0 &&
     isPlainObject(disposition) &&
-    disposition.disposition === "authoritative_backlog_exhausted" &&
+    disposition.disposition === MANAGER_TERMINAL_EVENT_TYPE &&
     disposition.sourceIdentity === sourceIdentity &&
     disposition.sourceRevision === sourceRevision &&
     disposition.rawPayloadRetained === false &&
@@ -22571,7 +22572,7 @@ function isTerminalEmptyDispatcherBlocker(blocker = "") {
 function validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview = {}, refill = {}) {
   const disposition = refill?.summary?.terminalDisposition;
   if (
-    refill?.status !== "authoritative_backlog_exhausted" ||
+    refill?.status !== MANAGER_TERMINAL_EVENT_TYPE ||
     !isValidAuthoritativeBacklogExhaustedDisposition(disposition) ||
     disposition.canonicalEventIntegration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED ||
     !normalizeSupervisorCanonicalEventMetadata(disposition.canonicalEventIntegration, disposition.supervisorEvent)
@@ -22598,7 +22599,7 @@ function validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview = {}
     (Array.isArray(refill.summary?.candidateLanes) && refill.summary.candidateLanes.length > 0)
   ) return null;
   return {
-    status: "authoritative_backlog_exhausted",
+    status: MANAGER_TERMINAL_EVENT_TYPE,
     sourceIdentity: disposition.sourceIdentity,
     sourceRevision: disposition.sourceRevision,
     canonicalEventIntegration: SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
@@ -26497,8 +26498,8 @@ function buildTerminalContinuationProjection({ dispatcherState = {}, preflight =
   const preservedOwnershipBlockers = blockers.filter((blocker) => blocker.code === "assignment-ambiguous-status");
   const unrelatedBlockers = blockers.filter((blocker) => blocker.code !== "assignment-ambiguous-status");
   if (
-    dispatcher.status !== "authoritative_backlog_exhausted" ||
-    dispatcher.terminalState?.status !== "authoritative_backlog_exhausted" ||
+    dispatcher.status !== MANAGER_TERMINAL_EVENT_TYPE ||
+    dispatcher.terminalState?.status !== MANAGER_TERMINAL_EVENT_TYPE ||
     dispatcher.terminalState?.canonicalEventIntegration !== SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED ||
     preflight.ok !== true ||
     preflight.status !== "ready" ||
@@ -27278,13 +27279,13 @@ function buildCycleDispatcherState(dispatchPreview = {}, preflightDispatcher = {
   const queueAvailable = nonNegativeInteger(counts.dispatchable ?? counts.assignable ?? counts.queued ?? candidateStateCounts.assignable ?? candidateStateCounts.queued);
   const activeLeases = dispatchPreviewActiveLeaseCount(summary);
   const independentlyValidatedTerminalState = validatedAuthoritativeTerminalDispatcherProjection(dispatchPreview, runway);
-  const terminalState = independentlyValidatedTerminalState && preflightDispatcher?.terminalState?.status === "authoritative_backlog_exhausted"
+  const terminalState = independentlyValidatedTerminalState && preflightDispatcher?.terminalState?.status === MANAGER_TERMINAL_EVENT_TYPE
     ? independentlyValidatedTerminalState
     : null;
   const terminalReady = terminalState && preflightDispatcher.status === "ready" && (!Array.isArray(preflightDispatcher.blockers) || preflightDispatcher.blockers.length === 0);
   return {
     dispatcher: {
-      status: terminalReady ? "authoritative_backlog_exhausted" : dispatchPreview.status || "unknown",
+      status: terminalReady ? MANAGER_TERMINAL_EVENT_TYPE : dispatchPreview.status || "unknown",
       allowed: terminalReady ? false : summary.allowed ?? null,
       selectedLane: sanitizeLedgerField(summary.selectedLane || "", "", 120) || null,
       selectedBranch: sanitizeLedgerField(summary.selectedBranch || "", "", 160) || null,
