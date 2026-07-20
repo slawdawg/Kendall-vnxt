@@ -59,6 +59,7 @@ from supervisor.api.schemas import (
     WorkItemManagedActionRequest,
     WorkItemPremiumApprovalRequest,
     WorkPacketLearnFollowUpCandidateWorkRequest,
+    WorkPacketListApiEnvelope,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
     WorkItemSupervisedCodexLaunchRequest,
@@ -556,10 +557,10 @@ async def list_candidate_work(session: AsyncSession = Depends(get_session)):
     return CandidateWorkListApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
 
 
-@app.get("/work-packets", response_model=ApiEnvelope)
+@app.get("/work-packets", response_model=WorkPacketListApiEnvelope)
 async def list_work_packets(session: AsyncSession = Depends(get_session)):
     packets = await service.list_work_packets(session)
-    return ApiEnvelope(data=packets)
+    return WorkPacketListApiEnvelope(data=packets)
 
 
 @app.get("/work-packets/{packet_id}", response_model=ApiEnvelope)
