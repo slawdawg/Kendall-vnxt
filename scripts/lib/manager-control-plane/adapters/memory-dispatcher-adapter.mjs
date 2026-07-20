@@ -1,7 +1,6 @@
-import { buildManagerExecutionLaneSummary, SIMULATED_WARNING } from "../summary-projection.mjs";
+import { buildManagerExecutionLaneSummary, SIMULATED_WARNING, WORK_STATUSES } from "../summary-projection.mjs";
 
 const CANDIDATE_STATUSES = new Set(["eligible", "needs_review", "blocked"]);
-const WORK_STATUSES = ["eligible", "queued", "leased", "running", "refilling", "completed", "failed", "expired", "quarantined", "blocked", "closed"];
 const MANAGER_RISK_CLASSES = new Set(["low", "medium", "high", "extreme"]);
 const MANAGER_SOURCE_TYPES = new Set(["prd", "bmad_artifact", "research", "repo_source", "runtime_state", "manual"]);
 const MANAGER_AUTHORITY_CLASSES = new Set(["allowed_unattended", "requires_preauthorization", "block_and_record", "forbidden"]);

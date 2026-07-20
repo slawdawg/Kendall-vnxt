@@ -16,6 +16,7 @@ export const WORK_STATUSES = [
   "blocked",
   "closed"
 ];
+Object.freeze(WORK_STATUSES);
 
 export function buildManagerExecutionLaneSummary({
   runId,
