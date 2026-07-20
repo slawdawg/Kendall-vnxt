@@ -6538,4 +6538,4 @@ class ManagerTerminalEventApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: ManagerTerminalEventView
-    meta: dict[str, Any] | None = None
+    meta: dict[str, str | int | float | bool | None] | None = None
