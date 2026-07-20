@@ -648,6 +648,11 @@ export interface LocalEvidencePacketView {
   commandsAllowed: boolean;
 }
 
+export interface LocalEvidencePacketApiEnvelope {
+  data: LocalEvidencePacketView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface LocalReadonlyWorkerPreviewView {
   workerId: string;
   runId: string;
