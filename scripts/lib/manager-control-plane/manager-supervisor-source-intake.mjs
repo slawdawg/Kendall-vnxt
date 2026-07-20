@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { projectCanonicalSupervisorPacket } from "./operational-readiness.mjs";
+import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
 
 const SOURCE_INTAKE_PATH = "/pipeline-control-plane/work-packets";
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -27,22 +28,7 @@ export function deriveAuthoritativePacketId(candidateWorkPacketId) {
 }
 
 export function resolveLoopbackSourceIntakeEndpoint(supervisorUrl) {
-  let parsed;
-  try {
-    parsed = new URL(requiredString(supervisorUrl, "supervisorUrl", 2048));
-  } catch (error) {
-    throw new TypeError("supervisorUrl must be an absolute loopback HTTP(S) URL.", { cause: error });
-  }
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
-    throw new TypeError("supervisorUrl must use a loopback host: localhost, 127.0.0.1, or ::1.");
-  }
-  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new TypeError("supervisorUrl must be an uncredentialed loopback HTTP(S) base URL.");
-  }
-  if (parsed.pathname !== "/" && parsed.pathname !== "") {
-    throw new TypeError("supervisorUrl must not include an application path.");
-  }
+  const parsed = parseLoopbackSupervisorUrl(supervisorUrl);
   return new URL(SOURCE_INTAKE_PATH, parsed).href;
 }
 

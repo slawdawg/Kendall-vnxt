@@ -13,6 +13,7 @@ import {
   intakeManagerSourcePacket,
   resolveLoopbackSourceIntakeEndpoint,
 } from "../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs";
+import { resolveLoopbackSupervisorEndpoint } from "../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs";
 import { parseManagerSourceIntakeArgs } from "../scripts/manager-supervisor-source-intake.mjs";
 
 function sourcePacket(overrides = {}) {
@@ -397,11 +398,14 @@ test("manager source intake derives deterministic bounded identities and maps a 
   assert.equal(JSON.stringify(request).includes("node --test"), false);
 });
 
-test("manager source intake is loopback-only and rejects ineligible ambiguous or retained inputs before fetch", async (t) => {
+test("manager supervisor integrations share loopback-only URL validation", async (t) => {
   assert.equal(resolveLoopbackSourceIntakeEndpoint("http://localhost:8000/"), "http://localhost:8000/pipeline-control-plane/work-packets");
   assert.equal(resolveLoopbackSourceIntakeEndpoint("http://[::1]:8000"), "http://[::1]:8000/pipeline-control-plane/work-packets");
+  assert.equal(resolveLoopbackSupervisorEndpoint("http://localhost:8000/"), "http://localhost:8000/manager-control-plane/terminal-events");
+  assert.equal(resolveLoopbackSupervisorEndpoint("http://[::1]:8000"), "http://[::1]:8000/manager-control-plane/terminal-events");
   for (const invalidUrl of ["https://supervisor.example.com", "http://127.0.0.1:8000/api", "http://user@localhost:8000"] ) {
     assert.throws(() => resolveLoopbackSourceIntakeEndpoint(invalidUrl), /loopback|application path|uncredentialed/);
+    assert.throws(() => resolveLoopbackSupervisorEndpoint(invalidUrl), /loopback|application path|uncredentialed/);
   }
 
   const cases = [
