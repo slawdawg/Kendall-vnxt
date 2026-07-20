@@ -5539,6 +5539,15 @@ class ClaudeReviewReadinessReportView(BaseModel):
     scarceUseApproved: bool = False
 
 
+class ClaudeReviewReadinessReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned Claude readiness report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ClaudeReviewReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class ClaudeReviewApprovalRequirementView(BaseModel):
     requirementId: str
     label: str
