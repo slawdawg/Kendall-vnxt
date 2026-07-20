@@ -5342,6 +5342,15 @@ class GitHygieneReportView(BaseModel):
     cleanupApproved: bool = False
 
 
+class GitHygieneReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned Git hygiene report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: GitHygieneReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class LocalWorktreePlanView(BaseModel):
     planId: str
     workItemId: str

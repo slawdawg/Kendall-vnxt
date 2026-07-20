@@ -34,6 +34,7 @@ from supervisor.api.schemas import (
     RuntimeEvidenceReviewReportApiEnvelope,
     ManagedRecipePolicyReportApiEnvelope,
     GitHubWorkflowPolicyReportApiEnvelope,
+    GitHygieneReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1467,9 +1468,9 @@ async def get_github_workflow_policy_report():
     return GitHubWorkflowPolicyReportApiEnvelope(data=service.get_github_workflow_policy_report())
 
 
-@app.get("/supervisor/git-hygiene-report", response_model=ApiEnvelope)
+@app.get("/supervisor/git-hygiene-report", response_model=GitHygieneReportApiEnvelope)
 async def get_git_hygiene_report():
-    return ApiEnvelope(data=service.get_git_hygiene_report())
+    return GitHygieneReportApiEnvelope(data=service.get_git_hygiene_report())
 
 
 @app.get("/supervisor/codex-readiness-report", response_model=ApiEnvelope)

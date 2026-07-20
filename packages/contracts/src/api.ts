@@ -1437,6 +1437,11 @@ export interface GitHygieneReportView {
   cleanupApproved: boolean;
 }
 
+export interface GitHygieneReportApiEnvelope {
+  data: GitHygieneReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface LocalWorktreePlanView {
   planId: string;
   workItemId: string;
