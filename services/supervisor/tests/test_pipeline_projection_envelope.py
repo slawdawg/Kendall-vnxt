@@ -36,3 +36,4 @@ def test_shared_typescript_pipeline_projection_contract_matches_python_model() -
 
     assert "export interface PipelineDashboardProjectionApiEnvelope" in contract_source
     assert "data: PipelineDashboardProjectionV0;" in contract_source
+    assert "meta?: Record<string, string | number | boolean | null> | null;" in contract_source

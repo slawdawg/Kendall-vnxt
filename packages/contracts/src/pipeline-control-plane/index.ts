@@ -4735,5 +4735,5 @@ export interface PipelineDashboardProjectionV0 {
 
 export interface PipelineDashboardProjectionApiEnvelope {
   data: PipelineDashboardProjectionV0;
-  meta?: Record<string, string | number | boolean | null>;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
