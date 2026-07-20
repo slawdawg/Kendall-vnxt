@@ -4724,6 +4724,15 @@ class DashboardE2EReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class DashboardE2EReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned dashboard E2E report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DashboardE2EReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class SupervisorReportCatalogEntryView(BaseModel):
     reportId: str
     label: str

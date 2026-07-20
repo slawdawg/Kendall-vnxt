@@ -29,6 +29,7 @@ from supervisor.api.schemas import (
     LegacyPlanningArtifactInventoryApiEnvelope,
     VerificationReadinessReportApiEnvelope,
     AuthorityReadinessMatrixReportApiEnvelope,
+    DashboardE2EReportApiEnvelope,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
@@ -1407,9 +1408,9 @@ async def get_authority_readiness_matrix_report():
     return AuthorityReadinessMatrixReportApiEnvelope(data=service.get_authority_readiness_matrix_report())
 
 
-@app.get("/supervisor/dashboard-e2e-report", response_model=ApiEnvelope)
+@app.get("/supervisor/dashboard-e2e-report", response_model=DashboardE2EReportApiEnvelope)
 async def get_dashboard_e2e_report():
-    return ApiEnvelope(data=service.get_dashboard_e2e_report())
+    return DashboardE2EReportApiEnvelope(data=service.get_dashboard_e2e_report())
 
 
 @app.get("/supervisor/report-catalog", response_model=ApiEnvelope)
