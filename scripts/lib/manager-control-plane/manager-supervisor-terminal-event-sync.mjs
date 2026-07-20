@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+  MANAGER_TERMINAL_EVENT_ID_PATTERN,
   isCanonicalTerminalEventTimestamp,
   normalizeSupervisorTerminalEventMetadata,
 } from "./terminal-event-contract.mjs";
@@ -344,7 +345,7 @@ function validateRequestShape(request) {
   for (const [field, limit] of [["eventId", 120], ["runId", 120], ["sourceIdentity", 240], ["sourceRevision", 160], ["idempotencyKey", 180], ["resumeRequirement", 360], ["nextManagerAction", 360]]) {
     requiredString(request[field], `terminalDisposition.${field}`, limit);
   }
-  if (!/^manager-terminal-event:[0-9a-f]{40}$/.test(request.eventId)) throw new TypeError("terminalDisposition.eventId must be canonical manager terminal-event identity.");
+  if (!MANAGER_TERMINAL_EVENT_ID_PATTERN.test(request.eventId)) throw new TypeError("terminalDisposition.eventId must be canonical manager terminal-event identity.");
   if (!hasExactKeys(request, REQUEST_KEYS)) throw new TypeError("terminalDisposition request metadata keys are invalid.");
   if (!request.reconciliationCounts || typeof request.reconciliationCounts !== "object" || Array.isArray(request.reconciliationCounts) || !hasExactKeys(request.reconciliationCounts, RECONCILIATION_COUNT_KEYS)) throw new TypeError("terminalDisposition.reconciliationCounts must contain only the bounded canonical keys.");
   if (RECONCILIATION_COUNT_KEYS.some((key) => !Number.isInteger(request.reconciliationCounts[key]) || request.reconciliationCounts[key] < 0)) throw new TypeError("terminalDisposition.reconciliationCounts values must be non-negative integers.");
