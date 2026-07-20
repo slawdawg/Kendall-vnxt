@@ -6173,6 +6173,8 @@ class MvpProofTrialReportView(BaseModel):
 
 
 class DeliveryReadinessPolicyItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     itemId: str
     label: str
     status: str
@@ -6181,19 +6183,37 @@ class DeliveryReadinessPolicyItemView(BaseModel):
 
 
 class DeliveryReadinessPolicyReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
     statusPolicy: list[DeliveryReadinessPolicyItemView]
     waiverPolicy: list[DeliveryReadinessPolicyItemView]
-    promoteReadinessPolicy: list[DeliveryReadinessPolicyItemView] = Field(default_factory=list)
-    deliverReadinessPolicy: list[DeliveryReadinessPolicyItemView] = Field(default_factory=list)
-    blockerRoutingPolicy: list[DeliveryReadinessPolicyItemView] = Field(default_factory=list)
+    promoteReadinessPolicy: list[DeliveryReadinessPolicyItemView]
+    deliverReadinessPolicy: list[DeliveryReadinessPolicyItemView]
+    blockerRoutingPolicy: list[DeliveryReadinessPolicyItemView]
     stopLines: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    executionAuthorityApproved: bool = False
-    remoteAutomationApproved: bool = False
+    readOnly: Literal[True]
+    executionAuthorityApproved: Literal[False]
+    remoteAutomationApproved: Literal[False]
+
+    @field_validator("readOnly", "executionAuthorityApproved", "remoteAutomationApproved", mode="before")
+    @classmethod
+    def _require_exact_boolean_safety_flags(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("delivery readiness safety flags must be exact JSON booleans")
+        return value
+
+
+class DeliveryReadinessPolicyReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned delivery readiness policy."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DeliveryReadinessPolicyReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class WorkItemView(BaseModel):
