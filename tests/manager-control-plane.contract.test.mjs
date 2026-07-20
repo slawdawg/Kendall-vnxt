@@ -153,6 +153,28 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(supervisorSchemaSource, /MANAGER_TERMINAL_EVENT_TYPE\s*=\s*"authoritative_backlog_exhausted"/);
   assert.match(supervisorSchemaSource, /eventType:\s*Literal\[MANAGER_TERMINAL_EVENT_TYPE\]/);
   assert.match(supervisorSchemaSource, /\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s+cannot retain required executable work/);
+  const extractSingleConstant = (source, pattern, label) => {
+    const matches = [...source.matchAll(pattern)].map((match) => match[1]);
+    assert.equal(matches.length, 1, `${label} must have exactly one canonical declaration`);
+    return matches[0];
+  };
+  const jsTerminalEventType = extractSingleConstant(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_TYPE\s*=\s*"([^"]+)"/g, "JS terminal-event type");
+  const tsTerminalEventType = extractSingleConstant(terminalEventSource, /MANAGER_TERMINAL_EVENT_TYPE\s*=\s*"([^"]+)"/g, "TypeScript terminal-event type");
+  const supervisorTerminalEventType = extractSingleConstant(supervisorSchemaSource, /MANAGER_TERMINAL_EVENT_TYPE\s*=\s*"([^"]+)"/g, "supervisor terminal-event type");
+  assert.deepEqual(
+    [jsTerminalEventType, tsTerminalEventType, supervisorTerminalEventType],
+    ["authoritative_backlog_exhausted", "authoritative_backlog_exhausted", "authoritative_backlog_exhausted"],
+    "JS, TypeScript, and supervisor terminal-event constants must remain exactly aligned",
+  );
+  const jsIntegrationStates = [
+    extractSingleConstant(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING\s*=\s*"([^"]+)"/g, "JS missing-supervisor integration state"),
+    extractSingleConstant(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED\s*=\s*"([^"]+)"/g, "JS persisted-supervisor integration state"),
+  ];
+  const tsIntegrationStates = [
+    extractSingleConstant(terminalEventSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING\s*=\s*"([^"]+)"/g, "TypeScript missing-supervisor integration state"),
+    extractSingleConstant(terminalEventSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED\s*=\s*"([^"]+)"/g, "TypeScript persisted-supervisor integration state"),
+  ];
+  assert.deepEqual(tsIntegrationStates, jsIntegrationStates, "JS and TypeScript supervisor integration states must remain exactly aligned");
   assert.match(supervisorSchemaSource, /model_config = ConfigDict\(extra="forbid", strict=True\)/);
   const tsFields = [...terminalEventSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \[((?:.|\n)*?)\] as const;/g)]
     .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
