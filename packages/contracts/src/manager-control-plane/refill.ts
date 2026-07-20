@@ -1,3 +1,4 @@
+import { MANAGER_TERMINAL_EVENT_TYPE } from "./terminal-event";
 import type { ManagerAuthorityDecisionClass } from "./authority";
 import type { EvidenceRefId, ManagerSourceRefId, RefillJobId } from "./ids";
 import type { ManagerRefillJobStatus } from "./lifecycle";
@@ -16,10 +17,10 @@ export type {
 } from "./terminal-event";
 
 export type RefillTriggerReason = "low_watermark" | "manual_bootstrap" | "source_exhaustion_check" | "recovery";
-export type RefillResult = "queued_work" | "queued_with_gated_candidates" | "no_safe_work" | "authoritative_backlog_exhausted" | "needs_review" | "blocked" | "failed";
+export type RefillResult = "queued_work" | "queued_with_gated_candidates" | "no_safe_work" | typeof MANAGER_TERMINAL_EVENT_TYPE | "needs_review" | "blocked" | "failed";
 
 export interface AuthoritativeBacklogExhaustedDisposition {
-  disposition: "authoritative_backlog_exhausted";
+  disposition: typeof MANAGER_TERMINAL_EVENT_TYPE;
   runId: string;
   sourceIdentity: string;
   sourceRevision: string;
@@ -55,12 +56,12 @@ interface RefillJobFields {
 }
 
 export interface NonTerminalRefillJob extends RefillJobFields {
-  result: Exclude<RefillResult, "authoritative_backlog_exhausted">;
+  result: Exclude<RefillResult, typeof MANAGER_TERMINAL_EVENT_TYPE>;
   terminalDisposition?: null;
 }
 
 export interface AuthoritativeBacklogExhaustedRefillJob extends RefillJobFields {
-  result: "authoritative_backlog_exhausted";
+  result: typeof MANAGER_TERMINAL_EVENT_TYPE;
   sourceIdentity: string;
   sourceRevision: string;
   terminalDisposition: AuthoritativeBacklogExhaustedDisposition;
