@@ -40,6 +40,7 @@ from supervisor.api.schemas import (
     ClaudeReviewReadinessReportApiEnvelope,
     ClaudeReviewApprovalReportApiEnvelope,
     ExecutionStateBoundaryApiEnvelope,
+    ReviewResourcePolicyReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1498,9 +1499,9 @@ async def get_claude_review_approval_report():
     return ClaudeReviewApprovalReportApiEnvelope(data=service.get_claude_review_approval_report())
 
 
-@app.get("/supervisor/review-resource-policy-report", response_model=ApiEnvelope)
+@app.get("/supervisor/review-resource-policy-report", response_model=ReviewResourcePolicyReportApiEnvelope)
 async def get_review_resource_policy_report():
-    return ApiEnvelope(data=service.get_review_resource_policy_report())
+    return ReviewResourcePolicyReportApiEnvelope(data=service.get_review_resource_policy_report())
 
 
 @app.get("/supervisor/github-delivery-authority-report", response_model=ApiEnvelope)
