@@ -139,7 +139,9 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(dashboardSummarySource, /ManagerControlPlane\.MANAGER_TERMINAL_EVENT_TYPE/);
   assert.doesNotMatch(dashboardSummarySource, /authoritative_backlog_exhausted/);
   assert.doesNotMatch(summaryProjectionSource, /"authoritative_backlog_exhausted"/);
-  assert.match(supervisorSchemaSource, /eventType: Literal\["authoritative_backlog_exhausted"\]/);
+  assert.match(supervisorSchemaSource, /MANAGER_TERMINAL_EVENT_TYPE\s*=\s*"authoritative_backlog_exhausted"/);
+  assert.match(supervisorSchemaSource, /eventType:\s*Literal\[MANAGER_TERMINAL_EVENT_TYPE\]/);
+  assert.match(supervisorSchemaSource, /\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s+cannot retain required executable work/);
   assert.match(supervisorSchemaSource, /model_config = ConfigDict\(extra="forbid", strict=True\)/);
   const tsFields = [...terminalEventSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \[((?:.|\n)*?)\] as const;/g)]
     .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));

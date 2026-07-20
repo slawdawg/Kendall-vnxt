@@ -6112,13 +6112,14 @@ MANAGER_TERMINAL_EVENT_VIEW_FIELDS = (
     "rawPayloadRetained",
     "createdAt",
 )
+MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"
 
 
 class ManagerTerminalEventRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     eventId: str = Field(max_length=120)
-    eventType: Literal["authoritative_backlog_exhausted"]
+    eventType: Literal[MANAGER_TERMINAL_EVENT_TYPE]
     runId: str = Field(max_length=120)
     sourceIdentity: str = Field(max_length=240)
     sourceRevision: str = Field(max_length=160)
@@ -6201,7 +6202,7 @@ class ManagerTerminalEventRequest(BaseModel):
                 "otherwiseRequired",
             )
         ):
-            raise ValueError("authoritative_backlog_exhausted cannot retain required executable work.")
+            raise ValueError(f"{MANAGER_TERMINAL_EVENT_TYPE} cannot retain required executable work.")
         if counts.approvalGated != len(self.unresolvedApprovalGatedWork):
             raise ValueError("approvalGated must equal the unresolvedApprovalGatedWork count.")
         work_ids = [item.workId for item in self.unresolvedApprovalGatedWork]
