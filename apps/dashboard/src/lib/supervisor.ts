@@ -22,6 +22,7 @@ export {
 } from "./pipeline-supervisor-projection";
 import type {
   ApiEnvelope,
+  AuditEventView,
   AuthorityReadinessMatrixReportView,
   CandidateWorkBmadImportPayload,
   CandidateWorkObsidianMetadataImportPayload,
@@ -1373,16 +1374,9 @@ export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
 }
 
 export async function getAuditEvents(): Promise<
-  Array<{
-    id: string;
-    workItemId: string;
-    reason: string;
-    mode: string;
-    outcome: string;
-    createdAt: string;
-  }>
+  AuditEventView[]
 > {
-  return requestJson("/audit-events");
+  return requestJson<AuditEventView[]>("/audit-events");
 }
 
 export async function getSavedOperatorViews(scope?: WorkItemFilterScope): Promise<SavedWorkItemView[]> {
