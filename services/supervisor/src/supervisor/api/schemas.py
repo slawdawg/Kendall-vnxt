@@ -5126,6 +5126,15 @@ class DevelopmentRunwayReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class DevelopmentRunwayReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned development runway."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DevelopmentRunwayReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class RuntimeEvidenceCrossCheckView(BaseModel):
     label: str
     report: str
