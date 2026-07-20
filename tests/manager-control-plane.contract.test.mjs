@@ -128,6 +128,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(summaryProjectionSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
   assert.match(managerCoreSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING/);
   assert.match(managerCoreSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED/);
+  assert.match(managerCoreSource, /MANAGER_TERMINAL_EVENT_TYPE/);
+  assert.doesNotMatch(managerCoreSource, /authoritative_backlog_exhausted/);
   assert.doesNotMatch(managerCoreSource, /"missing_supervisor_contract"|"supervisor_canonical_event"/);
   assert.match(dashboardSummarySource, /import \{ ManagerControlPlane \} from "@kendall\/contracts";/);
   assert.match(dashboardSummarySource, /ManagerControlPlane\.MANAGER_TERMINAL_EVENT_TYPE/);
