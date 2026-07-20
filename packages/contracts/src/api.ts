@@ -884,8 +884,13 @@ export interface ExecutionStateBoundaryView {
   executionAttemptRole: string[];
   forbiddenQueueLeaseFields: string[];
   futureProcessLifecycleAttachments: string[];
-  queueLeaseGrantsExecutionAuthority: boolean;
-  executionAttemptLaunchesWorkers: boolean;
+  queueLeaseGrantsExecutionAuthority: false;
+  executionAttemptLaunchesWorkers: false;
+}
+
+export interface ExecutionStateBoundaryApiEnvelope {
+  data: ExecutionStateBoundaryView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface ExecutionReadinessReportView {
