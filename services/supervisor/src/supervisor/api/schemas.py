@@ -6092,6 +6092,15 @@ class OperatorViewResponse(BaseModel):
     updatedAt: datetime
 
 
+class OperatorViewListApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned saved operator views."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[OperatorViewResponse]
+    meta: dict[str, Any] | None = None
+
+
 class ManagerAuthoritativeBacklogReconciliationCounts(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
