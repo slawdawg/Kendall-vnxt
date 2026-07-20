@@ -8,6 +8,7 @@ export const SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS = Object.freeze([
 ]);
 
 export const MANAGER_TERMINAL_EVENT_ID_PATTERN = /^manager-terminal-event:[0-9a-f]{40}$/;
+export const MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted";
 
 export function isCanonicalTerminalEventTimestamp(value) {
   return typeof value === "string" &&

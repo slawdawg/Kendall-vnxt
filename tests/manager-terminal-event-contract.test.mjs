@@ -5,6 +5,7 @@ import { buildAuthoritativeBacklogExhaustedDisposition } from "../scripts/lib/ma
 import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
 import {
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
+  MANAGER_TERMINAL_EVENT_TYPE,
   SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS,
   isCanonicalTerminalEventTimestamp,
   isValidSupervisorTerminalEventMetadata,
@@ -42,6 +43,7 @@ const EVENT_CASES = [
 ];
 
 test("shared canonical terminal-event contract keeps both consumers aligned and immutable", () => {
+  assert.equal(MANAGER_TERMINAL_EVENT_TYPE, "authoritative_backlog_exhausted");
   assert.deepEqual(SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS, [
     "eventId",
     "evidenceRef",
