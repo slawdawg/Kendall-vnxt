@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+  isCanonicalTerminalEventTimestamp,
+  normalizeSupervisorTerminalEventMetadata,
+} from "./terminal-event-contract.mjs";
 
 const TERMINAL_EVENT_PATH = "/manager-control-plane/terminal-events";
 const INTEGRATION_MISSING = "missing_supervisor_contract";
@@ -240,7 +244,7 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
     );
   }
 
-  return transformPersistedPacket(sourcePacket, {
+  const supervisorEvent = normalizeSupervisorTerminalEventMetadata({
     eventId: request.eventId,
     evidenceRef: `supervisor-event:${request.eventId}`,
     status: "persisted",
@@ -248,6 +252,14 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
     metadataOnly: true,
     rawPayloadRetained: false,
   });
+  if (!supervisorEvent) {
+    throw new ManagerSupervisorTerminalEventSyncError(
+      "manager_supervisor_sync_readback_malformed",
+      "Supervisor terminal-event readback could not be projected into the canonical metadata contract.",
+      sourcePacket,
+    );
+  }
+  return transformPersistedPacket(sourcePacket, supervisorEvent);
 }
 
 function buildRequestFromDisposition(disposition, eventId) {
@@ -387,13 +399,9 @@ function assertCanonicalMetadataStrings(value, path = "terminalDisposition") {
   }
 }
 
-function validPersistedAt(value) {
-  return typeof value === "string" && value.length <= 64 && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-}
-
 function isExactPersistedEvent(event) {
   return Boolean(event && typeof event === "object" && !Array.isArray(event) &&
-    hasExactKeys(event, PERSISTED_EVENT_KEYS) && validPersistedAt(event.createdAt));
+    hasExactKeys(event, PERSISTED_EVENT_KEYS) && isCanonicalTerminalEventTimestamp(event.createdAt));
 }
 
 function hasExactKeys(value, expectedKeys) {

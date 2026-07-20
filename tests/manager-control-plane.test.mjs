@@ -31989,6 +31989,14 @@ test("manager supervisor terminal sync fails closed for unavailable malformed an
       fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ data: { createdAt: "invalid" } }) }),
     },
     {
+      name: "noncanonical timestamp",
+      code: "manager_supervisor_sync_response_malformed",
+      fetchImpl: async (_url, options) => {
+        const request = JSON.parse(options.body);
+        return managerSupervisorResponse(request, "2026-07-12T01:02:03Z");
+      },
+    },
+    {
       name: "conflicting identity",
       code: "manager_supervisor_sync_identity_conflict",
       fetchImpl: async (_url, options) => {
