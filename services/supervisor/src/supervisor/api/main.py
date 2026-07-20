@@ -20,6 +20,7 @@ from supervisor.api.schemas import (
     AuthoritativeWorkPacketTransitionRequest,
     CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
+    CandidateWorkListApiEnvelope,
     CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     OperationalActionRequest,
@@ -544,10 +545,10 @@ async def import_obsidian_metadata_candidate_work(
     return ApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
-@app.get("/candidate-work", response_model=ApiEnvelope)
+@app.get("/candidate-work", response_model=CandidateWorkListApiEnvelope)
 async def list_candidate_work(session: AsyncSession = Depends(get_session)):
     candidates = await service.list_candidate_work(session)
-    return ApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
+    return CandidateWorkListApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
 
 
 @app.get("/work-packets", response_model=ApiEnvelope)

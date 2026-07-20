@@ -97,6 +97,11 @@ export interface CandidateWorkView {
   importMetadata: Record<string, unknown>;
 }
 
+export interface CandidateWorkListApiEnvelope {
+  data: CandidateWorkView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface WorkPacketLearnFollowUpCandidateWorkPayload {
   triggerKind: "completed_packet" | "failed_attempt" | "rejected_approval" | "quality_failure" | "operator_feedback";
   title: string;
