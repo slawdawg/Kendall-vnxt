@@ -121,7 +121,9 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(schemaJsonSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,[\s\S]*MANAGER_TERMINAL_EVENT_VIEW_FIELDS,[\s\S]*\} from "\.\/terminal-event";/);
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_REQUEST_FIELDS;/);
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_VIEW_FIELDS;/);
-  const schemaJsonFields = [requestFields, viewFields];
+  const schemaJsonAliases = [...schemaJsonSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_SERIALIZED_FIELDS = (MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS);/g)]
+    .map((match) => match[1] === "MANAGER_TERMINAL_EVENT_REQUEST_FIELDS" ? requestFields : viewFields);
+  const schemaJsonFields = schemaJsonAliases;
   const pyFields = [...supervisorSchemaSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \(([^)]*)\)/g)]
     .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
   assert.deepEqual(tsFields, [requestFields, viewFields]);
