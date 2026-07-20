@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 from urllib.error import HTTPError
 
+import pytest
 import uvicorn
 from httpx2 import ASGITransport, AsyncClient
 
@@ -167,6 +168,22 @@ def test_terminal_event_type_matches_independent_cross_language_contract() -> No
     from supervisor.api.schemas import MANAGER_TERMINAL_EVENT_TYPE
 
     assert MANAGER_TERMINAL_EVENT_TYPE == "authoritative_backlog_exhausted"
+
+
+def test_terminal_event_api_envelope_owns_the_typed_supervisor_view() -> None:
+    from supervisor.api.schemas import ManagerTerminalEventApiEnvelope
+
+    view = {
+        **_payload(),
+        "createdAt": "2026-07-20T05:42:11.123Z",
+    }
+    envelope = ManagerTerminalEventApiEnvelope.model_validate({"data": view})
+
+    assert envelope.data.model_dump() == view
+    with pytest.raises(ValueError):
+        ManagerTerminalEventApiEnvelope.model_validate(
+            {"data": {**view, "unexpected": "not part of the canonical view"}}
+        )
 
 
 def _table_count(db_path: Path, table_name: str) -> int:

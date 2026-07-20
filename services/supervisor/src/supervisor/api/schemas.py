@@ -6216,3 +6216,12 @@ class ManagerTerminalEventView(ManagerTerminalEventRequest):
         max_length=64,
         pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
     )
+
+
+class ManagerTerminalEventApiEnvelope(BaseModel):
+    """Typed supervisor-owned response boundary for canonical terminal events."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ManagerTerminalEventView
+    meta: dict[str, Any] | None = None

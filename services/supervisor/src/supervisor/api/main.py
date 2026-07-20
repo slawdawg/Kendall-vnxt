@@ -36,6 +36,7 @@ from supervisor.api.schemas import (
     DeliveryExecutionEvidencePayload,
     LlmWikiArtifactSearchResultView,
     LlmWikiDisposableRebuildWriteRequest,
+    ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
@@ -718,7 +719,10 @@ async def apply_pipeline_operational_action_v1(
     return ApiEnvelope(data=result)
 
 
-@app.post("/manager-control-plane/terminal-events", response_model=ApiEnvelope)
+@app.post(
+    "/manager-control-plane/terminal-events",
+    response_model=ManagerTerminalEventApiEnvelope,
+)
 async def record_manager_terminal_event(
     payload: ManagerTerminalEventRequest,
     _: None = Depends(require_local_operational_boundary),
@@ -735,7 +739,8 @@ async def record_manager_terminal_event(
 
 
 @app.get(
-    "/manager-control-plane/terminal-events/{event_id}", response_model=ApiEnvelope
+    "/manager-control-plane/terminal-events/{event_id}",
+    response_model=ManagerTerminalEventApiEnvelope,
 )
 async def read_manager_terminal_event(
     event_id: str,
