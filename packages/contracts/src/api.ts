@@ -456,6 +456,11 @@ export interface RoutingPreviewView {
   decision: RoutingDecisionView;
 }
 
+export interface RoutingPreviewApiEnvelope {
+  data: RoutingPreviewView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface SubscriptionHandoffEvidenceView {
   eventType: string;
   summary: string;

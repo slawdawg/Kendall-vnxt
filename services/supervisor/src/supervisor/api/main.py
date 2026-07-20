@@ -33,6 +33,7 @@ from supervisor.api.schemas import (
     OperatorViewDefaultRequest,
     PipelineDashboardProjectionApiEnvelope,
     PipelineEpic25EvidenceChainIngestRequest,
+    RoutingPreviewApiEnvelope,
     WorkItemActionRequest,
     WorkItemApiEnvelope,
     WorkItemAssignmentRequest,
@@ -1055,7 +1056,7 @@ async def get_work_item_recipe_gate_audit(work_item_id: str, session: AsyncSessi
     return WorkItemRecipeGateAuditApiEnvelope(data=audit)
 
 
-@app.get("/work-items/{work_item_id}/routing-preview", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/routing-preview", response_model=RoutingPreviewApiEnvelope)
 async def get_work_item_routing_preview(work_item_id: str, session: AsyncSession = Depends(get_session)):
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
@@ -1063,7 +1064,7 @@ async def get_work_item_routing_preview(work_item_id: str, session: AsyncSession
     preview = await service.get_routing_preview(session, work_item_id)
     if not preview:
         raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
-    return ApiEnvelope(data=preview)
+    return RoutingPreviewApiEnvelope(data=preview)
 
 
 @app.get("/work-items/{work_item_id}/task-packet-preview", response_model=ApiEnvelope)
