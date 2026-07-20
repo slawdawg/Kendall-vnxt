@@ -4692,6 +4692,15 @@ class AuthorityReadinessMatrixReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class AuthorityReadinessMatrixReportApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned authority readiness matrices."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: AuthorityReadinessMatrixReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class DashboardE2ERunnerView(BaseModel):
     runnerId: str
     label: str

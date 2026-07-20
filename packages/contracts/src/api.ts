@@ -1100,6 +1100,11 @@ export interface AuthorityReadinessMatrixReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface AuthorityReadinessMatrixReportApiEnvelope {
+  data: AuthorityReadinessMatrixReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DashboardE2ERunnerView {
   runnerId: string;
   label: string;
