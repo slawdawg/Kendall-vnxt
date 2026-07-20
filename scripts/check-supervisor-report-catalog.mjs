@@ -303,6 +303,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/local-cleanup-readiness-report",
   "GET /supervisor/remote-cleanup-sync-readiness-report",
   "GET /supervisor/trusted-autonomy-readiness-report",
+  "GET /supervisor/epic-6-completion-audit-report",
   "GET /supervisor/epic-6-mvp-proof-trial-report",
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
