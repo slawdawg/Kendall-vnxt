@@ -35,6 +35,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
     DeliveryExecutionEvidencePayload,
+    ExecutionAttemptApiEnvelope,
     LlmWikiArtifactSearchResultView,
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
@@ -918,13 +919,13 @@ async def get_work_item_llm_wiki_artifact(
     return ApiEnvelope(data=result)
 
 
-@app.get("/work-items/{work_item_id}/execution-attempts", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/execution-attempts", response_model=ExecutionAttemptApiEnvelope)
 async def get_work_item_execution_attempts(work_item_id: str, session: AsyncSession = Depends(get_session)):
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     attempts = await service.list_execution_attempts(session, work_item_id)
-    return ApiEnvelope(data=attempts)
+    return ExecutionAttemptApiEnvelope(data=attempts)
 
 
 @app.get("/work-items/{work_item_id}/runtime-evidence-export", response_model=ApiEnvelope)

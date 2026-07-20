@@ -708,6 +708,13 @@ class ExecutionAttemptView(BaseModel):
     eventRefs: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ExecutionAttemptApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[ExecutionAttemptView]
+    meta: dict[str, Any] | None = None
+
+
 class ExecutableWorkItemActionView(BaseModel):
     actionId: str
     label: str
