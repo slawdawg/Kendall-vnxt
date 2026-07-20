@@ -735,6 +735,11 @@ export interface RoutingLaneEvidenceProfileView {
   latestEventAt?: string | null;
 }
 
+export interface RoutingLaneProfileListApiEnvelope {
+  data: RoutingLaneEvidenceProfileView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 
 export interface WorkerRegistryEntryView {
   workerId: string;
