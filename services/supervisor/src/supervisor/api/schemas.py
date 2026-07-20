@@ -4216,6 +4216,15 @@ class RoutingLaneEvidenceProfileView(BaseModel):
     latestEventAt: datetime | None = None
 
 
+class RoutingLaneProfileListApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned routing lane catalog."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[RoutingLaneEvidenceProfileView]
+    meta: dict[str, Any] | None = None
+
+
 
 class WorkerRegistryEntryView(BaseModel):
     workerId: str
