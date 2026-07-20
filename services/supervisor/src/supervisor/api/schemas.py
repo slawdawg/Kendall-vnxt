@@ -262,6 +262,13 @@ class CandidateWorkView(BaseModel):
     importMetadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CandidateWorkListApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[CandidateWorkView]
+    meta: dict[str, Any] | None = None
+
+
 class BmadImportPackageView(BaseModel):
     title: str
     requestedOutcome: str
