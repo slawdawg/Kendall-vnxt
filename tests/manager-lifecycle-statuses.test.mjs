@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { buildManagerExecutionLaneSummary, WORK_STATUSES } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
+import { createMemoryDispatcherAdapter } from "../scripts/lib/manager-control-plane/adapters/memory-dispatcher-adapter.mjs";
+import { loadManagerFixture } from "./helpers/manager-control-plane/fixture-loader.mjs";
+import { loadWorkflowCoreManagerControlPlane } from "./helpers/manager-control-plane/workflow-core-loader.mjs";
 
 test("manager JavaScript consumers share the canonical work-item lifecycle status set", async () => {
   assert.deepEqual(WORK_STATUSES, [
@@ -18,6 +20,7 @@ test("manager JavaScript consumers share the canonical work-item lifecycle statu
     "blocked",
     "closed",
   ]);
+  assert.equal(Object.isFrozen(WORK_STATUSES), true);
   const summary = buildManagerExecutionLaneSummary({
     runId: "lifecycle-status-source-test",
     clock: {
@@ -36,7 +39,18 @@ test("manager JavaScript consumers share the canonical work-item lifecycle statu
     assert.equal(summary.stateCounts[status], 1, `summary count for ${status}`);
   }
 
-  const adapterSource = await readFile(new URL("../scripts/lib/manager-control-plane/adapters/memory-dispatcher-adapter.mjs", import.meta.url), "utf8");
-  assert.match(adapterSource, /import .*WORK_STATUSES.* from "\.\.\/summary-projection\.mjs"/);
-  assert.doesNotMatch(adapterSource, /const WORK_STATUSES = \[/);
+  const lifecycle = await loadWorkflowCoreManagerControlPlane();
+  const fixture = await loadManagerFixture("happy-path.json");
+  const adapter = createMemoryDispatcherAdapter({
+    lifecycle,
+    clock: lifecycle.createManualClock("2026-07-20T01:00:00.000Z"),
+    runId: "lifecycle-status-source-test",
+  });
+  const refill = await adapter.refill({
+    candidates: [fixture.candidate],
+    evidenceRefs: ["evidence:lifecycle-status-source"],
+    policyReason: "shared lifecycle status source regression",
+  });
+  assert.equal(refill.ok, true);
+  assert.equal(refill.value.queuedWorkItems[0].status, "queued");
 });
