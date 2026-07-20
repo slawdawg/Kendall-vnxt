@@ -7,6 +7,8 @@ import { basename, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS,
+  MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS,
   MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
   MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS,
   MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS,
@@ -94,6 +96,12 @@ function extractTypeScriptInterfaceFields(source, interfaceName) {
   return [...match[1].matchAll(/^\s+([A-Za-z][A-Za-z0-9]*):/gm)].map((entry) => entry[1]);
 }
 
+function extractTypeScriptInterfaceSerializedFields(source, interfaceName) {
+  const match = source.match(new RegExp(`interface ${interfaceName} \\{([\\s\\S]*?)\\}`));
+  assert.ok(match, `missing TypeScript interface ${interfaceName}`);
+  return [...match[1].matchAll(/^\s+([A-Za-z][A-Za-z0-9]*)\??:/gm)].map((entry) => entry[1]);
+}
+
 function extractPythonModelFields(source, className) {
   const match = source.match(new RegExp(`class ${className}\\(BaseModel\\):([\\s\\S]*?)(?=\\n\\nclass |$)`));
   assert.ok(match, `missing Python model ${className}`);
@@ -134,6 +142,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
     "idempotencyKey", "metadataOnly", "rawPayloadRetained",
   ];
   const viewFields = [...requestFields, "createdAt"];
+  const envelopeFields = ["data", "meta"];
+  const envelopeRequiredFields = ["data"];
   const reconciliationCountFields = [
     "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
     "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
@@ -143,24 +153,38 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   ];
   const tsReconciliationCountFields = extractTypeScriptInterfaceFields(terminalEventSource, "ManagerAuthoritativeBacklogReconciliationCounts");
   const tsUnresolvedWorkFields = extractTypeScriptInterfaceFields(terminalEventSource, "ManagerUnresolvedApprovalGatedWork");
+  const tsEnvelopeFields = extractTypeScriptInterfaceSerializedFields(terminalEventSource, "ManagerTerminalEventApiEnvelope");
   const pyReconciliationCountFields = extractPythonModelFields(supervisorSchemaSource, "ManagerAuthoritativeBacklogReconciliationCounts");
   const pyUnresolvedWorkFields = extractPythonModelFields(supervisorSchemaSource, "ManagerUnresolvedApprovalGatedWork");
+  const pyEnvelopeFields = extractPythonModelFields(supervisorSchemaSource, "ManagerTerminalEventApiEnvelope");
+  const tsEnvelopeRequiredFields = extractConstArray(terminalEventSource, "MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS");
+  const pyEnvelopeRequiredFields = [...supervisorSchemaSource.matchAll(/MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = \(([^)]*)\)/g)]
+    .flatMap((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
   assert.deepEqual([...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS], requestFields, "JS request fields must match the shared serialized contract");
   assert.deepEqual([...MANAGER_TERMINAL_EVENT_VIEW_FIELDS], viewFields, "JS view fields must match the shared serialized contract");
+  assert.deepEqual([...MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS], envelopeFields, "JS API envelope fields must match the shared serialized contract");
+  assert.deepEqual([...MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS], envelopeRequiredFields, "JS API envelope required fields must remain canonical");
   assert.deepEqual([...MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS], reconciliationCountFields, "JS reconciliation-count fields must remain canonical");
   assert.deepEqual([...MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS], unresolvedWorkFields, "JS unresolved-work fields must remain canonical");
   assert.deepEqual(tsReconciliationCountFields, reconciliationCountFields, "TypeScript reconciliation-count fields must remain aligned");
   assert.deepEqual(tsUnresolvedWorkFields, unresolvedWorkFields, "TypeScript unresolved-work fields must remain aligned");
+  assert.deepEqual(tsEnvelopeFields, envelopeFields, "TypeScript terminal-event API envelope fields must remain aligned");
+  assert.deepEqual(tsEnvelopeRequiredFields, envelopeRequiredFields, "TypeScript terminal-event API envelope required fields must remain aligned");
   assert.deepEqual(pyReconciliationCountFields, reconciliationCountFields, "Python reconciliation-count fields must remain aligned");
   assert.deepEqual(pyUnresolvedWorkFields, unresolvedWorkFields, "Python unresolved-work fields must remain aligned");
+  assert.deepEqual(pyEnvelopeFields, envelopeFields, "Python terminal-event API envelope fields must remain aligned");
+  assert.deepEqual(pyEnvelopeRequiredFields, envelopeRequiredFields, "Python terminal-event API envelope required fields must remain aligned");
   for (const field of requestFields) {
     assert.match(terminalEventSource, new RegExp(`\\b${field}:`), `TypeScript request is missing ${field}`);
     assert.match(supervisorSchemaSource, new RegExp(`^    ${field}:`, "m"), `Python request is missing ${field}`);
   }
   assert.match(terminalEventSource, /interface ManagerTerminalEventView extends ManagerTerminalEventRequest/);
+  assert.match(terminalEventSource, /interface ManagerTerminalEventApiEnvelope/);
+  assert.match(terminalEventSource, /MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = \[/);
   assert.match(supervisorSchemaSource, /class ManagerTerminalEventView\(ManagerTerminalEventRequest\)/);
   assert.match(supervisorSchemaSource, /^    createdAt:/m);
   assert.match(supervisorSchemaSource, /class ManagerTerminalEventApiEnvelope\(BaseModel\)/);
+  assert.match(supervisorSchemaSource, /MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = \(\s*"data",\s*"meta",\s*\)/);
   assert.match(supervisorSchemaSource, /^    data: ManagerTerminalEventView$/m);
   assert.match(supervisorSchemaSource, /class ManagerTerminalEventApiEnvelope\(BaseModel\):[\s\S]*model_config = ConfigDict\(extra="forbid", strict=True\)/);
   assert.match(supervisorMainSource, /@app\.post\([\s\S]*\/manager-control-plane\/terminal-events[\s\S]*response_model=ManagerTerminalEventApiEnvelope/);
@@ -174,6 +198,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(terminalEventContractSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event"/);
   assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_REQUEST_FIELDS = Object\.freeze\(\[/);
   assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_VIEW_FIELDS = Object\.freeze\(\[/);
+  assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = Object\.freeze\(\[/);
+  assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = Object\.freeze\(\[/);
   assert.match(lifecycleSource, /import\s*\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s*from\s*["']\.\/terminal-event["']/);
   assert.doesNotMatch(lifecycleSource.replace(/[\s"'`+]/g, ""), /authoritative_backlog_exhausted/);
   assert.match(refillSource, /import\s*\{\s*MANAGER_TERMINAL_EVENT_TYPE\s*\}\s*from\s*["']\.\/terminal-event["']/);
@@ -226,6 +252,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(schemaJsonSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,[\s\S]*MANAGER_TERMINAL_EVENT_VIEW_FIELDS,[\s\S]*\} from "\.\/terminal-event";/);
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_REQUEST_FIELDS;/);
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_VIEW_FIELDS;/);
+  assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_API_ENVELOPE_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS;/);
+  assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS;/);
   assert.match(terminalEventSyncSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_ID_PATTERN,[\s\S]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_TYPE/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_REQUEST_FIELDS/);
@@ -249,9 +277,12 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   const schemaJsonFields = schemaJsonAliases;
   const pyFields = [...supervisorSchemaSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \(([^)]*)\)/g)]
     .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
+  const pyEnvelopeContractFields = [...supervisorSchemaSource.matchAll(/MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = \(([^)]*)\)/g)]
+    .map((match) => [...match[1].matchAll(/"([^\"]+)"/g)].map((entry) => entry[1]));
   assert.deepEqual(tsFields, [requestFields, viewFields]);
   assert.deepEqual(schemaJsonFields, [requestFields, viewFields]);
   assert.deepEqual(pyFields, [requestFields, viewFields]);
+  assert.deepEqual(pyEnvelopeContractFields, [envelopeFields]);
   assert.deepEqual(extractRequiredFieldsByContract(schemaJsonSource, "ManagerTerminalEventRequest"), requestFields);
   assert.deepEqual(extractRequiredFieldsByContract(schemaJsonSource, "ManagerTerminalEventView"), viewFields);
 });
@@ -272,10 +303,13 @@ test("Manager Control Plane contracts define canonical objects and ids without r
       "ManagerTerminalEventType",
       "ManagerTerminalEventRequest",
       "ManagerTerminalEventView",
+      "ManagerTerminalEventApiEnvelope",
       "ManagerSupervisorCanonicalEventMetadata",
       "MANAGER_TERMINAL_EVENT_TYPE",
       "MANAGER_TERMINAL_EVENT_REQUEST_FIELDS",
       "MANAGER_TERMINAL_EVENT_VIEW_FIELDS",
+      "MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS",
+      "MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS",
     ],
     "types.ts": [
       "CandidateWorkPacket",
@@ -295,7 +329,7 @@ test("Manager Control Plane contracts define canonical objects and ids without r
     "authority.ts": ["ManagerAuthorityStage", "ManagerAuthorityDecision", "ManagerRunPreauthorization"],
     "operational-action.ts": ["ManagerOperationalActionPolicy", "ManagerOperationalActionEvaluation"],
     "events.ts": ["ManagerControlPlaneEvent", "ManagerControlPlaneEventName"],
-    "schema-json.ts": ["MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS", "MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS"]
+    "schema-json.ts": ["MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS", "MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS", "MANAGER_TERMINAL_EVENT_API_ENVELOPE_SERIALIZED_FIELDS", "MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_SERIALIZED_FIELDS"]
   })) {
     const source = sourceByModule.get(moduleName);
     assert.ok(source, `missing source for ${moduleName}`);
@@ -697,7 +731,7 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `import { MANAGER_SUMMARY_PHASES } from "${importPrefix}/lifecycle.ts";`,
       `import type { RefillResult } from "${importPrefix}/refill.ts";`,
       `import { MANAGER_TERMINAL_EVENT_TYPE } from "${importPrefix}/terminal-event.ts";`,
-      `import type { ManagerTerminalEventRequest, ManagerTerminalEventView } from "${importPrefix}/terminal-event.ts";`,
+      `import type { ManagerTerminalEventApiEnvelope, ManagerTerminalEventRequest, ManagerTerminalEventView } from "${importPrefix}/terminal-event.ts";`,
       `import { ManagerControlPlane } from "${contractsImportPrefix}/index.ts";`,
       `import type { ManagerExecutionLaneStateCounts, ManagerExecutionLaneSummary } from "${importPrefix}/summary.ts";`,
       "",
@@ -721,6 +755,8 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `  nextManagerAction: "Stop refill until new accepted source-owned backlog exists.", idempotencyKey: "authoritative-backlog-exhausted:run-1", metadataOnly: true, rawPayloadRetained: false`,
       `};`,
       `const terminalView: ManagerTerminalEventView = { ...terminalRequest, createdAt: "2026-07-19T00:00:00.000Z" };`,
+      `const terminalEnvelope: ManagerTerminalEventApiEnvelope = { data: terminalView, meta: null };`,
+      `if (terminalEnvelope.data.eventId !== terminalView.eventId) throw new Error("terminal envelope view mismatch");`,
       `if (terminalView.eventType !== "authoritative_backlog_exhausted") throw new Error("terminal event type mismatch");`,
       `const stateCounts: ManagerExecutionLaneStateCounts = {`,
       `  totalWorkItems: 0, totalLeases: 0, totalAttempts: 0, eligible: 0, queued: 0, leased: 0, running: 0, refilling: 0,`,

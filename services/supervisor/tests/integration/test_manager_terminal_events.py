@@ -171,7 +171,11 @@ def test_terminal_event_type_matches_independent_cross_language_contract() -> No
 
 
 def test_terminal_event_api_envelope_owns_the_typed_supervisor_view() -> None:
-    from supervisor.api.schemas import ManagerTerminalEventApiEnvelope
+    from supervisor.api.schemas import (
+        MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS,
+        MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS,
+        ManagerTerminalEventApiEnvelope,
+    )
 
     view = {
         **_payload(),
@@ -179,6 +183,11 @@ def test_terminal_event_api_envelope_owns_the_typed_supervisor_view() -> None:
     }
     envelope = ManagerTerminalEventApiEnvelope.model_validate({"data": view})
 
+    assert tuple(ManagerTerminalEventApiEnvelope.model_fields) == MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS
+    assert tuple(
+        field for field, model_field in ManagerTerminalEventApiEnvelope.model_fields.items()
+        if model_field.is_required()
+    ) == MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS
     assert envelope.data.model_dump() == view
     with pytest.raises(ValueError):
         ManagerTerminalEventApiEnvelope.model_validate(
