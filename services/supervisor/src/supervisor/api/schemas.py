@@ -5296,6 +5296,15 @@ class GitHubWorkflowPolicyReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class GitHubWorkflowPolicyReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned GitHub workflow policy."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: GitHubWorkflowPolicyReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class GitHygieneSignalView(BaseModel):
     signalId: str
     label: str

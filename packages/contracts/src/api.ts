@@ -1395,6 +1395,11 @@ export interface GitHubWorkflowPolicyReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface GitHubWorkflowPolicyReportApiEnvelope {
+  data: GitHubWorkflowPolicyReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface GitHygieneSignalView {
   signalId: string;
   label: string;
