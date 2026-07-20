@@ -41,6 +41,7 @@ from supervisor.api.schemas import (
     ClaudeReviewApprovalReportApiEnvelope,
     ExecutionStateBoundaryApiEnvelope,
     ReviewResourcePolicyReportApiEnvelope,
+    EpicCompletionAuditReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1582,9 +1583,9 @@ async def get_trusted_autonomy_readiness_report():
     return ApiEnvelope(data=service.get_trusted_autonomy_readiness_report())
 
 
-@app.get("/supervisor/epic-6-completion-audit-report", response_model=ApiEnvelope)
+@app.get("/supervisor/epic-6-completion-audit-report", response_model=EpicCompletionAuditReportApiEnvelope)
 async def get_epic_6_completion_audit_report():
-    return ApiEnvelope(data=service.get_epic_6_completion_audit_report())
+    return EpicCompletionAuditReportApiEnvelope(data=service.get_epic_6_completion_audit_report())
 
 
 @app.get("/supervisor/epic-6-mvp-proof-trial-report", response_model=ApiEnvelope)

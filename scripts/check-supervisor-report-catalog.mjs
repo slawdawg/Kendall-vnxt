@@ -17,6 +17,8 @@ function assertCondition(condition, message, failures) {
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
+const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/schemas.py");
+const contractSource = readWorkspaceFile("packages/contracts/src/api.ts");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
 const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
@@ -25,6 +27,28 @@ const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcu
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const routingPreviewTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
+const epicAuditSchemaStart = schemaSource.indexOf("class EpicCompletionAuditReportApiEnvelope");
+const epicAuditSchemaEnd = schemaSource.indexOf("\n\nclass MvpProofTrialStepView", epicAuditSchemaStart);
+const epicAuditSchema = epicAuditSchemaStart >= 0 && epicAuditSchemaEnd > epicAuditSchemaStart
+  ? schemaSource.slice(epicAuditSchemaStart, epicAuditSchemaEnd)
+  : "";
+const epicAuditViewStart = schemaSource.indexOf("class EpicCompletionAuditReportView");
+const epicAuditViewEnd = schemaSource.indexOf("\n\nclass EpicCompletionAuditReportApiEnvelope", epicAuditViewStart);
+const epicAuditView = epicAuditViewStart >= 0 && epicAuditViewEnd > epicAuditViewStart
+  ? schemaSource.slice(epicAuditViewStart, epicAuditViewEnd)
+  : "";
+const epicAuditContractStart = contractSource.indexOf("export interface EpicCompletionAuditReportView");
+const epicAuditContractEnd = contractSource.indexOf("\nexport interface EpicCompletionAuditReportApiEnvelope", epicAuditContractStart);
+const epicAuditContract = epicAuditContractStart >= 0 && epicAuditContractEnd > epicAuditContractStart
+  ? contractSource.slice(epicAuditContractStart, epicAuditContractEnd)
+  : "";
+const epicAuditRouteStart = apiSource.indexOf(
+  '@app.get("/supervisor/epic-6-completion-audit-report", response_model=EpicCompletionAuditReportApiEnvelope)',
+);
+const epicAuditRouteEnd = apiSource.indexOf("\n\n@app.", epicAuditRouteStart);
+const epicAuditRoute = epicAuditRouteStart >= 0 && epicAuditRouteEnd > epicAuditRouteStart
+  ? apiSource.slice(epicAuditRouteStart, epicAuditRouteEnd)
+  : "";
 
 const reports = [
   {
@@ -317,6 +341,42 @@ for (const visibleEndpoint of [
     `Dashboard browser coverage must assert visible report endpoint ${visibleEndpoint}`,
     failures,
   );
+}
+
+assertCondition(
+  epicAuditRoute.includes(
+    '@app.get("/supervisor/epic-6-completion-audit-report", response_model=EpicCompletionAuditReportApiEnvelope)',
+  ) && epicAuditRoute.includes(
+    "return EpicCompletionAuditReportApiEnvelope(data=service.get_epic_6_completion_audit_report())",
+  ),
+  "Epic 6 completion audit route must return the typed API envelope",
+  failures,
+);
+assertCondition(
+  epicAuditSchema.includes("class EpicCompletionAuditReportApiEnvelope") &&
+    epicAuditSchema.includes('model_config = ConfigDict(extra="forbid", strict=True)') &&
+    epicAuditSchema.includes("data: EpicCompletionAuditReportView") &&
+    epicAuditSchema.includes("meta: dict[str, str | int | float | bool | None] | None = None"),
+  "Epic 6 completion audit envelope must be strict and typed",
+  failures,
+);
+for (const safetyLiteral of [
+  "readOnly: Literal[True]",
+  "epicComplete: Literal[True]",
+  "remoteDeliveryApproved: Literal[True]",
+  "providerExecutionApproved: Literal[False]",
+  "cleanupApproved: Literal[True]",
+]) {
+  assertCondition(epicAuditView.includes(safetyLiteral), `Epic 6 audit view must include ${safetyLiteral}`, failures);
+}
+for (const safetyLiteral of [
+  "readOnly: true;",
+  "epicComplete: true;",
+  "remoteDeliveryApproved: true;",
+  "providerExecutionApproved: false;",
+  "cleanupApproved: true;",
+]) {
+  assertCondition(epicAuditContract.includes(safetyLiteral), `Epic 6 audit contract must include ${safetyLiteral}`, failures);
 }
 
 for (const overviewText of [
