@@ -2150,6 +2150,11 @@ export interface WorkItemView extends WorkItemPayload {
   auditMode: "none" | "advisory" | "required";
 }
 
+export interface WorkItemListApiEnvelope {
+  data: WorkItemView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface RunStatusView {
   mode: RunMode;
   pollIntervalSeconds: number;
