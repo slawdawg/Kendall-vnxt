@@ -6,6 +6,8 @@ import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control
 import {
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
   MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
+  MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS,
+  MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS,
   MANAGER_TERMINAL_EVENT_TYPE,
   MANAGER_TERMINAL_EVENT_VIEW_FIELDS,
   SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
@@ -60,6 +62,15 @@ test("shared canonical terminal-event contract keeps both consumers aligned and 
   ]);
   assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_REQUEST_FIELDS), true);
   assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_VIEW_FIELDS), true);
+  assert.deepEqual(MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS, [
+    "totalItems", "reconciledItems", "eligible", "queued", "leased", "running", "reviewFix",
+    "requiredRetrospective", "otherwiseRequired", "completed", "closed", "approvalGated",
+  ]);
+  assert.deepEqual(MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS, [
+    "workId", "title", "reason", "sourceRefs", "evidenceRefs",
+  ]);
+  assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_RECONCILIATION_COUNT_FIELDS), true);
+  assert.equal(Object.isFrozen(MANAGER_TERMINAL_EVENT_UNRESOLVED_WORK_FIELDS), true);
   assert.deepEqual(SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS, [
     "eventId",
     "evidenceRef",
