@@ -29,6 +29,52 @@ const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
+const deliveryReportStart = schemaSource.indexOf("class DeliveryReadinessPolicyReportView");
+const deliveryReportEnd = schemaSource.indexOf("\n\nclass DeliveryReadinessPolicyReportApiEnvelope", deliveryReportStart);
+const deliveryReportSchema = deliveryReportStart >= 0 && deliveryReportEnd > deliveryReportStart
+  ? schemaSource.slice(deliveryReportStart, deliveryReportEnd)
+  : "";
+const deliveryEnvelopeStart = schemaSource.indexOf("class DeliveryReadinessPolicyReportApiEnvelope");
+const deliveryEnvelopeEnd = schemaSource.indexOf("\n\nclass WorkItemView", deliveryEnvelopeStart);
+const deliveryEnvelopeSchema = deliveryEnvelopeStart >= 0 && deliveryEnvelopeEnd > deliveryEnvelopeStart
+  ? schemaSource.slice(deliveryEnvelopeStart, deliveryEnvelopeEnd)
+  : "";
+const deliveryContractStart = contractSource.indexOf("export interface DeliveryReadinessPolicyReportView");
+const deliveryContractEnd = contractSource.indexOf("\nexport interface DeliveryReadinessPolicyReportApiEnvelope", deliveryContractStart);
+const deliveryContract = deliveryContractStart >= 0 && deliveryContractEnd > deliveryContractStart
+  ? contractSource.slice(deliveryContractStart, deliveryContractEnd)
+  : "";
+const deliveryRouteStart = apiSource.indexOf(
+  '@app.get("/supervisor/delivery-readiness-policy-report", response_model=DeliveryReadinessPolicyReportApiEnvelope)',
+);
+const deliveryRouteEnd = apiSource.indexOf("\n\n@app.", deliveryRouteStart);
+const deliveryRoute = deliveryRouteStart >= 0 && deliveryRouteEnd > deliveryRouteStart
+  ? apiSource.slice(deliveryRouteStart, deliveryRouteEnd)
+  : "";
+const deliveryReportFields = [
+  "reportId: str",
+  "generatedAt: datetime",
+  "summary: str",
+  "statusPolicy: list[DeliveryReadinessPolicyItemView]",
+  "waiverPolicy: list[DeliveryReadinessPolicyItemView]",
+  "promoteReadinessPolicy: list[DeliveryReadinessPolicyItemView]",
+  "deliverReadinessPolicy: list[DeliveryReadinessPolicyItemView]",
+  "blockerRoutingPolicy: list[DeliveryReadinessPolicyItemView]",
+  "stopLines: list[str]",
+  "nextSafeActions: list[str]",
+];
+const deliveryContractFields = [
+  "reportId: string;",
+  "generatedAt: string;",
+  "summary: string;",
+  "statusPolicy: DeliveryReadinessPolicyItemView[];",
+  "waiverPolicy: DeliveryReadinessPolicyItemView[];",
+  "promoteReadinessPolicy: DeliveryReadinessPolicyItemView[];",
+  "deliverReadinessPolicy: DeliveryReadinessPolicyItemView[];",
+  "blockerRoutingPolicy: DeliveryReadinessPolicyItemView[];",
+  "stopLines: string[];",
+  "nextSafeActions: string[];",
+];
 
 const failures = [];
 
@@ -37,9 +83,24 @@ assertCondition(
   "package.json must define check:delivery-readiness as node ./scripts/check-delivery-readiness-policy-report.mjs",
   failures,
 );
+for (const field of deliveryReportFields) {
+  assertCondition(deliveryReportSchema.includes(`    ${field}`), `Delivery report must include ${field}`, failures);
+}
+for (const field of deliveryContractFields) {
+  assertCondition(deliveryContract.includes(`  ${field}`), `Delivery contract must include ${field}`, failures);
+}
 assertCondition(
   packageJson.scripts?.check?.includes("pnpm run check:delivery-readiness"),
   "pnpm run check must include pnpm run check:delivery-readiness",
+  failures,
+);
+assertCondition(
+  schemaSource.match(/class DeliveryReadinessPolicyReportView\b/g)?.length === 1 &&
+    schemaSource.match(/class DeliveryReadinessPolicyReportApiEnvelope\b/g)?.length === 1 &&
+    contractSource.match(/export interface DeliveryReadinessPolicyReportView\b/g)?.length === 1 &&
+    contractSource.match(/export interface DeliveryReadinessPolicyReportApiEnvelope\b/g)?.length === 1 &&
+    apiSource.match(/@app\.get\("\/supervisor\/delivery-readiness-policy-report"/g)?.length === 1,
+  "Delivery readiness policy declarations must be unique",
   failures,
 );
 
@@ -57,6 +118,37 @@ for (const typeName of [
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
 }
+assertCondition(
+  deliveryEnvelopeSchema.includes("class DeliveryReadinessPolicyReportApiEnvelope") &&
+    deliveryEnvelopeSchema.includes('model_config = ConfigDict(extra="forbid", strict=True)') &&
+    deliveryEnvelopeSchema.includes("data: DeliveryReadinessPolicyReportView") &&
+    deliveryEnvelopeSchema.includes("meta: dict[str, str | int | float | bool | None] | None = None"),
+  "Delivery readiness policy envelope must be strict and typed",
+  failures,
+);
+for (const safetyLiteral of [
+  "readOnly: Literal[True]",
+  "executionAuthorityApproved: Literal[False]",
+  "remoteAutomationApproved: Literal[False]",
+]) {
+  assertCondition(deliveryReportSchema.includes(safetyLiteral), `Delivery report must include ${safetyLiteral}`, failures);
+}
+for (const safetyLiteral of [
+  "readOnly: true;",
+  "executionAuthorityApproved: false;",
+  "remoteAutomationApproved: false;",
+]) {
+  assertCondition(deliveryContract.includes(safetyLiteral), `Delivery contract must include ${safetyLiteral}`, failures);
+}
+assertCondition(
+  deliveryRoute.includes(
+    '@app.get("/supervisor/delivery-readiness-policy-report", response_model=DeliveryReadinessPolicyReportApiEnvelope)',
+  ) && deliveryRoute.includes(
+    "return DeliveryReadinessPolicyReportApiEnvelope(data=service.get_delivery_readiness_policy_report())",
+  ),
+  "Delivery readiness route must return the typed envelope",
+  failures,
+);
 
 assertCondition(
   apiSource.includes('"/supervisor/delivery-readiness-policy-report"'),

@@ -42,6 +42,7 @@ from supervisor.api.schemas import (
     ExecutionStateBoundaryApiEnvelope,
     ReviewResourcePolicyReportApiEnvelope,
     EpicCompletionAuditReportApiEnvelope,
+    DeliveryReadinessPolicyReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1593,9 +1594,9 @@ async def get_epic_6_mvp_proof_trial_report():
     return ApiEnvelope(data=service.get_epic_6_mvp_proof_trial_report())
 
 
-@app.get("/supervisor/delivery-readiness-policy-report", response_model=ApiEnvelope)
+@app.get("/supervisor/delivery-readiness-policy-report", response_model=DeliveryReadinessPolicyReportApiEnvelope)
 async def get_delivery_readiness_policy_report():
-    return ApiEnvelope(data=service.get_delivery_readiness_policy_report())
+    return DeliveryReadinessPolicyReportApiEnvelope(data=service.get_delivery_readiness_policy_report())
 
 
 @app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)

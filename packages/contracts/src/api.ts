@@ -2234,9 +2234,14 @@ export interface DeliveryReadinessPolicyReportView {
   blockerRoutingPolicy: DeliveryReadinessPolicyItemView[];
   stopLines: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  executionAuthorityApproved: boolean;
-  remoteAutomationApproved: boolean;
+  readOnly: true;
+  executionAuthorityApproved: false;
+  remoteAutomationApproved: false;
+}
+
+export interface DeliveryReadinessPolicyReportApiEnvelope {
+  data: DeliveryReadinessPolicyReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface ThreatBoundaryRuleView {
