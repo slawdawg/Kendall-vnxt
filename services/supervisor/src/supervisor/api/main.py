@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     ApiEnvelope,
+    AuditEventApiEnvelope,
     ApiErrorEnvelope,
     ApiErrorShape,
     AuthoritativeWorkPacketCreateRequest,
@@ -57,6 +58,7 @@ from supervisor.api.schemas import (
     WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
     WorkItemVerificationEvidenceRequest,
+    WorkflowEventApiEnvelope,
 )
 from supervisor.application.manager_terminal_events import (
     get_manager_terminal_event,
@@ -813,13 +815,13 @@ async def get_work_item(work_item_id: str, session: AsyncSession = Depends(get_s
     raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
 
 
-@app.get("/work-items/{work_item_id}/events", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/events", response_model=WorkflowEventApiEnvelope)
 async def get_work_item_events(work_item_id: str, session: AsyncSession = Depends(get_session)):
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     events = await service.list_work_item_events(session, work_item_id)
-    return ApiEnvelope(data=[service.to_event_view(event) for event in events])
+    return WorkflowEventApiEnvelope(data=[service.to_event_view(event) for event in events])
 
 
 @app.post("/work-items/{work_item_id}/memory-proposals", response_model=ApiEnvelope)
@@ -1599,10 +1601,10 @@ async def disable():
     _legacy_mode_control_rejected()
 
 
-@app.get("/audit-events", response_model=ApiEnvelope)
+@app.get("/audit-events", response_model=AuditEventApiEnvelope)
 async def list_audit_events(session: AsyncSession = Depends(get_session)):
     audits = await service.list_audit_events(session)
-    return ApiEnvelope(data=[service.to_audit_view(audit) for audit in audits])
+    return AuditEventApiEnvelope(data=[service.to_audit_view(audit) for audit in audits])
 
 
 @app.get("/operator-views", response_model=ApiEnvelope)

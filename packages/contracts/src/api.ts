@@ -2178,6 +2178,25 @@ export interface WorkflowEventView {
   createdAt: string;
 }
 
+export interface AuditEventView {
+  id: string;
+  workItemId: string;
+  reason: string;
+  mode: "none" | "advisory" | "required";
+  outcome: string;
+  createdAt: string;
+}
+
+export interface WorkflowEventApiEnvelope {
+  data: WorkflowEventView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
+export interface AuditEventApiEnvelope {
+  data: AuditEventView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface RuntimeEvidenceExportBoundaryView {
   localRuntimeState: string[];
   gitBackedEvidence: string[];

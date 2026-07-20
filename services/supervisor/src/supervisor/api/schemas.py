@@ -5914,6 +5914,20 @@ class WorkflowEventView(BaseModel):
     createdAt: datetime
 
 
+class AuditEventApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[AuditEventView]
+    meta: dict[str, Any] | None = None
+
+
+class WorkflowEventApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[WorkflowEventView]
+    meta: dict[str, Any] | None = None
+
+
 class RuntimeEvidenceExportBoundaryView(BaseModel):
     localRuntimeState: list[str]
     gitBackedEvidence: list[str]
