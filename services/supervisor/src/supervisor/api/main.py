@@ -32,6 +32,7 @@ from supervisor.api.schemas import (
     DashboardE2EReportApiEnvelope,
     DevelopmentRunwayReportApiEnvelope,
     RuntimeEvidenceReviewReportApiEnvelope,
+    ManagedRecipePolicyReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1455,9 +1456,9 @@ async def get_runtime_evidence_review_report(session: AsyncSession = Depends(get
     return RuntimeEvidenceReviewReportApiEnvelope(data=await service.get_runtime_evidence_review_report(session))
 
 
-@app.get("/supervisor/managed-recipe-policy-report", response_model=ApiEnvelope)
+@app.get("/supervisor/managed-recipe-policy-report", response_model=ManagedRecipePolicyReportApiEnvelope)
 async def get_managed_recipe_policy_report():
-    return ApiEnvelope(data=service.get_managed_recipe_policy_report())
+    return ManagedRecipePolicyReportApiEnvelope(data=service.get_managed_recipe_policy_report())
 
 
 @app.get("/supervisor/github-workflow-policy-report", response_model=ApiEnvelope)

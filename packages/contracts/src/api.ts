@@ -1368,6 +1368,11 @@ export interface ManagedRecipePolicyReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface ManagedRecipePolicyReportApiEnvelope {
+  data: ManagedRecipePolicyReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface GitHubWorkflowPolicyItemView {
   itemId: string;
   label: string;

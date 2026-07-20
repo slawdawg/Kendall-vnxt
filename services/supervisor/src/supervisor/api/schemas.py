@@ -5265,6 +5265,15 @@ class ManagedRecipePolicyReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class ManagedRecipePolicyReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned managed recipe policy."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ManagedRecipePolicyReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class GitHubWorkflowPolicyItemView(BaseModel):
     itemId: str
     label: str
