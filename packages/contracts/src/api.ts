@@ -1618,6 +1618,11 @@ export interface ClaudeReviewReadinessReportView {
   scarceUseApproved: boolean;
 }
 
+export interface ClaudeReviewReadinessReportApiEnvelope {
+  data: ClaudeReviewReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface ClaudeReviewApprovalRequirementView {
   requirementId: string;
   label: string;
