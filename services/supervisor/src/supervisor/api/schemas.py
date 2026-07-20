@@ -5012,6 +5012,13 @@ class WorkItemExecutionRecipeView(BaseModel):
     remoteAutomationPolicy: WorkItemRemoteAutomationPolicyView
 
 
+class ExecutionRecipeListApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[WorkItemExecutionRecipeView]
+    meta: dict[str, Any] | None = None
+
+
 class ManagedRecipePolicyReportView(BaseModel):
     reportId: str
     generatedAt: datetime
