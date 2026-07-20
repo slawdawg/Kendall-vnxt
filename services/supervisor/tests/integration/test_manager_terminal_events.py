@@ -212,6 +212,10 @@ def test_terminal_event_persists_exact_metadata_without_work_creation_or_dispatc
         response = _post(base_url, "/manager-control-plane/terminal-events", _payload())
 
         assert response.status_code == 200, response.text
+        from supervisor.api.schemas import ManagerTerminalEventApiEnvelope
+
+        posted_envelope = ManagerTerminalEventApiEnvelope.model_validate(response.json())
+        assert posted_envelope.data.owner == "supervisor"
         event = response.json()["data"]
         expected = _payload()
         assert set(event) == set(MANAGER_TERMINAL_EVENT_VIEW_FIELDS)
