@@ -1488,6 +1488,11 @@ export interface CodexReadinessReportView {
   sourceMutationApproved: boolean;
 }
 
+export interface CodexReadinessReportApiEnvelope {
+  data: CodexReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface CodexImplementationApprovalRequirementView {
   requirementId: string;
   label: string;
