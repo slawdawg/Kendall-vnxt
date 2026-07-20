@@ -2,6 +2,7 @@ export const SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS = Object.freeze([
   "eventId",
   "evidenceRef",
   "status",
+  "owner",
   "persistedAt",
   "metadataOnly",
   "rawPayloadRetained",
@@ -28,6 +29,7 @@ export const MANAGER_TERMINAL_EVENT_REQUEST_FIELDS = Object.freeze([
 ]);
 export const MANAGER_TERMINAL_EVENT_VIEW_FIELDS = Object.freeze([
   ...MANAGER_TERMINAL_EVENT_REQUEST_FIELDS,
+  "owner",
   "createdAt",
 ]);
 export const MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = Object.freeze([
@@ -72,7 +74,7 @@ export function isValidSupervisorTerminalEventMetadata(event) {
   if (keys.length !== SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS.length ||
     keys.some((key) => !SUPERVISOR_TERMINAL_EVENT_METADATA_KEYS.includes(key))) return false;
   if (typeof event.eventId !== "string" || !MANAGER_TERMINAL_EVENT_ID_PATTERN.test(event.eventId)) return false;
-  if (event.evidenceRef !== `supervisor-event:${event.eventId}` || event.status !== "persisted") return false;
+  if (event.evidenceRef !== `supervisor-event:${event.eventId}` || event.status !== "persisted" || event.owner !== "supervisor") return false;
   if (!isCanonicalTerminalEventTimestamp(event.persistedAt)) return false;
   return event.metadataOnly === true && event.rawPayloadRetained === false;
 }
@@ -83,6 +85,7 @@ export function normalizeSupervisorTerminalEventMetadata(event) {
     eventId: event.eventId,
     evidenceRef: event.evidenceRef,
     status: "persisted",
+    owner: "supervisor",
     persistedAt: event.persistedAt,
     metadataOnly: true,
     rawPayloadRetained: false,

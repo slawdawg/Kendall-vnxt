@@ -2371,6 +2371,7 @@ test("summary projection preserves authoritative exhaustion and its resume requi
       eventId: "manager-terminal-event:1234567890abcdef1234567890abcdef12345678",
       evidenceRef: "supervisor-event:manager-terminal-event:1234567890abcdef1234567890abcdef12345678",
       status: "persisted",
+      owner: "supervisor",
       persistedAt: "2026-07-12T01:02:03.000Z",
       metadataOnly: true,
       rawPayloadRetained: false,

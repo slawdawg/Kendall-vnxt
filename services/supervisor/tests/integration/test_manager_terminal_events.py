@@ -179,6 +179,7 @@ def test_terminal_event_api_envelope_owns_the_typed_supervisor_view() -> None:
 
     view = {
         **_payload(),
+        "owner": "supervisor",
         "createdAt": "2026-07-20T05:42:11.123Z",
     }
     envelope = ManagerTerminalEventApiEnvelope.model_validate({"data": view})
@@ -215,6 +216,7 @@ def test_terminal_event_persists_exact_metadata_without_work_creation_or_dispatc
         expected = _payload()
         assert set(event) == set(MANAGER_TERMINAL_EVENT_VIEW_FIELDS)
         assert {key: event[key] for key in expected} == expected
+        assert event["owner"] == "supervisor"
         assert event["createdAt"]
         assert _table_count(db_path, "manager_terminal_events") == 1
         assert _table_count(db_path, "work_items") == 0
@@ -266,8 +268,9 @@ def test_terminal_event_exact_readback_returns_current_bounded_metadata(
         assert posted.status_code == 200, posted.text
         assert readback.status_code == 200, readback.text
         event = readback.json()["data"]
-        assert set(event) == {*payload, "createdAt"}
+        assert set(event) == {*payload, "owner", "createdAt"}
         assert {key: event[key] for key in payload} == payload
+        assert event["owner"] == "supervisor"
         assert event["createdAt"] == posted.json()["data"]["createdAt"]
         assert "rawPayload" not in event
         assert _table_count(db_path, "manager_terminal_events") == 1

@@ -45,6 +45,7 @@ def _to_view(record: ManagerTerminalEvent) -> ManagerTerminalEventView:
     return ManagerTerminalEventView.model_validate(
         {
             **_record_payload(record),
+            "owner": "supervisor",
             "createdAt": created_at.isoformat(timespec="milliseconds").replace(
                 "+00:00", "Z"
             ),

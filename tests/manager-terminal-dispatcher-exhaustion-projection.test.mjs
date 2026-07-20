@@ -50,6 +50,7 @@ function terminalBundle({ canonicalProof = true } = {}) {
             eventId: EVENT_ID,
             evidenceRef: `supervisor-event:${EVENT_ID}`,
             status: "persisted",
+            owner: "supervisor",
             persistedAt: "2026-07-12T14:28:15.078Z",
             metadataOnly: true,
             rawPayloadRetained: false,

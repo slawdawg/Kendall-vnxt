@@ -46,6 +46,7 @@ export const MANAGER_TERMINAL_EVENT_VIEW_FIELDS = [
   "idempotencyKey",
   "metadataOnly",
   "rawPayloadRetained",
+  "owner",
   "createdAt",
 ] as const;
 
@@ -87,6 +88,7 @@ export interface ManagerSupervisorCanonicalEventMetadata<
   eventId: TEventId;
   evidenceRef: `supervisor-event:${TEventId}` & EvidenceRefId;
   status: "persisted";
+  owner: "supervisor";
   persistedAt: string;
   metadataOnly: true;
   rawPayloadRetained: false;
@@ -109,8 +111,10 @@ export interface ManagerTerminalEventRequest {
   rawPayloadRetained: false;
 }
 
-/** Supervisor response adds only its canonical persistence timestamp. */
+/** Supervisor response adds canonical ownership and persistence timestamp. */
 export interface ManagerTerminalEventView extends ManagerTerminalEventRequest {
+  /** Canonical persistence is owned by the supervisor, never the manager. */
+  owner: "supervisor";
   createdAt: string;
 }
 
