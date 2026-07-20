@@ -5051,6 +5051,15 @@ class MaintenanceActionPlanReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class MaintenanceActionPlanReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned maintenance action plan."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MaintenanceActionPlanReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class DevelopmentRunwayReadinessCheckView(BaseModel):
     checkId: str
     label: str
