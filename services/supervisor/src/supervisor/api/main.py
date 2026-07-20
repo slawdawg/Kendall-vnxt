@@ -44,6 +44,7 @@ from supervisor.api.schemas import (
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
+    OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
@@ -1613,10 +1614,10 @@ async def list_audit_events(session: AsyncSession = Depends(get_session)):
     return AuditEventApiEnvelope(data=[service.to_audit_view(audit) for audit in audits])
 
 
-@app.get("/operator-views", response_model=ApiEnvelope)
+@app.get("/operator-views", response_model=OperatorViewListApiEnvelope)
 async def list_operator_views(scope: WorkItemFilterScope | None = None, session: AsyncSession = Depends(get_session)):
     views = await service.list_operator_views(session, scope)
-    return ApiEnvelope(data=[service.to_operator_view(view) for view in views])
+    return OperatorViewListApiEnvelope(data=[service.to_operator_view(view) for view in views])
 
 
 @app.post("/operator-views", response_model=ApiEnvelope)

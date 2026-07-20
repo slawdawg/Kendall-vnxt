@@ -2375,6 +2375,11 @@ export interface SavedWorkItemView {
   updatedAt: string;
 }
 
+export interface OperatorViewListApiEnvelope {
+  data: SavedWorkItemView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface SavedWorkItemViewPayload {
   name: string;
   scope: WorkItemFilterScope;
