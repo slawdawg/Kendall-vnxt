@@ -691,8 +691,29 @@ test("manager-ledger reconcile-state apply is idempotent for the same preflight"
 
     const eventsPath = join(stateRoot, "manager-runs", runId, "events.ndjson");
     const event = JSON.parse(readFileSync(eventsPath, "utf8").trim());
-    event.summary = "tampered immutable replay metadata";
+    event.reconciliationTimestamp = "2026-07-20T12:34:56.000Z";
     writeFileSync(eventsPath, `${JSON.stringify(event)}\n`);
+    const timestampReplay = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(timestampReplay.status, "ready");
+    assert.equal(timestampReplay.summary.duplicateIgnored, true);
+
+    const timestampReplayEvent = JSON.parse(readFileSync(eventsPath, "utf8").trim());
+    assert.equal(timestampReplayEvent.reconciliationTimestamp, "2026-07-20T12:34:56.000Z");
+    timestampReplayEvent.reconciliationTimestamp = "not-a-timestamp";
+    writeFileSync(eventsPath, `${JSON.stringify(timestampReplayEvent)}\n`);
+    const invalidTimestampConflict = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(invalidTimestampConflict.status, "blocked");
+    assert.ok(invalidTimestampConflict.blockers.some((blocker) => blocker.code === "reconcile-event-idempotency-conflict"));
+
+    delete timestampReplayEvent.reconciliationTimestamp;
+    writeFileSync(eventsPath, `${JSON.stringify(timestampReplayEvent)}\n`);
+    const missingTimestampConflict = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
+    assert.equal(missingTimestampConflict.status, "blocked");
+    assert.ok(missingTimestampConflict.blockers.some((blocker) => blocker.code === "reconcile-event-idempotency-conflict"));
+
+    timestampReplayEvent.reconciliationTimestamp = "2026-07-20T12:34:56.000Z";
+    timestampReplayEvent.summary = "tampered immutable replay metadata";
+    writeFileSync(eventsPath, `${JSON.stringify(timestampReplayEvent)}\n`);
     const metadataConflict = ledgerCommand({ command: "reconcile-state", runId, stateRoot, preflightFile, apply: true });
     assert.equal(metadataConflict.status, "blocked");
     assert.ok(metadataConflict.blockers.some((blocker) => blocker.code === "reconcile-event-idempotency-conflict"));
