@@ -34,6 +34,7 @@ from supervisor.api.schemas import (
     PipelineDashboardProjectionApiEnvelope,
     PipelineEpic25EvidenceChainIngestRequest,
     RoutingPreviewApiEnvelope,
+    TaskPacketPreviewApiEnvelope,
     WorkItemActionRequest,
     WorkItemApiEnvelope,
     WorkItemAssignmentRequest,
@@ -1067,7 +1068,7 @@ async def get_work_item_routing_preview(work_item_id: str, session: AsyncSession
     return RoutingPreviewApiEnvelope(data=preview)
 
 
-@app.get("/work-items/{work_item_id}/task-packet-preview", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/task-packet-preview", response_model=TaskPacketPreviewApiEnvelope)
 async def get_work_item_task_packet_preview(work_item_id: str, session: AsyncSession = Depends(get_session)):
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
@@ -1075,7 +1076,7 @@ async def get_work_item_task_packet_preview(work_item_id: str, session: AsyncSes
     preview = await service.get_task_packet_preview(session, work_item_id)
     if not preview:
         raise HTTPException(status_code=404, detail=error_response("Task packet preview not found.", "task_packet_preview_not_found").model_dump())
-    return ApiEnvelope(data=preview)
+    return TaskPacketPreviewApiEnvelope(data=preview)
 
 
 @app.post("/work-items/{work_item_id}/routing-preview", response_model=ApiEnvelope)

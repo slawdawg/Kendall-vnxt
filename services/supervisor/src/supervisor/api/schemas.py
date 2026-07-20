@@ -842,6 +842,15 @@ class TaskPacketPreviewView(BaseModel):
     commandExecutionAllowed: bool = False
 
 
+class TaskPacketPreviewApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned task packet previews."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: TaskPacketPreviewView
+    meta: dict[str, Any] | None = None
+
+
 class SourceRefV0View(BaseModel):
     refId: str
     sourceType: Literal["candidate_work", "work_item", "bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual"]
