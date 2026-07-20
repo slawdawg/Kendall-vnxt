@@ -1655,6 +1655,11 @@ export interface ClaudeReviewApprovalReportView {
   approvalBindingImplemented: boolean;
 }
 
+export interface ClaudeReviewApprovalReportApiEnvelope {
+  data: ClaudeReviewApprovalReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface ReviewResourcePolicyTriggerView {
   triggerId: string;
   label: string;
