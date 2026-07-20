@@ -1156,6 +1156,11 @@ export interface SupervisorReportCatalogView {
   executionAuthorityApproved: boolean;
 }
 
+export interface SupervisorReportCatalogApiEnvelope {
+  data: SupervisorReportCatalogView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface MaintenanceReadinessTrackView {
   trackId: string;
   label: string;
