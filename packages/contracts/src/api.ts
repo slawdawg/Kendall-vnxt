@@ -1227,6 +1227,11 @@ export interface SafeDevelopmentBacklogReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface SafeDevelopmentBacklogReportApiEnvelope {
+  data: SafeDevelopmentBacklogReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface MaintenanceActionPlanStepView {
   stepId: string;
   label: string;
