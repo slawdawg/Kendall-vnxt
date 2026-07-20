@@ -127,6 +127,7 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   const dashboardSummarySource = await readFile(new URL("../apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts", import.meta.url), "utf8");
   const sourceIntakeSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs", import.meta.url), "utf8");
   const supervisorSchemaSource = await readFile(new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url), "utf8");
+  const supervisorMainSource = await readFile(new URL("../services/supervisor/src/supervisor/api/main.py", import.meta.url), "utf8");
   const requestFields = [
     "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
     "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
@@ -159,6 +160,11 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(terminalEventSource, /interface ManagerTerminalEventView extends ManagerTerminalEventRequest/);
   assert.match(supervisorSchemaSource, /class ManagerTerminalEventView\(ManagerTerminalEventRequest\)/);
   assert.match(supervisorSchemaSource, /^    createdAt:/m);
+  assert.match(supervisorSchemaSource, /class ManagerTerminalEventApiEnvelope\(BaseModel\)/);
+  assert.match(supervisorSchemaSource, /^    data: ManagerTerminalEventView$/m);
+  assert.match(supervisorSchemaSource, /class ManagerTerminalEventApiEnvelope\(BaseModel\):[\s\S]*model_config = ConfigDict\(extra="forbid", strict=True\)/);
+  assert.match(supervisorMainSource, /@app\.post\([\s\S]*\/manager-control-plane\/terminal-events[\s\S]*response_model=ManagerTerminalEventApiEnvelope/);
+  assert.match(supervisorMainSource, /@app\.get\([\s\S]*\/manager-control-plane\/terminal-events\/\{event_id\}[\s\S]*response_model=ManagerTerminalEventApiEnvelope/);
   assert.match(terminalEventSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
   assert.match(terminalEventSource, /SUPERVISOR_TERMINAL_INTEGRATION_MISSING = "missing_supervisor_contract"/);
   assert.match(terminalEventSource, /SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED = "supervisor_canonical_event"/);
