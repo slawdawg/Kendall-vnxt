@@ -11,6 +11,7 @@ import {
   deriveManagerTerminalEventId,
   syncManagerSupervisorTerminalEvent,
 } from "../scripts/manager-supervisor-terminal-event-sync.mjs";
+import { MANAGER_TERMINAL_EVENT_TYPE } from "../scripts/lib/manager-control-plane/terminal-event-contract.mjs";
 import { runManagerSourcePacketSeed } from "../scripts/manager-source-packet-seed.mjs";
 import {
   buildCodexAdvisorClassificationPlan,
@@ -31849,7 +31850,7 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
     fetchImpl: async (url, options) => {
       const body = options.method === "POST" ? JSON.parse(options.body) : null;
       calls.push({ url, options, body });
-      if (body) persisted = { ...structuredClone(body), createdAt: "2026-07-12T01:02:03.000Z" };
+      if (body) persisted = { ...structuredClone(body), eventType: MANAGER_TERMINAL_EVENT_TYPE, createdAt: "2026-07-12T01:02:03.000Z" };
       return managerSupervisorResponseData(persisted);
     },
   });
@@ -31869,6 +31870,7 @@ test("manager supervisor terminal sync posts exact metadata and transforms only 
   assert.match(calls[0].body.eventId, /^manager-terminal-event:[0-9a-f]{40}$/);
   assert.doesNotMatch(calls[0].body.eventId, /^manager-terminal-event-[0-9a-f]{40}$/);
   assert.equal(calls[0].options.redirect, "error");
+  assert.equal(calls[0].body.eventType, MANAGER_TERMINAL_EVENT_TYPE);
   assert.equal(packet.summary.terminalDisposition.canonicalEventIntegration, "missing_supervisor_contract", "input must remain immutable");
   assert.equal(result.summary.terminalDisposition.canonicalEventIntegration, "supervisor_canonical_event");
   assert.deepEqual(result.summary.terminalDisposition.supervisorEvent, result.summary.refillJob.terminalDisposition.supervisorEvent);

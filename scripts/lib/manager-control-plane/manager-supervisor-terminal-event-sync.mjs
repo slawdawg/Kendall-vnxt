@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   MANAGER_TERMINAL_EVENT_ID_PATTERN,
+  MANAGER_TERMINAL_EVENT_TYPE,
   isCanonicalTerminalEventTimestamp,
   normalizeSupervisorTerminalEventMetadata,
 } from "./terminal-event-contract.mjs";
@@ -54,7 +55,7 @@ export function buildManagerTerminalEventRequest(packet) {
   }
   const request = {
     eventId: deriveManagerTerminalEventId(disposition.idempotencyKey),
-    eventType: "authoritative_backlog_exhausted",
+    eventType: MANAGER_TERMINAL_EVENT_TYPE,
     runId: disposition.runId,
     sourceIdentity: disposition.sourceIdentity,
     sourceRevision: disposition.sourceRevision,
@@ -258,7 +259,7 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
 function buildRequestFromDisposition(disposition, eventId) {
   return {
     eventId,
-    eventType: disposition.disposition,
+    eventType: MANAGER_TERMINAL_EVENT_TYPE,
     runId: disposition.runId,
     sourceIdentity: disposition.sourceIdentity,
     sourceRevision: disposition.sourceRevision,
@@ -275,7 +276,7 @@ function buildRequestFromDisposition(disposition, eventId) {
 
 function collectTerminalDispositions(value, found = []) {
   if (!value || typeof value !== "object") return found;
-  if (value.disposition === "authoritative_backlog_exhausted") found.push(value);
+  if (value.disposition === MANAGER_TERMINAL_EVENT_TYPE) found.push(value);
   for (const [key, nested] of Object.entries(value)) {
     if (key === "supervisorEvent") continue;
     if (Array.isArray(nested)) nested.forEach((item) => collectTerminalDispositions(item, found));
@@ -289,7 +290,7 @@ function transformPersistedPacket(packet, supervisorEvent) {
     if (Array.isArray(value)) return value.map(transform);
     if (!value || typeof value !== "object") return value;
     const transformed = Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, transform(nested)]));
-    if (transformed.disposition === "authoritative_backlog_exhausted") {
+    if (transformed.disposition === MANAGER_TERMINAL_EVENT_TYPE) {
       transformed.canonicalEventIntegration = INTEGRATION_PERSISTED;
       transformed.supervisorEvent = { ...supervisorEvent };
     }
@@ -309,7 +310,7 @@ function failClosedPacket(packet, code, message) {
   const preserveMissingIntegration = (value) => {
     if (Array.isArray(value)) return value.forEach(preserveMissingIntegration);
     if (!value || typeof value !== "object") return;
-    if (value.disposition === "authoritative_backlog_exhausted") {
+    if (value.disposition === MANAGER_TERMINAL_EVENT_TYPE) {
       value.canonicalEventIntegration = INTEGRATION_MISSING;
       delete value.supervisorEvent;
     }

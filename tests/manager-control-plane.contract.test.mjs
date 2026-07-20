@@ -99,6 +99,7 @@ test("Manager Control Plane contract namespace is exported from the package boun
 test("supervisor terminal-event request and view fields stay aligned with the TypeScript contract", async () => {
   const terminalEventSource = await readFile(new URL("terminal-event.ts", managerRoot), "utf8");
   const schemaJsonSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
+  const terminalEventContractSource = await readFile(new URL("../scripts/lib/manager-control-plane/terminal-event-contract.mjs", import.meta.url), "utf8");
   const terminalEventSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs", import.meta.url), "utf8");
   const sourceIntakeSyncSource = await readFile(new URL("../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs", import.meta.url), "utf8");
   const supervisorSchemaSource = await readFile(new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url), "utf8");
@@ -116,6 +117,7 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(supervisorSchemaSource, /class ManagerTerminalEventView\(ManagerTerminalEventRequest\)/);
   assert.match(supervisorSchemaSource, /^    createdAt:/m);
   assert.match(terminalEventSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
+  assert.match(terminalEventContractSource, /MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"/);
   assert.match(supervisorSchemaSource, /eventType: Literal\["authoritative_backlog_exhausted"\]/);
   assert.match(supervisorSchemaSource, /model_config = ConfigDict\(extra="forbid", strict=True\)/);
   const tsFields = [...terminalEventSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS = \[((?:.|\n)*?)\] as const;/g)]
@@ -124,6 +126,8 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_REQUEST_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_REQUEST_FIELDS;/);
   assert.match(schemaJsonSource, /MANAGER_TERMINAL_EVENT_VIEW_SERIALIZED_FIELDS = MANAGER_TERMINAL_EVENT_VIEW_FIELDS;/);
   assert.match(terminalEventSyncSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_ID_PATTERN,[\s\S]*\} from "\.\/terminal-event-contract\.mjs";/);
+  assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_TYPE/);
+  assert.doesNotMatch(terminalEventSyncSource, /eventType: "authoritative_backlog_exhausted"/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_ID_PATTERN\.test\(request\.eventId\)/);
   assert.doesNotMatch(terminalEventSyncSource, /\/\^manager-terminal-event:\[0-9a-f\]\{40\}\$\//);
   assert.match(terminalEventSyncSource, /import \{ normalizeSupervisorTimeoutMs \} from "\.\/supervisor-timeout\.mjs";/);
