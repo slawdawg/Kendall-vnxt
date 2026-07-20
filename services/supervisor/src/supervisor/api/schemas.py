@@ -5178,6 +5178,15 @@ class RuntimeEvidenceReviewReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class RuntimeEvidenceReviewReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned runtime evidence review."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: RuntimeEvidenceReviewReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

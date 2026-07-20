@@ -31,6 +31,7 @@ from supervisor.api.schemas import (
     AuthorityReadinessMatrixReportApiEnvelope,
     DashboardE2EReportApiEnvelope,
     DevelopmentRunwayReportApiEnvelope,
+    RuntimeEvidenceReviewReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1449,9 +1450,9 @@ async def get_development_runway_report():
     return DevelopmentRunwayReportApiEnvelope(data=service.get_development_runway_report())
 
 
-@app.get("/supervisor/runtime-evidence-review-report", response_model=ApiEnvelope)
+@app.get("/supervisor/runtime-evidence-review-report", response_model=RuntimeEvidenceReviewReportApiEnvelope)
 async def get_runtime_evidence_review_report(session: AsyncSession = Depends(get_session)):
-    return ApiEnvelope(data=await service.get_runtime_evidence_review_report(session))
+    return RuntimeEvidenceReviewReportApiEnvelope(data=await service.get_runtime_evidence_review_report(session))
 
 
 @app.get("/supervisor/managed-recipe-policy-report", response_model=ApiEnvelope)
