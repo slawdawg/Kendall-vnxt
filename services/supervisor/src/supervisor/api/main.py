@@ -37,6 +37,7 @@ from supervisor.api.schemas import (
     WorkItemDeliveryReadinessRequest,
     DeliveryExecutionEvidencePayload,
     ExecutionAttemptApiEnvelope,
+    ExecutionRecipeListApiEnvelope,
     LlmWikiArtifactSearchResultView,
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
@@ -794,9 +795,9 @@ async def list_work_items(session: AsyncSession = Depends(get_session)):
     return WorkItemListApiEnvelope(data=[service.to_work_item_view(item) for item in items])
 
 
-@app.get("/execution-recipes", response_model=ApiEnvelope)
+@app.get("/execution-recipes", response_model=ExecutionRecipeListApiEnvelope)
 async def list_execution_recipes():
-    return ApiEnvelope(data=service.list_execution_recipes())
+    return ExecutionRecipeListApiEnvelope(data=service.list_execution_recipes())
 
 
 @app.get("/routing/lane-profiles", response_model=ApiEnvelope)

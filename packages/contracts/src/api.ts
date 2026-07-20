@@ -188,6 +188,11 @@ export interface WorkItemExecutionRecipeView {
   remoteAutomationPolicy: WorkItemRemoteAutomationPolicyView;
 }
 
+export interface ExecutionRecipeListApiEnvelope {
+  data: WorkItemExecutionRecipeView[];
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface WorkItemDeliveryReadinessView {
   pullRequestStatus: string;
   pullRequestUrl?: string | null;
