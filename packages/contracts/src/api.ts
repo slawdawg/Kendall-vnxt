@@ -1253,6 +1253,11 @@ export interface MaintenanceActionPlanReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface MaintenanceActionPlanReportApiEnvelope {
+  data: MaintenanceActionPlanReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DevelopmentRunwayReadinessCheckView {
   checkId: string;
   label: string;
