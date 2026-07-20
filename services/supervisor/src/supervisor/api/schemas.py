@@ -5925,6 +5925,15 @@ class WorkItemView(BaseModel):
     auditMode: AuditMode
 
 
+class WorkItemApiEnvelope(BaseModel):
+    """Typed response boundary for a supervisor-owned WorkItem detail."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: WorkItemView
+    meta: dict[str, Any] | None = None
+
+
 class WorkItemListApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

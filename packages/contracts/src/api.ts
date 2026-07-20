@@ -2170,6 +2170,11 @@ export interface WorkItemView extends WorkItemPayload {
   auditMode: "none" | "advisory" | "required";
 }
 
+export interface WorkItemApiEnvelope {
+  data: WorkItemView;
+  meta?: Record<string, string | number | boolean | null>;
+}
+
 export interface WorkItemListApiEnvelope {
   data: WorkItemView[];
   meta?: Record<string, string | number | boolean | null>;

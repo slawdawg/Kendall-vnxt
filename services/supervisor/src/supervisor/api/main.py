@@ -32,6 +32,7 @@ from supervisor.api.schemas import (
     OperatorViewDefaultRequest,
     PipelineEpic25EvidenceChainIngestRequest,
     WorkItemActionRequest,
+    WorkItemApiEnvelope,
     WorkItemAssignmentRequest,
     WorkItemBranchPreparationRequest,
     WorkItemCreate,
@@ -816,12 +817,12 @@ async def list_routing_lane_profiles(session: AsyncSession = Depends(get_session
 async def list_worker_registry():
     return WorkerRegistryListApiEnvelope(data=service.list_worker_registry())
 
-@app.get("/work-items/{work_item_id}", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}", response_model=WorkItemApiEnvelope)
 async def get_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
     items = await service.list_work_items(session)
     for item in items:
         if item.id == work_item_id:
-            return ApiEnvelope(data=service.to_work_item_view(item))
+            return WorkItemApiEnvelope(data=service.to_work_item_view(item))
     raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
 
 
