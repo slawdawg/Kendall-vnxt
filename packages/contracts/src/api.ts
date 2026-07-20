@@ -949,6 +949,11 @@ export interface DocumentationAuthorityReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface DocumentationAuthorityReportApiEnvelope {
+  data: DocumentationAuthorityReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface LegacyPlanningArtifactCandidateView {
   candidateId: string;
   path: string;
