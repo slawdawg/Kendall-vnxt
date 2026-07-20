@@ -15,6 +15,11 @@ import {
 } from "../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs";
 import { resolveLoopbackSupervisorEndpoint } from "../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs";
 import { parseManagerSourceIntakeArgs } from "../scripts/manager-supervisor-source-intake.mjs";
+import {
+  normalizeSupervisorTimeoutMs,
+  SUPERVISOR_DEFAULT_TIMEOUT_MS,
+  SUPERVISOR_MAX_TIMEOUT_MS,
+} from "../scripts/lib/manager-control-plane/supervisor-timeout.mjs";
 
 function sourcePacket(overrides = {}) {
   const packet = buildSourceBackedPacketSeedPlan({
@@ -504,4 +509,13 @@ test("manager source intake rejects invalid timeout configuration before fetch",
     (error) => error.code === "manager_supervisor_source_intake_input_invalid",
   );
   assert.equal(fetchCalls, 0);
+});
+
+test("manager supervisor timeout contract keeps bounded defaults and rejects invalid values", () => {
+  assert.equal(normalizeSupervisorTimeoutMs(undefined), SUPERVISOR_DEFAULT_TIMEOUT_MS);
+  assert.equal(normalizeSupervisorTimeoutMs(1), 1);
+  assert.equal(normalizeSupervisorTimeoutMs(SUPERVISOR_MAX_TIMEOUT_MS), SUPERVISOR_MAX_TIMEOUT_MS);
+  for (const value of [0, -1, 1.5, SUPERVISOR_MAX_TIMEOUT_MS + 1, "1000"]) {
+    assert.throws(() => normalizeSupervisorTimeoutMs(value), /timeoutMs must be an integer from 1 through/);
+  }
 });

@@ -6,11 +6,11 @@ import {
   normalizeSupervisorTerminalEventMetadata,
 } from "./terminal-event-contract.mjs";
 import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
+import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 
 const TERMINAL_EVENT_PATH = "/manager-control-plane/terminal-events";
 const INTEGRATION_MISSING = "missing_supervisor_contract";
 const INTEGRATION_PERSISTED = "supervisor_canonical_event";
-const DEFAULT_TIMEOUT_MS = 10_000;
 const REQUEST_KEYS = [
   "eventId", "eventType", "runId", "sourceIdentity", "sourceRevision", "reconciliationCounts",
   "unresolvedApprovalGatedWork", "evidenceRefs", "resumeRequirement", "nextManagerAction",
@@ -94,6 +94,12 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
   } catch (error) {
     throw syncError("manager_supervisor_sync_input_invalid", error, sourcePacket);
   }
+  let timeoutMs;
+  try {
+    timeoutMs = normalizeSupervisorTimeoutMs(context.timeoutMs);
+  } catch (error) {
+    throw syncError("manager_supervisor_sync_input_invalid", error, sourcePacket);
+  }
 
   const fetchImpl = context.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") {
@@ -111,7 +117,7 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
       headers: { "content-type": "application/json", "accept": "application/json" },
       body: JSON.stringify(request),
       redirect: "error",
-      signal: AbortSignal.timeout(context.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new ManagerSupervisorTerminalEventSyncError(
@@ -172,7 +178,7 @@ export async function syncManagerSupervisorTerminalEvent(packet, supervisorUrl, 
       method: "GET",
       headers: { "accept": "application/json" },
       redirect: "error",
-      signal: AbortSignal.timeout(context.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new ManagerSupervisorTerminalEventSyncError(

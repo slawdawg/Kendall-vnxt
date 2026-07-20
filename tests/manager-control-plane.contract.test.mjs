@@ -126,6 +126,9 @@ test("supervisor terminal-event request and view fields stay aligned with the Ty
   assert.match(terminalEventSyncSource, /import \{[\s\S]*MANAGER_TERMINAL_EVENT_ID_PATTERN,[\s\S]*\} from "\.\/terminal-event-contract\.mjs";/);
   assert.match(terminalEventSyncSource, /MANAGER_TERMINAL_EVENT_ID_PATTERN\.test\(request\.eventId\)/);
   assert.doesNotMatch(terminalEventSyncSource, /\/\^manager-terminal-event:\[0-9a-f\]\{40\}\$\//);
+  assert.match(terminalEventSyncSource, /import \{ normalizeSupervisorTimeoutMs \} from "\.\/supervisor-timeout\.mjs";/);
+  assert.match(terminalEventSyncSource, /timeoutMs = normalizeSupervisorTimeoutMs\(context\.timeoutMs\)/);
+  assert.match(terminalEventSyncSource, /AbortSignal\.timeout\(timeoutMs\)/);
   assert.match(terminalEventSyncSource, /import \{ parseLoopbackSupervisorUrl \} from "\.\/loopback-supervisor\.mjs";/);
   assert.match(sourceIntakeSyncSource, /import \{ parseLoopbackSupervisorUrl \} from "\.\/loopback-supervisor\.mjs";/);
   const schemaJsonAliases = [...schemaJsonSource.matchAll(/MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_SERIALIZED_FIELDS = (MANAGER_TERMINAL_EVENT_(?:REQUEST|VIEW)_FIELDS);/g)]
