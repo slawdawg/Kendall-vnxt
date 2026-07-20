@@ -1351,6 +1351,11 @@ export interface RuntimeEvidenceReviewReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface RuntimeEvidenceReviewReportApiEnvelope {
+  data: RuntimeEvidenceReviewReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface ManagedRecipePolicyReportView {
   reportId: string;
   generatedAt: string;
