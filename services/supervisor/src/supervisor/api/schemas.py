@@ -5401,6 +5401,15 @@ class CodexReadinessReportView(BaseModel):
     sourceMutationApproved: bool = False
 
 
+class CodexReadinessReportApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor-owned Codex readiness report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: CodexReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class CodexImplementationApprovalRequirementView(BaseModel):
     requirementId: str
     label: str
