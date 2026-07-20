@@ -1,4 +1,4 @@
-import { isValidSupervisorTerminalEventMetadata } from "./terminal-event-contract.mjs";
+import { isValidSupervisorTerminalEventMetadata, MANAGER_TERMINAL_EVENT_TYPE } from "./terminal-event-contract.mjs";
 
 export const DEFAULT_SUMMARY_STALE_AFTER_MS = 300_000;
 export const SIMULATED_WARNING = "backend_proof_simulated_no_live_worker_execution";
@@ -209,7 +209,7 @@ function countRetainedWorkItemsForRefill(workItems, refillJob) {
 
 function selectTerminalRefillJob(refillJobs = [], runId = "") {
   const terminalIndexes = refillJobs
-    .map((job, index) => (job?.result === "authoritative_backlog_exhausted" || job?.terminalDisposition?.disposition === "authoritative_backlog_exhausted" ? index : -1))
+    .map((job, index) => (job?.result === MANAGER_TERMINAL_EVENT_TYPE || job?.terminalDisposition?.disposition === MANAGER_TERMINAL_EVENT_TYPE ? index : -1))
     .filter((index) => index >= 0);
   if (terminalIndexes.length === 0) return { job: null, contradiction: false };
   const latestTerminalIndex = terminalIndexes.at(-1);
@@ -217,7 +217,7 @@ function selectTerminalRefillJob(refillJobs = [], runId = "") {
   const laterHistory = refillJobs.slice(latestTerminalIndex + 1);
   const validCandidate = isValidatedTerminalRefillJob(candidate, runId);
   const allTerminalEntriesValid = terminalIndexes.every((index) => isValidatedTerminalRefillJob(refillJobs[index], runId));
-  const laterNonterminal = laterHistory.some((job) => job?.result !== "authoritative_backlog_exhausted" && job?.terminalDisposition?.disposition !== "authoritative_backlog_exhausted");
+  const laterNonterminal = laterHistory.some((job) => job?.result !== MANAGER_TERMINAL_EVENT_TYPE && job?.terminalDisposition?.disposition !== MANAGER_TERMINAL_EVENT_TYPE);
   const terminalKeys = terminalIndexes.map((index) => {
     const job = refillJobs[index];
     return `${job?.refillJobId || ""}:${terminalDispositionFingerprint(job?.terminalDisposition)}`;
@@ -230,7 +230,7 @@ function selectTerminalRefillJob(refillJobs = [], runId = "") {
 }
 
 function isValidatedTerminalRefillJob(job, runId) {
-  if (!job || job.result !== "authoritative_backlog_exhausted" || job.state !== "completed" || !isValidatedTerminalDisposition(job.terminalDisposition)) return false;
+  if (!job || job.result !== MANAGER_TERMINAL_EVENT_TYPE || job.state !== "completed" || !isValidatedTerminalDisposition(job.terminalDisposition)) return false;
   const disposition = job.terminalDisposition;
   const sourceRefs = Array.isArray(job.sourceRefs) ? job.sourceRefs.map((ref) => String(ref)) : [];
   return disposition.runId === String(runId) &&
@@ -247,7 +247,7 @@ function derivePhase({ workItems, blockedCandidates, needsReviewCandidates, refi
   if (workItems.some((item) => item.status === "failed")) return "failed";
   if (workItems.some((item) => item.status === "expired")) return "expired";
   if (terminalHistoryConflict) return "blocked";
-  if (terminalJob) return "authoritative_backlog_exhausted";
+  if (terminalJob) return MANAGER_TERMINAL_EVENT_TYPE;
   if (
     workItems.some((item) => item.status === "blocked" || item.status === "quarantined") ||
     blockedCandidates.length > 0 ||
@@ -284,7 +284,7 @@ function parseSummaryTimestamp(value) {
 
 function nextActionForSummary({ phase, freshness, blockers, stateCounts }) {
   if (freshness === "stale") return "inspect_stale_summary";
-  if (phase === "authoritative_backlog_exhausted") return "await_new_source_bound_manager_run";
+  if (phase === MANAGER_TERMINAL_EVENT_TYPE) return "await_new_source_bound_manager_run";
   if (phase === "failed" || phase === "expired" || (stateCounts?.failed ?? 0) > 0 || (stateCounts?.expired ?? 0) > 0) return "run_recovery";
   if ((blockers ?? []).includes("dispatcher_has_blocked_candidates") || (stateCounts?.blockedCandidates ?? 0) > 0) return "resolve_authority_or_source_blocker";
   if ((blockers ?? []).includes("dispatcher_has_needs_review_candidates") || (stateCounts?.needsReviewCandidates ?? 0) > 0) return "review_refill_candidates";
@@ -404,7 +404,7 @@ function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsR
     needsReviewCandidates.length > 0 || stateCounts.needsReviewCandidates > 0 || currentPhase === "needs_review" ? "candidate:needs_review" : null,
     duplicateCandidates.length > 0 ? "candidate:duplicate" : null,
     currentPhase === "no_safe_work" ? "supply:no_safe_work" : null,
-    terminalDisposition?.disposition === "authoritative_backlog_exhausted" ? "terminal:authoritative_backlog_exhausted" : null,
+    terminalDisposition?.disposition === MANAGER_TERMINAL_EVENT_TYPE ? `terminal:${MANAGER_TERMINAL_EVENT_TYPE}` : null,
     terminalDisposition?.canonicalEventIntegration === "missing_supervisor_contract" ? "terminal:missing_supervisor_contract" : null,
     terminalDisposition?.canonicalEventIntegration === "supervisor_canonical_event" ? "terminal:supervisor_canonical_event" : null,
     blockers.includes("terminal_refill_history_conflict") ? "terminal:history_conflict" : null,
@@ -413,7 +413,7 @@ function rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsR
 }
 
 function isValidatedTerminalDisposition(disposition) {
-  if (!disposition || disposition.disposition !== "authoritative_backlog_exhausted" || !["missing_supervisor_contract", "supervisor_canonical_event"].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false) return false;
+  if (!disposition || disposition.disposition !== MANAGER_TERMINAL_EVENT_TYPE || !["missing_supervisor_contract", "supervisor_canonical_event"].includes(disposition.canonicalEventIntegration) || disposition.rawPayloadRetained !== false) return false;
   if (!String(disposition.runId || "").trim() || !String(disposition.sourceIdentity || "").trim() || !String(disposition.sourceRevision || "").trim() || !String(disposition.idempotencyKey || "").trim() || !String(disposition.resumeRequirement || "").trim() || !String(disposition.nextManagerAction || "").trim()) return false;
   if (!Array.isArray(disposition.evidenceRefs) || disposition.evidenceRefs.length === 0 || !Array.isArray(disposition.unresolvedApprovalGatedWork)) return false;
   if (!disposition.unresolvedApprovalGatedWork.every(isValidUnresolvedApprovalGatedWorkRecord)) return false;
