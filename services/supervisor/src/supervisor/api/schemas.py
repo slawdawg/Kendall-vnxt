@@ -4516,6 +4516,15 @@ class DocumentationAuthorityReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class DocumentationAuthorityReportApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned documentation authority reports."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DocumentationAuthorityReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class LegacyPlanningArtifactCandidateView(BaseModel):
     candidateId: str
     path: str
