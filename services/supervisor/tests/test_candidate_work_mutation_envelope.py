@@ -21,3 +21,4 @@ def test_candidate_work_create_route_reuses_shared_typescript_contract() -> None
 
     assert "export interface CandidateWorkApiEnvelope" in contract_source
     assert "data: CandidateWorkView;" in contract_source
+    assert "meta?: Record<string, string | number | boolean | null> | null;" in contract_source

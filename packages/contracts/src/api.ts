@@ -104,7 +104,7 @@ export interface CandidateWorkListApiEnvelope {
 
 export interface CandidateWorkApiEnvelope {
   data: CandidateWorkView;
-  meta?: Record<string, string | number | boolean | null>;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface WorkPacketLearnFollowUpCandidateWorkPayload {
@@ -2463,7 +2463,7 @@ export interface WorkItemView extends WorkItemPayload {
 
 export interface WorkItemApiEnvelope {
   data: WorkItemView;
-  meta?: Record<string, string | number | boolean | null>;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface WorkItemListApiEnvelope {

@@ -23,3 +23,4 @@ def test_work_item_create_route_reuses_shared_typescript_contract() -> None:
     contract_source = (Path(__file__).parents[3] / "packages/contracts/src/api.ts").read_text(encoding="utf-8")
     assert "export interface WorkItemApiEnvelope" in contract_source
     assert "data: WorkItemView;" in contract_source
+    assert "meta?: Record<string, string | number | boolean | null> | null;" in contract_source
