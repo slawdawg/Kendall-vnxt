@@ -71,6 +71,23 @@ def _text_get(url: str) -> str:
         return response.read().decode("utf8")
 
 
+def _text_get_after_dashboard_restart(url: str) -> str:
+    """Bound the Next dev dynamic-route compile race after a dashboard restart."""
+    deadline = time.monotonic() + 10
+    last_error: HTTPError | None = None
+    while time.monotonic() < deadline:
+        try:
+            return _text_get(url)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            last_error = exc
+            time.sleep(0.25)
+    if last_error is not None:
+        raise last_error
+    return _text_get(url)
+
+
 def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Popen[str]:
     dashboard_binary = REPO_ROOT / "apps" / "dashboard" / "node_modules" / ".bin" / "next"
     if not dashboard_binary.is_file():
@@ -374,7 +391,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert "Supervisor runtime" in pipeline_html
         assert quote(packet_id, safe="") in pipeline_html
 
-        detail_html = _text_get(
+        detail_html = _text_get_after_dashboard_restart(
             f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
         )
         assert "gate 4 real dashboard process proof" in detail_html
@@ -431,7 +448,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
             dashboard_log,
         )
         restarted_pipeline_html = _text_get(f"{dashboard_base_url}/pipeline")
-        restarted_detail_html = _text_get(
+        restarted_detail_html = _text_get_after_dashboard_restart(
             f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
         )
         assert "Supervisor runtime" in restarted_pipeline_html
