@@ -82,6 +82,10 @@ def test_trusted_autonomy_readiness_envelope_is_strict_and_typed() -> None:
         invalid = _valid_report()
         invalid["autonomousCleanupApproved"] = True
         TrustedAutonomyReadinessReportApiEnvelope.model_validate({"data": invalid})
+    with pytest.raises(ValidationError):
+        invalid = _valid_report()
+        invalid["autonomyGates"] = [{**invalid["autonomyGates"][0], "unexpected": True}]  # type: ignore[index]
+        TrustedAutonomyReadinessReportApiEnvelope.model_validate({"data": invalid})
 
 
 def test_trusted_autonomy_readiness_route_uses_typed_envelope() -> None:

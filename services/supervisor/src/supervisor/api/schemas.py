@@ -6206,6 +6206,8 @@ class RemoteCleanupSyncReadinessReportApiEnvelope(BaseModel):
 
 
 class TrustedAutonomyReadinessGateView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     gateId: str
     label: str
     status: str
@@ -6214,6 +6216,8 @@ class TrustedAutonomyReadinessGateView(BaseModel):
 
 
 class TrustedAutonomyDeauthorizationTriggerView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     triggerId: str
     label: str
     status: str
