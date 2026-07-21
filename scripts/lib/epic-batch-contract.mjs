@@ -200,7 +200,7 @@ function validRevisionRef(value) {
 }
 
 function revisionMatches(actual, expected) {
-  return actual === expected || (typeof actual === "string" && typeof expected === "string" && actual.startsWith(expected));
+  return actual === expected || (typeof actual === "string" && typeof expected === "string" && (actual.startsWith(expected) || expected.startsWith(actual)));
 }
 
 function nonEmptyStringArray(value) {
