@@ -1691,6 +1691,91 @@ class LocalDogfoodAttestationReadbackApiEnvelope(BaseModel):
     meta: dict[str, str | int | float | bool | None] | None = None
 
 
+class LocalDogfoodAttestationReceiptBindingsView(BaseModel):
+    """Supervisor-minted metadata bindings for one local-only authorization."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    issuerId: str
+    keyId: str
+    environment: Literal["local_dogfood"]
+    packetSchema: str
+    targetRef: str
+    sourceRevision: str
+    sourceRefs: str
+    evidenceDigest: str
+    evidenceRefs: str
+    runId: str
+    attemptId: str
+    policyVersion: str
+    retentionPolicy: Literal["metadata_only"]
+    observerId: str
+
+
+class LocalDogfoodAuthorizationView(BaseModel):
+    """Bounded authorization write result; it grants no live evidence authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authorizationId: str
+    runId: str
+    attemptId: str
+    expiresAt: str
+    evidenceClass: Literal["integrated_local"]
+    receiptBindings: LocalDogfoodAttestationReceiptBindingsView
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class LocalDogfoodAttestationDecisionView(BaseModel):
+    """Receipt verification result; accepted receipts remain integrated-local only."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    evidenceClass: Literal["integrated_local"]
+    accepted: bool
+    rejectionReason: str | None = None
+    issuerId: str | None = None
+    keyId: str | None = None
+    receiptId: str | None = None
+    liveEvidenceAccepted: Literal[False] = False
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class LocalDogfoodAttestationRevocationView(BaseModel):
+    """Revocation acknowledgement; it is metadata-only and never executes work."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authorizationId: str
+    revoked: Literal[True]
+    evidenceClass: Literal["integrated_local"]
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class LocalDogfoodAuthorizationApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalDogfoodAuthorizationView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
+class LocalDogfoodAttestationDecisionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalDogfoodAttestationDecisionView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
+class LocalDogfoodAttestationRevocationApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalDogfoodAttestationRevocationView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 PipelineOperationalEvidenceClass = Literal["fixture", "integrated_local", "live_observed"]
 PipelineEpic25EvidenceSlot = Literal["readiness", "canary", "ramp", "recovery", "hardening", "decision"]
 PipelineEpic25PacketSchemaVersion = Literal[

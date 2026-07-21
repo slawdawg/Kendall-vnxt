@@ -46,7 +46,10 @@ from supervisor.api.schemas import (
     ReviewResourcePolicyReportApiEnvelope,
     EpicCompletionAuditReportApiEnvelope,
     MvpProofTrialReportApiEnvelope,
+    LocalDogfoodAuthorizationApiEnvelope,
+    LocalDogfoodAttestationDecisionApiEnvelope,
     LocalDogfoodAttestationReadbackApiEnvelope,
+    LocalDogfoodAttestationRevocationApiEnvelope,
     DeliveryReadinessPolicyReportApiEnvelope,
     GitHubDeliveryAuthorityReportApiEnvelope,
     TrustedDeliveryEligibilityReportApiEnvelope,
@@ -302,14 +305,17 @@ async def require_local_dogfood_operator(
             raise HTTPException(status_code=403, detail="CSRF validation failed.")
 
 
-@app.post("/local-dogfood/attestations/packets/{packet_id}/authorizations", response_model=ApiEnvelope)
+@app.post(
+    "/local-dogfood/attestations/packets/{packet_id}/authorizations",
+    response_model=LocalDogfoodAuthorizationApiEnvelope,
+)
 async def authorize_local_dogfood_attestation(
     packet_id: str,
     _: None = Depends(require_local_dogfood_operator),
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        return ApiEnvelope(
+        return LocalDogfoodAuthorizationApiEnvelope(
             data=await local_dogfood_attestation.authorize_for_packet(
                 session, packet_id, settings.local_dogfood_attestation_issuer_registry,
             )
@@ -318,7 +324,10 @@ async def authorize_local_dogfood_attestation(
         raise HTTPException(status_code=400, detail=error_response(str(exc), exc.reason).model_dump()) from exc
 
 
-@app.post("/local-dogfood/attestations/receipts", response_model=ApiEnvelope)
+@app.post(
+    "/local-dogfood/attestations/receipts",
+    response_model=LocalDogfoodAttestationDecisionApiEnvelope,
+)
 async def verify_local_dogfood_attestation(
     request: Request,
     _: None = Depends(require_local_dogfood_operator),
@@ -326,7 +335,7 @@ async def verify_local_dogfood_attestation(
 ):
     try:
         receipt, signature_b64 = local_dogfood_attestation.parse_receipt_submission(await request.body())
-        return ApiEnvelope(
+        return LocalDogfoodAttestationDecisionApiEnvelope(
             data=await local_dogfood_attestation.verify(
                 session,
                 receipt,
@@ -338,7 +347,10 @@ async def verify_local_dogfood_attestation(
         raise HTTPException(status_code=400, detail=error_response(str(exc), exc.reason).model_dump()) from exc
 
 
-@app.post("/local-dogfood/attestations/authorizations/{authorization_id}/observe", response_model=ApiEnvelope)
+@app.post(
+    "/local-dogfood/attestations/authorizations/{authorization_id}/observe",
+    response_model=LocalDogfoodAttestationDecisionApiEnvelope,
+)
 async def observe_local_dogfood_attestation(
     authorization_id: str,
     _: None = Depends(require_local_dogfood_operator),
@@ -353,7 +365,7 @@ async def observe_local_dogfood_attestation(
         secret = local_dogfood_attestation.read_owner_private_secret(
             settings.local_dogfood_attestation_envelope_secret_file
         )
-        return ApiEnvelope(
+        return LocalDogfoodAttestationDecisionApiEnvelope(
             data=await local_dogfood_attestation.observe_and_verify(
                 session,
                 authorization_id,
@@ -385,7 +397,10 @@ async def read_local_dogfood_attestation(
         raise HTTPException(status_code=404, detail=error_response(str(exc), exc.reason).model_dump()) from exc
 
 
-@app.post("/local-dogfood/attestations/authorizations/{authorization_id}/revoke", response_model=ApiEnvelope)
+@app.post(
+    "/local-dogfood/attestations/authorizations/{authorization_id}/revoke",
+    response_model=LocalDogfoodAttestationRevocationApiEnvelope,
+)
 async def revoke_local_dogfood_attestation(
     authorization_id: str,
     _: None = Depends(require_local_dogfood_operator),
@@ -396,7 +411,9 @@ async def revoke_local_dogfood_attestation(
         raise HTTPException(status_code=404, detail=error_response("Authorization not found.", "authorization_not_found").model_dump())
     authorization.revoked = True
     await session.commit()
-    return ApiEnvelope(data={"authorizationId": authorization_id, "revoked": True, "evidenceClass": "integrated_local"})
+    return LocalDogfoodAttestationRevocationApiEnvelope(
+        data={"authorizationId": authorization_id, "revoked": True, "evidenceClass": "integrated_local"}
+    )
 
 
 @app.get(
