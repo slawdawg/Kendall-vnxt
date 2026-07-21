@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import "./check-github-delivery-authority-report.mjs";
+
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
 function readWorkspaceFile(path) {
