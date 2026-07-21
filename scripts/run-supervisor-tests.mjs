@@ -7,12 +7,10 @@ import { spawn } from "node:child_process";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const dataDir = join(rootDir, ".data");
 const uvCacheDir = join(dataDir, "uv-cache");
-const tempDir = join(tmpdir(), "kendall-supervisor-tests");
 const DEFAULT_TIMEOUT_MS = Number(process.env.SUPERVISOR_TEST_TIMEOUT_MS || "0");
 
 mkdirSync(uvCacheDir, { recursive: true });
-mkdirSync(tempDir, { recursive: true });
-const runTempDir = mkdtempSync(join(tempDir, "run-"));
+const runTempDir = mkdtempSync(join(tmpdir(), "kendall-supervisor-tests-"));
 
 const uvCommand = process.env.UV_EXE || "uv";
 const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
@@ -24,6 +22,7 @@ const spawnOptions = {
   env: {
     ...process.env,
     UV_CACHE_DIR: uvCacheDir,
+    TMPDIR: runTempDir,
     TMP: runTempDir,
     TEMP: runTempDir,
   },

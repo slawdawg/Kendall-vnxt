@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -14,6 +14,38 @@ test("supervisor test runner rejects conflicting phase flags", () => {
 
   assert.equal(result.status, 64);
   assert.match(result.stderr, /conflicting flags/);
+});
+
+test("supervisor test runner gives child phases a private temp root", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "supervisor-runner-test-"));
+  const fakeUv = join(tempDir, "fake-uv.mjs");
+  const outputPath = join(tempDir, "child-env.json");
+  writeFileSync(fakeUv, [
+    "#!/usr/bin/env node",
+    "import { statSync, writeFileSync } from 'node:fs';",
+    "writeFileSync(process.env.SUPERVISOR_TEST_TEMP_OUTPUT, JSON.stringify({ TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP, mode: statSync(process.env.TMPDIR).mode & 0o777 }));",
+    "",
+  ].join("\n"));
+  chmodSync(fakeUv, 0o755);
+
+  try {
+    const result = spawnSync(process.execPath, [runner, "--preflight"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SUPERVISOR_TEST_TEMP_OUTPUT: outputPath,
+        UV_EXE: fakeUv,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const childTemp = JSON.parse(readFileSync(outputPath, "utf8"));
+    assert.equal(childTemp.TMPDIR, childTemp.TMP);
+    assert.equal(childTemp.TMP, childTemp.TEMP);
+    assert.equal(childTemp.mode, 0o700);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("supervisor test runner hard-kills a timed-out phase", () => {
