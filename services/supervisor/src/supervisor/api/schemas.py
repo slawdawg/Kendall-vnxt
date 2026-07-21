@@ -5923,7 +5923,7 @@ class LowRiskDeliveryPlanActionView(BaseModel):
     requiredPolicy: str
     allowedOperations: list[str] = Field(default_factory=list)
     blockedOperations: list[str] = Field(default_factory=list)
-    readOnly: bool = True
+    readOnly: Literal[True] = True
 
 
 class DeliveryGateCriterionView(BaseModel):
@@ -5940,8 +5940,8 @@ class DeliveryMergeGateEvidenceView(BaseModel):
     criteria: list[DeliveryGateCriterionView] = Field(default_factory=list)
     blockedReasons: list[str] = Field(default_factory=list)
     recoveryPath: str
-    metadataOnly: bool = True
-    mergeApproved: bool = False
+    metadataOnly: Literal[True] = True
+    mergeApproved: Literal[False] = False
 
 
 class CleanupDryRunGateEvidenceView(BaseModel):
@@ -5955,8 +5955,8 @@ class CleanupDryRunGateEvidenceView(BaseModel):
     expectedHeadRevision: str | None = None
     blockedReasons: list[str] = Field(default_factory=list)
     recoveryPath: str
-    metadataOnly: bool = True
-    cleanupApproved: bool = False
+    metadataOnly: Literal[True] = True
+    cleanupApproved: Literal[False] = False
 
 
 class LowRiskDeliveryPlanReportView(BaseModel):
@@ -6656,6 +6656,18 @@ SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS = (
     "data",
     "meta",
 )
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS = (
+    "projectionId",
+    "generatedAt",
+    "status",
+    "event",
+    "owner",
+    "metadataOnly",
+    "rawPayloadRetained",
+)
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_FIELDS = (
+    "data",
+)
 MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = (
     "data",
 )
@@ -6792,6 +6804,16 @@ class SupervisorTerminalEventProjection(BaseModel):
     owner: Literal["supervisor"]
     metadataOnly: Literal[True]
     rawPayloadRetained: Literal[False]
+
+    @model_validator(mode="after")
+    def _status_matches_event(self) -> "SupervisorTerminalEventProjection":
+        if self.status == "empty" and self.event is not None:
+            raise ValueError("Empty terminal-event projections must not include an event.")
+        if self.status == "available" and self.event is None:
+            raise ValueError("Available terminal-event projections must include an event.")
+        if self.status == "unavailable" and self.event is not None:
+            raise ValueError("Unavailable terminal-event projections must not include an event.")
+        return self
 
 
 class SupervisorTerminalEventProjectionApiEnvelope(BaseModel):

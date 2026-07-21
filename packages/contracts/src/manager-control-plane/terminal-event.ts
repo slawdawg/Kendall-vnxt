@@ -123,16 +123,25 @@ export interface ManagerTerminalEventApiEnvelope {
   meta?: Readonly<Record<string, string | number | boolean | null>> | null;
 }
 
-/** Read-only supervisor projection of the most recently persisted canonical terminal event. */
-export interface SupervisorTerminalEventProjection {
+/** Shared read-only supervisor projection fields. */
+interface SupervisorTerminalEventProjectionBase {
   projectionId: string;
   generatedAt: string;
-  status: "available" | "empty" | "unavailable";
-  event: ManagerTerminalEventView | null;
   owner: "supervisor";
   metadataOnly: true;
   rawPayloadRetained: false;
 }
+
+/** Read-only supervisor projection of the most recently persisted canonical terminal event. */
+export type SupervisorTerminalEventProjection =
+  | (SupervisorTerminalEventProjectionBase & {
+      status: "available";
+      event: ManagerTerminalEventView;
+    })
+  | (SupervisorTerminalEventProjectionBase & {
+      status: "empty" | "unavailable";
+      event: null;
+    });
 
 export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS = [
   "projectionId",

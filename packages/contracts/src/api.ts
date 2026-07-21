@@ -1931,8 +1931,8 @@ export interface DeliveryMergeGateEvidenceView {
   criteria: DeliveryGateCriterionView[];
   blockedReasons: string[];
   recoveryPath: string;
-  metadataOnly: boolean;
-  mergeApproved: boolean;
+  metadataOnly: true;
+  mergeApproved: false;
 }
 
 export interface CleanupDryRunGateEvidenceView {
@@ -1946,8 +1946,8 @@ export interface CleanupDryRunGateEvidenceView {
   expectedHeadRevision?: string | null;
   blockedReasons: string[];
   recoveryPath: string;
-  metadataOnly: boolean;
-  cleanupApproved: boolean;
+  metadataOnly: true;
+  cleanupApproved: false;
 }
 
 export interface LowRiskDeliveryPlanReportView {

@@ -817,6 +817,7 @@ async def read_manager_terminal_event(
 @app.get(
     "/supervisor/terminal-event",
     response_model=SupervisorTerminalEventProjectionApiEnvelope,
+    responses={503: {"model": SupervisorTerminalEventProjectionApiEnvelope}},
 )
 async def get_supervisor_terminal_event(
     session: AsyncSession = Depends(get_session),

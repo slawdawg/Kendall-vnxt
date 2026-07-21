@@ -17,7 +17,9 @@ from supervisor.api.schemas import (
     SupervisorTerminalEventProjection,
     SupervisorTerminalEventProjectionApiEnvelope,
     SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS,
+    SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_FIELDS,
     SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS,
+    SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS,
 )
 
 
@@ -87,7 +89,9 @@ def test_terminal_event_routes_use_declared_supervisor_envelope():
     assert SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS == (
         "projectionId", "generatedAt", "status", "event", "owner", "metadataOnly", "rawPayloadRetained"
     )
+    assert SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS == SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS
     assert SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS == ("data", "meta")
+    assert SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_FIELDS == ("data",)
 
 
 def test_supervisor_terminal_event_projection_preserves_empty_and_available_read_only_shapes(monkeypatch):
@@ -110,14 +114,56 @@ def test_supervisor_terminal_event_projection_preserves_empty_and_available_read
     assert available_projection.data.event == view
     available.assert_awaited_once()
 
+    projection_base = {
+        "projectionId": "supervisor-terminal-event-projection:2026-07-20T05:42:11.123Z",
+        "generatedAt": "2026-07-20T05:42:11.123Z",
+        "owner": "supervisor",
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+    }
     with pytest.raises(ValidationError):
-        SupervisorTerminalEventProjection.model_validate({
-            "projectionId": "supervisor-terminal-event-projection:2026-07-20T05:42:11.123Z",
-            "generatedAt": "2026-07-20T05:42:11.123Z",
-            "status": "empty",
-            "owner": "supervisor",
+        SupervisorTerminalEventProjection.model_validate({**projection_base, "status": "empty"})
+    with pytest.raises(ValidationError):
+        SupervisorTerminalEventProjection.model_validate({**projection_base, "status": "empty", "event": view})
+    with pytest.raises(ValidationError):
+        SupervisorTerminalEventProjection.model_validate({**projection_base, "status": "available", "event": None})
+    with pytest.raises(ValidationError):
+        SupervisorTerminalEventProjection.model_validate({**projection_base, "status": "unavailable", "event": view})
+
+
+def test_low_risk_nested_gate_flags_are_report_only():
+    from supervisor.api.schemas import (
+        CleanupDryRunGateEvidenceView,
+        DeliveryMergeGateEvidenceView,
+        LowRiskDeliveryPlanActionView,
+    )
+
+    with pytest.raises(ValidationError):
+        LowRiskDeliveryPlanActionView.model_validate({
+            "actionId": "merge",
+            "label": "Merge",
+            "status": "blocked",
+            "eligible": False,
+            "nextSafeAction": "Wait",
+            "requiredApproval": "operator",
+            "requiredPolicy": "standard-delivery",
+            "readOnly": False,
+        })
+    with pytest.raises(ValidationError):
+        DeliveryMergeGateEvidenceView.model_validate({
+            "status": "blocked",
+            "lowRiskReady": False,
+            "recoveryPath": "Retry",
             "metadataOnly": True,
-            "rawPayloadRetained": False,
+            "mergeApproved": True,
+        })
+    with pytest.raises(ValidationError):
+        CleanupDryRunGateEvidenceView.model_validate({
+            "status": "blocked",
+            "dryRunMatchesPolicy": True,
+            "recoveryPath": "Retry",
+            "metadataOnly": True,
+            "cleanupApproved": True,
         })
 
 
