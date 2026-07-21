@@ -921,6 +921,11 @@ export interface DocumentationAuthorityDocumentView {
   evidence: string[];
 }
 
+export interface DisabledProviderProofListApiEnvelope {
+  data: DisabledProviderProofView[];
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DocumentationAuthorityBlockedStoryView {
   storyId: string;
   path: string;
@@ -2301,14 +2306,19 @@ export interface ThreatBoundaryView {
   credentialPolicy: string;
   artifactPolicy: string;
   rules: ThreatBoundaryRuleView[];
-  processLaunchAllowed: boolean;
-  providerCallsAllowed: boolean;
-  modelCallsAllowed: boolean;
-  premiumExecutionAllowed: boolean;
-  commandExecutionAllowed: boolean;
-  sourceMutationAllowed: boolean;
-  networkAllowed: boolean;
-  credentialAccessAllowed: boolean;
+  processLaunchAllowed: false;
+  providerCallsAllowed: false;
+  modelCallsAllowed: false;
+  premiumExecutionAllowed: false;
+  commandExecutionAllowed: false;
+  sourceMutationAllowed: false;
+  networkAllowed: false;
+  credentialAccessAllowed: false;
+}
+
+export interface ThreatBoundaryApiEnvelope {
+  data: ThreatBoundaryView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 export interface RoutingOverrideView {
   overrideId: string;

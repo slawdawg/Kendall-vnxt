@@ -4410,6 +4410,8 @@ class ExecutionReadinessOutcomeEvidenceView(BaseModel):
 
 
 class DisabledProviderProofView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     workerId: str
     providerLabel: str
     disabledReason: str
@@ -4437,6 +4439,15 @@ class DisabledProviderProofView(BaseModel):
     timeoutPolicy: str
     cancellationPolicy: str
     retentionPolicy: str
+
+
+class DisabledProviderProofListApiEnvelope(BaseModel):
+    """Typed response boundary for disabled-provider proof reads."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: list[DisabledProviderProofView]
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class ExecutionStateBoundaryView(BaseModel):
@@ -5199,6 +5210,8 @@ class RuntimeEvidenceReviewReportApiEnvelope(BaseModel):
 
 
 class ThreatBoundaryRuleView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     ruleId: str
     label: str
     status: str
@@ -5208,6 +5221,8 @@ class ThreatBoundaryRuleView(BaseModel):
 
 
 class ThreatBoundaryView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     boundaryId: str
     status: str
     generatedAt: datetime
@@ -5220,14 +5235,23 @@ class ThreatBoundaryView(BaseModel):
     credentialPolicy: str
     artifactPolicy: str
     rules: list[ThreatBoundaryRuleView]
-    processLaunchAllowed: bool = False
-    providerCallsAllowed: bool = False
-    modelCallsAllowed: bool = False
-    premiumExecutionAllowed: bool = False
-    commandExecutionAllowed: bool = False
-    sourceMutationAllowed: bool = False
-    networkAllowed: bool = False
-    credentialAccessAllowed: bool = False
+    processLaunchAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    modelCallsAllowed: Literal[False] = False
+    premiumExecutionAllowed: Literal[False] = False
+    commandExecutionAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    networkAllowed: Literal[False] = False
+    credentialAccessAllowed: Literal[False] = False
+
+
+class ThreatBoundaryApiEnvelope(BaseModel):
+    """Typed response boundary for the supervisor threat boundary report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ThreatBoundaryView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class RoutingOverrideView(BaseModel):

@@ -52,6 +52,8 @@ from supervisor.api.schemas import (
     LocalCleanupReadinessReportApiEnvelope,
     RemoteCleanupSyncReadinessReportApiEnvelope,
     TrustedAutonomyReadinessReportApiEnvelope,
+    DisabledProviderProofListApiEnvelope,
+    ThreatBoundaryApiEnvelope,
     LowRiskDeliveryPlanReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
@@ -1658,9 +1660,12 @@ async def get_delivery_readiness_policy_report():
     return DeliveryReadinessPolicyReportApiEnvelope(data=service.get_delivery_readiness_policy_report())
 
 
-@app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)
+@app.get(
+    "/supervisor/disabled-provider-proofs",
+    response_model=DisabledProviderProofListApiEnvelope,
+)
 async def list_disabled_provider_proofs():
-    return ApiEnvelope(data=service.list_disabled_provider_proofs())
+    return DisabledProviderProofListApiEnvelope(data=service.list_disabled_provider_proofs())
 
 
 @app.get("/supervisor/execution-state-boundary", response_model=ExecutionStateBoundaryApiEnvelope)
@@ -1668,9 +1673,9 @@ async def get_execution_state_boundary():
     return ExecutionStateBoundaryApiEnvelope(data=service.get_execution_state_boundary())
 
 
-@app.get("/supervisor/threat-boundary", response_model=ApiEnvelope)
+@app.get("/supervisor/threat-boundary", response_model=ThreatBoundaryApiEnvelope)
 async def get_threat_boundary():
-    return ApiEnvelope(data=service.get_threat_boundary())
+    return ThreatBoundaryApiEnvelope(data=service.get_threat_boundary())
 
 
 def _legacy_mode_control_rejected() -> None:
