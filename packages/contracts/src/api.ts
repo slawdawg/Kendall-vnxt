@@ -1971,6 +1971,11 @@ export interface LowRiskDeliveryPlanReportView {
   automaticDeliveryApproved: boolean;
 }
 
+export interface LowRiskDeliveryPlanReportApiEnvelope {
+  data: LowRiskDeliveryPlanReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DeliveryExecutionEvidencePayload {
   actionId: "pr" | "merge";
   recordEvent?: boolean;

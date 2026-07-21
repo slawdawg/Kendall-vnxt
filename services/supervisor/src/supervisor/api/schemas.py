@@ -5980,6 +5980,15 @@ class LowRiskDeliveryPlanReportView(BaseModel):
     automaticDeliveryApproved: bool = False
 
 
+class LowRiskDeliveryPlanReportApiEnvelope(BaseModel):
+    """Typed read-only response boundary for low-risk delivery planning."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LowRiskDeliveryPlanReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class DeliveryExecutionEvidencePayload(BaseModel):
     actionId: Literal["pr", "merge"]
     recordEvent: bool = False
