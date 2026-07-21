@@ -5763,6 +5763,8 @@ class GitHubDeliveryAuthorityReportApiEnvelope(BaseModel):
 
 
 class TrustedDeliveryEligibilityCheckView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     checkId: str
     label: str
     gateFamily: str
@@ -5773,6 +5775,8 @@ class TrustedDeliveryEligibilityCheckView(BaseModel):
 
 
 class TrustedDeliveryEligibilityStageEvaluationView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     stageId: str
     label: str
     status: str
@@ -5784,6 +5788,8 @@ class TrustedDeliveryEligibilityStageEvaluationView(BaseModel):
 
 
 class TrustedDeliveryDiffGuardFileView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     path: str
     changeType: str
     classification: str
@@ -5791,6 +5797,8 @@ class TrustedDeliveryDiffGuardFileView(BaseModel):
 
 
 class TrustedDeliveryDiffGuardView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     approvedFiles: list[str]
     allowedGlobs: list[str]
     forbiddenPaths: list[str]
@@ -5804,12 +5812,16 @@ class TrustedDeliveryDiffGuardView(BaseModel):
 
 
 class TrustedDeliveryDiffGuardFixtureView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     fixtureId: str
     label: str
     guard: TrustedDeliveryDiffGuardView
 
 
 class TrustedDeliveryVerificationEvidenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     commandId: str
     label: str
     commandShape: str
@@ -5823,6 +5835,8 @@ class TrustedDeliveryVerificationEvidenceView(BaseModel):
 
 
 class TrustedDeliveryVerificationEvidenceFixtureView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     fixtureId: str
     label: str
     evidence: TrustedDeliveryVerificationEvidenceView
@@ -5831,6 +5845,8 @@ class TrustedDeliveryVerificationEvidenceFixtureView(BaseModel):
 
 
 class TrustedDeliveryActionEligibilityView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     actionId: str
     label: str
     status: str
@@ -5841,12 +5857,16 @@ class TrustedDeliveryActionEligibilityView(BaseModel):
 
 
 class TrustedDeliveryActionEligibilityFixtureView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     fixtureId: str
     label: str
     actions: list[TrustedDeliveryActionEligibilityView]
 
 
 class TrustedDeliveryEligibilityReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -5865,11 +5885,29 @@ class TrustedDeliveryEligibilityReportView(BaseModel):
     stages: list[TrustedDeliveryEligibilityStageEvaluationView]
     hardStops: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    automaticDeliveryApproved: bool = False
-    pushPrAutoEligible: bool = False
-    mergeAutoEligible: bool = False
-    cleanupAutoEligible: bool = False
+    readOnly: Literal[True]
+    automaticDeliveryApproved: Literal[False]
+    pushPrAutoEligible: bool
+    mergeAutoEligible: bool
+    cleanupAutoEligible: bool
+
+    @field_validator(
+        "readOnly",
+        "automaticDeliveryApproved",
+        mode="before",
+    )
+    @classmethod
+    def _require_exact_boolean_safety_flags(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("Trusted delivery safety flags must be exact booleans.")
+        return value
+
+
+class TrustedDeliveryEligibilityReportApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: TrustedDeliveryEligibilityReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class LowRiskDeliveryPlanActionView(BaseModel):

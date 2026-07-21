@@ -101,6 +101,7 @@
     "check:development-runway": "node ./scripts/check-development-runway-report.mjs",
     "check:delivery-readiness": "node ./scripts/check-delivery-readiness-policy-report.mjs",
     "check:github-delivery-authority": "node ./scripts/check-github-delivery-authority-report.mjs",
+    "check:trusted-delivery-eligibility": "node ./scripts/check-trusted-delivery-eligibility-report.mjs",
     "check:github-workflow-policy": "node ./scripts/check-github-workflow-policy-report.mjs",
     "check:cleanup-automation": "node ./scripts/check-cleanup-automation-approval-packet.mjs",
     "check:maintenance-readiness": "node ./scripts/check-maintenance-readiness-report.mjs",

@@ -1889,11 +1889,16 @@ export interface TrustedDeliveryEligibilityReportView {
   stages: TrustedDeliveryEligibilityStageEvaluationView[];
   hardStops: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  automaticDeliveryApproved: boolean;
+  readOnly: true;
+  automaticDeliveryApproved: false;
   pushPrAutoEligible: boolean;
   mergeAutoEligible: boolean;
   cleanupAutoEligible: boolean;
+}
+
+export interface TrustedDeliveryEligibilityReportApiEnvelope {
+  data: TrustedDeliveryEligibilityReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface LowRiskDeliveryPlanActionView {
