@@ -113,6 +113,22 @@ def test_local_dogfood_mutation_envelopes_reject_authority_inflation() -> None:
                 "liveEvidenceAccepted": True,
             }
         })
+    with pytest.raises(ValidationError):
+        LocalDogfoodAttestationDecisionApiEnvelope.model_validate({
+            "data": {
+                "evidenceClass": "integrated_local",
+                "accepted": True,
+                "rejectionReason": "replay",
+            }
+        })
+    with pytest.raises(ValidationError):
+        LocalDogfoodAttestationDecisionApiEnvelope.model_validate({
+            "data": {
+                "evidenceClass": "integrated_local",
+                "accepted": False,
+                "rejectionReason": None,
+            }
+        })
 
 
 def test_local_dogfood_readback_typescript_contract_matches_python() -> None:
@@ -124,5 +140,7 @@ def test_local_dogfood_readback_typescript_contract_matches_python() -> None:
     assert "export interface LocalDogfoodAuthorizationApiEnvelope" in contract
     assert "export interface LocalDogfoodAttestationDecisionApiEnvelope" in contract
     assert "export interface LocalDogfoodAttestationRevocationApiEnvelope" in contract
+    assert "accepted: true;" in contract
+    assert "accepted: false;" in contract
     assert 'metadataOnly: true;' in contract
     assert 'rawPayloadRetained: false;' in contract

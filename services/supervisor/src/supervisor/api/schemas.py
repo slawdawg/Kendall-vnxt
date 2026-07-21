@@ -1742,6 +1742,12 @@ class LocalDogfoodAttestationDecisionView(BaseModel):
     metadataOnly: Literal[True] = True
     rawPayloadRetained: Literal[False] = False
 
+    @model_validator(mode="after")
+    def _acceptance_reason_consistent(self) -> "LocalDogfoodAttestationDecisionView":
+        if self.accepted != (self.rejectionReason is None):
+            raise ValueError("accepted must be true exactly when rejectionReason is absent")
+        return self
+
 
 class LocalDogfoodAttestationRevocationView(BaseModel):
     """Revocation acknowledgement; it is metadata-only and never executes work."""

@@ -2312,11 +2312,8 @@ export interface LocalDogfoodAuthorizationApiEnvelope {
   meta?: Record<string, string | number | boolean | null> | null;
 }
 
-/** Local receipt verification remains integrated-local and never promotion-grade. */
-export interface LocalDogfoodAttestationDecisionView {
+interface LocalDogfoodAttestationDecisionBase {
   evidenceClass: "integrated_local";
-  accepted: boolean;
-  rejectionReason: string | null;
   issuerId: string | null;
   keyId: string | null;
   receiptId: string | null;
@@ -2324,6 +2321,17 @@ export interface LocalDogfoodAttestationDecisionView {
   metadataOnly: true;
   rawPayloadRetained: false;
 }
+
+/** Local receipt verification remains integrated-local and never promotion-grade. */
+export type LocalDogfoodAttestationDecisionView =
+  | (LocalDogfoodAttestationDecisionBase & {
+      accepted: true;
+      rejectionReason: null;
+    })
+  | (LocalDogfoodAttestationDecisionBase & {
+      accepted: false;
+      rejectionReason: string;
+    });
 
 export interface LocalDogfoodAttestationDecisionApiEnvelope {
   data: LocalDogfoodAttestationDecisionView;
