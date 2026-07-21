@@ -16,6 +16,8 @@ from supervisor.api.schemas import (
     ManagerTerminalEventView,
     SupervisorTerminalEventProjection,
     SupervisorTerminalEventProjectionApiEnvelope,
+    SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS,
+    SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS,
 )
 
 
@@ -82,6 +84,10 @@ def test_terminal_event_routes_use_declared_supervisor_envelope():
     assert _route("/manager-control-plane/terminal-events").response_model is ManagerTerminalEventApiEnvelope
     assert _route("/manager-control-plane/terminal-events/{event_id}").response_model is ManagerTerminalEventApiEnvelope
     assert _route("/supervisor/terminal-event").response_model is SupervisorTerminalEventProjectionApiEnvelope
+    assert SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS == (
+        "projectionId", "generatedAt", "status", "event", "owner", "metadataOnly", "rawPayloadRetained"
+    )
+    assert SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS == ("data", "meta")
 
 
 def test_supervisor_terminal_event_projection_preserves_empty_and_available_read_only_shapes(monkeypatch):
@@ -103,6 +109,28 @@ def test_supervisor_terminal_event_projection_preserves_empty_and_available_read
     assert available_projection.data.status == "available"
     assert available_projection.data.event == view
     available.assert_awaited_once()
+
+    with pytest.raises(ValidationError):
+        SupervisorTerminalEventProjection.model_validate({
+            "projectionId": "supervisor-terminal-event-projection:2026-07-20T05:42:11.123Z",
+            "generatedAt": "2026-07-20T05:42:11.123Z",
+            "status": "empty",
+            "owner": "supervisor",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        })
+
+
+def test_supervisor_terminal_event_projection_degrades_to_typed_unavailable(monkeypatch):
+    unavailable = AsyncMock(side_effect=ValueError("corrupt persisted metadata"))
+    monkeypatch.setattr(main_module, "get_latest_manager_terminal_event", unavailable)
+
+    response = asyncio.run(main_module.get_supervisor_terminal_event(session=object()))
+
+    assert response.status_code == 503
+    assert response.body is not None
+    assert b'"status":"unavailable"' in response.body
+    assert b'"event":null' in response.body
 
 
 def test_terminal_event_post_handler_returns_declared_supervisor_envelope(monkeypatch):
@@ -131,6 +159,7 @@ def test_shared_terminal_event_contract_matches_python_boundary():
     assert "export interface ManagerTerminalEventView extends ManagerTerminalEventRequest" in contract_source
     assert "export interface ManagerTerminalEventApiEnvelope" in contract_source
     assert "export interface SupervisorTerminalEventProjection" in contract_source
+    assert "SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS" in contract_source
     assert 'owner: "supervisor"' in contract_source
     assert 'rawPayloadRetained: false' in contract_source
     assert "Readonly<Record<string, string | number | boolean | null>>" in contract_source

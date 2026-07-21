@@ -10,6 +10,8 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
@@ -820,7 +822,21 @@ async def get_supervisor_terminal_event(
     session: AsyncSession = Depends(get_session),
 ):
     generated_at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    event = await get_latest_manager_terminal_event(session)
+    try:
+        event = await get_latest_manager_terminal_event(session)
+    except (ValidationError, SQLAlchemyError, ValueError):
+        projection = SupervisorTerminalEventProjectionApiEnvelope(
+            data={
+                "projectionId": f"supervisor-terminal-event-projection:{generated_at}",
+                "generatedAt": generated_at,
+                "status": "unavailable",
+                "event": None,
+                "owner": "supervisor",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        )
+        return JSONResponse(status_code=503, content=projection.model_dump(mode="json"))
     return SupervisorTerminalEventProjectionApiEnvelope(
         data={
             "projectionId": f"supervisor-terminal-event-projection:{generated_at}",

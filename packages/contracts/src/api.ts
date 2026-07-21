@@ -1965,10 +1965,10 @@ export interface LowRiskDeliveryPlanReportView {
   cleanupDryRunGate: CleanupDryRunGateEvidenceView;
   hardStops: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  remoteMutationApproved: boolean;
-  cleanupApproved: boolean;
-  automaticDeliveryApproved: boolean;
+  readOnly: true;
+  remoteMutationApproved: false;
+  cleanupApproved: false;
+  automaticDeliveryApproved: false;
 }
 
 export interface LowRiskDeliveryPlanReportApiEnvelope {

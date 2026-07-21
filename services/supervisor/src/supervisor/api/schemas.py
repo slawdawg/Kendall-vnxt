@@ -5974,10 +5974,10 @@ class LowRiskDeliveryPlanReportView(BaseModel):
     cleanupDryRunGate: CleanupDryRunGateEvidenceView
     hardStops: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    remoteMutationApproved: bool = False
-    cleanupApproved: bool = False
-    automaticDeliveryApproved: bool = False
+    readOnly: Literal[True] = True
+    remoteMutationApproved: Literal[False] = False
+    cleanupApproved: Literal[False] = False
+    automaticDeliveryApproved: Literal[False] = False
 
 
 class LowRiskDeliveryPlanReportApiEnvelope(BaseModel):
@@ -6643,6 +6643,19 @@ MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = (
     "data",
     "meta",
 )
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS = (
+    "projectionId",
+    "generatedAt",
+    "status",
+    "event",
+    "owner",
+    "metadataOnly",
+    "rawPayloadRetained",
+)
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS = (
+    "data",
+    "meta",
+)
 MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = (
     "data",
 )
@@ -6774,8 +6787,8 @@ class SupervisorTerminalEventProjection(BaseModel):
         max_length=64,
         pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
     )
-    status: Literal["available", "empty"]
-    event: ManagerTerminalEventView | None = None
+    status: Literal["available", "empty", "unavailable"]
+    event: ManagerTerminalEventView | None
     owner: Literal["supervisor"]
     metadataOnly: Literal[True]
     rawPayloadRetained: Literal[False]

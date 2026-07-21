@@ -422,6 +422,14 @@ def test_supervisor_terminal_event_projection_is_empty_then_returns_latest_owned
         assert _post(base_url, "/manager-control-plane/terminal-events", first).status_code == 200
         assert _post(base_url, "/manager-control-plane/terminal-events", second).status_code == 200
 
+        # Equal persisted timestamps use the documented canonical event-id tie-break.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "UPDATE manager_terminal_events SET created_at = ?",
+                ("2026-07-21 03:31:00.000000",),
+            )
+            connection.commit()
+
         latest = _get(base_url, "/supervisor/terminal-event")
         assert latest.status_code == 200, latest.text
         projection = latest.json()["data"]

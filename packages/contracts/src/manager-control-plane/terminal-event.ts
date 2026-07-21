@@ -127,7 +127,7 @@ export interface ManagerTerminalEventApiEnvelope {
 export interface SupervisorTerminalEventProjection {
   projectionId: string;
   generatedAt: string;
-  status: "available" | "empty";
+  status: "available" | "empty" | "unavailable";
   event: ManagerTerminalEventView | null;
   owner: "supervisor";
   metadataOnly: true;
@@ -144,6 +144,14 @@ export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS = [
   "rawPayloadRetained",
 ] as const;
 export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS = SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS;
+
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS = [
+  "data",
+  "meta",
+] as const;
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_FIELDS = [
+  "data",
+] as const;
 
 export interface SupervisorTerminalEventProjectionApiEnvelope {
   data: SupervisorTerminalEventProjection;

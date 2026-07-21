@@ -79,6 +79,11 @@ def test_low_risk_delivery_plan_envelope_is_strict_and_typed() -> None:
     with pytest.raises(ValidationError):
         LowRiskDeliveryPlanReportApiEnvelope.model_validate({"data": _valid_report(), "unexpected": True})
 
+    invalid = _valid_report()
+    invalid["automaticDeliveryApproved"] = True
+    with pytest.raises(ValidationError):
+        LowRiskDeliveryPlanReportApiEnvelope.model_validate({"data": invalid})
+
 
 def test_low_risk_delivery_plan_routes_use_declared_report_envelope() -> None:
     assert _route("/supervisor/low-risk-delivery-plan").response_model is LowRiskDeliveryPlanReportApiEnvelope
