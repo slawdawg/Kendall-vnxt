@@ -55,6 +55,10 @@ def test_trusted_delivery_eligibility_envelope_is_strict_and_typed() -> None:
         invalid = envelope.data.model_dump()
         invalid["stages"][0]["unexpected"] = "rejected"
         TrustedDeliveryEligibilityReportApiEnvelope.model_validate({"data": invalid})
+    with pytest.raises(ValidationError):
+        invalid = envelope.data.model_dump()
+        invalid["actionEligibility"][0]["executionApproved"] = True
+        TrustedDeliveryEligibilityReportApiEnvelope.model_validate({"data": invalid})
 
 
 def test_trusted_delivery_eligibility_routes_and_openapi_use_typed_envelope() -> None:
@@ -76,6 +80,7 @@ def test_trusted_delivery_eligibility_typescript_contract_matches_python() -> No
     assert "pushPrAutoEligible: boolean;" in contract
     assert "mergeAutoEligible: boolean;" in contract
     assert "cleanupAutoEligible: boolean;" in contract
+    assert "executionApproved: false;" in contract
     assert "meta?: Record<string, string | number | boolean | null> | null;" in contract
 
 

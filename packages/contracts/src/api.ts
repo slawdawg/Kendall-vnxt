@@ -1861,7 +1861,7 @@ export interface TrustedDeliveryActionEligibilityView {
   evidence: string[];
   blockedReasons: string[];
   nextAction: string;
-  executionApproved: boolean;
+  executionApproved: false;
 }
 
 export interface TrustedDeliveryActionEligibilityFixtureView {

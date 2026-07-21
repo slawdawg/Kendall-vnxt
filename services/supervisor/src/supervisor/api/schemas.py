@@ -5853,7 +5853,7 @@ class TrustedDeliveryActionEligibilityView(BaseModel):
     evidence: list[str]
     blockedReasons: list[str]
     nextAction: str
-    executionApproved: bool = False
+    executionApproved: Literal[False] = False
 
 
 class TrustedDeliveryActionEligibilityFixtureView(BaseModel):
