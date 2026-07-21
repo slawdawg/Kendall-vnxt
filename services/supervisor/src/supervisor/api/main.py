@@ -25,6 +25,7 @@ from supervisor.api.schemas import (
     AuthoritativeWorkPacketTransitionRequest,
     CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
+    CandidateWorkApiEnvelope,
     CandidateWorkListApiEnvelope,
     ExecutionConfigurationChecksApiEnvelope,
     ExecutionReadinessReportApiEnvelope,
@@ -603,10 +604,10 @@ async def create_work_item(payload: WorkItemCreate, session: AsyncSession = Depe
     return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.post("/candidate-work", response_model=ApiEnvelope)
+@app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)
 async def create_candidate_work(payload: CandidateWorkCreate, session: AsyncSession = Depends(get_session)):
     candidate = await service.create_candidate_work(session, payload)
-    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+    return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
 @app.post("/candidate-work/import-bmad", response_model=ApiEnvelope)
