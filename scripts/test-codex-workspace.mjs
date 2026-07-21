@@ -763,7 +763,7 @@ try {
   test("start validates mode", () => {
     const result = run(["start", "bad mode", "--mode", "scratch", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "invalid mode unexpectedly passed");
-    assert(result.stderr.includes("--mode must be either pr or experiment"));
+    assert(result.stderr.includes("--mode must be either pr, experiment, or epic-batch"));
   });
 
   test("start rejects path traversal task ids", () => {

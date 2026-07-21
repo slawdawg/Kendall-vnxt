@@ -1,8 +1,9 @@
 # ADR: Opt-in Staged Epic Delivery Pilot
 
 Date: 2026-07-17
-Status: **DOCUMENTATION-ONLY PILOT CONTRACT / STANDARD DELIVERY DEFAULT**
-Scope: low-risk maintenance planning; no runtime, worker, provider, GitHub, or cleanup implementation
+Status: **MECHANICS IMPLEMENTED / STANDARD DELIVERY DEFAULT**
+Scope: low-risk maintenance planning and guarded workspace mechanics; no runtime,
+worker, provider, GitHub, merge, branch, or cleanup execution
 
 ## Decision
 
@@ -15,10 +16,11 @@ epic branch/worktree. Each slice remains attributable, testable, reviewable,
 and reversible. GitHub delivery is deferred until the final checkpoint unless
 a split trigger requires an earlier standard-delivery PR.
 
-This ADR defines a planning contract only. It does not add a mode flag, change
-the manager, create a `finish-epic` command, grant merge or cleanup authority,
-launch workers/providers, or alter source, auth, secrets, deployment, schema,
-or runtime behavior.
+The workspace protocol now records an explicit `epic-batch` manifest mode and
+provides a planning-only `finish-epic` closeout packet. These mechanics do not
+grant merge or cleanup authority, launch workers/providers, or alter source,
+auth, secrets, deployment, schema, or runtime behavior. `standard-delivery`
+remains the default until an operator explicitly admits a batch.
 
 ## Delivery modes
 
