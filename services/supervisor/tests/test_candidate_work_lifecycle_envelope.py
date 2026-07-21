@@ -12,3 +12,8 @@ def test_candidate_work_update_route_uses_typed_envelope() -> None:
     assert route.response_model is CandidateWorkApiEnvelope
     assert CandidateWorkApiEnvelope.model_fields["data"].annotation is CandidateWorkView
     assert CandidateWorkApiEnvelope.model_config["extra"] == "forbid"
+
+
+def test_candidate_work_import_routes_use_typed_envelope() -> None:
+    for path in ("/candidate-work/import-bmad", "/candidate-work/import-obsidian-metadata"):
+        assert _route(path).response_model is CandidateWorkApiEnvelope

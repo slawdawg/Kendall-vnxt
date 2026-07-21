@@ -610,16 +610,16 @@ async def create_candidate_work(payload: CandidateWorkCreate, session: AsyncSess
     return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
-@app.post("/candidate-work/import-bmad", response_model=ApiEnvelope)
+@app.post("/candidate-work/import-bmad", response_model=CandidateWorkApiEnvelope)
 async def import_bmad_candidate_work(payload: CandidateWorkBmadImportRequest, session: AsyncSession = Depends(get_session)):
     try:
         candidate = await service.import_bmad_candidate_work(session, payload)
     except BmadImportError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_bmad_import").model_dump()) from exc
-    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+    return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
-@app.post("/candidate-work/import-obsidian-metadata", response_model=ApiEnvelope)
+@app.post("/candidate-work/import-obsidian-metadata", response_model=CandidateWorkApiEnvelope)
 async def import_obsidian_metadata_candidate_work(
     payload: CandidateWorkObsidianMetadataImportRequest,
     session: AsyncSession = Depends(get_session),
@@ -628,7 +628,7 @@ async def import_obsidian_metadata_candidate_work(
         candidate = await service.import_obsidian_metadata_candidate_work(session, payload)
     except ObsidianMetadataImportError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_obsidian_metadata_import").model_dump()) from exc
-    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+    return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
 @app.get("/candidate-work", response_model=CandidateWorkListApiEnvelope)
