@@ -19,6 +19,12 @@ import { protectedBranches as branchFoundationProtectedBranches } from "./lib/br
 import { buildAssignmentInventory } from "./lib/codex-workspace-assignment-inventory.mjs";
 import { currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
+import {
+  evaluateEpicBatchAdmission,
+  buildEpicBatchFinishPlan,
+  buildEpicBatchManifest,
+  EPIC_BATCH_DEFAULT_LIMITS,
+} from "./lib/epic-batch-contract.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultBaseBranch = "dev";
@@ -73,6 +79,9 @@ try {
     case "finish-pr":
       finishPr(commandArgs);
       break;
+    case "finish-epic":
+      finishEpic(commandArgs);
+      break;
     case "verify-pr-gates":
       verifyPrGates(commandArgs);
       break;
@@ -124,6 +133,7 @@ Commands:
   emergency-stop            Preview, apply, or clear a metadata-only emergency stop checkpoint.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
+  finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
@@ -144,7 +154,12 @@ Common options:
 start options:
   --base <branch>           Base branch. Defaults to dev.
   --branch <branch>         Override generated branch name.
-  --mode <pr|experiment>    Task mode. Defaults to pr.
+  --mode <pr|experiment|epic-batch>
+                             Task mode. Defaults to pr.
+  --epic-id <id>             Required with epic-batch mode.
+  --decision-ref <ref>       Required with epic-batch mode.
+  --expected-slices <list>   Comma-separated slices required for admission.
+  --allowed-paths <list>     Comma-separated allowlisted paths for admission.
   --no-fetch                Do not fetch origin before creating the branch.
   --summary-json            With --dry-run, print a bounded JSON start plan.
   --task-id <id>            Override generated task id.
@@ -230,6 +245,12 @@ finish-pr options:
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
+
+finish-epic options:
+  --summary-json            Print a bounded closeout plan without mutation.
+  --verification-ref <ref>  Existing final verification evidence reference.
+  --review-ref <ref>        Existing final review evidence reference.
+  --age-business-days <n>   Elapsed UTC business days; stale batches hold.
 
 verify-pr-gates options:
   --apply                   Record gate evidence in the manifest. Without this, gate check is dry-run.
@@ -333,8 +354,26 @@ function startWorkspace(argv) {
   const baseBranch = String(options.base || defaultBaseBranch);
   assertSafeBaseBranch(baseBranch);
   const mode = String(options.mode || "pr");
-  if (!["pr", "experiment"].includes(mode)) {
-    throw new Error("--mode must be either pr or experiment.");
+  if (!["pr", "experiment", "epic-batch"].includes(mode)) {
+    throw new Error("--mode must be either pr, experiment, or epic-batch.");
+  }
+  const epicBatch = mode === "epic-batch"
+    ? buildEpicBatchManifest({
+        epicId: options.epicId,
+        decisionRef: options.decisionRef,
+        expectedSlices: String(options.expectedSlices || "").split(","),
+        allowedPaths: String(options.allowedPaths || "").split(","),
+        limits: {
+          sliceLimit: options.sliceLimit || EPIC_BATCH_DEFAULT_LIMITS.sliceLimit,
+          ageBusinessDays: options.ageBusinessDays || EPIC_BATCH_DEFAULT_LIMITS.ageBusinessDays,
+          fileLimit: options.fileLimit || EPIC_BATCH_DEFAULT_LIMITS.fileLimit,
+          lineLimit: options.lineLimit || EPIC_BATCH_DEFAULT_LIMITS.lineLimit,
+        },
+      })
+    : null;
+  if (epicBatch) {
+    const admission = evaluateEpicBatchAdmission({ epicBatch });
+    if (admission.status !== "admitted") throw new Error(`epic-batch admission blocked: ${admission.blockers.join("; ")}`);
   }
   const slug = slugify(description);
   const taskId = String(options.taskId || `${dateStamp()}-${slug}`);
@@ -383,6 +422,7 @@ function startWorkspace(argv) {
     owner_acquired_at: new Date().toISOString(),
     owner_updated_at: new Date().toISOString(),
     mode,
+    epic_batch: epicBatch,
     pr_url: null,
     pr_number: null,
     created_at: new Date().toISOString(),
@@ -431,6 +471,7 @@ function buildStartDryRunSummary({ state, manifest, manifestPath, plan, shouldFe
     title: manifest.title,
     description: manifest.description,
     mode: manifest.mode,
+    epicBatch: manifest.epic_batch || null,
     owner: manifest.owner || null,
     branch: manifest.branch,
     baseBranch: manifest.base_branch || null,
@@ -2099,6 +2140,37 @@ function buildResumePacket({ manifest, path }, options, ownerWarning = laneOwner
   };
 }
 
+function finishEpic(argv) {
+  const { positional, options } = parseOptions(argv);
+  const state = workspaceState(options);
+  const manifestRecord = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
+  const { manifest } = manifestRecord;
+  assertLaneOwner(manifest, options);
+  const plan = buildEpicBatchFinishPlan(manifest, {
+    verificationRef: options.verificationRef || null,
+    reviewRef: options.reviewRef || null,
+    ageBusinessDays: options.ageBusinessDays === undefined ? null : Number(options.ageBusinessDays),
+  });
+  const packet = {
+    taskId: manifest.task_id,
+    mode: manifest.mode || "pr",
+    epicId: manifest.epic_batch?.epic_id || null,
+    status: plan.status,
+    blockers: plan.blockers,
+    steps: plan.steps,
+    mutation: plan.mutation,
+    authority: "operator decision required before final PR, merge, or cleanup",
+  };
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  printPlan("finish-epic", [
+    ...plan.steps,
+    ...(plan.blockers.length > 0 ? [`blocked: ${plan.blockers.join("; ")}`] : ["no mutation performed; operator delivery decision remains required"]),
+  ]);
+}
+
 function finishPr(argv) {
   const { positional, options } = parseOptions(argv);
   const state = workspaceState(options);
@@ -2114,6 +2186,9 @@ function finishPr(argv) {
   requireGh("finish-pr");
   if (manifest.mode === "experiment") {
     throw new Error("This workspace is marked as experiment mode. Create a PR only after changing its manifest mode to pr.");
+  }
+  if (manifest.mode === "epic-batch") {
+    throw new Error("This workspace is marked as epic-batch mode. Use finish-epic for planning-only final closeout.");
   }
   assertSafeBranch(manifest.branch);
   assertWorktreeExists(manifest);
