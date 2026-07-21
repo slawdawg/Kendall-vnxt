@@ -102,6 +102,11 @@ export interface CandidateWorkListApiEnvelope {
   meta?: Record<string, string | number | boolean | null>;
 }
 
+export interface CandidateWorkApiEnvelope {
+  data: CandidateWorkView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface WorkPacketLearnFollowUpCandidateWorkPayload {
   triggerKind: "completed_packet" | "failed_attempt" | "rejected_approval" | "quality_failure" | "operator_feedback";
   title: string;
@@ -2458,7 +2463,7 @@ export interface WorkItemView extends WorkItemPayload {
 
 export interface WorkItemApiEnvelope {
   data: WorkItemView;
-  meta?: Record<string, string | number | boolean | null>;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface WorkItemListApiEnvelope {

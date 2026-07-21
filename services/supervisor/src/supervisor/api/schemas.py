@@ -269,6 +269,15 @@ class CandidateWorkListApiEnvelope(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+class CandidateWorkApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned candidate-work creation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: CandidateWorkView
+    meta: dict[str, Any] | None = None
+
+
 class BmadImportPackageView(BaseModel):
     title: str
     requestedOutcome: str
