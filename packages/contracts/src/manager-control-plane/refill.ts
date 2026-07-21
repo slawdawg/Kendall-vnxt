@@ -1,11 +1,14 @@
-import { MANAGER_TERMINAL_EVENT_TYPE } from "./terminal-event";
+import {
+  MANAGER_TERMINAL_EVENT_TYPE,
+  SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
+  SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
+} from "./terminal-event";
 import type { ManagerAuthorityDecisionClass } from "./authority";
 import type { EvidenceRefId, ManagerSourceRefId, RefillJobId } from "./ids";
 import type { ManagerRefillJobStatus } from "./lifecycle";
 import type {
   ManagerAuthoritativeBacklogReconciliationCounts,
   ManagerSupervisorCanonicalEventMetadata,
-  ManagerSupervisorTerminalIntegration,
   ManagerTerminalEventId,
   ManagerUnresolvedApprovalGatedWork,
 } from "./terminal-event";
@@ -21,7 +24,7 @@ export type {
 export type RefillTriggerReason = "low_watermark" | "manual_bootstrap" | "source_exhaustion_check" | "recovery";
 export type RefillResult = "queued_work" | "queued_with_gated_candidates" | "no_safe_work" | typeof MANAGER_TERMINAL_EVENT_TYPE | "needs_review" | "blocked" | "failed";
 
-export interface AuthoritativeBacklogExhaustedDisposition {
+interface AuthoritativeBacklogExhaustedDispositionBase {
   disposition: typeof MANAGER_TERMINAL_EVENT_TYPE;
   runId: string;
   sourceIdentity: string;
@@ -31,11 +34,27 @@ export interface AuthoritativeBacklogExhaustedDisposition {
   evidenceRefs: readonly EvidenceRefId[];
   resumeRequirement: string;
   nextManagerAction: string;
-  canonicalEventIntegration: ManagerSupervisorTerminalIntegration;
-  supervisorEvent?: ManagerSupervisorCanonicalEventMetadata;
   idempotencyKey: string;
   rawPayloadRetained: false;
 }
+
+/** Terminal metadata is explicitly absent until supervisor persistence succeeds. */
+export interface MissingSupervisorTerminalEventDisposition
+  extends AuthoritativeBacklogExhaustedDispositionBase {
+  canonicalEventIntegration: typeof SUPERVISOR_TERMINAL_INTEGRATION_MISSING;
+  supervisorEvent?: never;
+}
+
+/** A persisted terminal disposition must carry the supervisor-owned event metadata. */
+export interface SupervisorCanonicalTerminalEventDisposition
+  extends AuthoritativeBacklogExhaustedDispositionBase {
+  canonicalEventIntegration: typeof SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED;
+  supervisorEvent: ManagerSupervisorCanonicalEventMetadata;
+}
+
+export type AuthoritativeBacklogExhaustedDisposition =
+  | MissingSupervisorTerminalEventDisposition
+  | SupervisorCanonicalTerminalEventDisposition;
 
 interface RefillJobFields {
   refillJobId: RefillJobId;
