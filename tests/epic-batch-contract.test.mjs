@@ -148,6 +148,25 @@ test("finish rejects unexpected slices and unrecorded final evidence", () => {
   assert.ok(result.blockers.includes("final verification evidence is missing or invalid"));
 });
 
+test("finish accepts historical checkpoints when final aggregate checkpoint covers final head", () => {
+  const epicBatch = buildEpicBatchManifest({ epicId: "epic-7", decisionRef: "operator:2026-07-21", expectedSlices: ["slice-a", "slice-b"], allowedPaths: ["scripts/"] });
+  const result = buildEpicBatchFinishPlan({ mode: "epic-batch", branch: "codex/epic-7", epic_batch: {
+    ...epicBatch,
+    slices: [
+      { slice_id: "slice-a", objective: "a", owner: "operator", commit: "abcdef1", rollback_ref: "revert:a", paths: ["scripts/a.mjs"], checks: ["check"] },
+      { slice_id: "slice-b", objective: "b", owner: "operator", commit: "abcdef2", rollback_ref: "revert:b", paths: ["scripts/b.mjs"], checks: ["check"] },
+    ],
+    checkpoints: [
+      { checkpoint_id: "cp-a", slices: ["slice-a"], result: "passed", base_revision: "abcdef0", head: "abcdef1", review_ref: "review:a", checks: ["check"] },
+      { checkpoint_id: "cp-final", slices: ["slice-a", "slice-b"], result: "passed", base_revision: "abcdef1", head: "abcdef2", review_ref: "review:final", checks: ["check"] },
+    ],
+    final_head: "abcdef2",
+    final_verification_ref: "verify:final",
+    final_review_ref: "review:final",
+  } }, { liveState: { dirty: false, branch: "codex/epic-7", head: "abcdef2" }, now: new Date(epicBatch.opened_at) });
+  assert.equal(result.status, "ready-for-operator-delivery-decision");
+});
+
 test("finish derives current UTC business-day age when omitted", () => {
   assert.equal(deriveBusinessDaysElapsed("2026-07-10T00:00:00Z", new Date("2026-07-20T00:00:00Z")), 6);
   const epicBatch = buildEpicBatchManifest({ epicId: "epic-7", decisionRef: "operator:2026-07-21", expectedSlices: ["slice-a"], allowedPaths: ["scripts/"] });

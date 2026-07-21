@@ -44,6 +44,7 @@ from supervisor.api.schemas import (
     EpicCompletionAuditReportApiEnvelope,
     DeliveryReadinessPolicyReportApiEnvelope,
     GitHubDeliveryAuthorityReportApiEnvelope,
+    TrustedDeliveryEligibilityReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -1512,9 +1513,9 @@ async def get_github_delivery_authority_report():
     return GitHubDeliveryAuthorityReportApiEnvelope(data=service.get_github_delivery_authority_report())
 
 
-@app.get("/supervisor/trusted-delivery-eligibility-report", response_model=ApiEnvelope)
+@app.get("/supervisor/trusted-delivery-eligibility-report", response_model=TrustedDeliveryEligibilityReportApiEnvelope)
 async def get_trusted_delivery_eligibility_report():
-    return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report())
+    return TrustedDeliveryEligibilityReportApiEnvelope(data=await service.get_trusted_delivery_eligibility_report())
 
 
 @app.get("/work-items/{work_item_id}/trusted-delivery-eligibility-report", response_model=ApiEnvelope)

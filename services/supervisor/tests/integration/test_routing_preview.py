@@ -7122,6 +7122,11 @@ def test_low_risk_delivery_plan_reports_dry_run_actions_without_mutation(tmp_pat
     assert report["remoteMutationApproved"] is False
     assert report["cleanupApproved"] is False
     assert report["automaticDeliveryApproved"] is False
+    assert "not eligible for delivery or cleanup mutation inside an epic batch" in report["summary"]
+    assert report["mergeGate"]["metadataOnly"] is True
+    assert report["mergeGate"]["mergeApproved"] is False
+    assert report["cleanupDryRunGate"]["metadataOnly"] is True
+    assert report["cleanupDryRunGate"]["cleanupApproved"] is False
     assert {action["actionId"] for action in report["actions"]} == {"pr", "merge", "cleanup"}
     assert all(action["readOnly"] is True for action in report["actions"])
     policy_by_action = {action["actionId"]: action["requiredPolicy"] for action in report["actions"]}

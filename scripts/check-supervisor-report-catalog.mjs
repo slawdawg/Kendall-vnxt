@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import "./check-github-delivery-authority-report.mjs";
+import "./check-trusted-delivery-eligibility-report.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
