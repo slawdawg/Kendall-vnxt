@@ -6092,12 +6092,19 @@ class CleanupPlanView(BaseModel):
     requiredPolicy: str
     recoveryPath: str
     nextSafeActions: list[str] = Field(default_factory=list)
-    readOnly: bool = True
-    cleanupAllowed: bool = False
-    branchDeletionApproved: bool = False
-    worktreeRemovalApproved: bool = False
-    evidenceDeletionApproved: bool = False
-    remoteMutationApproved: bool = False
+    readOnly: Literal[True] = True
+    cleanupAllowed: Literal[False] = False
+    branchDeletionApproved: Literal[False] = False
+    worktreeRemovalApproved: Literal[False] = False
+    evidenceDeletionApproved: Literal[False] = False
+    remoteMutationApproved: Literal[False] = False
+
+
+class CleanupPlanApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: CleanupPlanView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class LocalCleanupPolicyItemView(BaseModel):
@@ -6117,11 +6124,18 @@ class LocalCleanupReadinessReportView(BaseModel):
     blockedTargets: list[str]
     stopConditions: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    automaticCleanupApproved: bool = False
-    worktreeRemovalApproved: bool = False
-    branchDeletionApproved: bool = False
-    evidenceDeletionApproved: bool = False
+    readOnly: Literal[True] = True
+    automaticCleanupApproved: Literal[False] = False
+    worktreeRemovalApproved: Literal[False] = False
+    branchDeletionApproved: Literal[False] = False
+    evidenceDeletionApproved: Literal[False] = False
+
+
+class LocalCleanupReadinessReportApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalCleanupReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class RemoteCleanupSyncPolicyItemView(BaseModel):
@@ -6141,11 +6155,18 @@ class RemoteCleanupSyncReadinessReportView(BaseModel):
     blockedOperations: list[str]
     stopConditions: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    remoteBranchDeletionApproved: bool = False
-    issueSyncApproved: bool = False
-    storyStatusSyncApproved: bool = False
-    remoteMutationApproved: bool = False
+    readOnly: Literal[True] = True
+    remoteBranchDeletionApproved: Literal[False] = False
+    issueSyncApproved: Literal[False] = False
+    storyStatusSyncApproved: Literal[False] = False
+    remoteMutationApproved: Literal[False] = False
+
+
+class RemoteCleanupSyncReadinessReportApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: RemoteCleanupSyncReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class TrustedAutonomyReadinessGateView(BaseModel):

@@ -2079,12 +2079,17 @@ export interface CleanupPlanView {
   requiredPolicy: string;
   recoveryPath: string;
   nextSafeActions: string[];
-  readOnly: boolean;
-  cleanupAllowed: boolean;
-  branchDeletionApproved: boolean;
-  worktreeRemovalApproved: boolean;
-  evidenceDeletionApproved: boolean;
-  remoteMutationApproved: boolean;
+  readOnly: true;
+  cleanupAllowed: false;
+  branchDeletionApproved: false;
+  worktreeRemovalApproved: false;
+  evidenceDeletionApproved: false;
+  remoteMutationApproved: false;
+}
+
+export interface CleanupPlanApiEnvelope {
+  data: CleanupPlanView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface LocalCleanupPolicyItemView {
@@ -2104,11 +2109,16 @@ export interface LocalCleanupReadinessReportView {
   blockedTargets: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  automaticCleanupApproved: boolean;
-  worktreeRemovalApproved: boolean;
-  branchDeletionApproved: boolean;
-  evidenceDeletionApproved: boolean;
+  readOnly: true;
+  automaticCleanupApproved: false;
+  worktreeRemovalApproved: false;
+  branchDeletionApproved: false;
+  evidenceDeletionApproved: false;
+}
+
+export interface LocalCleanupReadinessReportApiEnvelope {
+  data: LocalCleanupReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface RemoteCleanupSyncPolicyItemView {
@@ -2128,11 +2138,16 @@ export interface RemoteCleanupSyncReadinessReportView {
   blockedOperations: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  remoteBranchDeletionApproved: boolean;
-  issueSyncApproved: boolean;
-  storyStatusSyncApproved: boolean;
-  remoteMutationApproved: boolean;
+  readOnly: true;
+  remoteBranchDeletionApproved: false;
+  issueSyncApproved: false;
+  storyStatusSyncApproved: false;
+  remoteMutationApproved: false;
+}
+
+export interface RemoteCleanupSyncReadinessReportApiEnvelope {
+  data: RemoteCleanupSyncReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface TrustedAutonomyReadinessGateView {
