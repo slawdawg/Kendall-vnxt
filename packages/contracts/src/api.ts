@@ -921,6 +921,11 @@ export interface DocumentationAuthorityDocumentView {
   evidence: string[];
 }
 
+export interface DisabledProviderProofListApiEnvelope {
+  data: DisabledProviderProofView[];
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DocumentationAuthorityBlockedStoryView {
   storyId: string;
   path: string;
@@ -2178,11 +2183,16 @@ export interface TrustedAutonomyReadinessReportView {
   requiredEvidence: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  lowRiskAutonomyApproved: boolean;
-  autonomousProviderUseApproved: boolean;
-  autonomousGitHubDeliveryApproved: boolean;
-  autonomousCleanupApproved: boolean;
+  readOnly: true;
+  lowRiskAutonomyApproved: false;
+  autonomousProviderUseApproved: false;
+  autonomousGitHubDeliveryApproved: false;
+  autonomousCleanupApproved: false;
+}
+
+export interface TrustedAutonomyReadinessReportApiEnvelope {
+  data: TrustedAutonomyReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface EpicCompletionAuditItemView {
@@ -2296,14 +2306,19 @@ export interface ThreatBoundaryView {
   credentialPolicy: string;
   artifactPolicy: string;
   rules: ThreatBoundaryRuleView[];
-  processLaunchAllowed: boolean;
-  providerCallsAllowed: boolean;
-  modelCallsAllowed: boolean;
-  premiumExecutionAllowed: boolean;
-  commandExecutionAllowed: boolean;
-  sourceMutationAllowed: boolean;
-  networkAllowed: boolean;
-  credentialAccessAllowed: boolean;
+  processLaunchAllowed: false;
+  providerCallsAllowed: false;
+  modelCallsAllowed: false;
+  premiumExecutionAllowed: false;
+  commandExecutionAllowed: false;
+  sourceMutationAllowed: false;
+  networkAllowed: false;
+  credentialAccessAllowed: false;
+}
+
+export interface ThreatBoundaryApiEnvelope {
+  data: ThreatBoundaryView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 export interface RoutingOverrideView {
   overrideId: string;
