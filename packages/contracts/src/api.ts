@@ -1914,7 +1914,7 @@ export interface LowRiskDeliveryPlanActionView {
   requiredPolicy: string;
   allowedOperations: string[];
   blockedOperations: string[];
-  readOnly: boolean;
+  readOnly: true;
 }
 
 export interface DeliveryGateCriterionView {
