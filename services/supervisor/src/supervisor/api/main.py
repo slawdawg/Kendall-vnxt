@@ -1359,7 +1359,7 @@ async def get_work_item_local_worktree_plan(work_item_id: str, session: AsyncSes
     return LocalWorktreePlanApiEnvelope(data=plan)
 
 
-@app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/retry", response_model=WorkItemApiEnvelope)
 async def retry_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
     try:
         item = await service.retry_item(session, work_item_id)
@@ -1367,10 +1367,10 @@ async def retry_work_item(work_item_id: str, session: AsyncSession = Depends(get
         raise HTTPException(status_code=409, detail=error_response(str(exc), "work_item_retry_blocked").model_dump()) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.post("/work-items/{work_item_id}/actions", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/actions", response_model=WorkItemApiEnvelope)
 async def apply_work_item_action(
     work_item_id: str,
     payload: WorkItemActionRequest,
@@ -1392,10 +1392,10 @@ async def apply_work_item_action(
         ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.post("/work-items/{work_item_id}/managed-next-action", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/managed-next-action", response_model=WorkItemApiEnvelope)
 async def execute_managed_next_action(
     work_item_id: str,
     payload: WorkItemManagedActionRequest,
@@ -1410,10 +1410,10 @@ async def execute_managed_next_action(
         ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.post("/work-items/{work_item_id}/delivery-readiness", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/delivery-readiness", response_model=WorkItemApiEnvelope)
 async def record_delivery_readiness(
     work_item_id: str,
     payload: WorkItemDeliveryReadinessRequest,
@@ -1428,7 +1428,7 @@ async def record_delivery_readiness(
         ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
 @app.post("/work-items/{work_item_id}/assignment", response_model=ApiEnvelope)
