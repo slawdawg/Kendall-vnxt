@@ -662,7 +662,7 @@ async def create_work_packet_learn_follow_up_candidate_work(
     return ApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
-@app.post("/pipeline-control-plane/work-packets", response_model=ApiEnvelope)
+@app.post("/pipeline-control-plane/work-packets", response_model=AuthoritativeWorkPacketApiEnvelope)
 async def create_authoritative_work_packet(
     payload: AuthoritativeWorkPacketCreateRequest,
     session: AsyncSession = Depends(get_session),
@@ -671,7 +671,7 @@ async def create_authoritative_work_packet(
         packet = await service.create_authoritative_work_packet(session, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_authoritative_work_packet").model_dump()) from exc
-    return ApiEnvelope(data=packet)
+    return AuthoritativeWorkPacketApiEnvelope(data=packet)
 
 
 @app.get("/pipeline-control-plane/work-packets", response_model=AuthoritativeWorkPacketListApiEnvelope)
@@ -714,7 +714,10 @@ async def ingest_pipeline_epic_25_evidence_chain(
     return ApiEnvelope(data=evidence_chain)
 
 
-@app.post("/pipeline-control-plane/work-packets/{packet_id}/transitions", response_model=ApiEnvelope)
+@app.post(
+    "/pipeline-control-plane/work-packets/{packet_id}/transitions",
+    response_model=AuthoritativeWorkPacketApiEnvelope,
+)
 async def transition_authoritative_work_packet(
     packet_id: str,
     payload: AuthoritativeWorkPacketTransitionRequest,
@@ -726,7 +729,7 @@ async def transition_authoritative_work_packet(
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_authoritative_work_packet_transition").model_dump()) from exc
     if not packet:
         raise HTTPException(status_code=404, detail=error_response("Authoritative WorkPacket not found.", "authoritative_work_packet_not_found").model_dump())
-    return ApiEnvelope(data=packet)
+    return AuthoritativeWorkPacketApiEnvelope(data=packet)
 
 
 @app.post("/pipeline-control-plane/work-packets/{packet_id}/local-proof", response_model=ApiEnvelope)
