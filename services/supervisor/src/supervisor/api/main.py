@@ -48,6 +48,9 @@ from supervisor.api.schemas import (
     DeliveryReadinessPolicyReportApiEnvelope,
     GitHubDeliveryAuthorityReportApiEnvelope,
     TrustedDeliveryEligibilityReportApiEnvelope,
+    CleanupPlanApiEnvelope,
+    LocalCleanupReadinessReportApiEnvelope,
+    RemoteCleanupSyncReadinessReportApiEnvelope,
     LowRiskDeliveryPlanReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
@@ -1561,7 +1564,10 @@ async def get_trusted_delivery_eligibility_report():
     return TrustedDeliveryEligibilityReportApiEnvelope(data=await service.get_trusted_delivery_eligibility_report())
 
 
-@app.get("/work-items/{work_item_id}/trusted-delivery-eligibility-report", response_model=ApiEnvelope)
+@app.get(
+    "/work-items/{work_item_id}/trusted-delivery-eligibility-report",
+    response_model=TrustedDeliveryEligibilityReportApiEnvelope,
+)
 async def get_work_item_trusted_delivery_eligibility_report(
     work_item_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1569,7 +1575,9 @@ async def get_work_item_trusted_delivery_eligibility_report(
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id))
+    return TrustedDeliveryEligibilityReportApiEnvelope(
+        data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id)
+    )
 
 
 @app.get("/supervisor/low-risk-delivery-plan", response_model=LowRiskDeliveryPlanReportApiEnvelope)
@@ -1588,7 +1596,7 @@ async def get_work_item_low_risk_delivery_plan(
     return LowRiskDeliveryPlanReportApiEnvelope(data=await service.get_low_risk_delivery_plan_report(session, work_item_id=work_item_id))
 
 
-@app.get("/work-items/{work_item_id}/cleanup-plan", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/cleanup-plan", response_model=CleanupPlanApiEnvelope)
 async def get_work_item_cleanup_plan(
     work_item_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1596,7 +1604,7 @@ async def get_work_item_cleanup_plan(
     plan = await service.get_cleanup_plan(session, work_item_id)
     if plan is None:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=plan)
+    return CleanupPlanApiEnvelope(data=plan)
 
 
 @app.post("/work-items/{work_item_id}/delivery-execution-evidence", response_model=ApiEnvelope)
@@ -1614,14 +1622,14 @@ async def record_work_item_delivery_execution_evidence(
     return ApiEnvelope(data=evidence)
 
 
-@app.get("/supervisor/local-cleanup-readiness-report", response_model=ApiEnvelope)
+@app.get("/supervisor/local-cleanup-readiness-report", response_model=LocalCleanupReadinessReportApiEnvelope)
 async def get_local_cleanup_readiness_report():
-    return ApiEnvelope(data=service.get_local_cleanup_readiness_report())
+    return LocalCleanupReadinessReportApiEnvelope(data=service.get_local_cleanup_readiness_report())
 
 
-@app.get("/supervisor/remote-cleanup-sync-readiness-report", response_model=ApiEnvelope)
+@app.get("/supervisor/remote-cleanup-sync-readiness-report", response_model=RemoteCleanupSyncReadinessReportApiEnvelope)
 async def get_remote_cleanup_sync_readiness_report():
-    return ApiEnvelope(data=service.get_remote_cleanup_sync_readiness_report())
+    return RemoteCleanupSyncReadinessReportApiEnvelope(data=service.get_remote_cleanup_sync_readiness_report())
 
 
 @app.get("/supervisor/trusted-autonomy-readiness-report", response_model=ApiEnvelope)
