@@ -57,9 +57,12 @@ def test_trusted_delivery_eligibility_envelope_is_strict_and_typed() -> None:
         TrustedDeliveryEligibilityReportApiEnvelope.model_validate({"data": invalid})
 
 
-def test_trusted_delivery_eligibility_route_and_openapi_use_typed_envelope() -> None:
-    route = _route("/supervisor/trusted-delivery-eligibility-report")
-    assert route.response_model is TrustedDeliveryEligibilityReportApiEnvelope
+def test_trusted_delivery_eligibility_routes_and_openapi_use_typed_envelope() -> None:
+    for path in (
+        "/supervisor/trusted-delivery-eligibility-report",
+        "/work-items/{work_item_id}/trusted-delivery-eligibility-report",
+    ):
+        assert _route(path).response_model is TrustedDeliveryEligibilityReportApiEnvelope
     schema = app.openapi()["components"]["schemas"]["TrustedDeliveryEligibilityReportApiEnvelope"]
     assert schema["properties"]["data"]["$ref"].endswith("TrustedDeliveryEligibilityReportView")
 

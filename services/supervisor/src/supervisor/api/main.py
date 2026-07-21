@@ -1561,7 +1561,10 @@ async def get_trusted_delivery_eligibility_report():
     return TrustedDeliveryEligibilityReportApiEnvelope(data=await service.get_trusted_delivery_eligibility_report())
 
 
-@app.get("/work-items/{work_item_id}/trusted-delivery-eligibility-report", response_model=ApiEnvelope)
+@app.get(
+    "/work-items/{work_item_id}/trusted-delivery-eligibility-report",
+    response_model=TrustedDeliveryEligibilityReportApiEnvelope,
+)
 async def get_work_item_trusted_delivery_eligibility_report(
     work_item_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1569,7 +1572,9 @@ async def get_work_item_trusted_delivery_eligibility_report(
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id))
+    return TrustedDeliveryEligibilityReportApiEnvelope(
+        data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id)
+    )
 
 
 @app.get("/supervisor/low-risk-delivery-plan", response_model=LowRiskDeliveryPlanReportApiEnvelope)
