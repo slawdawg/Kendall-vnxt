@@ -2,6 +2,7 @@
 import os
 import hmac
 import re
+from datetime import UTC, datetime
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
 
@@ -79,6 +80,7 @@ from supervisor.api.schemas import (
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
+    SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
@@ -109,6 +111,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.application.manager_terminal_events import (
     get_manager_terminal_event,
+    get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
 from supervisor.application import local_dogfood_attestation
@@ -806,6 +809,28 @@ async def read_manager_terminal_event(
             ).model_dump(),
         )
     return ManagerTerminalEventApiEnvelope(data=event)
+
+
+@app.get(
+    "/supervisor/terminal-event",
+    response_model=SupervisorTerminalEventProjectionApiEnvelope,
+)
+async def get_supervisor_terminal_event(
+    session: AsyncSession = Depends(get_session),
+):
+    generated_at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    event = await get_latest_manager_terminal_event(session)
+    return SupervisorTerminalEventProjectionApiEnvelope(
+        data={
+            "projectionId": f"supervisor-terminal-event-projection:{generated_at}",
+            "generatedAt": generated_at,
+            "status": "available" if event is not None else "empty",
+            "event": event,
+            "owner": "supervisor",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+    )
 
 
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)

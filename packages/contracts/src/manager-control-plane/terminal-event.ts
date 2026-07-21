@@ -122,3 +122,30 @@ export interface ManagerTerminalEventApiEnvelope {
   data: ManagerTerminalEventView;
   meta?: Readonly<Record<string, string | number | boolean | null>> | null;
 }
+
+/** Read-only supervisor projection of the most recently persisted canonical terminal event. */
+export interface SupervisorTerminalEventProjection {
+  projectionId: string;
+  generatedAt: string;
+  status: "available" | "empty";
+  event: ManagerTerminalEventView | null;
+  owner: "supervisor";
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS = [
+  "projectionId",
+  "generatedAt",
+  "status",
+  "event",
+  "owner",
+  "metadataOnly",
+  "rawPayloadRetained",
+] as const;
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS = SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS;
+
+export interface SupervisorTerminalEventProjectionApiEnvelope {
+  data: SupervisorTerminalEventProjection;
+  meta?: Readonly<Record<string, string | number | boolean | null>> | null;
+}

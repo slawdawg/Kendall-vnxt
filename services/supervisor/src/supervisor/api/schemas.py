@@ -6753,3 +6753,29 @@ class ManagerTerminalEventApiEnvelope(BaseModel):
 
     data: ManagerTerminalEventView
     meta: dict[str, str | int | float | bool | None] | None = None
+
+
+class SupervisorTerminalEventProjection(BaseModel):
+    """Read-only latest canonical terminal-event projection owned by supervisor."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    projectionId: str = Field(max_length=160)
+    generatedAt: str = Field(
+        max_length=64,
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
+    )
+    status: Literal["available", "empty"]
+    event: ManagerTerminalEventView | None = None
+    owner: Literal["supervisor"]
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+
+class SupervisorTerminalEventProjectionApiEnvelope(BaseModel):
+    """Typed supervisor-owned response boundary for latest terminal-event projection."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: SupervisorTerminalEventProjection
+    meta: dict[str, str | int | float | bool | None] | None = None

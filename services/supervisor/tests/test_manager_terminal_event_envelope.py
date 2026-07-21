@@ -10,7 +10,13 @@ from pydantic import ValidationError
 
 import supervisor.api.main as main_module
 from supervisor.api.main import app
-from supervisor.api.schemas import ManagerTerminalEventApiEnvelope, ManagerTerminalEventRequest, ManagerTerminalEventView
+from supervisor.api.schemas import (
+    ManagerTerminalEventApiEnvelope,
+    ManagerTerminalEventRequest,
+    ManagerTerminalEventView,
+    SupervisorTerminalEventProjection,
+    SupervisorTerminalEventProjectionApiEnvelope,
+)
 
 
 def _route(path: str) -> APIRoute:
@@ -75,6 +81,28 @@ def test_terminal_event_envelope_is_strict_and_typed():
 def test_terminal_event_routes_use_declared_supervisor_envelope():
     assert _route("/manager-control-plane/terminal-events").response_model is ManagerTerminalEventApiEnvelope
     assert _route("/manager-control-plane/terminal-events/{event_id}").response_model is ManagerTerminalEventApiEnvelope
+    assert _route("/supervisor/terminal-event").response_model is SupervisorTerminalEventProjectionApiEnvelope
+
+
+def test_supervisor_terminal_event_projection_preserves_empty_and_available_read_only_shapes(monkeypatch):
+    empty = AsyncMock(return_value=None)
+    monkeypatch.setattr(main_module, "get_latest_manager_terminal_event", empty)
+    empty_projection = asyncio.run(main_module.get_supervisor_terminal_event(session=object()))
+    assert isinstance(empty_projection, SupervisorTerminalEventProjectionApiEnvelope)
+    assert empty_projection.data.status == "empty"
+    assert empty_projection.data.event is None
+    assert empty_projection.data.owner == "supervisor"
+    assert empty_projection.data.metadataOnly is True
+    assert empty_projection.data.rawPayloadRetained is False
+
+    view = ManagerTerminalEventView.model_validate(_valid_view())
+    available = AsyncMock(return_value=view)
+    monkeypatch.setattr(main_module, "get_latest_manager_terminal_event", available)
+    available_projection = asyncio.run(main_module.get_supervisor_terminal_event(session=object()))
+    assert isinstance(available_projection.data, SupervisorTerminalEventProjection)
+    assert available_projection.data.status == "available"
+    assert available_projection.data.event == view
+    available.assert_awaited_once()
 
 
 def test_terminal_event_post_handler_returns_declared_supervisor_envelope(monkeypatch):
@@ -102,4 +130,7 @@ def test_shared_terminal_event_contract_matches_python_boundary():
     contract_source = (Path(__file__).parents[3] / "packages/contracts/src/manager-control-plane/terminal-event.ts").read_text(encoding="utf-8")
     assert "export interface ManagerTerminalEventView extends ManagerTerminalEventRequest" in contract_source
     assert "export interface ManagerTerminalEventApiEnvelope" in contract_source
+    assert "export interface SupervisorTerminalEventProjection" in contract_source
+    assert 'owner: "supervisor"' in contract_source
+    assert 'rawPayloadRetained: false' in contract_source
     assert "Readonly<Record<string, string | number | boolean | null>>" in contract_source
