@@ -6199,6 +6199,8 @@ class TrustedAutonomyDeauthorizationTriggerView(BaseModel):
 
 
 class TrustedAutonomyReadinessReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -6209,11 +6211,20 @@ class TrustedAutonomyReadinessReportView(BaseModel):
     requiredEvidence: list[str]
     stopConditions: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    lowRiskAutonomyApproved: bool = False
-    autonomousProviderUseApproved: bool = False
-    autonomousGitHubDeliveryApproved: bool = False
-    autonomousCleanupApproved: bool = False
+    readOnly: Literal[True] = True
+    lowRiskAutonomyApproved: Literal[False] = False
+    autonomousProviderUseApproved: Literal[False] = False
+    autonomousGitHubDeliveryApproved: Literal[False] = False
+    autonomousCleanupApproved: Literal[False] = False
+
+
+class TrustedAutonomyReadinessReportApiEnvelope(BaseModel):
+    """Typed response boundary for the read-only autonomy readiness report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: TrustedAutonomyReadinessReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class EpicCompletionAuditItemView(BaseModel):

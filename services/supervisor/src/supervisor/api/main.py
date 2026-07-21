@@ -51,6 +51,7 @@ from supervisor.api.schemas import (
     CleanupPlanApiEnvelope,
     LocalCleanupReadinessReportApiEnvelope,
     RemoteCleanupSyncReadinessReportApiEnvelope,
+    TrustedAutonomyReadinessReportApiEnvelope,
     LowRiskDeliveryPlanReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
@@ -1632,9 +1633,14 @@ async def get_remote_cleanup_sync_readiness_report():
     return RemoteCleanupSyncReadinessReportApiEnvelope(data=service.get_remote_cleanup_sync_readiness_report())
 
 
-@app.get("/supervisor/trusted-autonomy-readiness-report", response_model=ApiEnvelope)
+@app.get(
+    "/supervisor/trusted-autonomy-readiness-report",
+    response_model=TrustedAutonomyReadinessReportApiEnvelope,
+)
 async def get_trusted_autonomy_readiness_report():
-    return ApiEnvelope(data=service.get_trusted_autonomy_readiness_report())
+    return TrustedAutonomyReadinessReportApiEnvelope(
+        data=service.get_trusted_autonomy_readiness_report()
+    )
 
 
 @app.get("/supervisor/epic-6-completion-audit-report", response_model=EpicCompletionAuditReportApiEnvelope)

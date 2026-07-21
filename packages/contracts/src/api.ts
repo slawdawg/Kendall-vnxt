@@ -2178,11 +2178,16 @@ export interface TrustedAutonomyReadinessReportView {
   requiredEvidence: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  lowRiskAutonomyApproved: boolean;
-  autonomousProviderUseApproved: boolean;
-  autonomousGitHubDeliveryApproved: boolean;
-  autonomousCleanupApproved: boolean;
+  readOnly: true;
+  lowRiskAutonomyApproved: false;
+  autonomousProviderUseApproved: false;
+  autonomousGitHubDeliveryApproved: false;
+  autonomousCleanupApproved: false;
+}
+
+export interface TrustedAutonomyReadinessReportApiEnvelope {
+  data: TrustedAutonomyReadinessReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface EpicCompletionAuditItemView {
