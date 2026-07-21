@@ -1431,7 +1431,7 @@ async def record_delivery_readiness(
     return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.post("/work-items/{work_item_id}/assignment", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/assignment", response_model=WorkItemApiEnvelope)
 async def assign_work_item(
     work_item_id: str,
     payload: WorkItemAssignmentRequest,
@@ -1453,10 +1453,10 @@ async def assign_work_item(
         ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
-@app.post("/work-items/{work_item_id}/escalation", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/escalation", response_model=WorkItemApiEnvelope)
 async def escalate_work_item(
     work_item_id: str,
     payload: WorkItemEscalationRequest,
@@ -1472,7 +1472,7 @@ async def escalate_work_item(
     )
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
 @app.get("/supervisor/status", response_model=RunStatusApiEnvelope)
