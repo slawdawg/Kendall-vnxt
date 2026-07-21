@@ -890,7 +890,7 @@ async def get_supervisor_terminal_event(
     )
 
 
-@app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
+@app.patch("/candidate-work/{candidate_work_id}", response_model=CandidateWorkApiEnvelope)
 async def update_candidate_work(
     candidate_work_id: str,
     payload: CandidateWorkUpdate,
@@ -899,7 +899,7 @@ async def update_candidate_work(
     candidate = await service.update_candidate_work(session, candidate_work_id, payload)
     if not candidate:
         raise HTTPException(status_code=404, detail=error_response("Candidate work not found.", "candidate_work_not_found").model_dump())
-    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+    return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
 @app.post("/candidate-work/{candidate_work_id}/promote", response_model=ApiEnvelope)
