@@ -13,3 +13,11 @@ def test_retry_and_action_routes_use_work_item_envelope() -> None:
 
     assert WorkItemApiEnvelope.model_fields["data"].annotation is WorkItemView
     assert WorkItemApiEnvelope.model_config["extra"] == "forbid"
+
+
+def test_managed_next_action_and_delivery_readiness_routes_use_work_item_envelope() -> None:
+    for path in (
+        "/work-items/{work_item_id}/managed-next-action",
+        "/work-items/{work_item_id}/delivery-readiness",
+    ):
+        assert _route(path).response_model is WorkItemApiEnvelope
