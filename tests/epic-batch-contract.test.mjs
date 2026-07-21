@@ -49,6 +49,12 @@ test("epic-batch admission blocks security paths", () => {
   assert.ok(result.blockers.includes("high-risk surface requires standard-delivery"));
 });
 
+test("epic-batch admission blocks live and Epic 25 paths", () => {
+  const epicBatch = buildEpicBatchManifest({ epicId: "epic-7", decisionRef: "operator:2026-07-21", expectedSlices: ["slice-a"] });
+  const result = evaluateEpicBatchAdmission({ epicBatch, changedFiles: ["scripts/lib/live-memory-source-enforcement.mjs"] });
+  assert.ok(result.blockers.includes("high-risk surface requires standard-delivery"));
+});
+
 test("epic-batch admission blocks stale age before a new slice is admitted", () => {
   const epicBatch = buildEpicBatchManifest({ epicId: "epic-7", decisionRef: "operator:2026-07-21", expectedSlices: ["slice-a"] });
   const result = evaluateEpicBatchAdmission({ epicBatch, changedFiles: ["scripts/example.mjs"], ageBusinessDays: 6 });
@@ -82,7 +88,7 @@ test("checkpoint append preserves prior evidence and finish plan remains non-mut
     checkpoint_id: "cp-1",
     slices: ["slice-a"],
     base_revision: "abc1234",
-    head: "def4567",
+    head: "abcdef1",
     checks: ["pnpm run check:fast"],
     review_ref: "review:cp-1",
     result: "passed",
@@ -93,7 +99,7 @@ test("checkpoint append preserves prior evidence and finish plan remains non-mut
   assert.equal(blocked.mutation, "none; planning-only");
   const ready = buildEpicBatchFinishPlan({
     mode: "epic-batch",
-    epic_batch: { ...withCheckpoint, final_verification_ref: "verify:1", final_review_ref: "review:1", final_head: "abcdef1234567" },
+    epic_batch: { ...withCheckpoint, final_verification_ref: "verify:1", final_review_ref: "review:1", final_head: "abcdef1234567", checkpoints: [{ ...withCheckpoint.checkpoints[0], head: "abcdef1234567" }] },
     branch: "codex/epic-batch-task",
   }, {
     liveState: { dirty: false, branch: "codex/epic-batch-task", head: "abcdef1234567" },
@@ -128,6 +134,18 @@ test("finish evidence requires complete slice and checkpoint fields and admitted
     final_review_ref: "review:1",
   } }, { liveState: { dirty: false, branch: "codex/epic-7", head: "abcdef2" }, now: new Date(epicBatch.opened_at) });
   assert.ok(result.blockers.includes("slice paths exceed admitted allowlist"));
+});
+
+test("finish rejects unexpected slices and unrecorded final evidence", () => {
+  const epicBatch = buildEpicBatchManifest({ epicId: "epic-7", decisionRef: "operator:2026-07-21", expectedSlices: ["slice-a"], allowedPaths: ["scripts/"] });
+  const result = buildEpicBatchFinishPlan({ mode: "epic-batch", branch: "codex/epic-7", epic_batch: {
+    ...epicBatch,
+    slices: [{ slice_id: "slice-a", objective: "x", owner: "operator", commit: "abcdef1", rollback_ref: "revert:x", paths: ["scripts/x.mjs"], checks: ["check"] }, { slice_id: "unplanned", objective: "x", owner: "operator", commit: "abcdef1", rollback_ref: "revert:x", paths: ["scripts/y.mjs"], checks: ["check"] }],
+    checkpoints: [{ checkpoint_id: "cp-1", result: "passed", base_revision: "abcdef1", head: "abcdef2", review_ref: "review:cp", checks: ["check"] }],
+    final_head: "abcdef2",
+  } }, { liveState: { dirty: false, branch: "codex/epic-7", head: "abcdef2" }, now: new Date(epicBatch.opened_at) });
+  assert.ok(result.blockers.includes("unexpected slices are recorded"));
+  assert.ok(result.blockers.includes("final verification evidence is missing or invalid"));
 });
 
 test("finish derives current UTC business-day age when omitted", () => {

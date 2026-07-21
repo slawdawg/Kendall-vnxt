@@ -9,6 +9,10 @@ const EPIC_BATCH_AGE_CALENDAR = "UTC Monday-Friday; holidays do not extend the c
 const HIGH_RISK_MARKERS = Object.freeze([
   "auth",
   "security",
+  "live",
+  "bounded-live",
+  "epic25",
+  "epic-25",
   "credential",
   "secret",
   "provider",
@@ -133,6 +137,7 @@ export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, rev
   const expectedSliceIds = new Set(epicBatch?.expected_slices || []);
   const recordedSliceIds = new Set((epicBatch?.slices || []).map((slice) => slice.slice_id));
   if (expectedSliceIds.size > 0 && [...expectedSliceIds].some((sliceId) => !recordedSliceIds.has(sliceId))) blockers.push("expected slices are incomplete");
+  if ([...recordedSliceIds].some((sliceId) => !expectedSliceIds.has(sliceId))) blockers.push("unexpected slices are recorded");
   if (!epicBatch?.checkpoints?.length || epicBatch.checkpoints.some((checkpoint) => checkpoint.result !== "passed")) blockers.push("passed checkpoint evidence is missing");
   if (epicBatch?.split_triggers?.length) blockers.push("split trigger is unrecorded or unresolved");
   const elapsedAge = ageBusinessDays === null
@@ -157,9 +162,14 @@ export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, rev
       break;
     }
   }
+  const aggregatePaths = new Set((epicBatch?.slices || []).flatMap((slice) => slice.paths || []));
+  if (aggregatePaths.size > Number(epicBatch?.limits?.file_limit || 0)) blockers.push("aggregate file limit exceeded");
   if (!/^[0-9a-f]{7,64}$/.test(String(epicBatch?.final_head || ""))) blockers.push("final head is missing or invalid");
-  if (!validEvidenceRef(verificationRef || epicBatch?.final_verification_ref)) blockers.push("final verification evidence is missing or invalid");
-  if (!validEvidenceRef(reviewRef || epicBatch?.final_review_ref)) blockers.push("final review evidence is missing or invalid");
+  if (!validEvidenceRef(epicBatch?.final_verification_ref)) blockers.push("final verification evidence is missing or invalid");
+  if (!validEvidenceRef(epicBatch?.final_review_ref)) blockers.push("final review evidence is missing or invalid");
+  if (verificationRef && verificationRef !== epicBatch?.final_verification_ref) blockers.push("final verification evidence must be recorded in manifest");
+  if (reviewRef && reviewRef !== epicBatch?.final_review_ref) blockers.push("final review evidence must be recorded in manifest");
+  if (epicBatch?.final_head && (epicBatch.checkpoints || []).some((checkpoint) => checkpoint.result === "passed" && !revisionMatches(epicBatch.final_head, checkpoint.head))) blockers.push("final head is not covered by passed checkpoint evidence");
   if (!liveState) blockers.push("live worktree evidence is missing");
   else {
     if (liveState.error) blockers.push("live worktree status unavailable");
