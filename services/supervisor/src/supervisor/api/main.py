@@ -2,6 +2,7 @@
 import os
 import hmac
 import re
+from datetime import UTC, datetime
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
 
@@ -9,6 +10,8 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
@@ -45,6 +48,7 @@ from supervisor.api.schemas import (
     DeliveryReadinessPolicyReportApiEnvelope,
     GitHubDeliveryAuthorityReportApiEnvelope,
     TrustedDeliveryEligibilityReportApiEnvelope,
+    LowRiskDeliveryPlanReportApiEnvelope,
     SupervisorReportCatalogApiEnvelope,
     MaintenanceReadinessReportApiEnvelope,
     MaintenanceActionPlanReportApiEnvelope,
@@ -79,6 +83,7 @@ from supervisor.api.schemas import (
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
+    SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
@@ -109,6 +114,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.application.manager_terminal_events import (
     get_manager_terminal_event,
+    get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
 from supervisor.application import local_dogfood_attestation
@@ -806,6 +812,43 @@ async def read_manager_terminal_event(
             ).model_dump(),
         )
     return ManagerTerminalEventApiEnvelope(data=event)
+
+
+@app.get(
+    "/supervisor/terminal-event",
+    response_model=SupervisorTerminalEventProjectionApiEnvelope,
+    responses={503: {"model": SupervisorTerminalEventProjectionApiEnvelope}},
+)
+async def get_supervisor_terminal_event(
+    session: AsyncSession = Depends(get_session),
+):
+    generated_at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    try:
+        event = await get_latest_manager_terminal_event(session)
+    except (ValidationError, SQLAlchemyError, ValueError):
+        projection = SupervisorTerminalEventProjectionApiEnvelope(
+            data={
+                "projectionId": f"supervisor-terminal-event-projection:{generated_at}",
+                "generatedAt": generated_at,
+                "status": "unavailable",
+                "event": None,
+                "owner": "supervisor",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        )
+        return JSONResponse(status_code=503, content=projection.model_dump(mode="json"))
+    return SupervisorTerminalEventProjectionApiEnvelope(
+        data={
+            "projectionId": f"supervisor-terminal-event-projection:{generated_at}",
+            "generatedAt": generated_at,
+            "status": "available" if event is not None else "empty",
+            "event": event,
+            "owner": "supervisor",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+    )
 
 
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
@@ -1529,12 +1572,12 @@ async def get_work_item_trusted_delivery_eligibility_report(
     return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id))
 
 
-@app.get("/supervisor/low-risk-delivery-plan", response_model=ApiEnvelope)
+@app.get("/supervisor/low-risk-delivery-plan", response_model=LowRiskDeliveryPlanReportApiEnvelope)
 async def get_low_risk_delivery_plan():
-    return ApiEnvelope(data=await service.get_low_risk_delivery_plan_report())
+    return LowRiskDeliveryPlanReportApiEnvelope(data=await service.get_low_risk_delivery_plan_report())
 
 
-@app.get("/work-items/{work_item_id}/low-risk-delivery-plan", response_model=ApiEnvelope)
+@app.get("/work-items/{work_item_id}/low-risk-delivery-plan", response_model=LowRiskDeliveryPlanReportApiEnvelope)
 async def get_work_item_low_risk_delivery_plan(
     work_item_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1542,7 +1585,7 @@ async def get_work_item_low_risk_delivery_plan(
     work_item = await session.get(WorkItem, work_item_id)
     if not work_item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=await service.get_low_risk_delivery_plan_report(session, work_item_id=work_item_id))
+    return LowRiskDeliveryPlanReportApiEnvelope(data=await service.get_low_risk_delivery_plan_report(session, work_item_id=work_item_id))
 
 
 @app.get("/work-items/{work_item_id}/cleanup-plan", response_model=ApiEnvelope)

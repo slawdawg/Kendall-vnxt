@@ -5923,7 +5923,7 @@ class LowRiskDeliveryPlanActionView(BaseModel):
     requiredPolicy: str
     allowedOperations: list[str] = Field(default_factory=list)
     blockedOperations: list[str] = Field(default_factory=list)
-    readOnly: bool = True
+    readOnly: Literal[True] = True
 
 
 class DeliveryGateCriterionView(BaseModel):
@@ -5940,8 +5940,8 @@ class DeliveryMergeGateEvidenceView(BaseModel):
     criteria: list[DeliveryGateCriterionView] = Field(default_factory=list)
     blockedReasons: list[str] = Field(default_factory=list)
     recoveryPath: str
-    metadataOnly: bool = True
-    mergeApproved: bool = False
+    metadataOnly: Literal[True] = True
+    mergeApproved: Literal[False] = False
 
 
 class CleanupDryRunGateEvidenceView(BaseModel):
@@ -5955,8 +5955,8 @@ class CleanupDryRunGateEvidenceView(BaseModel):
     expectedHeadRevision: str | None = None
     blockedReasons: list[str] = Field(default_factory=list)
     recoveryPath: str
-    metadataOnly: bool = True
-    cleanupApproved: bool = False
+    metadataOnly: Literal[True] = True
+    cleanupApproved: Literal[False] = False
 
 
 class LowRiskDeliveryPlanReportView(BaseModel):
@@ -5974,10 +5974,19 @@ class LowRiskDeliveryPlanReportView(BaseModel):
     cleanupDryRunGate: CleanupDryRunGateEvidenceView
     hardStops: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    remoteMutationApproved: bool = False
-    cleanupApproved: bool = False
-    automaticDeliveryApproved: bool = False
+    readOnly: Literal[True] = True
+    remoteMutationApproved: Literal[False] = False
+    cleanupApproved: Literal[False] = False
+    automaticDeliveryApproved: Literal[False] = False
+
+
+class LowRiskDeliveryPlanReportApiEnvelope(BaseModel):
+    """Typed read-only response boundary for low-risk delivery planning."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LowRiskDeliveryPlanReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class DeliveryExecutionEvidencePayload(BaseModel):
@@ -6634,6 +6643,31 @@ MANAGER_TERMINAL_EVENT_API_ENVELOPE_FIELDS = (
     "data",
     "meta",
 )
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS = (
+    "projectionId",
+    "generatedAt",
+    "status",
+    "event",
+    "owner",
+    "metadataOnly",
+    "rawPayloadRetained",
+)
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS = (
+    "data",
+    "meta",
+)
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS = (
+    "projectionId",
+    "generatedAt",
+    "status",
+    "event",
+    "owner",
+    "metadataOnly",
+    "rawPayloadRetained",
+)
+SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_FIELDS = (
+    "data",
+)
 MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = (
     "data",
 )
@@ -6752,4 +6786,40 @@ class ManagerTerminalEventApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: ManagerTerminalEventView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
+class SupervisorTerminalEventProjection(BaseModel):
+    """Read-only latest canonical terminal-event projection owned by supervisor."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    projectionId: str = Field(max_length=160)
+    generatedAt: str = Field(
+        max_length=64,
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
+    )
+    status: Literal["available", "empty", "unavailable"]
+    event: ManagerTerminalEventView | None
+    owner: Literal["supervisor"]
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @model_validator(mode="after")
+    def _status_matches_event(self) -> "SupervisorTerminalEventProjection":
+        if self.status == "empty" and self.event is not None:
+            raise ValueError("Empty terminal-event projections must not include an event.")
+        if self.status == "available" and self.event is None:
+            raise ValueError("Available terminal-event projections must include an event.")
+        if self.status == "unavailable" and self.event is not None:
+            raise ValueError("Unavailable terminal-event projections must not include an event.")
+        return self
+
+
+class SupervisorTerminalEventProjectionApiEnvelope(BaseModel):
+    """Typed supervisor-owned response boundary for latest terminal-event projection."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: SupervisorTerminalEventProjection
     meta: dict[str, str | int | float | bool | None] | None = None

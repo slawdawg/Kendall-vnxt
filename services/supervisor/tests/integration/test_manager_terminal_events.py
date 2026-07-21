@@ -397,3 +397,46 @@ def test_terminal_event_requires_direct_loopback_and_rejects_forwarded_spoofing(
             assert rejected.status_code == 403
             assert "loopback" in rejected.text
         assert _table_count(db_path, "manager_terminal_events") == 0
+
+
+def test_supervisor_terminal_event_projection_is_empty_then_returns_latest_owned_event(
+    tmp_path, monkeypatch
+) -> None:
+    with _running_supervisor(tmp_path, monkeypatch) as (_, base_url, db_path):
+        empty = _get(base_url, "/supervisor/terminal-event")
+        assert empty.status_code == 200, empty.text
+        assert empty.json()["data"]["status"] == "empty"
+        assert empty.json()["data"]["event"] is None
+        assert empty.json()["data"]["owner"] == "supervisor"
+        assert empty.json()["data"]["metadataOnly"] is True
+        assert empty.json()["data"]["rawPayloadRetained"] is False
+
+        first = _payload()
+        second = _payload()
+        first["eventId"] = f"manager-terminal-event:{'a' * 40}"
+        first["runId"] = "manager-run-first"
+        first["idempotencyKey"] = "authoritative-backlog-exhausted:first"
+        second["eventId"] = f"manager-terminal-event:{'b' * 40}"
+        second["runId"] = "manager-run-second"
+        second["idempotencyKey"] = "authoritative-backlog-exhausted:second"
+        assert _post(base_url, "/manager-control-plane/terminal-events", first).status_code == 200
+        assert _post(base_url, "/manager-control-plane/terminal-events", second).status_code == 200
+
+        # Equal persisted timestamps use the documented canonical event-id tie-break.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "UPDATE manager_terminal_events SET created_at = ?",
+                ("2026-07-21 03:31:00.000000",),
+            )
+            connection.commit()
+
+        latest = _get(base_url, "/supervisor/terminal-event")
+        assert latest.status_code == 200, latest.text
+        projection = latest.json()["data"]
+        assert projection["status"] == "available"
+        assert projection["event"]["eventId"] == second["eventId"]
+        assert projection["event"]["owner"] == "supervisor"
+        assert projection["owner"] == "supervisor"
+        assert projection["metadataOnly"] is True
+        assert projection["rawPayloadRetained"] is False
+        assert _table_count(db_path, "manager_terminal_events") == 2

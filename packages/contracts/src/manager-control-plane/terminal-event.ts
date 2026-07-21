@@ -122,3 +122,47 @@ export interface ManagerTerminalEventApiEnvelope {
   data: ManagerTerminalEventView;
   meta?: Readonly<Record<string, string | number | boolean | null>> | null;
 }
+
+/** Shared read-only supervisor projection fields. */
+interface SupervisorTerminalEventProjectionBase {
+  projectionId: string;
+  generatedAt: string;
+  owner: "supervisor";
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+/** Read-only supervisor projection of the most recently persisted canonical terminal event. */
+export type SupervisorTerminalEventProjection =
+  | (SupervisorTerminalEventProjectionBase & {
+      status: "available";
+      event: ManagerTerminalEventView;
+    })
+  | (SupervisorTerminalEventProjectionBase & {
+      status: "empty" | "unavailable";
+      event: null;
+    });
+
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS = [
+  "projectionId",
+  "generatedAt",
+  "status",
+  "event",
+  "owner",
+  "metadataOnly",
+  "rawPayloadRetained",
+] as const;
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_FIELDS = SUPERVISOR_TERMINAL_EVENT_PROJECTION_FIELDS;
+
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_FIELDS = [
+  "data",
+  "meta",
+] as const;
+export const SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_FIELDS = [
+  "data",
+] as const;
+
+export interface SupervisorTerminalEventProjectionApiEnvelope {
+  data: SupervisorTerminalEventProjection;
+  meta?: Readonly<Record<string, string | number | boolean | null>> | null;
+}

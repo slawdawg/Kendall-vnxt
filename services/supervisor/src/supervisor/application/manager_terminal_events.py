@@ -126,3 +126,21 @@ async def get_manager_terminal_event(
 ) -> ManagerTerminalEventView | None:
     record = await session.get(ManagerTerminalEvent, event_id)
     return _to_view(record) if record is not None else None
+
+
+async def get_latest_manager_terminal_event(
+    session: AsyncSession,
+) -> ManagerTerminalEventView | None:
+    """Return the newest persisted event without mutation.
+
+    SQLite stores ``created_at`` with millisecond precision in this boundary.
+    When imported or concurrent rows share a timestamp, descending canonical
+    event ID is the explicit deterministic tie-break; no lexical ordering is
+    presented as stronger persistence chronology.
+    """
+    record = await session.scalar(
+        select(ManagerTerminalEvent)
+        .order_by(ManagerTerminalEvent.created_at.desc(), ManagerTerminalEvent.event_id.desc())
+        .limit(1)
+    )
+    return _to_view(record) if record is not None else None

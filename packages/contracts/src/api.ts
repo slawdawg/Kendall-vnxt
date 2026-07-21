@@ -1914,7 +1914,7 @@ export interface LowRiskDeliveryPlanActionView {
   requiredPolicy: string;
   allowedOperations: string[];
   blockedOperations: string[];
-  readOnly: boolean;
+  readOnly: true;
 }
 
 export interface DeliveryGateCriterionView {
@@ -1931,8 +1931,8 @@ export interface DeliveryMergeGateEvidenceView {
   criteria: DeliveryGateCriterionView[];
   blockedReasons: string[];
   recoveryPath: string;
-  metadataOnly: boolean;
-  mergeApproved: boolean;
+  metadataOnly: true;
+  mergeApproved: false;
 }
 
 export interface CleanupDryRunGateEvidenceView {
@@ -1946,8 +1946,8 @@ export interface CleanupDryRunGateEvidenceView {
   expectedHeadRevision?: string | null;
   blockedReasons: string[];
   recoveryPath: string;
-  metadataOnly: boolean;
-  cleanupApproved: boolean;
+  metadataOnly: true;
+  cleanupApproved: false;
 }
 
 export interface LowRiskDeliveryPlanReportView {
@@ -1965,10 +1965,15 @@ export interface LowRiskDeliveryPlanReportView {
   cleanupDryRunGate: CleanupDryRunGateEvidenceView;
   hardStops: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  remoteMutationApproved: boolean;
-  cleanupApproved: boolean;
-  automaticDeliveryApproved: boolean;
+  readOnly: true;
+  remoteMutationApproved: false;
+  cleanupApproved: false;
+  automaticDeliveryApproved: false;
+}
+
+export interface LowRiskDeliveryPlanReportApiEnvelope {
+  data: LowRiskDeliveryPlanReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface DeliveryExecutionEvidencePayload {
