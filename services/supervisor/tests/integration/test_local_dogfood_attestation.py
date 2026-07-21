@@ -251,6 +251,35 @@ def test_local_receipt_rejects_wrong_bindings_time_signature_and_duplicate_wire_
         assert duplicate.json()["detail"]["error"]["code"] == "duplicate_receipt_field"
 
 
+def test_local_receipt_rejection_normalizes_non_string_identifiers(tmp_path, monkeypatch):
+    key = Ed25519PrivateKey.generate()
+    with _client(tmp_path, monkeypatch, key) as client:
+        _authorize(client)
+        invalid = {
+            "schemaVersion": "pipeline-local-dogfood-attestation/v1",
+            "issuerId": 101,
+            "keyId": 202,
+            "receiptId": 303,
+        }
+        response = client.post(
+            "/local-dogfood/attestations/receipts",
+            json={"receipt": invalid, "signatureB64": "AA=="},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "evidenceClass": "integrated_local",
+        "accepted": False,
+        "rejectionReason": "unknown_or_missing_field",
+        "issuerId": "101",
+        "keyId": "202",
+        "receiptId": "303",
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+        "liveEvidenceAccepted": False,
+    }
+
+
 def test_existing_sqlite_attestation_table_gets_server_owned_binding_columns(tmp_path, monkeypatch):
     db_path = tmp_path / "attestation.db"
     with sqlite3.connect(db_path) as connection:
