@@ -294,11 +294,26 @@ def _snapshot(packet: AuthoritativeWorkPacket) -> tuple[str, str, str, str]:
     return source_revision, source_refs, evidence_digest, evidence_refs
 
 
+def _safe_receipt_identifier(receipt: dict, field: str) -> str | None:
+    """Keep rejected receipt metadata serializable for the typed API envelope."""
+    value = receipt.get(field)
+    if value is None or isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
 async def _record(session: AsyncSession, receipt: dict | None, reason: str | None) -> dict[str, str | bool | None]:
     receipt = receipt or {}
+    authorization_id = _safe_receipt_identifier(receipt, "authorizationId")
+    receipt_id = _safe_receipt_identifier(receipt, "receiptId")
+    issuer_id = _safe_receipt_identifier(receipt, "issuerId")
+    key_id = _safe_receipt_identifier(receipt, "keyId")
     session.add(LocalDogfoodReceiptDecision(
-        authorization_id=receipt.get("authorizationId"), receipt_id=receipt.get("receiptId"),
-        issuer_id=receipt.get("issuerId"), key_id=receipt.get("keyId"),
+        authorization_id=authorization_id, receipt_id=receipt_id,
+        issuer_id=issuer_id, key_id=key_id,
         accepted=reason is None, rejection_reason=reason,
     ))
     try:
@@ -307,7 +322,7 @@ async def _record(session: AsyncSession, receipt: dict | None, reason: str | Non
         await session.rollback()
         raise ReceiptRejected("rejection_persistence_failed") from exc
     return {"evidenceClass": "integrated_local", "accepted": reason is None, "rejectionReason": reason,
-            "issuerId": receipt.get("issuerId"), "keyId": receipt.get("keyId"), "receiptId": receipt.get("receiptId")}
+            "issuerId": issuer_id, "keyId": key_id, "receiptId": receipt_id}
 
 
 async def authorize_for_packet(session: AsyncSession, packet_id: str, registry_json: str, now: datetime | None = None) -> dict[str, str]:

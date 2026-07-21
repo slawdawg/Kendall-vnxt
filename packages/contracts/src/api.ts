@@ -2278,6 +2278,79 @@ export interface LocalDogfoodAttestationReadbackApiEnvelope {
   meta?: Record<string, string | number | boolean | null> | null;
 }
 
+export interface LocalDogfoodAttestationReceiptBindingsView {
+  issuerId: string;
+  keyId: string;
+  environment: "local_dogfood";
+  packetSchema: string;
+  targetRef: string;
+  sourceRevision: string;
+  sourceRefs: string;
+  evidenceDigest: string;
+  evidenceRefs: string;
+  runId: string;
+  attemptId: string;
+  policyVersion: string;
+  retentionPolicy: "metadata_only";
+  observerId: string;
+}
+
+/** Supervisor-minted local authorization; this is not live evidence authority. */
+export interface LocalDogfoodAuthorizationView {
+  authorizationId: string;
+  runId: string;
+  attemptId: string;
+  expiresAt: string;
+  evidenceClass: "integrated_local";
+  receiptBindings: LocalDogfoodAttestationReceiptBindingsView;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface LocalDogfoodAuthorizationApiEnvelope {
+  data: LocalDogfoodAuthorizationView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
+interface LocalDogfoodAttestationDecisionBase {
+  evidenceClass: "integrated_local";
+  issuerId: string | null;
+  keyId: string | null;
+  receiptId: string | null;
+  liveEvidenceAccepted: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+/** Local receipt verification remains integrated-local and never promotion-grade. */
+export type LocalDogfoodAttestationDecisionView =
+  | (LocalDogfoodAttestationDecisionBase & {
+      accepted: true;
+      rejectionReason: null;
+    })
+  | (LocalDogfoodAttestationDecisionBase & {
+      accepted: false;
+      rejectionReason: string;
+    });
+
+export interface LocalDogfoodAttestationDecisionApiEnvelope {
+  data: LocalDogfoodAttestationDecisionView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
+export interface LocalDogfoodAttestationRevocationView {
+  authorizationId: string;
+  revoked: true;
+  evidenceClass: "integrated_local";
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface LocalDogfoodAttestationRevocationApiEnvelope {
+  data: LocalDogfoodAttestationRevocationView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

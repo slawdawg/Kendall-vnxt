@@ -81,6 +81,11 @@ def test_terminal_event_envelope_is_strict_and_typed():
     with pytest.raises(ValidationError):
         ManagerTerminalEventApiEnvelope.model_validate({"data": _valid_view(), "meta": {"nested": {"blocked": True}}})
 
+    with pytest.raises(ValidationError):
+        ManagerTerminalEventApiEnvelope.model_validate(
+            {"data": {**_valid_view(), "owner": "manager"}}
+        )
+
 
 def test_terminal_event_routes_use_declared_supervisor_envelope():
     assert _route("/manager-control-plane/terminal-events").response_model is ManagerTerminalEventApiEnvelope
@@ -209,3 +214,12 @@ def test_shared_terminal_event_contract_matches_python_boundary():
     assert 'owner: "supervisor"' in contract_source
     assert 'rawPayloadRetained: false' in contract_source
     assert "Readonly<Record<string, string | number | boolean | null>>" in contract_source
+
+
+def test_refill_disposition_requires_supervisor_owned_metadata_after_persistence():
+    contract_source = (Path(__file__).parents[3] / "packages/contracts/src/manager-control-plane/refill.ts").read_text(encoding="utf-8")
+    assert "export interface MissingSupervisorTerminalEventDisposition" in contract_source
+    assert "supervisorEvent?: never;" in contract_source
+    assert "export interface SupervisorCanonicalTerminalEventDisposition" in contract_source
+    assert "supervisorEvent: ManagerSupervisorCanonicalEventMetadata;" in contract_source
+    assert "export type AuthoritativeBacklogExhaustedDisposition =" in contract_source
