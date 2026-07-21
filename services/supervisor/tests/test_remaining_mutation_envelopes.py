@@ -11,3 +11,10 @@ def test_assignment_and_escalation_routes_use_work_item_envelope() -> None:
         assert _route(path).response_model is WorkItemApiEnvelope
 
     assert WorkItemApiEnvelope.model_fields["data"].annotation is WorkItemView
+
+
+def test_follow_up_candidate_route_uses_candidate_work_envelope() -> None:
+    route = _route("/work-packets/{packet_id}/learn-follow-up-candidate-work")
+
+    assert route.response_model is CandidateWorkApiEnvelope
+    assert CandidateWorkApiEnvelope.model_fields["data"].annotation is CandidateWorkView

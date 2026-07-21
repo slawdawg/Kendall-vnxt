@@ -651,7 +651,7 @@ async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_se
     return WorkPacketApiEnvelope(data=packet)
 
 
-@app.post("/work-packets/{packet_id}/learn-follow-up-candidate-work", response_model=ApiEnvelope)
+@app.post("/work-packets/{packet_id}/learn-follow-up-candidate-work", response_model=CandidateWorkApiEnvelope)
 async def create_work_packet_learn_follow_up_candidate_work(
     packet_id: str,
     payload: WorkPacketLearnFollowUpCandidateWorkRequest,
@@ -660,7 +660,7 @@ async def create_work_packet_learn_follow_up_candidate_work(
     candidate = await service.create_work_packet_learn_follow_up_candidate_work(session, packet_id, payload)
     if not candidate:
         raise HTTPException(status_code=404, detail=error_response("Work Packet not found.", "work_packet_not_found").model_dump())
-    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+    return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
 @app.post("/pipeline-control-plane/work-packets", response_model=AuthoritativeWorkPacketApiEnvelope)
