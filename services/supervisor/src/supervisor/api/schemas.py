@@ -6066,6 +6066,8 @@ class DeliveryExecutionEvidenceView(BaseModel):
 
 
 class CleanupPlanResidueView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     kind: str
     path: str
     insideApprovedTarget: bool
@@ -6073,6 +6075,8 @@ class CleanupPlanResidueView(BaseModel):
 
 
 class CleanupPlanView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     planId: str
     generatedAt: datetime
     workItemId: str
@@ -6108,6 +6112,8 @@ class CleanupPlanApiEnvelope(BaseModel):
 
 
 class LocalCleanupPolicyItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     itemId: str
     label: str
     status: str
@@ -6116,6 +6122,8 @@ class LocalCleanupPolicyItemView(BaseModel):
 
 
 class LocalCleanupReadinessReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -6139,6 +6147,8 @@ class LocalCleanupReadinessReportApiEnvelope(BaseModel):
 
 
 class RemoteCleanupSyncPolicyItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     itemId: str
     label: str
     status: str
@@ -6147,6 +6157,8 @@ class RemoteCleanupSyncPolicyItemView(BaseModel):
 
 
 class RemoteCleanupSyncReadinessReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str

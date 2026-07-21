@@ -57,3 +57,17 @@ def test_cleanup_readiness_reports_preserve_report_only_safety_literals():
     invalid_remote["remoteMutationApproved"] = True
     with pytest.raises(ValidationError):
         RemoteCleanupSyncReadinessReportApiEnvelope.model_validate({"data": invalid_remote})
+
+
+def test_cleanup_readiness_envelopes_reject_unknown_nested_fields():
+    local = asyncio.run(_route("/supervisor/local-cleanup-readiness-report").endpoint())
+    invalid_local = local.data.model_dump()
+    invalid_local["cleanupPolicy"] = [{**invalid_local["cleanupPolicy"][0], "unexpected": True}]
+    with pytest.raises(ValidationError):
+        LocalCleanupReadinessReportApiEnvelope.model_validate({"data": invalid_local})
+
+    remote = asyncio.run(_route("/supervisor/remote-cleanup-sync-readiness-report").endpoint())
+    invalid_remote = remote.data.model_dump()
+    invalid_remote["syncPolicy"] = [{**invalid_remote["syncPolicy"][0], "unexpected": True}]
+    with pytest.raises(ValidationError):
+        RemoteCleanupSyncReadinessReportApiEnvelope.model_validate({"data": invalid_remote})
