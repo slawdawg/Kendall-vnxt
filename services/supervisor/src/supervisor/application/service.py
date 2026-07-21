@@ -18233,7 +18233,8 @@ class SupervisorService:
             summary=(
                 "Read-only dry-run plan for low-risk delivery. It composes green-gate evidence into PR, merge, "
                 "and cleanup actions, names missing proof, and performs no push, PR mutation, merge, branch deletion, "
-                "worktree deletion, issue sync, provider call, credential access, or failed-check bypass."
+                "worktree deletion, issue sync, provider call, credential access, or failed-check bypass. "
+                "This report-only plan is not eligible for delivery or cleanup mutation inside an epic batch."
             ),
             workItemId=work_item_id,
             currentBranch=eligibility.currentBranch,
