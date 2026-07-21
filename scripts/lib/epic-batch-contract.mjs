@@ -169,7 +169,14 @@ export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, rev
   if (!validEvidenceRef(epicBatch?.final_review_ref)) blockers.push("final review evidence is missing or invalid");
   if (verificationRef && verificationRef !== epicBatch?.final_verification_ref) blockers.push("final verification evidence must be recorded in manifest");
   if (reviewRef && reviewRef !== epicBatch?.final_review_ref) blockers.push("final review evidence must be recorded in manifest");
-  if (epicBatch?.final_head && (epicBatch.checkpoints || []).some((checkpoint) => checkpoint.result === "passed" && !revisionMatches(epicBatch.final_head, checkpoint.head))) blockers.push("final head is not covered by passed checkpoint evidence");
+  const passedCheckpoints = (epicBatch?.checkpoints || []).filter((checkpoint) => checkpoint.result === "passed");
+  const finalCheckpoint = passedCheckpoints.at(-1);
+  const finalCheckpointSlices = new Set(finalCheckpoint?.slices || []);
+  if (
+    !finalCheckpoint ||
+    !revisionMatches(epicBatch?.final_head, finalCheckpoint.head) ||
+    [...expectedSliceIds].some((sliceId) => !finalCheckpointSlices.has(sliceId))
+  ) blockers.push("final head is not covered by final aggregate checkpoint evidence");
   if (!liveState) blockers.push("live worktree evidence is missing");
   else {
     if (liveState.error) blockers.push("live worktree status unavailable");
