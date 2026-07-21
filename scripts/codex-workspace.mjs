@@ -372,6 +372,9 @@ function startWorkspace(argv) {
       })
     : null;
   if (epicBatch) {
+    for (const [name, value] of [["--epic-id", options.epicId], ["--decision-ref", options.decisionRef], ["--expected-slices", options.expectedSlices], ["--allowed-paths", options.allowedPaths]]) {
+      if (value === true || value === undefined || !String(value).trim()) throw new Error(`${name} requires a value with epic-batch mode`);
+    }
     const admission = evaluateEpicBatchAdmission({ epicBatch });
     if (admission.status !== "admitted") throw new Error(`epic-batch admission blocked: ${admission.blockers.join("; ")}`);
   }
