@@ -1665,6 +1665,32 @@ class LocalDogfoodAttestationReceiptRequest(BaseModel):
     signatureB64: str = Field(min_length=1, max_length=200)
 
 
+class LocalDogfoodAttestationReadbackView(BaseModel):
+    """Metadata-only readback for a local dogfood authorization."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authorizationId: str | None = None
+    issuerId: str | None = None
+    keyId: str | None = None
+    receiptId: str | None = None
+    receiptState: Literal["accepted", "rejected", "pending", "unavailable"]
+    rejectionReason: str | None = None
+    expiresAt: str | None = None
+    replayState: Literal["replayed", "not_replayed", "unknown"]
+    evidenceClass: Literal["integrated_local"]
+    liveEvidenceAccepted: Literal[False] = False
+
+
+class LocalDogfoodAttestationReadbackApiEnvelope(BaseModel):
+    """Typed response boundary for local dogfood attestation readbacks."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalDogfoodAttestationReadbackView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 PipelineOperationalEvidenceClass = Literal["fixture", "integrated_local", "live_observed"]
 PipelineEpic25EvidenceSlot = Literal["readiness", "canary", "ramp", "recovery", "hardening", "decision"]
 PipelineEpic25PacketSchemaVersion = Literal[

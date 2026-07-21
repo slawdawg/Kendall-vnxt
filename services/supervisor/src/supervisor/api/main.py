@@ -46,6 +46,7 @@ from supervisor.api.schemas import (
     ReviewResourcePolicyReportApiEnvelope,
     EpicCompletionAuditReportApiEnvelope,
     MvpProofTrialReportApiEnvelope,
+    LocalDogfoodAttestationReadbackApiEnvelope,
     DeliveryReadinessPolicyReportApiEnvelope,
     GitHubDeliveryAuthorityReportApiEnvelope,
     TrustedDeliveryEligibilityReportApiEnvelope,
@@ -365,16 +366,21 @@ async def observe_local_dogfood_attestation(
         raise HTTPException(status_code=400, detail=error_response(str(exc), exc.reason).model_dump()) from exc
 
 
-@app.get("/local-dogfood/attestations/authorizations/{authorization_id}", response_model=ApiEnvelope)
+@app.get(
+    "/local-dogfood/attestations/authorizations/{authorization_id}",
+    response_model=LocalDogfoodAttestationReadbackApiEnvelope,
+)
 async def read_local_dogfood_attestation(
     authorization_id: str,
     _: None = Depends(require_local_dogfood_operator),
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        return ApiEnvelope(data=await local_dogfood_attestation.readback(
-            session, authorization_id, registry_json=settings.local_dogfood_attestation_issuer_registry,
-        ))
+        return LocalDogfoodAttestationReadbackApiEnvelope(
+            data=await local_dogfood_attestation.readback(
+                session, authorization_id, registry_json=settings.local_dogfood_attestation_issuer_registry,
+            )
+        )
     except local_dogfood_attestation.ReceiptRejected as exc:
         raise HTTPException(status_code=404, detail=error_response(str(exc), exc.reason).model_dump()) from exc
 
@@ -393,15 +399,20 @@ async def revoke_local_dogfood_attestation(
     return ApiEnvelope(data={"authorizationId": authorization_id, "revoked": True, "evidenceClass": "integrated_local"})
 
 
-@app.get("/local-dogfood/attestations/targets/{target_ref}", response_model=ApiEnvelope)
+@app.get(
+    "/local-dogfood/attestations/targets/{target_ref}",
+    response_model=LocalDogfoodAttestationReadbackApiEnvelope,
+)
 async def read_local_dogfood_attestation_for_target(
     target_ref: str,
     _: None = Depends(require_local_dogfood_operator),
     session: AsyncSession = Depends(get_session),
 ):
-    return ApiEnvelope(data=await local_dogfood_attestation.readback_for_target(
-        session, target_ref, registry_json=settings.local_dogfood_attestation_issuer_registry,
-    ))
+    return LocalDogfoodAttestationReadbackApiEnvelope(
+        data=await local_dogfood_attestation.readback_for_target(
+            session, target_ref, registry_json=settings.local_dogfood_attestation_issuer_registry,
+        )
+    )
 
 
 @app.get("/health")

@@ -2260,6 +2260,24 @@ export interface MvpProofTrialReportApiEnvelope {
   meta?: Record<string, string | number | boolean | null> | null;
 }
 
+export interface LocalDogfoodAttestationReadbackView {
+  authorizationId: string | null;
+  issuerId: string | null;
+  keyId: string | null;
+  receiptId: string | null;
+  receiptState: "accepted" | "rejected" | "pending" | "unavailable";
+  rejectionReason: string | null;
+  expiresAt: string | null;
+  replayState: "replayed" | "not_replayed" | "unknown";
+  evidenceClass: "integrated_local";
+  liveEvidenceAccepted: false;
+}
+
+export interface LocalDogfoodAttestationReadbackApiEnvelope {
+  data: LocalDogfoodAttestationReadbackView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;
