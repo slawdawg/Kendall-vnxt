@@ -1665,6 +1665,32 @@ class LocalDogfoodAttestationReceiptRequest(BaseModel):
     signatureB64: str = Field(min_length=1, max_length=200)
 
 
+class LocalDogfoodAttestationReadbackView(BaseModel):
+    """Metadata-only readback for a local dogfood authorization."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authorizationId: str | None = None
+    issuerId: str | None = None
+    keyId: str | None = None
+    receiptId: str | None = None
+    receiptState: Literal["accepted", "rejected", "pending", "unavailable"]
+    rejectionReason: str | None = None
+    expiresAt: str | None = None
+    replayState: Literal["replayed", "not_replayed", "unknown"]
+    evidenceClass: Literal["integrated_local"]
+    liveEvidenceAccepted: Literal[False] = False
+
+
+class LocalDogfoodAttestationReadbackApiEnvelope(BaseModel):
+    """Typed response boundary for local dogfood attestation readbacks."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: LocalDogfoodAttestationReadbackView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 PipelineOperationalEvidenceClass = Literal["fixture", "integrated_local", "live_observed"]
 PipelineEpic25EvidenceSlot = Literal["readiness", "canary", "ramp", "recovery", "hardening", "decision"]
 PipelineEpic25PacketSchemaVersion = Literal[
@@ -6297,6 +6323,8 @@ class EpicCompletionAuditReportApiEnvelope(BaseModel):
 
 
 class MvpProofTrialStepView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     stepId: str
     label: str
     status: str
@@ -6306,6 +6334,8 @@ class MvpProofTrialStepView(BaseModel):
 
 
 class MvpProofTrialReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -6316,11 +6346,20 @@ class MvpProofTrialReportView(BaseModel):
     blockedOperations: list[str]
     stopConditions: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    codexLaunchApproved: bool = False
-    claudeLaunchApproved: bool = False
-    providerExpansionApproved: bool = False
-    autonomousDeliveryApproved: bool = False
+    readOnly: Literal[True] = True
+    codexLaunchApproved: Literal[True] = True
+    claudeLaunchApproved: Literal[False] = False
+    providerExpansionApproved: Literal[False] = False
+    autonomousDeliveryApproved: Literal[False] = False
+
+
+class MvpProofTrialReportApiEnvelope(BaseModel):
+    """Typed response boundary for the read-only Epic 6 proof-trial report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MvpProofTrialReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class DeliveryReadinessPolicyItemView(BaseModel):
