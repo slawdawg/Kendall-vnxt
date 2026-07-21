@@ -45,6 +45,7 @@ from supervisor.api.schemas import (
     ExecutionStateBoundaryApiEnvelope,
     ReviewResourcePolicyReportApiEnvelope,
     EpicCompletionAuditReportApiEnvelope,
+    MvpProofTrialReportApiEnvelope,
     DeliveryReadinessPolicyReportApiEnvelope,
     GitHubDeliveryAuthorityReportApiEnvelope,
     TrustedDeliveryEligibilityReportApiEnvelope,
@@ -1650,9 +1651,14 @@ async def get_epic_6_completion_audit_report():
     return EpicCompletionAuditReportApiEnvelope(data=service.get_epic_6_completion_audit_report())
 
 
-@app.get("/supervisor/epic-6-mvp-proof-trial-report", response_model=ApiEnvelope)
+@app.get(
+    "/supervisor/epic-6-mvp-proof-trial-report",
+    response_model=MvpProofTrialReportApiEnvelope,
+)
 async def get_epic_6_mvp_proof_trial_report():
-    return ApiEnvelope(data=service.get_epic_6_mvp_proof_trial_report())
+    return MvpProofTrialReportApiEnvelope(
+        data=service.get_epic_6_mvp_proof_trial_report()
+    )
 
 
 @app.get("/supervisor/delivery-readiness-policy-report", response_model=DeliveryReadinessPolicyReportApiEnvelope)

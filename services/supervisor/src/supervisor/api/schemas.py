@@ -6297,6 +6297,8 @@ class EpicCompletionAuditReportApiEnvelope(BaseModel):
 
 
 class MvpProofTrialStepView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     stepId: str
     label: str
     status: str
@@ -6306,6 +6308,8 @@ class MvpProofTrialStepView(BaseModel):
 
 
 class MvpProofTrialReportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     reportId: str
     generatedAt: datetime
     summary: str
@@ -6316,11 +6320,20 @@ class MvpProofTrialReportView(BaseModel):
     blockedOperations: list[str]
     stopConditions: list[str]
     nextSafeActions: list[str]
-    readOnly: bool = True
-    codexLaunchApproved: bool = False
-    claudeLaunchApproved: bool = False
-    providerExpansionApproved: bool = False
-    autonomousDeliveryApproved: bool = False
+    readOnly: Literal[True] = True
+    codexLaunchApproved: Literal[True] = True
+    claudeLaunchApproved: Literal[False] = False
+    providerExpansionApproved: Literal[False] = False
+    autonomousDeliveryApproved: Literal[False] = False
+
+
+class MvpProofTrialReportApiEnvelope(BaseModel):
+    """Typed response boundary for the read-only Epic 6 proof-trial report."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MvpProofTrialReportView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class DeliveryReadinessPolicyItemView(BaseModel):

@@ -2248,11 +2248,16 @@ export interface MvpProofTrialReportView {
   blockedOperations: string[];
   stopConditions: string[];
   nextSafeActions: string[];
-  readOnly: boolean;
-  codexLaunchApproved: boolean;
-  claudeLaunchApproved: boolean;
-  providerExpansionApproved: boolean;
-  autonomousDeliveryApproved: boolean;
+  readOnly: true;
+  codexLaunchApproved: true;
+  claudeLaunchApproved: false;
+  providerExpansionApproved: false;
+  autonomousDeliveryApproved: false;
+}
+
+export interface MvpProofTrialReportApiEnvelope {
+  data: MvpProofTrialReportView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface DeliveryReadinessPolicyItemView {
