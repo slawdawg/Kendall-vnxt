@@ -8,6 +8,7 @@ const EPIC_BATCH_AGE_CALENDAR = "UTC Monday-Friday; holidays do not extend the c
 
 const HIGH_RISK_MARKERS = Object.freeze([
   "auth",
+  "security",
   "credential",
   "secret",
   "provider",
@@ -43,6 +44,7 @@ export function buildEpicBatchManifest({ epicId, decisionRef, expectedSlices = [
     decision_ref: normalizedDecisionRef,
     limits: resolvedLimits,
     age_calendar: EPIC_BATCH_AGE_CALENDAR,
+    opened_at: new Date().toISOString(),
     age_business_days_elapsed: 0,
     expected_slices: [...expectedSlices].map((slice) => String(slice).trim()).filter(Boolean),
     allowed_paths: [...allowedPaths].map((path) => String(path).trim()).filter(Boolean),
@@ -80,7 +82,7 @@ export function evaluateEpicBatchAdmission({ epicBatch, expectedSlices = epicBat
 }
 
 export function appendEpicBatchCheckpoint(epicBatch, checkpoint) {
-  if (!epicBatch || !checkpoint?.checkpoint_id || !checkpoint.base_revision || !checkpoint.head || !checkpoint.review_ref || !checkpoint.checks?.length) {
+  if (!epicBatch || !checkpoint?.checkpoint_id || !validRevisionRef(checkpoint.base_revision) || !validRevisionRef(checkpoint.head) || !validEvidenceRef(checkpoint.review_ref) || !nonEmptyStringArray(checkpoint.checks)) {
     throw new Error("checkpoint_id, base_revision, head, and review_ref are required");
   }
   return {
@@ -98,11 +100,14 @@ export function appendEpicBatchCheckpoint(epicBatch, checkpoint) {
 }
 
 export function appendEpicBatchSlice(epicBatch, slice) {
-  if (!epicBatch || !slice?.slice_id || !slice.objective || !slice.owner || !slice.rollback_ref || !slice.commit) {
+  if (!epicBatch || !slice?.slice_id || !slice.objective || !slice.owner || !validEvidenceRef(slice.rollback_ref) || !validRevisionRef(slice.commit)) {
     throw new Error("slice_id, objective, owner, commit, and rollback_ref are required");
   }
-  if (!Array.isArray(slice.paths) || slice.paths.length === 0 || !Array.isArray(slice.checks) || slice.checks.length === 0) {
+  if (!nonEmptyStringArray(slice.paths) || !nonEmptyStringArray(slice.checks)) {
     throw new Error("slice paths and checks are required");
+  }
+  if (slice.paths.some((path) => !pathAllowedByManifest(path, epicBatch.allowed_paths || []))) {
+    throw new Error("slice paths must stay within the admitted allowlist");
   }
   if (epicBatch.slices?.length >= Number(epicBatch.limits?.slice_limit || 0)) throw new Error("slice limit exceeded");
   return {
@@ -119,7 +124,7 @@ export function appendEpicBatchSlice(epicBatch, slice) {
   };
 }
 
-export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, reviewRef = null, ageBusinessDays = null } = {}) {
+export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, reviewRef = null, ageBusinessDays = null, liveState = null, now = new Date() } = {}) {
   const epicBatch = manifest?.epic_batch;
   const blockers = [];
   if (manifest?.mode !== "epic-batch") blockers.push("workspace is not in epic-batch mode");
@@ -130,12 +135,38 @@ export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, rev
   if (expectedSliceIds.size > 0 && [...expectedSliceIds].some((sliceId) => !recordedSliceIds.has(sliceId))) blockers.push("expected slices are incomplete");
   if (!epicBatch?.checkpoints?.length || epicBatch.checkpoints.some((checkpoint) => checkpoint.result !== "passed")) blockers.push("passed checkpoint evidence is missing");
   if (epicBatch?.split_triggers?.length) blockers.push("split trigger is unrecorded or unresolved");
-  const elapsedAge = ageBusinessDays === null ? Number(epicBatch?.age_business_days_elapsed || 0) : Number(ageBusinessDays);
-  if (!Number.isInteger(elapsedAge) || elapsedAge < 0) blockers.push("age value is invalid");
+  const elapsedAge = ageBusinessDays === null
+    ? deriveBusinessDaysElapsed(epicBatch?.opened_at || manifest?.created_at, now)
+    : Number(ageBusinessDays);
+  if (elapsedAge === null) blockers.push("current age evidence is missing");
+  else if (!Number.isInteger(elapsedAge) || elapsedAge < 0) blockers.push("age value is invalid");
   else if (elapsedAge > Number(epicBatch?.limits?.age_business_days || 0)) blockers.push("age limit exceeded");
+  for (const slice of epicBatch?.slices || []) {
+    if (!slice?.slice_id || !slice.objective || !slice.owner || !validRevisionRef(slice.commit) || !validEvidenceRef(slice.rollback_ref) || !nonEmptyStringArray(slice.paths) || !nonEmptyStringArray(slice.checks)) {
+      blockers.push("complete slice evidence is missing");
+      break;
+    }
+    if (slice.paths.some((path) => !pathAllowedByManifest(path, epicBatch.allowed_paths || []))) {
+      blockers.push("slice paths exceed admitted allowlist");
+      break;
+    }
+  }
+  for (const checkpoint of epicBatch?.checkpoints || []) {
+    if (!checkpoint?.checkpoint_id || !validRevisionRef(checkpoint.base_revision) || !validRevisionRef(checkpoint.head) || !validEvidenceRef(checkpoint.review_ref) || !nonEmptyStringArray(checkpoint.checks)) {
+      blockers.push("complete checkpoint evidence is missing");
+      break;
+    }
+  }
   if (!/^[0-9a-f]{7,64}$/.test(String(epicBatch?.final_head || ""))) blockers.push("final head is missing or invalid");
   if (!validEvidenceRef(verificationRef || epicBatch?.final_verification_ref)) blockers.push("final verification evidence is missing or invalid");
   if (!validEvidenceRef(reviewRef || epicBatch?.final_review_ref)) blockers.push("final review evidence is missing or invalid");
+  if (!liveState) blockers.push("live worktree evidence is missing");
+  else {
+    if (liveState.error) blockers.push("live worktree status unavailable");
+    if (liveState.dirty) blockers.push("live worktree is dirty");
+    if (liveState.branch && manifest?.branch && liveState.branch !== manifest.branch) blockers.push("live worktree branch differs from manifest");
+    if (liveState.head && !revisionMatches(liveState.head, epicBatch.final_head)) blockers.push("live worktree head differs from final head");
+  }
   return {
     status: blockers.length === 0 ? "ready-for-operator-delivery-decision" : "blocked",
     blockers,
@@ -152,6 +183,42 @@ export function buildEpicBatchFinishPlan(manifest, { verificationRef = null, rev
 
 function validEvidenceRef(value) {
   return typeof value === "string" && /^[A-Za-z0-9_.:/-]{3,160}$/.test(value);
+}
+
+function validRevisionRef(value) {
+  return typeof value === "string" && /^[0-9a-f]{7,64}$/i.test(value.trim());
+}
+
+function revisionMatches(actual, expected) {
+  return actual === expected || (typeof actual === "string" && typeof expected === "string" && actual.startsWith(expected));
+}
+
+function nonEmptyStringArray(value) {
+  return Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0);
+}
+
+function pathAllowedByManifest(path, allowedPaths) {
+  if (typeof path !== "string" || !path.trim() || path.startsWith("/") || path.includes("..") || path.includes("\\")) return false;
+  return allowedPaths.some((allowed) => {
+    if (typeof allowed !== "string" || !allowed.trim() || allowed.startsWith("/") || allowed.includes("..") || allowed.includes("\\")) return false;
+    const normalizedAllowed = allowed.trim();
+    return path === normalizedAllowed || (normalizedAllowed.endsWith("/") && path.startsWith(normalizedAllowed));
+  });
+}
+
+export function deriveBusinessDaysElapsed(openedAt, now = new Date()) {
+  if (!openedAt) return null;
+  const opened = new Date(openedAt);
+  if (Number.isNaN(opened.getTime()) || opened > now) return null;
+  const cursor = new Date(Date.UTC(opened.getUTCFullYear(), opened.getUTCMonth(), opened.getUTCDate()));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  let elapsed = 0;
+  while (cursor < end) {
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const weekday = cursor.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) elapsed += 1;
+  }
+  return elapsed;
 }
 
 function positiveInteger(value, label) {

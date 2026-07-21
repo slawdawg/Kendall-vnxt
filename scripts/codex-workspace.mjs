@@ -2150,6 +2150,7 @@ function finishEpic(argv) {
     verificationRef: options.verificationRef || null,
     reviewRef: options.reviewRef || null,
     ageBusinessDays: options.ageBusinessDays === undefined ? null : Number(options.ageBusinessDays),
+    liveState: inspectEpicBatchLiveState(manifest),
   });
   const packet = {
     taskId: manifest.task_id,
@@ -2169,6 +2170,23 @@ function finishEpic(argv) {
     ...plan.steps,
     ...(plan.blockers.length > 0 ? [`blocked: ${plan.blockers.join("; ")}`] : ["no mutation performed; operator delivery decision remains required"]),
   ]);
+}
+
+function inspectEpicBatchLiveState(manifest) {
+  if (!manifest?.worktree_path || !existsSync(manifest.worktree_path)) {
+    return { error: "managed epic worktree is missing" };
+  }
+  try {
+    const status = parseStatus(manifest.worktree_path);
+    const branchResult = git(["branch", "--show-current"], { cwd: manifest.worktree_path });
+    return {
+      dirty: status.any,
+      branch: branchResult.code === 0 ? branchResult.stdout.trim() : "",
+      head: branchSha("HEAD", manifest.worktree_path),
+    };
+  } catch (error) {
+    return { error: error.message };
+  }
 }
 
 function finishPr(argv) {
@@ -4213,6 +4231,9 @@ function cleanupIntegratedPlan(record, state, context) {
   if (manifest.status === "closed") {
     return { ...base, reason: "workspace manifest is already closed" };
   }
+  if (manifest.mode === "epic-batch") {
+    return { ...base, reason: "epic-batch workspace requires finish-epic closeout; integrated cleanup is disabled" };
+  }
   if (manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || ""))) {
     return { ...base, reason: "workspace has PR/merged cleanup evidence; use cleanup-merged" };
   }
@@ -5380,6 +5401,7 @@ function assertSafeBranch(branch) {
 
 function assertSafeBaseBranch(branch) {
   const value = String(branch || "").trim();
+  if (value === "HEAD") return;
   if (
     !value ||
     value !== branch ||
