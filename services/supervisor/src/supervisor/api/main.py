@@ -594,13 +594,13 @@ async def lan_auth_startup_gate() -> dict[str, object]:
     }
 
 
-@app.post("/work-items", response_model=ApiEnvelope)
+@app.post("/work-items", response_model=WorkItemApiEnvelope)
 async def create_work_item(payload: WorkItemCreate, session: AsyncSession = Depends(get_session)):
     try:
         item = await service.create_work_item(session, payload)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "work_item_intake_blocked").model_dump()) from exc
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
 @app.post("/candidate-work", response_model=ApiEnvelope)
