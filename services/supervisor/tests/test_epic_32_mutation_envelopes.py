@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from supervisor.api import main as main_module
 from supervisor.api.schemas import (
     CandidateWorkPromotionApiEnvelope,
@@ -23,6 +26,8 @@ def test_epic_32_routes_use_strict_typed_envelopes() -> None:
     assert CandidateWorkPromotionApiEnvelope.model_fields["data"].annotation is CandidateWorkPromotionView
     assert DeliveryExecutionEvidenceApiEnvelope.model_config["extra"] == "forbid"
     assert CandidateWorkPromotionApiEnvelope.model_config["extra"] == "forbid"
+    assert DeliveryExecutionEvidenceView.model_config["extra"] == "forbid"
+    assert CandidateWorkPromotionView.model_config["extra"] == "forbid"
 
 
 def test_epic_32_typescript_contracts_match_python_boundaries() -> None:
@@ -33,3 +38,31 @@ def test_epic_32_typescript_contracts_match_python_boundaries() -> None:
     assert "export interface CandidateWorkPromotionApiEnvelope" in contract_source
     assert "data: CandidateWorkPromotionView;" in contract_source
     assert "meta?: Record<string, string | number | boolean | null> | null;" in contract_source
+    assert "export interface WorkItemApiEnvelope" in contract_source
+    assert "data: WorkItemView;" in contract_source
+
+
+def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
+    evidence = {
+        "evidenceId": "evidence-1",
+        "mode": "local",
+        "actionId": "pr",
+        "status": "recorded",
+        "eventRecorded": False,
+        "summary": "metadata-only evidence",
+        "recoveryPath": "retry",
+        "unexpected": True,
+    }
+    with pytest.raises(ValidationError):
+        DeliveryExecutionEvidenceView.model_validate(evidence)
+    with pytest.raises(ValidationError):
+        DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "meta": {"nested": []}})
+    with pytest.raises(ValidationError):
+        CandidateWorkPromotionApiEnvelope.model_validate({"data": {}, "meta": {"nested": []}})
+
+
+def test_epic_32_promotion_requires_both_result_objects() -> None:
+    with pytest.raises(ValidationError):
+        CandidateWorkPromotionView.model_validate({"candidateWork": {}})
+    with pytest.raises(ValidationError):
+        CandidateWorkPromotionView.model_validate({"workItem": {}})

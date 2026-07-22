@@ -6187,6 +6187,8 @@ class DeliveryApprovalLedgerEntryView(BaseModel):
 
 
 class DeliveryExecutionEvidenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     evidenceId: str
     mode: str
     actionId: str
@@ -6221,7 +6223,7 @@ class DeliveryExecutionEvidenceApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: DeliveryExecutionEvidenceView
-    meta: dict[str, Any] | None = None
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class CleanupPlanResidueView(BaseModel):
@@ -6558,6 +6560,8 @@ class WorkItemApiEnvelope(BaseModel):
 
 
 class CandidateWorkPromotionView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     candidateWork: CandidateWorkView
     workItem: WorkItemView
 
@@ -6568,7 +6572,7 @@ class CandidateWorkPromotionApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: CandidateWorkPromotionView
-    meta: dict[str, Any] | None = None
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class WorkItemListApiEnvelope(BaseModel):
