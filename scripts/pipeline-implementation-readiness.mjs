@@ -388,7 +388,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       },
       {
         file: "tests/e2e/dashboard.spec.ts",
-        tokens: ["sameOriginRuntimeRequests", "visualIntegrityEvidence", "Inspect packet: Resolve stale research source before routing", "Packet detail"],
+        tokens: ["sameOriginRuntimeRequests", "visualIntegrityEvidence", "Resolve stale research source before routing", "Packet detail"],
       },
     ],
     summary: "Refined cockpit UI has source-owned browser proof requirements for flow-only hierarchy, packet drill-down, screenshots, no-overlap, responsiveness, keyboard preservation, and no-live-call boundaries.",

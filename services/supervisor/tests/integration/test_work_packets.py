@@ -19,7 +19,8 @@ from urllib.error import HTTPError
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _reset_supervisor_modules() -> None:
@@ -2606,7 +2607,7 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
 
 def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_evidence(tmp_path, monkeypatch) -> None:
     db_name = "pipeline-dashboard-parallel-work-graph.db"
-    generated_at = datetime.now(timezone.utc).isoformat()
+    generated_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
     packet_id = "manager-source-parallel-wave"
     graph = {
         "schemaVersion": "parallel-work-graph-evidence/v0",
@@ -2669,7 +2670,7 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
         }
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(lambda _index: _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=concurrent_refresh), range(2)))
-        assert [response.status_code for response in responses] == [200, 200]
+        assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
         transition = _uds_request(
             socket_path,
             f"/pipeline-control-plane/work-packets/{packet_id}/transitions",
@@ -2715,12 +2716,165 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=legacy_refresh).status_code == 200
         with sqlite3.connect(_db_path(tmp_path, db_name)) as connection:
             connection.execute(
-                "UPDATE authoritative_work_packet_lifecycle_events SET parallel_work_graph_json = ? WHERE packet_id = ? AND event_type = 'packet.parallel_work_graph_refreshed'",
-                (json.dumps({**graph, "executionJobId": "execution-job:/unsafe"}), packet_id),
+                "UPDATE authoritative_work_packet_lifecycle_events SET parallel_work_graph_json = ? "
+                "WHERE packet_id = ? AND event_type IN ('packet.created', 'packet.parallel_work_graph_refreshed')",
+                (json.dumps({**graph, "executionJobId": "execution-job:/unsafe", "rawPayloadRetained": True}), packet_id),
             )
             connection.commit()
-        malformed_detail = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"][0]
+        malformed_detail = next(
+            detail
+            for detail in _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"]
+            if detail["packetId"] == packet_id
+        )
         assert malformed_detail["workGraph"]["availability"] == "unavailable"
+
+
+def test_parallel_work_graph_refresh_keeps_newer_concurrent_evidence_current(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-parallel-work-graph-race.db"
+    packet_id = "manager-source-parallel-race"
+    generated_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+    graph = {
+        "schemaVersion": "parallel-work-graph-evidence/v0",
+        "sourceSchemaVersion": "parallel-execution-graph-reservation/v1",
+        "availability": "available",
+        "packetId": packet_id,
+        "executionJobId": "execution-job:parallel-race-packet",
+        "reportIdentity": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "generatedAt": generated_at.isoformat(),
+        "freshnessState": "live",
+        "waveMembership": "selected",
+        "dependencyState": "clear",
+        "reservation": {"status": "advisory_reserved", "owner": "operator", "reasonCode": "independent_surface"},
+        "capacity": {"posture": "normal", "reasonCode": "capacity_normal"},
+        "reason": "The packet is selected in the advisory wave.",
+        "nextSafeAction": "Inspect existing authority gates before any future action.",
+        "evidenceRefs": ["evidence:parallel-race"],
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+        "retention": "metadata_only_evidence_references",
+    }
+    request = {
+        "packetId": packet_id,
+        "title": "Parallel graph race packet",
+        "sourceRef": {"refId": "doc:docs/operator-note.md", "sourceType": "repo_doc", "pathOrUrl": "docs/operator-note.md"},
+        "actor": {"actorType": "manager", "actorId": "manager-source-intake", "actorLabel": "Manager source intake adapter"},
+        "idempotencyKey": "manager-source-intake:parallel-race-create",
+        "correlationId": "manager-source:parallel-race-create",
+        "payloadSummary": "Eligible manager source candidate accepted as metadata-only intake.",
+        "evidenceRefs": ["manager-candidate:parallel-race"],
+        "parallelWorkGraphEvidence": graph,
+    }
+    with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_, socket_path):
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request).status_code == 200
+        newer = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "generatedAt": (generated_at + timedelta(seconds=2)).isoformat(),
+                "reason": "The newer advisory refresh must remain current after a concurrent older refresh.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-race-newer",
+            "correlationId": "manager-source:parallel-race-newer",
+        }
+        older = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "generatedAt": (generated_at + timedelta(seconds=1)).isoformat(),
+                "reason": "An older concurrent advisory refresh must never become current.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-race-older",
+            "correlationId": "manager-source:parallel-race-older",
+        }
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda refresh_payload: _uds_request(
+                        socket_path,
+                        "/internal/manager-source-intake/work-packets",
+                        payload=refresh_payload,
+                    ),
+                    [newer, older],
+                )
+            )
+        assert sorted(response.status_code for response in responses) in ([200, 200], [200, 400])
+        detail = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"][0]
+        assert detail["workGraph"]["generatedAt"] == newer["parallelWorkGraphEvidence"]["generatedAt"].replace("+00:00", "Z")
+        stale = {
+            **request,
+            "parallelWorkGraphEvidence": {**graph, "reason": "A stale report cannot replace current advisory evidence."},
+            "idempotencyKey": "manager-source-intake:parallel-race-stale",
+            "correlationId": "manager-source:parallel-race-stale",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=stale).status_code == 400
+        original_graph_with_new_key = {
+            **request,
+            "idempotencyKey": "manager-source-intake:parallel-race-original-graph-replay",
+            "correlationId": "manager-source:parallel-race-original-graph-replay",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=original_graph_with_new_key).status_code == 400
+
+
+def test_parallel_work_graph_refresh_retries_transient_sqlite_lock(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-dashboard-parallel-work-graph-sqlite-lock.db"
+    packet_id = "manager-source-parallel-sqlite-lock"
+    generated_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+    graph = {
+        "schemaVersion": "parallel-work-graph-evidence/v0",
+        "sourceSchemaVersion": "parallel-execution-graph-reservation/v1",
+        "availability": "available",
+        "packetId": packet_id,
+        "executionJobId": "execution-job:parallel-sqlite-lock-packet",
+        "reportIdentity": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "generatedAt": generated_at.isoformat(),
+        "freshnessState": "live",
+        "waveMembership": "selected",
+        "dependencyState": "clear",
+        "reservation": {"status": "advisory_reserved", "owner": "operator", "reasonCode": "independent_surface"},
+        "capacity": {"posture": "normal", "reasonCode": "capacity_normal"},
+        "reason": "The packet is selected in the advisory wave.",
+        "nextSafeAction": "Inspect existing authority gates before any future action.",
+        "evidenceRefs": ["evidence:parallel-sqlite-lock"],
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+        "retention": "metadata_only_evidence_references",
+    }
+    request = {
+        "packetId": packet_id,
+        "title": "Parallel graph SQLite lock packet",
+        "sourceRef": {"refId": "doc:docs/operator-note.md", "sourceType": "repo_doc", "pathOrUrl": "docs/operator-note.md"},
+        "actor": {"actorType": "manager", "actorId": "manager-source-intake", "actorLabel": "Manager source intake adapter"},
+        "idempotencyKey": "manager-source-intake:parallel-sqlite-lock-create",
+        "correlationId": "manager-source:parallel-sqlite-lock-create",
+        "payloadSummary": "Eligible manager source candidate accepted as metadata-only intake.",
+        "evidenceRefs": ["manager-candidate:parallel-sqlite-lock"],
+        "parallelWorkGraphEvidence": graph,
+    }
+    with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_, socket_path):
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request).status_code == 200
+        original_flush = AsyncSession.flush
+        flush_calls = 0
+
+        async def transient_sqlite_lock(session, *args, **kwargs):
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 1:
+                raise OperationalError("INSERT authoritative_work_packet_lifecycle_events", {}, RuntimeError("database table is locked"))
+            return await original_flush(session, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncSession, "flush", transient_sqlite_lock)
+        refresh = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "generatedAt": (generated_at + timedelta(seconds=1)).isoformat(),
+                "reason": "The refresh retries a transient SQLite lock without changing the advisory contract.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-sqlite-lock-refresh",
+            "correlationId": "manager-source:parallel-sqlite-lock-refresh",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=refresh).status_code == 200
+        assert flush_calls == 2
 
 
 def test_pipeline_dashboard_projection_blocks_legacy_packets_from_superseded_prd_sources(tmp_path, monkeypatch) -> None:

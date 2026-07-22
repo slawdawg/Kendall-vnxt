@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import uuid
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
 
@@ -753,82 +754,15 @@ class SupervisorService:
         packet_id = payload.packetId or f"packet-{uuid.uuid4()}"
         existing_packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if existing_packet:
-            existing_event = await self._authoritative_lifecycle_event_by_packet_created(session, packet_id)
-            latest_graph_event = await self._authoritative_latest_parallel_work_graph_event(session, packet_id)
-            if (
-                parallel_work_graph is not None
-                and existing_event is not None
-                and self._authoritative_graph_packet_identity_matches(existing_packet, payload)
-                and existing_event.parallel_work_graph_json != parallel_work_graph
-            ):
-                previous_graph = latest_graph_event.parallel_work_graph_json if latest_graph_event else None
-                if isinstance(previous_graph, dict) and (
-                    previous_graph.get("executionJobId") != parallel_work_graph.get("executionJobId")
-                    or previous_graph.get("reportIdentity") != parallel_work_graph.get("reportIdentity")
-                ):
-                    raise ValueError("Parallel work graph refresh conflicts with the authoritative report mapping.")
-                if isinstance(previous_graph, dict):
-                    try:
-                        previous_generated_at = self._ensure_aware(
-                            datetime.fromisoformat(str(previous_graph["generatedAt"]).replace("Z", "+00:00"))
-                        )
-                        incoming_generated_at = self._ensure_aware(
-                            datetime.fromisoformat(str(parallel_work_graph["generatedAt"]).replace("Z", "+00:00"))
-                        )
-                    except (KeyError, TypeError, ValueError) as exc:
-                        raise ValueError("Parallel work graph refresh conflicts with malformed persisted report metadata.") from exc
-                    if incoming_generated_at <= previous_generated_at:
-                        raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
-                refresh = AuthoritativeWorkPacketLifecycleEvent(
-                    id=f"event-{uuid.uuid4()}", packet_id=packet_id, schema_version=1,
-                    event_type="packet.parallel_work_graph_refreshed", previous_stage=existing_packet.current_stage,
-                    target_stage=existing_packet.current_stage, status=existing_packet.status, truth_label=existing_packet.truth_label,
-                    source_ref_json=existing_packet.source_ref_json, actor_json=payload.actor.model_dump(), correlation_id=payload.correlationId,
-                    causation_id=existing_packet.current_event_id, idempotency_key=payload.idempotencyKey,
-                    packet_title=existing_packet.title, parent_packet_id=existing_packet.parent_packet_id, lineage_kind=existing_packet.lineage_kind,
-                    ready_to_test_json=existing_packet.ready_to_test_json, operator_test_state=existing_packet.operator_test_state,
-                    operator_test_note=existing_packet.operator_test_note, parallel_work_graph_json=parallel_work_graph,
-                    payload_summary=payload_summary, evidence_refs_json=evidence_refs, occurred_at=datetime.now(timezone.utc),
-                )
-                existing_packet.current_event_id = refresh.id
-                existing_packet.updated_at = refresh.occurred_at
-                session.add(refresh)
-                try:
-                    await session.commit()
-                except IntegrityError as exc:
-                    await session.rollback()
-                    replay_event = await self._authoritative_lifecycle_event_by_idempotency(
-                        session,
-                        payload.idempotencyKey,
-                        packet_id=packet_id,
-                        event_type="packet.parallel_work_graph_refreshed",
-                    )
-                    replay_packet = await session.get(AuthoritativeWorkPacket, packet_id)
-                    if replay_event and replay_packet and self._authoritative_graph_refresh_event_matches(
-                        replay_event,
-                        payload,
-                        source_ref=source_ref,
-                        payload_summary=payload_summary,
-                        evidence_refs=evidence_refs,
-                        parallel_work_graph=parallel_work_graph,
-                    ):
-                        return await self.to_authoritative_work_packet_view(session, replay_packet)
-                    raise ValueError("Parallel work graph refresh conflicted with persisted lifecycle metadata.") from exc
-                return await self.to_authoritative_work_packet_view(session, existing_packet)
-            if (
-                parallel_work_graph is not None
-                and existing_event is not None
-                and self._authoritative_graph_packet_identity_matches(existing_packet, payload)
-                and existing_event.parallel_work_graph_json == parallel_work_graph
-            ):
-                return await self.to_authoritative_work_packet_view(session, existing_packet)
-            if (
-                not self._authoritative_create_matches(existing_packet, payload)
-                or existing_event is None
-                or existing_event.parallel_work_graph_json != parallel_work_graph
-            ):
-                raise ValueError("Authoritative WorkPacket already exists with different lifecycle metadata.")
-            return await self.to_authoritative_work_packet_view(session, existing_packet)
+            return await self._refresh_or_replay_authoritative_work_packet(
+                session,
+                packet_id=packet_id,
+                payload=payload,
+                source_ref=source_ref,
+                payload_summary=payload_summary,
+                evidence_refs=evidence_refs,
+                parallel_work_graph=parallel_work_graph,
+            )
 
         now = datetime.now(timezone.utc)
         event_id = f"event-{uuid.uuid4()}"
@@ -3606,6 +3540,206 @@ class SupervisorService:
             operatorTestNote=packet.operator_test_note,
             history=[self._authoritative_lifecycle_event_view(event) for event in events],
             metadataOnly=True,
+        )
+
+    async def _refresh_or_replay_authoritative_work_packet(
+        self,
+        session: AsyncSession,
+        *,
+        packet_id: str,
+        payload: AuthoritativeWorkPacketCreateRequest,
+        source_ref: dict,
+        payload_summary: str,
+        evidence_refs: list[str],
+        parallel_work_graph: dict[str, object] | None,
+    ) -> AuthoritativeWorkPacketLifecycleView:
+        """Refresh a packet graph with a row lock and compare-and-swap fallback.
+
+        PostgreSQL serializes contenders with ``FOR UPDATE``. SQLite does not
+        expose equivalent row locks, so the conditional current-event update is
+        also required: a loser rolls back its tentative lifecycle event, reloads
+        the newest graph, and must then satisfy the monotonic ``generatedAt``
+        check before it can write. This keeps a later commit from making an
+        older advisory report current on either supported database.
+        """
+        for attempt in range(3):
+            packet = await session.get(
+                AuthoritativeWorkPacket,
+                packet_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if packet is None:
+                raise ValueError("Authoritative WorkPacket disappeared during graph refresh.")
+            if payload.idempotencyKey:
+                replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                    session,
+                    payload.idempotencyKey,
+                )
+                if replay_event is not None:
+                    if replay_event.packet_id != packet_id:
+                        raise ValueError("Create idempotency key already belongs to a different authoritative WorkPacket.")
+                    matches = (
+                        self._authoritative_graph_refresh_event_matches(
+                            replay_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
+                        )
+                        if replay_event.event_type == "packet.parallel_work_graph_refreshed"
+                        else self._authoritative_create_event_matches(
+                            replay_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
+                        )
+                    )
+                    if not matches:
+                        raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
+                    return await self.to_authoritative_work_packet_view(session, packet)
+            existing_event = await self._authoritative_lifecycle_event_by_packet_created(session, packet_id)
+            latest_graph_event = await self._authoritative_latest_parallel_work_graph_event(session, packet_id)
+            if (
+                parallel_work_graph is not None
+                and existing_event is not None
+                and self._authoritative_graph_packet_identity_matches(packet, payload)
+                and existing_event.parallel_work_graph_json != parallel_work_graph
+            ):
+                previous_graph = latest_graph_event.parallel_work_graph_json if latest_graph_event else None
+                if isinstance(previous_graph, dict) and (
+                    previous_graph.get("executionJobId") != parallel_work_graph.get("executionJobId")
+                    or previous_graph.get("reportIdentity") != parallel_work_graph.get("reportIdentity")
+                ):
+                    raise ValueError("Parallel work graph refresh conflicts with the authoritative report mapping.")
+                if isinstance(previous_graph, dict):
+                    try:
+                        previous_generated_at = self._ensure_aware(
+                            datetime.fromisoformat(str(previous_graph["generatedAt"]).replace("Z", "+00:00"))
+                        )
+                        incoming_generated_at = self._ensure_aware(
+                            datetime.fromisoformat(str(parallel_work_graph["generatedAt"]).replace("Z", "+00:00"))
+                        )
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise ValueError("Parallel work graph refresh conflicts with malformed persisted report metadata.") from exc
+                    if incoming_generated_at <= previous_generated_at:
+                        # A concurrent duplicate can have started before its
+                        # peer committed, so this session's snapshot may not
+                        # yet contain the idempotency event checked above.
+                        # Reopen the read transaction before rejecting it as
+                        # stale; a matching committed event is a replay, not
+                        # an attempt to regress freshness.
+                        if payload.idempotencyKey:
+                            await session.rollback()
+                            replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                                session,
+                                payload.idempotencyKey,
+                                packet_id=packet_id,
+                                event_type="packet.parallel_work_graph_refreshed",
+                            )
+                            replay_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+                            if replay_event and replay_packet and self._authoritative_graph_refresh_event_matches(
+                                replay_event,
+                                payload,
+                                source_ref=source_ref,
+                                payload_summary=payload_summary,
+                                evidence_refs=evidence_refs,
+                                parallel_work_graph=parallel_work_graph,
+                            ):
+                                return await self.to_authoritative_work_packet_view(session, replay_packet)
+                        raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
+
+                expected_event_id = packet.current_event_id
+                refresh = AuthoritativeWorkPacketLifecycleEvent(
+                    id=f"event-{uuid.uuid4()}", packet_id=packet_id, schema_version=1,
+                    event_type="packet.parallel_work_graph_refreshed", previous_stage=packet.current_stage,
+                    target_stage=packet.current_stage, status=packet.status, truth_label=packet.truth_label,
+                    source_ref_json=packet.source_ref_json, actor_json=payload.actor.model_dump(), correlation_id=payload.correlationId,
+                    causation_id=expected_event_id, idempotency_key=payload.idempotencyKey,
+                    packet_title=packet.title, parent_packet_id=packet.parent_packet_id, lineage_kind=packet.lineage_kind,
+                    ready_to_test_json=packet.ready_to_test_json, operator_test_state=packet.operator_test_state,
+                    operator_test_note=packet.operator_test_note, parallel_work_graph_json=parallel_work_graph,
+                    payload_summary=payload_summary, evidence_refs_json=evidence_refs, occurred_at=datetime.now(timezone.utc),
+                )
+                session.add(refresh)
+                try:
+                    await session.flush()
+                    cas_result = await session.execute(
+                        update(AuthoritativeWorkPacket)
+                        .where(
+                            AuthoritativeWorkPacket.id == packet_id,
+                            AuthoritativeWorkPacket.current_event_id == expected_event_id,
+                        )
+                        .values(current_event_id=refresh.id, updated_at=refresh.occurred_at)
+                        .execution_options(synchronize_session=False)
+                    )
+                    if cas_result.rowcount != 1:
+                        await session.rollback()
+                        continue
+                    await session.commit()
+                except IntegrityError as exc:
+                    await session.rollback()
+                    replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                        session,
+                        payload.idempotencyKey,
+                        packet_id=packet_id,
+                        event_type="packet.parallel_work_graph_refreshed",
+                    )
+                    replay_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+                    if replay_event and replay_packet and self._authoritative_graph_refresh_event_matches(
+                        replay_event,
+                        payload,
+                        source_ref=source_ref,
+                        payload_summary=payload_summary,
+                        evidence_refs=evidence_refs,
+                        parallel_work_graph=parallel_work_graph,
+                    ):
+                        return await self.to_authoritative_work_packet_view(session, replay_packet)
+                    raise ValueError("Parallel work graph refresh conflicted with persisted lifecycle metadata.") from exc
+                except OperationalError as exc:
+                    await session.rollback()
+                    if self._is_retryable_sqlite_graph_refresh_lock(session, exc) and attempt < 2:
+                        await asyncio.sleep(0.01 * (attempt + 1))
+                        continue
+                    if self._is_retryable_sqlite_graph_refresh_lock(session, exc):
+                        raise ValueError(
+                            "Parallel work graph refresh is contended by another authoritative update; retry with fresh evidence."
+                        ) from exc
+                    raise
+                await session.refresh(packet)
+                return await self.to_authoritative_work_packet_view(session, packet)
+
+            if (
+                parallel_work_graph is not None
+                and existing_event is not None
+                and self._authoritative_graph_packet_identity_matches(packet, payload)
+                and existing_event.parallel_work_graph_json == parallel_work_graph
+            ):
+                if latest_graph_event is not None and latest_graph_event.parallel_work_graph_json != parallel_work_graph:
+                    raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
+                return await self.to_authoritative_work_packet_view(session, packet)
+            if (
+                not self._authoritative_create_matches(packet, payload)
+                or existing_event is None
+                or existing_event.parallel_work_graph_json != parallel_work_graph
+            ):
+                raise ValueError("Authoritative WorkPacket already exists with different lifecycle metadata.")
+            return await self.to_authoritative_work_packet_view(session, packet)
+
+        raise ValueError("Parallel work graph refresh conflicted with a concurrent authoritative update; retry with fresh evidence.")
+
+    @staticmethod
+    def _is_retryable_sqlite_graph_refresh_lock(session: AsyncSession, exc: OperationalError) -> bool:
+        """Recognize only SQLite's transient write-lock responses for retry."""
+        dialect = session.get_bind().dialect.name
+        message = str(exc).lower()
+        error_code = getattr(exc.orig, "sqlite_errorcode", None)
+        return dialect == "sqlite" and (
+            error_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            or ("database" in message and ("locked" in message or "busy" in message))
         )
 
     async def _authoritative_lifecycle_event_by_idempotency(
