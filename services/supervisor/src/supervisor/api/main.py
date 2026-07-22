@@ -462,15 +462,20 @@ PACKET_DETAIL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 PACKET_DETAIL_MEDIATOR = "packet-detail/v1"
 
 
-def _packet_detail_view(packet) -> dict[str, object]:
+def _canonical_packet_detail_timestamp(value: datetime) -> str:
+    """Emit one UTC wire form for the dashboard mediator's strict contract."""
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _packet_detail_view(packet, work_graph=None) -> dict[str, object]:
     evidence = packet.evidenceChain
     evidence_view = None
     if evidence is not None:
         evidence_view = {
             "schemaVersion": evidence.schemaVersion,
             "evidenceClass": evidence.evidenceClass,
-            "checkedAt": evidence.checkedAt,
-            "expiresAt": evidence.expiresAt,
+            "checkedAt": _canonical_packet_detail_timestamp(evidence.checkedAt),
+            "expiresAt": _canonical_packet_detail_timestamp(evidence.expiresAt),
             "freshnessState": evidence.freshnessState,
             "effectiveDecision": evidence.effectiveDecision,
             "typedBlockers": list(evidence.typedBlockers),
@@ -485,6 +490,7 @@ def _packet_detail_view(packet) -> dict[str, object]:
             "status": packet.status,
             "truthLabel": packet.truthLabel,
             "evidence": evidence_view,
+            "workGraph": work_graph.model_dump(mode="json") if work_graph is not None else None,
         },
     }
 
@@ -560,7 +566,11 @@ async def authenticated_packet_detail(
     """Fixed, read-only UDS target for the dashboard's authenticated mediator."""
 
     response.headers["Cache-Control"] = "no-store"
-    if request.headers.get("x-kendall-dashboard-mediator") != PACKET_DETAIL_MEDIATOR:
+    if (
+        request.headers.get("x-kendall-dashboard-mediator") != PACKET_DETAIL_MEDIATOR
+        or settings.supervisor_transport != "private_uds"
+        or request.client is not None
+    ):
         return _packet_detail_error(404, "Not found.")
     if not settings.lan_auth_enabled or not PACKET_DETAIL_ID.fullmatch(packet_id):
         await record_auth_audit(session, "packet_detail_read", "denied")
@@ -581,8 +591,17 @@ async def authenticated_packet_detail(
     if packet is None:
         await record_auth_audit(session, "packet_detail_read", "unavailable")
         return {"schemaVersion": "kendall-authenticated-packet-detail/v1", "state": "unavailable"}
+    try:
+        projection = await service.get_pipeline_dashboard_projection(session, mutation_access=False)
+    except Exception:
+        await record_auth_audit(session, "packet_detail_read", "unavailable")
+        return _packet_detail_error(503, "Packet detail is unavailable.")
+    detail = next((item for item in projection.selectedPacketDetails if item.packetId == packet.packetId), None)
+    if detail is None or detail.workGraph.packetId != packet.packetId:
+        await record_auth_audit(session, "packet_detail_read", "unavailable")
+        return {"schemaVersion": "kendall-authenticated-packet-detail/v1", "state": "unavailable"}
     await record_auth_audit(session, "packet_detail_read", "allowed", target_ref=packet.packetId)
-    return _packet_detail_view(packet)
+    return _packet_detail_view(packet, detail.workGraph)
 
 
 @app.get("/internal/lan-auth/startup-gate")
@@ -670,6 +689,28 @@ async def create_authoritative_work_packet(
     payload: AuthoritativeWorkPacketCreateRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    if payload.parallelWorkGraphEvidence is not None:
+        raise HTTPException(status_code=403, detail=error_response("Parallel work graph intake requires the private manager supervisor transport.", "manager_graph_private_transport_required").model_dump())
+    try:
+        packet = await service.create_authoritative_work_packet(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_authoritative_work_packet").model_dump()) from exc
+    return AuthoritativeWorkPacketApiEnvelope(data=packet)
+
+
+@app.post("/internal/manager-source-intake/work-packets", response_model=AuthoritativeWorkPacketApiEnvelope)
+async def create_manager_source_intake_work_packet(
+    request: Request,
+    payload: AuthoritativeWorkPacketCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    if (
+        not settings.lan_auth_enabled
+        or settings.supervisor_transport != "private_uds"
+        or request.client is not None
+        or payload.parallelWorkGraphEvidence is None
+    ):
+        raise HTTPException(status_code=403, detail=error_response("Private manager source intake is unavailable.", "manager_graph_private_transport_required").model_dump())
     try:
         packet = await service.create_authoritative_work_packet(session, payload)
     except ValueError as exc:

@@ -2,6 +2,8 @@
 import { pathToFileURL } from "node:url";
 
 import {
+  attachParallelWorkGraphEvidenceToManagerPacket,
+  buildParallelSuitabilityReport,
   buildSourceBackedPacketSeedPlan,
   parseCommonArgs,
 } from "./lib/manager-control-plane/core.mjs";
@@ -24,6 +26,7 @@ export class ManagerSourceIntakeCycleError extends Error {
 export function parseManagerSourceIntakeCycleArgs(argv = []) {
   const seedArgv = [];
   let supervisorUrl = null;
+  let supervisorUdsPath = null;
   let mode = "apply";
   let modeSpecified = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -45,6 +48,15 @@ export function parseManagerSourceIntakeCycleArgs(argv = []) {
       if (supervisorUrl !== null) throw new Error("--supervisor-url specified more than once");
       supervisorUrl = arg.slice("--supervisor-url=".length);
       if (!supervisorUrl) throw new Error("--supervisor-url requires a value");
+    } else if (arg === "--supervisor-uds-path") {
+      if (supervisorUdsPath !== null) throw new Error("--supervisor-uds-path specified more than once");
+      const value = argv[++index];
+      if (!value || value.startsWith("--")) throw new Error("--supervisor-uds-path requires a value");
+      supervisorUdsPath = value;
+    } else if (arg.startsWith("--supervisor-uds-path=")) {
+      if (supervisorUdsPath !== null) throw new Error("--supervisor-uds-path specified more than once");
+      supervisorUdsPath = arg.slice("--supervisor-uds-path=".length);
+      if (!supervisorUdsPath) throw new Error("--supervisor-uds-path requires a value");
     } else {
       seedArgv.push(arg);
     }
@@ -52,18 +64,24 @@ export function parseManagerSourceIntakeCycleArgs(argv = []) {
   if (!supervisorUrl) {
     throw new Error("Usage: manager-source-intake-cycle <source-backed seed options> --supervisor-url <loopback-url>");
   }
-  return { seedOptions: parseCommonArgs(seedArgv), supervisorUrl, mode };
+  return { seedOptions: parseCommonArgs(seedArgv), supervisorUrl, supervisorUdsPath, mode };
 }
 
 export async function runManagerSourceIntakeCycle(argv = process.argv.slice(2), context = {}) {
-  const { seedOptions, supervisorUrl, mode } = parseManagerSourceIntakeCycleArgs(argv);
+  const { seedOptions, supervisorUrl, supervisorUdsPath, mode } = parseManagerSourceIntakeCycleArgs(argv);
+  const intakeContext = supervisorUdsPath ? { ...context, supervisorUdsPath } : context;
   const plan = buildSourceBackedPacketSeedPlan(seedOptions, context);
   if (plan.summary?.packetState !== "eligible" || plan.summary?.seedPacket?.eligibilityDecision !== "eligible") {
     throw new ManagerSourceIntakeCycleError(plan);
   }
+  const parallelSuitability = buildParallelSuitabilityReport(seedOptions, {
+    ...context,
+    candidates: [plan.summary.seedPacket],
+  });
+  const bridgePacket = attachParallelWorkGraphEvidenceToManagerPacket(plan, parallelSuitability, { now: context.now });
   let intakePlan;
   try {
-    intakePlan = planManagerSourcePacketIntake(plan, supervisorUrl);
+    intakePlan = planManagerSourcePacketIntake(bridgePacket, supervisorUrl, intakeContext);
   } catch (error) {
     throw new ManagerSupervisorSourceIntakeError(
       /supervisorUrl/.test(String(error?.message || ""))
@@ -74,8 +92,8 @@ export async function runManagerSourceIntakeCycle(argv = process.argv.slice(2), 
       { cause: error },
     );
   }
-  if (mode === "dry_run") return withIntakeSelection(plan, intakePlan, false);
-  return withIntakeSelection(await intakeManagerSourcePacket(plan, supervisorUrl, context), intakePlan, true);
+  if (mode === "dry_run") return withIntakeSelection(bridgePacket, intakePlan, false);
+  return withIntakeSelection(await intakeManagerSourcePacket(bridgePacket, supervisorUrl, intakeContext), intakePlan, true);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -118,6 +136,9 @@ function withIntakeSelection(packet, intakePlan, applied) {
     endpoint: intakePlan.endpoint,
     packetId: intakePlan.request.packetId,
     sourceRef: intakePlan.request.sourceRef.refId,
+    parallelWorkGraphEvidence: intakePlan.request.parallelWorkGraphEvidence
+      ? { schemaVersion: intakePlan.request.parallelWorkGraphEvidence.schemaVersion, packetId: intakePlan.request.parallelWorkGraphEvidence.packetId }
+      : null,
     metadataOnly: true,
     rawPayloadRetained: false,
     fetchPerformed: applied,

@@ -15,6 +15,7 @@ export type PipelineCockpitPacketLoad = {
 export type PipelineCockpitPacketDetailLoad = {
   fixtureMode: PipelineRuntimeSourceState;
   packet: PipelineRuntimePacket | null;
+  workGraph: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | null;
 };
 
 export type PipelineRuntimeSourceState = {
@@ -110,11 +111,12 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
     return {
       fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Malformed runtime packet identity; no supervisor lookup or demo packet substitution was attempted."),
       packet: null,
+      workGraph: null,
     };
   }
   const projectionResult = await loadPipelineDashboardProjection();
   if (projectionResult.error) {
-    return { fixtureMode: projectionReadErrorSourceState(projectionResult.error), packet: null };
+    return { fixtureMode: projectionReadErrorSourceState(projectionResult.error), packet: null, workGraph: null };
   }
   const projectionRuntimeError = runtimeProjectionError(projectionResult.projection, "detail");
   if (projectionRuntimeError) {
@@ -125,24 +127,26 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
         `${projectionRuntimeError.summary} No demo packet was substituted.`,
       ),
       packet: null,
+      workGraph: null,
     };
   }
   try {
     const projection = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(canonicalPacketId)]);
     if (projection.kind === "invalid") {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", projection.error + " No demo packet was substituted."), packet: null };
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", projection.error + " No demo packet was substituted."), packet: null, workGraph: null };
     }
     const [supervisorPacket] = projection.kind === "runtime" ? projection.packets : [];
     if (!supervisorPacket || supervisorPacket.packetId !== canonicalPacketId) {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), packet: null };
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), packet: null, workGraph: null };
     }
     const detailProjectionContradictionMessage = detailProjectionContradiction(projectionResult.projection, canonicalPacketId, supervisorPacket);
     if (detailProjectionContradictionMessage) {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), packet: null };
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), packet: null, workGraph: null };
     }
     return {
       fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity."),
       packet: supervisorPacket,
+      workGraph: projectionResult.projection?.selectedPacketDetails.find((detail) => detail.packetId === canonicalPacketId)?.workGraph ?? null,
     };
   } catch (error) {
     const errorMessage = error && typeof error === "object" && "message" in error
@@ -154,6 +158,7 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
         ? "Supervisor has no WorkPacketV0 detail for this packet identity; no demo packet was substituted."
         : "Supervisor WorkPacketV0 detail could not be read; no demo packet was substituted."),
       packet: null,
+      workGraph: null,
     };
   }
 }

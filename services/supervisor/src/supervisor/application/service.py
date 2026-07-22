@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import uuid
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
 
@@ -28,6 +29,10 @@ CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS = 2
 CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS = 120
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
+    re.IGNORECASE,
+)
+PIPELINE_WORK_GRAPH_LOCAL_PATH_RE = re.compile(
+    r"(?:/|\bfile:|[A-Za-z]:[\\/]|~(?:[A-Za-z0-9._-]+)?[\\/]|\\)",
     re.IGNORECASE,
 )
 
@@ -190,6 +195,9 @@ from supervisor.api.schemas import (
     PipelineExecutionAttemptLineageV0View,
     PipelineQueueLeaseV0View,
     PipelineSelectedPacketDetailV0View,
+    PipelineWorkGraphCapacityV0View,
+    PipelineWorkGraphEvidenceV0View,
+    PipelineWorkGraphReservationV0View,
     PipelineFixtureModeV0View,
     PipelineGatedControlV0View,
     PipelineRuntimeReadinessV0View,
@@ -703,43 +711,66 @@ class SupervisorService:
         payload: AuthoritativeWorkPacketCreateRequest,
     ) -> AuthoritativeWorkPacketLifecycleView:
         _validate_authoritative_metadata_text(payload.title, path="title")
+        parallel_work_graph = self._authoritative_parallel_work_graph_evidence(payload)
+        source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
+        payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
+        evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
         if payload.idempotencyKey:
             existing_event = await self._authoritative_lifecycle_event_by_idempotency(
                 session,
                 payload.idempotencyKey,
                 event_type="packet.created",
             )
+            if existing_event is None:
+                existing_event = await self._authoritative_lifecycle_event_by_idempotency(
+                    session,
+                    payload.idempotencyKey,
+                    event_type="packet.parallel_work_graph_refreshed",
+                )
             if existing_event:
                 if payload.packetId and existing_event.packet_id != payload.packetId:
                     raise ValueError("Create idempotency key already belongs to a different authoritative WorkPacket.")
                 packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
                 if packet:
-                    source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
-                    payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
-                    evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
-                    if not self._authoritative_create_event_matches(
-                        existing_event,
-                        payload,
-                        source_ref=source_ref,
-                        payload_summary=payload_summary,
-                        evidence_refs=evidence_refs,
-                    ):
+                    matches = (
+                        self._authoritative_graph_refresh_event_matches(
+                            existing_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
+                        )
+                        if existing_event.event_type == "packet.parallel_work_graph_refreshed"
+                        else self._authoritative_create_event_matches(
+                            existing_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
+                        )
+                    )
+                    if not matches:
                         raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
                     return await self.to_authoritative_work_packet_view(session, packet)
 
         packet_id = payload.packetId or f"packet-{uuid.uuid4()}"
         existing_packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if existing_packet:
-            if not self._authoritative_create_matches(existing_packet, payload):
-                raise ValueError("Authoritative WorkPacket already exists with different lifecycle metadata.")
-            return await self.to_authoritative_work_packet_view(session, existing_packet)
+            return await self._refresh_or_replay_authoritative_work_packet(
+                session,
+                packet_id=packet_id,
+                payload=payload,
+                source_ref=source_ref,
+                payload_summary=payload_summary,
+                evidence_refs=evidence_refs,
+                parallel_work_graph=parallel_work_graph,
+            )
 
         now = datetime.now(timezone.utc)
         event_id = f"event-{uuid.uuid4()}"
-        source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
         actor = payload.actor.model_dump()
-        payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
-        evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
         packet = AuthoritativeWorkPacket(
             id=packet_id,
             title=payload.title,
@@ -775,6 +806,7 @@ class SupervisorService:
             ready_to_test_json=packet.ready_to_test_json,
             operator_test_state=packet.operator_test_state,
             operator_test_note=packet.operator_test_note,
+            parallel_work_graph_json=parallel_work_graph,
             payload_summary=payload_summary,
             evidence_refs_json=evidence_refs,
             occurred_at=now,
@@ -800,6 +832,7 @@ class SupervisorService:
                             source_ref=source_ref,
                             payload_summary=payload_summary,
                             evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
                         ):
                             raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
                         return await self.to_authoritative_work_packet_view(session, replay_packet)
@@ -3513,6 +3546,206 @@ class SupervisorService:
             metadataOnly=True,
         )
 
+    async def _refresh_or_replay_authoritative_work_packet(
+        self,
+        session: AsyncSession,
+        *,
+        packet_id: str,
+        payload: AuthoritativeWorkPacketCreateRequest,
+        source_ref: dict,
+        payload_summary: str,
+        evidence_refs: list[str],
+        parallel_work_graph: dict[str, object] | None,
+    ) -> AuthoritativeWorkPacketLifecycleView:
+        """Refresh a packet graph with a row lock and compare-and-swap fallback.
+
+        PostgreSQL serializes contenders with ``FOR UPDATE``. SQLite does not
+        expose equivalent row locks, so the conditional current-event update is
+        also required: a loser rolls back its tentative lifecycle event, reloads
+        the newest graph, and must then satisfy the monotonic ``generatedAt``
+        check before it can write. This keeps a later commit from making an
+        older advisory report current on either supported database.
+        """
+        for attempt in range(3):
+            packet = await session.get(
+                AuthoritativeWorkPacket,
+                packet_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if packet is None:
+                raise ValueError("Authoritative WorkPacket disappeared during graph refresh.")
+            if payload.idempotencyKey:
+                replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                    session,
+                    payload.idempotencyKey,
+                )
+                if replay_event is not None:
+                    if replay_event.packet_id != packet_id:
+                        raise ValueError("Create idempotency key already belongs to a different authoritative WorkPacket.")
+                    matches = (
+                        self._authoritative_graph_refresh_event_matches(
+                            replay_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
+                        )
+                        if replay_event.event_type == "packet.parallel_work_graph_refreshed"
+                        else self._authoritative_create_event_matches(
+                            replay_event,
+                            payload,
+                            source_ref=source_ref,
+                            payload_summary=payload_summary,
+                            evidence_refs=evidence_refs,
+                            parallel_work_graph=parallel_work_graph,
+                        )
+                    )
+                    if not matches:
+                        raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
+                    return await self.to_authoritative_work_packet_view(session, packet)
+            existing_event = await self._authoritative_lifecycle_event_by_packet_created(session, packet_id)
+            latest_graph_event = await self._authoritative_latest_parallel_work_graph_event(session, packet_id)
+            if (
+                parallel_work_graph is not None
+                and existing_event is not None
+                and self._authoritative_graph_packet_identity_matches(packet, payload)
+                and existing_event.parallel_work_graph_json != parallel_work_graph
+            ):
+                previous_graph = latest_graph_event.parallel_work_graph_json if latest_graph_event else None
+                if isinstance(previous_graph, dict) and (
+                    previous_graph.get("executionJobId") != parallel_work_graph.get("executionJobId")
+                    or previous_graph.get("reportIdentity") != parallel_work_graph.get("reportIdentity")
+                ):
+                    raise ValueError("Parallel work graph refresh conflicts with the authoritative report mapping.")
+                if isinstance(previous_graph, dict):
+                    try:
+                        previous_generated_at = self._ensure_aware(
+                            datetime.fromisoformat(str(previous_graph["generatedAt"]).replace("Z", "+00:00"))
+                        )
+                        incoming_generated_at = self._ensure_aware(
+                            datetime.fromisoformat(str(parallel_work_graph["generatedAt"]).replace("Z", "+00:00"))
+                        )
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise ValueError("Parallel work graph refresh conflicts with malformed persisted report metadata.") from exc
+                    if incoming_generated_at <= previous_generated_at:
+                        # A concurrent duplicate can have started before its
+                        # peer committed, so this session's snapshot may not
+                        # yet contain the idempotency event checked above.
+                        # Reopen the read transaction before rejecting it as
+                        # stale; a matching committed event is a replay, not
+                        # an attempt to regress freshness.
+                        if payload.idempotencyKey:
+                            await session.rollback()
+                            replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                                session,
+                                payload.idempotencyKey,
+                                packet_id=packet_id,
+                                event_type="packet.parallel_work_graph_refreshed",
+                            )
+                            replay_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+                            if replay_event and replay_packet and self._authoritative_graph_refresh_event_matches(
+                                replay_event,
+                                payload,
+                                source_ref=source_ref,
+                                payload_summary=payload_summary,
+                                evidence_refs=evidence_refs,
+                                parallel_work_graph=parallel_work_graph,
+                            ):
+                                return await self.to_authoritative_work_packet_view(session, replay_packet)
+                        raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
+
+                expected_event_id = packet.current_event_id
+                refresh = AuthoritativeWorkPacketLifecycleEvent(
+                    id=f"event-{uuid.uuid4()}", packet_id=packet_id, schema_version=1,
+                    event_type="packet.parallel_work_graph_refreshed", previous_stage=packet.current_stage,
+                    target_stage=packet.current_stage, status=packet.status, truth_label=packet.truth_label,
+                    source_ref_json=packet.source_ref_json, actor_json=payload.actor.model_dump(), correlation_id=payload.correlationId,
+                    causation_id=expected_event_id, idempotency_key=payload.idempotencyKey,
+                    packet_title=packet.title, parent_packet_id=packet.parent_packet_id, lineage_kind=packet.lineage_kind,
+                    ready_to_test_json=packet.ready_to_test_json, operator_test_state=packet.operator_test_state,
+                    operator_test_note=packet.operator_test_note, parallel_work_graph_json=parallel_work_graph,
+                    payload_summary=payload_summary, evidence_refs_json=evidence_refs, occurred_at=datetime.now(timezone.utc),
+                )
+                session.add(refresh)
+                try:
+                    await session.flush()
+                    cas_result = await session.execute(
+                        update(AuthoritativeWorkPacket)
+                        .where(
+                            AuthoritativeWorkPacket.id == packet_id,
+                            AuthoritativeWorkPacket.current_event_id == expected_event_id,
+                        )
+                        .values(current_event_id=refresh.id, updated_at=refresh.occurred_at)
+                        .execution_options(synchronize_session=False)
+                    )
+                    if cas_result.rowcount != 1:
+                        await session.rollback()
+                        continue
+                    await session.commit()
+                except IntegrityError as exc:
+                    await session.rollback()
+                    replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                        session,
+                        payload.idempotencyKey,
+                        packet_id=packet_id,
+                        event_type="packet.parallel_work_graph_refreshed",
+                    )
+                    replay_packet = await session.get(AuthoritativeWorkPacket, packet_id)
+                    if replay_event and replay_packet and self._authoritative_graph_refresh_event_matches(
+                        replay_event,
+                        payload,
+                        source_ref=source_ref,
+                        payload_summary=payload_summary,
+                        evidence_refs=evidence_refs,
+                        parallel_work_graph=parallel_work_graph,
+                    ):
+                        return await self.to_authoritative_work_packet_view(session, replay_packet)
+                    raise ValueError("Parallel work graph refresh conflicted with persisted lifecycle metadata.") from exc
+                except OperationalError as exc:
+                    await session.rollback()
+                    if self._is_retryable_sqlite_graph_refresh_lock(session, exc) and attempt < 2:
+                        await asyncio.sleep(0.01 * (attempt + 1))
+                        continue
+                    if self._is_retryable_sqlite_graph_refresh_lock(session, exc):
+                        raise ValueError(
+                            "Parallel work graph refresh is contended by another authoritative update; retry with fresh evidence."
+                        ) from exc
+                    raise
+                await session.refresh(packet)
+                return await self.to_authoritative_work_packet_view(session, packet)
+
+            if (
+                parallel_work_graph is not None
+                and existing_event is not None
+                and self._authoritative_graph_packet_identity_matches(packet, payload)
+                and existing_event.parallel_work_graph_json == parallel_work_graph
+            ):
+                if latest_graph_event is not None and latest_graph_event.parallel_work_graph_json != parallel_work_graph:
+                    raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
+                return await self.to_authoritative_work_packet_view(session, packet)
+            if (
+                not self._authoritative_create_matches(packet, payload)
+                or existing_event is None
+                or existing_event.parallel_work_graph_json != parallel_work_graph
+            ):
+                raise ValueError("Authoritative WorkPacket already exists with different lifecycle metadata.")
+            return await self.to_authoritative_work_packet_view(session, packet)
+
+        raise ValueError("Parallel work graph refresh conflicted with a concurrent authoritative update; retry with fresh evidence.")
+
+    @staticmethod
+    def _is_retryable_sqlite_graph_refresh_lock(session: AsyncSession, exc: OperationalError) -> bool:
+        """Recognize only SQLite's transient write-lock responses for retry."""
+        dialect = session.get_bind().dialect.name
+        message = str(exc).lower()
+        error_code = getattr(exc.orig, "sqlite_errorcode", None)
+        return dialect == "sqlite" and (
+            error_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            or ("database" in message and ("locked" in message or "busy" in message))
+        )
+
     async def _authoritative_lifecycle_event_by_idempotency(
         self,
         session: AsyncSession,
@@ -3762,6 +3995,17 @@ class SupervisorService:
             and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
         )
 
+    def _authoritative_graph_packet_identity_matches(
+        self,
+        packet: AuthoritativeWorkPacket,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> bool:
+        return (
+            packet.title == payload.title
+            and packet.truth_label == payload.truthLabel
+            and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
+        )
+
     def _authoritative_create_event_matches(
         self,
         event: AuthoritativeWorkPacketLifecycleEvent,
@@ -3770,6 +4014,7 @@ class SupervisorService:
         source_ref: dict,
         payload_summary: str,
         evidence_refs: list[str],
+        parallel_work_graph: dict[str, object] | None,
     ) -> bool:
         return (
             event.event_type == "packet.created"
@@ -3783,7 +4028,90 @@ class SupervisorService:
             and event.causation_id == payload.causationId
             and event.payload_summary == payload_summary
             and list(event.evidence_refs_json or []) == evidence_refs
+            and event.parallel_work_graph_json == parallel_work_graph
         )
+
+    def _authoritative_graph_refresh_event_matches(
+        self,
+        event: AuthoritativeWorkPacketLifecycleEvent,
+        payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        source_ref: dict,
+        payload_summary: str,
+        evidence_refs: list[str],
+        parallel_work_graph: dict[str, object] | None,
+    ) -> bool:
+        return (
+            event.event_type == "packet.parallel_work_graph_refreshed"
+            and parallel_work_graph is not None
+            and (not payload.packetId or event.packet_id == payload.packetId)
+            and event.truth_label == payload.truthLabel
+            and event.source_ref_json == source_ref
+            and event.actor_json == payload.actor.model_dump()
+            and event.correlation_id == payload.correlationId
+            and event.idempotency_key == payload.idempotencyKey
+            and event.payload_summary == payload_summary
+            and list(event.evidence_refs_json or []) == evidence_refs
+            and event.parallel_work_graph_json == parallel_work_graph
+        )
+
+    async def _authoritative_lifecycle_event_by_packet_created(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+    ) -> AuthoritativeWorkPacketLifecycleEvent | None:
+        result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent)
+            .where(
+                AuthoritativeWorkPacketLifecycleEvent.packet_id == packet_id,
+                AuthoritativeWorkPacketLifecycleEvent.event_type == "packet.created",
+            )
+            .order_by(AuthoritativeWorkPacketLifecycleEvent.occurred_at.asc(), AuthoritativeWorkPacketLifecycleEvent.id.asc())
+        )
+        return result.scalars().first()
+
+    async def _authoritative_latest_parallel_work_graph_event(
+        self,
+        session: AsyncSession,
+        packet_id: str,
+    ) -> AuthoritativeWorkPacketLifecycleEvent | None:
+        result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent)
+            .where(
+                AuthoritativeWorkPacketLifecycleEvent.packet_id == packet_id,
+                AuthoritativeWorkPacketLifecycleEvent.event_type.in_(["packet.created", "packet.parallel_work_graph_refreshed"]),
+                AuthoritativeWorkPacketLifecycleEvent.parallel_work_graph_json.is_not(None),
+            )
+            .order_by(AuthoritativeWorkPacketLifecycleEvent.occurred_at.desc(), AuthoritativeWorkPacketLifecycleEvent.id.desc())
+        )
+        return result.scalars().first()
+
+    def _authoritative_parallel_work_graph_evidence(
+        self,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> dict[str, object] | None:
+        evidence = payload.parallelWorkGraphEvidence
+        if evidence is None:
+            return None
+        actor = payload.actor.model_dump()
+        if actor != {
+            "actorType": "manager",
+            "actorId": "manager-source-intake",
+            "actorLabel": "Manager source intake adapter",
+        }:
+            raise ValueError("Parallel work graph evidence is accepted only from the manager source-intake actor.")
+        if not payload.packetId:
+            raise ValueError("Parallel work graph evidence requires an explicit authoritative packetId.")
+        safe = self._safe_pipeline_work_graph_evidence_metadata(evidence)
+        if safe is None or safe.get("packetId") != payload.packetId:
+            raise ValueError("Parallel work graph evidence must be strict, metadata-only, and bound to its authoritative packetId.")
+        try:
+            generated_at = self._ensure_aware(datetime.fromisoformat(str(safe["generatedAt"]).replace("Z", "+00:00")))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Parallel work graph evidence generatedAt is invalid.") from exc
+        if generated_at > datetime.now(timezone.utc):
+            raise ValueError("Parallel work graph evidence generatedAt is in the future.")
+        return safe
 
     def _authoritative_transition_event_matches(
         self,
@@ -3876,6 +4204,10 @@ class SupervisorService:
         if not isinstance(metadata, dict):
             return {}
         safe_metadata = dict(metadata)
+        # Parallel graph evidence belongs solely to the authoritative manager
+        # source-intake lifecycle event. Candidate metadata is not a graph
+        # import channel and can never replace Packet Detail evidence.
+        safe_metadata.pop("pipelineParallelWorkGraphEvidence", None)
         if safe_metadata.get("projectionVisibility") == "source_state_only":
             if isinstance(safe_metadata.get("pipelineSourceState"), dict):
                 safe_metadata["pipelineSourceState"] = self._safe_pipeline_source_state_metadata(
@@ -3909,6 +4241,135 @@ class SupervisorService:
                 safe_metadata["pipelineWorkerSummary"]
             )
         return safe_metadata
+
+    def _safe_pipeline_work_graph_evidence_metadata(self, raw_evidence: object) -> dict[str, object] | None:
+        """Persist only the narrow redacted bridge, never a planner report or paths."""
+        if not isinstance(raw_evidence, dict):
+            return None
+        required_keys = {
+            "schemaVersion",
+            "sourceSchemaVersion",
+            "availability",
+            "packetId",
+            "executionJobId",
+            "reportIdentity",
+            "generatedAt",
+            "freshnessState",
+            "waveMembership",
+            "dependencyState",
+            "reservation",
+            "capacity",
+            "reason",
+            "nextSafeAction",
+            "evidenceRefs",
+            "metadataOnly",
+            "rawPayloadRetained",
+            "retention",
+        }
+        if set(raw_evidence) != required_keys:
+            return None
+        if (
+            raw_evidence.get("schemaVersion") != "parallel-work-graph-evidence/v0"
+            or raw_evidence.get("sourceSchemaVersion") != "parallel-execution-graph-reservation/v1"
+            or (raw_evidence.get("availability"), raw_evidence.get("freshnessState")) not in {("available", "live"), ("stale", "stale")}
+            or raw_evidence.get("waveMembership") not in {"selected", "deferred", "blocked"}
+            or raw_evidence.get("dependencyState") not in {"clear", "declared", "blocked"}
+            or raw_evidence.get("metadataOnly") is not True
+            or raw_evidence.get("rawPayloadRetained") is not False
+            or raw_evidence.get("retention") != "metadata_only_evidence_references"
+        ):
+            return None
+        generated_at = raw_evidence.get("generatedAt")
+        if not isinstance(generated_at, str) or len(generated_at) > 64:
+            return None
+        try:
+            canonical_generated_at = self._ensure_aware(datetime.fromisoformat(generated_at.replace("Z", "+00:00"))).isoformat().replace("+00:00", "Z")
+        except ValueError:
+            return None
+        identifiers = [raw_evidence.get("packetId"), raw_evidence.get("executionJobId")]
+        if not all(
+            isinstance(value, str)
+            and value.strip() == value
+            and "/" not in value
+            and self._is_safe_pipeline_work_graph_ref(value)
+            for value in identifiers
+        ):
+            return None
+        if not isinstance(raw_evidence.get("reportIdentity"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", raw_evidence["reportIdentity"]):
+            return None
+        texts = [raw_evidence.get("reason"), raw_evidence.get("nextSafeAction")]
+        if not all(isinstance(value, str) and self._is_safe_pipeline_work_graph_text(value) for value in texts):
+            return None
+        refs = raw_evidence.get("evidenceRefs")
+        if not isinstance(refs, list) or len(refs) > 20 or not all(
+            isinstance(value, str) and "/" not in value and self._is_safe_pipeline_work_graph_ref(value) for value in refs
+        ):
+            return None
+        reservation = raw_evidence.get("reservation")
+        capacity = raw_evidence.get("capacity")
+        if (
+            not isinstance(reservation, dict)
+            or set(reservation) != {"status", "owner", "reasonCode"}
+            or not isinstance(capacity, dict)
+            or set(capacity) != {"posture", "reasonCode"}
+            or reservation.get("status") not in {"advisory_reserved", "deferred", "blocked", "not_recommended"}
+            or capacity.get("posture") not in {"normal", "degraded", "blocked"}
+            or reservation.get("owner") is not None and (
+                not isinstance(reservation.get("owner"), str)
+                or not self._is_safe_pipeline_work_graph_text(reservation["owner"], max_length=160)
+            )
+            or not all(
+                isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_:-]{1,120}", value)
+                for value in [reservation.get("reasonCode"), capacity.get("reasonCode")]
+            )
+        ):
+            return None
+        return {
+            "schemaVersion": raw_evidence.get("schemaVersion"),
+            "sourceSchemaVersion": raw_evidence.get("sourceSchemaVersion"),
+            "availability": raw_evidence.get("availability"),
+            "packetId": raw_evidence.get("packetId"),
+            "executionJobId": raw_evidence.get("executionJobId"),
+            "reportIdentity": raw_evidence.get("reportIdentity"),
+            "generatedAt": canonical_generated_at,
+            "freshnessState": raw_evidence.get("freshnessState"),
+            "waveMembership": raw_evidence.get("waveMembership"),
+            "dependencyState": raw_evidence.get("dependencyState"),
+            "reservation": {
+                "status": reservation.get("status"),
+                "owner": reservation.get("owner"),
+                "reasonCode": reservation.get("reasonCode"),
+            },
+            "capacity": {
+                "posture": capacity.get("posture"),
+                "reasonCode": capacity.get("reasonCode"),
+            },
+            "reason": raw_evidence.get("reason"),
+            "nextSafeAction": raw_evidence.get("nextSafeAction"),
+            "evidenceRefs": list(dict.fromkeys(refs)),
+            "metadataOnly": raw_evidence.get("metadataOnly"),
+            "rawPayloadRetained": raw_evidence.get("rawPayloadRetained"),
+            "retention": raw_evidence.get("retention"),
+        }
+
+    def _is_safe_pipeline_work_graph_text(self, value: str, *, max_length: int = 500) -> bool:
+        return (
+            value.strip() == value
+            and bool(value)
+            and len(value) <= max_length
+            and not UNSAFE_LIFECYCLE_TEXT_RE.search(value)
+            and not EXECUTABLE_CONTROL_TEXT_RE.search(value)
+            and not PIPELINE_WORK_GRAPH_LOCAL_PATH_RE.search(value)
+        )
+
+    def _is_safe_pipeline_work_graph_ref(self, value: str) -> bool:
+        return (
+            value.strip() == value
+            and bool(value)
+            and len(value) <= 255
+            and not UNSAFE_LIFECYCLE_TEXT_RE.search(value)
+            and not PIPELINE_WORK_GRAPH_LOCAL_PATH_RE.search(value)
+        )
 
     def _safe_pipeline_source_state_metadata(self, raw_source_state: dict[str, object]) -> dict[str, object]:
         allowed_states = {"healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown"}
@@ -5266,6 +5727,12 @@ class SupervisorService:
             legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
             legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
             candidates = await self.list_candidate_work(session)
+            work_graph_by_packet = await self._pipeline_work_graph_by_packet(
+                session,
+                authoritative_packets,
+                generated_at=generated_at,
+                stale_after_seconds=stale_after_seconds,
+            )
             source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
             worker_summary_records = self._pipeline_projection_worker_summary_records(candidates)
             gated_controls = self._pipeline_projection_gated_controls(candidates)
@@ -5378,8 +5845,8 @@ class SupervisorService:
                 for event in packet.history
                 if event.eventType in {"packet.created", "packet.stage_transitioned", "packet.operational_action_applied"}
             ]
-            current_lifecycle_event = next(
-                (event for event in lifecycle_events if event.eventId == packet.currentEventId),
+            current_authoritative_event = next(
+                (event for event in packet.history if event.eventId == packet.currentEventId),
                 None,
             )
             transition_events = [
@@ -5389,7 +5856,7 @@ class SupervisorService:
             ]
             latest_movement_event = (
                 next((event for event in reversed(transition_events) if event.targetStage == packet.currentStage), None)
-                if current_lifecycle_event
+                if current_authoritative_event
                 else None
             )
             recent_transition_event_refs = [f"event:{event.eventId}" for event in transition_events[-5:]]
@@ -5445,7 +5912,7 @@ class SupervisorService:
                 packet_source_label == "live"
                 and packet.status in {"active", "waiting", "blocked"}
                 and packet.currentStage != "learn"
-                and current_lifecycle_event is not None
+                and current_authoritative_event is not None
                 and latest_movement_event is not None
                 and latest_transition_event_ref is not None
             )
@@ -5503,6 +5970,7 @@ class SupervisorService:
                     actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]],
                     actionCapabilitiesV1=v1_packet_capabilities_by_packet.get(packet.packetId, []),
                     actionResultsV1=[self._operational_action_result_view_v1(item, replayed=False) for item in action_results_v1_by_packet.get(packet.packetId, [])[-12:]],
+                    workGraph=work_graph_by_packet.get(packet.packetId, self._unavailable_pipeline_work_graph(packet.packetId)),
                     metadataOnly=True,
                 )
             )
@@ -5648,6 +6116,7 @@ class SupervisorService:
                     queueLease=packet_lineage.get("queueLease"),
                     executionAttempts=packet_lineage.get("executionAttempts", []),
                     correlationIds=packet_lineage.get("correlationIds", []),
+                    workGraph=work_graph_by_packet.get(packet.packetId, self._unavailable_pipeline_work_graph(packet.packetId)),
                     metadataOnly=True,
                 )
             )
@@ -6405,6 +6874,173 @@ class SupervisorService:
             if source_state:
                 source_states.append(source_state)
         return source_states
+
+    def _unavailable_pipeline_work_graph(self, packet_id: str) -> PipelineWorkGraphEvidenceV0View:
+        """Return a truthful detail-only fallback; it never grants an action."""
+        return PipelineWorkGraphEvidenceV0View(
+            availability="unavailable",
+            sourceSchemaVersion="parallel-execution-graph-reservation/v1",
+            packetId=packet_id,
+            executionJobId=None,
+            generatedAt=None,
+            freshnessState="unavailable",
+            waveMembership="unavailable",
+            dependencyState="unavailable",
+            reservation=PipelineWorkGraphReservationV0View(
+                status="unavailable",
+                owner=None,
+                reasonCode="parallel_report_unavailable",
+            ),
+            capacity=PipelineWorkGraphCapacityV0View(
+                posture="unavailable",
+                reasonCode="parallel_capacity_unavailable",
+            ),
+            reason="No current supervisor-validated parallel wave evidence is available for this packet.",
+            nextSafeAction="Refresh the advisory planning evidence; this detail does not dispatch work, call a provider, or establish delivery eligibility.",
+            evidenceRefs=[],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+            retention="metadata_only_evidence_references",
+        )
+
+    async def _pipeline_work_graph_by_packet(
+        self,
+        session: AsyncSession,
+        authoritative_packets: list[AuthoritativeWorkPacketLifecycleView],
+        *,
+        generated_at: datetime,
+        stale_after_seconds: int,
+    ) -> dict[str, PipelineWorkGraphEvidenceV0View]:
+        """Project only manager source-intake lifecycle graph evidence."""
+        projections: dict[str, PipelineWorkGraphEvidenceV0View] = {}
+        processed_packet_ids: set[str] = set()
+        packet_ids = [packet.packetId for packet in authoritative_packets]
+        if not packet_ids:
+            return projections
+        event_result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent).where(
+                AuthoritativeWorkPacketLifecycleEvent.packet_id.in_(packet_ids),
+                AuthoritativeWorkPacketLifecycleEvent.event_type.in_(["packet.created", "packet.parallel_work_graph_refreshed"]),
+                AuthoritativeWorkPacketLifecycleEvent.parallel_work_graph_json.is_not(None),
+            ).order_by(AuthoritativeWorkPacketLifecycleEvent.packet_id.asc(), AuthoritativeWorkPacketLifecycleEvent.occurred_at.desc(), AuthoritativeWorkPacketLifecycleEvent.id.desc())
+        )
+        for event in event_result.scalars():
+            if event.packet_id in processed_packet_ids:
+                continue
+            processed_packet_ids.add(event.packet_id)
+            if not self._is_manager_source_intake_actor(event.actor_json):
+                projections[event.packet_id] = self._unavailable_pipeline_work_graph(event.packet_id)
+                continue
+            raw_evidence = event.parallel_work_graph_json
+            if not isinstance(raw_evidence, dict):
+                continue
+            projection = self._pipeline_work_graph_from_metadata(
+                raw_evidence,
+                expected_packet_ids={event.packet_id},
+                generated_at=generated_at,
+                stale_after_seconds=stale_after_seconds,
+            )
+            if projection is None:
+                projections[event.packet_id] = self._unavailable_pipeline_work_graph(event.packet_id)
+                continue
+            projections[projection.packetId] = projection
+        return projections
+
+    def _is_manager_source_intake_actor(self, actor: object) -> bool:
+        return actor == {
+            "actorType": "manager",
+            "actorId": "manager-source-intake",
+            "actorLabel": "Manager source intake adapter",
+        }
+
+    def _pipeline_work_graph_from_metadata(
+        self,
+        raw_evidence: dict[str, object],
+        *,
+        expected_packet_ids: set[str],
+        generated_at: datetime,
+        stale_after_seconds: int,
+    ) -> PipelineWorkGraphEvidenceV0View | None:
+        required_keys = {
+            "schemaVersion",
+            "sourceSchemaVersion",
+            "availability",
+            "packetId",
+            "executionJobId",
+            "reportIdentity",
+            "generatedAt",
+            "freshnessState",
+            "waveMembership",
+            "dependencyState",
+            "reservation",
+            "capacity",
+            "reason",
+            "nextSafeAction",
+            "evidenceRefs",
+            "metadataOnly",
+            "rawPayloadRetained",
+            "retention",
+        }
+        if set(raw_evidence) != required_keys:
+            return None
+        if (
+            raw_evidence.get("schemaVersion") != "parallel-work-graph-evidence/v0"
+            or raw_evidence.get("sourceSchemaVersion") != "parallel-execution-graph-reservation/v1"
+            or (raw_evidence.get("availability"), raw_evidence.get("freshnessState")) not in {("available", "live"), ("stale", "stale")}
+            or raw_evidence.get("metadataOnly") is not True
+            or raw_evidence.get("rawPayloadRetained") is not False
+            or raw_evidence.get("retention") != "metadata_only_evidence_references"
+        ):
+            return None
+        if not isinstance(raw_evidence.get("reportIdentity"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", raw_evidence["reportIdentity"]):
+            return None
+        packet_id = raw_evidence.get("packetId")
+        if not isinstance(packet_id, str) or packet_id not in expected_packet_ids:
+            return None
+        generated_at_raw = raw_evidence.get("generatedAt")
+        if not isinstance(generated_at_raw, str):
+            return None
+        try:
+            evidence_generated_at = datetime.fromisoformat(generated_at_raw.replace("Z", "+00:00"))
+            evidence_generated_at = self._ensure_aware(evidence_generated_at)
+        except ValueError:
+            return None
+        if evidence_generated_at > generated_at:
+            return None
+        stale = (generated_at - evidence_generated_at).total_seconds() > stale_after_seconds
+        reservation = raw_evidence.get("reservation")
+        capacity = raw_evidence.get("capacity")
+        if not isinstance(reservation, dict) or not isinstance(capacity, dict):
+            return None
+        try:
+            return PipelineWorkGraphEvidenceV0View(
+                availability="stale" if stale else "available",
+                sourceSchemaVersion=raw_evidence.get("sourceSchemaVersion"),
+                packetId=packet_id,
+                executionJobId=raw_evidence.get("executionJobId"),
+                reportIdentity=raw_evidence.get("reportIdentity"),
+                generatedAt=evidence_generated_at,
+                freshnessState="stale" if stale else "live",
+                waveMembership=raw_evidence.get("waveMembership"),
+                dependencyState=raw_evidence.get("dependencyState"),
+                reservation=PipelineWorkGraphReservationV0View(
+                    status=reservation.get("status"),
+                    owner=reservation.get("owner"),
+                    reasonCode=reservation.get("reasonCode"),
+                ),
+                capacity=PipelineWorkGraphCapacityV0View(
+                    posture=capacity.get("posture"),
+                    reasonCode=capacity.get("reasonCode"),
+                ),
+                reason=raw_evidence.get("reason"),
+                nextSafeAction=raw_evidence.get("nextSafeAction"),
+                evidenceRefs=raw_evidence.get("evidenceRefs"),
+                metadataOnly=True,
+                rawPayloadRetained=False,
+                retention="metadata_only_evidence_references",
+            )
+        except ValidationError:
+            return None
 
     def _candidate_is_pipeline_source_state_only(self, candidate: CandidateWork) -> bool:
         metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}

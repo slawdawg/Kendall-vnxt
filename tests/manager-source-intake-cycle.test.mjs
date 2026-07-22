@@ -66,10 +66,12 @@ function responseFor(request, overrides = {}) {
 test("manager source intake cycle accepts seed inputs plus one required loopback supervisor URL", () => {
   const parsed = parseManagerSourceIntakeCycleArgs(ELIGIBLE_ARGS);
   assert.equal(parsed.supervisorUrl, "http://127.0.0.1:8000");
+  assert.equal(parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--supervisor-uds-path", "/tmp/kendall-supervisor.sock"]).supervisorUdsPath, "/tmp/kendall-supervisor.sock");
   assert.equal(parsed.seedOptions.candidateId, "gate-4-cycle-candidate");
   assert.deepEqual(parsed.seedOptions.sourceRefs, ["doc:docs/workflows/current-session-runbook.md"]);
   assert.throws(() => parseManagerSourceIntakeCycleArgs(ELIGIBLE_ARGS.slice(0, -2)), /supervisor-url/);
   assert.throws(() => parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--supervisor-url=http://localhost:8000"]), /specified more than once/);
+  assert.throws(() => parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--supervisor-uds-path", "/tmp/a.sock", "--supervisor-uds-path", "/tmp/b.sock"]), /specified more than once/);
   assert.equal(parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--dry-run"]).mode, "dry_run");
   assert.equal(parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--apply"]).mode, "apply");
   assert.throws(() => parseManagerSourceIntakeCycleArgs([...ELIGIBLE_ARGS, "--dry-run", "--apply"]), /mode may only/);
@@ -90,6 +92,13 @@ test("manager source intake cycle dry-run validates the exact target without fet
   assert.equal(result.summary.continuousSelection.status, "ready");
   assert.ok(result.summary.continuousSelection.targetComponents.includes("supervisor:http://127.0.0.1:8000/pipeline-control-plane/work-packets"));
   assert.equal(result.summary.seedPacket.supervisorIntake, undefined);
+});
+
+test("manager source intake cycle bridges a normal BMAD story through the private UDS graph route", async () => {
+  const result = await runManagerSourceIntakeCycle([...ELIGIBLE_ARGS, "--dry-run", "--supervisor-uds-path", "/tmp/kendall-supervisor.sock"]);
+  assert.equal(result.summary.sourceIntakePlan.endpoint, "private-uds:/tmp/kendall-supervisor.sock/internal/manager-source-intake/work-packets");
+  assert.equal(result.summary.sourceIntakePlan.parallelWorkGraphEvidence?.schemaVersion, "parallel-work-graph-evidence/v0");
+  assert.doesNotMatch(JSON.stringify(result.summary.sourceIntakePlan.parallelWorkGraphEvidence), /_bmad-output|implementation-artifacts|\.md/i);
 });
 
 test("manager source intake cycle plans first and refuses blocked work without fetch", async () => {

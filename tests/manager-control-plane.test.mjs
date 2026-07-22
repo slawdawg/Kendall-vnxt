@@ -37,6 +37,7 @@ import {
   buildLiveWorkerProofReadiness,
   buildMatureToolEvaluationPlan,
   buildParallelSuitabilityReport,
+  buildParallelWorkGraphEvidence,
   buildBmadCodeReviewRequestPlan,
   buildBmadRequestPacketPlan,
   bmadRequestWorkflowCatalog,
@@ -9485,6 +9486,82 @@ test("builds a deterministic metadata-only execution graph with bounded independ
     assert.equal(Object.hasOwn(job, "prompt"), false);
     assert.equal(Object.hasOwn(job, "completion"), false);
   }
+});
+
+test("redacts a matching parallel report into Packet Detail work graph evidence without planner inputs", () => {
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: "packet-detail",
+      title: "Project a bounded work graph",
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:34-4"],
+      evidenceRefs: ["evidence:34-4"],
+      verificationTargets: ["pnpm run test:manager-control-plane"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["apps/dashboard/src/components/pipeline/packet-detail-page.tsx"] },
+    }],
+    generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
+
+  const evidence = buildParallelWorkGraphEvidence(report, {
+    "packet-detail": "candidate_work:self",
+  }, {
+    now: "2026-07-22T12:01:00.000Z",
+  });
+
+  assert.match(evidence[0].reportIdentity, /^sha256:[0-9a-f]{64}$/);
+  assert.doesNotMatch(evidence[0].reportIdentity, /worktree|changeSurface|sourceRefs|provider|dispatch apply/i);
+
+  assert.equal(evidence.length, 1);
+  assert.deepEqual(evidence[0], {
+    schemaVersion: "parallel-work-graph-evidence/v0",
+    sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+    availability: "available",
+    packetId: "candidate_work:self",
+    executionJobId: "execution-job:packet-detail",
+    reportIdentity: evidence[0].reportIdentity,
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    freshnessState: "live",
+    waveMembership: "selected",
+    dependencyState: "clear",
+    reservation: { status: "advisory_reserved", owner: null, reasonCode: "independent_source_declared_surface" },
+    capacity: { posture: "normal", reasonCode: "capacity_normal" },
+    reason: "Candidate has independent source-declared scope and is selected only as a bounded advisory recommendation.",
+    nextSafeAction: "Review the existing dispatch preview before any separately authorized mutation.",
+    evidenceRefs: evidence[0].evidenceRefs,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  });
+  assert.deepEqual(evidence[0].evidenceRefs, [evidence[0].evidenceRefs[0]]);
+  assert.match(evidence[0].evidenceRefs[0], /^opaque-ref:sha256:[0-9a-f]{64}$/);
+  assert.doesNotMatch(JSON.stringify(evidence[0].evidenceRefs), /evidence:34-4/i);
+  assert.deepEqual(
+    buildParallelWorkGraphEvidence(report, { "packet-detail": "candidate_work:self" }, { now: "2026-07-22T12:01:00.000Z" })[0].evidenceRefs,
+    evidence[0].evidenceRefs,
+    "the opaque reference is deterministic for the same bounded source metadata",
+  );
+  const alternateReport = structuredClone(report);
+  alternateReport.summary.executionJobs[0].evidenceRefs = ["evidence:34-4-alternate"];
+  assert.notDeepEqual(
+    buildParallelWorkGraphEvidence(alternateReport, { "packet-detail": "candidate_work:self" }, { now: "2026-07-22T12:01:00.000Z" })[0].evidenceRefs,
+    evidence[0].evidenceRefs,
+    "the opaque reference remains bound to its source metadata",
+  );
+  assert.doesNotMatch(JSON.stringify(evidence), /worktree|changeSurface|sourceRefs|provider|dispatch apply/i);
+
+  const stale = buildParallelWorkGraphEvidence(report, { "packet-detail": "candidate_work:self" }, {
+    now: "2026-07-22T12:10:01.000Z",
+  });
+  assert.equal(stale[0].availability, "stale");
+  assert.equal(stale[0].freshnessState, "stale");
+  assert.deepEqual(buildParallelWorkGraphEvidence(report, { "packet-detail": "candidate_work:self" }, {
+    now: "2026-07-22T11:59:00.000Z",
+  }), []);
+  assert.deepEqual(buildParallelWorkGraphEvidence(report, { "packet-detail": "candidate_work: unsafe" }), []);
+  assert.deepEqual(buildParallelWorkGraphEvidence({ summary: { ...report.summary, rawPayloadRetained: true } }, {}), []);
 });
 
 test("selects an immutable read-only review candidate beside a non-overlapping writer without mutable inputs", () => {

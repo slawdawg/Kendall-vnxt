@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
+  attachParallelWorkGraphEvidenceToManagerPacket,
   buildOperationalReadinessContract,
+  buildParallelWorkGraphEvidence,
+  buildParallelSuitabilityReport,
   buildSourceBackedPacketSeedPlan,
   projectCanonicalSupervisorPacket,
 } from "../scripts/lib/manager-control-plane/core.mjs";
@@ -11,6 +18,7 @@ import {
   buildManagerSourceIntakeRequest,
   deriveAuthoritativePacketId,
   intakeManagerSourcePacket,
+  planManagerSourcePacketIntake,
   resolveLoopbackSourceIntakeEndpoint,
 } from "../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs";
 import { resolveLoopbackSupervisorEndpoint } from "../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs";
@@ -200,6 +208,222 @@ test("manager source intake allowlists eligible source metadata and validates ex
   assert.equal(result.summary.seedPacket.rawPayloadRetained, false);
 });
 
+test("manager source intake binds its normal advisory report to the deterministic authoritative packet", () => {
+  const packet = sourcePacket();
+  const candidateId = packet.summary.seedPacket.candidateWorkPacketId;
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: candidateId,
+      title: packet.summary.seedPacket.title,
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:_bmad-output/implementation-artifacts/34-5-story.md"],
+      evidenceRefs: ["story:_bmad-output/implementation-artifacts/34-5-story.md"],
+      verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+    }],
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
+  const bridged = attachParallelWorkGraphEvidenceToManagerPacket(packet, report, { now: "2026-07-22T12:01:00.000Z" });
+  const request = buildManagerSourceIntakeRequest(bridged, { allowPrivateGraph: true });
+  assert.equal(request.parallelWorkGraphEvidence.packetId, request.packetId);
+  assert.equal(request.parallelWorkGraphEvidence.executionJobId, `execution-job:${candidateId}`);
+  assert.equal(request.parallelWorkGraphEvidence.sourceSchemaVersion, "parallel-execution-graph-reservation/v1");
+  assert.equal(request.parallelWorkGraphEvidence.rawPayloadRetained, false);
+  assert.doesNotMatch(JSON.stringify(request.parallelWorkGraphEvidence), /worktree|changeSurface|sourceRefs|provider|raw prompt/i);
+  assert.doesNotMatch(JSON.stringify(request.parallelWorkGraphEvidence), /_bmad-output|34-5-story\.md/i);
+  assert.equal(request.parallelWorkGraphEvidence.evidenceRefs.filter((ref) => /^opaque-ref:sha256:[0-9a-f]{64}$/.test(ref)).length, 1);
+
+  const windowsPathReport = structuredClone(report);
+  windowsPathReport.summary.executionJobs[0].evidenceRefs = ["C:\\operator\\private\\34-5-story.md"];
+  assert.deepEqual(
+    buildParallelWorkGraphEvidence(windowsPathReport, { [candidateId]: request.packetId }, { now: "2026-07-22T12:01:00.000Z" }),
+    [],
+    "unscoped Windows paths fail closed instead of crossing as raw or derived references",
+  );
+
+  for (const credentialLikeRef of [
+    "token=operator-private-value",
+    "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+    "github_pat_abcdefghijklmnopqrstuvwxyz0123456789",
+    "glpat-abcdefghijklmnopqrstuvwxyz0123456789",
+    "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+    "xoxb-abcdefghijklmnopqrstuvwxyz0123456789",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+    "AKIAABCDEFGHIJKLMNOP",
+    "authorization:Basicb3BlcmF0b3ItcHJpdmF0ZQ==",
+    "basic:b3BlcmF0b3ItcHJpdmF0ZQ==",
+    "Basic b3BlcmF0b3ItcHJpdmF0ZQ==",
+    "Bearer operator-private-value",
+  ]) {
+    const credentialLikeReport = structuredClone(report);
+    credentialLikeReport.summary.executionJobs[0].evidenceRefs = [credentialLikeRef];
+    assert.deepEqual(
+      buildParallelWorkGraphEvidence(credentialLikeReport, { [candidateId]: request.packetId }, { now: "2026-07-22T12:01:00.000Z" }),
+      [],
+      credentialLikeRef,
+    );
+  }
+});
+
+test("manager source intake refuses graph evidence with credential-like references", () => {
+  const packet = sourcePacket();
+  const candidateId = packet.summary.seedPacket.candidateWorkPacketId;
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: candidateId,
+      title: packet.summary.seedPacket.title,
+      eligibilityDecision: "eligible",
+      sourceRefs: ["api_key:operator-private-value"],
+      evidenceRefs: ["api_key:operator-private-value"],
+      verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+    }],
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
+  const bridged = attachParallelWorkGraphEvidenceToManagerPacket(packet, report, { now: "2026-07-22T12:01:00.000Z" });
+  assert.equal(bridged.summary.seedPacket.parallelWorkGraphEvidence, undefined);
+  assert.doesNotMatch(JSON.stringify(bridged), /api_key|operator-private-value/i);
+});
+
+test("manager source intake routes graph evidence only through an explicit private UDS path", () => {
+  const packet = attachParallelWorkGraphEvidenceToManagerPacket(sourcePacket(), buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: "candidate-gate-4-manager-intake",
+      title: "Gate 4 manager source intake",
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:34-5"],
+      evidenceRefs: ["evidence:34-5"],
+      verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+    }],
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  }), { now: "2026-07-22T12:01:00.000Z" });
+  const privatePlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
+  const loopbackPlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", {});
+  const ordinaryUdsPlan = planManagerSourcePacketIntake(sourcePacket(), "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
+  assert.equal(privatePlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/internal/manager-source-intake/work-packets");
+  assert.ok(privatePlan.request.parallelWorkGraphEvidence);
+  assert.equal(ordinaryUdsPlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/pipeline-control-plane/work-packets");
+  assert.equal(ordinaryUdsPlan.request.parallelWorkGraphEvidence, undefined);
+  assert.equal(loopbackPlan.request.parallelWorkGraphEvidence, undefined);
+});
+
+test("manager source intake sends graph evidence over private UDS without using fetch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kendall-source-intake-"));
+  const socketPath = join(directory, "supervisor.sock");
+  let receivedRequest;
+  const server = createServer((request, response) => {
+    assert.equal(request.url, "/internal/manager-source-intake/work-packets");
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", async () => {
+      receivedRequest = JSON.parse(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+    });
+  });
+  await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
+  try {
+    const packet = attachParallelWorkGraphEvidenceToManagerPacket(sourcePacket(), buildParallelSuitabilityReport({}, {
+      candidates: [{
+        candidateWorkPacketId: "candidate-gate-4-manager-intake", title: "Gate 4 manager source intake", eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-5"], evidenceRefs: ["evidence:34-5"], verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+        baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+      }],
+      generatedAt: "2026-07-22T12:00:00.000Z", usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } }, resourceContext: { status: "normal" },
+    }), { now: "2026-07-22T12:01:00.000Z" });
+    const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+      supervisorUdsPath: socketPath,
+      fetchImpl: () => { throw new Error("private UDS intake must not use fetch"); },
+    });
+    assert.ok(receivedRequest.parallelWorkGraphEvidence);
+    assert.equal(result.summary.seedPacket.supervisorIntake.status, "persisted");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("manager source intake sends ordinary metadata over UDS through the public route", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kendall-source-intake-"));
+  const socketPath = join(directory, "supervisor.sock");
+  let receivedRequest;
+  const server = createServer((request, response) => {
+    assert.equal(request.url, "/pipeline-control-plane/work-packets");
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", async () => {
+      receivedRequest = JSON.parse(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+    });
+  });
+  await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
+  try {
+    const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+      supervisorUdsPath: socketPath,
+      fetchImpl: () => { throw new Error("UDS intake must not use fetch"); },
+    });
+    assert.equal(receivedRequest.parallelWorkGraphEvidence, undefined);
+    assert.equal(result.summary.seedPacket.supervisorIntake.status, "persisted");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("manager source intake accepts a graph-refresh replay after a later terminal state", async () => {
+  const request = buildManagerSourceIntakeRequest(sourcePacket());
+  const refreshEvent = {
+    eventId: "event-source-intake-terminal-refresh",
+    packetId: request.packetId,
+    schemaVersion: 1,
+    eventType: "packet.parallel_work_graph_refreshed",
+    previousStage: request.initialStage,
+    targetStage: request.initialStage,
+    status: "active",
+    truthLabel: request.truthLabel,
+    sourceRef: request.sourceRef,
+    actor: request.actor,
+    occurredAt: "2026-07-12T12:00:00.000Z",
+    correlationId: request.correlationId,
+    causationId: "event-prior-stage",
+    idempotencyKey: request.idempotencyKey,
+    payloadSummary: request.payloadSummary,
+    evidenceRefs: request.evidenceRefs,
+    metadataOnly: true,
+  };
+  const terminalEvent = {
+    ...refreshEvent,
+    eventId: "event-source-intake-terminal-after-refresh",
+    eventType: "packet.transitioned",
+    previousStage: request.initialStage,
+    targetStage: "deliver",
+    status: "complete",
+    idempotencyKey: "terminal-transition-after-refresh",
+  };
+  const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+    fetchImpl: async () => responseFor(request, {
+      currentStage: "deliver",
+      status: "complete",
+      currentEventId: terminalEvent.eventId,
+      history: [refreshEvent, terminalEvent],
+    }),
+  });
+  assert.equal(result.summary.seedPacket.supervisorIntake.status, "persisted");
+});
+
 test("manager source intake consumes canonical supervisor truth without inferring authority", async () => {
   const packet = sourcePacket();
   let request;
@@ -279,19 +503,45 @@ test("canonical source intake preserves supervisor terminal state", async () => 
         eventType: "packet.transitioned",
         previousStage: "capture",
         targetStage: "deliver",
-        status: "done",
+        status: "complete",
         idempotencyKey: "terminal-transition",
       };
       body.data.currentStage = "deliver";
-      body.data.status = "done";
+      body.data.status = "complete";
       body.data.currentEventId = terminalEvent.eventId;
       body.data.history.push(terminalEvent);
       return { ok: true, status: 200, json: async () => body };
     },
   });
   assert.equal(result.summary.seedPacket.supervisorIntake.currentStage, "deliver");
-  assert.equal(result.summary.seedPacket.supervisorIntake.lifecycleStatus, "done");
+  assert.equal(result.summary.seedPacket.supervisorIntake.lifecycleStatus, "complete");
   assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth.githubMutationAllowed, false);
+});
+
+test("canonical source intake accepts deferred supervisor terminal state", async () => {
+  const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      const response = responseFor(request, canonicalFields(request));
+      const body = await response.json();
+      const terminalEvent = {
+        ...body.data.history[0],
+        eventId: "event-source-intake-deferred",
+        eventType: "packet.transitioned",
+        previousStage: "capture",
+        targetStage: "deliver",
+        status: "deferred",
+        idempotencyKey: "deferred-transition",
+      };
+      body.data.currentStage = "deliver";
+      body.data.status = "deferred";
+      body.data.currentEventId = terminalEvent.eventId;
+      body.data.history.push(terminalEvent);
+      return { ok: true, status: 200, json: async () => body };
+    },
+  });
+  assert.equal(result.summary.seedPacket.supervisorIntake.lifecycleStatus, "deferred");
 });
 
 test("operational readiness uses canonical backend truth instead of contradictory manager fallback", () => {

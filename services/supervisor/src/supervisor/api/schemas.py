@@ -2531,6 +2531,7 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
     parentPacketId: str | None = Field(default=None, max_length=80)
     lineageKind: Literal["root", "split", "rework", "remediation", "recombination", "delivery_failure"] = "root"
     readyToTest: "OperationalReadyToTestRequest | None" = None
+    parallelWorkGraphEvidence: dict[str, Any] | None = None
     payloadSummary: str = Field(default="Metadata-only lifecycle creation.", min_length=1, max_length=500)
     evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
 
@@ -2553,6 +2554,8 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
     def _canonical_source_must_match_packet_source(self):
         if self.canonicalContract and self.canonicalContract.canonicalSource.provenance.sourceRef != self.sourceRef:
             raise ValueError("Canonical source provenance must match the authoritative packet sourceRef.")
+        if self.parallelWorkGraphEvidence and self.packetId and self.parallelWorkGraphEvidence.get("packetId") != self.packetId:
+            raise ValueError("Parallel work graph evidence must bind to the authoritative packetId.")
         return self
 
 
@@ -2587,7 +2590,7 @@ class AuthoritativeWorkPacketLifecycleEventView(BaseModel):
     eventId: str
     packetId: str
     schemaVersion: Literal[1] = 1
-    eventType: Literal["packet.created", "packet.stage_transitioned", "packet.operational_action_applied"]
+    eventType: Literal["packet.created", "packet.stage_transitioned", "packet.operational_action_applied", "packet.parallel_work_graph_refreshed"]
     previousStage: AuthoritativePacketStage | None = None
     targetStage: AuthoritativePacketStage
     status: AuthoritativePacketStatus
@@ -3728,6 +3731,92 @@ class PipelineDashboardWorkPacketV0View(BaseModel):
         return serialized
 
 
+class PipelineWorkGraphReservationV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["advisory_reserved", "deferred", "blocked", "not_recommended", "unavailable"]
+    owner: str | None = None
+    reasonCode: str
+
+    @field_validator("owner")
+    @classmethod
+    def owner_is_safe(cls, value: str | None) -> str | None:
+        if value is not None and not _is_safe_pipeline_control_text(value):
+            raise ValueError("Work graph reservation owner must be safe metadata text.")
+        return value
+
+    @field_validator("reasonCode")
+    @classmethod
+    def reason_code_is_safe(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9_:-]{1,120}", value):
+            raise ValueError("Work graph reservation reason code must be bounded metadata.")
+        return value
+
+
+class PipelineWorkGraphCapacityV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    posture: Literal["normal", "degraded", "blocked", "unavailable"]
+    reasonCode: str
+
+    @field_validator("reasonCode")
+    @classmethod
+    def reason_code_is_safe(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9_:-]{1,120}", value):
+            raise ValueError("Work graph capacity reason code must be bounded metadata.")
+        return value
+
+
+class PipelineWorkGraphEvidenceV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schemaVersion: Literal["parallel-work-graph-evidence/v0"] = "parallel-work-graph-evidence/v0"
+    sourceSchemaVersion: Literal["parallel-execution-graph-reservation/v1"] = "parallel-execution-graph-reservation/v1"
+    availability: Literal["available", "stale", "unavailable"]
+    packetId: str
+    executionJobId: str | None = None
+    reportIdentity: str | None = None
+    generatedAt: datetime | None = None
+    freshnessState: Literal["live", "stale", "unavailable"]
+    waveMembership: Literal["selected", "deferred", "blocked", "unavailable"]
+    dependencyState: Literal["clear", "declared", "blocked", "unavailable"]
+    reservation: PipelineWorkGraphReservationV0View
+    capacity: PipelineWorkGraphCapacityV0View
+    reason: str
+    nextSafeAction: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+    retention: Literal["metadata_only_evidence_references"] = "metadata_only_evidence_references"
+
+    @field_validator("packetId", "executionJobId")
+    @classmethod
+    def ids_are_safe(cls, value: str | None) -> str | None:
+        if value is not None and (not _is_safe_pipeline_evidence_ref(value) or "/" in value):
+            raise ValueError("Work graph identity must be a safe metadata reference.")
+        return value
+
+    @field_validator("generatedAt")
+    @classmethod
+    def generated_at_is_utc(cls, value: datetime | None) -> datetime | None:
+        return _canonical_utc(value, label="Work graph generatedAt") if value is not None else None
+
+    @field_validator("reason", "nextSafeAction")
+    @classmethod
+    def text_is_safe(cls, value: str) -> str:
+        if (
+            not _is_safe_pipeline_control_text(value)
+            or EPIC_25_EXECUTABLE_POLICY_TEXT_RE.search(value)
+            or re.search(r"(?:^|[\\s\"'])/(?:home|tmp|var|etc)/", value, re.IGNORECASE)
+        ):
+            raise ValueError("Work graph text must be redacted metadata-only text.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if len(refs) > 20 or not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Work graph evidence refs must be bounded safe metadata refs.")
+        return refs
+
+
 class PipelineSelectedPacketDetailV0View(BaseModel):
     packetId: str
     sourceRefs: list[AuthoritativePacketSourceRefView] = Field(default_factory=list)
@@ -3757,6 +3846,7 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     queueLease: PipelineQueueLeaseV0View | None = None
     executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
     correlationIds: list[str] = Field(default_factory=list)
+    workGraph: PipelineWorkGraphEvidenceV0View
     metadataOnly: Literal[True] = True
 
     @model_serializer(mode="wrap")

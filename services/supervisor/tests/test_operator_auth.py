@@ -304,11 +304,13 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             success, token, _ = await authenticate_operator(session, "operator-password", "uds", get_settings())
             assert success and token
 
+        checked_at = datetime(2026, 7, 22, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        expires_at = checked_at + timedelta(minutes=5)
         evidence = SimpleNamespace(
             schemaVersion="pipeline-epic-25-evidence-chain/v1",
             evidenceClass="integrated_local",
-            checkedAt=datetime.now(timezone.utc),
-            expiresAt=datetime.now(timezone.utc) + timedelta(minutes=5),
+            checkedAt=checked_at,
+            expiresAt=expires_at,
             freshnessState="fresh",
             effectiveDecision="hold",
             typedBlockers=["quality_gate_not_passed"],
@@ -321,10 +323,36 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             truthLabel="source_owned",
             evidenceChain=evidence,
         )
+        work_graph_payload = {
+            "schemaVersion": "parallel-work-graph-evidence/v0",
+            "sourceSchemaVersion": "parallel-execution-graph-reservation/v1",
+            "availability": "unavailable",
+            "packetId": "packet-1",
+            "executionJobId": None,
+            "generatedAt": None,
+            "freshnessState": "unavailable",
+            "waveMembership": "unavailable",
+            "dependencyState": "unavailable",
+            "reservation": {"status": "unavailable", "owner": None, "reasonCode": "parallel_report_unavailable"},
+            "capacity": {"posture": "unavailable", "reasonCode": "parallel_capacity_unavailable"},
+            "reason": "No current supervisor-validated parallel wave evidence is available for this packet.",
+            "nextSafeAction": "Refresh the advisory planning evidence; this detail does not dispatch work, call a provider, or establish delivery eligibility.",
+            "evidenceRefs": [],
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+            "retention": "metadata_only_evidence_references",
+        }
+        work_graph = SimpleNamespace(packetId="packet-1", model_dump=lambda **_kwargs: work_graph_payload)
+        projection = SimpleNamespace(selectedPacketDetails=[SimpleNamespace(packetId="packet-1", workGraph=work_graph)])
         original = main.service.get_authoritative_work_packet
+        original_projection = main.service.get_pipeline_dashboard_projection
         async def fake_get_packet(_session, _packet_id):
             return packet
+        async def fake_get_projection(_session, mutation_access=False):
+            assert mutation_access is False
+            return projection
         main.service.get_authoritative_work_packet = fake_get_packet
+        main.service.get_pipeline_dashboard_projection = fake_get_projection
         try:
             cookie = f"kendall_operator_session={token}"
             headers = {"x-kendall-dashboard-mediator": "packet-detail/v1"}
@@ -335,7 +363,10 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             assert response_headers.get(b"cache-control") == b"no-store"
             payload = json.loads(body)
             assert payload["packet"]["packetId"] == "packet-1"
-            assert set(payload["packet"]) == {"packetId", "title", "currentStage", "status", "truthLabel", "evidence"}
+            assert set(payload["packet"]) == {"packetId", "title", "currentStage", "status", "truthLabel", "evidence", "workGraph"}
+            assert payload["packet"]["workGraph"] == work_graph_payload
+            assert payload["packet"]["evidence"]["checkedAt"] == "2026-07-22T12:00:00.123456Z"
+            assert payload["packet"]["evidence"]["expiresAt"] == "2026-07-22T12:05:00.123456Z"
             assert "authorization" not in body.decode().lower()
 
             status, _, body = await _asgi_request(main.app, "GET", "/internal/dashboard/packet-detail/packet-1", headers={**headers, "x-forwarded-for": "127.0.0.1"}, cookie=cookie)
@@ -344,7 +375,16 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             assert status == 403 and b"unavailable" in body
             status, response_headers, _ = await _asgi_request(main.app, "GET", "/internal/dashboard/packet-detail/packet-1", headers=headers)
             assert status == 401 and response_headers.get(b"cache-control") == b"no-store"
-            original = main.service.get_authoritative_work_packet
+            original_projection_reader = main.service.get_pipeline_dashboard_projection
+            async def unavailable_projection(_session, mutation_access=False):
+                raise RuntimeError("simulated projection failure")
+            main.service.get_pipeline_dashboard_projection = unavailable_projection
+            try:
+                status, response_headers, _ = await _asgi_request(main.app, "GET", "/internal/dashboard/packet-detail/packet-1", headers=headers, cookie=cookie)
+                assert status == 503 and response_headers.get(b"cache-control") == b"no-store"
+            finally:
+                main.service.get_pipeline_dashboard_projection = original_projection_reader
+            original_packet_reader = main.service.get_authoritative_work_packet
             async def unavailable(_session, _packet_id):
                 raise RuntimeError("simulated supervisor failure")
             main.service.get_authoritative_work_packet = unavailable
@@ -352,9 +392,10 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
                 status, response_headers, _ = await _asgi_request(main.app, "GET", "/internal/dashboard/packet-detail/packet-1", headers=headers, cookie=cookie)
                 assert status == 503 and response_headers.get(b"cache-control") == b"no-store"
             finally:
-                main.service.get_authoritative_work_packet = original
+                main.service.get_authoritative_work_packet = original_packet_reader
         finally:
             main.service.get_authoritative_work_packet = original
+            main.service.get_pipeline_dashboard_projection = original_projection
 
         async with SessionLocal() as session:
             events = (await session.execute(select(DashboardAuditEvent))).scalars().all()

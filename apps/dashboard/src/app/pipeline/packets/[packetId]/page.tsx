@@ -21,7 +21,7 @@ export default async function PipelinePacketPage({
   if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
     return <LanPacketDetailPage packetId={decodedPacketId} />;
   }
-  const { fixtureMode, packet } = await loadPipelineCockpitPacket(decodedPacketId);
+  const { fixtureMode, packet, workGraph } = await loadPipelineCockpitPacket(decodedPacketId);
 
   if (!packet) {
     notFound();
@@ -29,7 +29,7 @@ export default async function PipelinePacketPage({
 
   return (
     <Shell compactHeader realtimeRefresh={false} wide>
-      <PacketDetailPage packet={packet} sourceState={fixtureMode} />
+      <PacketDetailPage packet={packet} sourceState={fixtureMode} workGraph={workGraph} />
     </Shell>
   );
 }

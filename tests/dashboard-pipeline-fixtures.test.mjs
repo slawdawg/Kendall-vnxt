@@ -153,6 +153,33 @@ function validDashboardProjection() {
     blocker: null,
     nextAction: packet.nextAction,
     unblocker: "operator",
+    workGraph: {
+      schemaVersion: "parallel-work-graph-evidence/v0",
+      sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+      availability: "available",
+      packetId: packet.packetId,
+      executionJobId: "execution-job:runtime-packet",
+      reportIdentity: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      generatedAt: now,
+      freshnessState: "live",
+      waveMembership: "selected",
+      dependencyState: "clear",
+      reservation: {
+        status: "advisory_reserved",
+        owner: "operator",
+        reasonCode: "independent_surface",
+      },
+      capacity: {
+        posture: "normal",
+        reasonCode: "capacity_normal",
+      },
+      reason: "The packet is in the advisory wave.",
+      nextSafeAction: "Inspect the existing authority gates before any future action.",
+      evidenceRefs: ["evidence:parallel-wave"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    },
     metadataOnly: true,
   };
   const managerSummary = {
@@ -612,6 +639,24 @@ test("selected projection details reject synthetic and blank nested references",
   const cleanProjection = validDashboardProjection();
   assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
 
+  const legacyProjection = structuredClone(cleanProjection);
+  delete legacyProjection.selectedPacketDetails[0].workGraph;
+  assert.equal(projectionModule.isPipelineDashboardProjection(legacyProjection), false);
+  const normalizedLegacyProjection = projectionModule.normalizePipelineDashboardProjection(legacyProjection);
+  assert.equal(normalizedLegacyProjection.selectedPacketDetails[0].workGraph.availability, "unavailable");
+  assert.equal(normalizedLegacyProjection.selectedPacketDetails[0].workGraph.packetId, legacyProjection.selectedPacketDetails[0].packetId);
+  assert.equal(projectionModule.isPipelineDashboardProjection(normalizedLegacyProjection), true);
+
+  const malformedLegacyProjection = structuredClone(cleanProjection);
+  malformedLegacyProjection.selectedPacketDetails[0] = null;
+  assert.doesNotThrow(() => projectionModule.normalizePipelineDashboardProjection(malformedLegacyProjection));
+  assert.equal(projectionModule.isPipelineDashboardProjection(projectionModule.normalizePipelineDashboardProjection(malformedLegacyProjection)), false);
+
+  const sparseLegacyProjection = structuredClone(cleanProjection);
+  delete sparseLegacyProjection.selectedPacketDetails[0];
+  assert.doesNotThrow(() => projectionModule.normalizePipelineDashboardProjection(sparseLegacyProjection));
+  assert.equal(projectionModule.isPipelineDashboardProjection(projectionModule.normalizePipelineDashboardProjection(sparseLegacyProjection)), false);
+
   const invalidCases = [
     ["fixture source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "FIXTURE:nested-source"; }],
     ["demo source path", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].pathOrUrl = " demo:nested-source-path "; }],
@@ -624,12 +669,35 @@ test("selected projection details reject synthetic and blank nested references",
     ["blank recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["\t"]; }],
     ["fixture recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["fixture:event"]; }],
     ["demo recent transition event reference", (projection) => { projection.selectedPacketDetails[0].recentTransitionEventRefs = ["demo:event"]; }],
+    ["missing work graph", (projection) => { delete projection.selectedPacketDetails[0].workGraph; }],
+    ["raw work graph retention", (projection) => { projection.selectedPacketDetails[0].workGraph.rawPayloadRetained = true; }],
+    ["work graph packet mismatch", (projection) => { projection.selectedPacketDetails[0].workGraph.packetId = "runtime:other"; }],
+    ["available work graph without report identity", (projection) => { projection.selectedPacketDetails[0].workGraph.reportIdentity = null; }],
+    ["work graph path leak", (projection) => { projection.selectedPacketDetails[0].workGraph.reason = "See /home/operator/private-worktree for details."; }],
+    ["work graph executable recovery", (projection) => { projection.selectedPacketDetails[0].workGraph.nextSafeAction = "Run git push before retrying."; }],
   ];
   for (const [label, mutate] of invalidCases) {
     const candidate = structuredClone(cleanProjection);
     mutate(candidate);
     assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
   }
+
+  const unavailableGraphProjection = structuredClone(cleanProjection);
+  unavailableGraphProjection.selectedPacketDetails[0].workGraph = {
+    ...unavailableGraphProjection.selectedPacketDetails[0].workGraph,
+    availability: "unavailable",
+    executionJobId: null,
+    reportIdentity: null,
+    generatedAt: null,
+    freshnessState: "unavailable",
+    waveMembership: "unavailable",
+    dependencyState: "unavailable",
+    reservation: { status: "unavailable", owner: null, reasonCode: "parallel_report_unavailable" },
+    capacity: { posture: "unavailable", reasonCode: "parallel_capacity_unavailable" },
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(unavailableGraphProjection), true);
+  unavailableGraphProjection.selectedPacketDetails[0].workGraph.reportIdentity = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  assert.equal(projectionModule.isPipelineDashboardProjection(unavailableGraphProjection), false, "unavailable work graph must not carry a report identity");
 
   const ordinaryText = structuredClone(cleanProjection);
   ordinaryText.selectedPacketDetails[0].sourceRefs[0].title = "Operator label mentions fixture:legacy text";
@@ -654,6 +722,25 @@ test("selected projection details reject synthetic and blank nested references",
     candidate.sourceStates[0][field] = label.includes("fixture") ? "fixture:stale-source" : "demo:blocked-source";
     assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
   }
+});
+
+test("Work Graph remains a supervisor-backed Packet Detail group and never enters compact cards", async () => {
+  const [cockpitSource, packetDetailSource, lanDetailSource, mediatorSource] = await Promise.all([
+    readFile(cockpitPath, "utf8"),
+    readFile(packetDetailPath, "utf8"),
+    readFile(new URL("../apps/dashboard/src/components/pipeline/lan-packet-detail-page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../apps/dashboard/scripts/packet-detail-mediator.mjs", import.meta.url), "utf8"),
+  ]);
+  const miniPacketSource = extractFunctionSource(cockpitSource, "PacketMiniCard");
+  assert.match(cockpitSource, /<ParallelWorkGraphPanel detail=\{projectionDetail\}/);
+  assert.match(cockpitSource, /aria-label="Work Graph"/);
+  assert.match(cockpitSource, /aria-live="assertive"/);
+  assert.match(packetDetailSource, /<PacketDetailWorkGraph workGraph=\{workGraph\}/);
+  assert.match(lanDetailSource, /aria-label="Work Graph"/);
+  assert.match(lanDetailSource, /credentials: "same-origin"/);
+  assert.match(mediatorSource, /\/internal\/dashboard\/packet-detail\//);
+  assert.match(mediatorSource, /PACKET_DETAIL_MAX_BYTES/);
+  assert.doesNotMatch(miniPacketSource, /workGraph|reservation|capacity|recovery/i);
 });
 
 test("projection counts reject contradictory active and empty states while preserving unknown counts", async () => {

@@ -1,6 +1,7 @@
 import type { EvidenceRefId, ExecutionJobId, ReservationLeaseId } from "./ids";
 
 export const PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION = "parallel-execution-graph-reservation/v1" as const;
+export const PARALLEL_WORK_GRAPH_EVIDENCE_SCHEMA_VERSION = "parallel-work-graph-evidence/v0" as const;
 
 export type ParallelSuitabilityLifecycleStatus = "selected" | "deferred" | "blocked";
 export type ReservationLeaseProjectionStatus = "advisory_reserved" | "deferred" | "blocked" | "not_recommended";
@@ -86,4 +87,38 @@ export interface ParallelSuitabilityReport {
   rawPayloadRetained: false;
   retention: "metadata_only_evidence_references";
   stopLines: readonly string[];
+}
+
+/**
+ * The redacted, supervisor-consumable Packet Detail projection of one
+ * ParallelSuitabilityReport execution job. It deliberately omits ChangeSurface
+ * paths, worktree state, immutable-review inputs, source references, and the
+ * report's raw recommendation payload.
+ */
+export interface ParallelWorkGraphEvidence {
+  schemaVersion: typeof PARALLEL_WORK_GRAPH_EVIDENCE_SCHEMA_VERSION;
+  sourceSchemaVersion: typeof PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION;
+  availability: "available" | "stale" | "unavailable";
+  packetId: string;
+  executionJobId: ExecutionJobId | null;
+  reportIdentity: string | null;
+  generatedAt: string | null;
+  freshnessState: "live" | "stale" | "unavailable";
+  waveMembership: "selected" | "deferred" | "blocked" | "unavailable";
+  dependencyState: "clear" | "declared" | "blocked" | "unavailable";
+  reservation: {
+    status: ReservationLeaseProjectionStatus | "unavailable";
+    owner: string | null;
+    reasonCode: string;
+  };
+  capacity: {
+    posture: ParallelCapacityDecision["posture"] | "unavailable";
+    reasonCode: string;
+  };
+  reason: string;
+  nextSafeAction: string;
+  evidenceRefs: readonly EvidenceRefId[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
 }

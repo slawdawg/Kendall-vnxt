@@ -114,6 +114,10 @@ const RECONCILE_PROHIBITED_RAW_KEYS = new Set([
   "sourcedump",
   "sourcecopy",
 ]);
+const WORK_GRAPH_UNSAFE_TEXT_RE = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const WORK_GRAPH_CREDENTIAL_REFERENCE_RE = /\b(?:api|access|auth)[_-]?(?:key|token)\b|\bauthorization\b|\b(?:bearer|basic)\b(?:\s+|[:=])|\b(?:token|secret|password|credential)\s*[:=]|\b(?:gh[pousr]_|github_pat_|glpat-|sk(?:-proj|-ant)?-|xox[a-z]-)[A-Za-z0-9_-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\b/i;
+const WORK_GRAPH_OPAQUE_REFERENCE_RE = /^(?:(?:artifact|doc|evidence|preflight|report|reservation|source|story):[A-Za-z0-9._/@=+-]{1,420}|(?:after|before|depends-on)-[a-z0-9-]{1,160})$/i;
+const WORK_GRAPH_EXECUTABLE_TEXT_RE = /\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b/i;
 
 export const MANAGER_WORKER_LIFECYCLE_STATES = Object.freeze([
   "busy",
@@ -13932,7 +13936,9 @@ export function buildRefillPlan(options = {}, context = {}) {
   const sourceIntakeAction = sourceBackedSupervisorIntakeAction({
     runId: resolveManagerRunId(options, context),
     supervisorUrl: options.supervisorUrl || context.supervisorUrl,
+    supervisorUdsPath: options.supervisorUdsPath || context.supervisorUdsPath,
     sourceBackedPacketSeed,
+    parallelSuitability,
     bmadRoot: managerBmadRoot(options, context),
   });
   const readyForDevAttention = starvation && bmadPlanningGap?.summary?.refillDisposition === "preserve_existing_ready_for_dev_work";
@@ -14029,7 +14035,7 @@ function sourceWorkEligibilityHasCandidates(summary = {}) {
     nonNegativeInteger(summary.candidateCount ?? summary.candidate_count) > 0;
 }
 
-function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", sourceBackedPacketSeed = null, bmadRoot = "" } = {}) {
+function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", supervisorUdsPath = "", sourceBackedPacketSeed = null, parallelSuitability = null, bmadRoot = "" } = {}) {
   if (!supervisorUrl || sourceBackedPacketSeed?.summary?.packetState !== "eligible") return null;
   const seedPacket = sourceBackedPacketSeed.summary?.seedPacket;
   if (!seedPacket || sourceBackedPacketSeed.summary?.sourceWorkEligibility?.eligibleCount !== 1) return null;
@@ -14053,9 +14059,10 @@ function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", so
     { bmadRoot: bmadRoot || repoRoot },
   );
   if (exactSeedPlan.summary?.packetState !== "eligible") return null;
+  const bridgePacket = attachParallelWorkGraphEvidenceToManagerPacket(exactSeedPlan, parallelSuitability);
   let intakePlan;
   try {
-    intakePlan = planManagerSourcePacketIntake(exactSeedPlan, supervisorUrl);
+    intakePlan = planManagerSourcePacketIntake(bridgePacket, supervisorUrl, { supervisorUdsPath });
   } catch {
     return null;
   }
@@ -14075,6 +14082,7 @@ function sourceBackedSupervisorIntakeAction({ runId = "", supervisorUrl = "", so
     ["--source-sprint-status-ref", seedPacket.sourceProvenance?.sprintStatusRef],
     ["--source-key", seedPacket.sourceProvenance?.sourceKey],
     ["--supervisor-url", supervisorUrl],
+    ["--supervisor-uds-path", supervisorUdsPath],
   ].filter(([, value]) => Boolean(value));
   const command = `node ./scripts/manager-source-intake-cycle.mjs --summary-json${args.map(([flag, value]) => ` ${flag} ${shellSingleQuote(value)}`).join("")}`;
   return {
@@ -18485,6 +18493,163 @@ export function buildParallelSuitabilityReport(options = {}, context = {}) {
       nextAction: "Treat selected entries as a planning recommendation only; the existing dispatch and ownership gates remain the sole mutation boundary.",
     }],
   });
+}
+
+/**
+ * Builds the only dashboard-safe view of a parallel suitability decision. The
+ * caller supplies the already-authoritative packet mapping; this function does
+ * not discover a worktree, reserve work, select capacity, or authorize an
+ * action. In particular, it never carries ChangeSurface paths, immutable
+ * review input, source refs, or a worktree path across the boundary.
+ */
+export function buildParallelWorkGraphEvidence(report, packetIdByCandidate = {}, options = {}) {
+  const summary = safeReadProperty(report, "summary", report);
+  if (!isPlainObject(summary) || safeReadProperty(summary, "schemaVersion", null) !== PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION) {
+    return [];
+  }
+  if (safeReadProperty(summary, "rawPayloadRetained", null) !== false || safeReadProperty(summary, "retention", null) !== "metadata_only_evidence_references") {
+    return [];
+  }
+  const generatedAt = validParallelWorkGraphTimestamp(safeReadProperty(summary, "generatedAt", null));
+  const recommendation = safeReadProperty(summary, "recommendation", null);
+  const capacity = safeReadProperty(recommendation, "capacity", null);
+  if (!generatedAt || !isPlainObject(recommendation) || !isPlainObject(capacity) || safeReadProperty(capacity, "externalRouteAllowance", null) !== 0) {
+    return [];
+  }
+  const capacityPosture = safeReadProperty(capacity, "posture", null);
+  const capacityReasonCode = safeParallelWorkGraphCode(safeReadProperty(capacity, "reasonCode", null));
+  if (!["normal", "degraded", "blocked"].includes(capacityPosture) || !capacityReasonCode) {
+    return [];
+  }
+  const now = validParallelWorkGraphTimestamp(options.now) || new Date().toISOString();
+  const staleAfterMs = Number.isSafeInteger(options.staleAfterMs) && options.staleAfterMs > 0
+    ? options.staleAfterMs
+    : 5 * 60 * 1000;
+  if (Date.parse(generatedAt) > Date.parse(now) + 30_000) {
+    return [];
+  }
+  const freshnessState = Date.parse(now) - Date.parse(generatedAt) > staleAfterMs ? "stale" : "live";
+  const jobs = safeReadProperty(summary, "executionJobs", []);
+  if (!Array.isArray(jobs)) {
+    return [];
+  }
+  const evidence = [];
+  for (const job of jobs) {
+    if (!isPlainObject(job)) continue;
+    const candidateId = safeParallelWorkGraphIdentifier(safeReadProperty(job, "candidateId", null));
+    const packetId = candidateId ? safeParallelWorkGraphIdentifier(safeReadProperty(packetIdByCandidate, candidateId, null)) : null;
+    const executionJobId = safeParallelWorkGraphIdentifier(safeReadProperty(job, "executionJobId", null));
+    const lifecycleStatus = safeReadProperty(job, "lifecycleStatus", null);
+    const reservationLease = safeReadProperty(job, "reservationLease", null);
+    if (!packetId || !executionJobId || !["selected", "deferred", "blocked"].includes(lifecycleStatus) || !isPlainObject(reservationLease)) continue;
+    const reservationStatus = safeReadProperty(reservationLease, "status", null);
+    const reservationReasonCode = safeParallelWorkGraphCode(safeReadProperty(reservationLease, "reasonCode", null));
+    if (!["advisory_reserved", "deferred", "blocked", "not_recommended"].includes(reservationStatus) || !reservationReasonCode) continue;
+    const owner = safeNullableParallelWorkGraphText(safeReadProperty(reservationLease, "owner", null), 160);
+    const dependencies = safeReadProperty(job, "dependencies", []);
+    const dependencyRefs = Array.isArray(dependencies)
+      ? dependencies.map((dependency) => safeParallelWorkGraphOpaqueReference(dependency))
+      : null;
+    if (!dependencyRefs || dependencyRefs.some((dependency) => !dependency)) continue;
+    const reason = safeParallelWorkGraphText(safeReadProperty(reservationLease, "reason", null));
+    const nextSafeAction = safeParallelWorkGraphText(safeReadProperty(job, "nextSafeAction", null));
+    const refs = safeParallelWorkGraphEvidenceRefs(safeReadProperty(job, "evidenceRefs", []));
+    if (!reason || !nextSafeAction || refs === null) continue;
+    evidence.push({
+      schemaVersion: "parallel-work-graph-evidence/v0",
+      sourceSchemaVersion: PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION,
+      availability: freshnessState === "stale" ? "stale" : "available",
+      packetId,
+      executionJobId,
+      reportIdentity: `sha256:${createHash("sha256").update(JSON.stringify({ schemaVersion: PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION, candidateId, executionJobId })).digest("hex")}`,
+      generatedAt,
+      freshnessState,
+      waveMembership: lifecycleStatus,
+      dependencyState: dependencyRefs.length === 0 ? "clear" : lifecycleStatus === "blocked" ? "blocked" : "declared",
+      reservation: { status: reservationStatus, owner, reasonCode: reservationReasonCode },
+      capacity: { posture: capacityPosture, reasonCode: capacityReasonCode },
+      reason,
+      nextSafeAction,
+      evidenceRefs: refs,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    });
+  }
+  return evidence.sort((left, right) => left.packetId.localeCompare(right.packetId));
+}
+
+/**
+ * Bind one redacted 34.3 advisory report entry to the already deterministic
+ * manager source-intake packet. The report itself never crosses this boundary.
+ */
+export function attachParallelWorkGraphEvidenceToManagerPacket(packet, report, options = {}) {
+  if (!isPlainObject(packet) || !isPlainObject(packet.summary) || !isPlainObject(packet.summary.seedPacket)) return packet;
+  const candidateId = safeParallelWorkGraphIdentifier(packet.summary.seedPacket.candidateWorkPacketId || packet.summary.seedPacket.candidateId);
+  if (!candidateId) return packet;
+  const packetId = `manager-source-${createHash("sha256").update(candidateId).digest("hex").slice(0, 40)}`;
+  const matches = buildParallelWorkGraphEvidence(report, { [candidateId]: packetId }, options)
+    .filter((entry) => entry.packetId === packetId);
+  if (matches.length !== 1) return packet;
+  return {
+    ...packet,
+    summary: {
+      ...packet.summary,
+      parallelWorkGraphEvidence: matches[0],
+    },
+  };
+}
+
+function validParallelWorkGraphTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+}
+
+function safeParallelWorkGraphIdentifier(value) {
+  return typeof value === "string" && value.trim() === value && !/\s/.test(value) && !value.includes("/") && value.length > 0 && value.length <= 255 && !/[\x00-\x1f\x7f]/.test(value) && !WORK_GRAPH_UNSAFE_TEXT_RE.test(value)
+    ? value
+    : null;
+}
+
+function safeParallelWorkGraphOpaqueReference(value) {
+  if (
+    typeof value !== "string" ||
+    WORK_GRAPH_CREDENTIAL_REFERENCE_RE.test(value) ||
+    !WORK_GRAPH_OPAQUE_REFERENCE_RE.test(value)
+  ) {
+    return null;
+  }
+  // Evidence and dependency references never cross the projection boundary
+  // verbatim. Their approved bounded grammar preserves graph linkage only.
+  if (
+    value.trim() !== value ||
+    value.length === 0 ||
+    value.length > 500 ||
+    /[\x00-\x1f\x7f]/.test(value) ||
+    WORK_GRAPH_UNSAFE_TEXT_RE.test(value)
+  ) {
+    return null;
+  }
+  return `opaque-ref:sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function safeParallelWorkGraphCode(value) {
+  return typeof value === "string" && /^[a-z][a-z0-9_:-]{1,120}$/.test(value) ? value : null;
+}
+
+function safeParallelWorkGraphText(value, maxLength = 500) {
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.length > maxLength) return null;
+  if (WORK_GRAPH_UNSAFE_TEXT_RE.test(value) || WORK_GRAPH_EXECUTABLE_TEXT_RE.test(value) || /(?:^|[\s"'])\/(?:home|tmp|var|etc)\//i.test(value)) return null;
+  return value;
+}
+
+function safeNullableParallelWorkGraphText(value, maxLength) {
+  return value === null ? null : safeParallelWorkGraphText(value, maxLength);
+}
+
+function safeParallelWorkGraphEvidenceRefs(value) {
+  if (!Array.isArray(value) || value.length > 20) return null;
+  const refs = value.map((ref) => safeParallelWorkGraphOpaqueReference(ref));
+  return refs.every(Boolean) ? [...new Set(refs)].sort() : null;
 }
 
 function buildParallelCapacityDecision(options = {}, context = {}) {
