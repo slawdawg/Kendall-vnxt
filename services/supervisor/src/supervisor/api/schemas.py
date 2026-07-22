@@ -57,6 +57,11 @@ def _strict_contract_payload(value: Any, model: type[BaseModel], *, path: str) -
                     _strict_contract_payload(item, nested_model, path=f"{path}.{name}[{index}]")
             else:
                 _strict_contract_payload(value[name], nested_model, path=f"{path}.{name}")
+        elif origin in (list, tuple, set) and candidates and candidates[0] in primitive_types:
+            element_type = candidates[0]
+            for index, item in enumerate(value[name]):
+                if type(item) is not element_type:
+                    raise ValueError(f"{path}.{name}[{index}] must use a strict scalar value")
 
 UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
@@ -6592,7 +6597,7 @@ class WorkItemApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: WorkItemView
-    meta: dict[str, Any] | None = None
+    meta: dict[str, str | int | float | bool | None] | None = None
 
     @model_validator(mode="before")
     @classmethod

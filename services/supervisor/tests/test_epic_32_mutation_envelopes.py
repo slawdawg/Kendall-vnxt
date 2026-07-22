@@ -60,6 +60,8 @@ def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
     with pytest.raises(ValidationError):
         DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "meta": {"nested": []}})
     with pytest.raises(ValidationError):
+        WorkItemApiEnvelope.model_validate({"data": {}, "meta": {"nested": []}})
+    with pytest.raises(ValidationError):
         CandidateWorkPromotionApiEnvelope.model_validate({"data": {}, "meta": {"nested": []}})
     with pytest.raises(ValidationError):
         DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "unexpected": True})
@@ -77,6 +79,12 @@ def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
         CandidateWorkPromotionView.model_validate({"candidateWork": {"sortOrder": True}, "workItem": {}})
     with pytest.raises(ValidationError):
         WorkItemApiEnvelope.model_validate({"data": {"executionRecipe": {"unexpected": True}}})
+    with pytest.raises(ValueError):
+        _strict_contract_payload(
+            {"executionRecipe": {"allowedPaths": [1]}},
+            WorkItemView,
+            path="prepare.data",
+        )
 
 def test_epic_32_envelopes_accept_null_and_scalar_metadata() -> None:
     evidence = {
