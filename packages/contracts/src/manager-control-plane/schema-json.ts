@@ -341,6 +341,40 @@ export const PARALLEL_WORK_GRAPH_EVIDENCE_SERIALIZED_FIELDS = [
   "retention"
 ] as const;
 
+export const IMMUTABLE_REVIEW_IDENTITY_SERIALIZED_FIELDS = [
+  "execution_job_id",
+  "exact_head",
+  "digest"
+] as const;
+
+export const REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS = [
+  "schema_version",
+  "decision_id",
+  "state",
+  "controlling_reason",
+  "safe_fallback",
+  "immutable_review",
+  "authority_evidence",
+  "disclosure_packet_id",
+  "metadata_only",
+  "raw_payload_retained",
+  "execution"
+] as const;
+
+export const DISCLOSURE_PACKET_SERIALIZED_FIELDS = [
+  "schema_version",
+  "disclosure_packet_id",
+  "immutable_review",
+  "route_allowlist",
+  "adapter_allowlist",
+  "tool_allowlist",
+  "authority",
+  "issuance",
+  "scope",
+  "metadata_only",
+  "raw_payload_retained"
+] as const;
+
 export const EVIDENCE_REF_SERIALIZED_FIELDS = [
   "evidence_ref_id",
   "evidence_type",
@@ -523,6 +557,9 @@ export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
   ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS,
   ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
   ParallelWorkGraphEvidence: PARALLEL_WORK_GRAPH_EVIDENCE_SERIALIZED_FIELDS,
+  ImmutableReviewIdentity: IMMUTABLE_REVIEW_IDENTITY_SERIALIZED_FIELDS,
+  ReviewRouteDecision: REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS,
+  DisclosurePacket: DISCLOSURE_PACKET_SERIALIZED_FIELDS,
   EvidenceRef: EVIDENCE_REF_SERIALIZED_FIELDS,
   ManagerRunPreauthorization: MANAGER_RUN_PREAUTHORIZATION_SERIALIZED_FIELDS,
   ImplementationRunTask: IMPLEMENTATION_RUN_TASK_SERIALIZED_FIELDS,
@@ -549,6 +586,9 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
   ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS,
   ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
   ParallelWorkGraphEvidence: PARALLEL_WORK_GRAPH_EVIDENCE_SERIALIZED_FIELDS,
+  ImmutableReviewIdentity: IMMUTABLE_REVIEW_IDENTITY_SERIALIZED_FIELDS,
+  ReviewRouteDecision: REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS,
+  DisclosurePacket: DISCLOSURE_PACKET_SERIALIZED_FIELDS,
   CandidateWorkPacket: [
     "candidate_work_packet_id",
     "run_id",

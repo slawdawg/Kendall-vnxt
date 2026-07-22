@@ -28,6 +28,7 @@ const expectedModules = [
   "events.ts",
   "terminal-event.ts",
   "refill.ts",
+  "review-route.ts",
   "summary.ts",
   "schema-json.ts"
 ];
@@ -657,6 +658,28 @@ test("Parallel suitability contracts keep graph and reservations metadata-only a
     2,
     "capacity fields must be available from the generic and required contract registries",
   );
+});
+
+test("Review route contracts keep disclosure preparation metadata-only and non-executing", async () => {
+  const routeSource = await readFile(new URL("review-route.ts", managerRoot), "utf8");
+  const schemaSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
+  for (const exportedName of ["ImmutableReviewIdentity", "ReviewRouteDecision", "DisclosurePacket"]) {
+    assert.match(routeSource, new RegExp(`export (type|interface) ${exportedName}\\b`), `missing ${exportedName}`);
+  }
+  for (const literal of ["review-route-decision/v1", "disclosure-packet/v1", "report_only", "simulated", "blocked", "metadata_only", "execution: \"none\""]) {
+    assert.match(routeSource, new RegExp(literal), `missing review-route contract literal ${literal}`);
+  }
+  assertRequiredFields(
+    "ReviewRouteDecision serialized fields",
+    ["schema_version", "decision_id", "state", "controlling_reason", "safe_fallback", "immutable_review", "authority_evidence", "disclosure_packet_id", "metadata_only", "raw_payload_retained", "execution"],
+    extractConstArray(schemaSource, "REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS"),
+  );
+  assertRequiredFields(
+    "DisclosurePacket serialized fields",
+    ["schema_version", "disclosure_packet_id", "immutable_review", "route_allowlist", "adapter_allowlist", "tool_allowlist", "authority", "issuance", "scope", "metadata_only", "raw_payload_retained"],
+    extractConstArray(schemaSource, "DISCLOSURE_PACKET_SERIALIZED_FIELDS"),
+  );
+  assert.doesNotMatch(routeSource, /\bprovider\b|node:|adapter\//i, "contracts must not introduce runtime imports");
 });
 
 test("Manager Run start and control state schemas record source and steering evidence", async () => {
