@@ -114,6 +114,59 @@ def test_epic_32_envelopes_accept_null_and_scalar_metadata() -> None:
     assert DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "meta": None}).meta is None
 
 
+def test_epic_32_child_views_accept_db_style_enum_strings() -> None:
+    candidate = CandidateWorkView.model_validate(
+        {
+            "id": "candidate-1",
+            "title": "Example",
+            "requestedOutcome": "Implement example",
+            "source": "bmad",
+            "sourceArtifactPath": "_bmad-output/example.md",
+            "sourceArtifactType": "bmad_story",
+            "riskLevel": "low",
+            "priority": "normal",
+            "sortOrder": 0,
+            "status": "proposed",
+            "createdAt": "2026-07-22T00:00:00Z",
+            "updatedAt": "2026-07-22T00:00:00Z",
+        }
+    )
+    assert candidate.source.value == "bmad"
+    assert candidate.status.value == "proposed"
+
+    work_item = WorkItemView.model_validate(
+        {
+            "id": "work-item-1",
+            "title": "Example",
+            "requestedOutcome": "Implement example",
+            "source": "bmad",
+            "origin": "bmad",
+            "details": None,
+            "riskLevel": "low",
+            "metadata": {},
+            "state": "queued",
+            "lane": "implementation",
+            "ageMinutes": 0,
+            "needsAttention": False,
+            "attentionReason": None,
+            "statusSummary": "queued",
+            "blockedReason": None,
+            "nextStep": None,
+            "selfDetectedIssue": False,
+            "selfDetectedIssueCategory": None,
+            "executionRecipe": None,
+            "deliveryReadiness": None,
+            "createdAt": "2026-07-22T00:00:00Z",
+            "updatedAt": "2026-07-22T00:00:00Z",
+            "lastEventAt": "2026-07-22T00:00:00Z",
+            "requiresAudit": False,
+            "auditMode": "none",
+        }
+    )
+    assert work_item.state.value == "queued"
+    assert work_item.auditMode.value == "none"
+
+
 def test_epic_32_recursive_validation_preserves_generic_metadata_and_lists() -> None:
     _strict_contract_payload(
         {"metadata": {}, "executionRecipe": None, "deliveryReadiness": None},

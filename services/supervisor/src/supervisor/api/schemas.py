@@ -273,7 +273,7 @@ class CandidateWorkUpdate(BaseModel):
 
 
 class CandidateWorkSourceSummaryView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     label: str
     summary: str
@@ -291,7 +291,7 @@ class CandidateWorkSourceSummaryView(BaseModel):
 
 
 class CandidateWorkView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     title: str
@@ -309,6 +309,12 @@ class CandidateWorkView(BaseModel):
     promotedWorkItemId: str | None = None
     sourceSummary: CandidateWorkSourceSummaryView | None = None
     importMetadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _candidate_work_result_must_be_strict(cls, value):
+        _strict_contract_payload(value, cls, path="candidateWork")
+        return value
 
 
 class CandidateWorkListApiEnvelope(BaseModel):
@@ -431,7 +437,7 @@ class WorkItemBranchPreparationRequest(BaseModel):
 
 
 class WorkItemDeliveryReadinessView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     pullRequestStatus: str
     pullRequestUrl: str | None = None
@@ -445,7 +451,7 @@ class WorkItemDeliveryReadinessView(BaseModel):
 
 
 class WorkItemPolicyGateView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     label: str
@@ -455,7 +461,7 @@ class WorkItemPolicyGateView(BaseModel):
 
 
 class WorkItemRemoteAutomationPolicyView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     status: str
     summary: str
@@ -5449,7 +5455,7 @@ class RoutingOverrideView(BaseModel):
 
 
 class WorkItemExecutionRecipeView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     label: str
@@ -6575,7 +6581,7 @@ class DeliveryReadinessPolicyReportApiEnvelope(BaseModel):
 
 
 class WorkItemView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     title: str
@@ -6607,6 +6613,12 @@ class WorkItemView(BaseModel):
     lastEventAt: datetime
     requiresAudit: bool
     auditMode: AuditMode
+
+    @model_validator(mode="before")
+    @classmethod
+    def _work_item_view_must_be_strict(cls, value):
+        _strict_contract_payload(value, cls, path="workItem")
+        return value
 
 
 class WorkItemApiEnvelope(BaseModel):
