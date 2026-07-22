@@ -133,6 +133,11 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
+For a read-only, bounded recommendation about whether source-ready work can be
+planned in parallel, use the [Parallel Suitability Report runbook](docs/workflows/end-to-end-lane-runner.md#parallel-suitability-report-read-only).
+It is advisory only and does not dispatch workers or mutate workspace, Git, or
+GitHub state.
+
 - `pnpm run check` runs preflight, documentation drift checks, governed worker execution dry-run checks, documentation authority report drift checks, legacy planning artifact inventory drift checks, review resource policy drift checks, verification readiness report drift checks, pipeline implementation readiness evidence drift checks, dashboard pipeline import-boundary checks, authority readiness matrix drift checks, adaptive scoring decision-prep drift checks, premium execution policy drift checks, worker launch policy drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, runner assignment status drift checks, manager quality-gate adapter tests, delivery readiness policy drift checks, GitHub workflow policy drift checks, cleanup automation policy drift checks, maintenance readiness drift checks, token economy drift checks, workspace coordination drift checks, tmux orientation report checks, mise workflow drift checks, Linux install lane checks, BMAD work product boundary checks, Kendall Obsidian memory checks, clean-install boundary checks, dashboard build, and supervisor integration tests
 - `pnpm run check:fast` runs the fast workflow gate for workspace, sandbox, dashboard, and CI drift before broader static or full verification
 - `pnpm run test:check-plan` verifies changed-file check routing, fail-closed Git diff collection, quick-fail command coverage, and aggregate wiring for CI acceleration

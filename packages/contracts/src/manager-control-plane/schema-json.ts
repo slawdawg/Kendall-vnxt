@@ -257,6 +257,56 @@ export const REFILL_JOB_SERIALIZED_FIELDS = [
   "updated_at"
 ] as const;
 
+export const CHANGE_SURFACE_SERIALIZED_FIELDS = [
+  "proof_status",
+  "paths"
+] as const;
+
+export const RESERVATION_LEASE_SERIALIZED_FIELDS = [
+  "schema_version",
+  "reservation_lease_id",
+  "status",
+  "reason_code",
+  "reason",
+  "owner",
+  "worktree_path",
+  "evidence_refs",
+  "conflicting_execution_job_ids",
+  "expires_at",
+  "mutation"
+] as const;
+
+export const EXECUTION_JOB_SERIALIZED_FIELDS = [
+  "schema_version",
+  "execution_job_id",
+  "candidate_id",
+  "purpose",
+  "owner",
+  "worktree",
+  "read_write_mode",
+  "change_surface",
+  "baseline_scope",
+  "dependencies",
+  "evidence_refs",
+  "verification_targets",
+  "lifecycle_status",
+  "reservation_lease",
+  "recovery_state",
+  "next_safe_action"
+] as const;
+
+export const PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS = [
+  "schema_version",
+  "generated_at",
+  "recommendation",
+  "execution_jobs",
+  "reservation_leases",
+  "mutation",
+  "raw_payload_retained",
+  "retention",
+  "stop_lines"
+] as const;
+
 export const EVIDENCE_REF_SERIALIZED_FIELDS = [
   "evidence_ref_id",
   "evidence_type",
@@ -433,6 +483,10 @@ export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
   Lease: LEASE_SERIALIZED_FIELDS,
   ExecutionAttempt: EXECUTION_ATTEMPT_SERIALIZED_FIELDS,
   RefillJob: REFILL_JOB_SERIALIZED_FIELDS,
+  ChangeSurface: CHANGE_SURFACE_SERIALIZED_FIELDS,
+  ReservationLease: RESERVATION_LEASE_SERIALIZED_FIELDS,
+  ExecutionJob: EXECUTION_JOB_SERIALIZED_FIELDS,
+  ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
   EvidenceRef: EVIDENCE_REF_SERIALIZED_FIELDS,
   ManagerRunPreauthorization: MANAGER_RUN_PREAUTHORIZATION_SERIALIZED_FIELDS,
   ImplementationRunTask: IMPLEMENTATION_RUN_TASK_SERIALIZED_FIELDS,
@@ -453,6 +507,10 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
   ManagerTerminalEventApiEnvelope: MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_SERIALIZED_FIELDS,
   SupervisorTerminalEventProjection: SUPERVISOR_TERMINAL_EVENT_PROJECTION_REQUIRED_SERIALIZED_FIELDS,
   SupervisorTerminalEventProjectionApiEnvelope: SUPERVISOR_TERMINAL_EVENT_PROJECTION_API_ENVELOPE_REQUIRED_SERIALIZED_FIELDS,
+  ChangeSurface: CHANGE_SURFACE_SERIALIZED_FIELDS,
+  ReservationLease: RESERVATION_LEASE_SERIALIZED_FIELDS,
+  ExecutionJob: EXECUTION_JOB_SERIALIZED_FIELDS,
+  ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
   CandidateWorkPacket: [
     "candidate_work_packet_id",
     "run_id",

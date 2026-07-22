@@ -623,6 +623,32 @@ test("Manager Control Plane schema metadata covers required serialized fields an
   );
 });
 
+test("Parallel suitability contracts keep graph and reservations metadata-only and structurally stable", async () => {
+  const parallelSource = await readFile(new URL("parallel-suitability.ts", managerRoot), "utf8");
+  const schemaSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
+  const idsSource = await readFile(new URL("ids.ts", managerRoot), "utf8");
+
+  for (const exportedName of ["ChangeSurface", "ReservationLease", "ExecutionJob", "ParallelSuitabilityReport"]) {
+    assert.match(parallelSource, new RegExp(`export (type|interface) ${exportedName}\\b`), `missing ${exportedName}`);
+  }
+  for (const literal of ["parallel-execution-graph-reservation/v1", "advisory_reserved", "deferred", "blocked", "metadata_only_evidence_references"]) {
+    assert.match(parallelSource, new RegExp(literal), `missing graph contract literal ${literal}`);
+  }
+  for (const idName of ["ExecutionJobId", "ReservationLeaseId"]) {
+    assert.match(idsSource, new RegExp(`export type ${idName}\\b`), `missing ${idName}`);
+  }
+  assertRequiredFields(
+    "ParallelSuitabilityReport serialized fields",
+    ["schema_version", "generated_at", "recommendation", "execution_jobs", "reservation_leases", "mutation", "raw_payload_retained", "retention", "stop_lines"],
+    extractConstArray(schemaSource, "PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS"),
+  );
+  assertRequiredFields(
+    "ExecutionJob serialized fields",
+    ["execution_job_id", "change_surface", "baseline_scope", "reservation_lease", "lifecycle_status", "evidence_refs", "next_safe_action"],
+    extractConstArray(schemaSource, "EXECUTION_JOB_SERIALIZED_FIELDS"),
+  );
+});
+
 test("Manager Run start and control state schemas record source and steering evidence", async () => {
   const typesSource = await readFile(new URL("types.ts", managerRoot), "utf8");
   const schemaSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
