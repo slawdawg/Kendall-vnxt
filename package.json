@@ -147,7 +147,7 @@
     "test:manager-control-plane": "pnpm run test:manager-control-plane:preflight && pnpm run test:manager-control-plane:full",
     "test:manager-control-plane:preflight": "pnpm run test:manager-control-plane:contracts && pnpm run test:manager-control-plane:focused && pnpm run test:manager-control-plane:verification",
     "test:manager-control-plane:contracts": "node ./scripts/run-manager-control-plane-fast-tests.mjs contracts",
-    "test:manager-control-plane:focused": "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs",
+    "test:manager-control-plane:focused": "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_review_route_packet.py -q",
     "test:manager-control-plane:verification": "node --test tests/manager-control-plane-verification.test.mjs",
     "test:manager-source-intake": "node --test tests/manager-continuous-source-intake.test.mjs tests/manager-default-bmad-source-resolution.test.mjs tests/manager-source-intake-cycle.test.mjs tests/manager-supervisor-source-intake.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_manager_source_intake_adapter.py -q",
     "test:manager-control-plane:full": "node ./scripts/run-manager-control-plane-shards.mjs all --jobs 1",

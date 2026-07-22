@@ -72,7 +72,9 @@ const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const checkScript = readWorkspaceFile("scripts/check-manager-control-plane.mjs");
 const requiredFiles = [
   ".agents/skills/kendall-manager-control-plane/SKILL.md",
+  "packages/contracts/src/manager-control-plane/review-route.ts",
   "scripts/lib/manager-control-plane/core.mjs",
+  "scripts/lib/manager-control-plane/review-route.mjs",
   "scripts/lib/manager-control-plane/forbidden-boundary.mjs",
   "scripts/lib/manager-control-plane/README.md",
   "scripts/manager-preflight.mjs",
@@ -116,6 +118,9 @@ const requiredFiles = [
   "tests/manager-supervisor-source-intake.test.mjs",
   "tests/manager-control-plane-verification.test.mjs",
   "tests/manager-control-plane.contract.test.mjs",
+  "tests/manager-review-route.test.mjs",
+  "services/supervisor/src/supervisor/domain/review_route.py",
+  "services/supervisor/tests/integration/test_review_route_packet.py",
   "tests/manager-control-plane.dispatcher-port.test.mjs",
   "tests/manager-control-plane.forbidden-boundary.test.mjs",
   "tests/manager-control-plane.run-contract.test.mjs",
@@ -161,7 +166,7 @@ for (const [name, command] of [
   ["test:manager-control-plane", "pnpm run test:manager-control-plane:preflight && pnpm run test:manager-control-plane:full"],
   ["test:manager-control-plane:preflight", "pnpm run test:manager-control-plane:contracts && pnpm run test:manager-control-plane:focused && pnpm run test:manager-control-plane:verification"],
   ["test:manager-control-plane:contracts", "node ./scripts/run-manager-control-plane-fast-tests.mjs contracts"],
-  ["test:manager-control-plane:focused", "node ./scripts/run-manager-control-plane-fast-tests.mjs focused"],
+  ["test:manager-control-plane:focused", "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_review_route_packet.py -q"],
   ["test:manager-control-plane:verification", "node --test tests/manager-control-plane-verification.test.mjs"],
   ["test:manager-source-intake", "node --test tests/manager-continuous-source-intake.test.mjs tests/manager-default-bmad-source-resolution.test.mjs tests/manager-source-intake-cycle.test.mjs tests/manager-supervisor-source-intake.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_manager_source_intake_adapter.py -q"],
   ["test:manager-control-plane:full", "node ./scripts/run-manager-control-plane-shards.mjs all --jobs 1"],

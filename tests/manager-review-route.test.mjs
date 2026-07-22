@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -183,4 +184,12 @@ test("review-route evaluator has no live adapter, child-process, network, or raw
   const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../scripts/lib/manager-control-plane/review-route.mjs", import.meta.url), "utf8"));
   assert.doesNotMatch(source, /node:child_process|\bspawn\s*\(|\bexec(?:File|Sync)?\s*\(|fetch\s*\(|https?:\/\/|OllamaProviderAdapter|get_local_evidence_explanation/i);
   assert.doesNotMatch(source, /raw(?:Prompt|Completion|Transcript)|providerPayload|reasoningTrace/i);
+});
+
+test("manager control-plane drift check requires the report-only route test as a focused test segment", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const checker = await readFile(new URL("../scripts/check-manager-control-plane.mjs", import.meta.url), "utf8");
+  const focused = "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_review_route_packet.py -q";
+  assert.equal(packageJson.scripts["test:manager-control-plane:focused"], focused);
+  assert.match(checker, /\["test:manager-control-plane:focused", "node \.\/scripts\/run-manager-control-plane-fast-tests\.mjs focused && node --test tests\/manager-review-route\.test\.mjs && uv run --directory services\/supervisor pytest tests\/integration\/test_review_route_packet\.py -q"\]/);
 });
