@@ -2622,7 +2622,7 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
         "dependencyState": "clear",
         "reservation": {"status": "advisory_reserved", "owner": "operator", "reasonCode": "independent_surface"},
         "capacity": {"posture": "normal", "reasonCode": "capacity_normal"},
-        "reason": "The packet is selected in the advisory wave.",
+        "reason": "The profile: advisory packet is selected in the wave.",
         "nextSafeAction": "Inspect existing authority gates before any future action.",
         "evidenceRefs": ["evidence:parallel-wave"],
         "metadataOnly": True,
@@ -2643,6 +2643,106 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
     with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (main, socket_path):
         public_reject = _uds_request(socket_path, "/pipeline-control-plane/work-packets", payload=request)
         assert public_reject.status_code == 403
+        future_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "generatedAt": (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(),
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-future",
+            "correlationId": "manager-source:parallel-wave-future",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=future_report).status_code == 400
+        unsafe_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": "The report references /tmp/private-source and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_path_report).status_code == 400
+        unsafe_key_value_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": "The report path=/tmp/private-source must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-key-value-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-key-value-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_key_value_path_report).status_code == 400
+        unsafe_exact_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": "The report points to /tmp and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-exact-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-exact-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_exact_path_report).status_code == 400
+        unsafe_windows_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": r"The report points to C:\operator\private and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-windows-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-windows-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_windows_path_report).status_code == 400
+        unsafe_root_relative_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": r"The report points to \Windows\System32 and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-root-relative-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-root-relative-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_root_relative_path_report).status_code == 400
+        unsafe_named_home_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": "The report points to ~operator/private and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-named-home-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-named-home-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_named_home_path_report).status_code == 400
+        unsafe_posix_root_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": "The report points to /private/source and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-posix-root-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-posix-root-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_posix_root_path_report).status_code == 400
+        unsafe_file_uri_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": "The report points to file:///private/source and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-file-uri",
+            "correlationId": "manager-source:parallel-wave-unsafe-file-uri",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_file_uri_report).status_code == 400
+        unsafe_unc_path_report = {
+            **request,
+            "parallelWorkGraphEvidence": {
+                **graph,
+                "reason": r"The report points to \\server\private and must be rejected.",
+            },
+            "idempotencyKey": "manager-source-intake:parallel-wave-unsafe-unc-path",
+            "correlationId": "manager-source:parallel-wave-unsafe-unc-path",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_unc_path_report).status_code == 400
         create_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request)
         assert create_response.status_code == 200
         projection_response = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
@@ -2691,6 +2791,9 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
         }
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=post_transition_refresh).status_code == 200
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=post_transition_refresh).status_code == 200
+        refreshed_detail = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"][0]
+        assert refreshed_detail["latestTransitionEventRef"] == f"event:{transition.json()['data']['currentEventId']}"
+        assert refreshed_detail["canSatisfyLiveMovementProof"] is True
         older_refresh = {
             **post_transition_refresh,
             "parallelWorkGraphEvidence": {**post_transition_refresh["parallelWorkGraphEvidence"], "generatedAt": generated_at, "reason": "An older advisory report must not replace newer evidence."},

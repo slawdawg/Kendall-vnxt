@@ -544,7 +544,7 @@ export function consumeCanonicalSupervisorProjection(projection = {}, context = 
       entry.capabilityState === "available" && ["allowed", "not_required"].includes(entry.authorityState))) {
     blockers.push({ code: "canonical_capability_authority_violation", message: "Canonical projection cannot grant manager mutation authority.", nextAction: "Block the capability and refresh supervisor authority truth." });
   }
-  const terminal = ["done", "failed"].includes(selected.status);
+  const terminal = ["complete", "deferred", "failed"].includes(selected.status);
   const ok = blockers.length === 0;
   const operationalActions = ok && !terminal && projected.readinessReady
     ? { ...structuredClone(runtime), source: "canonical_supervisor_projection", metadataOnly: true, rawPayloadRetained: false }

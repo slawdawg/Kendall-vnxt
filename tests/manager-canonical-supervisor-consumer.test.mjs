@@ -184,7 +184,7 @@ test("partial stale contradictory and terminal canonical truth fails closed with
     },
   });
   const lifecycleContradiction = supervisorProjection();
-  lifecycleContradiction.workPackets[0].status = "done";
+  lifecycleContradiction.workPackets[0].status = "complete";
   lifecycleContradiction.workPackets[0].currentStage = "learn";
   const duplicateCapabilities = supervisorProjection();
   duplicateCapabilities.actionCapabilities.push(duplicateCapabilities.actionCapabilities[0]);
@@ -195,15 +195,17 @@ test("partial stale contradictory and terminal canonical truth fails closed with
     assert.equal(consumed.operationalActions.source, "canonical_supervisor_projection");
   }
 
-  const terminal = supervisorProjection();
-  for (const packet of [...terminal.workPackets, ...terminal.selectedPacketDetails]) {
-    packet.status = "done";
-    packet.currentStage = "learn";
+  for (const terminalStatus of ["complete", "deferred"]) {
+    const terminal = supervisorProjection();
+    for (const packet of [...terminal.workPackets, ...terminal.selectedPacketDetails]) {
+      packet.status = terminalStatus;
+      packet.currentStage = "learn";
+    }
+    const consumed = consumeCanonicalSupervisorProjection(terminal, { now: NOW });
+    assert.equal(consumed.ok, true, JSON.stringify(consumed.blockers));
+    assert.equal(consumed.terminal, true);
+    assert.equal(consumed.operationalActions.actionCapabilities.find((entry) => entry.actionId === "requeue").authorityState, "blocked");
   }
-  const consumed = consumeCanonicalSupervisorProjection(terminal, { now: NOW });
-  assert.equal(consumed.ok, true, JSON.stringify(consumed.blockers));
-  assert.equal(consumed.terminal, true);
-  assert.equal(consumed.operationalActions.actionCapabilities.find((entry) => entry.actionId === "requeue").authorityState, "blocked");
 
   assert.deepEqual(consumeCanonicalSupervisorProjection({ workPackets: [{ packetId: "legacy" }] }, { now: NOW }), {
     present: false,

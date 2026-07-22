@@ -31,6 +31,10 @@ EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
 )
+PIPELINE_WORK_GRAPH_LOCAL_PATH_RE = re.compile(
+    r"(?:/|\bfile:|[A-Za-z]:[\\/]|~(?:[A-Za-z0-9._-]+)?[\\/]|\\)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -4105,7 +4109,7 @@ class SupervisorService:
             generated_at = self._ensure_aware(datetime.fromisoformat(str(safe["generatedAt"]).replace("Z", "+00:00")))
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("Parallel work graph evidence generatedAt is invalid.") from exc
-        if generated_at > datetime.now(timezone.utc) + timedelta(seconds=30):
+        if generated_at > datetime.now(timezone.utc):
             raise ValueError("Parallel work graph evidence generatedAt is in the future.")
         return safe
 
@@ -4355,7 +4359,7 @@ class SupervisorService:
             and len(value) <= max_length
             and not UNSAFE_LIFECYCLE_TEXT_RE.search(value)
             and not EXECUTABLE_CONTROL_TEXT_RE.search(value)
-            and not re.search(r"(?:^|[\\s\"'])/(?:home|tmp|var|etc)/", value, re.IGNORECASE)
+            and not PIPELINE_WORK_GRAPH_LOCAL_PATH_RE.search(value)
         )
 
     def _is_safe_pipeline_work_graph_ref(self, value: str) -> bool:
@@ -4364,7 +4368,7 @@ class SupervisorService:
             and bool(value)
             and len(value) <= 255
             and not UNSAFE_LIFECYCLE_TEXT_RE.search(value)
-            and not re.search(r"(?:^|[\\s\"'])/(?:home|tmp|var|etc)/", value, re.IGNORECASE)
+            and not PIPELINE_WORK_GRAPH_LOCAL_PATH_RE.search(value)
         )
 
     def _safe_pipeline_source_state_metadata(self, raw_source_state: dict[str, object]) -> dict[str, object]:
@@ -5841,8 +5845,8 @@ class SupervisorService:
                 for event in packet.history
                 if event.eventType in {"packet.created", "packet.stage_transitioned", "packet.operational_action_applied"}
             ]
-            current_lifecycle_event = next(
-                (event for event in lifecycle_events if event.eventId == packet.currentEventId),
+            current_authoritative_event = next(
+                (event for event in packet.history if event.eventId == packet.currentEventId),
                 None,
             )
             transition_events = [
@@ -5852,7 +5856,7 @@ class SupervisorService:
             ]
             latest_movement_event = (
                 next((event for event in reversed(transition_events) if event.targetStage == packet.currentStage), None)
-                if current_lifecycle_event
+                if current_authoritative_event
                 else None
             )
             recent_transition_event_refs = [f"event:{event.eventId}" for event in transition_events[-5:]]
@@ -5908,7 +5912,7 @@ class SupervisorService:
                 packet_source_label == "live"
                 and packet.status in {"active", "waiting", "blocked"}
                 and packet.currentStage != "learn"
-                and current_lifecycle_event is not None
+                and current_authoritative_event is not None
                 and latest_movement_event is not None
                 and latest_transition_event_ref is not None
             )

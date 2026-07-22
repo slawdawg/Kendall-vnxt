@@ -12,7 +12,7 @@ const MAX_PACKET_BYTES = 256 * 1024;
 const FORBIDDEN_METADATA = /\b(raw[ _-]?(prompt|completion|payload|transcript)|provider[ _-]?payload|reasoning[ _-]?trace|terminal[ _-]?scrollback|tmux[ _-]?scrollback|pane[ _-]?scrollback|secret|credential|api[ _-]?key|access[ _-]?token)\b/i;
 const FORBIDDEN_FIELD = /(raw(?!payloadretained)|prompt|completion|provider.*payload|reasoning|secret|credential|token|scrollback|transcript)/i;
 const STAGES = new Set(["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"]);
-const STATUSES = new Set(["waiting", "active", "blocked", "failed", "done"]);
+const STATUSES = new Set(["waiting", "active", "blocked", "failed", "complete", "deferred"]);
 
 export class ManagerSupervisorSourceIntakeError extends Error {
   constructor(code, message, packet, options = {}) {
@@ -118,8 +118,12 @@ export function buildManagerSourceIntakeRequest(packet, options = {}) {
 export function planManagerSourcePacketIntake(packet, supervisorUrl, context = {}) {
   validateBoundedMetadataOnlyValue(packet, "managerPacket");
   const privateUdsPath = resolvePrivateUdsPath(context.supervisorUdsPath);
-  const endpoint = privateUdsPath ? `private-uds:${privateUdsPath}${PRIVATE_SOURCE_INTAKE_PATH}` : resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
   const request = buildManagerSourceIntakeRequest(packet, { allowPrivateGraph: Boolean(privateUdsPath) });
+  // A private UDS transport is not itself an authority grant. Ordinary
+  // metadata-only intake remains on the public route; only the graph-bearing
+  // manager report needs the private route that admits that additional field.
+  const intakePath = request.parallelWorkGraphEvidence ? PRIVATE_SOURCE_INTAKE_PATH : SOURCE_INTAKE_PATH;
+  const endpoint = privateUdsPath ? `private-uds:${privateUdsPath}${intakePath}` : resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
   const targetComponents = [
     `candidate:${requiredSafeMetadata(packet.summary.seedPacket.candidateWorkPacketId, "seedPacket.candidateWorkPacketId", 120)}`,
     `packet:${request.packetId}`,
@@ -179,7 +183,7 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   }
   try {
     response = privateUdsPath
-      ? await postPrivateUds(privateUdsPath, PRIVATE_SOURCE_INTAKE_PATH, request, timeoutMs)
+      ? await postPrivateUds(privateUdsPath, request.parallelWorkGraphEvidence ? PRIVATE_SOURCE_INTAKE_PATH : SOURCE_INTAKE_PATH, request, timeoutMs)
       : await fetchImpl(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "application/json" },
@@ -546,6 +550,12 @@ function validateLifecycleIdentity(lifecycle, request) {
   if (!persisted || persisted.metadataOnly !== true || !validTimestamp(persisted.occurredAt)) {
     throw new TypeError("Supervisor source intake lifecycle is missing the exact persisted manager source event.");
   }
+  if (
+    persisted.eventType === "packet.parallel_work_graph_refreshed" &&
+    (!STAGES.has(persisted.targetStage) || !STATUSES.has(persisted.status))
+  ) {
+    throw new TypeError("Supervisor graph-refresh event has invalid persisted lifecycle state.");
+  }
   const persistedIdentity = {
     packetId: persisted.packetId,
     eventType: persisted.eventType,
@@ -563,8 +573,8 @@ function validateLifecycleIdentity(lifecycle, request) {
   const expectedPersistedIdentity = {
     packetId: request.packetId,
     eventType: persisted.eventType,
-    targetStage: persisted.eventType === "packet.parallel_work_graph_refreshed" ? lifecycle.currentStage : request.initialStage,
-    status: persisted.eventType === "packet.parallel_work_graph_refreshed" ? lifecycle.status : request.status,
+    targetStage: persisted.eventType === "packet.parallel_work_graph_refreshed" ? persisted.targetStage : request.initialStage,
+    status: persisted.eventType === "packet.parallel_work_graph_refreshed" ? persisted.status : request.status,
     truthLabel: request.truthLabel,
     sourceRef: request.sourceRef,
     actor: request.actor,
