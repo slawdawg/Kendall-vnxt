@@ -9477,6 +9477,104 @@ test("builds a deterministic metadata-only execution graph with bounded independ
   }
 });
 
+test("selects an immutable read-only review candidate beside a non-overlapping writer without mutable inputs", () => {
+  const stateRoot = join(tmpdir(), `parallel-immutable-review-no-write-${process.pid}-${Date.now()}`);
+  const writer = {
+    candidateWorkPacketId: "parallel-writer",
+    title: "Update deterministic planner",
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-2"],
+    evidenceRefs: ["source:34-2"],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/core.mjs"] },
+  };
+  const reviewer = {
+    candidateWorkPacketId: "parallel-review",
+    title: "Independently review the planner",
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-2"],
+    evidenceRefs: ["source:34-2-review"],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    readWriteMode: "read_only",
+    immutableReview: {
+      exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      sourceRefs: ["review-input:34-2"],
+      mutableWorktree: false,
+      metadataOnly: true,
+    },
+  };
+
+  try {
+    const first = buildParallelSuitabilityReport({ stateRoot }, { candidates: [writer, reviewer], generatedAt: new Date("2026-07-22T12:00:00.000Z") });
+    const second = buildParallelSuitabilityReport({ stateRoot }, { candidates: [reviewer, writer], generatedAt: new Date("2026-07-22T12:00:00.000Z") });
+
+    assert.equal(existsSync(stateRoot), false);
+    assert.deepEqual(first, second);
+    assert.deepEqual(first.summary.recommendation.selectedExecutionJobIds, ["execution-job:parallel-review", "execution-job:parallel-writer"]);
+    const reviewJob = first.summary.executionJobs.find((job) => job.executionJobId === "execution-job:parallel-review");
+    assert.equal(reviewJob.readWriteMode, "read_only");
+    assert.equal(reviewJob.worktree.path, null);
+    assert.deepEqual(reviewJob.immutableReview, reviewer.immutableReview);
+    assert.equal(reviewJob.reservationLease.reasonCode, "immutable_review_candidate");
+    assert.doesNotMatch(JSON.stringify(first), /provider call|current finding|delivery eligible/i);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("blocks malformed, stale, mismatched, and mutable immutable-review candidates without changing writer gates", () => {
+  const reviewCandidate = (candidateWorkPacketId, overrides = {}) => ({
+    candidateWorkPacketId,
+    title: candidateWorkPacketId,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-2"],
+    evidenceRefs: ["source:34-2-review"],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    readWriteMode: "read_only",
+    immutableReview: {
+      exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      sourceRefs: ["review-input:34-2"],
+      mutableWorktree: false,
+      metadataOnly: true,
+    },
+    ...overrides,
+  });
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [
+      reviewCandidate("missing-review", { immutableReview: undefined }),
+      reviewCandidate("bad-digest", { immutableReview: { exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", digest: "copied source", sourceRefs: ["review-input:34-2"], mutableWorktree: false, metadataOnly: true } }),
+      reviewCandidate("alias-conflict", { immutableReview: { exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sourceRefs: ["review-input:34-2"], mutableWorktree: false, mutable_worktree: true, metadataOnly: true } }),
+      reviewCandidate("changed-head", { immutableReview: { exactHead: "cccccccccccccccccccccccccccccccccccccccc", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sourceRefs: ["review-input:34-2"], mutableWorktree: false, metadataOnly: true } }),
+      reviewCandidate("mutable-worktree", { worktreePath: "/tmp/review", immutableReview: { exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sourceRefs: ["review-input:34-2"], mutableWorktree: false, metadataOnly: true } }),
+      reviewCandidate("mode-alias-conflict", { read_write_mode: "read_write" }),
+      reviewCandidate("mode-bigint", { read_write_mode: 1n }),
+      reviewCandidate("stale-review", { immutableReview: { exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sourceRefs: ["review-input:34-2"], mutableWorktree: false, metadataOnly: true, stale: true } }),
+      reviewCandidate("stale-shape", { immutableReview: { exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sourceRefs: ["review-input:34-2"], mutableWorktree: false, metadataOnly: true, stale: "true" } }),
+      reviewCandidate("top-level-alias-conflict", { immutable_review: { exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sourceRefs: ["review-input:34-2"], mutableWorktree: false, metadataOnly: true, stale: true } }),
+    ],
+  });
+
+  assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, []);
+  assert.deepEqual(report.summary.executionJobs.map((job) => [job.executionJobId, job.lifecycleStatus, job.reservationLease.reasonCode]), [
+    ["execution-job:alias-conflict", "blocked", "immutable_review_malformed"],
+    ["execution-job:bad-digest", "blocked", "immutable_review_malformed"],
+    ["execution-job:changed-head", "blocked", "immutable_review_head_mismatch"],
+    ["execution-job:missing-review", "blocked", "immutable_review_missing"],
+    ["execution-job:mode-alias-conflict", "blocked", "read_write_mode_malformed"],
+    ["execution-job:mode-bigint", "blocked", "read_write_mode_malformed"],
+    ["execution-job:mutable-worktree", "blocked", "immutable_review_mutable_worktree"],
+    ["execution-job:stale-review", "blocked", "immutable_review_stale"],
+    ["execution-job:stale-shape", "blocked", "immutable_review_malformed"],
+    ["execution-job:top-level-alias-conflict", "blocked", "immutable_review_malformed"],
+  ]);
+  assert.doesNotMatch(JSON.stringify(report), /copied source|\/tmp\/review/);
+});
+
 test("fails closed graph reservations for malformed, overlapping, delivery, ownership, and authority candidates", () => {
   const report = buildParallelSuitabilityReport({}, {
     generatedAt: new Date("2026-07-22T12:00:00.000Z"),

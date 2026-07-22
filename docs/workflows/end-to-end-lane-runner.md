@@ -279,6 +279,30 @@ worker, call a provider, merge, or clean up. Existing `dispatch-next --apply`,
 ownership/takeover, exact-head delivery, and cleanup gates remain the only
 mutation boundaries.
 
+A selected `read_only` entry is an **immutable review candidate**, not a review
+result. It may appear beside a non-overlapping writer only when it carries a
+full exact Git head, a `sha256:` digest, metadata-only source references, no
+mutable worktree path, and a baseline that exactly matches that head. The dry
+run does not call a provider, create findings, establish delivery eligibility,
+or promote the candidate into a review request. Treat it as a bounded planning
+fact only; a separately governed review workflow remains necessary before any
+provider or delivery activity.
+
+Interpret the output as follows:
+
+- `selected` means the report found a bounded advisory wave under its current
+  graph, baseline, and cap rules.
+- `deferred` means a valid candidate must wait for the named coupling,
+  overlap, baseline, or cap condition.
+- `blocked` means source, ownership, delivery, authority, or immutable-review
+  evidence is missing, stale, malformed, or unsafe.
+
+For a blocked immutable review candidate, correct the exact reason (for
+example, rebuild a stale or mismatched exact-head/digest snapshot, remove the
+mutable worktree input, or replace malformed metadata) and re-run the dry run.
+Do not use a re-run to infer a provider result or bypass the existing delivery
+gates.
+
 If a candidate is deferred or blocked, resolve its named reason and rebuild the
 report from fresh source and assignment evidence. Common recovery actions are:
 

@@ -285,6 +285,7 @@ export const EXECUTION_JOB_SERIALIZED_FIELDS = [
   "worktree",
   "read_write_mode",
   "change_surface",
+  "immutable_review",
   "baseline_scope",
   "dependencies",
   "evidence_refs",
