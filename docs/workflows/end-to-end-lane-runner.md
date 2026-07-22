@@ -176,7 +176,15 @@ cannot be completed without expanded party-mode authority.
    branch, remote branch, and delivery subagent audit for the current lane.
    Cleanup is resumable; if a previous attempt removed the worktree but stopped
    before branch deletion or manifest closure, rerun the same cleanup command
-   from a stable worktree.
+   from a stable worktree. When cleanup records `cleanup_partial`, inspect the
+   manifest's metadata-only `cleanup_target_evidence` before retrying: every
+   required worktree, local-branch, and requested remote-branch target must be
+   `absent` before the manifest can close. A target left `present` or `unknown`
+   is a stop line, not a successful closeout; fix that target and rerun the same
+   exact cleanup command to refresh the evidence. If the partial attempt
+   registered a remote branch through `--delete-remote`, preserve that flag on
+   resume: the runner refuses to downgrade a still-present registered remote
+   target and close the manifest while that branch remains.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface. Use
    `cleanup-orphans --summary-json` to inspect matched orphan directories before
