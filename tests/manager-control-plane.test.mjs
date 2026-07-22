@@ -9514,7 +9514,8 @@ test("redacts a matching parallel report into Packet Detail work graph evidence 
   assert.match(evidence[0].reportIdentity, /^sha256:[0-9a-f]{64}$/);
   assert.doesNotMatch(evidence[0].reportIdentity, /worktree|changeSurface|sourceRefs|provider|dispatch apply/i);
 
-  assert.deepEqual(evidence, [{
+  assert.equal(evidence.length, 1);
+  assert.deepEqual(evidence[0], {
     schemaVersion: "parallel-work-graph-evidence/v0",
     sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
     availability: "available",
@@ -9529,11 +9530,26 @@ test("redacts a matching parallel report into Packet Detail work graph evidence 
     capacity: { posture: "normal", reasonCode: "capacity_normal" },
     reason: "Candidate has independent source-declared scope and is selected only as a bounded advisory recommendation.",
     nextSafeAction: "Review the existing dispatch preview before any separately authorized mutation.",
-    evidenceRefs: ["evidence:34-4"],
+    evidenceRefs: evidence[0].evidenceRefs,
     metadataOnly: true,
     rawPayloadRetained: false,
     retention: "metadata_only_evidence_references",
-  }]);
+  });
+  assert.deepEqual(evidence[0].evidenceRefs, [evidence[0].evidenceRefs[0]]);
+  assert.match(evidence[0].evidenceRefs[0], /^opaque-ref:sha256:[0-9a-f]{64}$/);
+  assert.doesNotMatch(JSON.stringify(evidence[0].evidenceRefs), /evidence:34-4/i);
+  assert.deepEqual(
+    buildParallelWorkGraphEvidence(report, { "packet-detail": "candidate_work:self" }, { now: "2026-07-22T12:01:00.000Z" })[0].evidenceRefs,
+    evidence[0].evidenceRefs,
+    "the opaque reference is deterministic for the same bounded source metadata",
+  );
+  const alternateReport = structuredClone(report);
+  alternateReport.summary.executionJobs[0].evidenceRefs = ["evidence:34-4-alternate"];
+  assert.notDeepEqual(
+    buildParallelWorkGraphEvidence(alternateReport, { "packet-detail": "candidate_work:self" }, { now: "2026-07-22T12:01:00.000Z" })[0].evidenceRefs,
+    evidence[0].evidenceRefs,
+    "the opaque reference remains bound to its source metadata",
+  );
   assert.doesNotMatch(JSON.stringify(evidence), /worktree|changeSurface|sourceRefs|provider|dispatch apply/i);
 
   const stale = buildParallelWorkGraphEvidence(report, { "packet-detail": "candidate_work:self" }, {

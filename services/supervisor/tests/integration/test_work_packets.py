@@ -5,6 +5,7 @@ import os
 import socket
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -101,32 +102,42 @@ def _running_http_supervisor(tmp_path, monkeypatch, db_name: str):
 @contextmanager
 def _running_private_uds_supervisor(tmp_path, monkeypatch, db_name: str):
     db_path = tmp_path / db_name
-    socket_path = tmp_path / "private-supervisor.sock"
-    password_path = tmp_path / "bootstrap-password"
-    password_path.write_text("private test bootstrap password\n", encoding="utf8")
-    password_path.chmod(0o600)
-    tmp_path.chmod(0o700)
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
-    monkeypatch.setenv("KENDALL_LAN_AUTH_ENABLED", "true")
-    monkeypatch.setenv("KENDALL_SUPERVISOR_TRANSPORT", "private_uds")
-    monkeypatch.setenv("KENDALL_SUPERVISOR_UDS_PATH", str(socket_path))
-    monkeypatch.setenv("KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE", str(password_path))
-    _reset_supervisor_modules()
-    from supervisor.api import main
-    server = uvicorn.Server(uvicorn.Config(main.app, uds=str(socket_path), log_level="error", access_log=False, lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started and thread.is_alive() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert server.started, "private UDS supervisor failed to start within 10 seconds"
+    private_socket_dir = Path(tempfile.gettempdir()) / f"kendall-uds-{hashlib.sha256(str(tmp_path).encode('utf8')).hexdigest()[:12]}"
+    private_socket_dir.mkdir(mode=0o700)
+    socket_path = private_socket_dir / "supervisor.sock"
+    server = None
+    thread = None
     try:
+        password_path = tmp_path / "bootstrap-password"
+        password_path.write_text("private test bootstrap password\n", encoding="utf8")
+        password_path.chmod(0o600)
+        tmp_path.chmod(0o700)
+        monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
+        monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+        monkeypatch.setenv("KENDALL_LAN_AUTH_ENABLED", "true")
+        monkeypatch.setenv("KENDALL_SUPERVISOR_TRANSPORT", "private_uds")
+        monkeypatch.setenv("KENDALL_SUPERVISOR_UDS_PATH", str(socket_path))
+        monkeypatch.setenv("KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE", str(password_path))
+        _reset_supervisor_modules()
+        from supervisor.api import main
+        server = uvicorn.Server(uvicorn.Config(main.app, uds=str(socket_path), log_level="error", access_log=False, lifespan="on"))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert server.started, "private UDS supervisor failed to start within 10 seconds"
         yield main, socket_path
     finally:
-        server.should_exit = True
-        thread.join(timeout=10)
-        assert not thread.is_alive(), "private UDS supervisor failed to stop within 10 seconds"
+        try:
+            if server is not None:
+                server.should_exit = True
+            if thread is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "private UDS supervisor failed to stop within 10 seconds"
+        finally:
+            socket_path.unlink(missing_ok=True)
+            private_socket_dir.rmdir()
 
 
 def _uds_request(socket_path: Path, path: str, *, method: str = "POST", payload: dict[str, object] | None = None) -> _HttpResponse:
