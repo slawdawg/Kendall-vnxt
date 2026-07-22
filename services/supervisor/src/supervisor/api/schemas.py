@@ -6565,6 +6565,19 @@ class CandidateWorkPromotionView(BaseModel):
     candidateWork: CandidateWorkView
     workItem: WorkItemView
 
+    @model_validator(mode="before")
+    @classmethod
+    def _promotion_children_must_reject_unknown_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        for field_name, child_model in (("candidateWork", CandidateWorkView), ("workItem", WorkItemView)):
+            child = value.get(field_name)
+            if isinstance(child, dict):
+                unknown = set(child) - set(child_model.model_fields)
+                if unknown:
+                    raise ValueError(f"{field_name} contains unknown fields: {sorted(unknown)}")
+        return value
+
 
 class CandidateWorkPromotionApiEnvelope(BaseModel):
     """Typed response boundary for supervisor-owned candidate promotion."""

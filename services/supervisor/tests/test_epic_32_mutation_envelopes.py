@@ -59,6 +59,29 @@ def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
         DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "meta": {"nested": []}})
     with pytest.raises(ValidationError):
         CandidateWorkPromotionApiEnvelope.model_validate({"data": {}, "meta": {"nested": []}})
+    with pytest.raises(ValidationError):
+        DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "unexpected": True})
+    with pytest.raises(ValidationError):
+        CandidateWorkPromotionView.model_validate({"candidateWork": {"unexpected": True}, "workItem": {}})
+    with pytest.raises(ValidationError):
+        DeliveryExecutionEvidenceView.model_validate({**evidence, "exitCode": "1"})
+
+def test_epic_32_envelopes_accept_null_and_scalar_metadata() -> None:
+    evidence = {
+        "evidenceId": "evidence-1",
+        "mode": "local",
+        "actionId": "pr",
+        "status": "recorded",
+        "eventRecorded": False,
+        "summary": "metadata-only evidence",
+        "recoveryPath": "retry",
+    }
+    envelope = DeliveryExecutionEvidenceApiEnvelope.model_validate(
+        {"data": evidence, "meta": {"text": "ok", "count": 1, "enabled": True, "nullable": None}}
+    )
+    assert envelope.meta is not None
+    assert envelope.meta["nullable"] is None
+    assert DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "meta": None}).meta is None
 
 
 def test_epic_32_promotion_requires_both_result_objects() -> None:
