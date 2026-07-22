@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   attachParallelWorkGraphEvidenceToManagerPacket,
   buildOperationalReadinessContract,
+  buildParallelWorkGraphEvidence,
   buildParallelSuitabilityReport,
   buildSourceBackedPacketSeedPlan,
   projectCanonicalSupervisorPacket,
@@ -215,8 +216,8 @@ test("manager source intake binds its normal advisory report to the deterministi
       candidateWorkPacketId: candidateId,
       title: packet.summary.seedPacket.title,
       eligibilityDecision: "eligible",
-      sourceRefs: ["story:34-5"],
-      evidenceRefs: ["evidence:34-5"],
+      sourceRefs: ["story:_bmad-output/implementation-artifacts/34-5-story.md"],
+      evidenceRefs: ["story:_bmad-output/implementation-artifacts/34-5-story.md"],
       verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
       baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
@@ -232,6 +233,62 @@ test("manager source intake binds its normal advisory report to the deterministi
   assert.equal(request.parallelWorkGraphEvidence.sourceSchemaVersion, "parallel-execution-graph-reservation/v1");
   assert.equal(request.parallelWorkGraphEvidence.rawPayloadRetained, false);
   assert.doesNotMatch(JSON.stringify(request.parallelWorkGraphEvidence), /worktree|changeSurface|sourceRefs|provider|raw prompt/i);
+  assert.doesNotMatch(JSON.stringify(request.parallelWorkGraphEvidence), /_bmad-output|34-5-story\.md/i);
+  assert.equal(request.parallelWorkGraphEvidence.evidenceRefs.filter((ref) => /^opaque-ref:sha256:[0-9a-f]{64}$/.test(ref)).length, 1);
+
+  const windowsPathReport = structuredClone(report);
+  windowsPathReport.summary.executionJobs[0].evidenceRefs = ["C:\\operator\\private\\34-5-story.md"];
+  assert.deepEqual(
+    buildParallelWorkGraphEvidence(windowsPathReport, { [candidateId]: request.packetId }, { now: "2026-07-22T12:01:00.000Z" }),
+    [],
+    "unscoped Windows paths fail closed instead of crossing as raw or derived references",
+  );
+
+  for (const credentialLikeRef of [
+    "token=operator-private-value",
+    "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+    "github_pat_abcdefghijklmnopqrstuvwxyz0123456789",
+    "glpat-abcdefghijklmnopqrstuvwxyz0123456789",
+    "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+    "xoxb-abcdefghijklmnopqrstuvwxyz0123456789",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+    "AKIAABCDEFGHIJKLMNOP",
+    "authorization:Basicb3BlcmF0b3ItcHJpdmF0ZQ==",
+    "basic:b3BlcmF0b3ItcHJpdmF0ZQ==",
+    "Basic b3BlcmF0b3ItcHJpdmF0ZQ==",
+    "Bearer operator-private-value",
+  ]) {
+    const credentialLikeReport = structuredClone(report);
+    credentialLikeReport.summary.executionJobs[0].evidenceRefs = [credentialLikeRef];
+    assert.deepEqual(
+      buildParallelWorkGraphEvidence(credentialLikeReport, { [candidateId]: request.packetId }, { now: "2026-07-22T12:01:00.000Z" }),
+      [],
+      credentialLikeRef,
+    );
+  }
+});
+
+test("manager source intake refuses graph evidence with credential-like references", () => {
+  const packet = sourcePacket();
+  const candidateId = packet.summary.seedPacket.candidateWorkPacketId;
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: candidateId,
+      title: packet.summary.seedPacket.title,
+      eligibilityDecision: "eligible",
+      sourceRefs: ["api_key:operator-private-value"],
+      evidenceRefs: ["api_key:operator-private-value"],
+      verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+    }],
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
+  const bridged = attachParallelWorkGraphEvidenceToManagerPacket(packet, report, { now: "2026-07-22T12:01:00.000Z" });
+  assert.equal(bridged.summary.seedPacket.parallelWorkGraphEvidence, undefined);
+  assert.doesNotMatch(JSON.stringify(bridged), /api_key|operator-private-value/i);
 });
 
 test("manager source intake routes graph evidence only through an explicit private UDS path", () => {

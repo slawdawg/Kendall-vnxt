@@ -94,10 +94,11 @@ test("manager source intake cycle dry-run validates the exact target without fet
   assert.equal(result.summary.seedPacket.supervisorIntake, undefined);
 });
 
-test("manager source intake cycle preserves an explicit private UDS target in its plan", async () => {
+test("manager source intake cycle bridges a normal BMAD story through the private UDS graph route", async () => {
   const result = await runManagerSourceIntakeCycle([...ELIGIBLE_ARGS, "--dry-run", "--supervisor-uds-path", "/tmp/kendall-supervisor.sock"]);
-  assert.equal(result.summary.sourceIntakePlan.endpoint, "private-uds:/tmp/kendall-supervisor.sock/pipeline-control-plane/work-packets");
-  assert.equal(result.summary.sourceIntakePlan.parallelWorkGraphEvidence, null, "a source-only cycle does not invent a report; precomputed manager graph coverage is tested at the bridge");
+  assert.equal(result.summary.sourceIntakePlan.endpoint, "private-uds:/tmp/kendall-supervisor.sock/internal/manager-source-intake/work-packets");
+  assert.equal(result.summary.sourceIntakePlan.parallelWorkGraphEvidence?.schemaVersion, "parallel-work-graph-evidence/v0");
+  assert.doesNotMatch(JSON.stringify(result.summary.sourceIntakePlan.parallelWorkGraphEvidence), /_bmad-output|implementation-artifacts|\.md/i);
 });
 
 test("manager source intake cycle plans first and refuses blocked work without fetch", async () => {

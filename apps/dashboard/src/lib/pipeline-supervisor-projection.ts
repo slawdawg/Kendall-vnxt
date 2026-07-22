@@ -4,7 +4,7 @@ import {
   isPipelineProductModeMappingV0,
   validatePipelineOperationalActionCapabilityV1,
 } from "@kendall/contracts";
-import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type { PipelineDashboardProjectionV0, PipelineWorkGraphEvidenceV0 } from "@kendall/contracts";
 
 export function normalizePipelineDashboardProjection(projection: Partial<PipelineDashboardProjectionV0>): Partial<PipelineDashboardProjectionV0> {
   if (!projection || typeof projection !== "object") {
@@ -49,6 +49,9 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
   const reliabilityProblemsCurrent = "reliabilityProblems" in projection;
   const gatedControlsCurrent = "gatedControls" in projection;
   const runtimeCapabilitiesCurrent = !projection.runtimeReadiness || "actionCapabilitiesV1" in projection.runtimeReadiness;
+  const selectedPacketWorkGraphsCurrent = !Array.isArray(projection.selectedPacketDetails) || Array.from(projection.selectedPacketDetails).every((detail) => (
+    detail && typeof detail === "object" && "workGraph" in detail
+  ));
   if (
     sourceStatesCurrent &&
     queueSummaryCurrent &&
@@ -56,7 +59,8 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     workerSummaryCurrent &&
     reliabilityProblemsCurrent &&
     gatedControlsCurrent &&
-    runtimeCapabilitiesCurrent
+    runtimeCapabilitiesCurrent &&
+    selectedPacketWorkGraphsCurrent
   ) {
     return projection;
   }
@@ -133,6 +137,19 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
           : "Worker runtime state is not connected to the supervisor projection.",
         metadataOnly: true,
       };
+  const selectedPacketDetails = Array.isArray(projection.selectedPacketDetails) && !selectedPacketWorkGraphsCurrent
+    ? Array.from(projection.selectedPacketDetails, (detail) => {
+        if (!detail || typeof detail !== "object") {
+          return detail;
+        }
+        const legacyDetail = detail as unknown as Record<string, unknown>;
+        const packetId = legacyDetail.packetId;
+        if ("workGraph" in legacyDetail || typeof packetId !== "string") {
+          return detail;
+        }
+        return { ...detail, workGraph: unavailableProjectionWorkGraph(packetId) };
+      })
+    : projection.selectedPacketDetails;
   return {
     ...projection,
     managerSummary,
@@ -141,9 +158,33 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     sourceStates: sourceStatesCurrent ? projection.sourceStates : [],
     reliabilityProblems: reliabilityProblemsCurrent ? projection.reliabilityProblems : [],
     gatedControls: gatedControlsCurrent ? projection.gatedControls : [],
+    selectedPacketDetails,
     runtimeReadiness: projection.runtimeReadiness && !runtimeCapabilitiesCurrent
       ? { ...projection.runtimeReadiness, actionCapabilitiesV1: [] }
       : projection.runtimeReadiness,
+  };
+}
+
+function unavailableProjectionWorkGraph(packetId: string): PipelineWorkGraphEvidenceV0 {
+  return {
+    schemaVersion: "parallel-work-graph-evidence/v0" as const,
+    sourceSchemaVersion: "parallel-execution-graph-reservation/v1" as const,
+    availability: "unavailable" as const,
+    packetId,
+    executionJobId: null,
+    reportIdentity: null,
+    generatedAt: null,
+    freshnessState: "unavailable" as const,
+    waveMembership: "unavailable" as const,
+    dependencyState: "unavailable" as const,
+    reservation: { status: "unavailable" as const, owner: null, reasonCode: "parallel_report_unavailable" },
+    capacity: { posture: "unavailable" as const, reasonCode: "parallel_capacity_unavailable" },
+    reason: "Parallel work graph evidence is unavailable.",
+    nextSafeAction: "Inspect the authoritative packet lifecycle before relying on work graph evidence.",
+    evidenceRefs: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references" as const,
   };
 }
 

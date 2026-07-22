@@ -115,6 +115,8 @@ const RECONCILE_PROHIBITED_RAW_KEYS = new Set([
   "sourcecopy",
 ]);
 const WORK_GRAPH_UNSAFE_TEXT_RE = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const WORK_GRAPH_CREDENTIAL_REFERENCE_RE = /\b(?:api|access|auth)[_-]?(?:key|token)\b|\bauthorization\b|\b(?:bearer|basic)\b(?:\s+|[:=])|\b(?:token|secret|password|credential)\s*[:=]|\b(?:gh[pousr]_|github_pat_|glpat-|sk(?:-proj|-ant)?-|xox[a-z]-)[A-Za-z0-9_-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\b/i;
+const WORK_GRAPH_OPAQUE_REFERENCE_RE = /^(?:(?:artifact|doc|evidence|preflight|report|reservation|source|story):[A-Za-z0-9._/@=+-]{1,420}|(?:after|before|depends-on)-[a-z0-9-]{1,160})$/i;
 const WORK_GRAPH_EXECUTABLE_TEXT_RE = /\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b/i;
 
 export const MANAGER_WORKER_LIFECYCLE_STATES = Object.freeze([
@@ -18545,7 +18547,10 @@ export function buildParallelWorkGraphEvidence(report, packetIdByCandidate = {},
     if (!["advisory_reserved", "deferred", "blocked", "not_recommended"].includes(reservationStatus) || !reservationReasonCode) continue;
     const owner = safeNullableParallelWorkGraphText(safeReadProperty(reservationLease, "owner", null), 160);
     const dependencies = safeReadProperty(job, "dependencies", []);
-    if (!Array.isArray(dependencies) || dependencies.some((dependency) => !safeParallelWorkGraphIdentifier(dependency))) continue;
+    const dependencyRefs = Array.isArray(dependencies)
+      ? dependencies.map((dependency) => safeParallelWorkGraphOpaqueReference(dependency))
+      : null;
+    if (!dependencyRefs || dependencyRefs.some((dependency) => !dependency)) continue;
     const reason = safeParallelWorkGraphText(safeReadProperty(reservationLease, "reason", null));
     const nextSafeAction = safeParallelWorkGraphText(safeReadProperty(job, "nextSafeAction", null));
     const refs = safeParallelWorkGraphEvidenceRefs(safeReadProperty(job, "evidenceRefs", []));
@@ -18560,7 +18565,7 @@ export function buildParallelWorkGraphEvidence(report, packetIdByCandidate = {},
       generatedAt,
       freshnessState,
       waveMembership: lifecycleStatus,
-      dependencyState: dependencies.length === 0 ? "clear" : lifecycleStatus === "blocked" ? "blocked" : "declared",
+      dependencyState: dependencyRefs.length === 0 ? "clear" : lifecycleStatus === "blocked" ? "blocked" : "declared",
       reservation: { status: reservationStatus, owner, reasonCode: reservationReasonCode },
       capacity: { posture: capacityPosture, reasonCode: capacityReasonCode },
       reason,
@@ -18605,6 +18610,28 @@ function safeParallelWorkGraphIdentifier(value) {
     : null;
 }
 
+function safeParallelWorkGraphOpaqueReference(value) {
+  if (
+    typeof value !== "string" ||
+    WORK_GRAPH_CREDENTIAL_REFERENCE_RE.test(value) ||
+    !WORK_GRAPH_OPAQUE_REFERENCE_RE.test(value)
+  ) {
+    return null;
+  }
+  // Evidence and dependency references never cross the projection boundary
+  // verbatim. Their approved bounded grammar preserves graph linkage only.
+  if (
+    value.trim() !== value ||
+    value.length === 0 ||
+    value.length > 500 ||
+    /[\x00-\x1f\x7f]/.test(value) ||
+    WORK_GRAPH_UNSAFE_TEXT_RE.test(value)
+  ) {
+    return null;
+  }
+  return `opaque-ref:sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
 function safeParallelWorkGraphCode(value) {
   return typeof value === "string" && /^[a-z][a-z0-9_:-]{1,120}$/.test(value) ? value : null;
 }
@@ -18621,7 +18648,7 @@ function safeNullableParallelWorkGraphText(value, maxLength) {
 
 function safeParallelWorkGraphEvidenceRefs(value) {
   if (!Array.isArray(value) || value.length > 20) return null;
-  const refs = value.map((ref) => safeParallelWorkGraphIdentifier(ref));
+  const refs = value.map((ref) => safeParallelWorkGraphOpaqueReference(ref));
   return refs.every(Boolean) ? [...new Set(refs)].sort() : null;
 }
 

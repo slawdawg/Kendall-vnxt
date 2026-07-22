@@ -639,6 +639,24 @@ test("selected projection details reject synthetic and blank nested references",
   const cleanProjection = validDashboardProjection();
   assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
 
+  const legacyProjection = structuredClone(cleanProjection);
+  delete legacyProjection.selectedPacketDetails[0].workGraph;
+  assert.equal(projectionModule.isPipelineDashboardProjection(legacyProjection), false);
+  const normalizedLegacyProjection = projectionModule.normalizePipelineDashboardProjection(legacyProjection);
+  assert.equal(normalizedLegacyProjection.selectedPacketDetails[0].workGraph.availability, "unavailable");
+  assert.equal(normalizedLegacyProjection.selectedPacketDetails[0].workGraph.packetId, legacyProjection.selectedPacketDetails[0].packetId);
+  assert.equal(projectionModule.isPipelineDashboardProjection(normalizedLegacyProjection), true);
+
+  const malformedLegacyProjection = structuredClone(cleanProjection);
+  malformedLegacyProjection.selectedPacketDetails[0] = null;
+  assert.doesNotThrow(() => projectionModule.normalizePipelineDashboardProjection(malformedLegacyProjection));
+  assert.equal(projectionModule.isPipelineDashboardProjection(projectionModule.normalizePipelineDashboardProjection(malformedLegacyProjection)), false);
+
+  const sparseLegacyProjection = structuredClone(cleanProjection);
+  delete sparseLegacyProjection.selectedPacketDetails[0];
+  assert.doesNotThrow(() => projectionModule.normalizePipelineDashboardProjection(sparseLegacyProjection));
+  assert.equal(projectionModule.isPipelineDashboardProjection(projectionModule.normalizePipelineDashboardProjection(sparseLegacyProjection)), false);
+
   const invalidCases = [
     ["fixture source identity", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].refId = "FIXTURE:nested-source"; }],
     ["demo source path", (projection) => { projection.selectedPacketDetails[0].sourceRefs[0].pathOrUrl = " demo:nested-source-path "; }],
