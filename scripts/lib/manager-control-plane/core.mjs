@@ -18398,8 +18398,10 @@ export function buildParallelSuitabilityReport(options = {}, context = {}) {
   const reservationCandidates = jobs.filter((job) => job.lifecycleStatus === "eligible");
   for (const job of jobs) {
     if (job.lifecycleStatus !== "eligible") continue;
+    if (job.readWriteMode === "read_only") continue;
     const overlappingJobs = reservationCandidates
       .filter((other) => other.executionJobId !== job.executionJobId)
+      .filter((other) => other.readWriteMode !== "read_only")
       .filter((other) => changeSurfacesOverlap(job.changeSurface.paths, other.changeSurface.paths))
       .map((other) => other.executionJobId)
       .sort();
@@ -18500,20 +18502,32 @@ function normalizeExecutionJob(candidate = {}, index = 0, context = {}) {
   const surface = normalizeSourceDeclaredChangeSurface(candidate.changeSurface || candidate.change_surface);
   const ownerMetadata = compactMetadataText(candidate.owner || candidate.assignedOwner || "");
   const worktreeMetadata = compactMetadataText(candidate.worktreePath || candidate.worktree_path || "");
+  const readWriteModeValue = immutableReviewAliasedValue(candidate, "readWriteMode", "read_write_mode");
+  const readWriteMode = readWriteModeValue.conflict
+    ? { value: "unknown", valid: false }
+    : normalizeParallelReadWriteMode(readWriteModeValue.value);
   const owner = ownerMetadata.value;
   const worktreePath = worktreeMetadata.value;
   const purpose = compactMetadataText(candidate.title || candidate.purpose || "", { allowSpaces: true });
   const baseline = normalizeBaselineReference(candidate.baselineRef || candidate.baseline_ref || candidate.baseRef || candidate.base_ref || "");
   const baselineRef = baseline.value;
+  const immutableReviewValue = immutableReviewAliasedValue(candidate, "immutableReview", "immutable_review");
+  const immutableReview = immutableReviewValue.conflict
+    ? { value: null, state: "malformed" }
+    : normalizeImmutableReviewInput(immutableReviewValue.value);
+  const isReadOnlyReview = readWriteMode.value === "read_only";
   const job = {
     schemaVersion: PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION,
     executionJobId,
     candidateId,
     purpose: purpose.value,
     owner: owner ? { value: owner, status: owner === context.currentOwner ? "current_owner" : "foreign_owner" } : { value: null, status: "absent" },
-    worktree: worktreePath ? { path: worktreePath, status: "reported" } : { path: null, status: "absent", reason: "no worktree is reserved by this report-only projection" },
-    readWriteMode: surface.valid ? "read_write" : "unknown",
+    worktree: isReadOnlyReview
+      ? { path: null, status: "absent", reason: "immutable review candidates cannot carry mutable worktree input" }
+      : worktreePath ? { path: worktreePath, status: "reported" } : { path: null, status: "absent", reason: "no worktree is reserved by this report-only projection" },
+    readWriteMode: readWriteMode.value,
     changeSurface: surface.publicShape,
+    immutableReview: immutableReview.value,
     baselineScope: {
       reference: baselineRef,
       status: baselineRef ? "reported" : "missing",
@@ -18530,7 +18544,7 @@ function normalizeExecutionJob(candidate = {}, index = 0, context = {}) {
       reasonCode: "pending_evaluation",
       reason: "Candidate has not completed report-only reservation evaluation.",
       owner: owner || null,
-      worktreePath,
+      worktreePath: isReadOnlyReview ? null : worktreePath,
       evidenceRefs,
       expiresAt: null,
       mutation: "none; advisory projection only",
@@ -18538,7 +18552,7 @@ function normalizeExecutionJob(candidate = {}, index = 0, context = {}) {
     recoveryState: "rebuild report from fresh source and assignment evidence",
     nextSafeAction: "Review source, ownership, and scope evidence before any dispatch preview.",
   };
-  const decision = executionJobBlockDecision(candidate, job, context, surface, { sourceEvidence, evidence, purpose, baseline, dependencies, verificationTargets, ownerMetadata, worktreeMetadata });
+  const decision = executionJobBlockDecision(candidate, job, context, surface, { sourceEvidence, evidence, purpose, baseline, dependencies, verificationTargets, ownerMetadata, worktreeMetadata, readWriteMode, immutableReview });
   if (decision) blockExecutionJob(job, decision.code, decision.reason);
   return job;
 }
@@ -18556,7 +18570,13 @@ function executionJobBlockDecision(candidate, job, context, surface, referenceVa
   if (referenceValidation.sourceEvidence.rejected || referenceValidation.evidence.rejected) return { code: "metadata_reference_malformed", reason: "Candidate supplied malformed or non-metadata source/evidence references; no raw content was retained." };
   if (job.baselineScope.sourceRefs.length === 0) return { code: "source_evidence_missing", reason: "Candidate is missing source-owned evidence references." };
   if (job.verificationTargets.length === 0) return { code: "verification_missing", reason: "Candidate is missing verification targets." };
-  if (!surface.valid) return { code: surface.reasonCode, reason: surface.reason };
+  if (!referenceValidation.readWriteMode.valid) return { code: "read_write_mode_malformed", reason: "Candidate read/write mode is malformed; no parallel recommendation is safe." };
+  if (job.readWriteMode === "read_only") {
+    const immutableReviewDecision = immutableReviewBlockDecision(candidate, job, referenceValidation.immutableReview);
+    if (immutableReviewDecision) return immutableReviewDecision;
+  }
+  if (job.readWriteMode === "unknown") return { code: "read_write_mode_malformed", reason: "Candidate read/write mode is malformed; no parallel recommendation is safe." };
+  if (job.readWriteMode !== "read_only" && !surface.valid) return { code: surface.reasonCode, reason: surface.reason };
   if (candidate.generated === true || candidate.generatedArtifact === true || /generated/.test(eligibilityReason)) return { code: "generated_or_untrusted_candidate", reason: "Generated or untrusted candidate evidence cannot reserve a parallel change surface." };
   if (eligibility !== "eligible") return {
     code: eligibilityReason.includes("authority") ? "authority_blocked" : "candidate_not_eligible",
@@ -18576,6 +18596,72 @@ function executionJobBlockDecision(candidate, job, context, surface, referenceVa
   if (assignmentStatus === "foreign") return { code: "foreign_owned", reason: "Candidate branch is owned by another runner in authoritative assignment evidence." };
   if (assignmentStatus === "ambiguous") return { code: "assignment_ambiguous", reason: "Candidate branch has ambiguous authoritative assignment evidence." };
   if (assignmentStatus) return { code: "active_assignment", reason: "Candidate branch is already active or claimed in authoritative assignment evidence." };
+  return null;
+}
+
+function normalizeParallelReadWriteMode(value) {
+  if (value === "" || value === null || value === undefined) return { value: "read_write", valid: true };
+  if (value === "read_write" || value === "read_only") return { value, valid: true };
+  return { value: "unknown", valid: false };
+}
+
+function normalizeImmutableReviewInput(value) {
+  if (value === "" || value === null || value === undefined) return { value: null, state: "missing" };
+  if (!isPlainObject(value)) return { value: null, state: "malformed" };
+  const allowedKeys = new Set(["exactHead", "exact_head", "digest", "sourceRefs", "source_refs", "mutableWorktree", "mutable_worktree", "metadataOnly", "metadata_only", "stale"]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return { value: null, state: "malformed" };
+  if (Object.hasOwn(value, "stale") && typeof value.stale !== "boolean") return { value: null, state: "malformed" };
+  const exactHeadValue = immutableReviewAliasedValue(value, "exactHead", "exact_head");
+  const sourceRefsValue = immutableReviewAliasedValue(value, "sourceRefs", "source_refs");
+  const mutableWorktreeValue = immutableReviewAliasedValue(value, "mutableWorktree", "mutable_worktree");
+  const metadataOnlyValue = immutableReviewAliasedValue(value, "metadataOnly", "metadata_only");
+  if (exactHeadValue.conflict || sourceRefsValue.conflict || mutableWorktreeValue.conflict || metadataOnlyValue.conflict) return { value: null, state: "malformed" };
+  const exactHead = String(exactHeadValue.value || "").trim().toLowerCase();
+  const digest = String(value.digest || "").trim().toLowerCase();
+  const sourceEvidence = metadataOnlyReferenceList(sourceRefsValue.value);
+  const mutableWorktree = mutableWorktreeValue.value;
+  const metadataOnly = metadataOnlyValue.value;
+  if (value.stale === true) return { value: null, state: "stale" };
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(exactHead) || !/^sha256:[0-9a-f]{64}$/.test(digest) || sourceEvidence.rejected || sourceEvidence.refs.length === 0 || mutableWorktree !== false || metadataOnly !== true) {
+    return { value: null, state: "malformed" };
+  }
+  return {
+    value: {
+      exactHead,
+      digest,
+      sourceRefs: sourceEvidence.refs,
+      mutableWorktree: false,
+      metadataOnly: true,
+    },
+    state: "valid",
+  };
+}
+
+function immutableReviewAliasedValue(value, primaryKey, aliasKey) {
+  const hasPrimary = Object.hasOwn(value, primaryKey);
+  const hasAlias = Object.hasOwn(value, aliasKey);
+  const primary = hasPrimary ? value[primaryKey] : undefined;
+  const alias = hasAlias ? value[aliasKey] : undefined;
+  let conflict = false;
+  if (hasPrimary && hasAlias && !Object.is(primary, alias)) {
+    try {
+      conflict = JSON.stringify(primary) !== JSON.stringify(alias);
+    } catch {
+      conflict = true;
+    }
+  }
+  return { value: hasPrimary ? primary : alias, conflict };
+}
+
+function immutableReviewBlockDecision(candidate, job, immutableReview) {
+  if (immutableReview.state === "missing") return { code: "immutable_review_missing", reason: "Read-only review candidates require immutable exact-head and digest metadata." };
+  if (immutableReview.state === "stale") return { code: "immutable_review_stale", reason: "Immutable review metadata is stale; rebuild it from the current exact head before re-planning." };
+  if (immutableReview.state !== "valid" || !job.immutableReview) return { code: "immutable_review_malformed", reason: "Immutable review metadata is malformed, restricted, or not metadata-only." };
+  if (job.worktree.path || candidate.worktreePath || candidate.worktree_path) return { code: "immutable_review_mutable_worktree", reason: "Read-only review candidates cannot include a mutable worktree path." };
+  const baselineHead = String(job.baselineScope.reference || "").split("@").at(-1) || "";
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(baselineHead) || job.immutableReview.exactHead !== baselineHead.toLowerCase()) {
+    return { code: "immutable_review_head_mismatch", reason: "Immutable review exact head does not match the candidate baseline; rebuild both from one current revision." };
+  }
   return null;
 }
 
@@ -18763,6 +18849,13 @@ function deferExecutionJob(job, reasonCode, reason, conflictingExecutionJobIds =
 function selectExecutionJob(job) {
   job.lifecycleStatus = "selected";
   job.reservationLease.status = "advisory_reserved";
+  if (job.readWriteMode === "read_only") {
+    job.reservationLease.reasonCode = "immutable_review_candidate";
+    job.reservationLease.reason = "Candidate has immutable metadata-only review input and is selected only as an advisory review candidate.";
+    job.recoveryState = "review the immutable candidate metadata only; it does not authorize provider execution, findings, or delivery";
+    job.nextSafeAction = "Use the separately governed review workflow if and when an approved route exists; this report remains advisory only.";
+    return;
+  }
   job.reservationLease.reasonCode = "independent_source_declared_surface";
   job.reservationLease.reason = "Candidate has independent source-declared scope and is selected only as a bounded advisory recommendation.";
   job.recoveryState = "use existing dispatch preview and authority gates separately; no lease was written";

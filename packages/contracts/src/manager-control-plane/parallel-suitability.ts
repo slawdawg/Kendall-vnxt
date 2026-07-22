@@ -26,6 +26,15 @@ export interface ReservationLease {
   mutation: "none; advisory projection only";
 }
 
+/** Immutable metadata-only input for a report-only read-only review candidate. */
+export interface ImmutableReviewInput {
+  exactHead: string;
+  digest: string;
+  sourceRefs: readonly string[];
+  mutableWorktree: false;
+  metadataOnly: true;
+}
+
 export interface ExecutionJob {
   schemaVersion: typeof PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION;
   executionJobId: ExecutionJobId;
@@ -33,8 +42,9 @@ export interface ExecutionJob {
   purpose: string | null;
   owner: { value: string | null; status: "current_owner" | "foreign_owner" | "absent" };
   worktree: { path: string | null; status: "reported" | "absent"; reason?: string };
-  readWriteMode: "read_write" | "unknown";
+  readWriteMode: "read_write" | "read_only" | "unknown";
   changeSurface: ChangeSurface;
+  immutableReview: ImmutableReviewInput | null;
   baselineScope: { reference: string | null; status: "reported" | "missing"; sourceRefs: readonly string[] };
   dependencies: readonly string[];
   evidenceRefs: readonly EvidenceRefId[];

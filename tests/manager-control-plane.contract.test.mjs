@@ -628,10 +628,10 @@ test("Parallel suitability contracts keep graph and reservations metadata-only a
   const schemaSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
   const idsSource = await readFile(new URL("ids.ts", managerRoot), "utf8");
 
-  for (const exportedName of ["ChangeSurface", "ReservationLease", "ExecutionJob", "ParallelSuitabilityReport"]) {
+  for (const exportedName of ["ChangeSurface", "ReservationLease", "ImmutableReviewInput", "ExecutionJob", "ParallelSuitabilityReport"]) {
     assert.match(parallelSource, new RegExp(`export (type|interface) ${exportedName}\\b`), `missing ${exportedName}`);
   }
-  for (const literal of ["parallel-execution-graph-reservation/v1", "advisory_reserved", "deferred", "blocked", "metadata_only_evidence_references"]) {
+  for (const literal of ["parallel-execution-graph-reservation/v1", "advisory_reserved", "deferred", "blocked", "read_only", "metadata_only_evidence_references"]) {
     assert.match(parallelSource, new RegExp(literal), `missing graph contract literal ${literal}`);
   }
   for (const idName of ["ExecutionJobId", "ReservationLeaseId"]) {
@@ -644,7 +644,7 @@ test("Parallel suitability contracts keep graph and reservations metadata-only a
   );
   assertRequiredFields(
     "ExecutionJob serialized fields",
-    ["execution_job_id", "change_surface", "baseline_scope", "reservation_lease", "lifecycle_status", "evidence_refs", "next_safe_action"],
+    ["execution_job_id", "read_write_mode", "change_surface", "immutable_review", "baseline_scope", "reservation_lease", "lifecycle_status", "evidence_refs", "next_safe_action"],
     extractConstArray(schemaSource, "EXECUTION_JOB_SERIALIZED_FIELDS"),
   );
 });
