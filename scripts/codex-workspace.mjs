@@ -3491,6 +3491,11 @@ function cleanupMerged(argv, mode = {}) {
       claimLaneOwner(lockedManifest, options);
       Object.assign(manifest, lockedManifest);
       try {
+        // Capture target state as soon as this worker owns the lock. Every
+        // later lock-time hold must leave cleanup_partial with current,
+        // target-specific resume evidence rather than a generic error alone.
+        const lockedCleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+        recordCleanupTargetEvidence(manifest, lockedCleanupCwd, { deleteRemote });
         const lockedPr = prView(manifest);
         if (!lockedPr?.mergedAt) {
           throw new Error(`Could not refresh merged PR evidence under cleanup lock for ${manifest.task_id}.`);
@@ -3498,7 +3503,6 @@ function cleanupMerged(argv, mode = {}) {
         if (lockedPr.baseRefName && lockedPr.baseRefName !== manifest.base_branch) {
           throw new Error(`Existing PR base is ${lockedPr.baseRefName}, expected ${manifest.base_branch}.`);
         }
-        const lockedCleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
         const lockedWorktreeStatus = worktreeCleanupStatus(manifest, lockedCleanupCwd);
         if (lockedWorktreeStatus.dirty) {
           throw new Error("Worktree is not clean after acquiring cleanup lock.");
@@ -3510,6 +3514,8 @@ function cleanupMerged(argv, mode = {}) {
         preflightAssignmentClosureForCleanedManifest(state, manifest, options);
         recordCleanupDeliverySubagentAudit(manifest, lockedPr, options);
         cleanupMergedResources(manifest, state, { cleanupCwd: lockedCleanupCwd, deleteRemote, pr: lockedPr });
+        assertCleanupTargetsAbsent(manifest, lockedCleanupCwd, { deleteRemote });
+        finalizeMergedCleanupResources(manifest, lockedPr, { deleteRemote });
         appendAuthorityDecision(manifest, manifest.cleanup_authority_decision);
         manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, manifest.anti_churn_finalization || {}, {
           worktreeStatus: lockedWorktreeStatus.status || null,
@@ -4426,6 +4432,11 @@ function cleanupMergedPlan(manifest, pr, options) {
 
 function cleanupMergedResources(manifest, state, options) {
   const cleanupStartedAt = new Date().toISOString();
+  // Refresh target state immediately before resource mutation. The caller
+  // already records a lock-acquisition snapshot for earlier holds; this one
+  // captures the exact state before exact-head and deletion operations.
+  const initialTargets = recordCleanupTargetEvidence(manifest, options.cleanupCwd, { deleteRemote: options.deleteRemote });
+  assertCleanupTargetsInspectable(initialTargets);
   const expectedHeadSha = requireCleanupHeadSha(manifest, options.pr);
   const auditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, options.pr);
   if (auditBlocker) {
@@ -4444,25 +4455,147 @@ function cleanupMergedResources(manifest, state, options) {
     manifest.cleanup_remote_branch_sha =
       originBranchSha(manifest.branch, options.cleanupCwd) || manifest.cleanup_remote_branch_sha || null;
   }
-
-  removeWorktreeIfPresent(manifest, state, options.cleanupCwd);
-  deleteLocalBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
-  if (options.deleteRemote) {
-    deleteRemoteBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
+  try {
+    removeWorktreeIfPresent(manifest, state, options.cleanupCwd);
+    deleteLocalBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
+    if (options.deleteRemote) {
+      deleteRemoteBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
+    }
+  } finally {
+    // Preserve exactly which registered targets remain if a later cleanup step
+    // fails. This makes cleanup_partial safe to resume from a stable worktree.
+    recordCleanupTargetEvidence(manifest, options.cleanupCwd, { deleteRemote: options.deleteRemote });
   }
+}
+
+function finalizeMergedCleanupResources(manifest, pr, options = {}) {
   const cleanupCompletedAt = new Date().toISOString();
   manifest.cleanup_completed_at = cleanupCompletedAt;
-  manifest.cleanup_authority_decision = shapeCleanupAuthorityDecision(manifest, options.pr, {
+  manifest.cleanup_authority_decision = shapeCleanupAuthorityDecision(manifest, pr, {
     deleteRemote: Boolean(options.deleteRemote),
     decision: "applied",
     allowed: true,
     generatedAt: cleanupCompletedAt,
     evidenceRefs: [
       `task:${manifest.task_id}`,
-      options.pr.number ? `pr:${options.pr.number}` : "",
-      `expected-head:${expectedHeadSha}`,
+      pr.number ? `pr:${pr.number}` : "",
+      `expected-head:${manifest.cleanup_expected_head_sha}`,
     ],
   });
+}
+
+function cleanupTargetEvidence(manifest, cleanupCwd, options = {}) {
+  const checkedAt = new Date().toISOString();
+  const worktreeExists = existsSync(manifest.worktree_path);
+  const worktreeListed = worktreeListedSafe(manifest.worktree_path, cleanupCwd);
+  const localBranch = cleanupLocalTargetEvidence(manifest, cleanupCwd);
+  const remote = cleanupRemoteTargetEvidence(manifest, cleanupCwd, Boolean(options.deleteRemote));
+  return {
+    checkedAt,
+    worktree: {
+      required: true,
+      path: manifest.worktree_path,
+      state: worktreeExists || worktreeListed ? "present" : "absent",
+      exists: worktreeExists,
+      listed: worktreeListed,
+    },
+    localBranch: {
+      required: true,
+      branch: manifest.branch,
+      ...localBranch,
+    },
+    remoteBranch: remote,
+  };
+}
+
+function cleanupLocalTargetEvidence(manifest, cleanupCwd) {
+  const result = git(["rev-parse", "--verify", "--quiet", manifest.branch], { cwd: cleanupCwd });
+  if (result.code === 0) {
+    return { state: "present", sha: result.stdout || null, error: null };
+  }
+  // `rev-parse --verify --quiet` reports a genuinely absent ref as exit 1
+  // with no output. Any other failure is an inspection failure, never absence.
+  if (result.code === 1 && !result.stdout && !result.stderr) {
+    return { state: "absent", sha: null, error: null };
+  }
+  return {
+    state: "unknown",
+    sha: null,
+    error: (result.stderr || result.stdout || `git rev-parse exited ${result.code}`).slice(0, 500),
+  };
+}
+
+function worktreeListedSafe(worktreePath, cleanupCwd) {
+  const result = git(["worktree", "list", "--porcelain"], { cwd: cleanupCwd });
+  if (result.code !== 0) {
+    return true;
+  }
+  return parseWorktreePorcelain(result.stdout).some((record) => samePath(record.path, worktreePath));
+}
+
+function cleanupRemoteTargetEvidence(manifest, cleanupCwd, deleteRemote) {
+  if (!deleteRemote) {
+    return {
+      required: false,
+      branch: manifest.branch,
+      state: "not-requested",
+      sha: null,
+      error: null,
+    };
+  }
+  try {
+    const sha = originBranchSha(manifest.branch, cleanupCwd);
+    return {
+      required: true,
+      branch: manifest.branch,
+      state: sha ? "present" : "absent",
+      sha: sha || null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      required: true,
+      branch: manifest.branch,
+      state: "unknown",
+      sha: null,
+      error: String(error.message || error).slice(0, 500),
+    };
+  }
+}
+
+function recordCleanupTargetEvidence(manifest, cleanupCwd, options = {}) {
+  const targets = cleanupTargetEvidence(manifest, cleanupCwd, options);
+  manifest.cleanup_target_evidence = targets;
+  appendTaskEvent(
+    manifest,
+    "cleanup_targets_checked",
+    `worktree:${targets.worktree.state}; local_branch:${targets.localBranch.state}; remote_branch:${targets.remoteBranch.state}`,
+  );
+  return targets;
+}
+
+function assertCleanupTargetsAbsent(manifest, cleanupCwd, options = {}) {
+  const targets = recordCleanupTargetEvidence(manifest, cleanupCwd, options);
+  const remaining = [
+    ["worktree", targets.worktree],
+    ["local_branch", targets.localBranch],
+    ["remote_branch", targets.remoteBranch],
+  ].filter(([, target]) => target.required && target.state !== "absent");
+  if (remaining.length) {
+    throw new Error(`Cleanup cannot close manifest while registered targets remain: ${remaining.map(([name, target]) => `${name}:${target.state}`).join(", ")}.`);
+  }
+  return targets;
+}
+
+function assertCleanupTargetsInspectable(targets) {
+  const unknown = [
+    ["worktree", targets.worktree],
+    ["local_branch", targets.localBranch],
+    ["remote_branch", targets.remoteBranch],
+  ].filter(([, target]) => target.required && target.state === "unknown");
+  if (unknown.length) {
+    throw new Error(`Cleanup cannot mutate while registered target inspection is unknown: ${unknown.map(([name]) => name).join(", ")}.`);
+  }
 }
 
 function cleanupDeliverySubagentAuditBlocker(manifest, pr, context = {}) {

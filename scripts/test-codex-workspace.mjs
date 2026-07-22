@@ -6982,6 +6982,216 @@ try {
     }
   });
 
+  test("cleanup-merged keeps remote deletion failure partial with target evidence, then resumes", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const fakeGit = installFixtureGitProxy(
+        fixture,
+        `args[0] === 'push' && args.includes(':refs/heads/${fixture.branch}')`,
+        "simulated remote deletion failure",
+      );
+
+      const failed = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(failed.code !== 0, "cleanup unexpectedly closed after remote deletion failure");
+      assert(failed.stderr.includes("simulated remote deletion failure"), failed.stderr || failed.stdout);
+      assert(!existsSync(fixture.worktree), "worktree should be removed before simulated remote failure");
+      assert(!branchExists(fixture.root, fixture.branch), "local branch should be removed before simulated remote failure");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "remote branch should remain after simulated remote failure");
+
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const partial = readJson(manifestPath);
+      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
+      assert(!partial.cleanup_completed_at, "partial cleanup must not have a completion timestamp");
+      assert(partial.cleanup_target_evidence?.worktree?.state === "absent", "partial evidence must record removed worktree");
+      assert(partial.cleanup_target_evidence?.localBranch?.state === "absent", "partial evidence must record removed local branch");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "partial evidence must record remaining remote branch");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.sha, "partial remote evidence must retain the current target SHA");
+      assert(
+        partial.events.some((event) => event.type === "cleanup_targets_checked" && event.message.includes("remote_branch:present")),
+        "partial cleanup must preserve target-specific remote evidence",
+      );
+
+      rmSync(fakeGit, { force: true });
+      const resumed = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "cleanup resume did not delete the remaining remote branch");
+      const closed = readJson(manifestPath);
+      assert(closed.status === "closed", `manifest status is ${closed.status}`);
+      assert(closed.cleanup_error === null, `cleanup_error not cleared: ${closed.cleanup_error}`);
+      assert(closed.cleanup_completed_at, "resumed cleanup missing completion timestamp");
+      assert(closed.cleanup_target_evidence?.worktree?.state === "absent", "closed cleanup must prove worktree absence");
+      assert(closed.cleanup_target_evidence?.localBranch?.state === "absent", "closed cleanup must prove local branch absence");
+      assert(closed.cleanup_target_evidence?.remoteBranch?.state === "absent", "closed cleanup must prove remote branch absence");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged records advanced remote target evidence before exact-head resume refusal", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const fakeGit = installFixtureGitProxy(
+        fixture,
+        `args[0] === 'push' && args.includes(':refs/heads/${fixture.branch}')`,
+        "simulated remote deletion failure",
+      );
+      const firstAttempt = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(firstAttempt.code !== 0, "initial cleanup unexpectedly closed");
+      rmSync(fakeGit, { force: true });
+
+      const advanceWorktree = join(fixture.root, "remote-advance");
+      runGit(fixture.root, ["clone", "-q", fixture.remoteRoot, advanceWorktree]);
+      runGit(advanceWorktree, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(advanceWorktree, ["config", "user.name", "Codex Workspace Test"]);
+      runGit(advanceWorktree, ["checkout", "-q", "-b", fixture.branch, `origin/${fixture.branch}`]);
+      commitFile(advanceWorktree, "advanced-remote.txt", "advanced\n", "advance remote cleanup branch");
+      runGit(advanceWorktree, ["push", "-q", "origin", fixture.branch]);
+      const advancedRemoteSha = runGit(advanceWorktree, ["rev-parse", "HEAD"]).stdout;
+
+      const resumed = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(resumed.code !== 0, "advanced remote cleanup unexpectedly closed");
+      assert(resumed.stderr.includes("does not match expected cleanup head"), resumed.stderr || resumed.stdout);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "advanced remote branch was deleted after exact-head refusal");
+
+      const partial = readJson(join(fixture.stateRoot, "tasks", "cleanup-task.json"));
+      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
+      assert(!partial.cleanup_completed_at, "mismatched resume must not record cleanup completion");
+      assert(partial.cleanup_target_evidence?.worktree?.state === "absent", "resume evidence must retain absent worktree");
+      assert(partial.cleanup_target_evidence?.localBranch?.state === "absent", "resume evidence must retain absent local branch");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "resume evidence must show remaining remote branch");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.sha === advancedRemoteSha, "resume evidence must show current remote SHA");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged blocks local branch inspection failure before resource deletion", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const fakeGit = installFixtureGitProxy(
+        fixture,
+        `args[0] === 'rev-parse' && args.includes('${fixture.branch}')`,
+        "simulated local branch inspection failure",
+      );
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code !== 0, "cleanup unexpectedly proceeded after local branch inspection failure");
+      assert(result.stderr.includes("registered target inspection is unknown: local_branch"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "cleanup removed worktree after local inspection failure");
+      assert(branchExists(fixture.root, fixture.branch), "cleanup deleted local branch after local inspection failure");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup deleted remote branch after local inspection failure");
+
+      const partial = readJson(join(fixture.stateRoot, "tasks", "cleanup-task.json"));
+      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
+      assert(partial.cleanup_target_evidence?.worktree?.state === "present", "partial evidence must retain worktree presence");
+      assert(partial.cleanup_target_evidence?.localBranch?.state === "unknown", "partial evidence must retain local inspection failure");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "partial evidence must retain remote branch presence");
+      rmSync(fakeGit, { force: true });
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged records targets before missing exact-head evidence blocks cleanup", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = null;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFixtureGhPrView(fixture, null);
+
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code !== 0, "cleanup unexpectedly proceeded without exact-head evidence");
+      assert(result.stderr.includes("Cleanup requires exact PR head evidence"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "cleanup removed worktree without exact-head evidence");
+      assert(branchExists(fixture.root, fixture.branch), "cleanup deleted local branch without exact-head evidence");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup deleted remote branch without exact-head evidence");
+
+      const partial = readJson(manifestPath);
+      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
+      assert(!partial.cleanup_completed_at, "missing-head cleanup must not record completion");
+      assert(partial.cleanup_target_evidence?.worktree?.state === "present", "missing-head evidence must record worktree presence");
+      assert(partial.cleanup_target_evidence?.localBranch?.state === "present", "missing-head evidence must record local branch presence");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "missing-head evidence must record remote branch presence");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged records targets when the locked delivery-audit hold blocks cleanup", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.delivery_subagent_audit;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code !== 0, "cleanup unexpectedly proceeded without delivery audit evidence");
+      assert(result.stderr.includes("Delivery subagent audit"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "cleanup removed worktree before locked audit hold");
+      assert(branchExists(fixture.root, fixture.branch), "cleanup deleted local branch before locked audit hold");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup deleted remote branch before locked audit hold");
+
+      const partial = readJson(manifestPath);
+      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
+      assert(!partial.cleanup_completed_at, "audit-held cleanup must not record completion");
+      assert(partial.cleanup_target_evidence?.worktree?.state === "present", "audit-held evidence must record worktree presence");
+      assert(partial.cleanup_target_evidence?.localBranch?.state === "present", "audit-held evidence must record local branch presence");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "audit-held evidence must record remote branch presence");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-merged trusts merged PR head when local delivery metadata is stale", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -7638,6 +7848,48 @@ function createMergedCleanupFixture() {
     worktreeScript: join(worktree, "scripts", "codex-workspace.mjs"),
     env,
   };
+}
+
+function installFixtureGitProxy(fixture, failureCondition, failureMessage) {
+  const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+  const fakeGit = join(fixture.fakeBin, "git");
+  writeFileSync(
+    fakeGit,
+    [
+      "#!/usr/bin/env node",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      `if (${failureCondition}) {`,
+      `  console.error(${JSON.stringify(failureMessage)});`,
+      "  process.exit(1);",
+      "}",
+      `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
+      "process.exit(result.status ?? 1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGit, 0o755);
+  return fakeGit;
+}
+
+function writeFixtureGhPrView(fixture, headRefOid) {
+  const fakeGh = join(fixture.fakeBin, "gh");
+  writeFileSync(
+    fakeGh,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'view') {",
+      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefOid: ${JSON.stringify(headRefOid)} }));`,
+      "  process.exit(0);",
+      "}",
+      "console.error(`unexpected gh args: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGh, 0o755);
 }
 
 function runMergedCleanupFixtureScript(fixture, args) {
