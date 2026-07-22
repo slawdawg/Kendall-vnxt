@@ -273,6 +273,8 @@ class CandidateWorkUpdate(BaseModel):
 
 
 class CandidateWorkSourceSummaryView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     label: str
     summary: str
     sourceType: CandidateWorkSource
@@ -289,6 +291,8 @@ class CandidateWorkSourceSummaryView(BaseModel):
 
 
 class CandidateWorkView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
     title: str
     requestedOutcome: str
@@ -427,6 +431,8 @@ class WorkItemBranchPreparationRequest(BaseModel):
 
 
 class WorkItemDeliveryReadinessView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     pullRequestStatus: str
     pullRequestUrl: str | None = None
     ciStatus: str
@@ -439,6 +445,8 @@ class WorkItemDeliveryReadinessView(BaseModel):
 
 
 class WorkItemPolicyGateView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
     label: str
     requiredBefore: str
@@ -447,6 +455,8 @@ class WorkItemPolicyGateView(BaseModel):
 
 
 class WorkItemRemoteAutomationPolicyView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     status: str
     summary: str
     allowedOperations: list[str]
@@ -5439,6 +5449,8 @@ class RoutingOverrideView(BaseModel):
 
 
 class WorkItemExecutionRecipeView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
     label: str
     summary: str
@@ -6563,6 +6575,8 @@ class DeliveryReadinessPolicyReportApiEnvelope(BaseModel):
 
 
 class WorkItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
     title: str
     requestedOutcome: str

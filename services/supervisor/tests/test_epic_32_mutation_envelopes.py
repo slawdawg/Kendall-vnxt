@@ -78,6 +78,10 @@ def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
     with pytest.raises(ValidationError):
         CandidateWorkPromotionView.model_validate({"candidateWork": {"sortOrder": True}, "workItem": {}})
     with pytest.raises(ValidationError):
+        CandidateWorkView.model_validate({"sortOrder": "1"})
+    with pytest.raises(ValidationError):
+        WorkItemView.model_validate({"ageMinutes": "1"})
+    with pytest.raises(ValidationError):
         WorkItemApiEnvelope.model_validate({"data": {"executionRecipe": {"unexpected": True}}})
     with pytest.raises(ValueError):
         _strict_contract_payload(
