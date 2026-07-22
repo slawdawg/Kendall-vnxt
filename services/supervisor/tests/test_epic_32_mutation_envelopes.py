@@ -7,10 +7,12 @@ from supervisor.api import main as main_module
 from supervisor.api.schemas import (
     CandidateWorkPromotionApiEnvelope,
     CandidateWorkPromotionView,
+    CandidateWorkView,
     DeliveryExecutionEvidenceApiEnvelope,
     DeliveryExecutionEvidenceView,
     WorkItemApiEnvelope,
     WorkItemView,
+    _strict_contract_payload,
 )
 
 
@@ -88,6 +90,15 @@ def test_epic_32_envelopes_accept_null_and_scalar_metadata() -> None:
     assert envelope.meta is not None
     assert envelope.meta["nullable"] is None
     assert DeliveryExecutionEvidenceApiEnvelope.model_validate({"data": evidence, "meta": None}).meta is None
+
+
+def test_epic_32_recursive_validation_preserves_generic_metadata_and_lists() -> None:
+    _strict_contract_payload(
+        {"metadata": {}, "executionRecipe": None, "deliveryReadiness": None},
+        WorkItemView,
+        path="prepare.data",
+    )
+    _strict_contract_payload({"importMetadata": {}, "sourceSummary": None}, CandidateWorkView, path="promotion.candidateWork")
 
 
 def test_epic_32_promotion_requires_both_result_objects() -> None:

@@ -1,8 +1,9 @@
 ﻿import hashlib
 import json
 import re
+import types
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Literal, get_args, get_origin
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
 
@@ -39,13 +40,23 @@ def _strict_contract_payload(value: Any, model: type[BaseModel], *, path: str) -
         if name not in value or value[name] is None:
             continue
         annotation = field.annotation
-        candidates = get_args(annotation) if get_origin(annotation) is not None else (annotation,)
-        scalar_types = tuple(item for item in candidates if item in primitive_types)
+        origin = get_origin(annotation)
+        candidates = get_args(annotation)
+        if annotation in primitive_types:
+            scalar_types = (annotation,)
+        elif origin in (Union, types.UnionType) and all(item in primitive_types or item is type(None) for item in candidates):
+            scalar_types = tuple(item for item in candidates if item in primitive_types)
+        else:
+            scalar_types = ()
         if scalar_types and not isinstance(value[name], scalar_types):
             raise ValueError(f"{path}.{name} must use a strict scalar value")
         nested_model = next((item for item in candidates if isinstance(item, type) and issubclass(item, BaseModel)), None)
         if nested_model is not None:
-            _strict_contract_payload(value[name], nested_model, path=f"{path}.{name}")
+            if origin in (list, tuple, set):
+                for index, item in enumerate(value[name]):
+                    _strict_contract_payload(item, nested_model, path=f"{path}.{name}[{index}]")
+            else:
+                _strict_contract_payload(value[name], nested_model, path=f"{path}.{name}")
 
 UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
