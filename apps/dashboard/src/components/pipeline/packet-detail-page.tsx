@@ -3,6 +3,7 @@ import Link from "next/link";
 import { LocalDogfoodAttestationPanel } from "./local-dogfood-attestation-panel";
 import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
+import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
 type PipelineGoldenPathSnapshot = {
@@ -26,11 +27,13 @@ export function PacketDetailPage({
   snapshot = null,
   sourceBoundaries = [],
   sourceState,
+  workGraph = null,
 }: {
   packet: PipelineFixturePacket;
   snapshot?: PipelineGoldenPathSnapshot | null;
   sourceBoundaries?: SourceBoundaryDeclarationV0[];
   sourceState?: PipelineRuntimeSourceState;
+  workGraph?: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | null;
 }) {
   const isDemoPacket = packet.sourceKind === "demo-fixture" || (
     packet.sourceKind === undefined && packet.fixtureKind !== undefined
@@ -83,6 +86,8 @@ export function PacketDetailPage({
       </section>
 
       <LocalDogfoodAttestationPanel enabled={!isDemoPacket} targetRef={packet.packetId} />
+
+      {workGraph ? <PacketDetailWorkGraph workGraph={workGraph} /> : null}
 
       <section className="grid gap-4 xl:grid-cols-2">
         <DetailSection title="Route">
@@ -226,6 +231,28 @@ export function PacketDetailPage({
         </div>
       </section>
     </main>
+  );
+}
+
+function PacketDetailWorkGraph({ workGraph }: { workGraph: NonNullable<PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"]> }) {
+  const attention = workGraph.availability !== "available" || workGraph.waveMembership === "blocked" || workGraph.waveMembership === "deferred";
+  return (
+    <DetailSection title="Work Graph">
+      {attention ? <p aria-live="assertive" className="text-sm leading-6 text-[var(--muted)]">Work Graph is {workGraph.availability === "available" ? workGraph.waveMembership : workGraph.availability}. {workGraph.nextSafeAction}</p> : null}
+      <FieldList
+        fields={[
+          ["Wave", workGraph.waveMembership],
+          ["Dependencies", workGraph.dependencyState],
+          ["Reservation", `${workGraph.reservation.status}; ${workGraph.reservation.reasonCode}; owner ${workGraph.reservation.owner ?? "not assigned"}`],
+          ["Capacity", `${workGraph.capacity.posture}; ${workGraph.capacity.reasonCode}`],
+          ["Reason", workGraph.reason],
+          ["Recovery", workGraph.nextSafeAction],
+          ["Freshness", workGraph.generatedAt ? `${workGraph.freshnessState}; generated ${workGraph.generatedAt}` : workGraph.freshnessState],
+          ["Boundary", "Advisory metadata only; no dispatch, provider execution, findings, or delivery eligibility."],
+        ]}
+      />
+      <RefList title="Work Graph evidence" values={workGraph.evidenceRefs} empty="No Work Graph evidence is available." />
+    </DetailSection>
   );
 }
 

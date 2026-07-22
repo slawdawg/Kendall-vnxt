@@ -1,12 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
   expectedPlaywrightChromiumExecutables,
   hasPlaywrightChromium,
   playwrightBrowserPreflight,
+  resolveE2EDatabasePath,
 } from "../scripts/dashboard-e2e-runner.mjs";
 
 test("dashboard e2e browser preflight fails before server launch with setup command", () => {
@@ -39,4 +40,27 @@ test("dashboard e2e browser preflight accepts the configured worktree browser ca
   } finally {
     rmSync(browserPath, { recursive: true, force: true });
   }
+});
+
+test("dashboard e2e database path stays in the generated isolated .data root", () => {
+  const dataDir = resolve(".data");
+  const defaultPath = resolveE2EDatabasePath({ dataDir, databaseName: "story-34-4", processId: 123 });
+  assert.equal(defaultPath, join(dataDir, "story-34-4-123.db").replaceAll("\\\\", "/"));
+
+  const suppliedPath = resolveE2EDatabasePath({
+    dataDir,
+    databaseName: "story-34-4",
+    processId: 123,
+    requestedPath: join(dataDir, "explicit-story-34-4.db"),
+  });
+  assert.equal(suppliedPath, join(dataDir, "explicit-story-34-4.db").replaceAll("\\\\", "/"));
+
+  assert.throws(
+    () => resolveE2EDatabasePath({ dataDir, databaseName: "story-34-4", processId: 123, requestedPath: join(tmpdir(), "outside.db") }),
+    /generated \.data test database path/,
+  );
+  assert.throws(
+    () => resolveE2EDatabasePath({ dataDir, databaseName: "story-34-4", processId: 123, requestedPath: join(dataDir, "not-a-database.txt") }),
+    /generated \.data test database path/,
+  );
 });

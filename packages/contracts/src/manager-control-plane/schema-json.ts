@@ -320,6 +320,27 @@ export const PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS = [
   "stop_lines"
 ] as const;
 
+export const PARALLEL_WORK_GRAPH_EVIDENCE_SERIALIZED_FIELDS = [
+  "schema_version",
+  "source_schema_version",
+  "availability",
+  "packet_id",
+  "execution_job_id",
+  "report_identity",
+  "generated_at",
+  "freshness_state",
+  "wave_membership",
+  "dependency_state",
+  "reservation",
+  "capacity",
+  "reason",
+  "next_safe_action",
+  "evidence_refs",
+  "metadata_only",
+  "raw_payload_retained",
+  "retention"
+] as const;
+
 export const EVIDENCE_REF_SERIALIZED_FIELDS = [
   "evidence_ref_id",
   "evidence_type",
@@ -501,6 +522,7 @@ export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
   ExecutionJob: EXECUTION_JOB_SERIALIZED_FIELDS,
   ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS,
   ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
+  ParallelWorkGraphEvidence: PARALLEL_WORK_GRAPH_EVIDENCE_SERIALIZED_FIELDS,
   EvidenceRef: EVIDENCE_REF_SERIALIZED_FIELDS,
   ManagerRunPreauthorization: MANAGER_RUN_PREAUTHORIZATION_SERIALIZED_FIELDS,
   ImplementationRunTask: IMPLEMENTATION_RUN_TASK_SERIALIZED_FIELDS,
@@ -526,6 +548,7 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
   ExecutionJob: EXECUTION_JOB_SERIALIZED_FIELDS,
   ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS,
   ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
+  ParallelWorkGraphEvidence: PARALLEL_WORK_GRAPH_EVIDENCE_SERIALIZED_FIELDS,
   CandidateWorkPacket: [
     "candidate_work_packet_id",
     "run_id",

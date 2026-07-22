@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
+  attachParallelWorkGraphEvidenceToManagerPacket,
   buildOperationalReadinessContract,
+  buildParallelSuitabilityReport,
   buildSourceBackedPacketSeedPlan,
   projectCanonicalSupervisorPacket,
 } from "../scripts/lib/manager-control-plane/core.mjs";
@@ -11,6 +17,7 @@ import {
   buildManagerSourceIntakeRequest,
   deriveAuthoritativePacketId,
   intakeManagerSourcePacket,
+  planManagerSourcePacketIntake,
   resolveLoopbackSourceIntakeEndpoint,
 } from "../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs";
 import { resolveLoopbackSupervisorEndpoint } from "../scripts/lib/manager-control-plane/manager-supervisor-terminal-event-sync.mjs";
@@ -198,6 +205,93 @@ test("manager source intake allowlists eligible source metadata and validates ex
   assert.equal(result.summary.seedPacket.supervisorIntake.truthSource, "legacy_lifecycle_fallback");
   assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth, null);
   assert.equal(result.summary.seedPacket.rawPayloadRetained, false);
+});
+
+test("manager source intake binds its normal advisory report to the deterministic authoritative packet", () => {
+  const packet = sourcePacket();
+  const candidateId = packet.summary.seedPacket.candidateWorkPacketId;
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: candidateId,
+      title: packet.summary.seedPacket.title,
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:34-5"],
+      evidenceRefs: ["evidence:34-5"],
+      verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+    }],
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
+  const bridged = attachParallelWorkGraphEvidenceToManagerPacket(packet, report, { now: "2026-07-22T12:01:00.000Z" });
+  const request = buildManagerSourceIntakeRequest(bridged, { allowPrivateGraph: true });
+  assert.equal(request.parallelWorkGraphEvidence.packetId, request.packetId);
+  assert.equal(request.parallelWorkGraphEvidence.executionJobId, `execution-job:${candidateId}`);
+  assert.equal(request.parallelWorkGraphEvidence.sourceSchemaVersion, "parallel-execution-graph-reservation/v1");
+  assert.equal(request.parallelWorkGraphEvidence.rawPayloadRetained, false);
+  assert.doesNotMatch(JSON.stringify(request.parallelWorkGraphEvidence), /worktree|changeSurface|sourceRefs|provider|raw prompt/i);
+});
+
+test("manager source intake routes graph evidence only through an explicit private UDS path", () => {
+  const packet = attachParallelWorkGraphEvidenceToManagerPacket(sourcePacket(), buildParallelSuitabilityReport({}, {
+    candidates: [{
+      candidateWorkPacketId: "candidate-gate-4-manager-intake",
+      title: "Gate 4 manager source intake",
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:34-5"],
+      evidenceRefs: ["evidence:34-5"],
+      verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+      baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+    }],
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  }), { now: "2026-07-22T12:01:00.000Z" });
+  const privatePlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
+  const loopbackPlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", {});
+  assert.equal(privatePlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/internal/manager-source-intake/work-packets");
+  assert.ok(privatePlan.request.parallelWorkGraphEvidence);
+  assert.equal(loopbackPlan.request.parallelWorkGraphEvidence, undefined);
+});
+
+test("manager source intake sends graph evidence over private UDS without using fetch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kendall-source-intake-"));
+  const socketPath = join(directory, "supervisor.sock");
+  let receivedRequest;
+  const server = createServer((request, response) => {
+    assert.equal(request.url, "/internal/manager-source-intake/work-packets");
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", async () => {
+      receivedRequest = JSON.parse(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+    });
+  });
+  await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
+  try {
+    const packet = attachParallelWorkGraphEvidenceToManagerPacket(sourcePacket(), buildParallelSuitabilityReport({}, {
+      candidates: [{
+        candidateWorkPacketId: "candidate-gate-4-manager-intake", title: "Gate 4 manager source intake", eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-5"], evidenceRefs: ["evidence:34-5"], verificationTargets: ["node --test tests/manager-supervisor-source-intake.test.mjs"],
+        baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs"] },
+      }],
+      generatedAt: "2026-07-22T12:00:00.000Z", usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } }, resourceContext: { status: "normal" },
+    }), { now: "2026-07-22T12:01:00.000Z" });
+    const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+      supervisorUdsPath: socketPath,
+      fetchImpl: () => { throw new Error("private UDS intake must not use fetch"); },
+    });
+    assert.ok(receivedRequest.parallelWorkGraphEvidence);
+    assert.equal(result.summary.seedPacket.supervisorIntake.status, "persisted");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("manager source intake consumes canonical supervisor truth without inferring authority", async () => {

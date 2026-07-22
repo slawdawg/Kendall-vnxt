@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,12 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
   const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
   const dashboardPort = new URL(dashboardUrl).port || "3000";
   const supervisorPort = new URL(supervisorUrl).port || "8100";
-  const dbPath = (process.env.PLAYWRIGHT_E2E_DB_PATH ?? join(dataDir, `${databaseName}-${process.pid}.db`)).replaceAll("\\", "/");
+  const dbPath = resolveE2EDatabasePath({
+    dataDir,
+    databaseName,
+    processId: process.pid,
+    requestedPath: process.env.PLAYWRIGHT_E2E_DB_PATH,
+  });
   const workspaceStateRoot = process.env.CODEX_WORKSPACE_STATE_ROOT ?? join(dataDir, `${databaseName}-workspace-state-${process.pid}`);
 
   mkdirSync(tempDir, { recursive: true });
@@ -91,6 +96,15 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
   } finally {
     await Promise.allSettled(children.map(stopProcessTree));
   }
+}
+
+export function resolveE2EDatabasePath({ dataDir, databaseName, processId, requestedPath }) {
+  const normalizedDataDir = resolve(dataDir).replaceAll("\\", "/");
+  const dbPath = resolve(requestedPath ?? join(normalizedDataDir, `${databaseName}-${processId}.db`)).replaceAll("\\", "/");
+  if (!dbPath.startsWith(`${normalizedDataDir}/`) || !dbPath.endsWith(".db")) {
+    throw new Error("PLAYWRIGHT_E2E_DB_PATH must be a generated .data test database path.");
+  }
+  return dbPath;
 }
 
 export function playwrightBrowserPreflight(browserPath) {

@@ -18,6 +18,19 @@ type PacketDetail = {
     effectiveDecision?: string;
     typedBlockers?: string[];
   } | null;
+  workGraph: {
+    sourceSchemaVersion: "parallel-execution-graph-reservation/v1";
+    availability: "available" | "stale" | "unavailable";
+    waveMembership: "selected" | "deferred" | "blocked" | "unavailable";
+    dependencyState: "clear" | "declared" | "blocked" | "unavailable";
+    reservation: { status: string; owner: string | null; reasonCode: string };
+    capacity: { posture: string; reasonCode: string };
+    reason: string;
+    nextSafeAction: string;
+    freshnessState: string;
+    generatedAt: string | null;
+    evidenceRefs: string[];
+  } | null;
 };
 
 export function LanPacketDetailPage({ packetId }: { packetId: string }) {
@@ -93,6 +106,25 @@ export function LanPacketDetailPage({ packetId }: { packetId: string }) {
               <DetailField label="Blockers" value={packet.evidence.typedBlockers?.join(", ") || "None"} />
             </div>
           ) : <p className="mt-2 text-sm text-[var(--muted)]">No evidence readback is available.</p>}
+        </section>
+        <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4" aria-label="Work Graph">
+          <h2 className="text-lg font-semibold">Work Graph</h2>
+          {packet.workGraph ? (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {(packet.workGraph.availability !== "available" || packet.workGraph.waveMembership === "blocked" || packet.workGraph.waveMembership === "deferred") ? (
+                <p aria-live="assertive" className="sm:col-span-2 xl:col-span-3 text-sm leading-6 text-[var(--muted)]">Work Graph is {packet.workGraph.availability === "available" ? packet.workGraph.waveMembership : packet.workGraph.availability}. {packet.workGraph.nextSafeAction}</p>
+              ) : null}
+              <DetailField label="Wave" value={packet.workGraph.waveMembership} />
+              <DetailField label="Dependencies" value={packet.workGraph.dependencyState} />
+              <DetailField label="Reservation" value={`${packet.workGraph.reservation.status}; ${packet.workGraph.reservation.reasonCode}; owner ${packet.workGraph.reservation.owner ?? "not assigned"}`} />
+              <DetailField label="Capacity" value={`${packet.workGraph.capacity.posture}; ${packet.workGraph.capacity.reasonCode}`} />
+              <DetailField label="Reason" value={packet.workGraph.reason} />
+              <DetailField label="Recovery" value={packet.workGraph.nextSafeAction} />
+              <DetailField label="Freshness" value={packet.workGraph.generatedAt ? `${packet.workGraph.freshnessState}; generated ${packet.workGraph.generatedAt}` : packet.workGraph.freshnessState} />
+              <DetailField label="Boundary" value="Advisory metadata only; no dispatch, provider execution, findings, or delivery eligibility." />
+              <DetailField label="Evidence refs" value={packet.workGraph.evidenceRefs.length > 0 ? packet.workGraph.evidenceRefs.join(", ") : "None"} />
+            </div>
+          ) : <p className="mt-2 text-sm text-[var(--muted)]">Work Graph evidence is unavailable.</p>}
         </section>
       </main>
     </Shell>

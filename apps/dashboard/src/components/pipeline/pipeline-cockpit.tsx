@@ -2731,6 +2731,7 @@ function PacketInspection({
           <RefList title="Evidence refs" values={detailEvidenceRefs} empty="No evidence refs in backend projection detail." />
         </section>
       ) : null}
+      <ParallelWorkGraphPanel detail={projectionDetail} />
       {packet.executionAttempts.length > 0 || projectedExecutionAttempts.length > 0 ? (
         <section aria-label="Execution attempts" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
           <h3 className="text-sm font-semibold">Execution attempts</h3>
@@ -2767,6 +2768,38 @@ function PacketInspection({
         Open full packet
       </Link>
     </aside>
+  );
+}
+
+function ParallelWorkGraphPanel({ detail }: { detail: ProjectionSelectedPacketDetail | null }) {
+  const graph = detail?.workGraph;
+  if (!graph) {
+    return null;
+  }
+  const needsAttention = graph.availability !== "available" || graph.waveMembership === "blocked" || graph.waveMembership === "deferred";
+  return (
+    <section aria-label="Work Graph" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Work Graph</h3>
+        <span className="rounded-full border border-[var(--line)] px-2 py-0.5 text-xs text-[var(--muted)]">{graph.availability}</span>
+      </div>
+      {needsAttention ? (
+        <p aria-live="assertive" className="text-xs leading-5 text-[var(--muted)]">
+          Work Graph {graph.availability === "stale" ? "is stale" : graph.availability === "unavailable" ? "is unavailable" : `is ${graph.waveMembership}`}. {graph.nextSafeAction}
+        </p>
+      ) : null}
+      <dl className="grid gap-2 text-sm">
+        <InspectionRow label="Wave" value={graph.waveMembership} />
+        <InspectionRow label="Dependencies" value={graph.dependencyState} />
+        <InspectionRow label="Reservation" value={`${graph.reservation.status}; ${graph.reservation.reasonCode}; owner ${graph.reservation.owner ?? "not assigned"}`} />
+        <InspectionRow label="Capacity" value={`${graph.capacity.posture}; ${graph.capacity.reasonCode}`} />
+        <InspectionRow label="Reason" value={graph.reason} />
+        <InspectionRow label="Recovery" value={graph.nextSafeAction} />
+        <InspectionRow label="Freshness" value={graph.generatedAt ? `${graph.freshnessState}; generated ${graph.generatedAt}` : graph.freshnessState} />
+        <InspectionRow label="Boundary" value="advisory metadata only; no dispatch, provider execution, findings, or delivery eligibility" />
+      </dl>
+      <RefList title="Work Graph evidence refs" values={graph.evidenceRefs} empty="No Work Graph evidence refs are available." />
+    </section>
   );
 }
 

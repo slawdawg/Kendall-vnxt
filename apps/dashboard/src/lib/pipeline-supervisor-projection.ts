@@ -1072,6 +1072,7 @@ function isProjectionSelectedPacketDetail(value: unknown) {
   const hasValidLiveMovementProof =
     detail.canSatisfyLiveMovementProof === undefined ||
     typeof detail.canSatisfyLiveMovementProof === "boolean";
+  const hasValidWorkGraph = isProjectionWorkGraph(detail.workGraph, detail.packetId);
   const movementProofIsConsistent =
     detail.canSatisfyLiveMovementProof !== true ||
     (detail.truthLabel === "live" &&
@@ -1101,7 +1102,58 @@ function isProjectionSelectedPacketDetail(value: unknown) {
     hasValidRecentTransitionEventRefs &&
     hasValidLatestMovementSummary &&
     hasValidLiveMovementProof &&
+    hasValidWorkGraph &&
     movementProofIsConsistent &&
     detail.metadataOnly === true
   );
+}
+
+function isProjectionWorkGraph(value: unknown, packetId: unknown): boolean {
+  if (!value || typeof value !== "object" || !isSafeWorkGraphIdentifier(packetId)) {
+    return false;
+  }
+  const graph = value as NonNullable<PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"]>;
+  const safeGraphText = (text: unknown, maxLength = 500) => (
+    typeof text === "string" &&
+    isSafeProjectionText(text) &&
+    text.length <= maxLength &&
+    !/(?:^|[\s"'])\/(?:home|tmp|var|etc)\//i.test(text)
+  );
+  const reasonCode = (code: unknown) => typeof code === "string" && /^[a-z][a-z0-9_:-]{1,120}$/.test(code);
+  const isUnavailable = graph.availability === "unavailable";
+  return (
+    Object.keys(graph).length === 18 &&
+    graph.schemaVersion === "parallel-work-graph-evidence/v0" &&
+    graph.sourceSchemaVersion === "parallel-execution-graph-reservation/v1" &&
+    ["available", "stale", "unavailable"].includes(graph.availability) &&
+    graph.packetId === packetId &&
+    (graph.executionJobId === null || isSafeWorkGraphIdentifier(graph.executionJobId)) &&
+    (graph.reportIdentity === null || (typeof graph.reportIdentity === "string" && /^sha256:[0-9a-f]{64}$/.test(graph.reportIdentity))) &&
+    (graph.generatedAt === null || isTimestampString(graph.generatedAt)) &&
+    ["live", "stale", "unavailable"].includes(graph.freshnessState) &&
+    ["selected", "deferred", "blocked", "unavailable"].includes(graph.waveMembership) &&
+    ["clear", "declared", "blocked", "unavailable"].includes(graph.dependencyState) &&
+    graph.reservation && Object.keys(graph.reservation).length === 3 &&
+    ["advisory_reserved", "deferred", "blocked", "not_recommended", "unavailable"].includes(graph.reservation.status) &&
+    (graph.reservation.owner === null || safeGraphText(graph.reservation.owner, 160)) &&
+    reasonCode(graph.reservation.reasonCode) &&
+    graph.capacity && Object.keys(graph.capacity).length === 2 &&
+    ["normal", "degraded", "blocked", "unavailable"].includes(graph.capacity.posture) &&
+    reasonCode(graph.capacity.reasonCode) &&
+    safeGraphText(graph.reason) &&
+    safeGraphText(graph.nextSafeAction) &&
+    Array.isArray(graph.evidenceRefs) &&
+    graph.evidenceRefs.length <= 20 &&
+    graph.evidenceRefs.every(isSafeEvidenceRef) &&
+    graph.metadataOnly === true &&
+    graph.rawPayloadRetained === false &&
+    graph.retention === "metadata_only_evidence_references" &&
+    (isUnavailable
+      ? graph.executionJobId === null && graph.reportIdentity === null && graph.generatedAt === null && graph.freshnessState === "unavailable" && graph.waveMembership === "unavailable" && graph.dependencyState === "unavailable" && graph.reservation.status === "unavailable" && graph.capacity.posture === "unavailable"
+      : graph.executionJobId !== null && graph.reportIdentity !== null && graph.generatedAt !== null && graph.freshnessState === (graph.availability === "stale" ? "stale" : "live"))
+  );
+}
+
+function isSafeWorkGraphIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.trim() === value && !value.includes("/") && isSafeEvidenceRef(value);
 }

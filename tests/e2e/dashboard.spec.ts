@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -32,6 +32,7 @@ type CandidateWorkCreatePayload = {
   sourceArtifactType: "bmad_story" | "bmad_research" | "bmad_workflow_output" | "chief_of_staff_request" | "manual_note";
   riskLevel?: "low" | "medium" | "high";
   priority?: "low" | "normal" | "high" | "urgent";
+  importMetadata?: Record<string, unknown>;
 };
 
 type PipelineViewportTarget = {
@@ -47,6 +48,14 @@ function pipelineViewportForProject(projectName: string): PipelineViewportTarget
     return { width: 430, height: 932 };
   }
   return { width: 1440, height: 960 };
+}
+
+function pipelinePacketButton(scope: Page | Locator, title: string): Locator {
+  return scope.getByRole("button", { name: new RegExp(`^${escapeRegExp(title)}; status `) });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function createCandidateWork(request: APIRequestContext, payload: CandidateWorkCreatePayload) {
@@ -81,6 +90,7 @@ async function seedSupervisorPipelinePacket(
   packetId: string,
   title: string,
   status: "waiting" | "complete" = "waiting",
+  parallelWorkGraphEvidence?: Record<string, unknown>,
 ) {
   const sourcePath = "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md";
   const sourceBytes = await fs.readFile(path.join(process.cwd(), sourcePath));
@@ -99,7 +109,9 @@ async function seedSupervisorPipelinePacket(
       status,
       truthLabel: "source_owned",
       sourceRef,
-      actor: { actorType: "manager", actorId: "story-4-6-playwright", actorLabel: "Story 4.6 Playwright" },
+      actor: parallelWorkGraphEvidence
+        ? { actorType: "manager", actorId: "manager-source-intake", actorLabel: "Manager source intake adapter" }
+        : { actorType: "manager", actorId: "story-4-6-playwright", actorLabel: "Story 4.6 Playwright" },
       idempotencyKey: `story-4-6-create-${packetId}`,
       correlationId: `story-4-6-correlation-${packetId}`,
       evidenceRefs: [`test:story-4-6:${packetId}`],
@@ -110,6 +122,10 @@ async function seedSupervisorPipelinePacket(
   expect(response.ok()).toBeTruthy();
   const body = (await response.json()) as { data: { packetId: string } };
   expect(body.data.packetId).toBe(packetId);
+  // The browser fixture owns its isolated SQLite database. Runtime graph
+  // authorization is covered by the private-UDS supervisor integration test;
+  // this narrow setup only gives the renderer a persisted authoritative event.
+  if (parallelWorkGraphEvidence) attachSupervisorPipelineWorkGraph(packetId, parallelWorkGraphEvidence);
   return body.data;
 }
 
@@ -137,6 +153,23 @@ function readSupervisorPipelinePacket(packetId: string) {
     encoding: "utf8",
   });
   return JSON.parse(result) as SupervisorPipelinePacketSnapshot;
+}
+
+function attachSupervisorPipelineWorkGraph(packetId: string, graph: Record<string, unknown>) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const script = [
+    "import json, sqlite3, sys",
+    "db_path = sys.argv[1]",
+    "packet_id = sys.argv[2]",
+    "graph = json.loads(sys.argv[3])",
+    "conn = sqlite3.connect(db_path)",
+    "result = conn.execute(\"update authoritative_work_packet_lifecycle_events set parallel_work_graph_json = ? where packet_id = ? and event_type = 'packet.created'\", (json.dumps(graph), packet_id))",
+    "assert result.rowcount == 1",
+    "conn.commit()",
+    "conn.close()",
+  ].join("; ");
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, JSON.stringify(graph)], { cwd: process.cwd(), encoding: "utf8" });
 }
 
 function ageSupervisorPipelinePacket(packetId: string, snapshot: SupervisorPipelinePacketSnapshot) {
@@ -720,7 +753,7 @@ test.describe("dashboard workflow coverage", () => {
       await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
       await expect(truthSummary.getByText("Source:")).toBeVisible();
       await expect(truthSummary.getByText("live", { exact: true }).first()).toBeVisible();
-      const inspectButton = page.getByRole("button", { name: `Inspect packet: ${title}` });
+      const inspectButton = pipelinePacketButton(page, title);
       await expect(inspectButton).toBeVisible();
       await inspectButton.click();
       const packetInspector = page.getByRole("complementary", { name: "Packet inspection panel" });
@@ -740,7 +773,7 @@ test.describe("dashboard workflow coverage", () => {
       await page.goto("/pipeline");
       await page.reload();
       await expect(page.getByText("Supervisor runtime", { exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: `Inspect packet: ${title}` })).toBeVisible();
+      await expect(pipelinePacketButton(page, title)).toBeVisible();
       const runtimeBody = await page.locator("body").innerText();
       for (const fixtureSentinel of [
         "fixture:happy-path",
@@ -822,7 +855,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Demo fixtures", { exact: true })).toBeVisible();
     await expect(page.locator(".pipeline-mini-packet-proof", { hasText: "non-live fixture" }).first()).toBeVisible();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: /Inspect packet:/ }).first().click();
+    await page.locator(".pipeline-mini-packet").first().click();
     await expect(page.getByText("Fixture/non-live packet; cannot satisfy live proof.", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Contextual action strip")).toHaveCount(0);
     await page.getByRole("link", { name: "Open full packet" }).click();
@@ -830,6 +863,46 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Source: Demo fixture", { exact: true })).toBeVisible();
     await expect(page.getByText("Demo fixture; cannot satisfy live proof.", { exact: true })).toBeVisible();
     expect(supervisorRequests).toEqual([]);
+  });
+
+  test("renders supervisor-backed blocked Work Graph detail without expanding compact cards", async ({ page, request }, testInfo) => {
+    const title = `Story 34.4 blocked dependency ${Date.now()}`;
+    const packetId = `manager-source-story-34-4-${Date.now()}`;
+    await seedSupervisorPipelinePacket(request, packetId, title, "waiting", {
+          schemaVersion: "parallel-work-graph-evidence/v0",
+          sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+          availability: "available",
+          packetId,
+          executionJobId: `execution-job:story-34-4-${testInfo.project.name}`,
+          reportIdentity: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          generatedAt: new Date().toISOString(),
+          freshnessState: "live",
+          waveMembership: "blocked",
+          dependencyState: "blocked",
+          reservation: { status: "blocked", owner: null, reasonCode: "dependency_blocked" },
+          capacity: { posture: "normal", reasonCode: "capacity_normal" },
+          reason: "A declared dependency must be resolved before this advisory wave can continue.",
+          nextSafeAction: "Resolve the declared dependency, then refresh advisory planning evidence.",
+          evidenceRefs: ["evidence:story-34-4-browser"],
+          metadataOnly: true,
+          rawPayloadRetained: false,
+          retention: "metadata_only_evidence_references",
+    });
+    await page.goto("/pipeline");
+    const card = pipelinePacketButton(page, title);
+    await expect(card).toBeVisible();
+    await expect(card).not.toHaveAttribute("aria-label", /work graph|reservation|capacity|recovery/i);
+    await card.click();
+    const inspector = page.getByLabel("Packet inspection panel");
+    const graph = inspector.getByLabel("Work Graph");
+    await expect(graph).toBeVisible();
+    await expect(graph.getByText("Wave", { exact: true })).toBeVisible();
+    await expect(graph.getByText("blocked", { exact: true }).first()).toBeVisible();
+    await expect(graph.locator('[aria-live="assertive"]')).toContainText("Resolve the declared dependency");
+    await page.setViewportSize(pipelineViewportForProject(testInfo.project.name));
+    await expect(graph).toBeVisible();
+    await inspector.getByRole("button", { name: "Close Packet Detail", exact: true }).click();
+    await expect(card).toBeFocused();
   });
 
   test("opens isolated demo pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {
@@ -983,7 +1056,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByLabel("Pipeline inspection panel")).toHaveCount(0);
     await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
     await expect(page.getByLabel("Stage inspection panel")).toHaveCount(0);
-    const compactPacketCount = await routeMap.locator("button[aria-label^=\"Inspect packet:\"]").count();
+    const compactPacketCount = await routeMap.locator(".pipeline-mini-packet").count();
     expect(compactPacketCount).toBeGreaterThan(0);
     expect(compactPacketCount).toBeLessThanOrEqual(40);
     const executeStation = routeMap.locator(".pipeline-route-station").filter({
@@ -993,12 +1066,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(executeOverflow).toBeVisible();
     await executeOverflow.click();
     await expect(executeStation.locator(".pipeline-more-packets")).toHaveCount(0);
-    expect(await executeStation.locator("button[aria-label^=\"Inspect packet:\"]").count()).toBeGreaterThan(4);
-    const lastExecutePacket = executeStation.locator("button[aria-label^=\"Inspect packet:\"]").last();
+    expect(await executeStation.locator(".pipeline-mini-packet").count()).toBeGreaterThan(4);
+    const lastExecutePacket = executeStation.locator(".pipeline-mini-packet").last();
     await lastExecutePacket.click();
     await expect(lastExecutePacket).toHaveAttribute("aria-pressed", "true");
     await expect(executeStation.locator(".pipeline-more-packets")).toHaveCount(0);
-    expect(await executeStation.locator("button[aria-label^=\"Inspect packet:\"]").count()).toBeGreaterThan(4);
+    expect(await executeStation.locator(".pipeline-mini-packet").count()).toBeGreaterThan(4);
     await expect(routeMap.getByRole("button", { name: "Needs approval", exact: true })).toBeVisible();
     await expect(routeMap.locator(".pipeline-stage-info-icon")).toHaveCount(10);
     const captureStage = routeMap.getByRole("button", { name: "Capture", exact: true });
@@ -1040,21 +1113,24 @@ test.describe("dashboard workflow coverage", () => {
     }
     await expect(packetSearch).toBeFocused();
     await packetSearch.fill("stale");
-    const stalePacketButton = routeMap.getByRole("button", { name: /Inspect packet: Resolve stale research source before routing/ });
+    const stalePacketButton = pipelinePacketButton(routeMap, "Resolve stale research source before routing");
     await expect(stalePacketButton).toBeVisible();
     await packetSearch.fill("");
     await packetSearch.fill("Recover failed");
-    const failedPacketButton = routeMap.getByRole("button", { name: /Inspect packet: Recover failed worker stage/ });
+    const failedPacketButton = pipelinePacketButton(routeMap, "Recover failed worker stage");
     await expect(failedPacketButton).toBeVisible();
     await failedPacketButton.click();
     const failedInspection = page.getByLabel("Packet inspection panel");
     await expect(failedInspection).toBeVisible();
     await expect(failedInspection.getByText("Next", { exact: true })).toBeVisible();
     await expect(failedInspection.getByText("Recovery", { exact: true }).first()).toBeVisible();
-    await failedPacketButton.click();
+    await expect(failedInspection.getByLabel("Work Graph")).toHaveCount(0);
+    await failedInspection.getByRole("button", { name: "Close Packet Detail", exact: true }).click();
     await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
+    await expect(failedPacketButton).toBeFocused();
+    await expect(failedPacketButton).not.toHaveAttribute("aria-label", /work graph|reservation|capacity|recovery/i);
     await packetSearch.fill("governed hermes");
-    const governedHermesPacketButton = routeMap.getByRole("button", { name: /Inspect packet: Governed Hermes dry-run attempt active/ });
+    const governedHermesPacketButton = pipelinePacketButton(routeMap, "Governed Hermes dry-run attempt active");
     await expect(governedHermesPacketButton).toBeVisible();
     await governedHermesPacketButton.click();
     const governedHermesInspection = page.getByLabel("Packet inspection panel");
@@ -1222,7 +1298,7 @@ test.describe("dashboard workflow coverage", () => {
       await expect(pipelineBoard).toBeVisible();
       await expect(routeMap).toBeVisible();
       await expect(page.getByLabel(/inspection panel/i)).toHaveCount(0);
-      const visiblePacketCount = await routeMap.locator("button[aria-label^=\"Inspect packet:\"]:visible").count();
+      const visiblePacketCount = await routeMap.locator(".pipeline-mini-packet:visible").count();
       expect(visiblePacketCount, JSON.stringify({ viewport, visiblePacketCount })).toBeGreaterThan(0);
       expect(visiblePacketCount, JSON.stringify({ viewport, visiblePacketCount })).toBeLessThanOrEqual(40);
       const mobileRouteEvidence = await page.evaluate(() => {

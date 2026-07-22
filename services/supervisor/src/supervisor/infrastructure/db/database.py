@@ -356,6 +356,7 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS ready_to_test_json JSON"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS operator_test_state VARCHAR(24)"))
             await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS operator_test_note TEXT"))
+            await connection.execute(text("ALTER TABLE authoritative_work_packet_lifecycle_events ADD COLUMN IF NOT EXISTS parallel_work_graph_json JSON"))
             await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN IF NOT EXISTS provided_fencing_token INTEGER"))
             await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN IF NOT EXISTS outcome VARCHAR(16) DEFAULT 'accepted'"))
             await connection.execute(text("ALTER TABLE queue_lease_actions ADD COLUMN IF NOT EXISTS rejection_reason TEXT"))
@@ -449,6 +450,7 @@ async def init_db() -> None:
                     ("ready_to_test_json", "JSON"),
                     ("operator_test_state", "VARCHAR(24)"),
                     ("operator_test_note", "VARCHAR(255)"),
+                    ("parallel_work_graph_json", "JSON"),
                 ),
             )
             await _sqlite_add_columns(

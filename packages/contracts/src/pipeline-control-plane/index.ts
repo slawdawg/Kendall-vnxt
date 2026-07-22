@@ -4567,7 +4567,37 @@ export interface PipelineSelectedPacketDetailV0 {
   queueLease?: PipelineQueueLeaseV0 | null;
   executionAttempts?: PipelineExecutionAttemptLineageV0[];
   correlationIds?: string[];
+  /** Supervisor-owned redacted read model; never a dashboard planner or action. */
+  workGraph: PipelineWorkGraphEvidenceV0;
   metadataOnly: true;
+}
+
+export interface PipelineWorkGraphEvidenceV0 {
+  schemaVersion: "parallel-work-graph-evidence/v0";
+  sourceSchemaVersion: "parallel-execution-graph-reservation/v1";
+  availability: "available" | "stale" | "unavailable";
+  packetId: string;
+  executionJobId: string | null;
+  reportIdentity: string | null;
+  generatedAt: string | null;
+  freshnessState: "live" | "stale" | "unavailable";
+  waveMembership: "selected" | "deferred" | "blocked" | "unavailable";
+  dependencyState: "clear" | "declared" | "blocked" | "unavailable";
+  reservation: {
+    status: "advisory_reserved" | "deferred" | "blocked" | "not_recommended" | "unavailable";
+    owner: string | null;
+    reasonCode: string;
+  };
+  capacity: {
+    posture: "normal" | "degraded" | "blocked" | "unavailable";
+    reasonCode: string;
+  };
+  reason: string;
+  nextSafeAction: string;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
 }
 
 export interface PipelineManagerSummaryV0 {

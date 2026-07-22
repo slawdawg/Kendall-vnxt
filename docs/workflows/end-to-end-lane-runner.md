@@ -296,6 +296,36 @@ resource and usage evidence and rebuild the report. Do not substitute raw host
 output, infer normal capacity from absent evidence, or use a retry to dispatch,
 launch a worker, call a provider, write a lease, merge, or clean up.
 
+### Packet Detail Work Graph projection
+
+The manager source-intake adapter converts one normal manager report entry only
+when it has the deterministic authoritative packet mapping, then sends the
+validated, redacted result only through the private manager-to-supervisor UDS
+intake. The supervisor records it on that packet's `packet.created` lifecycle
+event or an immutable `packet.parallel_work_graph_refreshed` event for a
+new-key graph refresh.
+The supervisor may expose one validated, redacted
+`parallel-work-graph-evidence/v0` record for the matching packet and execution
+job in **Packet Detail**. It projects only wave membership, dependency state,
+reservation status/owner, capacity posture, reason, freshness, metadata-only
+evidence refs, and one advisory recovery instruction. It is not a second
+planner and does not change authority: the dashboard must render it as backend
+truth and never recompute capacity, reservations, or dispatch eligibility.
+
+The compact `/pipeline` card remains packet presence, name, and status only.
+If the graph is stale, malformed, oversized, unavailable, or mismatched, the
+supervisor returns the explicit unavailable detail state instead of a fallback.
+Refresh the current manager report through its normal governed workflow; do not
+copy its full payload, change-surface paths, worktree state, source/diff
+content, prompts, credentials, provider data, or command output into Candidate
+Work or browser-visible evidence. Candidate metadata and the public work-packet
+endpoint are not graph import or replacement paths. The lifecycle-column migration is additive for SQLite and
+PostgreSQL. For an application rollback, stop the new adapter and run the prior
+application version; it ignores the nullable column without deleting or
+rewriting evidence. A destructive schema rollback requires a separately
+approved migration plan. The authenticated LAN Packet Detail uses the
+same bounded data over the existing session-bound private UDS mediator.
+
 A selected `read_only` entry is an **immutable review candidate**, not a review
 result. It may appear beside a non-overlapping writer only when it carries a
 full exact Git head, a `sha256:` digest, metadata-only source references, no

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 
 import { projectCanonicalSupervisorPacket } from "./operational-readiness.mjs";
@@ -6,6 +7,7 @@ import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
 import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 
 const SOURCE_INTAKE_PATH = "/pipeline-control-plane/work-packets";
+const PRIVATE_SOURCE_INTAKE_PATH = "/internal/manager-source-intake/work-packets";
 const MAX_PACKET_BYTES = 256 * 1024;
 const FORBIDDEN_METADATA = /\b(raw[ _-]?(prompt|completion|payload|transcript)|provider[ _-]?payload|reasoning[ _-]?trace|terminal[ _-]?scrollback|tmux[ _-]?scrollback|pane[ _-]?scrollback|secret|credential|api[ _-]?key|access[ _-]?token)\b/i;
 const FORBIDDEN_FIELD = /(raw(?!payloadretained)|prompt|completion|provider.*payload|reasoning|secret|credential|token|scrollback|transcript)/i;
@@ -31,7 +33,7 @@ export function resolveLoopbackSourceIntakeEndpoint(supervisorUrl) {
   return new URL(SOURCE_INTAKE_PATH, parsed).href;
 }
 
-export function buildManagerSourceIntakeRequest(packet) {
+export function buildManagerSourceIntakeRequest(packet, options = {}) {
   const candidate = eligibleSeedCandidate(packet);
   const candidateId = requiredSafeMetadata(candidate.candidateWorkPacketId || candidate.candidateId, "seedPacket.candidateWorkPacketId", 120);
   const title = requiredSafeMetadata(candidate.title, "seedPacket.title", 180);
@@ -56,12 +58,14 @@ export function buildManagerSourceIntakeRequest(packet) {
   const sourceProvenance = managerBmadSourceProvenance(candidate);
   const sourceRef = authoritativeSourceRef(candidate.sourceRefs[0], sourceProvenance ? title : null);
   const packetId = deriveAuthoritativePacketId(candidateId);
+  const parallelWorkGraphEvidence = options.allowPrivateGraph === true ? managerParallelWorkGraphEvidence(packet, packetId) : null;
   const identityDigest = digest(JSON.stringify({
     candidateId,
     sourceRef,
     sourceProvenance,
     dedupeKey: requiredSafeMetadata(candidate.dedupeKey, "seedPacket.dedupeKey", 180),
     title,
+    parallelWorkGraphEvidence,
   }), 40);
   const provenanceEvidence = sourceProvenance
     ? [
@@ -107,13 +111,15 @@ export function buildManagerSourceIntakeRequest(packet) {
       ...provenanceEvidence,
       `manager-source-metadata:sha256:${identityDigest}`,
     ],
+    ...(parallelWorkGraphEvidence ? { parallelWorkGraphEvidence } : {}),
   };
 }
 
-export function planManagerSourcePacketIntake(packet, supervisorUrl) {
+export function planManagerSourcePacketIntake(packet, supervisorUrl, context = {}) {
   validateBoundedMetadataOnlyValue(packet, "managerPacket");
-  const endpoint = resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
-  const request = buildManagerSourceIntakeRequest(packet);
+  const privateUdsPath = resolvePrivateUdsPath(context.supervisorUdsPath);
+  const endpoint = privateUdsPath ? `private-uds:${privateUdsPath}${PRIVATE_SOURCE_INTAKE_PATH}` : resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
+  const request = buildManagerSourceIntakeRequest(packet, { allowPrivateGraph: Boolean(privateUdsPath) });
   const targetComponents = [
     `candidate:${requiredSafeMetadata(packet.summary.seedPacket.candidateWorkPacketId, "seedPacket.candidateWorkPacketId", 120)}`,
     `packet:${request.packetId}`,
@@ -123,6 +129,7 @@ export function planManagerSourcePacketIntake(packet, supervisorUrl) {
   return {
     endpoint,
     request,
+    privateUdsPath,
     continuousSelection: {
       code: "continuous-source-intake",
       mutationClass: "source_backed_supervisor_intake",
@@ -144,8 +151,9 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   }
   let endpoint;
   let request;
+  let privateUdsPath;
   try {
-    ({ endpoint, request } = planManagerSourcePacketIntake(sourcePacket, supervisorUrl));
+    ({ endpoint, request, privateUdsPath } = planManagerSourcePacketIntake(sourcePacket, supervisorUrl, context));
   } catch (error) {
     const code = /supervisorUrl/.test(String(error?.message || ""))
       ? "manager_supervisor_source_intake_non_loopback_url"
@@ -154,7 +162,7 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   }
 
   const fetchImpl = context.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") {
+  if (!privateUdsPath && typeof fetchImpl !== "function") {
     throw new ManagerSupervisorSourceIntakeError(
       "manager_supervisor_source_intake_network_unavailable",
       "Supervisor source intake requires an available fetch implementation.",
@@ -170,13 +178,15 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
     throw intakeError("manager_supervisor_source_intake_input_invalid", error, sourcePacket);
   }
   try {
-    response = await fetchImpl(endpoint, {
+    response = privateUdsPath
+      ? await postPrivateUds(privateUdsPath, PRIVATE_SOURCE_INTAKE_PATH, request, timeoutMs)
+      : await fetchImpl(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "application/json" },
       body: JSON.stringify(request),
       redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
-    });
+      });
   } catch (error) {
     throw new ManagerSupervisorSourceIntakeError(
       "manager_supervisor_source_intake_network_error",
@@ -259,6 +269,38 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   return integrated;
 }
 
+function resolvePrivateUdsPath(value = process.env.KENDALL_SUPERVISOR_UDS_PATH) {
+  if (value === undefined || value === null || value === "") return null;
+  const path = requiredString(value, "supervisorUdsPath", 512);
+  if (!path.startsWith("/") || path.includes("\0") || path.split("/").includes("..")) throw new TypeError("supervisorUdsPath must be an absolute private UDS path.");
+  return path;
+}
+
+function postPrivateUds(socketPath, path, body, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({ socketPath, path, method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, timeout: timeoutMs }, (response) => {
+      const chunks = [];
+      let receivedBytes = 0;
+      response.on("data", (chunk) => {
+        receivedBytes += chunk.length;
+        if (receivedBytes > MAX_PACKET_BYTES) {
+          response.destroy(new Error("private supervisor UDS source intake response exceeds the metadata limit"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.once("error", reject);
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({ ok: (response.statusCode ?? 500) >= 200 && (response.statusCode ?? 500) < 300, status: response.statusCode ?? 500, json: async () => JSON.parse(text) });
+      });
+    });
+    request.once("error", reject);
+    request.once("timeout", () => request.destroy(new Error("private supervisor UDS source intake timed out")));
+    request.end(JSON.stringify(body));
+  });
+}
+
 function eligibleSeedCandidate(packet) {
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) {
     throw new TypeError("Manager source intake requires a source-backed manager packet object.");
@@ -304,6 +346,62 @@ function eligibleSeedCandidate(packet) {
     throw new TypeError("Manager source intake requires one exact source-artifact discovery projection.");
   }
   return candidate;
+}
+
+function managerParallelWorkGraphEvidence(packet, packetId) {
+  const evidence = packet?.summary?.parallelWorkGraphEvidence;
+  if (evidence === undefined || evidence === null) return null;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    throw new TypeError("Manager parallel work graph evidence must be a typed metadata object.");
+  }
+  const required = new Set([
+    "schemaVersion", "sourceSchemaVersion", "availability", "packetId", "executionJobId", "reportIdentity", "generatedAt", "freshnessState",
+    "waveMembership", "dependencyState", "reservation", "capacity", "reason", "nextSafeAction", "evidenceRefs",
+    "metadataOnly", "rawPayloadRetained", "retention",
+  ]);
+  if (Object.keys(evidence).length !== required.size || Object.keys(evidence).some((key) => !required.has(key))) {
+    throw new TypeError("Manager parallel work graph evidence must use the exact typed contract.");
+  }
+  if (
+    evidence.schemaVersion !== "parallel-work-graph-evidence/v0" ||
+    evidence.sourceSchemaVersion !== "parallel-execution-graph-reservation/v1" ||
+    evidence.packetId !== packetId ||
+    !((evidence.availability === "available" && evidence.freshnessState === "live") || (evidence.availability === "stale" && evidence.freshnessState === "stale")) ||
+    !["selected", "deferred", "blocked"].includes(evidence.waveMembership) ||
+    !["clear", "declared", "blocked"].includes(evidence.dependencyState) ||
+    evidence.metadataOnly !== true || evidence.rawPayloadRetained !== false || evidence.retention !== "metadata_only_evidence_references"
+  ) {
+    throw new TypeError("Manager parallel work graph evidence is not a valid metadata-only advisory projection.");
+  }
+  if (!validTimestamp(evidence.generatedAt) || !safeGraphIdentifier(evidence.executionJobId) || !/^sha256:[0-9a-f]{64}$/.test(evidence.reportIdentity) || !safeGraphText(evidence.reason) || !safeGraphText(evidence.nextSafeAction)) {
+    throw new TypeError("Manager parallel work graph evidence has unsafe identity or text.");
+  }
+  if (!Array.isArray(evidence.evidenceRefs) || evidence.evidenceRefs.length > 20 || !evidence.evidenceRefs.every(safeGraphIdentifier)) {
+    throw new TypeError("Manager parallel work graph evidence refs must be bounded metadata identifiers.");
+  }
+  if (!evidence.reservation || typeof evidence.reservation !== "object" || Array.isArray(evidence.reservation) ||
+      !evidence.capacity || typeof evidence.capacity !== "object" || Array.isArray(evidence.capacity) ||
+      Object.keys(evidence.reservation).length !== 3 || Object.keys(evidence.capacity).length !== 2 ||
+      !["advisory_reserved", "deferred", "blocked", "not_recommended"].includes(evidence.reservation.status) ||
+      !(evidence.reservation.owner === null || safeGraphText(evidence.reservation.owner, 160)) ||
+      !safeGraphCode(evidence.reservation.reasonCode) ||
+      !["normal", "degraded", "blocked"].includes(evidence.capacity.posture) || !safeGraphCode(evidence.capacity.reasonCode)) {
+    throw new TypeError("Manager parallel work graph reservation or capacity metadata is invalid.");
+  }
+  return structuredClone(evidence);
+}
+
+function safeGraphIdentifier(value) {
+  return typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= 255 && !/[\s/\x00-\x1f\x7f]/.test(value) && !FORBIDDEN_METADATA.test(value);
+}
+
+function safeGraphCode(value) {
+  return typeof value === "string" && /^[a-z][a-z0-9_:-]{1,120}$/.test(value);
+}
+
+function safeGraphText(value, maxLength = 500) {
+  return typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= maxLength &&
+    !FORBIDDEN_METADATA.test(value) && !/[\u0000-\u001f\u007f]/.test(value) && !/(?:^|[\s"'])\/(?:home|tmp|var|etc)\//i.test(value);
 }
 
 function authoritativeSourceRef(value, title = null) {
@@ -442,31 +540,31 @@ function validateLifecycleIdentity(lifecycle, request) {
   };
   if (!isDeepStrictEqual(topIdentity, expectedTopIdentity)) throw identityConflict("Supervisor source intake returned conflicting WorkPacket identity.");
 
-  const creation = lifecycle.history.find((event) => event?.eventType === "packet.created" && event?.idempotencyKey === request.idempotencyKey);
-  if (!creation || creation.metadataOnly !== true || !validTimestamp(creation.occurredAt)) {
-    throw new TypeError("Supervisor source intake lifecycle is missing the exact persisted creation event.");
+  const persisted = lifecycle.history.find((event) =>
+    ["packet.created", "packet.parallel_work_graph_refreshed"].includes(event?.eventType) && event?.idempotencyKey === request.idempotencyKey,
+  );
+  if (!persisted || persisted.metadataOnly !== true || !validTimestamp(persisted.occurredAt)) {
+    throw new TypeError("Supervisor source intake lifecycle is missing the exact persisted manager source event.");
   }
-  const creationIdentity = {
-    packetId: creation.packetId,
-    eventType: creation.eventType,
-    previousStage: creation.previousStage,
-    targetStage: creation.targetStage,
-    status: creation.status,
-    truthLabel: creation.truthLabel,
-    sourceRef: creation.sourceRef,
-    actor: creation.actor,
-    correlationId: creation.correlationId,
-    idempotencyKey: creation.idempotencyKey,
-    payloadSummary: creation.payloadSummary,
-    evidenceRefs: creation.evidenceRefs,
-    metadataOnly: creation.metadataOnly,
+  const persistedIdentity = {
+    packetId: persisted.packetId,
+    eventType: persisted.eventType,
+    targetStage: persisted.targetStage,
+    status: persisted.status,
+    truthLabel: persisted.truthLabel,
+    sourceRef: persisted.sourceRef,
+    actor: persisted.actor,
+    correlationId: persisted.correlationId,
+    idempotencyKey: persisted.idempotencyKey,
+    payloadSummary: persisted.payloadSummary,
+    evidenceRefs: persisted.evidenceRefs,
+    metadataOnly: persisted.metadataOnly,
   };
-  const expectedCreationIdentity = {
+  const expectedPersistedIdentity = {
     packetId: request.packetId,
-    eventType: "packet.created",
-    previousStage: null,
-    targetStage: request.initialStage,
-    status: request.status,
+    eventType: persisted.eventType,
+    targetStage: persisted.eventType === "packet.parallel_work_graph_refreshed" ? lifecycle.currentStage : request.initialStage,
+    status: persisted.eventType === "packet.parallel_work_graph_refreshed" ? lifecycle.status : request.status,
     truthLabel: request.truthLabel,
     sourceRef: request.sourceRef,
     actor: request.actor,
@@ -476,7 +574,7 @@ function validateLifecycleIdentity(lifecycle, request) {
     evidenceRefs: request.evidenceRefs,
     metadataOnly: true,
   };
-  if (!isDeepStrictEqual(creationIdentity, expectedCreationIdentity)) throw identityConflict("Supervisor source intake returned conflicting creation-event identity.");
+  if (!isDeepStrictEqual(persistedIdentity, expectedPersistedIdentity)) throw identityConflict("Supervisor source intake returned conflicting manager-source event identity.");
 }
 
 function failClosedPacket(packet, code, message) {

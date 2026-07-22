@@ -23,6 +23,30 @@ In LAN-auth mode the custom runtime serves the standalone sign-in surface and
 proxies only the fixed authentication routes over the supervisor UDS. Protected
 Next routes are session-gated; Packet Detail reads use the bounded read mediator.
 
+## Packet Detail Work Graph
+
+When the supervisor has a current, validated advisory parallel-wave snapshot,
+Packet Detail shows a **Work Graph** group with wave membership, dependency,
+reservation, capacity, reason, freshness, evidence references, and one safe
+recovery instruction. It is read-only planning evidence: it does not dispatch
+work, call a provider, report review findings, or make work delivery-eligible.
+The pipeline map deliberately keeps its compact cards to packet presence, name,
+and status.
+
+An unavailable or stale Work Graph is an honest state, not a dashboard fallback.
+Refresh the governed manager planning evidence through the normal lane workflow,
+which sends the redacted graph only through the private manager-to-supervisor
+UDS intake and persists it on the matching authoritative lifecycle event, then
+refresh Packet Detail. Same-key replays are idempotent; changed graph evidence
+needs a new immutable intake key. Candidate/import metadata and the public
+work-packet endpoint are never Work Graph inputs. The supervisor migration is additive: an
+older supervisor can safely ignore the nullable lifecycle column during an
+application rollback; do not drop or rewrite retained lifecycle evidence.
+In LAN-auth mode this group is returned only through
+the existing session-bound private-UDS mediator; never expose or copy the
+supervisor socket, bootstrap password, prompts, provider payloads, source/diff
+content, worktree paths, or host command output to the browser.
+
 See the repository's [Authenticated LAN dashboard setup](../../docs/workflows/authenticated-lan-dashboard-setup.md)
 for first-time host configuration, private-file permissions, certificate setup,
 startup order, and failure diagnosis.

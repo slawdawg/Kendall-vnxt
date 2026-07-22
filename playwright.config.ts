@@ -14,9 +14,12 @@ const enableWebKitProjects = process.env.PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS === "
 const expectUnavailableSupervisor = process.env.PLAYWRIGHT_EXPECT_UNAVAILABLE_SUPERVISOR === "true";
 const supervisorCommand = `uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 127.0.0.1 --port ${supervisorPort}`;
 const dashboardCommand = `pnpm --filter @kendall/dashboard exec next dev --hostname 127.0.0.1 --port ${dashboardPort}`;
-const dbPath = (
-  process.env.PLAYWRIGHT_E2E_DB_PATH ?? path.join(localDataDir, `e2e-supervisor-${process.pid}.db`)
-).replaceAll("\\", "/");
+const requestedDbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+const dbPath = path.resolve(requestedDbPath ?? path.join(localDataDir, `e2e-supervisor-${process.pid}.db`)).replaceAll("\\", "/");
+const permittedE2eDataRoot = `${path.resolve(localDataDir).replaceAll("\\", "/")}/`;
+if (!dbPath.startsWith(permittedE2eDataRoot) || !dbPath.endsWith(".db")) {
+  throw new Error("PLAYWRIGHT_E2E_DB_PATH must be a generated .data test database path.");
+}
 const dbUrl = `sqlite+aiosqlite:///${dbPath}`;
 process.env.PLAYWRIGHT_E2E_DB_PATH = dbPath;
 

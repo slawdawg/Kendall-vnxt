@@ -26,6 +26,29 @@ function request(port, path, options = {}) {
   });
 }
 
+function unavailableWorkGraph(packetId) {
+  return {
+    schemaVersion: "parallel-work-graph-evidence/v0",
+    sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+    availability: "unavailable",
+    packetId,
+    executionJobId: null,
+    reportIdentity: null,
+    generatedAt: null,
+    freshnessState: "unavailable",
+    waveMembership: "unavailable",
+    dependencyState: "unavailable",
+    reservation: { status: "unavailable", owner: null, reasonCode: "parallel_report_unavailable" },
+    capacity: { posture: "unavailable", reasonCode: "parallel_capacity_unavailable" },
+    reason: "No current supervisor-validated parallel wave evidence is available for this packet.",
+    nextSafeAction: "Refresh the advisory planning evidence; this detail does not dispatch work, call a provider, or establish delivery eligibility.",
+    evidenceRefs: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  };
+}
+
 test("mediates one fixed authenticated UDS GET with no-store and stable denial", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kendall-packet-detail-"));
   const socketPath = join(directory, "supervisor.sock");
@@ -38,10 +61,26 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
     }
     res.setHeader("content-type", "application/json");
     const packetId = decodeURIComponent(req.url.split("/").at(-1));
+    const workGraph = unavailableWorkGraph(packetId);
+    if (packetId === "malformed") workGraph.reason = "raw provider payload copied here";
+    if (packetId === "bad-report-identity") workGraph.reportIdentity = "report:unsafe";
+    if (packetId === "nested-extra") workGraph.reservation.secretToken = "forbidden";
+    if (packetId === "packet-extra") {
+      res.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null, workGraph, rawPayload: "forbidden" } }));
+      return;
+    }
+    if (packetId === "top-level-extra") {
+      res.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null, workGraph }, rawPayload: "forbidden" }));
+      return;
+    }
+    if (packetId === "unavailable-extra") {
+      res.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "unavailable", packet: { rawPayload: "forbidden" } }));
+      return;
+    }
     res.end(JSON.stringify({
       schemaVersion: "kendall-authenticated-packet-detail/v1",
       state: "available",
-      packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null },
+      packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null, workGraph },
     }));
   });
   await listen(supervisor, socketPath);
@@ -66,16 +105,35 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   assert.equal(colonId.body.packet.packetId, "packet:1");
   assert.equal(observed.length, 2);
 
+  const malformed = await request(port, "/api/packet-detail/malformed", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(malformed.status, 503);
+  assert.deepEqual(malformed.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  const badReportIdentity = await request(port, "/api/packet-detail/bad-report-identity", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(badReportIdentity.status, 503);
+  assert.deepEqual(badReportIdentity.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  const packetExtra = await request(port, "/api/packet-detail/packet-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(packetExtra.status, 503);
+  assert.deepEqual(packetExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  const topLevelExtra = await request(port, "/api/packet-detail/top-level-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(topLevelExtra.status, 503);
+  assert.deepEqual(topLevelExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  const nestedExtra = await request(port, "/api/packet-detail/nested-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(nestedExtra.status, 503);
+  assert.deepEqual(nestedExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  const unavailableExtra = await request(port, "/api/packet-detail/unavailable-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(unavailableExtra.status, 503);
+  assert.deepEqual(unavailableExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
+
   const denied = await request(port, "/api/packet-detail/does-not-exist");
   assert.equal(denied.status, 401);
   assert.deepEqual(denied.body, { state: "sign_in_required" });
-  assert.equal(observed.length, 2);
+  assert.equal(observed.length, 8);
 
   const mutation = await request(port, "/api/packet-detail/packet-1", { method: "POST" });
   assert.equal(mutation.status, 405);
   const forwarded = await request(port, "/api/packet-detail/packet-1", { headers: { "x-forwarded-for": "127.0.0.1" } });
   assert.equal(forwarded.status, 400);
-  assert.equal(observed.length, 2);
+  assert.equal(observed.length, 8);
 
   await close(dashboard);
   await close(supervisor);

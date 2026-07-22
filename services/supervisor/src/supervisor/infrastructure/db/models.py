@@ -254,6 +254,7 @@ class AuthoritativeWorkPacketLifecycleEvent(Base):
     ready_to_test_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     operator_test_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
     operator_test_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parallel_work_graph_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     payload_summary: Mapped[str] = mapped_column(Text, default="")
     evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
