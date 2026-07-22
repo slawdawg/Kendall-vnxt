@@ -7039,6 +7039,48 @@ try {
     }
   });
 
+  test("cleanup-merged refuses remote target downgrade on partial resume", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const fakeGit = installFixtureGitProxy(
+        fixture,
+        `args[0] === 'push' && args.includes(':refs/heads/${fixture.branch}')`,
+        "simulated remote deletion failure",
+      );
+      const firstAttempt = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(firstAttempt.code !== 0, "initial remote cleanup failure was not simulated");
+      rmSync(fakeGit, { force: true });
+
+      const downgradedResume = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(downgradedResume.code !== 0, "cleanup closed after dropping --delete-remote");
+      assert(downgradedResume.stderr.includes("requires --delete-remote"), downgradedResume.stderr || downgradedResume.stdout);
+      assert(!existsSync(fixture.worktree), "downgraded resume unexpectedly restored or removed a worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "downgraded resume recreated or deleted the local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "downgraded resume deleted the registered remote branch");
+
+      const partial = readJson(join(fixture.stateRoot, "tasks", "cleanup-task.json"));
+      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
+      assert(!partial.cleanup_completed_at, "downgraded resume must not record completion");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.required === true, "registered remote target requirement was downgraded");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.deleteRequested === false, "evidence must record the omitted resume flag");
+      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "registered remote target evidence must remain present");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-merged records advanced remote target evidence before exact-head resume refusal", () => {
     const fixture = createMergedCleanupFixture();
     try {

@@ -3454,6 +3454,22 @@ function cleanupMerged(argv, mode = {}) {
       continue;
     }
 
+    const remoteResumeBlocker = cleanupRemoteResumeBlocker(manifest, deleteRemote);
+    if (remoteResumeBlocker && (options.summaryJson || options.dryRun || !apply)) {
+      if (options.summaryJson) {
+        summaryResults.push(
+          cleanupMergedSkipSummary(manifest, "skipped_remote_cleanup_required", remoteResumeBlocker, {
+            pr,
+            worktreeStatus,
+            deleteRemote,
+          }),
+        );
+        continue;
+      }
+      console.log(`SKIP ${manifest.task_id}: ${remoteResumeBlocker}`);
+      continue;
+    }
+
     const cleanupAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr, { options });
     if (cleanupAuditBlocker && (options.summaryJson || options.dryRun || !apply)) {
       if (options.summaryJson) {
@@ -3496,6 +3512,10 @@ function cleanupMerged(argv, mode = {}) {
         // target-specific resume evidence rather than a generic error alone.
         const lockedCleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
         recordCleanupTargetEvidence(manifest, lockedCleanupCwd, { deleteRemote });
+        const lockedRemoteResumeBlocker = cleanupRemoteResumeBlocker(manifest, deleteRemote);
+        if (lockedRemoteResumeBlocker) {
+          throw new Error(lockedRemoteResumeBlocker);
+        }
         const lockedPr = prView(manifest);
         if (!lockedPr?.mergedAt) {
           throw new Error(`Could not refresh merged PR evidence under cleanup lock for ${manifest.task_id}.`);
@@ -4410,7 +4430,8 @@ function worktreeCleanupStatus(manifest, cleanupCwd) {
 
 function cleanupMergedPlan(manifest, pr, options) {
   const localBranchSha = branchSha(manifest.branch, options.cleanupCwd);
-  const remoteBranchSha = options.deleteRemote ? originBranchSha(manifest.branch, options.cleanupCwd) : "";
+  const remoteRequired = remoteCleanupTargetRequired(manifest, options.deleteRemote);
+  const remoteBranchSha = remoteRequired ? originBranchSha(manifest.branch, options.cleanupCwd) : "";
   const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
   const lines = [
     `PR #${pr.number || manifest.pr_number || "unknown"} merged at ${pr.mergedAt}`,
@@ -4418,13 +4439,13 @@ function cleanupMergedPlan(manifest, pr, options) {
     `owner ${manifest.owner || "unowned"}`,
     `local branch ${manifest.branch} (${localBranchSha || "absent"})`,
   ];
-  if (options.deleteRemote) {
+  if (remoteRequired) {
     lines.push(`remote branch origin/${manifest.branch} (${remoteBranchSha || "absent"})`);
   }
   lines.push(`clean generated artifacts under ${manifest.worktree_path}`);
   lines.push(`git worktree remove ${manifest.worktree_path}`);
   lines.push(`git branch -d ${manifest.branch}`);
-  if (options.deleteRemote) {
+  if (remoteRequired) {
     lines.push(`git push origin --delete ${manifest.branch}`);
   }
   return lines;
@@ -4534,9 +4555,11 @@ function worktreeListedSafe(worktreePath, cleanupCwd) {
 }
 
 function cleanupRemoteTargetEvidence(manifest, cleanupCwd, deleteRemote) {
-  if (!deleteRemote) {
+  const required = remoteCleanupTargetRequired(manifest, deleteRemote);
+  if (!required) {
     return {
       required: false,
+      deleteRequested: false,
       branch: manifest.branch,
       state: "not-requested",
       sha: null,
@@ -4547,6 +4570,7 @@ function cleanupRemoteTargetEvidence(manifest, cleanupCwd, deleteRemote) {
     const sha = originBranchSha(manifest.branch, cleanupCwd);
     return {
       required: true,
+      deleteRequested: Boolean(deleteRemote),
       branch: manifest.branch,
       state: sha ? "present" : "absent",
       sha: sha || null,
@@ -4555,12 +4579,25 @@ function cleanupRemoteTargetEvidence(manifest, cleanupCwd, deleteRemote) {
   } catch (error) {
     return {
       required: true,
+      deleteRequested: Boolean(deleteRemote),
       branch: manifest.branch,
       state: "unknown",
       sha: null,
       error: String(error.message || error).slice(0, 500),
     };
   }
+}
+
+function remoteCleanupTargetRequired(manifest, deleteRemote) {
+  return Boolean(deleteRemote || manifest.cleanup_target_evidence?.remoteBranch?.required);
+}
+
+function cleanupRemoteResumeBlocker(manifest, deleteRemote) {
+  const remote = manifest.cleanup_target_evidence?.remoteBranch;
+  if (remote?.required && !deleteRemote && remote.state !== "absent") {
+    return "Cleanup resume requires --delete-remote while a previously registered remote branch target remains.";
+  }
+  return "";
 }
 
 function recordCleanupTargetEvidence(manifest, cleanupCwd, options = {}) {
