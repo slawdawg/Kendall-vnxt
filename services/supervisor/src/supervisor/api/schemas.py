@@ -2,7 +2,7 @@
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
 
@@ -21,6 +21,31 @@ from supervisor.domain.types import (
     WorkflowAction,
     WorkflowState,
 )
+
+
+def _strict_contract_payload(value: Any, model: type[BaseModel], *, path: str) -> None:
+    """Reject unknown keys and primitive coercions at a response boundary."""
+
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+    if not isinstance(value, dict):
+        return
+    fields = model.model_fields
+    unknown = set(value) - set(fields)
+    if unknown:
+        raise ValueError(f"{path} contains unknown fields: {sorted(unknown)}")
+    primitive_types = (str, int, float, bool)
+    for name, field in fields.items():
+        if name not in value or value[name] is None:
+            continue
+        annotation = field.annotation
+        candidates = get_args(annotation) if get_origin(annotation) is not None else (annotation,)
+        scalar_types = tuple(item for item in candidates if item in primitive_types)
+        if scalar_types and not isinstance(value[name], scalar_types):
+            raise ValueError(f"{path}.{name} must use a strict scalar value")
+        nested_model = next((item for item in candidates if isinstance(item, type) and issubclass(item, BaseModel)), None)
+        if nested_model is not None:
+            _strict_contract_payload(value[name], nested_model, path=f"{path}.{name}")
 
 UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
@@ -6558,6 +6583,13 @@ class WorkItemApiEnvelope(BaseModel):
     data: WorkItemView
     meta: dict[str, Any] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _work_item_result_must_be_strict(cls, value):
+        if isinstance(value, dict) and "data" in value:
+            _strict_contract_payload(value["data"], WorkItemView, path="data")
+        return value
+
 
 class CandidateWorkPromotionView(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -6570,12 +6602,8 @@ class CandidateWorkPromotionView(BaseModel):
     def _promotion_children_must_reject_unknown_fields(cls, value):
         if not isinstance(value, dict):
             return value
-        for field_name, child_model in (("candidateWork", CandidateWorkView), ("workItem", WorkItemView)):
-            child = value.get(field_name)
-            if isinstance(child, dict):
-                unknown = set(child) - set(child_model.model_fields)
-                if unknown:
-                    raise ValueError(f"{field_name} contains unknown fields: {sorted(unknown)}")
+        _strict_contract_payload(value.get("candidateWork"), CandidateWorkView, path="candidateWork")
+        _strict_contract_payload(value.get("workItem"), WorkItemView, path="workItem")
         return value
 
 
