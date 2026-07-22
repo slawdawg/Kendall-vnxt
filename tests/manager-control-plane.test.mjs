@@ -9452,8 +9452,18 @@ test("builds a deterministic metadata-only execution graph with bounded independ
       dependencyHints: [],
     },
   ];
-  const first = buildParallelSuitabilityReport({}, { candidates, generatedAt: new Date("2026-07-22T12:00:00.000Z") });
-  const second = buildParallelSuitabilityReport({}, { candidates: [...candidates].reverse(), generatedAt: new Date("2026-07-22T12:00:00.000Z") });
+  const first = buildParallelSuitabilityReport({}, {
+    candidates,
+    generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
+  const second = buildParallelSuitabilityReport({}, {
+    candidates: [...candidates].reverse(),
+    generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  });
 
   assert.equal(first.status, "ready");
   assert.equal(first.summary.schemaVersion, "parallel-execution-graph-reservation/v1");
@@ -9508,8 +9518,18 @@ test("selects an immutable read-only review candidate beside a non-overlapping w
   };
 
   try {
-    const first = buildParallelSuitabilityReport({ stateRoot }, { candidates: [writer, reviewer], generatedAt: new Date("2026-07-22T12:00:00.000Z") });
-    const second = buildParallelSuitabilityReport({ stateRoot }, { candidates: [reviewer, writer], generatedAt: new Date("2026-07-22T12:00:00.000Z") });
+    const first = buildParallelSuitabilityReport({ stateRoot }, {
+      candidates: [writer, reviewer],
+      generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+      usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+      resourceContext: { status: "normal" },
+    });
+    const second = buildParallelSuitabilityReport({ stateRoot }, {
+      candidates: [reviewer, writer],
+      generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+      usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+      resourceContext: { status: "normal" },
+    });
 
     assert.equal(existsSync(stateRoot), false);
     assert.deepEqual(first, second);
@@ -9522,6 +9542,242 @@ test("selects an immutable read-only review candidate beside a non-overlapping w
     assert.doesNotMatch(JSON.stringify(first), /provider call|current finding|delivery eligible/i);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("plans a deterministic capacity-aware normal wave with separate writer and immutable-review caps", () => {
+  const baselineRef = "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const writer = (id) => ({
+    candidateWorkPacketId: `writer-${id}`,
+    title: `Writer ${id}`,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-3"],
+    evidenceRefs: [`source:writer-${id}`],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef,
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [`scripts/writer-${id}.mjs`] },
+  });
+  const reviewer = (id) => ({
+    candidateWorkPacketId: `reviewer-${id}`,
+    title: `Reviewer ${id}`,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-3"],
+    evidenceRefs: [`source:reviewer-${id}`],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef,
+    readWriteMode: "read_only",
+    immutableReview: {
+      exactHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      sourceRefs: [`review-input:${id}`],
+      mutableWorktree: false,
+      metadataOnly: true,
+    },
+  });
+  const candidates = [writer("a"), writer("b"), writer("c"), reviewer("a"), reviewer("b"), reviewer("c")];
+  const context = {
+    candidates,
+    generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+    resourceContext: { status: "normal" },
+  };
+
+  const first = buildParallelSuitabilityReport({}, context);
+  const second = buildParallelSuitabilityReport({}, { ...context, candidates: [...candidates].reverse() });
+
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.summary.recommendation.selectedExecutionJobIds, [
+    "execution-job:reviewer-a",
+    "execution-job:reviewer-b",
+    "execution-job:writer-a",
+    "execution-job:writer-b",
+  ]);
+  assert.deepEqual(first.summary.recommendation.capacity, {
+    schemaVersion: "parallel-capacity-decision/v1",
+    posture: "normal",
+    writerCap: 2,
+    readOnlyCap: 2,
+    totalCap: 4,
+    externalRouteAllowance: 0,
+    reasonCode: "capacity_normal",
+    reason: "Current normalized resource and usage posture permits the bounded advisory wave.",
+    nextSafeAction: "Review the advisory wave, then use the existing dispatch preview and authority gates separately for any future mutation.",
+  });
+  assert.equal(first.summary.executionJobs.find((job) => job.executionJobId === "execution-job:writer-c").reservationLease.reasonCode, "capacity_writer_cap");
+  assert.equal(first.summary.executionJobs.find((job) => job.executionJobId === "execution-job:reviewer-c").reservationLease.reasonCode, "capacity_read_only_cap");
+  const legacyCap = buildParallelSuitabilityReport({ maxParallel: 1 }, context);
+  assert.deepEqual(legacyCap.summary.recommendation.selectedExecutionJobIds, ["execution-job:reviewer-a"]);
+  assert.equal(legacyCap.summary.executionJobs.find((job) => job.executionJobId === "execution-job:reviewer-b").reservationLease.reasonCode, "recommendation_cap");
+  assert.equal(buildParallelSuitabilityReport({ maxParallel: Symbol("max") }, context).summary.recommendation.maxSelected, 4);
+  assert.doesNotMatch(JSON.stringify(first), /provider call|current finding|rawLoadAverage/i);
+});
+
+test("degrades unknown capacity and preserves critical stop lines without overriding existing candidate blocks", () => {
+  const normalUsage = { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } };
+  const candidate = (id, overrides = {}) => ({
+    candidateWorkPacketId: id,
+    title: id,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-3"],
+    evidenceRefs: [`source:${id}`],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef: "dev@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [`scripts/${id}.mjs`] },
+    ...overrides,
+  });
+  const unknown = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("first"), candidate("second")],
+    resourceContext: { status: "unknown" },
+    usageContext: normalUsage,
+  });
+  assert.equal(unknown.summary.recommendation.capacity.posture, "degraded");
+  assert.equal(unknown.summary.recommendation.capacity.writerCap, 1);
+  assert.equal(unknown.summary.recommendation.capacity.readOnlyCap, 0);
+  assert.equal(unknown.summary.recommendation.capacity.externalRouteAllowance, 0);
+  assert.deepEqual(unknown.summary.recommendation.selectedExecutionJobIds, ["execution-job:first"]);
+  assert.equal(unknown.summary.executionJobs.find((job) => job.executionJobId === "execution-job:second").reservationLease.reasonCode, "capacity_writer_cap");
+
+  const missingWeekly = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("weekly-first"), candidate("weekly-second")],
+    resourceContext: { status: "normal" },
+    usageContext: { status: "normal" },
+  });
+  assert.equal(missingWeekly.summary.recommendation.capacity.posture, "degraded");
+  assert.deepEqual(missingWeekly.summary.recommendation.selectedExecutionJobIds, ["execution-job:weekly-first"]);
+
+  const revokedLoadAverage = Proxy.revocable([], {});
+  revokedLoadAverage.revoke();
+  for (const [label, resourceContext, usageContext, expectedPosture, selected] of [
+    ["unavailable-resource", { status: "unavailable" }, normalUsage, "degraded", true],
+    ["warm-resource", { status: "warm" }, normalUsage, "degraded", true],
+    ["pressured-resource", { status: "pressured" }, normalUsage, "blocked", false],
+    ["unavailable-usage", { status: "normal" }, { status: "unavailable" }, "degraded", true],
+    ["conserve-usage", { status: "normal" }, { status: "conserve", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } }, "degraded", true],
+    ["weekly-pressure", { status: "normal" }, { status: "normal", summary: { weekly: { state: "pressured", reliable: true, source: "fixture" } } }, "blocked", false],
+    ["malformed-resource", { cpuCount: 4, freeMemory: -1, totalMemory: 10, loadAverage: [0] }, normalUsage, "degraded", true],
+    ["malformed-normal-resource", { status: "normal", cpuCount: 4, freeMemory: -1, totalMemory: 10, loadAverage: [0] }, normalUsage, "degraded", true],
+    ["nonserializable-resource", { status: "normal", cpuCount: Symbol("cpu"), freeMemory: 9, totalMemory: 10, loadAverage: [0] }, normalUsage, "degraded", true],
+    ["bigint-resource", { status: "normal", cpuCount: 4n, freeMemory: 9, totalMemory: 10, loadAverage: [0] }, normalUsage, "degraded", true],
+    ["coerced-string-resource", { status: "normal", cpuCount: "4", freeMemory: "9", totalMemory: "10", loadAverage: [0] }, normalUsage, "degraded", true],
+    ["revoked-load-average", { status: "normal", cpuCount: 4, freeMemory: 9, totalMemory: 10, loadAverage: revokedLoadAverage.proxy }, normalUsage, "degraded", true],
+  ]) {
+    const report = buildParallelSuitabilityReport({}, {
+      candidates: [candidate(`${label}-a`), candidate(`${label}-b`)],
+      resourceContext,
+      usageContext,
+    });
+    assert.equal(report.summary.recommendation.capacity.posture, expectedPosture, `${label} must fail conservatively`);
+    assert.equal(report.summary.recommendation.capacity.externalRouteAllowance, 0, `${label} must retain the provider stop line`);
+    assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, selected ? [`execution-job:${label}-a`] : []);
+  }
+
+  const critical = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("eligible"), candidate("foreign", { owner: "manager/other" })],
+    resourceContext: { status: "critical" },
+    usageContext: normalUsage,
+  });
+  assert.equal(critical.summary.recommendation.capacity.posture, "blocked");
+  assert.deepEqual(critical.summary.recommendation.selectedExecutionJobIds, []);
+  assert.equal(critical.summary.executionJobs.find((job) => job.executionJobId === "execution-job:eligible").reservationLease.reasonCode, "capacity_stop_line");
+  assert.equal(critical.summary.executionJobs.find((job) => job.executionJobId === "execution-job:foreign").reservationLease.reasonCode, "foreign_owned");
+
+  const usageStop = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("usage-stop")],
+    resourceContext: { status: "normal" },
+    usageContext: { status: "drain", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+  });
+  assert.equal(usageStop.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(usageStop.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  const operatorPaused = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("operator-paused")],
+    resourceContext: { status: "normal" },
+    usageContext: normalUsage,
+    dispatchPosture: { summary: { state: "operator_paused", newDispatchAllowed: false } },
+  });
+  assert.equal(operatorPaused.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(operatorPaused.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  const previewStopped = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("preview-stopped")],
+    resourceContext: { status: "normal" },
+    usageContext: normalUsage,
+    dispatchPreview: { summary: { state: "blocked", newDispatchAllowed: false } },
+  });
+  assert.equal(previewStopped.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(previewStopped.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  const standalonePause = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("standalone-pause")],
+    resourceContext: { status: "normal" },
+    usageContext: normalUsage,
+    operatorInstruction: "pause",
+  });
+  assert.equal(standalonePause.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(standalonePause.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  const throwingEvidence = {};
+  Object.defineProperty(throwingEvidence, "status", { get() { throw new Error("hostile getter"); } });
+  const aliases = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("alias")],
+    resourceContext: "",
+    resourceStatus: { status: "normal" },
+    usageContext: throwingEvidence,
+    usageStatus: normalUsage,
+  });
+  assert.equal(aliases.summary.recommendation.capacity.posture, "normal");
+
+  const transportReady = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("transport-ready")],
+    resourceContext: { status: "ready", summary: { state: "normal" } },
+    usageContext: { status: "ready", summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" } } },
+  });
+  assert.equal(transportReady.summary.recommendation.capacity.posture, "normal");
+
+  const nestedUnavailable = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("nested-unavailable")],
+    resourceContext: { status: "normal", summary: { state: "normal", available: false } },
+    usageContext: normalUsage,
+  });
+  assert.equal(nestedUnavailable.summary.recommendation.capacity.posture, "degraded");
+
+  const declaredCriticalMetrics = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("declared-critical")],
+    resourceContext: { status: "critical", cpuCount: 4, freeMemory: 9, totalMemory: 10, loadAverage: [0] },
+    usageContext: normalUsage,
+  });
+  assert.equal(declaredCriticalMetrics.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(declaredCriticalMetrics.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  const conflictingPosture = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("conflicting-posture")],
+    resourceContext: { status: "normal", state: "critical" },
+    usageContext: normalUsage,
+  });
+  assert.equal(conflictingPosture.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(conflictingPosture.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  const malformedCriticalPosture = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("malformed-critical-posture")],
+    resourceContext: { status: "malformed", state: "critical" },
+    usageContext: normalUsage,
+  });
+  assert.equal(malformedCriticalPosture.summary.recommendation.capacity.posture, "blocked");
+  assert.equal(malformedCriticalPosture.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
+
+  for (const [label, extraContext] of [
+    ["secondary-critical-resource", { resourceStatus: { status: "critical" } }],
+    ["secondary-drain-usage", { usageStatus: { status: "drain", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } } }],
+    ["secondary-weekly-pressure", { usageStatus: { status: "normal", summary: { weekly: { state: "pressured", reliable: true, source: "fixture" } } } }],
+  ]) {
+    const report = buildParallelSuitabilityReport({}, {
+      candidates: [candidate(label)],
+      resourceContext: { status: "normal" },
+      usageContext: normalUsage,
+      ...extraContext,
+    });
+    assert.equal(report.summary.recommendation.capacity.posture, "blocked", `${label} must override a normal primary alias`);
+    assert.equal(report.summary.executionJobs[0].reservationLease.reasonCode, "capacity_stop_line");
   }
 });
 
@@ -9737,6 +9993,8 @@ test("serializes otherwise independent candidates when their exact baselines dif
       candidate("baseline-b", "dev@bbbbbbbb"),
       candidate("baseline-c", "dev@aaaaaaaa"),
     ],
+    resourceContext: { status: "normal" },
+    usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
   });
 
   assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, ["execution-job:baseline-a", "execution-job:baseline-c"]);
@@ -9856,11 +10114,14 @@ test("fails closed for truncated or blocked authoritative inventory and content-
 });
 
 test("surfaces the execution graph in the existing refill read model without changing dispatch authority", () => {
+  const stateRoot = join(tmpdir(), `parallel-capacity-refill-no-write-${process.pid}-${Date.now()}`);
   const plan = buildRefillPlan(
-    { desiredWorkers: 1, sourceRefs: ["doc:docs/workflows/current-session-runbook.md"] },
+    { desiredWorkers: 1, sourceRefs: ["doc:docs/workflows/current-session-runbook.md"], stateRoot },
     {
       assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
       dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } },
+      resourceContext: { status: "normal" },
       sourceWorkCandidates: [{
         candidateWorkPacketId: "graph-refill-candidate",
         title: "Graph refill candidate",
@@ -9878,7 +10139,68 @@ test("surfaces the execution graph in the existing refill read model without cha
   assert.equal(plan.summary.parallelSuitability.schemaVersion, "parallel-execution-graph-reservation/v1");
   assert.equal(plan.summary.parallelSuitability.mutation, "none; report-only graph and reservation recommendation");
   assert.equal(plan.summary.parallelSuitability.recommendation.selectedExecutionJobIds.length, 1);
+  assert.deepEqual(plan.summary.parallelSuitability.recommendation.capacity, {
+    schemaVersion: "parallel-capacity-decision/v1",
+    posture: "normal",
+    writerCap: 2,
+    readOnlyCap: 2,
+    totalCap: 4,
+    externalRouteAllowance: 0,
+    reasonCode: "capacity_normal",
+    reason: "Current normalized resource and usage posture permits the bounded advisory wave.",
+    nextSafeAction: "Review the advisory wave, then use the existing dispatch preview and authority gates separately for any future mutation.",
+  });
+  assert.equal(existsSync(stateRoot), false);
   assert.equal(plan.summary.parallelSuitability.stopLines.includes("no_dispatch_apply"), true);
+});
+
+test("propagates canonical cycle capacity packets into the advisory refill projection", () => {
+  const cycle = buildFastCyclePacket({}, {
+    usageContext: {
+      status: "normal",
+      summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, rawPayloadRetained: false },
+    },
+    resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+  });
+
+  assert.equal(cycle.summary.runway.parallelSuitability.recommendation.capacity.posture, "normal");
+  assert.equal(cycle.summary.runway.parallelSuitability.recommendation.capacity.totalCap, 4);
+  assert.equal(cycle.summary.runway.parallelSuitability.recommendation.capacity.externalRouteAllowance, 0);
+  assert.equal(cycle.summary.runway.parallelSuitability.mutation, "none; report-only graph and reservation recommendation");
+
+  const pausedCycle = buildFastCyclePacket({}, {
+    usageContext: {
+      status: "normal",
+      summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, rawPayloadRetained: false },
+    },
+    resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+    operatorInstruction: "pause",
+  });
+  assert.equal(pausedCycle.summary.runway.parallelSuitability.recommendation.capacity.posture, "blocked");
+
+  const conflictingResourceCycle = buildFastCyclePacket({}, {
+    usageContext: {
+      status: "normal",
+      summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, rawPayloadRetained: false },
+    },
+    resourceContext: { status: "normal", cpuCount: 4, freeMemory: 500, totalMemory: 10_000, loadAverage: [5] },
+  });
+  assert.equal(conflictingResourceCycle.summary.runway.parallelSuitability.recommendation.capacity.posture, "blocked");
+
+  for (const [label, extraContext] of [
+    ["direct-resource-status", { resourceStatus: { status: "critical" } }],
+    ["direct-usage-status", { usageStatus: { status: "drain", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } } }],
+  ]) {
+    const stoppedCycle = buildFastCyclePacket({}, {
+      usageContext: {
+        status: "normal",
+        summary: { state: "normal", weekly: { state: "normal", reliable: true, source: "fixture" }, rawPayloadRetained: false },
+      },
+      resourceContext: { status: "normal", summary: { state: "normal", rawPayloadRetained: false } },
+      ...extraContext,
+    });
+    assert.equal(stoppedCycle.summary.runway.parallelSuitability.recommendation.capacity.posture, "blocked", `${label} must survive cycle normalization`);
+  }
 });
 
 test("blocks refill decisions when assignment inventory is unavailable or malformed", () => {

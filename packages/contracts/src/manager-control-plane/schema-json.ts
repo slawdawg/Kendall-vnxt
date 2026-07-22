@@ -296,6 +296,18 @@ export const EXECUTION_JOB_SERIALIZED_FIELDS = [
   "next_safe_action"
 ] as const;
 
+export const PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS = [
+  "schema_version",
+  "posture",
+  "writer_cap",
+  "read_only_cap",
+  "total_cap",
+  "external_route_allowance",
+  "reason_code",
+  "reason",
+  "next_safe_action"
+] as const;
+
 export const PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS = [
   "schema_version",
   "generated_at",
@@ -487,6 +499,7 @@ export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
   ChangeSurface: CHANGE_SURFACE_SERIALIZED_FIELDS,
   ReservationLease: RESERVATION_LEASE_SERIALIZED_FIELDS,
   ExecutionJob: EXECUTION_JOB_SERIALIZED_FIELDS,
+  ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS,
   ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
   EvidenceRef: EVIDENCE_REF_SERIALIZED_FIELDS,
   ManagerRunPreauthorization: MANAGER_RUN_PREAUTHORIZATION_SERIALIZED_FIELDS,
@@ -511,6 +524,7 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
   ChangeSurface: CHANGE_SURFACE_SERIALIZED_FIELDS,
   ReservationLease: RESERVATION_LEASE_SERIALIZED_FIELDS,
   ExecutionJob: EXECUTION_JOB_SERIALIZED_FIELDS,
+  ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS,
   ParallelSuitabilityReport: PARALLEL_SUITABILITY_REPORT_SERIALIZED_FIELDS,
   CandidateWorkPacket: [
     "candidate_work_packet_id",

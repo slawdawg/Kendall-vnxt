@@ -18389,7 +18389,8 @@ export function buildParallelSuitabilityReport(options = {}, context = {}) {
   const currentOwner = sanitizeLedgerField(context.currentOwner || context.assignmentSummary?.summary?.currentOwner || context.assignmentSummary?.currentOwner || "", "", 160);
   const candidates = parallelSuitabilityCandidateInputs(options, context);
   const assignmentState = assignmentBranchesFromSummary(context.assignmentSummary || options.assignmentSummary || {});
-  const maxSelected = boundedParallelRecommendation(options.maxParallel ?? context.maxParallel);
+  const capacity = buildParallelCapacityDecision(options, context);
+  const maxSelected = boundedParallelRecommendation(options.maxParallel ?? context.maxParallel, capacity.totalCap);
   const duplicateIds = duplicateValues(candidates.map((candidate, index) => executionCandidateId(candidate, index)));
   const duplicateBranches = duplicateValues(candidates.map((candidate) => normalizedCandidateBranch(candidate)).filter(Boolean));
   const jobs = candidates
@@ -18416,15 +18417,27 @@ export function buildParallelSuitabilityReport(options = {}, context = {}) {
   const eligible = jobs.filter((job) => job.lifecycleStatus === "eligible");
   let selectedBaseline = null;
   let selectedCount = 0;
+  let selectedWriterCount = 0;
+  let selectedReadOnlyCount = 0;
   for (const job of eligible) {
-    if (selectedBaseline !== null && job.baselineScope.reference !== selectedBaseline) {
+    if (capacity.posture === "blocked") {
+      blockExecutionJob(job, "capacity_stop_line", "Normalized capacity posture is blocked by an existing resource or usage stop line; refresh capacity evidence before rebuilding this advisory report.");
+    } else if (selectedBaseline !== null && job.baselineScope.reference !== selectedBaseline) {
       deferExecutionJob(job, "baseline_mismatch", "Candidate baseline differs from the selected shared reservation baseline; re-plan from one exact revision.");
-    } else if (selectedCount < maxSelected) {
+    } else if (maxSelected < capacity.totalCap && selectedCount >= maxSelected) {
+      deferExecutionJob(job, "recommendation_cap", `Conservative recommendation cap is ${maxSelected}; re-plan after selected work reaches a terminal review state.`);
+    } else if (job.readWriteMode === "read_only" && selectedReadOnlyCount >= capacity.readOnlyCap) {
+      deferExecutionJob(job, "capacity_read_only_cap", `Capacity immutable read-only cap is ${capacity.readOnlyCap}; refresh normalized capacity evidence and re-plan before selecting another review candidate.`);
+    } else if (job.readWriteMode !== "read_only" && selectedWriterCount >= capacity.writerCap) {
+      deferExecutionJob(job, "capacity_writer_cap", `Capacity writer cap is ${capacity.writerCap}; refresh normalized capacity evidence and re-plan before selecting another writer candidate.`);
+    } else if (selectedCount >= maxSelected) {
+      deferExecutionJob(job, "recommendation_cap", `Conservative recommendation cap is ${maxSelected}; re-plan after selected work reaches a terminal review state.`);
+    } else {
       selectExecutionJob(job);
       selectedBaseline = job.baselineScope.reference;
       selectedCount += 1;
-    } else {
-      deferExecutionJob(job, "recommendation_cap", `Conservative recommendation cap is ${maxSelected}; re-plan after selected work reaches a terminal review state.`);
+      if (job.readWriteMode === "read_only") selectedReadOnlyCount += 1;
+      else selectedWriterCount += 1;
     }
   }
   const selectedExecutionJobIds = jobs.filter((job) => job.lifecycleStatus === "selected").map((job) => job.executionJobId);
@@ -18439,6 +18452,7 @@ export function buildParallelSuitabilityReport(options = {}, context = {}) {
       recommendation: {
         status: "advisory_only",
         maxSelected,
+        capacity,
         selectedExecutionJobIds,
         deferredExecutionJobIds,
         blockedExecutionJobIds,
@@ -18470,6 +18484,188 @@ export function buildParallelSuitabilityReport(options = {}, context = {}) {
       code: "parallel-suitability-report-only",
       nextAction: "Treat selected entries as a planning recommendation only; the existing dispatch and ownership gates remain the sole mutation boundary.",
     }],
+  });
+}
+
+function buildParallelCapacityDecision(options = {}, context = {}) {
+  const resourceInputs = meaningfulParallelCapacityInputs(context.resourceContext, context.resourceStatus, options.resourceContext, options.resourceStatus);
+  const usageInputs = meaningfulParallelCapacityInputs(context.usageContext, context.usageStatus, options.usageContext, options.usageStatus);
+  const resourcePosture = mostRestrictiveParallelPosture(
+    resourceInputs.map((input) => normalizedParallelResourcePosture(input)),
+    ["critical", "unavailable", "pressured", "warm", "unknown", "normal"],
+  );
+  const usagePosture = mostRestrictiveParallelPosture(
+    usageInputs.map((input) => normalizedParallelUsagePosture(input)),
+    ["manager_only", "drain", "unavailable", "conserve", "unknown", "normal"],
+  );
+  const weeklyUsage = normalizedParallelWeeklyUsagePosture(usageInputs, context, options);
+  const dispatchPosture = buildDispatchPosture(usagePosture, resourcePosture, weeklyUsage).summary;
+  const normal = resourcePosture === "normal" && usagePosture === "normal" && weeklyUsage.state === "normal" && dispatchPosture.newDispatchAllowed !== false;
+  const blocked = resourcePosture === "critical" || ["manager_only", "drain"].includes(usagePosture) || dispatchPosture.newDispatchAllowed === false || dispatchPosture.state === "blocked" || dispatchPosture.state === "drain" || parallelCapacityDispatchStopped(context, options);
+  if (blocked) {
+    return {
+      schemaVersion: "parallel-capacity-decision/v1",
+      posture: "blocked",
+      writerCap: 0,
+      readOnlyCap: 0,
+      totalCap: 0,
+      externalRouteAllowance: 0,
+      reasonCode: "capacity_stop_line",
+      reason: "Existing normalized resource or usage posture blocks a new advisory wave.",
+      nextSafeAction: "Wait for the existing resource or usage stop line to recover, refresh normalized capacity evidence, then rebuild this report.",
+    };
+  }
+  if (normal) {
+    return {
+      schemaVersion: "parallel-capacity-decision/v1",
+      posture: "normal",
+      writerCap: 2,
+      readOnlyCap: 2,
+      totalCap: 4,
+      externalRouteAllowance: 0,
+      reasonCode: "capacity_normal",
+      reason: "Current normalized resource and usage posture permits the bounded advisory wave.",
+      nextSafeAction: "Review the advisory wave, then use the existing dispatch preview and authority gates separately for any future mutation.",
+    };
+  }
+  return {
+    schemaVersion: "parallel-capacity-decision/v1",
+    posture: "degraded",
+    writerCap: 1,
+    readOnlyCap: 0,
+    totalCap: 1,
+    externalRouteAllowance: 0,
+    reasonCode: "capacity_degraded",
+    reason: "Normalized capacity evidence is missing, unavailable, unknown, warm, pressured, or otherwise conservative; retain one writer at most and no immutable review route allowance.",
+    nextSafeAction: "Refresh normalized resource and usage evidence, then rebuild this advisory report; no provider, dispatch, or delivery action is authorized here.",
+  };
+}
+
+function normalizedParallelResourcePosture(input) {
+  const declared = normalizedParallelPosture(input, ["normal", "warm", "pressured", "critical", "unknown", "unavailable"]);
+  if (["warm", "pressured", "critical", "unavailable"].includes(declared)) return declared;
+  const measurements = parallelResourceMeasurementsSnapshot(input);
+  if (measurements) return normalizedParallelPosture(buildResourceStatus(measurements), ["normal", "warm", "pressured", "critical"]);
+  if (hasAnyParallelResourceMetric(input)) return "unknown";
+  return declared;
+}
+
+function normalizedParallelUsagePosture(input) {
+  return normalizedParallelPosture(input, ["normal", "conserve", "drain", "manager_only", "unknown", "unavailable"]);
+}
+
+function normalizedParallelWeeklyUsagePosture(usageInputs = [], context = {}, options = {}) {
+  const weeklyInputs = usageInputs.flatMap((usageInput) => {
+    const usageSummary = safeReadProperty(usageInput, "summary", {});
+    return [
+      safeReadProperty(usageSummary, "weekly", undefined),
+      safeReadProperty(usageInput, "weekly", undefined),
+    ];
+  });
+  return selectWeeklyUsagePressure(
+    ...weeklyInputs,
+    safeReadProperty(context, "weeklyUsage", undefined),
+    safeReadProperty(context, "weeklyUsageContext", undefined),
+    safeReadProperty(context, "weeklyUsagePressure", undefined),
+    safeReadProperty(options, "weeklyUsage", undefined),
+    safeReadProperty(options, "weeklyUsageContext", undefined),
+    safeReadProperty(options, "weeklyUsagePressure", undefined),
+  );
+}
+
+function normalizedParallelPosture(input, allowed) {
+  if (!input || typeof input !== "object" && typeof input !== "string") return "unknown";
+  const summary = typeof input === "object" ? safeReadProperty(input, "summary", {}) : {};
+  if (typeof input === "object" && (safeReadProperty(input, "available", undefined) === false || safeReadProperty(summary, "available", undefined) === false)) return "unavailable";
+  const values = typeof input === "string"
+    ? [input]
+    : [
+        safeReadProperty(input, "status", undefined),
+        safeReadProperty(input, "state", undefined),
+        safeReadProperty(summary, "state", undefined),
+      ];
+  const normalized = values
+    .filter((value) => typeof value === "string")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (normalized.length === 0) return "unknown";
+  const known = normalized.filter((value) => allowed.includes(value));
+  for (const stopLine of ["critical", "manager_only", "drain", "pressured", "warm", "unavailable"]) {
+    if (known.includes(stopLine)) return stopLine;
+  }
+  if (normalized.some((value) => !allowed.includes(value) && value !== "ready")) return "unknown";
+  const distinct = [...new Set(known)];
+  if (distinct.length === 0) return "unknown";
+  if (distinct.length === 1) return distinct[0];
+  return "unknown";
+}
+
+function parallelResourceMeasurementsSnapshot(input) {
+  if (!isPlainObject(input)) return null;
+  const cpuCount = finiteParallelCapacityNumber(safeReadProperty(input, "cpuCount", undefined), { integer: true });
+  const freeMemory = finiteParallelCapacityNumber(safeReadProperty(input, "freeMemory", undefined), { integer: true });
+  const totalMemory = finiteParallelCapacityNumber(safeReadProperty(input, "totalMemory", undefined), { integer: true });
+  const loadAverage = safeReadProperty(input, "loadAverage", []);
+  const load1 = safeIsArray(loadAverage) ? finiteParallelCapacityNumber(safeReadProperty(loadAverage, 0, undefined)) : null;
+  if (cpuCount === null || cpuCount <= 0 ||
+    freeMemory === null || freeMemory < 0 ||
+    totalMemory === null || totalMemory <= 0 || freeMemory > totalMemory ||
+    load1 === null || load1 < 0) return null;
+  return {
+    cpuCount,
+    freeMemory,
+    totalMemory,
+    loadAverage: [load1],
+  };
+}
+
+function hasAnyParallelResourceMetric(input) {
+  if (!isPlainObject(input)) return false;
+  return ["cpuCount", "freeMemory", "totalMemory", "loadAverage"].some((key) => safeReadProperty(input, key, undefined) !== undefined);
+}
+
+function finiteParallelCapacityNumber(value, { integer = false } = {}) {
+  try {
+    if (typeof value !== "number") return null;
+    const numeric = value;
+    return Number.isFinite(numeric) && (!integer || Number.isSafeInteger(numeric)) ? numeric : null;
+  } catch {
+    return null;
+  }
+}
+
+function meaningfulParallelCapacityInputs(...values) {
+  return values.filter((value) => {
+    if (value === null || value === undefined || value === "" || (safeIsArray(value) && safeReadProperty(value, "length", -1) === 0)) return false;
+    return !isPlainObject(value) || Object.keys(safePlainObjectSnapshot(value) || {}).length > 0;
+  });
+}
+
+function mostRestrictiveParallelPosture(postures, precedence) {
+  for (const posture of precedence) {
+    if (postures.includes(posture)) return posture;
+  }
+  return "unknown";
+}
+
+function parallelCapacityDispatchStopped(context = {}, options = {}) {
+  const plannedSteering = buildSteeringPlan(options, context);
+  const candidates = [
+    safeReadProperty(context, "dispatchPosture", null),
+    safeReadProperty(options, "dispatchPosture", null),
+    safeReadProperty(context, "dispatchPreview", null),
+    safeReadProperty(options, "dispatchPreview", null),
+    safeReadProperty(safeReadProperty(context, "steering", {}), "summary", null),
+    safeReadProperty(safeReadProperty(options, "steering", {}), "summary", null),
+    plannedSteering,
+  ];
+  return candidates.some((candidate) => {
+    const summary = safeReadProperty(candidate, "summary", candidate) || {};
+    const state = safeReadProperty(summary, "state", "");
+    const futureDispatch = safeReadProperty(summary, "futureDispatch", {});
+    return safeReadProperty(summary, "newDispatchAllowed", undefined) === false ||
+      safeReadProperty(futureDispatch, "newDispatchAllowed", undefined) === false ||
+      ["blocked", "drain", "operator_paused"].includes(typeof state === "string" ? state : "");
   });
 }
 
@@ -18816,10 +19012,10 @@ function changeSurfacesOverlap(left = [], right = []) {
   ));
 }
 
-function boundedParallelRecommendation(value) {
-  const requested = Number(value);
-  if (!Number.isInteger(requested)) return 2;
-  return Math.min(Math.max(requested, 1), 2);
+function boundedParallelRecommendation(value, maximum = 4) {
+  const requested = finiteParallelCapacityNumber(value, { integer: true });
+  if (requested === null) return maximum;
+  return Math.min(Math.max(requested, 1), maximum);
 }
 
 function validReportTimestamp(value) {
@@ -24109,19 +24305,23 @@ export function buildCyclePacket(options = {}, context = {}) {
   }
   const usageContext = safePlainObjectSnapshot(safeReadProperty(context, "usageContext", {})) || {};
   const resourceContext = safePlainObjectSnapshot(safeReadProperty(context, "resourceContext", {})) || {};
+  const usageStatusContext = safePlainObjectSnapshot(safeReadProperty(context, "usageStatus", {})) || {};
+  const resourceStatusContext = safePlainObjectSnapshot(safeReadProperty(context, "resourceStatus", {})) || {};
+  const usageSource = meaningfulParallelCapacityInputs(usageContext, usageStatusContext)[0] || {};
+  const resourceSource = meaningfulParallelCapacityInputs(resourceContext, resourceStatusContext)[0] || {};
   const preflightStatus = safeReadProperty(context, "preflightStatus", null);
   const workerStatus = safeReadProperty(context, "workerStatus", null);
   const dispatchPreviewContext = safeReadProperty(context, "dispatchPreview", null);
   const usageInput = {
-    ...usageContext,
-    weeklyUsage: safeReadProperty(usageContext, "weeklyUsage", undefined) ?? safeReadProperty(context, "weeklyUsage", undefined),
-    weeklyUsageContext: safeReadProperty(usageContext, "weeklyUsageContext", undefined) ?? safeReadProperty(context, "weeklyUsageContext", undefined),
-    weeklyUsagePressure: safeReadProperty(usageContext, "weeklyUsagePressure", undefined) ?? safeReadProperty(context, "weeklyUsagePressure", undefined),
+    ...usageSource,
+    weeklyUsage: safeReadProperty(usageSource, "weeklyUsage", undefined) ?? safeReadProperty(context, "weeklyUsage", undefined),
+    weeklyUsageContext: safeReadProperty(usageSource, "weeklyUsageContext", undefined) ?? safeReadProperty(context, "weeklyUsageContext", undefined),
+    weeklyUsagePressure: safeReadProperty(usageSource, "weeklyUsagePressure", undefined) ?? safeReadProperty(context, "weeklyUsagePressure", undefined),
   };
   const usage = usageInput && (safeReadProperty(usageInput, "status", null) || safeReadProperty(usageInput, "state", null))
     ? normalizeUsagePacketContext(usageInput, context)
     : buildUsageStatus(usageInput);
-  const resources = resourceContext && (safeReadProperty(resourceContext, "status", null) || safeReadProperty(resourceContext, "state", null)) ? normalizePacketContext(resourceContext) : buildResourceStatus(resourceContext || {});
+  const resources = resourceSource && (safeReadProperty(resourceSource, "status", null) || safeReadProperty(resourceSource, "state", null)) ? normalizePacketContext(resourceSource) : buildResourceStatus(resourceSource || {});
   const preflight = preflightStatus ? normalizePacketContext(preflightStatus) : buildPreflight(readOnlyRunOptions, context);
   const preflightSandboxBoundary = sandboxBoundaryFromPacket(preflight, "node ./scripts/manager-preflight.mjs --summary-json");
   if (
@@ -24173,7 +24373,17 @@ export function buildCyclePacket(options = {}, context = {}) {
     });
   }
   const dispatchPreview = dispatchPreviewContext ? normalizeDispatchPreviewContext(dispatchPreviewContext) : buildDispatchPreview(readOnlyRunOptions, context);
-  const runway = buildRefillPlan(readOnlyRunOptions, { ...context, dispatchPreview, discoverDefaultSources: true });
+  const steering = buildSteeringPlan(readOnlyRunOptions, context);
+  const runway = buildRefillPlan(readOnlyRunOptions, {
+    ...context,
+    usageContext: context.usageContext ?? usage,
+    usageStatus: context.usageStatus ?? usage,
+    resourceContext: context.resourceContext ?? resources,
+    resourceStatus: context.resourceStatus ?? resources,
+    dispatchPreview,
+    steering,
+    discoverDefaultSources: true,
+  });
   const workers = workerStatus ? normalizePacketContext(workerStatus) : buildWorkerStatus(readOnlyRunOptions, { ...context, usageContext: usage, resourceContext: resources, dispatchPreview, refillPlan: context.refillPlan || runway });
   const workerHandoff = buildWorkerHandoffPlan(readOnlyRunOptions, {
     ...context,
@@ -24198,7 +24408,6 @@ export function buildCyclePacket(options = {}, context = {}) {
     taskRisk: context.taskRisk || {},
     usageState: usage.status,
   });
-  const steering = buildSteeringPlan(readOnlyRunOptions, context);
   const cleanup = context.cleanupPlan || buildCleanupPlan(readOnlyRunOptions, context);
   const resume = context.resumeState ? normalizePacketContext(context.resumeState) : buildResumeState(readOnlyRunOptions, context);
   const hasRecoverySignals = Boolean(context.stateSignals || context.reconciliationStateSignals);
