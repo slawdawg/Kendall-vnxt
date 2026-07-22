@@ -6215,6 +6215,15 @@ class DeliveryExecutionEvidenceView(BaseModel):
     remoteMutationPerformed: bool = False
 
 
+class DeliveryExecutionEvidenceApiEnvelope(BaseModel):
+    """Typed metadata-only response boundary for delivery execution evidence."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DeliveryExecutionEvidenceView
+    meta: dict[str, Any] | None = None
+
+
 class CleanupPlanResidueView(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -6545,6 +6554,20 @@ class WorkItemApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: WorkItemView
+    meta: dict[str, Any] | None = None
+
+
+class CandidateWorkPromotionView(BaseModel):
+    candidateWork: CandidateWorkView
+    workItem: WorkItemView
+
+
+class CandidateWorkPromotionApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned candidate promotion."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: CandidateWorkPromotionView
     meta: dict[str, Any] | None = None
 
 
