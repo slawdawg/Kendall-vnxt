@@ -72,6 +72,10 @@ def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
     with pytest.raises(ValidationError):
         WorkItemApiEnvelope.model_validate({"data": {"ageMinutes": "1"}})
     with pytest.raises(ValidationError):
+        WorkItemApiEnvelope.model_validate({"data": {"ageMinutes": True}})
+    with pytest.raises(ValidationError):
+        CandidateWorkPromotionView.model_validate({"candidateWork": {"sortOrder": True}, "workItem": {}})
+    with pytest.raises(ValidationError):
         WorkItemApiEnvelope.model_validate({"data": {"executionRecipe": {"unexpected": True}}})
 
 def test_epic_32_envelopes_accept_null_and_scalar_metadata() -> None:

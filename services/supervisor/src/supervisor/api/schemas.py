@@ -48,7 +48,7 @@ def _strict_contract_payload(value: Any, model: type[BaseModel], *, path: str) -
             scalar_types = tuple(item for item in candidates if item in primitive_types)
         else:
             scalar_types = ()
-        if scalar_types and not isinstance(value[name], scalar_types):
+        if scalar_types and type(value[name]) not in scalar_types:
             raise ValueError(f"{path}.{name} must use a strict scalar value")
         nested_model = next((item for item in candidates if isinstance(item, type) and issubclass(item, BaseModel)), None)
         if nested_model is not None:
