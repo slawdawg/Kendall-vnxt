@@ -304,11 +304,13 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             success, token, _ = await authenticate_operator(session, "operator-password", "uds", get_settings())
             assert success and token
 
+        checked_at = datetime(2026, 7, 22, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        expires_at = checked_at + timedelta(minutes=5)
         evidence = SimpleNamespace(
             schemaVersion="pipeline-epic-25-evidence-chain/v1",
             evidenceClass="integrated_local",
-            checkedAt=datetime.now(timezone.utc),
-            expiresAt=datetime.now(timezone.utc) + timedelta(minutes=5),
+            checkedAt=checked_at,
+            expiresAt=expires_at,
             freshnessState="fresh",
             effectiveDecision="hold",
             typedBlockers=["quality_gate_not_passed"],
@@ -363,6 +365,8 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             assert payload["packet"]["packetId"] == "packet-1"
             assert set(payload["packet"]) == {"packetId", "title", "currentStage", "status", "truthLabel", "evidence", "workGraph"}
             assert payload["packet"]["workGraph"] == work_graph_payload
+            assert payload["packet"]["evidence"]["checkedAt"] == "2026-07-22T12:00:00.123456Z"
+            assert payload["packet"]["evidence"]["expiresAt"] == "2026-07-22T12:05:00.123456Z"
             assert "authorization" not in body.decode().lower()
 
             status, _, body = await _asgi_request(main.app, "GET", "/internal/dashboard/packet-detail/packet-1", headers={**headers, "x-forwarded-for": "127.0.0.1"}, cookie=cookie)

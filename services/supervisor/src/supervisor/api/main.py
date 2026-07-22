@@ -462,6 +462,11 @@ PACKET_DETAIL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 PACKET_DETAIL_MEDIATOR = "packet-detail/v1"
 
 
+def _canonical_packet_detail_timestamp(value: datetime) -> str:
+    """Emit one UTC wire form for the dashboard mediator's strict contract."""
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _packet_detail_view(packet, work_graph=None) -> dict[str, object]:
     evidence = packet.evidenceChain
     evidence_view = None
@@ -469,8 +474,8 @@ def _packet_detail_view(packet, work_graph=None) -> dict[str, object]:
         evidence_view = {
             "schemaVersion": evidence.schemaVersion,
             "evidenceClass": evidence.evidenceClass,
-            "checkedAt": evidence.checkedAt,
-            "expiresAt": evidence.expiresAt,
+            "checkedAt": _canonical_packet_detail_timestamp(evidence.checkedAt),
+            "expiresAt": _canonical_packet_detail_timestamp(evidence.expiresAt),
             "freshnessState": evidence.freshnessState,
             "effectiveDecision": evidence.effectiveDecision,
             "typedBlockers": list(evidence.typedBlockers),

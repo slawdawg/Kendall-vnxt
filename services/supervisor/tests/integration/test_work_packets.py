@@ -2618,7 +2618,10 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
 
 def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_evidence(tmp_path, monkeypatch) -> None:
     db_name = "pipeline-dashboard-parallel-work-graph.db"
-    generated_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    # This bootstrap value is only used by the deliberately rejected reports
+    # below. Refresh the accepted fixture immediately before its first live
+    # projection so this long integration path cannot age it stale.
+    generated_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
     packet_id = "manager-source-parallel-wave"
     graph = {
         "schemaVersion": "parallel-work-graph-evidence/v0",
@@ -2754,12 +2757,20 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
             "correlationId": "manager-source:parallel-wave-unsafe-unc-path",
         }
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_unc_path_report).status_code == 400
+        # The test advances this graph three seconds through refresh paths;
+        # retain a small past margin so those accepted updates are never
+        # future-dated while the initial projection still has ten seconds of
+        # freshness headroom.
+        generated_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        graph["generatedAt"] = generated_at
         create_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request)
         assert create_response.status_code == 200
         projection_response = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
         assert projection_response.status_code == 200
         detail = projection_response.json()["data"]["selectedPacketDetails"][0]
         assert detail["workGraph"] == {**graph, "generatedAt": generated_at.replace("+00:00", "Z")}
+        assert detail["workGraph"]["availability"] == "available"
+        assert detail["workGraph"]["freshnessState"] == "live"
         assert "worktree" not in json.dumps(detail["workGraph"]).lower()
         replay_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request)
         assert replay_response.status_code == 200

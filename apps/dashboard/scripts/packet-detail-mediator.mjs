@@ -10,6 +10,10 @@ const DENIED_BODY = JSON.stringify({ state: "sign_in_required" });
 const UNAVAILABLE_BODY = JSON.stringify({ state: "unavailable", message: "Attestation readback unavailable" });
 const UNSAFE_METADATA_TEXT = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
 const EXECUTABLE_METADATA_TEXT = /\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b/i;
+const PACKET_DETAIL_LEGACY_PACKET_KEYS = ["packetId", "title", "currentStage", "status", "truthLabel", "evidence"];
+const PACKET_DETAIL_CURRENT_PACKET_KEYS = [...PACKET_DETAIL_LEGACY_PACKET_KEYS, "workGraph"];
+const PACKET_DETAIL_EVIDENCE_KEYS = ["schemaVersion", "evidenceClass", "checkedAt", "expiresAt", "freshnessState", "effectiveDecision", "typedBlockers"];
+const UTC_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/;
 
 function sendJson(response, statusCode, body) {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
@@ -35,6 +39,80 @@ function isSafeMetadataText(value, maxLength = 500) {
 
 function hasExactKeys(value, keys) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function parseCanonicalUtcTimestamp(value) {
+  if (typeof value !== "string") return null;
+  const match = UTC_TIMESTAMP.exec(value);
+  if (!match) return null;
+  const timestamp = Date.parse(`${match[1]}Z`);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 19) !== match[1]) return null;
+  return timestamp * 1_000 + Number((match[2] || "").padEnd(6, "0"));
+}
+
+function unavailableWorkGraph(packetId) {
+  return {
+    schemaVersion: "parallel-work-graph-evidence/v0",
+    sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+    availability: "unavailable",
+    packetId,
+    executionJobId: null,
+    reportIdentity: null,
+    generatedAt: null,
+    freshnessState: "unavailable",
+    waveMembership: "unavailable",
+    dependencyState: "unavailable",
+    reservation: { status: "unavailable", owner: null, reasonCode: "parallel_report_unavailable" },
+    capacity: { posture: "unavailable", reasonCode: "parallel_capacity_unavailable" },
+    reason: "Parallel work graph evidence is unavailable.",
+    nextSafeAction: "Inspect the authoritative packet lifecycle before relying on work graph evidence.",
+    evidenceRefs: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  };
+}
+
+function isSafePacketEvidence(evidence) {
+  if (evidence === null) return true;
+  if (!hasExactKeys(evidence, PACKET_DETAIL_EVIDENCE_KEYS)) return false;
+  for (const key of ["schemaVersion", "evidenceClass"]) {
+    if (!isSafeMetadataText(evidence[key], 160)) return false;
+  }
+  for (const key of ["freshnessState", "effectiveDecision"]) {
+    if (!isSafeReference(evidence[key])) return false;
+  }
+  const checkedAt = parseCanonicalUtcTimestamp(evidence.checkedAt);
+  const expiresAt = parseCanonicalUtcTimestamp(evidence.expiresAt);
+  return checkedAt !== null
+    && expiresAt !== null
+    && expiresAt > checkedAt
+    && expiresAt - checkedAt <= 300_000_000
+    && Array.isArray(evidence.typedBlockers)
+    && evidence.typedBlockers.length <= 20
+    && evidence.typedBlockers.every(isSafeReference);
+}
+
+function isSafePacketDetailPacket(packet, packetId, keys) {
+  return hasExactKeys(packet, keys)
+    && packet.packetId === packetId
+    && isSafeMetadataText(packet.title, 240)
+    && isSafeReference(packet.currentStage)
+    && isSafeReference(packet.status)
+    && isSafeReference(packet.truthLabel)
+    && isSafePacketEvidence(packet.evidence);
+}
+
+function normalizeLegacyPacketDetailPayload(payload, packetId) {
+  if (
+    !hasExactKeys(payload, ["schemaVersion", "state", "packet"])
+    || payload.schemaVersion !== "kendall-authenticated-packet-detail/v1"
+    || payload.state !== "available"
+    || !isSafePacketDetailPacket(payload.packet, packetId, PACKET_DETAIL_LEGACY_PACKET_KEYS)
+  ) {
+    return payload;
+  }
+  return { ...payload, packet: { ...payload.packet, workGraph: unavailableWorkGraph(packetId) } };
 }
 
 function isSafeWorkGraph(graph, packetId) {
@@ -110,24 +188,24 @@ export function createPacketDetailMediator({ supervisorUdsPath, expectedHost, ex
     inFlight += 1;
     try {
       const result = await requestSupervisor(supervisorUdsPath, parsed.packetId, request.headers.cookie, timeoutMs);
+      const payload = normalizeLegacyPacketDetailPayload(result.payload, parsed.packetId);
       if (result.statusCode === 401 || result.statusCode === 403) {
         sendJson(response, 401, DENIED_BODY);
       } else if (
         result.statusCode !== 200
-        || !result.payload
-        || result.payload.schemaVersion !== "kendall-authenticated-packet-detail/v1"
-        || !["available", "unavailable"].includes(result.payload.state)
-        || (result.payload.state === "unavailable" && Object.keys(result.payload).length !== 2)
-        || (result.payload.state === "available" && (
-          !hasExactKeys(result.payload, ["schemaVersion", "state", "packet"])
-          || !hasExactKeys(result.payload.packet, ["packetId", "title", "currentStage", "status", "truthLabel", "evidence", "workGraph"])
-          || result.payload.packet.packetId !== parsed.packetId
-          || !isSafeWorkGraph(result.payload.packet.workGraph, parsed.packetId)
+        || !payload
+        || payload.schemaVersion !== "kendall-authenticated-packet-detail/v1"
+        || !["available", "unavailable"].includes(payload.state)
+        || (payload.state === "unavailable" && Object.keys(payload).length !== 2)
+        || (payload.state === "available" && (
+          !hasExactKeys(payload, ["schemaVersion", "state", "packet"])
+          || !isSafePacketDetailPacket(payload.packet, parsed.packetId, PACKET_DETAIL_CURRENT_PACKET_KEYS)
+          || !isSafeWorkGraph(payload.packet.workGraph, parsed.packetId)
         ))
       ) {
         sendJson(response, 503, UNAVAILABLE_BODY);
       } else {
-        sendJson(response, 200, result.payload);
+        sendJson(response, 200, payload);
       }
     } catch {
       sendJson(response, 503, UNAVAILABLE_BODY);

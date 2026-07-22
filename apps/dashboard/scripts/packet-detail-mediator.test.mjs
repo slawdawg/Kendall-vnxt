@@ -77,6 +77,104 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
       res.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "unavailable", packet: { rawPayload: "forbidden" } }));
       return;
     }
+    if (packetId === "legacy") {
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null },
+      }));
+      return;
+    }
+    if (packetId === "legacy-extra") {
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null, rawPayload: "forbidden" },
+      }));
+      return;
+    }
+    if (packetId === "legacy-raw") {
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: { packetId, title: "raw provider payload copied here", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null },
+      }));
+      return;
+    }
+    if (packetId === "legacy-incomplete-evidence") {
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: { effectiveDecision: "go" } },
+      }));
+      return;
+    }
+    if (packetId === "legacy-inverted-evidence") {
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: {
+          packetId,
+          title: "Safe title",
+          status: "shaping",
+          currentStage: "shaping",
+          truthLabel: "source_owned",
+          evidence: {
+            schemaVersion: "pipeline-epic-25-evidence-chain/v1",
+            evidenceClass: "source_owned",
+            checkedAt: "2026-07-22T12:05:00.000Z",
+            expiresAt: "2026-07-22T12:00:00.000Z",
+            freshnessState: "fresh",
+            effectiveDecision: "hold",
+            typedBlockers: [],
+          },
+        },
+      }));
+      return;
+    }
+    if (["legacy-equal-evidence", "legacy-long-evidence", "legacy-offset-evidence"].includes(packetId)) {
+      const evidence = {
+        schemaVersion: "pipeline-epic-25-evidence-chain/v1",
+        evidenceClass: "source_owned",
+        checkedAt: "2026-07-22T12:00:00.000Z",
+        expiresAt: "2026-07-22T12:05:00.000Z",
+        freshnessState: "fresh",
+        effectiveDecision: "hold",
+        typedBlockers: [],
+      };
+      if (packetId === "legacy-equal-evidence") evidence.expiresAt = evidence.checkedAt;
+      if (packetId === "legacy-long-evidence") evidence.expiresAt = "2026-07-22T12:05:00.000001Z";
+      if (packetId === "legacy-offset-evidence") evidence.checkedAt = "2026-07-22T12:00:00+00:00";
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence },
+      }));
+      return;
+    }
+    if (packetId === "legacy-microsecond-evidence") {
+      res.end(JSON.stringify({
+        schemaVersion: "kendall-authenticated-packet-detail/v1",
+        state: "available",
+        packet: {
+          packetId,
+          title: "Safe title",
+          status: "shaping",
+          currentStage: "shaping",
+          truthLabel: "source_owned",
+          evidence: {
+            schemaVersion: "pipeline-epic-25-evidence-chain/v1",
+            evidenceClass: "source_owned",
+            checkedAt: "2026-07-22T12:00:00.123456Z",
+            expiresAt: "2026-07-22T12:05:00.123456Z",
+            freshnessState: "fresh",
+            effectiveDecision: "hold",
+            typedBlockers: [],
+          },
+        },
+      }));
+      return;
+    }
     res.end(JSON.stringify({
       schemaVersion: "kendall-authenticated-packet-detail/v1",
       state: "available",
@@ -105,6 +203,38 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   assert.equal(colonId.body.packet.packetId, "packet:1");
   assert.equal(observed.length, 2);
 
+  const legacy = await request(port, "/api/packet-detail/legacy", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.packet.workGraph.availability, "unavailable");
+  assert.equal(legacy.body.packet.workGraph.packetId, "legacy");
+  assert.equal(legacy.body.packet.workGraph.rawPayloadRetained, false);
+
+  const legacyExtra = await request(port, "/api/packet-detail/legacy-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(legacyExtra.status, 503);
+  assert.deepEqual(legacyExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
+
+  const legacyRaw = await request(port, "/api/packet-detail/legacy-raw", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(legacyRaw.status, 503);
+  assert.deepEqual(legacyRaw.body, { state: "unavailable", message: "Attestation readback unavailable" });
+
+  const legacyIncompleteEvidence = await request(port, "/api/packet-detail/legacy-incomplete-evidence", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(legacyIncompleteEvidence.status, 503);
+  assert.deepEqual(legacyIncompleteEvidence.body, { state: "unavailable", message: "Attestation readback unavailable" });
+
+  const legacyInvertedEvidence = await request(port, "/api/packet-detail/legacy-inverted-evidence", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(legacyInvertedEvidence.status, 503);
+  assert.deepEqual(legacyInvertedEvidence.body, { state: "unavailable", message: "Attestation readback unavailable" });
+
+  for (const packetId of ["legacy-equal-evidence", "legacy-long-evidence", "legacy-offset-evidence"]) {
+    const response = await request(port, `/api/packet-detail/${packetId}`, { headers: { cookie: "kendall_operator_session=opaque" } });
+    assert.equal(response.status, 503);
+    assert.deepEqual(response.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  }
+
+  const legacyMicrosecondEvidence = await request(port, "/api/packet-detail/legacy-microsecond-evidence", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(legacyMicrosecondEvidence.status, 200);
+  assert.equal(legacyMicrosecondEvidence.body.packet.workGraph.availability, "unavailable");
+
   const malformed = await request(port, "/api/packet-detail/malformed", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(malformed.status, 503);
   assert.deepEqual(malformed.body, { state: "unavailable", message: "Attestation readback unavailable" });
@@ -127,13 +257,13 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   const denied = await request(port, "/api/packet-detail/does-not-exist");
   assert.equal(denied.status, 401);
   assert.deepEqual(denied.body, { state: "sign_in_required" });
-  assert.equal(observed.length, 8);
+  assert.equal(observed.length, 17);
 
   const mutation = await request(port, "/api/packet-detail/packet-1", { method: "POST" });
   assert.equal(mutation.status, 405);
   const forwarded = await request(port, "/api/packet-detail/packet-1", { headers: { "x-forwarded-for": "127.0.0.1" } });
   assert.equal(forwarded.status, 400);
-  assert.equal(observed.length, 8);
+  assert.equal(observed.length, 17);
 
   await close(dashboard);
   await close(supervisor);

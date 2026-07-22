@@ -65,7 +65,7 @@ export async function startEpic26AuthHarness(port = 3102) {
     }
     if (request.url === "/internal/dashboard/packet-detail/packet-1") {
       if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session") { response.writeHead(401); response.end(JSON.stringify({ detail: "Sign-in required." })); return; }
-      response.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId: "packet-1", title: "Packet 1 detail", currentStage: "shaping", status: "ready", truthLabel: "integrated_local", evidence: { freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] } } }));
+      response.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId: "packet-1", title: "Packet 1 detail", currentStage: "shaping", status: "ready", truthLabel: "integrated_local", evidence: { schemaVersion: "pipeline-epic-25-evidence-chain/v1", evidenceClass: "source_owned", checkedAt: "2026-07-22T12:00:00.000Z", expiresAt: "2026-07-22T12:05:00.000Z", freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] } } }));
       return;
     }
     response.writeHead(404).end();
