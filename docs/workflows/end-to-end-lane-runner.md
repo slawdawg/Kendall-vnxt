@@ -256,6 +256,40 @@ takeover or cleanup decision.
 Use `resume --json` when an automation runner needs the matched worktree,
 branch, owner, PR, and owner-warning evidence without parsing human text.
 
+## Parallel Suitability Report (Read Only)
+
+Before considering more than one independent lane, obtain the manager refill
+report from a clean `dev` checkout:
+
+```bash
+node ./scripts/manager-refill-plan.mjs --summary-json
+```
+
+The optional `summary.parallelSuitability` projection is an advisory,
+metadata-only graph. Its versioned `ExecutionJob`, `ChangeSurface`, and
+`ReservationLease` entries explain which source-ready candidates are selected,
+deferred, or blocked. It records only identifiers, source/evidence references,
+declared surfaces, ownership/worktree facts or absence reasons, baseline scope,
+dependencies, and recovery actions.
+
+Treat `selectedExecutionJobIds` as a bounded planning recommendation, not a
+dispatch permission. The report never writes state-root records, manifests,
+assignments, leases, locks, branches, or GitHub state; it cannot launch a
+worker, call a provider, merge, or clean up. Existing `dispatch-next --apply`,
+ownership/takeover, exact-head delivery, and cleanup gates remain the only
+mutation boundaries.
+
+If a candidate is deferred or blocked, resolve its named reason and rebuild the
+report from fresh source and assignment evidence. Common recovery actions are:
+
+- Declare a narrow, source-proven, non-overlapping `ChangeSurface`; do not
+  infer independence from a lane name or filename.
+- Serialize shared contracts, dependencies, and operator-UX work until an
+  explicit non-overlap proof exists.
+- Preserve dirty, stale, foreign-owned, duplicate, authority-blocked, and
+  open-delivery lanes under their existing workflow; do not use this report to
+  take ownership or bypass delivery gates.
+
 ## Parallel Tmux Smoke Waves
 
 When the operator asks to run multiple Codex workers in visible tmux sessions,

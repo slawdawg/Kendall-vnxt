@@ -13899,6 +13899,11 @@ export function buildRefillPlan(options = {}, context = {}) {
     { closedStoryStatuses },
   );
   const splitPlan = starvation && sourceSlice ? buildSplitPlan(context.splitHints || options.splitHints || null) : null;
+  const parallelSuitability = buildParallelSuitabilityReport(options, {
+    ...context,
+    assignmentSummary: assignment,
+    sourceWorkEligibility,
+  });
   const candidateLanes = starvation && workCreationStep && !requestPacketBlocked ? buildCandidateLanePackets(refillNeeded, sourceSlice, workCreationStep, splitPlan) : [];
   const dispatcherRefill = buildDispatcherRefillWatermarkPlan(
     {
@@ -13987,6 +13992,7 @@ export function buildRefillPlan(options = {}, context = {}) {
       materializationGate,
       refillJob: dispatcherRefill.summary?.refillJob || null,
       refillWatermark: dispatcherRefill.summary || null,
+      parallelSuitability: parallelSuitability.summary,
       closedEvidence,
       workCreationStep,
       splitPlan,
@@ -16199,7 +16205,13 @@ function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = n
   const acceptanceCriteria = normalizeCandidateStringList(candidate.acceptanceCriteria || candidate.acceptance_criteria || candidate.acceptanceCriterion || candidate.ac);
   const verificationTargets = normalizeCandidateStringList(candidate.verificationTargets || candidate.verification_targets || candidate.verification || candidate.verificationTarget);
   const dependencyHints = normalizeCandidateStringList(candidate.dependencyHints || candidate.dependency_hints || candidate.dependencies);
-  const touchedSurfaceHint = sanitizeLedgerField(candidate.touchedSurfaceHint || candidate.touched_surface_hint || candidate.touchedSurface || "", "", 180);
+  const changeSurface = normalizeSourceDeclaredChangeSurface(candidate.changeSurface || candidate.change_surface).publicShape;
+  const touchedSurfaceHint = sanitizeLedgerField(
+    candidate.touchedSurfaceHint || candidate.touched_surface_hint || candidate.touchedSurface || changeSurface.paths?.[0] || "",
+    "",
+    180,
+  );
+  const baselineRef = sanitizeLedgerField(candidate.baselineRef || candidate.baseline_ref || candidate.baseRef || candidate.base_ref || "", "", 180);
   const sourceOwnedRewrite = normalizeSourceOwnedRewriteRef(candidate.sourceOwnedRewriteRef || candidate.source_owned_rewrite_ref || "");
   const provenanceValidation = normalizeDefaultBmadSourceProvenance(candidate.sourceProvenance || candidate.source_provenance, sourceRefs, root);
   const sourceOwnedRewriteRef = sourceOwnedRewrite.ref;
@@ -16218,6 +16230,13 @@ function normalizeCandidateWorkPacket(candidate = {}, index = 0, artifactMap = n
     dedupeKey: canonicalDedupeKey,
     suppliedDedupeKey: sanitizeLedgerField(candidate.dedupeKey || candidate.dedupe_key || "", "", 180),
     touchedSurfaceHint,
+    changeSurface,
+    baselineRef,
+    branch: sanitizeIdentifierField(candidate.branch || candidate.branchName || "", "", 160),
+    owner: sanitizeLedgerField(candidate.owner || candidate.assignedOwner || "", "", 160),
+    worktreePath: sanitizeLedgerField(candidate.worktreePath || candidate.worktree_path || "", "", 260),
+    dirty: candidate.dirty === true,
+    stale: candidate.stale === true,
     authorityClass: sanitizeLedgerField(candidate.authorityClass || candidate.authority_class || "", "", 80),
     evidenceRefs: normalizeCandidateStringList(candidate.evidenceRefs || candidate.evidence_refs).slice(0, 8),
     ownershipBoundaries: [...ownershipBoundaries].sort(),
@@ -16259,6 +16278,13 @@ function markCandidateWork(candidate = {}, decision = "blocked", reason = "block
     dependencyHints: candidate.dependencyHints,
     dedupeKey: candidate.dedupeKey,
     touchedSurfaceHint: candidate.touchedSurfaceHint,
+    changeSurface: candidate.changeSurface,
+    baselineRef: candidate.baselineRef || null,
+    branch: candidate.branch || null,
+    owner: candidate.owner || null,
+    worktreePath: candidate.worktreePath || null,
+    dirty: candidate.dirty === true,
+    stale: candidate.stale === true,
     authorityClass: candidate.authorityClass || null,
     evidenceRefs: candidate.evidenceRefs,
     ...(candidate.sourceProvenance ? { sourceProvenance: candidate.sourceProvenance } : {}),
@@ -18354,6 +18380,393 @@ function buildCourseCorrectionBacklogItems(backlogTarget) {
     },
   ];
   return items.slice(0, Math.min(Math.max(backlogTarget, 1), 6));
+}
+
+export const PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION = "parallel-execution-graph-reservation/v1";
+
+export function buildParallelSuitabilityReport(options = {}, context = {}) {
+  const generatedAt = validReportTimestamp(context.generatedAt || options.generatedAt);
+  const currentOwner = sanitizeLedgerField(context.currentOwner || context.assignmentSummary?.summary?.currentOwner || context.assignmentSummary?.currentOwner || "", "", 160);
+  const candidates = parallelSuitabilityCandidateInputs(options, context);
+  const assignmentState = assignmentBranchesFromSummary(context.assignmentSummary || options.assignmentSummary || {});
+  const maxSelected = boundedParallelRecommendation(options.maxParallel ?? context.maxParallel);
+  const duplicateIds = duplicateValues(candidates.map((candidate, index) => executionCandidateId(candidate, index)));
+  const duplicateBranches = duplicateValues(candidates.map((candidate) => normalizedCandidateBranch(candidate)).filter(Boolean));
+  const jobs = candidates
+    .map((candidate, index) => normalizeExecutionJob(candidate, index, { currentOwner, assignmentState, duplicateIds, duplicateBranches }))
+    .sort((left, right) => left.executionJobId.localeCompare(right.executionJobId));
+  const reservationCandidates = jobs.filter((job) => job.lifecycleStatus === "eligible");
+  for (const job of jobs) {
+    if (job.lifecycleStatus !== "eligible") continue;
+    const overlappingJobs = reservationCandidates
+      .filter((other) => other.executionJobId !== job.executionJobId)
+      .filter((other) => changeSurfacesOverlap(job.changeSurface.paths, other.changeSurface.paths))
+      .map((other) => other.executionJobId)
+      .sort();
+    if (overlappingJobs.length > 0) {
+      deferExecutionJob(job, "change_surface_overlap", "ChangeSurface overlaps another candidate; serialize and re-plan with an explicit non-overlap proof.", overlappingJobs);
+      continue;
+    }
+    if (job.dependencies.length > 0) {
+      deferExecutionJob(job, "dependency_declared", "Candidate declares dependencies or coupling blockers; complete or clear them before a new parallel recommendation.");
+    }
+  }
+  const eligible = jobs.filter((job) => job.lifecycleStatus === "eligible");
+  let selectedBaseline = null;
+  let selectedCount = 0;
+  for (const job of eligible) {
+    if (selectedBaseline !== null && job.baselineScope.reference !== selectedBaseline) {
+      deferExecutionJob(job, "baseline_mismatch", "Candidate baseline differs from the selected shared reservation baseline; re-plan from one exact revision.");
+    } else if (selectedCount < maxSelected) {
+      selectExecutionJob(job);
+      selectedBaseline = job.baselineScope.reference;
+      selectedCount += 1;
+    } else {
+      deferExecutionJob(job, "recommendation_cap", `Conservative recommendation cap is ${maxSelected}; re-plan after selected work reaches a terminal review state.`);
+    }
+  }
+  const selectedExecutionJobIds = jobs.filter((job) => job.lifecycleStatus === "selected").map((job) => job.executionJobId);
+  const deferredExecutionJobIds = jobs.filter((job) => job.lifecycleStatus === "deferred").map((job) => job.executionJobId);
+  const blockedExecutionJobIds = jobs.filter((job) => job.lifecycleStatus === "blocked").map((job) => job.executionJobId);
+  const status = blockedExecutionJobIds.length > 0 || deferredExecutionJobIds.length > 0 ? "attention" : "ready";
+  return packet({
+    status,
+    summary: {
+      schemaVersion: PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION,
+      generatedAt,
+      recommendation: {
+        status: "advisory_only",
+        maxSelected,
+        selectedExecutionJobIds,
+        deferredExecutionJobIds,
+        blockedExecutionJobIds,
+        nextSafeAction: selectedExecutionJobIds.length > 0
+          ? "Review this advisory recommendation, then use the existing dispatch preview and authority gates separately for any future mutation."
+          : "Resolve the named blocker or coupling reason, then rebuild this report from fresh source and assignment evidence.",
+      },
+      executionJobs: jobs,
+      reservationLeases: jobs.map((job) => job.reservationLease),
+      mutation: "none; report-only graph and reservation recommendation",
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+      stopLines: [
+        "no_dispatch_apply",
+        "no_worker_launch_or_provider_execution",
+        "no_git_github_merge_or_cleanup_mutation",
+        "no_state_root_manifest_assignment_or_lease_write",
+      ],
+    },
+    blockers: jobs
+      .filter((job) => job.lifecycleStatus === "blocked")
+      .map((job) => ({
+        code: job.reservationLease.reasonCode,
+        message: job.reservationLease.reason,
+        executionJobId: job.executionJobId,
+        nextAction: job.nextSafeAction,
+      })),
+    nextActions: [{
+      code: "parallel-suitability-report-only",
+      nextAction: "Treat selected entries as a planning recommendation only; the existing dispatch and ownership gates remain the sole mutation boundary.",
+    }],
+  });
+}
+
+function parallelSuitabilityCandidateInputs(options = {}, context = {}) {
+  const explicit = context.candidates || context.executionCandidates || options.candidates || options.executionCandidates;
+  if (Array.isArray(explicit)) return explicit.slice(0, 24).map(normalizeParallelCandidateInput);
+  const summary = context.sourceWorkEligibility?.summary || context.sourceWorkEligibility || {};
+  return [
+    ...(Array.isArray(summary.candidateWorkPackets) ? summary.candidateWorkPackets : []),
+    ...(Array.isArray(summary.needsReviewPackets) ? summary.needsReviewPackets : []),
+    ...(Array.isArray(summary.blockedPackets) ? summary.blockedPackets : []),
+    ...(Array.isArray(summary.dedupe?.skippedCandidates) ? summary.dedupe.skippedCandidates : []),
+  ].slice(0, 24).map(normalizeParallelCandidateInput);
+}
+
+function normalizeParallelCandidateInput(candidate, index) {
+  if (isPlainObject(candidate)) return candidate;
+  return { malformedCandidate: true, candidateWorkPacketId: `malformed-${index + 1}` };
+}
+
+function normalizeExecutionJob(candidate = {}, index = 0, context = {}) {
+  const candidateId = executionCandidateId(candidate, index);
+  const executionJobId = `execution-job:${candidateId}`;
+  const sourceEvidence = metadataOnlyReferenceList(candidate.sourceRefs || candidate.source_refs);
+  const evidence = metadataOnlyReferenceList(candidate.evidenceRefs || candidate.evidence_refs || sourceEvidence.refs);
+  const sourceRefs = sourceEvidence.refs;
+  const evidenceRefs = evidence.refs;
+  const verificationTargets = compactMetadataList(candidate.verificationTargets || candidate.verification_targets, { allowSpaces: true });
+  const dependencies = compactMetadataList(candidate.dependencyHints || candidate.dependency_hints || candidate.dependencies || candidate.couplingBlockers);
+  const surface = normalizeSourceDeclaredChangeSurface(candidate.changeSurface || candidate.change_surface);
+  const ownerMetadata = compactMetadataText(candidate.owner || candidate.assignedOwner || "");
+  const worktreeMetadata = compactMetadataText(candidate.worktreePath || candidate.worktree_path || "");
+  const owner = ownerMetadata.value;
+  const worktreePath = worktreeMetadata.value;
+  const purpose = compactMetadataText(candidate.title || candidate.purpose || "", { allowSpaces: true });
+  const baseline = normalizeBaselineReference(candidate.baselineRef || candidate.baseline_ref || candidate.baseRef || candidate.base_ref || "");
+  const baselineRef = baseline.value;
+  const job = {
+    schemaVersion: PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION,
+    executionJobId,
+    candidateId,
+    purpose: purpose.value,
+    owner: owner ? { value: owner, status: owner === context.currentOwner ? "current_owner" : "foreign_owner" } : { value: null, status: "absent" },
+    worktree: worktreePath ? { path: worktreePath, status: "reported" } : { path: null, status: "absent", reason: "no worktree is reserved by this report-only projection" },
+    readWriteMode: surface.valid ? "read_write" : "unknown",
+    changeSurface: surface.publicShape,
+    baselineScope: {
+      reference: baselineRef,
+      status: baselineRef ? "reported" : "missing",
+      sourceRefs,
+    },
+    dependencies: dependencies.values,
+    evidenceRefs,
+    verificationTargets: verificationTargets.values,
+    lifecycleStatus: "eligible",
+    reservationLease: {
+      schemaVersion: "reservation-lease-projection/v1",
+      reservationLeaseId: `reservation-lease:${candidateId}`,
+      status: "not_recommended",
+      reasonCode: "pending_evaluation",
+      reason: "Candidate has not completed report-only reservation evaluation.",
+      owner: owner || null,
+      worktreePath,
+      evidenceRefs,
+      expiresAt: null,
+      mutation: "none; advisory projection only",
+    },
+    recoveryState: "rebuild report from fresh source and assignment evidence",
+    nextSafeAction: "Review source, ownership, and scope evidence before any dispatch preview.",
+  };
+  const decision = executionJobBlockDecision(candidate, job, context, surface, { sourceEvidence, evidence, purpose, baseline, dependencies, verificationTargets, ownerMetadata, worktreeMetadata });
+  if (decision) blockExecutionJob(job, decision.code, decision.reason);
+  return job;
+}
+
+function executionJobBlockDecision(candidate, job, context, surface, referenceValidation) {
+  const eligibility = String(candidate.eligibilityDecision || candidate.eligibility_decision || candidate.status || "eligible").toLowerCase();
+  const eligibilityReason = String(candidate.eligibilityReason || candidate.eligibility_reason || "").toLowerCase();
+  if (candidate.malformedCandidate === true) return { code: "candidate_malformed", reason: "Malformed candidate input was preserved as a blocked report entry." };
+  if (context.assignmentState.malformed) return { code: "assignment_inventory_malformed", reason: "Authoritative assignment evidence is malformed; no parallel recommendation is safe." };
+  if (!job.candidateId || /^candidate-\d+$/.test(job.candidateId)) return { code: "candidate_id_missing", reason: "Candidate is missing a stable source-owned identifier." };
+  if (!referenceValidation.purpose.valid || !referenceValidation.dependencies.valid || !referenceValidation.verificationTargets.valid || !referenceValidation.ownerMetadata.valid || !referenceValidation.worktreeMetadata.valid) return { code: "metadata_field_malformed", reason: "Candidate metadata is malformed or content-like; no raw value was retained." };
+  if (!job.purpose) return { code: "purpose_missing", reason: "Candidate is missing a purpose." };
+  if (referenceValidation.baseline.invalid) return { code: "baseline_reference_malformed", reason: "Candidate baseline reference is not an exact branch@revision reference." };
+  if (job.baselineScope.status === "missing") return { code: "baseline_reference_missing", reason: "Candidate is missing a baseline or exact scope reference." };
+  if (referenceValidation.sourceEvidence.rejected || referenceValidation.evidence.rejected) return { code: "metadata_reference_malformed", reason: "Candidate supplied malformed or non-metadata source/evidence references; no raw content was retained." };
+  if (job.baselineScope.sourceRefs.length === 0) return { code: "source_evidence_missing", reason: "Candidate is missing source-owned evidence references." };
+  if (job.verificationTargets.length === 0) return { code: "verification_missing", reason: "Candidate is missing verification targets." };
+  if (!surface.valid) return { code: surface.reasonCode, reason: surface.reason };
+  if (candidate.generated === true || candidate.generatedArtifact === true || /generated/.test(eligibilityReason)) return { code: "generated_or_untrusted_candidate", reason: "Generated or untrusted candidate evidence cannot reserve a parallel change surface." };
+  if (eligibility !== "eligible") return {
+    code: eligibilityReason.includes("authority") ? "authority_blocked" : "candidate_not_eligible",
+    reason: "Candidate is not eligible under the existing source-work classification.",
+  };
+  if (eligibilityReason.includes("authority") || String(candidate.authorityClass || candidate.authority_class || "").startsWith("blocked")) return { code: "authority_blocked", reason: "Candidate is authority-blocked by existing classification evidence." };
+  if (candidate.dirty === true || /dirty/.test(String(candidate.workspaceStatus || candidate.workspace_status || ""))) return { code: "dirty_workspace", reason: "Candidate workspace is dirty and must be preserved before re-planning." };
+  if (candidate.stale === true || /stale/.test(String(candidate.workspaceStatus || candidate.workspace_status || ""))) return { code: "stale_owner", reason: "Candidate ownership is stale and requires existing takeover evidence before re-planning." };
+  if (job.owner.value && job.owner.value !== context.currentOwner) return { code: "foreign_owned", reason: "Candidate is owned by another runner; existing takeover rules remain authoritative." };
+  if (context.duplicateIds.has(job.candidateId)) return { code: "duplicate_lane", reason: "Candidate identifier is duplicated in the report input." };
+  const branch = normalizedCandidateBranch(candidate);
+  if (branch && context.duplicateBranches.has(branch)) return { code: "duplicate_lane", reason: "Candidate branch is duplicated in the report input." };
+  const assignmentStatus = branch ? context.assignmentState.branches.get(branch) : null;
+  if (assignmentStatus === "delivery") return { code: "open_delivery", reason: "Candidate branch already has open delivery evidence and remains serialized." };
+  if (assignmentStatus === "authority") return { code: "authority_blocked", reason: "Candidate branch is authority-blocked in authoritative assignment evidence." };
+  if (assignmentStatus === "stale") return { code: "stale_owner", reason: "Candidate branch has stale-owner evidence and requires the existing takeover gate." };
+  if (assignmentStatus === "foreign") return { code: "foreign_owned", reason: "Candidate branch is owned by another runner in authoritative assignment evidence." };
+  if (assignmentStatus === "ambiguous") return { code: "assignment_ambiguous", reason: "Candidate branch has ambiguous authoritative assignment evidence." };
+  if (assignmentStatus) return { code: "active_assignment", reason: "Candidate branch is already active or claimed in authoritative assignment evidence." };
+  return null;
+}
+
+function normalizeSourceDeclaredChangeSurface(value) {
+  if (!isPlainObject(value)) return invalidChangeSurface("change_surface_missing", "Candidate has no source-declared ChangeSurface.");
+  const declaration = sanitizeLedgerField(value.declaration || value.proof || value.proofStatus || "", "", 80);
+  const rawPaths = Array.isArray(value.paths) ? value.paths : Array.isArray(value.files) ? value.files : [];
+  const paths = rawPaths.map(normalizeChangeSurfacePath).filter(Boolean);
+  if (declaration !== "source_declared_non_overlap") return invalidChangeSurface("change_surface_proof_missing", "ChangeSurface lacks a source-declared non-overlap proof.", declaration, paths);
+  if (paths.length === 0 || paths.length !== rawPaths.length) return invalidChangeSurface("change_surface_malformed", "ChangeSurface paths are missing, malformed, broad, or generated.", declaration, paths);
+  return {
+    valid: true,
+    publicShape: { proofStatus: declaration, paths: [...new Set(paths)].sort() },
+  };
+}
+
+function invalidChangeSurface(reasonCode, reason, proofStatus = null, paths = []) {
+  return {
+    valid: false,
+    reasonCode,
+    reason,
+    publicShape: { proofStatus: proofStatus === "source_declared_non_overlap" ? proofStatus : "missing", paths: [...new Set(paths)].sort() },
+  };
+}
+
+function normalizeChangeSurfacePath(value) {
+  if (typeof value !== "string") return "";
+  const raw = String(value || "").trim().replace(/\\/g, "/");
+  if (!raw || raw.startsWith("/") || /^[a-z]:\//i.test(raw) || /[*?]/.test(raw)) return "";
+  const segments = [];
+  for (const segment of raw.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") return "";
+    segments.push(segment);
+  }
+  const path = segments.join("/");
+  if (!path || !/[.][A-Za-z0-9_-]+$/.test(path) || /(^|\/)(node_modules|_bmad-output|\.next|dist|build)(\/|$)/.test(path)) return "";
+  return path;
+}
+
+function executionCandidateId(candidate = {}, index = 0) {
+  return sanitizeIdentifierField(candidate.candidateWorkPacketId || candidate.candidateId || candidate.id || "", `candidate-${index + 1}`, 120);
+}
+
+function normalizedCandidateBranch(candidate = {}) {
+  return sanitizeIdentifierField(candidate.branch || candidate.branchName || "", "", 160);
+}
+
+function duplicateValues(values = []) {
+  const counts = new Map();
+  for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([value]) => value));
+}
+
+function assignmentBranchesFromSummary(assignment = {}) {
+  const summary = assignment.summary || assignment || {};
+  const inventory = isPlainObject(summary.assignmentInventory) ? summary.assignmentInventory : null;
+  const summaryTruncated = Boolean(summary.laneAssignmentsTruncated || summary.workspaceAssignmentsTruncated);
+  const inventoryComplete = inventory?.complete === true && Array.isArray(inventory.laneAssignments) && Array.isArray(inventory.workspaceAssignments);
+  const rows = [
+    ...(Array.isArray(summary.workspaceAssignments) ? summary.workspaceAssignments : []),
+    ...(Array.isArray(summary.laneAssignments) ? summary.laneAssignments : []),
+    ...(inventoryComplete ? inventory.workspaceAssignments : []),
+    ...(inventoryComplete ? inventory.laneAssignments : []),
+    ...(inventoryComplete && Array.isArray(inventory.staleOwnerTargets) ? inventory.staleOwnerTargets : []),
+    ...(inventoryComplete && Array.isArray(inventory.ownedActiveTargets) ? inventory.ownedActiveTargets : []),
+  ];
+  const branches = new Map();
+  let malformed = summaryTruncated && !inventoryComplete;
+  for (const row of rows) {
+    if (!isPlainObject(row)) {
+      malformed = true;
+      continue;
+    }
+    const branch = normalizedCandidateBranch(row);
+    const statuses = [row.status, row.manifestStatus, row.phase].map((value) => String(value || "").toLowerCase());
+    if (!branch) continue;
+    const status = assignmentBranchStatus(statuses);
+    if (status) setAssignmentBranchStatus(branches, branch, status);
+  }
+  return { branches, malformed };
+}
+
+function assignmentBranchStatus(statuses = []) {
+  if (statuses.some((status) => ["delivery", "pr_open"].includes(status))) return "delivery";
+  if (statuses.includes("blocked_authority")) return "authority";
+  if (statuses.includes("blocked_stale_owner_needs_takeover")) return "stale";
+  if (statuses.includes("blocked_owned_active")) return "foreign";
+  if (statuses.includes("ambiguous")) return "ambiguous";
+  if (statuses.some((status) => ["active", "claimed", "cleanup"].includes(status))) return "active";
+  return null;
+}
+
+function setAssignmentBranchStatus(branches, branch, status) {
+  const rank = { ambiguous: 1, active: 2, foreign: 3, stale: 4, authority: 5, delivery: 6 };
+  const existing = branches.get(branch);
+  if (!existing || rank[status] > rank[existing]) branches.set(branch, status);
+}
+
+function metadataOnlyReferenceList(value) {
+  const refs = [];
+  let rejected = false;
+  for (const raw of sourceRefList(value)) {
+    const ref = sanitizeLedgerField(raw, "", 180);
+    if (!isMetadataOnlyReference(ref)) {
+      rejected = true;
+      continue;
+    }
+    if (!refs.includes(ref)) refs.push(ref);
+  }
+  return { refs: refs.slice(0, 12), rejected };
+}
+
+function isMetadataOnlyReference(value) {
+  return /^[a-z][a-z0-9_-]*:[A-Za-z0-9_./:@=-]+$/i.test(String(value || ""));
+}
+
+function compactMetadataText(value, { allowSpaces = false } = {}) {
+  if (typeof value !== "string") return { value: null, valid: value === "" || value === null || value === undefined };
+  const raw = value.trim();
+  if (!raw) return { value: null, valid: true };
+  if (raw.length > 180 || /[\r\n{}<>`$;|]/.test(raw) || /(prompt|completion|provider payload|raw source|source dump|transcript|secret|credential|diff --git|stdout|stderr|stack trace|\b(?:const|function|return|class|import|export)\b)/i.test(raw)) {
+    return { value: null, valid: false };
+  }
+  const allowed = allowSpaces ? /^[A-Za-z0-9 .,_:/@=+-]+$/ : /^[A-Za-z0-9._:/@=+-]+$/;
+  if (!allowed.test(raw)) return { value: null, valid: false };
+  return { value: sanitizeLedgerField(raw, "", 180) || null, valid: true };
+}
+
+function compactMetadataList(value, options = {}) {
+  const values = [];
+  let valid = true;
+  for (const entry of sourceRefList(value)) {
+    const normalized = compactMetadataText(entry, options);
+    if (!normalized.valid) valid = false;
+    else if (normalized.value && !values.includes(normalized.value)) values.push(normalized.value);
+  }
+  return { values: values.slice(0, 12), valid };
+}
+
+function normalizeBaselineReference(value) {
+  if (value === "" || value === null || value === undefined) return { value: null, invalid: false };
+  if (typeof value !== "string") return { value: null, invalid: true };
+  const raw = value.trim();
+  if (!/^[A-Za-z0-9._/-]+@[0-9a-f]{7,64}$/i.test(raw)) return { value: null, invalid: true };
+  return { value: raw, invalid: false };
+}
+
+function changeSurfacesOverlap(left = [], right = []) {
+  return left.some((leftPath) => right.some((rightPath) =>
+    leftPath === rightPath || leftPath.startsWith(`${rightPath}/`) || rightPath.startsWith(`${leftPath}/`),
+  ));
+}
+
+function boundedParallelRecommendation(value) {
+  const requested = Number(value);
+  if (!Number.isInteger(requested)) return 2;
+  return Math.min(Math.max(requested, 1), 2);
+}
+
+function validReportTimestamp(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now());
+  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
+}
+
+function blockExecutionJob(job, reasonCode, reason) {
+  job.lifecycleStatus = "blocked";
+  job.reservationLease.status = "blocked";
+  job.reservationLease.reasonCode = reasonCode;
+  job.reservationLease.reason = sanitizeLedgerField(reason, "reservation evaluation failed", 240);
+  job.recoveryState = "resolve the named blocker and rebuild the report from fresh evidence";
+  job.nextSafeAction = job.recoveryState;
+}
+
+function deferExecutionJob(job, reasonCode, reason, conflictingExecutionJobIds = []) {
+  job.lifecycleStatus = "deferred";
+  job.reservationLease.status = "deferred";
+  job.reservationLease.reasonCode = reasonCode;
+  job.reservationLease.reason = sanitizeLedgerField(reason, "reservation deferred", 240);
+  if (conflictingExecutionJobIds.length > 0) job.reservationLease.conflictingExecutionJobIds = conflictingExecutionJobIds;
+  job.recoveryState = "resolve coupling or wait for the selected recommendation to reach a terminal review state, then rebuild the report";
+  job.nextSafeAction = job.recoveryState;
+}
+
+function selectExecutionJob(job) {
+  job.lifecycleStatus = "selected";
+  job.reservationLease.status = "advisory_reserved";
+  job.reservationLease.reasonCode = "independent_source_declared_surface";
+  job.reservationLease.reason = "Candidate has independent source-declared scope and is selected only as a bounded advisory recommendation.";
+  job.recoveryState = "use existing dispatch preview and authority gates separately; no lease was written";
+  job.nextSafeAction = "Review the existing dispatch preview before any separately authorized mutation.";
 }
 
 function buildSplitPlan(hints) {

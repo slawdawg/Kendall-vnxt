@@ -36,6 +36,7 @@ import {
   buildLargeSliceContinuationPlan,
   buildLiveWorkerProofReadiness,
   buildMatureToolEvaluationPlan,
+  buildParallelSuitabilityReport,
   buildBmadCodeReviewRequestPlan,
   buildBmadRequestPacketPlan,
   bmadRequestWorkflowCatalog,
@@ -9418,6 +9419,368 @@ test("keeps BMAD story boundary intact for coupled split hints", () => {
     },
   );
   assert.equal(emptyNormalized.summary.splitPlan.status, "keep_story_boundary");
+});
+
+test("builds a deterministic metadata-only execution graph with bounded independent reservations", () => {
+  const candidates = [
+    {
+      candidateWorkPacketId: "lane-core",
+      title: "Harden manager core",
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:_bmad-output/implementation-artifacts/34-1-shared-execution-graph-and-reservation-contract.md"],
+      evidenceRefs: ["source:story-34-1"],
+      verificationTargets: ["pnpm run test:manager-control-plane"],
+      changeSurface: {
+        declaration: "source_declared_non_overlap",
+        paths: ["scripts/lib/manager-control-plane/core.mjs"],
+      },
+      baselineRef: "dev@a93194e",
+      dependencyHints: [],
+    },
+    {
+      candidateWorkPacketId: "lane-tests",
+      title: "Cover manager graph contracts",
+      eligibilityDecision: "eligible",
+      sourceRefs: ["story:_bmad-output/implementation-artifacts/34-1-shared-execution-graph-and-reservation-contract.md"],
+      evidenceRefs: ["source:story-34-1"],
+      verificationTargets: ["pnpm run check:manager-control-plane"],
+      changeSurface: {
+        declaration: "source_declared_non_overlap",
+        paths: ["tests/manager-control-plane.test.mjs"],
+      },
+      baselineRef: "dev@a93194e",
+      dependencyHints: [],
+    },
+  ];
+  const first = buildParallelSuitabilityReport({}, { candidates, generatedAt: new Date("2026-07-22T12:00:00.000Z") });
+  const second = buildParallelSuitabilityReport({}, { candidates: [...candidates].reverse(), generatedAt: new Date("2026-07-22T12:00:00.000Z") });
+
+  assert.equal(first.status, "ready");
+  assert.equal(first.summary.schemaVersion, "parallel-execution-graph-reservation/v1");
+  assert.deepEqual(first.summary.recommendation.selectedExecutionJobIds, ["execution-job:lane-core", "execution-job:lane-tests"]);
+  assert.deepEqual(first, second);
+  assert.equal(first.summary.mutation, "none; report-only graph and reservation recommendation");
+  assert.equal(first.summary.rawPayloadRetained, false);
+  assert.deepEqual(first.summary.stopLines, [
+    "no_dispatch_apply",
+    "no_worker_launch_or_provider_execution",
+    "no_git_github_merge_or_cleanup_mutation",
+    "no_state_root_manifest_assignment_or_lease_write",
+  ]);
+  for (const job of first.summary.executionJobs) {
+    assert.match(job.executionJobId, /^execution-job:/);
+    assert.equal(job.lifecycleStatus, "selected");
+    assert.equal(job.changeSurface.proofStatus, "source_declared_non_overlap");
+    assert.equal(job.reservationLease.status, "advisory_reserved");
+    assert.equal(Object.hasOwn(job, "prompt"), false);
+    assert.equal(Object.hasOwn(job, "completion"), false);
+  }
+});
+
+test("fails closed graph reservations for malformed, overlapping, delivery, ownership, and authority candidates", () => {
+  const report = buildParallelSuitabilityReport({}, {
+    generatedAt: new Date("2026-07-22T12:00:00.000Z"),
+    currentOwner: "manager/current",
+    candidates: [
+      {
+        candidateWorkPacketId: "missing-surface",
+        title: "Missing surface",
+        eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-1"],
+        verificationTargets: ["test"],
+        baselineRef: "dev@a93194e",
+      },
+      {
+        candidateWorkPacketId: "overlap-a",
+        title: "Overlap A",
+        eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-1"],
+        verificationTargets: ["test"],
+        baselineRef: "dev@a93194e",
+        changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/shared.mjs"] },
+      },
+      {
+        candidateWorkPacketId: "overlap-b",
+        title: "Overlap B",
+        eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-1"],
+        verificationTargets: ["test"],
+        baselineRef: "dev@a93194e",
+        changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/shared.mjs"] },
+      },
+      {
+        candidateWorkPacketId: "foreign-owner",
+        title: "Foreign owner",
+        eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-1"],
+        verificationTargets: ["test"],
+        baselineRef: "dev@a93194e",
+        owner: "manager/other",
+        changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/foreign.mjs"] },
+      },
+      {
+        candidateWorkPacketId: "delivery-open",
+        title: "Open delivery",
+        eligibilityDecision: "eligible",
+        sourceRefs: ["story:34-1"],
+        verificationTargets: ["test"],
+        baselineRef: "dev@a93194e",
+        branch: "codex/delivery-open",
+        changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/delivery.mjs"] },
+      },
+      {
+        candidateWorkPacketId: "authority-blocked",
+        title: "Authority blocked",
+        eligibilityDecision: "blocked",
+        eligibilityReason: "authority_blocked",
+        sourceRefs: ["story:34-1"],
+        verificationTargets: ["test"],
+        baselineRef: "dev@a93194e",
+        changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/authority.mjs"] },
+      },
+    ],
+    assignmentSummary: {
+      summary: {
+        workspaceAssignments: [{ branch: "codex/delivery-open", status: "delivery", manifestStatus: "pr_open" }],
+      },
+    },
+  });
+
+  assert.equal(report.status, "attention");
+  assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, []);
+  assert.deepEqual(
+    report.summary.executionJobs.map((job) => [job.executionJobId, job.lifecycleStatus, job.reservationLease.reasonCode]),
+    [
+      ["execution-job:authority-blocked", "blocked", "authority_blocked"],
+      ["execution-job:delivery-open", "blocked", "open_delivery"],
+      ["execution-job:foreign-owner", "blocked", "foreign_owned"],
+      ["execution-job:missing-surface", "blocked", "change_surface_missing"],
+      ["execution-job:overlap-a", "deferred", "change_surface_overlap"],
+      ["execution-job:overlap-b", "deferred", "change_surface_overlap"],
+    ],
+  );
+});
+
+test("keeps duplicate, dirty, stale, and unknown-scope graph candidates out of a read-only recommendation", () => {
+  const stateRoot = join(tmpdir(), `parallel-graph-no-write-${process.pid}-${Date.now()}`);
+  const candidate = (candidateWorkPacketId, overrides = {}) => ({
+    candidateWorkPacketId,
+    title: candidateWorkPacketId,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-1"],
+    verificationTargets: ["test"],
+    baselineRef: "dev@a93194e",
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [`scripts/${candidateWorkPacketId}.mjs`] },
+    ...overrides,
+  });
+  try {
+    const report = buildParallelSuitabilityReport({ stateRoot }, {
+      candidates: [
+        candidate("dirty", { dirty: true }),
+        candidate("stale", { stale: true }),
+        candidate("duplicate-a", { branch: "codex/duplicate" }),
+        candidate("duplicate-b", { branch: "codex/duplicate" }),
+        candidate("unknown-scope", { changeSurface: { declaration: "source_declared_non_overlap", paths: ["**/*.mjs"] } }),
+      ],
+    });
+
+    assert.equal(existsSync(stateRoot), false);
+    assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, []);
+    assert.deepEqual(
+      report.summary.executionJobs.map((job) => job.reservationLease.reasonCode),
+      ["dirty_workspace", "duplicate_lane", "duplicate_lane", "stale_owner", "change_surface_malformed"],
+    );
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("canonicalizes equivalent ChangeSurface paths before overlap evaluation", () => {
+  const candidate = (candidateWorkPacketId, path) => ({
+    candidateWorkPacketId,
+    title: candidateWorkPacketId,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-1"],
+    verificationTargets: ["test"],
+    baselineRef: "dev@a93194e",
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [path] },
+  });
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [
+      candidate("windows-spelling", "scripts\\shared.mjs"),
+      candidate("redundant-spelling", "scripts//./shared.mjs"),
+    ],
+  });
+
+  assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, []);
+  assert.deepEqual(report.summary.executionJobs.map((job) => job.changeSurface.paths), [
+    ["scripts/shared.mjs"],
+    ["scripts/shared.mjs"],
+  ]);
+  assert.deepEqual(report.summary.executionJobs.map((job) => job.reservationLease.reasonCode), [
+    "change_surface_overlap",
+    "change_surface_overlap",
+  ]);
+});
+
+test("serializes otherwise independent candidates when their exact baselines differ", () => {
+  const candidate = (candidateWorkPacketId, baselineRef) => ({
+    candidateWorkPacketId,
+    title: candidateWorkPacketId,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-1"],
+    verificationTargets: ["test"],
+    baselineRef,
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [`scripts/${candidateWorkPacketId}.mjs`] },
+  });
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [
+      candidate("baseline-a", "dev@aaaaaaaa"),
+      candidate("baseline-b", "dev@bbbbbbbb"),
+      candidate("baseline-c", "dev@aaaaaaaa"),
+    ],
+  });
+
+  assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, ["execution-job:baseline-a", "execution-job:baseline-c"]);
+  assert.equal(report.summary.executionJobs[1].reservationLease.reasonCode, "baseline_mismatch");
+});
+
+test("blocks active assignment evidence, broad surfaces, malformed inputs, and non-metadata references", () => {
+  const candidate = (candidateWorkPacketId, overrides = {}) => ({
+    candidateWorkPacketId,
+    title: candidateWorkPacketId,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-1"],
+    verificationTargets: ["test"],
+    baselineRef: "dev@a93194e",
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [`scripts/${candidateWorkPacketId}.mjs`] },
+    ...overrides,
+  });
+  const report = buildParallelSuitabilityReport({}, {
+    candidates: [
+      candidate("active-assignment", { branch: "codex/active-assignment" }),
+      candidate("parent-surface", { changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib"] } }),
+      candidate("bad-evidence", { evidenceRefs: ["function doWork() { return source; }"] }),
+      null,
+    ],
+    assignmentSummary: { summary: { laneAssignments: [{ branch: "codex/active-assignment", status: "claimed" }] } },
+  });
+
+  assert.deepEqual(report.summary.recommendation.selectedExecutionJobIds, []);
+  assert.deepEqual(report.summary.executionJobs.map((job) => job.reservationLease.reasonCode), [
+    "active_assignment",
+    "metadata_reference_malformed",
+    "candidate_malformed",
+    "change_surface_malformed",
+  ]);
+  assert.doesNotMatch(JSON.stringify(report), /function doWork/);
+});
+
+test("fails closed for truncated or blocked authoritative inventory and content-like metadata", () => {
+  const candidate = (candidateWorkPacketId, overrides = {}) => ({
+    candidateWorkPacketId,
+    title: candidateWorkPacketId,
+    eligibilityDecision: "eligible",
+    sourceRefs: ["story:34-1"],
+    verificationTargets: ["pnpm run test:manager-control-plane"],
+    baselineRef: "dev@a93194e",
+    changeSurface: { declaration: "source_declared_non_overlap", paths: [`scripts/${candidateWorkPacketId}.mjs`] },
+    ...overrides,
+  });
+  const blockedInventory = buildParallelSuitabilityReport({}, {
+    candidates: [
+      candidate("foreign", { branch: "codex/foreign" }),
+      candidate("stale", { branch: "codex/stale" }),
+      candidate("authority", { branch: "codex/authority" }),
+      candidate("ambiguous", { branch: "codex/ambiguous" }),
+    ],
+    assignmentSummary: {
+      summary: {
+        laneAssignmentsTruncated: true,
+        assignmentInventory: {
+          complete: true,
+          laneAssignments: [
+            { branch: "codex/foreign", status: "blocked_owned_active" },
+            { branch: "codex/stale", status: "blocked_stale_owner_needs_takeover" },
+            { branch: "codex/authority", status: "blocked_authority" },
+            { branch: "codex/ambiguous", status: "ambiguous" },
+          ],
+          workspaceAssignments: [],
+        },
+      },
+    },
+  });
+  const malformedMetadata = buildParallelSuitabilityReport({}, {
+    candidates: [
+      candidate("raw-purpose", { title: "const secret = source" }),
+      candidate("raw-dependency", { dependencyHints: ["function hidden() {}"] }),
+      candidate("raw-baseline", { baselineRef: "diff --git a/file b/file" }),
+      candidate("raw-worktree", { worktreePath: "stdout: copied command output" }),
+    ],
+  });
+  const truncatedWithoutInventory = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("truncated")],
+    assignmentSummary: { summary: { laneAssignmentsTruncated: true } },
+  });
+  const incompleteInventory = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("incomplete")],
+    assignmentSummary: {
+      summary: {
+        laneAssignmentsTruncated: true,
+        assignmentInventory: { complete: false, laneAssignments: [], workspaceAssignments: [] },
+      },
+    },
+  });
+  const rawEligibilityReason = buildParallelSuitabilityReport({}, {
+    candidates: [candidate("raw-eligibility", {
+      eligibilityDecision: "blocked",
+      eligibilityReason: "provider payload: copied source explanation",
+    })],
+  });
+
+  assert.deepEqual(blockedInventory.summary.executionJobs.map((job) => job.reservationLease.reasonCode), [
+    "assignment_ambiguous",
+    "authority_blocked",
+    "foreign_owned",
+    "stale_owner",
+  ]);
+  assert.deepEqual(malformedMetadata.summary.executionJobs.map((job) => job.reservationLease.reasonCode), [
+    "baseline_reference_malformed",
+    "metadata_field_malformed",
+    "metadata_field_malformed",
+    "metadata_field_malformed",
+  ]);
+  assert.equal(truncatedWithoutInventory.summary.executionJobs[0].reservationLease.reasonCode, "assignment_inventory_malformed");
+  assert.equal(incompleteInventory.summary.executionJobs[0].reservationLease.reasonCode, "assignment_inventory_malformed");
+  assert.equal(rawEligibilityReason.summary.executionJobs[0].reservationLease.reason, "Candidate is not eligible under the existing source-work classification.");
+  assert.doesNotMatch(JSON.stringify(malformedMetadata), /secret = source|hidden\(|copied command output|diff --git/);
+  assert.doesNotMatch(JSON.stringify(rawEligibilityReason), /copied source explanation|provider payload/);
+});
+
+test("surfaces the execution graph in the existing refill read model without changing dispatch authority", () => {
+  const plan = buildRefillPlan(
+    { desiredWorkers: 1, sourceRefs: ["doc:docs/workflows/current-session-runbook.md"] },
+    {
+      assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 } } },
+      dispatchPreview: { counts: { dispatchable: 0, active: 0 } },
+      sourceWorkCandidates: [{
+        candidateWorkPacketId: "graph-refill-candidate",
+        title: "Graph refill candidate",
+        sourceRefs: ["doc:docs/workflows/current-session-runbook.md"],
+        acceptanceCriteria: ["AC1"],
+        verificationTargets: ["pnpm run test:manager-control-plane"],
+        riskClass: "low",
+        authorityClass: "allowed_unattended",
+        baselineRef: "dev@a93194e",
+        changeSurface: { declaration: "source_declared_non_overlap", paths: ["scripts/lib/manager-control-plane/core.mjs"] },
+      }],
+    },
+  );
+
+  assert.equal(plan.summary.parallelSuitability.schemaVersion, "parallel-execution-graph-reservation/v1");
+  assert.equal(plan.summary.parallelSuitability.mutation, "none; report-only graph and reservation recommendation");
+  assert.equal(plan.summary.parallelSuitability.recommendation.selectedExecutionJobIds.length, 1);
+  assert.equal(plan.summary.parallelSuitability.stopLines.includes("no_dispatch_apply"), true);
 });
 
 test("blocks refill decisions when assignment inventory is unavailable or malformed", () => {
