@@ -123,6 +123,11 @@ export interface CandidateWorkPromotionView {
   workItem: WorkItemView;
 }
 
+export interface CandidateWorkPromotionApiEnvelope {
+  data: CandidateWorkPromotionView;
+  meta?: Record<string, string | number | boolean | null> | null;
+}
+
 export interface BmadImportPackageView {
   title: string;
   requestedOutcome: string;
@@ -2060,6 +2065,11 @@ export interface DeliveryExecutionEvidenceView {
   cleanupAllowed: boolean;
   externalMutationRecorded: boolean;
   remoteMutationPerformed: boolean;
+}
+
+export interface DeliveryExecutionEvidenceApiEnvelope {
+  data: DeliveryExecutionEvidenceView;
+  meta?: Record<string, string | number | boolean | null> | null;
 }
 
 export interface CleanupPlanResidueView {

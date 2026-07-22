@@ -1,8 +1,9 @@
 ﻿import hashlib
 import json
 import re
+import types
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
 
@@ -21,6 +22,50 @@ from supervisor.domain.types import (
     WorkflowAction,
     WorkflowState,
 )
+
+
+def _strict_contract_payload(value: Any, model: type[BaseModel], *, path: str) -> None:
+    """Reject unknown keys and primitive coercions at a response boundary."""
+
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+    if not isinstance(value, dict):
+        return
+    fields = model.model_fields
+    unknown = set(value) - set(fields)
+    if unknown:
+        raise ValueError(f"{path} contains unknown fields: {sorted(unknown)}")
+    primitive_types = (str, int, float, bool)
+    for name, field in fields.items():
+        if name not in value or value[name] is None:
+            continue
+        annotation = field.annotation
+        origin = get_origin(annotation)
+        candidates = get_args(annotation)
+        if annotation in primitive_types:
+            scalar_types = (annotation,)
+        elif origin in (Union, types.UnionType) and all(item in primitive_types or item is type(None) for item in candidates):
+            scalar_types = tuple(item for item in candidates if item in primitive_types)
+        else:
+            scalar_types = ()
+        if scalar_types and type(value[name]) not in scalar_types:
+            raise ValueError(f"{path}.{name} must use a strict scalar value")
+        nested_model = (
+            annotation
+            if isinstance(annotation, type) and issubclass(annotation, BaseModel)
+            else next((item for item in candidates if isinstance(item, type) and issubclass(item, BaseModel)), None)
+        )
+        if nested_model is not None:
+            if origin in (list, tuple, set):
+                for index, item in enumerate(value[name]):
+                    _strict_contract_payload(item, nested_model, path=f"{path}.{name}[{index}]")
+            else:
+                _strict_contract_payload(value[name], nested_model, path=f"{path}.{name}")
+        elif origin in (list, tuple, set) and candidates and candidates[0] in primitive_types:
+            element_type = candidates[0]
+            for index, item in enumerate(value[name]):
+                if type(item) is not element_type:
+                    raise ValueError(f"{path}.{name}[{index}] must use a strict scalar value")
 
 UNSAFE_PIPELINE_EVIDENCE_REF_RE = re.compile(
     r"\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b",
@@ -228,6 +273,8 @@ class CandidateWorkUpdate(BaseModel):
 
 
 class CandidateWorkSourceSummaryView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     label: str
     summary: str
     sourceType: CandidateWorkSource
@@ -244,6 +291,8 @@ class CandidateWorkSourceSummaryView(BaseModel):
 
 
 class CandidateWorkView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     title: str
     requestedOutcome: str
@@ -260,6 +309,12 @@ class CandidateWorkView(BaseModel):
     promotedWorkItemId: str | None = None
     sourceSummary: CandidateWorkSourceSummaryView | None = None
     importMetadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _candidate_work_result_must_be_strict(cls, value):
+        _strict_contract_payload(value, cls, path="candidateWork")
+        return value
 
 
 class CandidateWorkListApiEnvelope(BaseModel):
@@ -382,6 +437,8 @@ class WorkItemBranchPreparationRequest(BaseModel):
 
 
 class WorkItemDeliveryReadinessView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     pullRequestStatus: str
     pullRequestUrl: str | None = None
     ciStatus: str
@@ -394,6 +451,8 @@ class WorkItemDeliveryReadinessView(BaseModel):
 
 
 class WorkItemPolicyGateView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     label: str
     requiredBefore: str
@@ -402,6 +461,8 @@ class WorkItemPolicyGateView(BaseModel):
 
 
 class WorkItemRemoteAutomationPolicyView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: str
     summary: str
     allowedOperations: list[str]
@@ -5394,6 +5455,8 @@ class RoutingOverrideView(BaseModel):
 
 
 class WorkItemExecutionRecipeView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     label: str
     summary: str
@@ -6187,6 +6250,8 @@ class DeliveryApprovalLedgerEntryView(BaseModel):
 
 
 class DeliveryExecutionEvidenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     evidenceId: str
     mode: str
     actionId: str
@@ -6213,6 +6278,15 @@ class DeliveryExecutionEvidenceView(BaseModel):
     cleanupAllowed: bool = False
     externalMutationRecorded: bool = False
     remoteMutationPerformed: bool = False
+
+
+class DeliveryExecutionEvidenceApiEnvelope(BaseModel):
+    """Typed metadata-only response boundary for delivery execution evidence."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DeliveryExecutionEvidenceView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class CleanupPlanResidueView(BaseModel):
@@ -6507,6 +6581,8 @@ class DeliveryReadinessPolicyReportApiEnvelope(BaseModel):
 
 
 class WorkItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     title: str
     requestedOutcome: str
@@ -6538,6 +6614,12 @@ class WorkItemView(BaseModel):
     requiresAudit: bool
     auditMode: AuditMode
 
+    @model_validator(mode="before")
+    @classmethod
+    def _work_item_view_must_be_strict(cls, value):
+        _strict_contract_payload(value, cls, path="workItem")
+        return value
+
 
 class WorkItemApiEnvelope(BaseModel):
     """Typed response boundary for a supervisor-owned WorkItem detail."""
@@ -6545,7 +6627,39 @@ class WorkItemApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: WorkItemView
-    meta: dict[str, Any] | None = None
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _work_item_result_must_be_strict(cls, value):
+        if isinstance(value, dict) and "data" in value:
+            _strict_contract_payload(value["data"], WorkItemView, path="data")
+        return value
+
+
+class CandidateWorkPromotionView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    candidateWork: CandidateWorkView
+    workItem: WorkItemView
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promotion_children_must_reject_unknown_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        _strict_contract_payload(value.get("candidateWork"), CandidateWorkView, path="candidateWork")
+        _strict_contract_payload(value.get("workItem"), WorkItemView, path="workItem")
+        return value
+
+
+class CandidateWorkPromotionApiEnvelope(BaseModel):
+    """Typed response boundary for supervisor-owned candidate promotion."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: CandidateWorkPromotionView
+    meta: dict[str, str | int | float | bool | None] | None = None
 
 
 class WorkItemListApiEnvelope(BaseModel):

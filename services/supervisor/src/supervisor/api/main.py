@@ -26,6 +26,7 @@ from supervisor.api.schemas import (
     CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
     CandidateWorkApiEnvelope,
+    CandidateWorkPromotionApiEnvelope,
     CandidateWorkListApiEnvelope,
     ExecutionConfigurationChecksApiEnvelope,
     ExecutionReadinessReportApiEnvelope,
@@ -85,6 +86,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
     DeliveryExecutionEvidencePayload,
+    DeliveryExecutionEvidenceApiEnvelope,
     ExecutionAttemptApiEnvelope,
     ExecutionRecipeListApiEnvelope,
     RoutingLaneProfileListApiEnvelope,
@@ -902,7 +904,7 @@ async def update_candidate_work(
     return CandidateWorkApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
-@app.post("/candidate-work/{candidate_work_id}/promote", response_model=ApiEnvelope)
+@app.post("/candidate-work/{candidate_work_id}/promote", response_model=CandidateWorkPromotionApiEnvelope)
 async def promote_candidate_work(candidate_work_id: str, session: AsyncSession = Depends(get_session)):
     try:
         promoted = await service.promote_candidate_work(session, candidate_work_id)
@@ -911,7 +913,9 @@ async def promote_candidate_work(candidate_work_id: str, session: AsyncSession =
     if not promoted:
         raise HTTPException(status_code=404, detail=error_response("Candidate work not found.", "candidate_work_not_found").model_dump())
     candidate, item = promoted
-    return ApiEnvelope(data={"candidateWork": service.to_candidate_work_view(candidate), "workItem": service.to_work_item_view(item)})
+    return CandidateWorkPromotionApiEnvelope(
+        data={"candidateWork": service.to_candidate_work_view(candidate), "workItem": service.to_work_item_view(item)}
+    )
 
 
 @app.get("/work-items", response_model=WorkItemListApiEnvelope)
@@ -1327,7 +1331,7 @@ async def create_work_item_subscription_agent_launch(
         raise HTTPException(status_code=404, detail=error_response("Subscription agent launch request not found.", "subscription_agent_launch_not_found").model_dump())
     return ApiEnvelope(data=launch)
 
-@app.post("/work-items/{work_item_id}/prepare-branch", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/prepare-branch", response_model=WorkItemApiEnvelope)
 async def prepare_work_item_branch(
     work_item_id: str,
     payload: WorkItemBranchPreparationRequest,
@@ -1342,7 +1346,7 @@ async def prepare_work_item_branch(
         ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=service.to_work_item_view(item))
+    return WorkItemApiEnvelope(data=service.to_work_item_view(item))
 
 
 @app.get("/work-items/{work_item_id}/local-worktree-plan", response_model=LocalWorktreePlanApiEnvelope)
@@ -1643,7 +1647,7 @@ async def get_work_item_cleanup_plan(
     return CleanupPlanApiEnvelope(data=plan)
 
 
-@app.post("/work-items/{work_item_id}/delivery-execution-evidence", response_model=ApiEnvelope)
+@app.post("/work-items/{work_item_id}/delivery-execution-evidence", response_model=DeliveryExecutionEvidenceApiEnvelope)
 async def record_work_item_delivery_execution_evidence(
     work_item_id: str,
     payload: DeliveryExecutionEvidencePayload,
@@ -1655,7 +1659,7 @@ async def record_work_item_delivery_execution_evidence(
         raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_delivery_execution_evidence").model_dump())
     if evidence is None:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
-    return ApiEnvelope(data=evidence)
+    return DeliveryExecutionEvidenceApiEnvelope(data=evidence)
 
 
 @app.get("/supervisor/local-cleanup-readiness-report", response_model=LocalCleanupReadinessReportApiEnvelope)
