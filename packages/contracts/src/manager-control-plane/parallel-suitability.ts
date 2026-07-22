@@ -55,12 +55,26 @@ export interface ExecutionJob {
   nextSafeAction: string;
 }
 
+/** Compact, normalized capacity policy for an advisory wave; never host telemetry or provider authority. */
+export interface ParallelCapacityDecision {
+  schemaVersion: "parallel-capacity-decision/v1";
+  posture: "normal" | "degraded" | "blocked";
+  writerCap: number;
+  readOnlyCap: number;
+  totalCap: number;
+  externalRouteAllowance: 0;
+  reasonCode: string;
+  reason: string;
+  nextSafeAction: string;
+}
+
 export interface ParallelSuitabilityReport {
   schemaVersion: typeof PARALLEL_EXECUTION_GRAPH_RESERVATION_SCHEMA_VERSION;
   generatedAt: string;
   recommendation: {
     status: "advisory_only";
     maxSelected: number;
+    capacity: ParallelCapacityDecision;
     selectedExecutionJobIds: readonly ExecutionJobId[];
     deferredExecutionJobIds: readonly ExecutionJobId[];
     blockedExecutionJobIds: readonly ExecutionJobId[];

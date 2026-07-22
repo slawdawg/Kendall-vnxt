@@ -279,6 +279,23 @@ worker, call a provider, merge, or clean up. Existing `dispatch-next --apply`,
 ownership/takeover, exact-head delivery, and cleanup gates remain the only
 mutation boundaries.
 
+`recommendation.capacity` is a compact, metadata-only capacity decision. With
+current normalized `normal` resource and usage posture, it permits at most two
+`read_write` entries, two valid immutable `read_only` entries, and four total.
+Its `externalRouteAllowance` is always `0`: this report does not authorize a
+provider route or call. Missing, unavailable, unknown, warm, or pressured
+capacity evidence is `degraded`, with at most one writer and no read-only route
+allowance. If normalized pressure is also an existing no-new-dispatch stop
+line, the report is `blocked` and selects nothing. A `critical` resource
+posture or an existing usage/dispatch stop line is likewise `blocked`; it
+preserves all existing candidate,
+ownership, assignment, delivery, and baseline blocks.
+
+For a degraded or blocked capacity decision, refresh the existing normalized
+resource and usage evidence and rebuild the report. Do not substitute raw host
+output, infer normal capacity from absent evidence, or use a retry to dispatch,
+launch a worker, call a provider, write a lease, merge, or clean up.
+
 A selected `read_only` entry is an **immutable review candidate**, not a review
 result. It may appear beside a non-overlapping writer only when it carries a
 full exact Git head, a `sha256:` digest, metadata-only source references, no

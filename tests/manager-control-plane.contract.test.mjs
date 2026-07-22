@@ -628,7 +628,7 @@ test("Parallel suitability contracts keep graph and reservations metadata-only a
   const schemaSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
   const idsSource = await readFile(new URL("ids.ts", managerRoot), "utf8");
 
-  for (const exportedName of ["ChangeSurface", "ReservationLease", "ImmutableReviewInput", "ExecutionJob", "ParallelSuitabilityReport"]) {
+  for (const exportedName of ["ChangeSurface", "ReservationLease", "ImmutableReviewInput", "ExecutionJob", "ParallelCapacityDecision", "ParallelSuitabilityReport"]) {
     assert.match(parallelSource, new RegExp(`export (type|interface) ${exportedName}\\b`), `missing ${exportedName}`);
   }
   for (const literal of ["parallel-execution-graph-reservation/v1", "advisory_reserved", "deferred", "blocked", "read_only", "metadata_only_evidence_references"]) {
@@ -646,6 +646,16 @@ test("Parallel suitability contracts keep graph and reservations metadata-only a
     "ExecutionJob serialized fields",
     ["execution_job_id", "read_write_mode", "change_surface", "immutable_review", "baseline_scope", "reservation_lease", "lifecycle_status", "evidence_refs", "next_safe_action"],
     extractConstArray(schemaSource, "EXECUTION_JOB_SERIALIZED_FIELDS"),
+  );
+  assertRequiredFields(
+    "ParallelCapacityDecision serialized fields",
+    ["schema_version", "posture", "writer_cap", "read_only_cap", "total_cap", "external_route_allowance", "reason_code", "reason", "next_safe_action"],
+    extractConstArray(schemaSource, "PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS"),
+  );
+  assert.equal(
+    (schemaSource.match(/ParallelCapacityDecision: PARALLEL_CAPACITY_DECISION_SERIALIZED_FIELDS/g) || []).length,
+    2,
+    "capacity fields must be available from the generic and required contract registries",
   );
 });
 
