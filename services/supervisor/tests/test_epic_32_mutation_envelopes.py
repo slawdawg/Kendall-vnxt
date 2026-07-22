@@ -85,6 +85,12 @@ def test_epic_32_envelopes_reject_unknown_and_non_scalar_metadata() -> None:
             WorkItemView,
             path="prepare.data",
         )
+    with pytest.raises(ValueError):
+        _strict_contract_payload(
+            {"executionRecipe": {"remoteAutomationPolicy": {"unexpected": True}}},
+            WorkItemView,
+            path="prepare.data",
+        )
 
 def test_epic_32_envelopes_accept_null_and_scalar_metadata() -> None:
     evidence = {
