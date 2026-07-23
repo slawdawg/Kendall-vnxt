@@ -80,6 +80,7 @@ first pass when only one surface changed.
 `pnpm run check:fast`,
 `pnpm run test:check-plan`,
 `pnpm run test:supervisor-runner`,
+`pnpm run test:supervisor:review-route`,
 `pnpm run test:static-bundles`,
 `pnpm run test:review-gated-low-risk-automation`,
 `pnpm run test:review-gated-low-risk-fake-adapter`,
@@ -159,4 +160,9 @@ verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run test:anti-churn-source-apply`,
 `pnpm run test:anti-churn-verification-rollback`,
 `pnpm run test:dashboard-e2e-runner`, `pnpm run build:dashboard`,
-`pnpm run test:supervisor-runner`, and `pnpm run test:supervisor`.
+`pnpm run test:supervisor-runner`, `pnpm run test:supervisor:review-route`, and
+`pnpm run test:supervisor`.
+
+`pnpm run test:supervisor:review-route` is the focused report-only Disclosure
+Packet parity check. It validates no-provider route behavior without calling a
+provider, invoking an adapter, or granting execution authority.
