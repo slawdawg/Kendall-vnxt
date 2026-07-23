@@ -3092,6 +3092,28 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
         )
         assert unavailable_detail["reviewRoute"]["availability"] == "unavailable"
         assert unavailable_detail["reviewRoute"]["routeState"] == "unavailable"
+        unsafe_historical_packet_id = "packet-" + "a1" * 20
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as connection:
+            connection.execute(
+                "UPDATE authoritative_work_packet_lifecycle_events SET packet_id = ? WHERE packet_id = ?",
+                (unsafe_historical_packet_id, packet_id),
+            )
+            connection.execute(
+                "UPDATE authoritative_work_packets SET id = ? WHERE id = ?",
+                (unsafe_historical_packet_id, packet_id),
+            )
+            connection.commit()
+        unsafe_projection = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
+        assert unsafe_projection.status_code == 200
+        unsafe_detail = next(
+            item
+            for item in unsafe_projection.json()["data"]["selectedPacketDetails"]
+            if item["packetId"] == unsafe_historical_packet_id
+        )
+        assert unsafe_detail["reviewRoute"]["availability"] == "unavailable"
+        assert unsafe_detail["reviewRoute"]["packetId"] == "unavailable-review-route-packet"
+        assert unsafe_detail["workGraph"]["availability"] == "unavailable"
+        assert unsafe_detail["workGraph"]["packetId"] == "unavailable-work-graph-packet"
 
 
 def test_parallel_work_graph_refresh_keeps_newer_concurrent_evidence_current(tmp_path, monkeypatch) -> None:

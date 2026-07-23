@@ -287,6 +287,7 @@ from supervisor.api.schemas import (
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
+    _is_safe_review_route_packet_id,
     _validate_authoritative_metadata_text,
     _validate_metadata_tree,
     _validate_work_item_scalar_text,
@@ -6923,11 +6924,12 @@ class SupervisorService:
         return source_states
 
     def _unavailable_pipeline_work_graph(self, packet_id: str) -> PipelineWorkGraphEvidenceV0View:
-        """Return a truthful detail-only fallback; it never grants an action."""
+        """Return a truthful fallback without reflecting unsafe persisted identities."""
+        safe_packet_id = packet_id if _is_safe_review_route_packet_id(packet_id) else "unavailable-work-graph-packet"
         return PipelineWorkGraphEvidenceV0View(
             availability="unavailable",
             sourceSchemaVersion="parallel-execution-graph-reservation/v1",
-            packetId=packet_id,
+            packetId=safe_packet_id,
             executionJobId=None,
             generatedAt=None,
             freshnessState="unavailable",
@@ -6951,10 +6953,11 @@ class SupervisorService:
         )
 
     def _unavailable_pipeline_review_route(self, packet_id: str) -> PipelineReviewRouteEvidenceV0View:
-        """Return a truthful detail-only fallback that cannot imply execution."""
+        """Return a truthful fallback without reflecting unsafe persisted identities."""
+        safe_packet_id = packet_id if _is_safe_review_route_packet_id(packet_id) else "unavailable-review-route-packet"
         return PipelineReviewRouteEvidenceV0View(
             availability="unavailable",
-            packetId=packet_id,
+            packetId=safe_packet_id,
             routeState="unavailable",
             reasonCode="review_evidence_unavailable",
             reason="Review evidence unavailable.",
