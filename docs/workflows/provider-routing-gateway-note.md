@@ -71,6 +71,25 @@ re-evaluate the metadata-only packet. Live use or promotion involving a private
 diff remains a separately governed high-risk change with its own authority,
 data-boundary, and retention review.
 
+## Simulated Normalized Findings
+
+The fixed `simulated-review-adapter/v1` is a deterministic fixture only. It
+accepts one valid simulated Disclosure Packet and emits compact, provider-neutral
+Normalized Findings for contract and recovery testing. It sends no packet to
+Claude, Ollama, or any other provider, and it has no tools, network, process,
+browser, credential, or raw-content operation.
+
+Every finding is bound to the packet's exact reviewed head and digest. A changed
+head or digest makes prior results `stale`; stale results contain no findings,
+are ineligible as delivery evidence, and require reissuing a current packet and
+re-evaluating. Policy vetoes, capability/resource blocks, timeouts, and terminal
+packets similarly return typed non-executing no-findings results. Any live route
+or private-diff promotion remains out of scope for this simulated slice.
+
+This pure fixture does not persist a single-use consumption claim. Its completed
+result is therefore not delivery-evidence eligible: a future runtime slice must
+atomically record and verify consumption before any evidence decision can use it.
+
 ## Non-Goals
 
 - Do not allow raw `claude`, `codex`, `ollama`, or future provider calls from

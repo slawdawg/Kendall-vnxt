@@ -3,6 +3,25 @@ export type ReviewRouteState = "report_only" | "simulated" | "blocked";
 
 export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1" as const;
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1" as const;
+export const NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1" as const;
+export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1" as const;
+export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-adapter/v1" as const;
+
+/** The only adapter identifier accepted for simulated review. It has no tools. */
+export type ReviewRouteAdapterId = "none" | typeof SIMULATED_REVIEW_ADAPTER_ID;
+export type NormalizedFindingSeverity = "info" | "low" | "medium" | "high";
+export type SimulatedReviewResultState = "completed" | "stale" | "blocked";
+export type SimulatedReviewResultCode =
+  | "simulated_completed"
+  | "simulated_deduplicated"
+  | "immutable_identity_stale"
+  | "packet_invalid"
+  | "packet_already_used"
+  | "decision_invalid"
+  | "simulation_timeout"
+  | "policy_vetoed"
+  | "capability_unsupported"
+  | "resource_blocked";
 
 export interface ImmutableReviewIdentity {
   executionJobId: string;
@@ -62,7 +81,7 @@ export interface DisclosurePacket {
   disclosurePacketId: string;
   immutableReview: ImmutableReviewIdentity;
   routeAllowlist: readonly string[];
-  adapterAllowlist: readonly string[];
+  adapterAllowlist: readonly ReviewRouteAdapterId[];
   toolAllowlist: readonly string[];
   authority: DisclosurePacketAuthority;
   issuance: DisclosurePacketIssuance;
@@ -72,4 +91,34 @@ export interface DisclosurePacket {
   };
   metadataOnly: true;
   rawPayloadRetained: false;
+}
+
+/** Provider-neutral, metadata-only simulated finding. */
+export interface NormalizedFinding {
+  schemaVersion: typeof NORMALIZED_FINDING_SCHEMA_VERSION;
+  findingId: string;
+  rule: string;
+  severity: NormalizedFindingSeverity;
+  pathOrRef: string;
+  lineOrRange: string;
+  summary: string;
+  remediation: string;
+  reviewedHead: string;
+  digest: string;
+}
+
+/** Pure simulation outcome. `blocked` and `stale` never carry findings. */
+export interface SimulatedReviewResult {
+  schemaVersion: typeof SIMULATED_REVIEW_RESULT_SCHEMA_VERSION;
+  adapterId: typeof SIMULATED_REVIEW_ADAPTER_ID;
+  state: SimulatedReviewResultState;
+  code: SimulatedReviewResultCode;
+  findings: readonly NormalizedFinding[];
+  disclosurePacketId: string | null;
+  decisionId: string | null;
+  reviewedHead: string | null;
+  digest: string | null;
+  deliveryEvidenceEligible: boolean;
+  safeFallback: ReviewRouteFallback;
+  execution: "none";
 }

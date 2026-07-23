@@ -1,8 +1,13 @@
+import hashlib
+
 from supervisor.domain.review_route import (
     DISCLOSURE_PACKET_MAX_UTF8_BYTES,
+    SIMULATED_REVIEW_ADAPTER_ID,
     disclosure_packet_utf8_bytes,
     is_disclosure_packet_size_allowed,
     validate_disclosure_packet,
+    validate_normalized_finding,
+    validate_simulated_review_result,
 )
 
 
@@ -54,6 +59,28 @@ def test_disclosure_packet_python_contract_matches_report_only_shape() -> None:
     assert validate_disclosure_packet(
         _packet(), now=NOW, route_policy=_policy(), immutable_review={"executionJobId": "execution-job:review-35-1", "exactHead": EXACT_HEAD, "digest": DIGEST}
     ) == {"ok": True, "reasons": []}
+
+
+def test_disclosure_packet_python_contract_matches_simulated_adapter_pair() -> None:
+    policy = {**_policy(), "adapterAllowlist": ["none", SIMULATED_REVIEW_ADAPTER_ID]}
+    packet = {**_packet(), "routeAllowlist": ["simulated"], "adapterAllowlist": [SIMULATED_REVIEW_ADAPTER_ID]}
+    assert validate_disclosure_packet(packet, now=NOW, route_policy=policy) == {"ok": True, "reasons": []}
+
+    mismatch = validate_disclosure_packet({**packet, "adapterAllowlist": ["none"]}, now=NOW, route_policy=policy)
+    assert mismatch["ok"] is False
+    assert "route_adapter_pair_invalid" in mismatch["reasons"]
+
+
+def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
+    key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:1:simulated-metadata-boundary/v1"
+    finding = {"schemaVersion": "normalized-finding/v1", "findingId": f"normalized-finding:sha256:{hashlib.sha256(key.encode()).hexdigest()}", "rule": "simulated-metadata-boundary/v1", "severity": "info", "pathOrRef": "metadata:review-route", "lineOrRange": "1", "summary": "Bounded fixture finding.", "remediation": "Re-evaluate the bounded fixture.", "reviewedHead": EXACT_HEAD, "digest": DIGEST}
+    assert validate_normalized_finding(finding)["ok"] is True
+    assert validate_normalized_finding({**finding, "prompt": "no"})["ok"] is False
+    result = {"schemaVersion": "simulated-review-result/v1", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [finding], "disclosurePacketId": "disclosure-packet:review-35-1", "decisionId": "review-route-decision:fixture", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
+    assert validate_simulated_review_result(result)["ok"] is True
+    assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]})["ok"] is False
+    assert validate_simulated_review_result({**result, "deliveryEvidenceEligible": True})["ok"] is False
+    assert validate_simulated_review_result({**result, "code": "simulated_deduplicated", "findings": [finding]})["ok"] is False
 
 
 def test_disclosure_packet_python_contract_fails_closed_for_unsafe_or_stale_inputs() -> None:

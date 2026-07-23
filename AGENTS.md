@@ -262,6 +262,18 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   delegation mechanism is available and all safe progress is blocked; record the
   exception, reason, touched files or operations, verification, and why waiting
   would block progress.
+- Parallel development is the default for nontrivial epic work. At each phase,
+  identify independent research, planning, implementation, verification,
+  review, documentation, and delivery-preparation tracks, then dispatch them
+  to separately owned managed lanes or workers when their write surfaces and
+  contracts do not overlap. Do not serialize independent work merely for
+  coordinator convenience.
+- Serialize only true dependencies or overlapping/high-risk surfaces, including
+  a shared contract or source file, migrations, authority/policy changes, and
+  final delivery or cleanup. Record the dependency and actively dispatch newly
+  unlocked work while other lanes wait for CI, review, or an external gate.
+  Parallel lanes retain the same BMAD, review, authority, evidence, and
+  delivery requirements; concurrency never permits a lane to bypass them.
 - Claude Code CLI read-only review is a durable approved review lane when all
   of these are true: the operator asks for Claude review or the active
   end-to-end lane explicitly calls for independent Claude critique; the command

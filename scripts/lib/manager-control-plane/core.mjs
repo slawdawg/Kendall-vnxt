@@ -50,6 +50,12 @@ export {
 } from "./review-route.mjs";
 
 export {
+  evaluateSimulatedReview,
+  NORMALIZED_FINDING_SCHEMA_VERSION,
+  SIMULATED_REVIEW_RESULT_SCHEMA_VERSION,
+} from "./simulated-review-adapter.mjs";
+
+export {
   buildOperationalReadinessContract,
   validateOperationalReadinessContract,
   projectCanonicalSupervisorPacket,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -7,6 +8,7 @@ import {
   DISCLOSURE_PACKET_MAX_UTF8_BYTES,
   disclosurePacketUtf8Bytes,
   evaluateReviewRoute,
+  evaluateSimulatedReview,
   isDisclosurePacketSizeAllowed,
   validateDisclosurePacket,
 } from "../scripts/lib/manager-control-plane/core.mjs";
@@ -66,7 +68,12 @@ test("review route produces canonical report-only decision and metadata-only dis
 
 test("review route is deterministic and simulated stays non-executing", () => {
   const base = validInput();
-  const input = { ...base, requestedState: "simulated", disclosure: { ...base.disclosure, routeAllowlist: ["simulated"] } };
+  const input = {
+    ...base,
+    requestedState: "simulated",
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-adapter/v1"] },
+    disclosure: { ...base.disclosure, routeAllowlist: ["simulated"], adapterAllowlist: ["simulated-review-adapter/v1"] },
+  };
   const first = evaluateReviewRoute(input);
   const second = evaluateReviewRoute(input);
 
@@ -74,6 +81,127 @@ test("review route is deterministic and simulated stays non-executing", () => {
   assert.equal(first.decision.state, "simulated");
   assert.equal(first.decision.execution, "none");
   assert.match(first.decision.safeFallback.action, /report_only|re_evaluate/);
+});
+
+function simulatedInput(overrides = {}) {
+  const base = validInput();
+  const preparation = evaluateReviewRoute({
+    ...base,
+    requestedState: "simulated",
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-adapter/v1"] },
+    disclosure: { ...base.disclosure, routeAllowlist: ["simulated"], adapterAllowlist: ["simulated-review-adapter/v1"] },
+  });
+  return {
+    packet: preparation.packet,
+    decision: preparation.decision,
+    now: NOW,
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-adapter/v1"] },
+    currentImmutableReview: base.immutableReview,
+    ...overrides,
+  };
+}
+
+test("simulated adapter returns a deterministic metadata-only normalized finding", () => {
+  const first = evaluateSimulatedReview(simulatedInput());
+  const second = evaluateSimulatedReview(simulatedInput());
+
+  assert.deepEqual(first, second);
+  assert.equal(first.state, "completed");
+  assert.equal(first.code, "simulated_completed");
+  assert.equal(first.execution, "none");
+  assert.equal(first.deliveryEvidenceEligible, false);
+  assert.equal(first.findings.length, 1);
+  assert.equal(first.disclosurePacketId, "disclosure-packet:review-35-1");
+  assert.match(first.decisionId, /^review-route-decision:sha256:/);
+  assert.deepEqual(Object.keys(first.findings[0]).sort(), ["digest", "findingId", "lineOrRange", "pathOrRef", "remediation", "reviewedHead", "rule", "schemaVersion", "severity", "summary"].sort());
+  assert.equal(first.findings[0].reviewedHead, EXACT_HEAD);
+  assert.equal(first.findings[0].digest, DIGEST);
+});
+
+test("simulated adapter marks changed identity stale and deduplicates only its exact key", () => {
+  const first = evaluateSimulatedReview(simulatedInput());
+  const deduplicated = evaluateSimulatedReview(simulatedInput({ priorFindings: first.findings }));
+  assert.equal(deduplicated.state, "completed");
+  assert.equal(deduplicated.code, "simulated_deduplicated");
+  assert.deepEqual(deduplicated.findings, []);
+
+  const distinct = { ...first.findings[0], lineOrRange: "2" };
+  distinct.findingId = `normalized-finding:sha256:${createHash("sha256").update(`${distinct.reviewedHead}:${distinct.digest}:${distinct.pathOrRef}:${distinct.lineOrRange}:${distinct.rule}`).digest("hex")}`;
+  const distinctResult = evaluateSimulatedReview(simulatedInput({ priorFindings: [distinct] }));
+  assert.equal(distinctResult.state, "completed");
+  assert.equal(distinctResult.findings.length, 1);
+
+  const stale = evaluateSimulatedReview(simulatedInput({ currentImmutableReview: { ...validInput().immutableReview, exactHead: "d".repeat(40) } }));
+  assert.equal(stale.state, "stale");
+  assert.equal(stale.code, "immutable_identity_stale");
+  assert.equal(stale.deliveryEvidenceEligible, false);
+  assert.deepEqual(stale.findings, []);
+});
+
+test("simulated adapter returns typed no-findings fallback without execution", () => {
+  const cases = [
+    [{ fallback: "timeout" }, "simulation_timeout"],
+    [{ routePolicy: { ...simulatedInput().routePolicy, policyState: "vetoed" } }, "policy_vetoed"],
+    [{ routePolicy: { ...simulatedInput().routePolicy, capabilityState: "unsupported" } }, "capability_unsupported"],
+    [{ routePolicy: { ...simulatedInput().routePolicy, resourceState: "blocked" } }, "resource_blocked"],
+  ];
+  for (const [overrides, code] of cases) {
+    const result = evaluateSimulatedReview(simulatedInput(overrides));
+    assert.equal(result.state, "blocked");
+    assert.equal(result.code, code);
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.deliveryEvidenceEligible, false);
+    assert.equal(result.execution, "none");
+  }
+});
+
+test("simulated adapter rejects malformed identities and duplicate finding keys", () => {
+  const first = evaluateSimulatedReview(simulatedInput());
+  const duplicate = evaluateSimulatedReview(simulatedInput({ priorFindings: [first.findings[0], { ...first.findings[0], findingId: "normalized-finding:duplicate" }] }));
+  assert.equal(duplicate.state, "blocked");
+  assert.equal(duplicate.findings.length, 0);
+  const hostile = new Proxy(simulatedInput(), { getOwnPropertyDescriptor() { throw new Error("trap"); } });
+  assert.equal(evaluateSimulatedReview(hostile).state, "blocked");
+  let descriptorReads = 0;
+  const stateful = new Proxy(simulatedInput(), {
+    getOwnPropertyDescriptor(target, key) {
+      descriptorReads += 1;
+      if (descriptorReads > 12) throw new Error("late trap");
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const statefulResult = evaluateSimulatedReview(stateful);
+  assert.equal(statefulResult.state, "blocked");
+  assert.equal(statefulResult.code, "decision_invalid");
+  let serialized = false;
+  const hookedFinding = { ...first.findings[0], toJSON() { serialized = true; return {}; } };
+  assert.equal(evaluateSimulatedReview(simulatedInput({ priorFindings: [hookedFinding] })).state, "blocked");
+  assert.equal(serialized, false);
+});
+
+test("simulated adapter binds canonical simulated authority and supplied one-time consumption", () => {
+  const prepared = simulatedInput();
+  const reportOnly = evaluateReviewRoute(validInput());
+  const forged = evaluateSimulatedReview({ ...prepared, packet: reportOnly.packet, decision: { ...prepared.decision, disclosurePacketId: reportOnly.packet.disclosurePacketId } });
+  assert.equal(forged.state, "blocked");
+  assert.equal(forged.code, "decision_invalid");
+
+  const consumed = evaluateSimulatedReview(simulatedInput({ consumedDisclosurePacketIds: [prepared.packet.disclosurePacketId] }));
+  assert.equal(consumed.state, "blocked");
+  assert.equal(consumed.code, "packet_already_used");
+  assert.deepEqual(consumed.findings, []);
+
+  const first = evaluateSimulatedReview(simulatedInput());
+  const altered = { ...first.findings[0], summary: "Different bounded text." };
+  const result = evaluateSimulatedReview(simulatedInput({ priorFindings: [altered] }));
+  assert.equal(result.state, "blocked");
+  assert.equal(result.findings.length, 0);
+
+  const forgedAuthority = evaluateSimulatedReview(simulatedInput({ decision: { ...prepared.decision, authorityEvidence: { ...prepared.decision.authorityEvidence, authorityRef: "authority:forged" } } }));
+  assert.equal(forgedAuthority.state, "blocked");
+
+  const oversizedPrior = evaluateSimulatedReview(simulatedInput({ priorFindings: Array.from({ length: 33 }, (_, index) => ({ ...first.findings[0], findingId: `normalized-finding:${index}`, lineOrRange: String(index + 1) })) }));
+  assert.equal(oversizedPrior.state, "blocked");
 });
 
 test("review route fails closed for veto, unsupported capability, resource blocks, expiry, revocation, cancellation, future packets, and reused packets", () => {
@@ -276,6 +404,13 @@ test("review-route evaluator has no live adapter, child-process, network, or raw
   assert.doesNotMatch(source, /raw(?:Prompt|Completion|Transcript)|providerPayload|reasoningTrace/i);
 });
 
+test("simulated adapter has no live, process, network, browser, or local-explanation boundary", async () => {
+  const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../scripts/lib/manager-control-plane/simulated-review-adapter.mjs", import.meta.url), "utf8"));
+  assert.doesNotMatch(source, /node:(?:child_process|fs|http|https|net)|\bspawn\s*\(|\bexec(?:File|Sync)?\s*\(|\bfetch\s*\(|https?:\/\/|OllamaProviderAdapter|get_local_evidence_explanation|\bclaude\b|\bollama\b/i);
+  assert.match(source, /SIMULATED_REVIEW_ADAPTER_ID/);
+  assert.match(source, /execution:\s*"none"/);
+});
+
 test("manager control-plane drift check requires the report-only route test as a focused test segment", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const checker = await readFile(new URL("../scripts/check-manager-control-plane.mjs", import.meta.url), "utf8");
@@ -289,4 +424,5 @@ test("manager control-plane drift check requires the report-only route test as a
   assert.match(checker, /options\.pytestArgs\.length > 0 \? options\.pytestArgs : \["tests"\]/);
   assert.match(checker, /"services\/supervisor\/src\/supervisor\/domain\/review_route\.py"/);
   assert.match(checker, /"services\/supervisor\/tests\/integration\/test_review_route_packet\.py"/);
+  assert.match(checker, /"scripts\/lib\/manager-control-plane\/simulated-review-adapter\.mjs"/);
 });

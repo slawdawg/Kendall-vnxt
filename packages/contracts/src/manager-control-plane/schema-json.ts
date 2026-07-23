@@ -375,6 +375,34 @@ export const DISCLOSURE_PACKET_SERIALIZED_FIELDS = [
   "raw_payload_retained"
 ] as const;
 
+export const NORMALIZED_FINDING_SERIALIZED_FIELDS = [
+  "schema_version",
+  "finding_id",
+  "rule",
+  "severity",
+  "path_or_ref",
+  "line_or_range",
+  "summary",
+  "remediation",
+  "reviewed_head",
+  "digest"
+] as const;
+
+export const SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS = [
+  "schema_version",
+  "adapter_id",
+  "state",
+  "code",
+  "findings",
+  "disclosure_packet_id",
+  "decision_id",
+  "reviewed_head",
+  "digest",
+  "delivery_evidence_eligible",
+  "safe_fallback",
+  "execution"
+] as const;
+
 export const EVIDENCE_REF_SERIALIZED_FIELDS = [
   "evidence_ref_id",
   "evidence_type",
@@ -560,6 +588,8 @@ export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
   ImmutableReviewIdentity: IMMUTABLE_REVIEW_IDENTITY_SERIALIZED_FIELDS,
   ReviewRouteDecision: REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS,
   DisclosurePacket: DISCLOSURE_PACKET_SERIALIZED_FIELDS,
+  NormalizedFinding: NORMALIZED_FINDING_SERIALIZED_FIELDS,
+  SimulatedReviewResult: SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS,
   EvidenceRef: EVIDENCE_REF_SERIALIZED_FIELDS,
   ManagerRunPreauthorization: MANAGER_RUN_PREAUTHORIZATION_SERIALIZED_FIELDS,
   ImplementationRunTask: IMPLEMENTATION_RUN_TASK_SERIALIZED_FIELDS,

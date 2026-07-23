@@ -7,6 +7,7 @@ or invoke an adapter, access credentials, or perform a network operation.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,9 @@ from typing import Any
 
 DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1"
 DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024
+SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-adapter/v1"
+NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1"
+SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1"
 
 
 def disclosure_packet_utf8_bytes(value: object) -> int | None:
@@ -26,6 +30,58 @@ def disclosure_packet_utf8_bytes(value: object) -> int | None:
 def is_disclosure_packet_size_allowed(value: object) -> bool:
     encoded_size = disclosure_packet_utf8_bytes(value)
     return encoded_size is not None and encoded_size <= DISCLOSURE_PACKET_MAX_UTF8_BYTES
+
+
+def validate_normalized_finding(value: object) -> dict[str, object]:
+    fields = {"schemaVersion", "findingId", "rule", "severity", "pathOrRef", "lineOrRange", "summary", "remediation", "reviewedHead", "digest"}
+    if type(value) is not dict or set(value) != fields:
+        return _invalid("finding_malformed")
+    if value.get("schemaVersion") != NORMALIZED_FINDING_SCHEMA_VERSION or not _safe_id(value.get("findingId")) or not _safe_id(value.get("rule")) or not _safe_id(value.get("pathOrRef")):
+        return _invalid("finding_malformed")
+    if value.get("severity") not in {"info", "low", "medium", "high"} or not isinstance(value.get("lineOrRange"), str) or not re.fullmatch(r"[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?", value["lineOrRange"]):
+        return _invalid("finding_malformed")
+    if any(not isinstance(value.get(key), str) or not value[key] or len(value[key]) > 280 or _FORBIDDEN_TEXT.search(value[key]) for key in {"summary", "remediation"}):
+        return _invalid("finding_malformed")
+    if not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest")):
+        return _invalid("finding_malformed")
+    key = f"{value['reviewedHead']}:{value['digest']}:{value['pathOrRef']}:{value['lineOrRange']}:{value['rule']}"
+    if value["findingId"] != f"normalized-finding:sha256:{hashlib.sha256(key.encode()).hexdigest()}":
+        return _invalid("finding_malformed")
+    return {"ok": True, "reasons": []}
+
+
+def validate_simulated_review_result(value: object) -> dict[str, object]:
+    fields = {"schemaVersion", "adapterId", "state", "code", "findings", "disclosurePacketId", "decisionId", "reviewedHead", "digest", "deliveryEvidenceEligible", "safeFallback", "execution"}
+    if type(value) is not dict or set(value) != fields or value.get("schemaVersion") != SIMULATED_REVIEW_RESULT_SCHEMA_VERSION or value.get("adapterId") != SIMULATED_REVIEW_ADAPTER_ID or value.get("execution") != "none":
+        return _invalid("result_malformed")
+    if value.get("state") not in {"completed", "stale", "blocked"} or type(value.get("findings")) is not list or len(value["findings"]) > 32 or value.get("deliveryEvidenceEligible") is not False:
+        return _invalid("result_malformed")
+    if value["state"] != "completed" and (value["findings"] or value["deliveryEvidenceEligible"]):
+        return _invalid("result_malformed")
+    allowed_codes = {"completed": {"simulated_completed", "simulated_deduplicated"}, "stale": {"immutable_identity_stale"}, "blocked": {"packet_invalid", "packet_already_used", "decision_invalid", "simulation_timeout", "policy_vetoed", "capability_unsupported", "resource_blocked"}}
+    if value.get("code") not in allowed_codes[value["state"]] or type(value.get("safeFallback")) is not dict or set(value["safeFallback"]) != {"action", "summary"} or value["safeFallback"].get("action") not in {"retain_report_only", "re_evaluate", "reissue_disclosure_packet", "resolve_policy_block"} or not isinstance(value["safeFallback"].get("summary"), str) or not value["safeFallback"]["summary"] or len(value["safeFallback"]["summary"]) > 280 or _FORBIDDEN_TEXT.search(value["safeFallback"]["summary"]):
+        return _invalid("result_malformed")
+    if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _safe_id(value.get("decisionId")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
+        return _invalid("result_malformed")
+    if value["state"] == "completed" and ((value["code"] == "simulated_completed") != bool(value["findings"])):
+        return _invalid("result_malformed")
+    if value["code"] == "simulated_completed" and len(value["findings"]) != 1:
+        return _invalid("result_malformed")
+    if value["code"] == "simulated_deduplicated" and value["findings"]:
+        return _invalid("result_malformed")
+    if value["state"] == "stale" and (not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
+        return _invalid("result_malformed")
+    if value["state"] != "completed" and (value.get("disclosurePacketId") is not None or value.get("decisionId") is not None):
+        return _invalid("result_malformed")
+    if value.get("reviewedHead") is not None and not _exact_head(value.get("reviewedHead")):
+        return _invalid("result_malformed")
+    if value.get("digest") is not None and not _digest(value.get("digest")):
+        return _invalid("result_malformed")
+    if any(not validate_normalized_finding(item)["ok"] for item in value["findings"]):
+        return _invalid("result_malformed")
+    if any(item["reviewedHead"] != value.get("reviewedHead") or item["digest"] != value.get("digest") for item in value["findings"]):
+        return _invalid("result_malformed")
+    return {"ok": True, "reasons": []}
 
 _PACKET_FIELDS = frozenset(
     {
@@ -72,7 +128,7 @@ def validate_disclosure_packet(
         reasons.append("packet_id_invalid")
     _validate_identity(packet.get("immutableReview"), reasons, immutable_review)
     _validate_string_list(packet.get("routeAllowlist"), "route", reasons, {"report_only", "simulated"})
-    _validate_string_list(packet.get("adapterAllowlist"), "adapter", reasons, {"none"})
+    _validate_string_list(packet.get("adapterAllowlist"), "adapter", reasons, {"none", SIMULATED_REVIEW_ADAPTER_ID})
     _validate_string_list(packet.get("toolAllowlist"), "tool", reasons, {"none"})
     _validate_subset(packet.get("routeAllowlist"), _policy_list(route_policy, "routeAllowlist"), "route", reasons)
     _validate_subset(packet.get("adapterAllowlist"), _policy_list(route_policy, "adapterAllowlist"), "adapter", reasons)
@@ -80,6 +136,7 @@ def validate_disclosure_packet(
     _validate_authority(packet.get("authority"), reasons)
     _validate_issuance(packet.get("issuance"), now, reasons)
     _validate_scope(packet.get("scope"), reasons)
+    _validate_route_adapter_pair(packet.get("routeAllowlist"), packet.get("adapterAllowlist"), reasons)
     if packet.get("metadataOnly") is not True or packet.get("rawPayloadRetained") is not False:
         reasons.append("metadata_boundary_invalid")
     encoded_size = disclosure_packet_utf8_bytes(packet)
@@ -185,9 +242,18 @@ def _validate_evidence_refs(value: object, reasons: list[str]) -> None:
 
 
 def _validate_subset(values: object, allowed: object, label: str, reasons: list[str]) -> None:
-    fixed_values = {"report_only", "simulated"} if label == "route" else {"none"}
+    fixed_values = {"report_only", "simulated"} if label == "route" else ({"none", SIMULATED_REVIEW_ADAPTER_ID} if label == "adapter" else {"none"})
     if type(values) is not list or not _valid_string_list(allowed, fixed_values) or any(value not in allowed for value in values):
         reasons.append(f"{label}_not_allowed")
+
+
+def _validate_route_adapter_pair(route_allowlist: object, adapter_allowlist: object, reasons: list[str]) -> None:
+    if type(route_allowlist) is not list or type(adapter_allowlist) is not list or len(route_allowlist) != 1 or len(adapter_allowlist) != 1:
+        reasons.append("route_adapter_pair_invalid")
+        return
+    expected = "none" if route_allowlist[0] == "report_only" else SIMULATED_REVIEW_ADAPTER_ID
+    if adapter_allowlist[0] != expected:
+        reasons.append("route_adapter_pair_invalid")
 
 
 def _inspect_fields(value: dict[str, object], allowed: frozenset[str], reasons: list[str]) -> None:

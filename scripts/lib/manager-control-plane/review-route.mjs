@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1";
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1";
+export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-adapter/v1";
 export const DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024;
 
 export function disclosurePacketUtf8Bytes(value) {
@@ -31,6 +32,7 @@ const DISCLOSURE_INPUT_REQUIRED_FIELDS = DISCLOSURE_INPUT_FIELDS;
 const REVIEW_ROUTE_INPUT_FIELDS = Object.freeze(["now", "immutableReview", "authority", "routePolicy", "disclosure", "consumedDisclosurePacketIds", "requestedState"]);
 const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
 const ROUTE_ALLOWLIST_VALUES = Object.freeze(["report_only", "simulated"]);
+const ADAPTER_ALLOWLIST_VALUES = Object.freeze(["none", SIMULATED_REVIEW_ADAPTER_ID]);
 const NONE_ALLOWLIST_VALUES = Object.freeze(["none"]);
 const SAFE_ID = /^[A-Za-z][A-Za-z0-9._:/-]{1,180}$/;
 const SAFE_EVIDENCE_REF = /^evidence:sha256:[0-9a-f]{64}$/;
@@ -80,7 +82,7 @@ export function validateDisclosurePacket(packet, options = {}) {
     if (!safeId(packet.disclosurePacketId)) reasons.push("packet_id_invalid");
     validateImmutableReview(packet.immutableReview, reasons, options.immutableReview);
     validateStringList(packet.routeAllowlist, "route", reasons, ROUTE_ALLOWLIST_VALUES);
-    validateStringList(packet.adapterAllowlist, "adapter", reasons, NONE_ALLOWLIST_VALUES);
+    validateStringList(packet.adapterAllowlist, "adapter", reasons, ADAPTER_ALLOWLIST_VALUES);
     validateStringList(packet.toolAllowlist, "tool", reasons, NONE_ALLOWLIST_VALUES);
     validateSubset(packet.routeAllowlist, options.routePolicy?.routeAllowlist, "route", reasons);
     validateSubset(packet.adapterAllowlist, options.routePolicy?.adapterAllowlist, "adapter", reasons);
@@ -88,6 +90,7 @@ export function validateDisclosurePacket(packet, options = {}) {
     validateAuthority(packet.authority, reasons);
     validateIssuance(packet.issuance, options.now, reasons);
     validateScope(packet.scope, reasons);
+    validateRouteAdapterPair(packet.routeAllowlist, packet.adapterAllowlist, reasons);
     if (packet.metadataOnly !== true || packet.rawPayloadRetained !== false) reasons.push("metadata_boundary_invalid");
     const serializedBytes = disclosurePacketUtf8Bytes(packet);
     if (serializedBytes === null) reasons.push("packet_malformed");
@@ -267,7 +270,7 @@ function validateEvidenceRefs(values, reasons) {
 }
 
 function validateSubset(values, allowed, label, reasons) {
-  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
+  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : label === "adapter" ? ADAPTER_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
   if (!isAllowedStringList(allowed, fixedValues) || !isSafePlainArray(values) || values.some((value) => !allowed.includes(value))) reasons.push(`${label}_not_allowed`);
 }
 
@@ -310,7 +313,7 @@ function normalizeRoutePolicy(value) {
     const capabilityState = ownDataValue(value, "capabilityState");
     const resourceState = ownDataValue(value, "resourceState");
     const routeValid = isAllowedStringList(routeAllowlist, ROUTE_ALLOWLIST_VALUES) && routeAllowlist.includes("report_only");
-    const adapterValid = isAllowedStringList(adapterAllowlist, NONE_ALLOWLIST_VALUES) && adapterAllowlist.includes("none");
+    const adapterValid = isAllowedStringList(adapterAllowlist, ADAPTER_ALLOWLIST_VALUES) && adapterAllowlist.includes("none");
     const toolValid = isAllowedStringList(toolAllowlist, NONE_ALLOWLIST_VALUES) && toolAllowlist.includes("none");
     if (reasons.length > 0 || !routeValid || !adapterValid || !toolValid) return null;
     return {
@@ -336,7 +339,7 @@ function validateDisclosureInput(value) {
       if (typeof value[field] !== "string") reasons.push("packet_malformed");
     }
     if (!isAllowedStringList(value.routeAllowlist, ROUTE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
-    if (!isAllowedStringList(value.adapterAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
+    if (!isAllowedStringList(value.adapterAllowlist, ADAPTER_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedStringList(value.toolAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedEvidenceRefs(value.evidenceRefs)) reasons.push("packet_malformed");
     if (value.singleUse !== true) reasons.push("single_use_required");
@@ -344,6 +347,15 @@ function validateDisclosureInput(value) {
   } catch {
     return invalid("packet_malformed");
   }
+}
+
+function validateRouteAdapterPair(routeAllowlist, adapterAllowlist, reasons) {
+  if (!isSafePlainArray(routeAllowlist) || !isSafePlainArray(adapterAllowlist) || routeAllowlist.length !== 1 || adapterAllowlist.length !== 1) {
+    reasons.push("route_adapter_pair_invalid");
+    return;
+  }
+  const expected = routeAllowlist[0] === "report_only" ? "none" : SIMULATED_REVIEW_ADAPTER_ID;
+  if (adapterAllowlist[0] !== expected) reasons.push("route_adapter_pair_invalid");
 }
 
 function validateInputObject(value, fields) {
