@@ -76,6 +76,7 @@ UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 REVIEW_ROUTE_EVIDENCE_REF_RE = re.compile(r"^review-evidence:sha256:[a-f0-9]{64}$")
+REVIEW_ROUTE_PACKET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 REVIEW_ROUTE_TEXT_BY_REASON_CODE = {
     "report_only": (
         "A bounded report-only review is available.",
@@ -157,6 +158,19 @@ def _is_safe_pipeline_evidence_ref(value: str) -> bool:
 def _is_safe_review_route_evidence_ref(value: str) -> bool:
     """Allow only opaque, non-provider review evidence references in this projection."""
     return bool(REVIEW_ROUTE_EVIDENCE_REF_RE.fullmatch(value))
+
+
+def _is_safe_review_route_packet_id(value: str) -> bool:
+    """Require a compact opaque packet identity before it enters review evidence."""
+    ref = value.strip()
+    return (
+        ref == value
+        and bool(REVIEW_ROUTE_PACKET_ID_RE.fullmatch(ref))
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(ref)
+        and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(ref)
+        and not re.search(r"(?:prompt|completion|transcript|reasoning|provider|secret|credential|token)", ref, re.IGNORECASE)
+    )
 
 
 def _is_safe_pipeline_control_text(value: str) -> bool:
@@ -3876,7 +3890,7 @@ class PipelineWorkGraphEvidenceV0View(BaseModel):
 
 
 class PipelineReviewRouteFindingSummaryV0View(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     count: int = Field(ge=0, le=32)
     highestSeverity: Literal["info", "low", "medium", "high"] | None = None
     evidenceRefs: list[str] = Field(default_factory=list)
@@ -3913,8 +3927,8 @@ class PipelineReviewRouteEvidenceV0View(BaseModel):
     @field_validator("packetId")
     @classmethod
     def packet_id_is_safe(cls, value: str) -> str:
-        if not _is_safe_pipeline_evidence_ref(value) or "/" in value:
-            raise ValueError("Review-route packet identity must be a safe metadata reference.")
+        if not _is_safe_review_route_packet_id(value):
+            raise ValueError("Review-route packet identity must use the opaque safe identifier grammar.")
         return value
 
     @field_validator("reasonCode")

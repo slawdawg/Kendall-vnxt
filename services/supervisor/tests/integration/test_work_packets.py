@@ -2948,6 +2948,31 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             "correlationId": "manager-source:review-route-forbidden-ref",
         }
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=forbidden_ref).status_code == 400
+        for invalid_count in ("1", 1.0, True):
+            malformed_count = {
+                **request,
+                "reviewRouteEvidence": {
+                    **review_route,
+                    "findingSummary": {"count": invalid_count, "highestSeverity": "info", "evidenceRefs": []},
+                },
+                "idempotencyKey": f"manager-source-intake:review-route-count-{type(invalid_count).__name__}",
+                "correlationId": f"manager-source:review-route-count-{type(invalid_count).__name__}",
+            }
+            assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=malformed_count).status_code == 400
+        for unsafe_packet_id in (
+            "manager-source:raw-prompt",
+            "manager-source:credential-token",
+            "manager-source:sk-proj-abcdefghijklmnopqrstuvwx",
+        ):
+            unsafe_packet_identity = {
+                **request,
+                "packetId": unsafe_packet_id,
+                "parallelWorkGraphEvidence": {**graph, "packetId": unsafe_packet_id},
+                "reviewRouteEvidence": {**review_route, "packetId": unsafe_packet_id},
+                "idempotencyKey": f"manager-source-intake:review-route-identity-{len(unsafe_packet_id)}",
+                "correlationId": f"manager-source:review-route-identity-{len(unsafe_packet_id)}",
+            }
+            assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_packet_identity).status_code == 400
         for issuance_state in ("expired", "revoked", "cancelled", "unavailable"):
             non_active_issuance = {
                 **request,
@@ -2958,9 +2983,22 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=non_active_issuance).status_code == 400
         response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request)
         assert response.status_code == 200
+        evidence_only_reissue = {
+            **request,
+            "reviewRouteEvidence": {
+                **review_route,
+                "routeState": "report_only",
+                "reasonCode": "report_only",
+                "reason": "A bounded report-only review is available.",
+                "findingSummary": {"count": 0, "highestSeverity": None, "evidenceRefs": []},
+            },
+            "idempotencyKey": "manager-source-intake:review-route-evidence-only-reissue",
+            "correlationId": "manager-source:review-route-evidence-only-reissue",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=evidence_only_reissue).status_code == 200
         projection = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]
         detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet_id)
-        assert detail["reviewRoute"] == review_route
+        assert detail["reviewRoute"] == evidence_only_reissue["reviewRouteEvidence"]
         assert detail["workGraph"]["packetId"] == packet_id
         assert "providerPayload" not in json.dumps(detail["reviewRoute"])
         refresh_without_review_route = {

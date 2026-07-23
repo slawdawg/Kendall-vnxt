@@ -3632,7 +3632,11 @@ class SupervisorService:
                     or previous_graph.get("reportIdentity") != parallel_work_graph.get("reportIdentity")
                 ):
                     raise ValueError("Parallel work graph refresh conflicts with the authoritative report mapping.")
-                if isinstance(previous_graph, dict):
+                # A review-route reissue can change only the bounded review
+                # metadata while deliberately retaining the authoritative
+                # work graph. Freshness applies to graph replacement, not to
+                # that evidence-only update.
+                if isinstance(previous_graph, dict) and previous_graph != parallel_work_graph:
                     try:
                         previous_generated_at = self._ensure_aware(
                             datetime.fromisoformat(str(previous_graph["generatedAt"]).replace("Z", "+00:00"))
