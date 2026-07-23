@@ -135,3 +135,14 @@ The full dashboard e2e suite may report unrelated failures in this environment:
 
 These do not block the alpha `/pipeline` loop when the targeted cockpit test
 passes, but they should be tracked separately before broad beta testing.
+
+The focused dashboard controls e2e command currently stops before its
+review-route readiness assertion because the verification panel unexpectedly
+contains one `/work-items/{id}` link where the test expects none
+(`tests/e2e/dashboard.spec.ts:1814`). The same run emits repeated React
+duplicate-key warnings for `GET /supervisor/runner-assignment-status-report`.
+This is a controls/report rendering follow-up, not evidence against the
+report-only review-route contract; reproduce it with
+`pnpm run test:e2e:dashboard:controls` using the existing shared Playwright
+browser cache. Keep it separate from review-route work unless the controls
+contract is deliberately being changed.

@@ -181,6 +181,20 @@ test("review route rejects top-level private fields, unsupported requested state
   }
 });
 
+test("review route rejects forbidden nested route-policy fields before packet preparation", () => {
+  const base = validInput();
+  for (const routePolicy of [
+    { ...base.routePolicy, prompt: "private route input" },
+    { ...base.routePolicy, rawPayload: "private route input" },
+  ]) {
+    const result = evaluateReviewRoute({ ...base, routePolicy });
+    assert.equal(result.ok, false);
+    assert.equal(result.decision.state, "blocked");
+    assert.equal(result.decision.controllingReason.code, "route_policy_invalid");
+    assert.equal(result.packet, null);
+  }
+});
+
 test("review route rejects serialization hooks and nonplain arrays before disclosure sizing", () => {
   const packet = buildDisclosurePacket(validInput());
   const hookedAllowlist = ["report_only"];
