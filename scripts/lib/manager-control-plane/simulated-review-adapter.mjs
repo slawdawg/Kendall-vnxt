@@ -164,6 +164,7 @@ function fallbackResult(fallback, identity) {
 
 function currentPolicyBlock(value) {
   if (!isStrictObject(value, ["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"])) return "policy_vetoed";
+  if (!ownDataValue(value, "routeAllowlist").includes("report_only") || !ownDataValue(value, "adapterAllowlist").includes("none")) return "policy_vetoed";
   if (ownDataValue(value, "policyState") !== "ready") return "policy_vetoed";
   if (ownDataValue(value, "capabilityState") !== "supported") return "capability_unsupported";
   if (ownDataValue(value, "resourceState") !== "ready") return "resource_blocked";

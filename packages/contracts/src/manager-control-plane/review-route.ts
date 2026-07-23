@@ -118,7 +118,7 @@ export interface SimulatedReviewResult {
   decisionId: string | null;
   reviewedHead: string | null;
   digest: string | null;
-  deliveryEvidenceEligible: boolean;
+  deliveryEvidenceEligible: false;
   safeFallback: ReviewRouteFallback;
   execution: "none";
 }

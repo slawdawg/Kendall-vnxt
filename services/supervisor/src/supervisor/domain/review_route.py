@@ -61,6 +61,9 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
     allowed_codes = {"completed": {"simulated_completed", "simulated_deduplicated"}, "stale": {"immutable_identity_stale"}, "blocked": {"packet_invalid", "packet_already_used", "decision_invalid", "simulation_timeout", "policy_vetoed", "capability_unsupported", "resource_blocked"}}
     if value.get("code") not in allowed_codes[value["state"]] or type(value.get("safeFallback")) is not dict or set(value["safeFallback"]) != {"action", "summary"} or value["safeFallback"].get("action") not in {"retain_report_only", "re_evaluate", "reissue_disclosure_packet", "resolve_policy_block"} or not isinstance(value["safeFallback"].get("summary"), str) or not value["safeFallback"]["summary"] or len(value["safeFallback"]["summary"]) > 280 or _FORBIDDEN_TEXT.search(value["safeFallback"]["summary"]):
         return _invalid("result_malformed")
+    expected_actions = {"completed": "retain_report_only", "stale": "reissue_disclosure_packet", "blocked": "resolve_policy_block" if value["code"] == "policy_vetoed" else "reissue_disclosure_packet" if value["code"] in {"packet_invalid", "packet_already_used"} else "re_evaluate"}
+    if value["safeFallback"]["action"] != expected_actions[value["state"]]:
+        return _invalid("result_malformed")
     if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _safe_id(value.get("decisionId")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
         return _invalid("result_malformed")
     if value["state"] == "completed" and ((value["code"] == "simulated_completed") != bool(value["findings"])):

@@ -343,6 +343,7 @@ function validateDisclosureInput(value) {
     if (!isAllowedStringList(value.toolAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedEvidenceRefs(value.evidenceRefs)) reasons.push("packet_malformed");
     if (value.singleUse !== true) reasons.push("single_use_required");
+    validateRouteAdapterPair(value.routeAllowlist, value.adapterAllowlist, reasons);
     return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
   } catch {
     return invalid("packet_malformed");
