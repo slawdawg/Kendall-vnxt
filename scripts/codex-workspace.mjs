@@ -41,6 +41,11 @@ if (!command || command === "--help" || command === "-h") {
   process.exit(command ? 0 : 1);
 }
 
+if (commandArgs.includes("--help") || commandArgs.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+
 try {
   switch (command) {
     case "start":
@@ -149,6 +154,7 @@ Commands:
   doctor                    Check local workspace protocol readiness.
 
 Common options:
+  --help, -h               Show this help and exit without resolving or mutating a workspace.
   --dry-run                 Print the planned mutation without applying it.
   --state-root <path>       Override the Codex workspace state root.
   --owner <id>              Override the lane owner recorded or checked for this command.

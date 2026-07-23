@@ -765,6 +765,29 @@ try {
     assert(result.stdout.includes("Defaults to origin/main"), result.stdout || result.stderr);
   });
 
+  test("subcommand help exits before finish-pr manifest handling", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+
+      for (const args of [
+        ["finish-pr", "--help"],
+        ["finish-pr", "-h"],
+        ["finish-pr", "resumed-task", "--help"],
+      ]) {
+        const result = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+        assert(result.code === 0, result.stderr || result.stdout);
+        assert(result.stderr === "", result.stderr || result.stdout);
+        assert(result.stdout.includes("Usage: node ./scripts/codex-workspace.mjs <command> [options]"), result.stdout || result.stderr);
+        assert(result.stdout.includes("--help, -h"), result.stdout || result.stderr);
+        assert(readFileSync(manifestPath, "utf8") === before, `${args.join(" ")} changed the manifest`);
+      }
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("start refuses protected branch overrides", () => {
     for (const branch of ["main", "master", "prod"]) {
       const result = run(["start", `bad ${branch} task`, "--branch", branch, "--dry-run", "--state-root", stateRoot]);
