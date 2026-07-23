@@ -1,13 +1,24 @@
 import { createHash } from "node:crypto";
 
-export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1";
+export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v2";
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1";
+export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1";
 export const DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024;
 
 export function disclosurePacketUtf8Bytes(value) {
   try {
     const normalized = normalizeJsonForSerialization(value);
     return normalized.ok ? Buffer.byteLength(JSON.stringify(normalized.value), "utf8") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Return a hook-free, canonical digest of strictly serializable packet metadata. */
+export function disclosurePacketCanonicalDigest(value) {
+  try {
+    const normalized = normalizeJsonForSerialization(value);
+    return normalized.ok ? `sha256:${createHash("sha256").update(JSON.stringify(normalized.value)).digest("hex")}` : null;
   } catch {
     return null;
   }
@@ -31,6 +42,7 @@ const DISCLOSURE_INPUT_REQUIRED_FIELDS = DISCLOSURE_INPUT_FIELDS;
 const REVIEW_ROUTE_INPUT_FIELDS = Object.freeze(["now", "immutableReview", "authority", "routePolicy", "disclosure", "consumedDisclosurePacketIds", "requestedState"]);
 const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
 const ROUTE_ALLOWLIST_VALUES = Object.freeze(["report_only", "simulated"]);
+const ADAPTER_ALLOWLIST_VALUES = Object.freeze(["none", SIMULATED_REVIEW_ADAPTER_ID]);
 const NONE_ALLOWLIST_VALUES = Object.freeze(["none"]);
 const SAFE_ID = /^[A-Za-z][A-Za-z0-9._:/-]{1,180}$/;
 const SAFE_EVIDENCE_REF = /^evidence:sha256:[0-9a-f]{64}$/;
@@ -80,7 +92,7 @@ export function validateDisclosurePacket(packet, options = {}) {
     if (!safeId(packet.disclosurePacketId)) reasons.push("packet_id_invalid");
     validateImmutableReview(packet.immutableReview, reasons, options.immutableReview);
     validateStringList(packet.routeAllowlist, "route", reasons, ROUTE_ALLOWLIST_VALUES);
-    validateStringList(packet.adapterAllowlist, "adapter", reasons, NONE_ALLOWLIST_VALUES);
+    validateStringList(packet.adapterAllowlist, "adapter", reasons, ADAPTER_ALLOWLIST_VALUES);
     validateStringList(packet.toolAllowlist, "tool", reasons, NONE_ALLOWLIST_VALUES);
     validateSubset(packet.routeAllowlist, options.routePolicy?.routeAllowlist, "route", reasons);
     validateSubset(packet.adapterAllowlist, options.routePolicy?.adapterAllowlist, "adapter", reasons);
@@ -88,6 +100,7 @@ export function validateDisclosurePacket(packet, options = {}) {
     validateAuthority(packet.authority, reasons);
     validateIssuance(packet.issuance, options.now, reasons);
     validateScope(packet.scope, reasons);
+    validateRouteAdapterPair(packet.routeAllowlist, packet.adapterAllowlist, reasons);
     if (packet.metadataOnly !== true || packet.rawPayloadRetained !== false) reasons.push("metadata_boundary_invalid");
     const serializedBytes = disclosurePacketUtf8Bytes(packet);
     if (serializedBytes === null) reasons.push("packet_malformed");
@@ -202,6 +215,7 @@ export function evaluateReviewRoute(input = {}) {
 
 function routeResult({ state, code, summary, fallback, fallbackSummary, immutableReview, authority, packet }) {
   const disclosurePacketId = packet?.disclosurePacketId || null;
+  const disclosurePacketDigest = packet ? disclosurePacketCanonicalDigest(packet) : null;
   const identity = immutableReview ? `${immutableReview.exactHead}:${immutableReview.digest}` : "invalid";
   return {
     ok: state !== "blocked",
@@ -214,6 +228,7 @@ function routeResult({ state, code, summary, fallback, fallbackSummary, immutabl
       immutableReview,
       authorityEvidence: { issuerId: authority.issuerId, authorityRef: authority.authorityRef, status: authority.valid ? "valid" : "invalid" },
       disclosurePacketId,
+      disclosurePacketDigest,
       metadataOnly: true,
       rawPayloadRetained: false,
       execution: "none",
@@ -267,8 +282,10 @@ function validateEvidenceRefs(values, reasons) {
 }
 
 function validateSubset(values, allowed, label, reasons) {
-  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
-  if (!isAllowedStringList(allowed, fixedValues) || !isSafePlainArray(values) || values.some((value) => !allowed.includes(value))) reasons.push(`${label}_not_allowed`);
+  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : label === "adapter" ? ADAPTER_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
+  const copiedValues = copySafePlainArray(values);
+  const copiedAllowed = copySafePlainArray(allowed);
+  if (!copiedValues || !copiedAllowed || !isAllowedStringList(copiedAllowed, fixedValues) || copiedValues.some((value) => !copiedAllowed.includes(value))) reasons.push(`${label}_not_allowed`);
 }
 
 function inspectObjectFields(value, fields, reasons) {
@@ -283,9 +300,11 @@ function inspectObjectFields(value, fields, reasons) {
 function containsForbiddenText(value, seen = new WeakSet()) {
   if (typeof value === "string") return FORBIDDEN_TEXT.test(value);
   if (Array.isArray(value)) {
+    const values = copySafePlainArray(value);
+    if (!values) return false;
     if (seen.has(value)) return true;
     seen.add(value);
-    return value.some((entry) => containsForbiddenText(entry, seen));
+    return values.some((entry) => containsForbiddenText(entry, seen));
   }
   if (isPlainObject(value)) {
     if (seen.has(value)) return true;
@@ -310,7 +329,7 @@ function normalizeRoutePolicy(value) {
     const capabilityState = ownDataValue(value, "capabilityState");
     const resourceState = ownDataValue(value, "resourceState");
     const routeValid = isAllowedStringList(routeAllowlist, ROUTE_ALLOWLIST_VALUES) && routeAllowlist.includes("report_only");
-    const adapterValid = isAllowedStringList(adapterAllowlist, NONE_ALLOWLIST_VALUES) && adapterAllowlist.includes("none");
+    const adapterValid = isAllowedStringList(adapterAllowlist, ADAPTER_ALLOWLIST_VALUES) && adapterAllowlist.includes("none");
     const toolValid = isAllowedStringList(toolAllowlist, NONE_ALLOWLIST_VALUES) && toolAllowlist.includes("none");
     if (reasons.length > 0 || !routeValid || !adapterValid || !toolValid) return null;
     return {
@@ -336,14 +355,28 @@ function validateDisclosureInput(value) {
       if (typeof value[field] !== "string") reasons.push("packet_malformed");
     }
     if (!isAllowedStringList(value.routeAllowlist, ROUTE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
-    if (!isAllowedStringList(value.adapterAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
+    if (!isAllowedStringList(value.adapterAllowlist, ADAPTER_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedStringList(value.toolAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedEvidenceRefs(value.evidenceRefs)) reasons.push("packet_malformed");
     if (value.singleUse !== true) reasons.push("single_use_required");
+    validateRouteAdapterPair(value.routeAllowlist, value.adapterAllowlist, reasons);
     return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
   } catch {
     return invalid("packet_malformed");
   }
+}
+
+function validateRouteAdapterPair(routeAllowlist, adapterAllowlist, reasons) {
+  const routes = copySafePlainArray(routeAllowlist);
+  const adapters = copySafePlainArray(adapterAllowlist);
+  if (!routes || !adapters) {
+    reasons.push("route_adapter_pair_invalid");
+    return;
+  }
+  if (routes.includes("report_only") && !adapters.includes("none")) reasons.push("route_adapter_pair_invalid");
+  if (routes.includes("simulated") && !adapters.includes(SIMULATED_REVIEW_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes("none") && !routes.includes("report_only")) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes(SIMULATED_REVIEW_ADAPTER_ID) && !routes.includes("simulated")) reasons.push("route_adapter_pair_invalid");
 }
 
 function validateInputObject(value, fields) {
@@ -400,35 +433,46 @@ function fallbackForPacketReason(reason) {
 }
 
 function stableList(value) {
-  return isSafePlainArray(value) ? [...new Set(value.map((entry) => String(entry)))].sort() : [];
+  const values = copySafePlainArray(value);
+  return values ? [...new Set(values.map((entry) => String(entry)))].sort() : [];
 }
 
 function validateConsumedDisclosurePacketIds(value) {
   if (value === undefined) return { ok: true, values: [] };
-  if (!isSafePlainArray(value) || value.length > 256 || value.some((entry) => !safeId(entry)) || new Set(value).size !== value.length) return { ok: false, values: [] };
-  return { ok: true, values: [...value] };
+  const values = copySafePlainArray(value);
+  if (!values || values.length > 256 || values.some((entry) => !safeId(entry)) || new Set(values).size !== values.length) return { ok: false, values: [] };
+  return { ok: true, values };
 }
 
 function isAllowedStringList(values, fixedValues) {
-  return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => safeId(value) && fixedValues.includes(value)) && new Set(values).size === values.length;
+  const copied = copySafePlainArray(values);
+  return Boolean(copied) && copied.length > 0 && copied.length <= 32 && copied.every((value) => safeId(value) && fixedValues.includes(value)) && new Set(copied).size === copied.length;
 }
 
 function isAllowedEvidenceRefs(values) {
-  return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => typeof value === "string" && SAFE_EVIDENCE_REF.test(value)) && new Set(values).size === values.length;
+  const copied = copySafePlainArray(values);
+  return Boolean(copied) && copied.length > 0 && copied.length <= 32 && copied.every((value) => typeof value === "string" && SAFE_EVIDENCE_REF.test(value)) && new Set(copied).size === copied.length;
 }
 
 function isSafePlainArray(value) {
+  return copySafePlainArray(value) !== null;
+}
+
+function copySafePlainArray(value) {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return false;
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null;
     const names = Object.getOwnPropertyNames(value);
-    if (names.length !== value.length + 1 || !names.includes("length")) return false;
-    for (let index = 0; index < value.length; index += 1) {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !Object.hasOwn(lengthDescriptor, "value") || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || names.length !== lengthDescriptor.value + 1 || !names.includes("length")) return null;
+    const copied = [];
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (!descriptor || !Object.hasOwn(descriptor, "value")) return false;
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return null;
+      copied.push(descriptor.value);
     }
-    return true;
+    return copied;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -437,22 +481,16 @@ function ownDataValue(value, key) {
   return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
 }
 
-function copySafePlainArray(value) {
-  if (!isSafePlainArray(value)) return null;
-  const normalized = [];
-  for (let index = 0; index < value.length; index += 1) normalized[index] = Object.getOwnPropertyDescriptor(value, String(index)).value;
-  return normalized;
-}
-
 function normalizeJsonForSerialization(value, seen = new WeakSet()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return { ok: true, value };
   if (typeof value === "number" && Number.isFinite(value)) return { ok: true, value };
-  if (isSafePlainArray(value)) {
+  const arrayValue = copySafePlainArray(value);
+  if (arrayValue) {
     if (seen.has(value)) return { ok: false };
     seen.add(value);
     const normalized = [];
-    for (let index = 0; index < value.length; index += 1) {
-      const item = normalizeJsonForSerialization(value[index], seen);
+    for (const entry of arrayValue) {
+      const item = normalizeJsonForSerialization(entry, seen);
       if (!item.ok) return item;
       normalized.push(item.value);
     }
@@ -462,7 +500,7 @@ function normalizeJsonForSerialization(value, seen = new WeakSet()) {
   if (!isPlainObject(value) || seen.has(value) || Object.getOwnPropertySymbols(value).length > 0) return { ok: false };
   seen.add(value);
   const normalized = Object.create(null);
-  for (const key of Object.getOwnPropertyNames(value)) {
+  for (const key of Object.getOwnPropertyNames(value).sort()) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (key === "toJSON" || !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return { ok: false };
     const item = normalizeJsonForSerialization(descriptor.value, seen);

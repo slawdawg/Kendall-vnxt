@@ -76,6 +76,7 @@ const requiredFiles = [
   "packages/contracts/src/manager-control-plane/review-route.ts",
   "scripts/lib/manager-control-plane/core.mjs",
   "scripts/lib/manager-control-plane/review-route.mjs",
+  "scripts/lib/manager-control-plane/simulated-review-adapter.mjs",
   "scripts/lib/manager-control-plane/forbidden-boundary.mjs",
   "scripts/lib/manager-control-plane/README.md",
   "scripts/manager-preflight.mjs",
