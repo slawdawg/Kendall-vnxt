@@ -94,6 +94,9 @@ try {
     case "cleanup-integrated":
       cleanupIntegrated(commandArgs);
       break;
+    case "cleanup-superseded":
+      cleanupSuperseded(commandArgs);
+      break;
     case "cleanup-orphans":
       cleanupOrphans(commandArgs);
       break;
@@ -138,6 +141,7 @@ Commands:
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-integrated [query] Remove clean no-PR worktrees already integrated into a base ref.
+  cleanup-superseded <task> Remove one clean no-PR worktree carried forward by a named merged PR.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
   repair-manifests          Preview or apply conservative repairs for closed legacy manifests.
@@ -283,6 +287,16 @@ cleanup-integrated options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --base <ref>              Ref to compare against. Defaults to origin/dev.
   --summary-json            Without --apply, print a compact JSON cleanup summary.
+
+cleanup-superseded options:
+  --source-head <sha>       Exact current head of the no-PR source branch.
+  --carry-forward-pr <id>   Merged PR that carries the named source scope.
+  --carry-forward-commit <sha> Exact integrated commit recorded by that merged PR.
+  --scope <paths>           Comma-separated repository-relative paths to prove by tree entry.
+  --apply                   Apply local-only cleanup after a fresh locked re-proof.
+  --approval <text>         Required with --apply; records operator approval evidence.
+  --reason <text>           Required with --apply; records the reviewed cleanup reason.
+  --summary-json            Without --apply, print a compact metadata-only proof packet.
 
 cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -3732,6 +3746,21 @@ function preflightAssignmentClosureForCleanedManifest(state, manifest, options =
   }
   const assignment = readAssignment(path);
   validateAssignment(assignment, path);
+  if (options.requireNoPrEvidence && supersededAssignmentHasPrEvidence(assignment)) {
+    throw new Error(`Assignment ${assignmentId} has PR or delivery evidence; superseded cleanup requires a no-PR source lane.`);
+  }
+  if (options.requireExactAssignmentIdentity) {
+    if (assignment.task_id !== manifest.task_id) {
+      throw new Error(`Assignment ${assignmentId} task ${assignment.task_id || "missing"} does not exactly match source task ${manifest.task_id}.`);
+    }
+    const backlogItemId = String(assignment.source_backlog_item?.item_id || "").trim();
+    if (backlogItemId && backlogItemId !== manifest.task_id) {
+      throw new Error(`Assignment ${assignmentId} backlog item ${backlogItemId} does not exactly match source task ${manifest.task_id}.`);
+    }
+  }
+  if (options.requireKnownAssignmentOwner && !String(assignment.owner || "").trim()) {
+    throw new Error(`Assignment ${assignmentId} owner is required for superseded cleanup.`);
+  }
   if (assignment.status === "closed") {
     return { closeable: false, assignmentId };
   }
@@ -3758,7 +3787,7 @@ function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
     return null;
   }
 
-  return withAssignmentLock(state, assignmentId, () => {
+  const close = () => {
     const assignment = readAssignment(path);
     validateAssignment(assignment, path);
     if (assignment.status === "closed") {
@@ -3794,7 +3823,8 @@ function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
     ];
     writeAssignment(path, assignment);
     return { closed: true, assignmentId, closedAt };
-  });
+  };
+  return options.assignmentLockHeld ? close() : withAssignmentLock(state, assignmentId, close);
 }
 
 function assignmentCloseoutPlan(record, manifests, currentOwner, options = {}) {
@@ -4405,6 +4435,518 @@ function applyCleanupIntegrated(state, plan, options) {
     }
     writeManifest(plan.manifestPath, manifest);
   });
+}
+
+function cleanupSuperseded(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) {
+    throw new Error("cleanup-superseded requires exactly one explicit source task id.");
+  }
+  if (options.summaryJson && options.apply) {
+    throw new Error("cleanup-superseded --summary-json is only supported without --apply.");
+  }
+  if (options.deleteRemote) {
+    throw new Error("cleanup-superseded retains remote branches; --delete-remote is forbidden.");
+  }
+
+  const proofInput = cleanupSupersessionInput(options);
+  const state = workspaceState(options);
+  const record = findManifest(state, positional[0]);
+  requireGh("cleanup-superseded");
+  const plan = cleanupSupersededPlan(record, state, { options, proofInput, currentOwner: currentLaneOwner(options) });
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildCleanupSupersededSummary({ state, plan, proofInput, currentOwner: currentLaneOwner(options) }), null, 2));
+    return;
+  }
+  if (plan.status !== "ready") {
+    console.log(`BLOCKED ${plan.taskId}: ${plan.reason}`);
+    return;
+  }
+  if (!options.apply) {
+    printPlan("cleanup-superseded", cleanupSupersededPlanLines(plan));
+    console.log("Add --apply --approval <operator evidence> --reason <reviewed reason> only after reviewing this proof packet.");
+    return;
+  }
+  if (!validSupersessionApplyEvidence(options.approval) || !validSupersessionApplyEvidence(options.reason)) {
+    throw new Error("cleanup-superseded --apply requires --approval and --reason with at least 10 non-whitespace characters each.");
+  }
+
+  applyCleanupSuperseded(state, plan, { options, proofInput });
+  console.log(`Closed ${plan.taskId}`);
+}
+
+function cleanupSupersessionInput(options) {
+  const sourceHead = requireExactGitObjectId(options.sourceHead, "--source-head");
+  const carryForwardCommit = requireExactGitObjectId(options.carryForwardCommit, "--carry-forward-commit");
+  const carryForwardPr = String(options.carryForwardPr || "").trim();
+  const carryForwardPrNumber = Number(carryForwardPr);
+  if (!/^\d+$/.test(carryForwardPr) || !Number.isSafeInteger(carryForwardPrNumber) || carryForwardPrNumber <= 0) {
+    throw new Error("cleanup-superseded --carry-forward-pr must be a positive safe integer PR number.");
+  }
+  const scope = parseSupersessionScope(options.scope);
+  return { sourceHead, carryForwardPr: carryForwardPrNumber, carryForwardCommit, scope };
+}
+
+function requireExactGitObjectId(value, optionName) {
+  const normalized = String(value || "").trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(normalized)) {
+    throw new Error(`cleanup-superseded ${optionName} must be an exact 40- or 64-character Git object id.`);
+  }
+  return normalized.toLowerCase();
+}
+
+function parseSupersessionScope(value) {
+  if (value === true || value === undefined || value === null) {
+    throw new Error("cleanup-superseded --scope requires a value.");
+  }
+  const paths = String(value || "").split(",");
+  if (paths.length === 0 || paths.length > 64) {
+    throw new Error("cleanup-superseded --scope requires between 1 and 64 comma-separated paths.");
+  }
+  if (new Set(paths).size !== paths.length) {
+    throw new Error("cleanup-superseded --scope must not repeat a path.");
+  }
+  for (const path of paths) {
+    if (
+      path !== path.trim() ||
+      path.startsWith("/") ||
+      path.startsWith(":") ||
+      path.includes("\\") ||
+      /[*?\[\]{}!]/.test(path) ||
+      /[\x00-\x1f\x7f]/.test(path) ||
+      path.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+      path.startsWith(".git/") ||
+      path === ".git"
+    ) {
+      throw new Error(`cleanup-superseded --scope contains an unsafe repository-relative path: ${path}`);
+    }
+  }
+  return [...paths].sort();
+}
+
+function validSupersessionApplyEvidence(value) {
+  return String(value || "").replace(/\s+/g, "").length >= 10;
+}
+
+function cleanupSupersededPlan(record, state, context) {
+  const { manifest } = record;
+  const { proofInput, options } = context;
+  const partialResume = sameSupersessionPartialResume(manifest, proofInput);
+  const base = {
+    taskId: manifest.task_id,
+    status: "blocked",
+    reason: "",
+    branch: manifest.branch,
+    sourceStatus: manifest.status,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    manifestPath: record.path,
+    proof: {
+      source: { requestedHead: proofInput.sourceHead, localBranchHead: null, remoteBranchHead: null, status: "unverified" },
+      carryForward: { prNumber: proofInput.carryForwardPr, requestedCommit: proofInput.carryForwardCommit, status: "unverified" },
+      scope: { paths: proofInput.scope, status: "unverified", sourceEntries: [], carryForwardEntries: [] },
+      worktree: null,
+      assignment: { status: "unverified" },
+      sourcePullRequests: { status: "unverified", count: null },
+      currentBase: { manifestRef: manifest.base_ref || null, canonicalRef: null, headSha: null, status: "unverified", scopeStatus: "unverified" },
+    },
+    remoteBranchPolicy: "remote branches are retained by cleanup-superseded",
+  };
+
+  if (manifest.status === "closed") return { ...base, reason: "workspace manifest is already closed" };
+  if (/(?:hold|held)/i.test(String(manifest.status || ""))) return { ...base, reason: "held workspace deletion is forbidden" };
+  if (manifest.mode === "epic-batch") return { ...base, reason: "epic-batch workspace requires finish-epic closeout" };
+  if (supersededSourceHasPrEvidence(manifest)) {
+    return { ...base, reason: "source workspace has PR or prior cleanup evidence; cleanup-superseded accepts only no-PR source lanes" };
+  }
+  const ownerGate = supersededManifestOwnerGate(manifest, options);
+  if (ownerGate.status !== "matched") return { ...base, reason: ownerGate.reason };
+  base.proof.owner = ownerGate;
+  if (manifest.cleanup_target_evidence?.remoteBranch?.required) {
+    return { ...base, reason: "source manifest retains a prior required remote cleanup target; local-only superseded cleanup refuses to alter it" };
+  }
+
+  assertSafeBranch(manifest.branch);
+  let cleanupCwd;
+  try {
+    cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+  } catch (error) {
+    return { ...base, reason: error.message };
+  }
+  const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
+  base.proof.worktree = cleanupWorktreeSummary(worktreeStatus);
+  if ((!worktreeStatus.exists || !worktreeStatus.listed) && !partialResume) return { ...base, cleanupCwd, reason: "source worktree must exist and remain registered" };
+  if (partialResume && (worktreeStatus.exists || worktreeStatus.listed)) return { ...base, cleanupCwd, reason: "partial supersession resume requires the source worktree to remain absent" };
+  if (worktreeStatus.dirty) return { ...base, cleanupCwd, reason: "source worktree is not clean" };
+
+  const localBranchHead = branchSha(manifest.branch, cleanupCwd) || null;
+  let remoteBranchHead = null;
+  try {
+    remoteBranchHead = originBranchSha(manifest.branch, cleanupCwd) || null;
+  } catch (error) {
+    return { ...base, cleanupCwd, reason: `source remote branch evidence is unavailable: ${error.message}` };
+  }
+  base.proof.source = {
+    requestedHead: proofInput.sourceHead,
+    localBranchHead,
+    remoteBranchHead,
+    status: (partialResume ? !localBranchHead && remoteBranchHead === proofInput.sourceHead : localBranchHead === proofInput.sourceHead && remoteBranchHead === proofInput.sourceHead) ? "matched" : "mismatch",
+  };
+  if (base.proof.source.status !== "matched") return { ...base, cleanupCwd, reason: partialResume ? "partial supersession resume requires an absent local branch and retained remote branch at --source-head" : "source local and remote branch heads must exactly match --source-head" };
+
+  const sourcePullRequests = sourceBranchPullRequestProof(manifest.branch, cleanupCwd);
+  base.proof.sourcePullRequests = sourcePullRequests;
+  if (sourcePullRequests.status !== "matched") return { ...base, cleanupCwd, reason: sourcePullRequests.reason };
+
+  const assignmentGate = supersededAssignmentGate(state, manifest, options);
+  base.proof.assignment = assignmentGate;
+  if (assignmentGate.status !== "matched") return { ...base, cleanupCwd, reason: assignmentGate.reason };
+
+  const carryForward = mergedCarryForwardPr(proofInput.carryForwardPr, cleanupCwd);
+  base.proof.carryForward = {
+    prNumber: proofInput.carryForwardPr,
+    requestedCommit: proofInput.carryForwardCommit,
+    mergedAt: carryForward?.mergedAt || null,
+    mergeCommit: carryForward?.mergeCommit?.oid || null,
+    status: "unverified",
+  };
+  if (!carryForward?.mergedAt || String(carryForward.state || "").toUpperCase() !== "MERGED") {
+    return { ...base, cleanupCwd, reason: "named carry-forward PR is not merged" };
+  }
+  if (String(carryForward.baseRefName || "") !== String(manifest.base_branch || "")) {
+    return { ...base, cleanupCwd, reason: "named carry-forward PR base does not match the source manifest base branch" };
+  }
+  if (carryForward.mergeCommit?.oid !== proofInput.carryForwardCommit) {
+    return { ...base, cleanupCwd, reason: "named carry-forward PR merge commit does not exactly match --carry-forward-commit" };
+  }
+  if (!gitCommitExists(proofInput.carryForwardCommit, cleanupCwd)) {
+    return { ...base, cleanupCwd, reason: "named carry-forward commit is unavailable in the local repository" };
+  }
+  base.proof.carryForward.status = "matched";
+
+  const currentBase = supersededCurrentBaseProof(manifest, carryForward, proofInput, cleanupCwd);
+  base.proof.currentBase = currentBase;
+  if (currentBase.status !== "matched") {
+    return { ...base, cleanupCwd, reason: currentBase.reason };
+  }
+
+  const scopeProof = compareScopedTreeEntries(proofInput.sourceHead, proofInput.carryForwardCommit, proofInput.scope, cleanupCwd);
+  base.proof.scope = scopeProof;
+  if (scopeProof.status !== "matched") return { ...base, cleanupCwd, reason: "scoped source and carry-forward trees are not exactly equivalent" };
+  const currentBaseScope = compareScopedTreeEntries(proofInput.sourceHead, currentBase.canonicalRef, proofInput.scope, cleanupCwd);
+  base.proof.currentBase.scopeStatus = currentBaseScope.status;
+  base.proof.currentBase.scopeEntries = currentBaseScope.carryForwardEntries;
+  if (currentBaseScope.status !== "matched") {
+    return { ...base, cleanupCwd, reason: "scoped source content is not exactly retained in the current canonical base" };
+  }
+  if (!scopeCoversSourceDelta(currentBase.canonicalRef, proofInput.sourceHead, proofInput.scope, cleanupCwd)) {
+    return { ...base, cleanupCwd, reason: "bounded scope does not cover every source-lane tree delta" };
+  }
+
+  return { ...base, status: "ready", cleanupCwd, expectedHeadSha: proofInput.sourceHead, localBranchSha: localBranchHead, remoteBranchSha: remoteBranchHead, partialResume, reason: partialResume ? "same-proof supersession partial is safe to resume" : "clean no-PR source is exactly carried by the named merged successor scope" };
+}
+
+function sameSupersessionPartialResume(manifest, proofInput) {
+  const proof = manifest.cleanup_supersession_evidence?.proof;
+  return manifest.status === "cleanup_partial" && manifest.cleanup_supersession_evidence?.remoteBranchPolicy === "retained" && proof?.source?.requestedHead === proofInput.sourceHead && proof?.carryForward?.prNumber === proofInput.carryForwardPr && proof?.carryForward?.requestedCommit === proofInput.carryForwardCommit && Array.isArray(proof?.scope?.paths) && JSON.stringify(proof.scope.paths) === JSON.stringify(proofInput.scope);
+}
+
+function supersededCurrentBaseProof(manifest, carryForward, proofInput, cwd) {
+  const baseBranch = String(manifest.base_branch || "").trim();
+  const canonicalRef = baseBranch ? `origin/${baseBranch}` : "";
+  const manifestRef = String(manifest.base_ref || "").trim();
+  const base = { manifestRef: manifestRef || null, canonicalRef: canonicalRef || null, headSha: null, status: "unverified", scopeStatus: "unverified" };
+  if (!baseBranch || manifestRef !== canonicalRef) {
+    return { ...base, status: "mismatch", reason: "source manifest base_ref must exactly name the canonical origin/<base_branch> ref" };
+  }
+  const headSha = branchSha(canonicalRef, cwd);
+  if (!headSha) {
+    return { ...base, status: "blocked", reason: "current canonical base ref is unavailable locally" };
+  }
+  if (!carryForward.baseRefOid || carryForward.baseRefOid !== headSha) {
+    return { ...base, headSha, status: "mismatch", reason: "current canonical base head does not exactly match GitHub carry-forward PR base evidence" };
+  }
+  if (!gitCommitIsAncestor(proofInput.carryForwardCommit, canonicalRef, cwd)) {
+    return { ...base, headSha, status: "mismatch", reason: "named carry-forward commit is not retained in the current canonical base" };
+  }
+  return { ...base, headSha, status: "matched", reason: "current canonical base exactly retains the named carry-forward commit" };
+}
+
+function scopeCoversSourceDelta(baseRef, sourceHead, scope, cwd) {
+  if (!baseRef || !branchSha(baseRef, cwd)) return false;
+  const result = git(["diff", "--name-only", "--no-renames", "-z", `${baseRef}...${sourceHead}`], { cwd });
+  if (result.code !== 0) return false;
+  const changed = result.stdout.split("\0").filter(Boolean);
+  return changed.length > 0 && changed.every((path) => scope.some((entry) => path === entry || path.startsWith(`${entry}/`)));
+}
+
+function supersededSourceHasPrEvidence(manifest) {
+  return [
+    manifest.pr_url,
+    manifest.pr_number,
+    manifest.pr_delivery_head_sha,
+    manifest.pr_state,
+    manifest.merged_at,
+    manifest.pr_merged_at,
+    manifest.cleanup_pr_number,
+    manifest.cleanup_pr_url,
+    manifest.cleanup_merged_at,
+  ].some((value) => value !== null && value !== undefined && String(value).trim() !== "") || ["pr_open", "merged"].includes(String(manifest.status || ""));
+}
+
+function sourceBranchPullRequestProof(branch, cwd) {
+  // This is an existence proof, not an inventory: one matching PR is enough
+  // to block cleanup, so a one-record bound cannot hide a nonzero result.
+  const result = run("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "number", "--limit", "1"], { cwd });
+  if (result.code !== 0) {
+    return { status: "blocked", count: null, reason: `source branch PR evidence is unavailable: ${result.stderr || result.stdout || "GitHub CLI failed"}` };
+  }
+  let pullRequests;
+  try {
+    pullRequests = parseGhJson(result.stdout, `source branch ${branch} PR evidence`);
+  } catch (error) {
+    return { status: "blocked", count: null, reason: error.message };
+  }
+  if (!Array.isArray(pullRequests)) {
+    return { status: "blocked", count: null, reason: "source branch PR evidence is malformed" };
+  }
+  if (pullRequests.length > 0) {
+    return { status: "blocked", count: pullRequests.length, reason: "source branch has GitHub PR evidence; cleanup-superseded accepts only no-PR source lanes" };
+  }
+  return { status: "matched", count: 0 };
+}
+
+function supersededAssignmentGate(state, manifest, options) {
+  const assignmentId = String(manifest.source_assignment_id || "").trim();
+  if (!assignmentId) return { status: "blocked", reason: "source assignment evidence is required" };
+  const path = assignmentPath(state, assignmentId);
+  if (!existsSync(path)) return { status: "blocked", reason: `source assignment ${assignmentId} is missing` };
+  try {
+    const assignment = readAssignment(path);
+    validateAssignment(assignment, path);
+    if (assignment.status === "closed" && manifest.status !== "cleanup_partial") return { status: "blocked", reason: `source assignment ${assignmentId} is already closed` };
+    if (supersededAssignmentHasPrEvidence(assignment)) return { status: "blocked", reason: `source assignment ${assignmentId} has PR or delivery evidence` };
+    if (assignment.task_id !== manifest.task_id) return { status: "blocked", reason: `source assignment ${assignmentId} task does not exactly match source task` };
+    const backlogItemId = String(assignment.source_backlog_item?.item_id || "").trim();
+    if (backlogItemId && backlogItemId !== manifest.task_id) return { status: "blocked", reason: `source assignment ${assignmentId} backlog item does not exactly match source task` };
+    if (assignment.branch !== manifest.branch || !samePath(assignment.worktree_path, manifest.worktree_path)) {
+      return { status: "blocked", reason: `source assignment ${assignmentId} does not exactly match source branch and worktree` };
+    }
+    if (!String(assignment.owner || "").trim()) return { status: "blocked", reason: `source assignment ${assignmentId} owner is required` };
+    if (assignment.owner !== manifest.owner && (!options.takeOwnership || !validTakeoverReason(options.takeoverReason))) {
+      return { status: "blocked", reason: `source assignment ${assignmentId} owner does not match source lane owner` };
+    }
+    return { status: "matched", assignmentId, owner: assignment.owner || null };
+  } catch (error) {
+    return { status: "blocked", reason: `source assignment evidence is invalid: ${error.message}` };
+  }
+}
+
+function supersededManifestOwnerGate(manifest, options) {
+  const owner = String(manifest.owner || "").trim();
+  if (!owner && (!options.takeOwnership || !validTakeoverReason(options.takeoverReason))) {
+    return { status: "blocked", reason: "source lane owner is required; use explicit --take-ownership with --takeover-reason for a legacy unowned lane" };
+  }
+  const warning = laneOwnerWarning(manifest, options);
+  if (warning && !options.takeOwnership) return { status: "blocked", reason: warning };
+  if ((warning || !owner) && !validTakeoverReason(options.takeoverReason)) {
+    return { status: "blocked", reason: "--takeover-reason must explain the takeover in at least 10 non-whitespace characters" };
+  }
+  return { status: "matched", owner: owner || null, currentOwner: currentLaneOwner(options), takeover: Boolean(options.takeOwnership && owner !== currentLaneOwner(options)) };
+}
+
+function supersededAssignmentHasPrEvidence(assignment) {
+  return [assignment.pr_url, assignment.pr_number, assignment.pr_state, assignment.merged_at, assignment.pr_merged_at, assignment.pr_delivery_head_sha].some((value) => value !== null && value !== undefined && String(value).trim() !== "");
+}
+
+function mergedCarryForwardPr(prNumber, cwd) {
+  const result = run("gh", ["pr", "view", String(prNumber), "--json", "number,url,mergedAt,state,baseRefName,baseRefOid,headRefOid,mergeCommit"], { cwd });
+  if (result.code !== 0) return null;
+  return parseGhJson(result.stdout, `carry-forward PR ${prNumber}`);
+}
+
+function gitCommitExists(commit, cwd) {
+  return git(["cat-file", "-e", `${commit}^{commit}`], { cwd }).code === 0;
+}
+
+function gitCommitIsAncestor(ancestor, descendant, cwd) {
+  return git(["merge-base", "--is-ancestor", ancestor, descendant], { cwd }).code === 0;
+}
+
+function compareScopedTreeEntries(sourceHead, carryForwardCommit, scope, cwd) {
+  const sourceEntries = scopedTreeEntries(sourceHead, scope, cwd);
+  const carryForwardEntries = scopedTreeEntries(carryForwardCommit, scope, cwd);
+  if (sourceEntries.error || carryForwardEntries.error) {
+    return { paths: scope, status: "blocked", sourceEntries: sourceEntries.entries || [], carryForwardEntries: carryForwardEntries.entries || [], reason: sourceEntries.error || carryForwardEntries.error };
+  }
+  const sourceSignature = JSON.stringify(sourceEntries.entries);
+  const carryForwardSignature = JSON.stringify(carryForwardEntries.entries);
+  // The object-entry comparison is the proof record. Keep Git's own scoped
+  // tree comparison as an independent fail-closed guard against parser or
+  // pathspec surprises, including deletes, modes, renames, and type changes.
+  const scopedDiff = git(["diff", "--quiet", sourceHead, carryForwardCommit, "--", ...scope], { cwd });
+  if (scopedDiff.code > 1) {
+    return {
+      paths: scope,
+      status: "blocked",
+      sourceEntries: sourceEntries.entries,
+      carryForwardEntries: carryForwardEntries.entries,
+      reason: scopedDiff.stderr || scopedDiff.stdout || "cannot compare scoped source and carry-forward trees",
+    };
+  }
+  return {
+    paths: scope,
+    status: sourceSignature === carryForwardSignature && scopedDiff.code === 0 ? "matched" : "mismatch",
+    sourceEntries: sourceEntries.entries,
+    carryForwardEntries: carryForwardEntries.entries,
+  };
+}
+
+function scopedTreeEntries(commit, scope, cwd) {
+  const result = git(["ls-tree", "-r", "-z", "--full-tree", commit, "--", ...scope], { cwd });
+  if (result.code !== 0) return { entries: [], error: result.stderr || result.stdout || `cannot inspect tree ${commit}` };
+  const entries = [];
+  for (const entry of String(result.stdout || "").split("\0").filter(Boolean)) {
+    const tab = entry.indexOf("\t");
+    const header = tab >= 0 ? entry.slice(0, tab).split(" ") : [];
+    const path = tab >= 0 ? entry.slice(tab + 1) : "";
+    if (header.length !== 3 || !/^\d+$/.test(header[0]) || !/^\w+$/.test(header[1]) || !/^[a-f0-9]+$/i.test(header[2]) || !path) {
+      return { entries, error: `unexpected ls-tree entry for ${commit}` };
+    }
+    entries.push({ path, mode: header[0], type: header[1], objectId: header[2] });
+  }
+  entries.sort((left, right) => left.path.localeCompare(right.path));
+  return { entries };
+}
+
+function cleanupSupersededPlanLines(plan) {
+  return [
+    `${plan.taskId}: superseded by merged PR #${plan.proof.carryForward.prNumber} at ${plan.proof.carryForward.mergeCommit}`,
+    `source head ${plan.expectedHeadSha} matches local and remote ${plan.branch}`,
+    `scope (${plan.proof.scope.paths.join(", ")}): exact tree entries matched`,
+    `owner ${plan.owner || "unowned"}; assignment ${plan.proof.assignment.assignmentId}`,
+    `git worktree remove ${plan.worktreePath}`,
+    `git update-ref -d refs/heads/${plan.branch} ${plan.expectedHeadSha}`,
+    `retain remote branch origin/${plan.branch}`,
+    `close manifest and source assignment ${plan.taskId}`,
+  ];
+}
+
+function buildCleanupSupersededSummary({ state, plan, proofInput, currentOwner }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    currentOwner,
+    mode: "cleanup-superseded",
+    sourceTask: plan.taskId,
+    requestedProof: proofInput,
+    counts: { total: 1, cleanupReady: plan.status === "ready" ? 1 : 0, blocked: plan.status === "ready" ? 0 : 1 },
+    results: [plan],
+    mutation: "none; preview proof only",
+    remoteBranchPolicy: "remote branches are retained by cleanup-superseded",
+  };
+}
+
+function applyCleanupSuperseded(state, plan, context) {
+  withManifestLock(state, plan.taskId, () => {
+    const manifest = readManifest(plan.manifestPath);
+    validateManifest(manifest, plan.manifestPath);
+    assertLaneOwner(manifest, context.options);
+    claimLaneOwner(manifest, context.options);
+    const assignmentId = String(manifest.source_assignment_id || "").trim();
+    if (!assignmentId) throw new Error("cleanup-superseded requires a linked assignment under the manifest lock.");
+    return withAssignmentLock(state, assignmentId, () => {
+    const freshPlan = cleanupSupersededPlan({ manifest, path: plan.manifestPath }, state, {
+      options: context.options,
+      proofInput: context.proofInput,
+      currentOwner: currentLaneOwner(context.options),
+    });
+    if (freshPlan.status !== "ready") throw new Error(`${plan.taskId} supersession proof changed under lock: ${freshPlan.reason}`);
+    assertSupersededRetainedRemoteHead(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha);
+    preflightAssignmentClosureForCleanedManifest(state, manifest, {
+      ...context.options,
+      requireNoPrEvidence: true,
+      requireExactAssignmentIdentity: true,
+      requireKnownAssignmentOwner: true,
+    });
+
+    try {
+      const appliedAt = new Date().toISOString();
+      manifest.cleanup_started_at = manifest.cleanup_started_at || appliedAt;
+      manifest.cleanup_owner = manifest.owner || null;
+      manifest.cleanup_branch = manifest.branch;
+      manifest.cleanup_expected_head_sha = freshPlan.expectedHeadSha;
+      manifest.cleanup_local_branch_sha = freshPlan.localBranchSha;
+      manifest.cleanup_remote_branch_sha = freshPlan.remoteBranchSha;
+      manifest.cleanup_remote_branch_deleted_at = null;
+      manifest.cleanup_remote_branch_policy = "retained-superseded-cleanup";
+      manifest.cleanup_supersession_evidence = {
+        schemaVersion: 1,
+        appliedAt,
+        approval: String(context.options.approval).trim(),
+        reason: String(context.options.reason).trim(),
+        proof: freshPlan.proof,
+        remoteBranchPolicy: "retained",
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      };
+      manifest.cleanup_supersession_rollback = `Restore local branch ${manifest.branch} at ${freshPlan.expectedHeadSha} and recreate ${manifest.worktree_path}; remote origin/${manifest.branch} is retained at the proven source head.`;
+      appendTaskEvent(manifest, "cleanup_supersession_proved", `merged PR #${freshPlan.proof.carryForward.prNumber}; scope:${freshPlan.proof.scope.paths.join(",")}`);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_error = "superseded cleanup journal started; inspect recorded targets before resuming after interruption";
+      manifest.updated_at = appliedAt;
+      appendTaskEvent(manifest, "cleanup_journal_started", "durable superseded cleanup journal persisted before local target deletion");
+      writeManifest(plan.manifestPath, manifest);
+
+      removeWorktreeIfPresent(manifest, state, freshPlan.cleanupCwd);
+      writeManifest(plan.manifestPath, manifest);
+      deleteLocalBranchIfPresent(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha);
+      writeManifest(plan.manifestPath, manifest);
+      const targets = recordCleanupTargetEvidence(manifest, freshPlan.cleanupCwd, { deleteRemote: false });
+      writeManifest(plan.manifestPath, manifest);
+      assertCleanupTargetsAbsent(manifest, freshPlan.cleanupCwd, { deleteRemote: false });
+      if (targets.remoteBranch.state !== "not-requested") throw new Error("superseded cleanup remote branch retention evidence is invalid");
+      manifest.cleanup_retained_remote_verified_at = new Date().toISOString();
+      manifest.cleanup_retained_remote_branch_sha = assertSupersededRetainedRemoteHead(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha);
+      appendTaskEvent(manifest, "retained_remote_revalidated", `${manifest.branch}@${manifest.cleanup_retained_remote_branch_sha}`);
+
+      manifest.status = "closed";
+      manifest.closed_at = new Date().toISOString();
+      manifest.updated_at = manifest.closed_at;
+      manifest.cleanup_completed_at = manifest.closed_at;
+      manifest.cleanup_error = null;
+      const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest, {
+        ...context.options,
+        assignmentLockHeld: true,
+        lastResult: `closed after superseded cleanup of ${manifest.task_id}`,
+        eventMessage: `cleaned superseded no-PR workspace ${manifest.task_id}`,
+      });
+      if (assignmentClosure?.closed) {
+        manifest.source_assignment_closed_at = assignmentClosure.closedAt;
+        appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
+      }
+      appendTaskEvent(manifest, "cleanup_supersession_applied", `local worktree and branch removed; remote branch retained`);
+      appendTaskEvent(manifest, "closed", `cleaned superseded no-PR workspace carried by PR #${freshPlan.proof.carryForward.prNumber}`);
+    } catch (error) {
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_error = error.message;
+      manifest.updated_at = new Date().toISOString();
+      appendTaskEvent(manifest, "cleanup_partial", error.message);
+      writeManifest(plan.manifestPath, manifest);
+      throw error;
+    }
+    writeManifest(plan.manifestPath, manifest);
+    });
+  });
+}
+
+function assertSupersededRetainedRemoteHead(manifest, cleanupCwd, expectedHeadSha) {
+  const actualHeadSha = originBranchSha(manifest.branch, cleanupCwd);
+  if (!actualHeadSha || actualHeadSha !== expectedHeadSha) {
+    throw new Error(`Retained remote branch origin/${manifest.branch} head ${actualHeadSha || "absent"} does not match proven source head ${expectedHeadSha}.`);
+  }
+  return actualHeadSha;
 }
 
 

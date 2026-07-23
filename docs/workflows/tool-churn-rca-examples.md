@@ -203,3 +203,15 @@ Tool Churn RCA Packet
 - One next safe action: preserve the recorded direct verification evidence, inspect the lock path read-only, verify lane ownership, compare its mtime/heartbeat to a configured stale threshold (fail closed on missing or invalid timestamps), and verify no active process or descendants remain; if inspection is denied, missing, or sandbox-incomplete, stop, capture the exact error, and request the same read-only inspection outside the sandbox. Classify network, credential, or provider diagnostics separately and forbid Git fallback until that recovery is resolved; if bounded timeout/exit diagnostics remain unavailable or the cause remains unknown, fail closed and do not fall back. Only then clear a stale lane-owned lock with an approval packet naming authority family, operation, scope, and evidence refs. Use explicit scoped Git commit/push/PR commands only after reconciling the lane owner, worktree, branch/base, allowlisted diff, exact HEAD, checks, and review evidence; require pass evidence for each manifest-lock, anti-churn-finalization, authority-decision, intentional-staging, push-before-PR, and stop-line gate, and hold the manifest lock and anti-churn gate through finalization and every delivery mutation (commit, push, and PR creation) rather than recording equivalent gates after the fact.
 - Durable fix recommendation: Add a bounded finish-pr child timeout that captures elapsed timeout, exit code or signal, stderr, child process tree, and lock state; terminates only verified lane-owned process identities with matching start times (fail closed on ownership or PID-reuse ambiguity), verifies descendants exited, re-reads the manifest and lock, verifies owner/path/age before any stale-lock cleanup, preserves the manifest, and fails with a recoverable diagnostic instead of waiting indefinitely.
 ```
+
+## Long Workspace Fixture Suite Duration Boundary
+
+```text
+Tool Churn RCA Packet
+- What failed: The full `node ./scripts/test-codex-workspace.mjs` fixture suite was terminated by the runner before it reached later cleanup cases, without an assertion failure.
+- Failure class: verification-duration boundary.
+- Evidence: Repeated runs ended after the same earlier passing fixture group; the captured output contained no `FAIL` or assertion trace from the supersession tests.
+- Retry stop line: Do not repeatedly rerun the whole suite just to reach one later fixture group or treat the partial output as a pass.
+- One next safe action: Use the opt-in `CODEX_WORKSPACE_TEST_FILTER=<bounded name> node ./scripts/test-codex-workspace.mjs` route, then preserve the exact focused result with the full-suite duration boundary.
+- Durable fix recommendation: Keep the filter opt-in so default full-suite coverage is unchanged, and add focused contracts whenever a new expensive workspace lifecycle path is introduced.
+```
