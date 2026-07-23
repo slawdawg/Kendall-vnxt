@@ -7632,6 +7632,44 @@ try {
     }
   });
 
+  test("cleanup-superseded first-use repair requires carry-forward base evidence to match current canonical dev", () => {
+    const scenarios = [
+      { name: "direct exact base OID", options: { firstUseRepair: true }, source: "gh-pr-view", ready: true },
+      { name: "direct mismatched base OID", options: { firstUseRepair: true, reportedBaseRefOid: "SOURCE_HEAD" }, source: "gh-pr-view", ready: false },
+      { name: "direct unsafe base OID", options: { firstUseRepair: true, reportedBaseRefOid: "--no-verify" }, source: "gh-pr-view", ready: false, reason: "base head is missing or is not an exact Git object id", unsafeId: "--no-verify" },
+      { name: "direct incomplete source scope", options: { firstUseRepair: true, extraSourceDelta: true }, source: "gh-pr-view", ready: false, reason: "bounded scope does not cover every source-lane tree delta" },
+      { name: "GraphQL fallback exact base OID", options: { firstUseRepair: true, unsupportedBaseRefOid: true }, source: "gh-api-graphql", ready: true },
+      { name: "GraphQL fallback mismatched base OID", options: { firstUseRepair: true, unsupportedBaseRefOid: true, fallbackBaseRefOid: "SOURCE_HEAD" }, source: "gh-api-graphql", ready: false },
+      { name: "GraphQL fallback unsafe base OID", options: { firstUseRepair: true, unsupportedBaseRefOid: true, fallbackBaseRefOid: "--no-verify" }, source: "gh-api-graphql", ready: false, reason: "omitted an exact Git object id", unsafeId: "--no-verify" },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createSupersededCleanupFixture(scenario.options);
+      try {
+        const result = runFixtureScript(fixture, [...legacyFirstUseSupersededArgs(fixture), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const summary = JSON.parse(result.stdout);
+        const plan = summary.results[0];
+        assert(plan.proof.carryForward.baseRefOidSource === scenario.source, `${scenario.name}: ${result.stdout}`);
+        if (scenario.ready) {
+          assert(summary.counts.cleanupReady === 1, `${scenario.name}: ${result.stdout}`);
+          assert(plan.proof.currentBase.headSha === fixture.currentBaseHead, `${scenario.name}: ${result.stdout}`);
+          assert(plan.proof.carryForward.baseRefOid === fixture.currentBaseHead, `${scenario.name}: ${result.stdout}`);
+        } else {
+          assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became cleanup-ready: ${result.stdout}`);
+          assert(plan.status === "blocked", `${scenario.name} was not blocked: ${result.stdout}`);
+          assert(plan.proof.carryForward.baseRefOid === undefined, `${scenario.name}: blocked proof retained a base OID`);
+          assert(plan.reason.includes(scenario.reason || "current canonical base head does not exactly match GitHub carry-forward PR base evidence"), `${scenario.name}: ${plan.reason}`);
+          if (scenario.unsafeId) assert(!result.stdout.includes(scenario.unsafeId), `${scenario.name}: unsafe base OID leaked into proof output`);
+        }
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree during preview`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source branch during preview`);
+        assert(!remoteBranchExists(fixture.root, fixture.branch), `${scenario.name} created or mutated absent source remote`);
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
+    }
+  });
+
   test("cleanup-superseded denies missing, malformed, conflicting, and drifted GraphQL base proof before mutation", () => {
     const cases = [
       { name: "missing base oid", options: { unsupportedBaseRefOid: true, fallbackBaseRefOid: null }, expected: "omitted an exact Git object id" },
@@ -7860,6 +7898,8 @@ try {
       const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
       assert(preview.code === 0, preview.stderr || preview.stdout);
       const plan = JSON.parse(preview.stdout).results[0];
+      assert(plan.proof.carryForward.baseRefOid === fixture.currentBaseHead, preview.stdout || preview.stderr);
+      assert(plan.proof.currentBase.headSha === fixture.currentBaseHead, preview.stdout || preview.stderr);
       runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
       runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
       const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
@@ -7887,6 +7927,44 @@ try {
       assert(closed.status === "closed", `first-use partial resume status is ${closed.status}`);
       assert(closed.cleanup_source_remote_absent === "absent", closed.cleanup_source_remote_absent);
       assert(!remoteBranchExists(fixture.root, fixture.branch), "first-use partial resume created or mutated source remote");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded first-use partial resume blocks changed canonical base evidence without mutation", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+    const args = legacyFirstUseSupersededArgs(fixture);
+    try {
+      const initial = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(initial.code === 0, initial.stderr || initial.stdout);
+      const initialPlan = JSON.parse(initial.stdout).results[0];
+      assert(initialPlan.proof.carryForward.baseRefOid === fixture.currentBaseHead, initial.stdout || initial.stderr);
+
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_supersession_evidence = { schemaVersion: 1, remoteBranchPolicy: "absent", proof: initialPlan.proof };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      commitFile(fixture.root, "after-cleanup-base-advance.txt", "advance after local targets were removed\n", "advance canonical base after cleanup interruption");
+      const advancedBaseHead = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["push", "-q", "origin", fixture.baseBranch]);
+      const fakeGh = join(fixture.fakeBin, "gh");
+      writeFileSync(fakeGh, readFileSync(fakeGh, "utf8").replaceAll(fixture.currentBaseHead, advancedBaseHead));
+
+      const resumed = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const summary = JSON.parse(resumed.stdout);
+      assert(summary.counts.cleanupReady === 0, resumed.stdout || resumed.stderr);
+      assert(summary.results[0].status === "blocked", resumed.stdout || resumed.stderr);
+      assert(summary.results[0].reason.includes("recorded first-use canonical base proof"), summary.results[0].reason);
+      assert(!existsSync(fixture.worktree), "blocked partial resume recreated or mutated source worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "blocked partial resume recreated or mutated local branch");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "blocked partial resume mutated absent source remote");
+      assert(readJson(manifestPath).status === "cleanup_partial", "blocked partial resume changed its journal state");
     } finally {
       cleanupSupersededCleanupFixture(fixture);
     }
@@ -9229,6 +9307,11 @@ function createSupersededCleanupFixture(options = {}) {
     : options.fallbackBaseRefOid === undefined
       ? currentBaseHead
       : options.fallbackBaseRefOid;
+  const reportedBaseRefOid = options.reportedBaseRefOid === "SOURCE_HEAD"
+    ? sourceHead
+    : options.reportedBaseRefOid === undefined
+      ? currentBaseHead
+      : options.reportedBaseRefOid;
   const legacyPrNumberField = Object.hasOwn(options, "legacyPrNumber")
     ? `number: ${JSON.stringify(options.legacyPrNumber)},`
     : "number: 456,";
@@ -9237,12 +9320,12 @@ function createSupersededCleanupFixture(options = {}) {
     : "number: 456,";
   const reportedHeadRefOid = Object.hasOwn(options, "reportedHeadRefOid")
     ? options.reportedHeadRefOid
-    : options.unsupportedBaseRefOid
+    : options.unsupportedBaseRefOid && !options.firstUseRepair
       ? carryForwardCommit
       : fakePrHead;
   const reportedMergeCommitOid = Object.hasOwn(options, "reportedMergeCommitOid")
     ? options.reportedMergeCommitOid
-    : options.unsupportedBaseRefOid
+    : options.unsupportedBaseRefOid && !options.firstUseRepair
       ? carryForwardCommit
       : mergeCommit;
   const fallbackGraphql = options.unsupportedBaseRefOid
@@ -9298,7 +9381,7 @@ function createSupersededCleanupFixture(options = {}) {
         : "",
       options.legacyInvalidJson || options.modernInvalidJson
         ? "  console.log('{invalid JSON');"
-        : `  console.log(JSON.stringify({ ${options.unsupportedBaseRefOid ? legacyPrNumberField : modernPrNumberField} url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || baseBranch}', ${options.unsupportedBaseRefOid ? "" : `baseRefOid: '${currentBaseHead}',`} headRefOid: ${JSON.stringify(reportedHeadRefOid)}, mergeCommit: { oid: ${JSON.stringify(reportedMergeCommitOid)} } }));`,
+        : `  console.log(JSON.stringify({ ${options.unsupportedBaseRefOid ? legacyPrNumberField : modernPrNumberField} url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || baseBranch}', ${options.unsupportedBaseRefOid ? "" : `baseRefOid: '${reportedBaseRefOid}',`} headRefOid: ${JSON.stringify(reportedHeadRefOid)}, mergeCommit: { oid: ${JSON.stringify(reportedMergeCommitOid)} } }));`,
       "  process.exit(0);",
       "}",
       "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: 'fixture-owner' }, name: 'fixture-repo' })); process.exit(0); }",

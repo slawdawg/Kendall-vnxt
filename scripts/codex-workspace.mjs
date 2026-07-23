@@ -4606,6 +4606,9 @@ function validSupersessionApplyEvidence(value) {
 function cleanupSupersededPlan(record, state, context) {
   const { manifest } = record;
   const { proofInput, options } = context;
+  // This is a preliminary identity check so only an already-recorded partial
+  // cleanup may proceed past the intentionally absent local targets.  The
+  // first-use base proof is rechecked after its live evidence is available.
   const partialResume = sameSupersessionPartialResume(manifest, proofInput);
   const base = {
     taskId: manifest.task_id,
@@ -4719,6 +4722,9 @@ function cleanupSupersededPlan(record, state, context) {
   if (currentBase.status !== "matched") {
     return { ...base, cleanupCwd, reason: currentBase.reason };
   }
+  if (partialResume && !sameSupersessionPartialResume(manifest, proofInput, { carryForward, currentBase })) {
+    return { ...base, cleanupCwd, reason: "partial supersession resume requires the recorded first-use canonical base proof to exactly match current evidence" };
+  }
 
   const scopeProof = compareScopedTreeEntries(proofInput.sourceHead, proofInput.carryForwardCommit, proofInput.scope, cleanupCwd);
   base.proof.scope = scopeProof;
@@ -4729,9 +4735,14 @@ function cleanupSupersededPlan(record, state, context) {
   base.proof.currentBase.scopeStatus = currentBaseScope.status;
   base.proof.currentBase.scopeEntries = currentBaseScope.carryForwardEntries || currentBaseScope.canonicalEntries || [];
   if (currentBaseScope.status !== "matched") return { ...base, cleanupCwd, reason: proofInput.repair ? currentBaseScope.reason : "scoped source content is not exactly retained in the current canonical base" };
-  if (proofInput.repair) base.proof.repair = { ...base.proof.repair, status: "matched", hardeningProof: currentBaseScope };
   if (!scopeCoversSourceDelta(currentBase.canonicalRef, proofInput.sourceHead, proofInput.scope, cleanupCwd)) {
     return { ...base, cleanupCwd, reason: "bounded scope does not cover every source-lane tree delta" };
+  }
+  if (proofInput.repair) {
+    // The value was normalized as an exact Git object ID and matched against
+    // the canonical head above; retain it only in a fully ready repair proof.
+    base.proof.carryForward.baseRefOid = carryForward.baseRefOid;
+    base.proof.repair = { ...base.proof.repair, status: "matched", hardeningProof: currentBaseScope };
   }
 
   return { ...base, status: "ready", cleanupCwd, expectedHeadSha: proofInput.sourceHead, localBranchSha: localBranchHead, remoteBranchSha: remoteBranchHead, partialResume, reason: partialResume ? "same-proof supersession partial is safe to resume" : proofInput.repair ? "explicit legacy first-use repair proof is safe to apply locally" : "clean no-PR source is exactly carried by the named merged successor scope" };
@@ -4748,7 +4759,7 @@ function supersededSourceMismatchReason({ partialResume, expectedRemoteState }) 
   return partialResume ? "partial supersession resume requires an absent local branch and retained remote branch at --source-head" : "source local and remote branch heads must exactly match --source-head";
 }
 
-function sameSupersessionPartialResume(manifest, proofInput) {
+function sameSupersessionPartialResume(manifest, proofInput, liveEvidence = null) {
   const proof = manifest.cleanup_supersession_evidence?.proof;
   const recordedRepair = proof?.repair ? {
     mode: proof.repair.mode,
@@ -4771,7 +4782,17 @@ function sameSupersessionPartialResume(manifest, proofInput) {
     hardeningScope: proofInput.repair.hardeningScope,
   } : null;
   const expectedRemotePolicy = proofInput.repair ? "absent" : "retained";
-  return manifest.status === "cleanup_partial" && manifest.cleanup_supersession_evidence?.remoteBranchPolicy === expectedRemotePolicy && proof?.source?.requestedHead === proofInput.sourceHead && proof?.carryForward?.prNumber === proofInput.carryForwardPr && proof?.carryForward?.requestedCommit === proofInput.carryForwardCommit && Array.isArray(proof?.scope?.paths) && JSON.stringify(proof.scope.paths) === JSON.stringify(proofInput.scope) && JSON.stringify(recordedRepair) === JSON.stringify(requestedRepair);
+  const sameRecordedInput = manifest.status === "cleanup_partial" && manifest.cleanup_supersession_evidence?.remoteBranchPolicy === expectedRemotePolicy && proof?.source?.requestedHead === proofInput.sourceHead && proof?.carryForward?.prNumber === proofInput.carryForwardPr && proof?.carryForward?.requestedCommit === proofInput.carryForwardCommit && Array.isArray(proof?.scope?.paths) && JSON.stringify(proof.scope.paths) === JSON.stringify(proofInput.scope) && JSON.stringify(recordedRepair) === JSON.stringify(requestedRepair);
+  if (!sameRecordedInput || !proofInput.repair) return sameRecordedInput;
+
+  // A first-use resume has no local targets left to bind it to the original
+  // proof. Require the exact normalized PR base OID and canonical base head
+  // that were persisted while the initial ready proof still had those targets.
+  const recordedBaseRefOid = exactGitObjectIdOrNull(proof?.carryForward?.baseRefOid);
+  const recordedCurrentBaseHead = exactGitObjectIdOrNull(proof?.currentBase?.headSha);
+  if (!recordedBaseRefOid || !recordedCurrentBaseHead || recordedBaseRefOid !== recordedCurrentBaseHead) return false;
+  if (!liveEvidence) return true;
+  return liveEvidence.carryForward?.baseRefOid === recordedBaseRefOid && liveEvidence.currentBase?.headSha === recordedCurrentBaseHead;
 }
 
 function supersededCurrentBaseProof(manifest, carryForward, proofInput, cwd) {
@@ -4812,7 +4833,7 @@ function supersededCurrentBaseProof(manifest, carryForward, proofInput, cwd) {
     }
     base.remoteHeadSha = remoteHeadSha;
   }
-  if (!proofInput.repair && (!carryForward.baseRefOid || carryForward.baseRefOid !== headSha)) {
+  if (!carryForward.baseRefOid || carryForward.baseRefOid !== headSha) {
     return { ...base, headSha, status: "mismatch", reason: "current canonical base head does not exactly match GitHub carry-forward PR base evidence" };
   }
   if (!gitCommitIsAncestor(proofInput.carryForwardCommit, canonicalRef, cwd) || (proofInput.repair && !carryForward.mergeCommit?.oid) || (proofInput.repair && !gitCommitIsAncestor(carryForward.mergeCommit.oid, canonicalRef, cwd))) {

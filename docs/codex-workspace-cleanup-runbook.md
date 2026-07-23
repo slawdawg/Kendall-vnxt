@@ -91,6 +91,12 @@ remote was successfully observed as absent, its manifest has no assignment and
 names a deleted predecessor base, and a named commit was carried inside a named
 merged PR before a bounded review-hardening sequence.
 
+If an interrupted first-use cleanup has already removed its local worktree and
+branch, resumption requires the journal's recorded normalized carry-forward PR
+base OID and canonical base head to match the newly checked current evidence
+exactly. A changed base proof leaves the partial journal and all remaining
+targets untouched; inspect and restart from fresh evidence instead.
+
 It is an explicit migration contract, not a fallback. All fields below are
 required, including metadata-only provenance and hardening rationale:
 
@@ -116,7 +122,9 @@ is integrated into that merge, the complete post-carry PR lineage is declared,
 and the declared hardening paths exactly equal every carried-to-merge path
 difference. It also proves the recorded predecessor `origin/<branch>` ref is
 absent both locally and at origin, and the current `origin/dev` scoped tree
-still equals that merged PR. It separately queries the source remote: an empty
+still equals that merged PR. The named carry-forward PR base object ID must
+also exactly equal the current canonical `origin/dev` head; a ready proof records
+that normalized exact ID for audit. It separately queries the source remote: an empty
 successful result proves `absent`; a lookup failure, a present branch, an
 unknown or matching active unlinked assignment, a dangling assignment id, a
 non-`dev` canonical base, or any unlisted path/commit blocks cleanup. The
