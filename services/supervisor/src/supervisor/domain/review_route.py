@@ -15,7 +15,7 @@ from typing import Any
 
 DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1"
 DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024
-SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-adapter/v1"
+SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1"
 NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1"
 SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1"
 

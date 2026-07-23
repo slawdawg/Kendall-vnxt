@@ -73,7 +73,7 @@ data-boundary, and retention review.
 
 ## Simulated Normalized Findings
 
-The fixed `simulated-review-adapter/v1` is a deterministic fixture only. It
+The fixed `simulated-review-fixture/v1` is a deterministic fixture only. It
 accepts one valid simulated Disclosure Packet and emits compact, provider-neutral
 Normalized Findings for contract and recovery testing. It sends no packet to
 Claude, Ollama, or any other provider, and it has no tools, network, process,

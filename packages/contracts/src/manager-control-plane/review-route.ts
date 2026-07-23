@@ -5,7 +5,7 @@ export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1" a
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1" as const;
 export const NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1" as const;
 export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1" as const;
-export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-adapter/v1" as const;
+export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1" as const;
 
 /** The only adapter identifier accepted for simulated review. It has no tools. */
 export type ReviewRouteAdapterId = "none" | typeof SIMULATED_REVIEW_ADAPTER_ID;
@@ -93,7 +93,7 @@ export interface DisclosurePacket {
   rawPayloadRetained: false;
 }
 
-/** Provider-neutral, metadata-only simulated finding. */
+/** Metadata-only simulated finding. */
 export interface NormalizedFinding {
   schemaVersion: typeof NORMALIZED_FINDING_SCHEMA_VERSION;
   findingId: string;

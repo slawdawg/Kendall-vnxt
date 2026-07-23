@@ -71,8 +71,8 @@ test("review route is deterministic and simulated stays non-executing", () => {
   const input = {
     ...base,
     requestedState: "simulated",
-    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-adapter/v1"] },
-    disclosure: { ...base.disclosure, routeAllowlist: ["simulated"], adapterAllowlist: ["simulated-review-adapter/v1"] },
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-fixture/v1"] },
+    disclosure: { ...base.disclosure, routeAllowlist: ["simulated"], adapterAllowlist: ["simulated-review-fixture/v1"] },
   };
   const first = evaluateReviewRoute(input);
   const second = evaluateReviewRoute(input);
@@ -88,14 +88,14 @@ function simulatedInput(overrides = {}) {
   const preparation = evaluateReviewRoute({
     ...base,
     requestedState: "simulated",
-    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-adapter/v1"] },
-    disclosure: { ...base.disclosure, routeAllowlist: ["simulated"], adapterAllowlist: ["simulated-review-adapter/v1"] },
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-fixture/v1"] },
+    disclosure: { ...base.disclosure, routeAllowlist: ["simulated"], adapterAllowlist: ["simulated-review-fixture/v1"] },
   });
   return {
     packet: preparation.packet,
     decision: preparation.decision,
     now: NOW,
-    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-adapter/v1"] },
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-fixture/v1"] },
     currentImmutableReview: base.immutableReview,
     ...overrides,
   };

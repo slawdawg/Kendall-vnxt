@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1";
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1";
-export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-adapter/v1";
+export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1";
 export const DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024;
 
 export function disclosurePacketUtf8Bytes(value) {
