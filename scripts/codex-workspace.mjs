@@ -4609,8 +4609,13 @@ function cleanupSupersededPlan(record, state, context) {
     requestedCommit: proofInput.carryForwardCommit,
     mergedAt: carryForward?.mergedAt || null,
     mergeCommit: carryForward?.mergeCommit?.oid || null,
+    baseRefOidSource: carryForward?.baseRefOidSource || null,
+    baseRefOidError: carryForward?.baseRefOidError || null,
     status: "unverified",
   };
+  if (carryForward?.baseRefOidError) {
+    return { ...base, cleanupCwd, reason: carryForward.baseRefOidError };
+  }
   if (!carryForward?.mergedAt || String(carryForward.state || "").toUpperCase() !== "MERGED") {
     return { ...base, cleanupCwd, reason: "named carry-forward PR is not merged" };
   }
@@ -4663,6 +4668,9 @@ function supersededCurrentBaseProof(manifest, carryForward, proofInput, cwd) {
   const headSha = branchSha(canonicalRef, cwd);
   if (!headSha) {
     return { ...base, status: "blocked", reason: "current canonical base ref is unavailable locally" };
+  }
+  if (carryForward.baseRefOidError) {
+    return { ...base, headSha, status: "blocked", reason: carryForward.baseRefOidError };
   }
   if (!carryForward.baseRefOid || carryForward.baseRefOid !== headSha) {
     return { ...base, headSha, status: "mismatch", reason: "current canonical base head does not exactly match GitHub carry-forward PR base evidence" };
@@ -4761,9 +4769,160 @@ function supersededAssignmentHasPrEvidence(assignment) {
 }
 
 function mergedCarryForwardPr(prNumber, cwd) {
-  const result = run("gh", ["pr", "view", String(prNumber), "--json", "number,url,mergedAt,state,baseRefName,baseRefOid,headRefOid,mergeCommit"], { cwd });
+  const modernFields = "number,url,mergedAt,state,baseRefName,baseRefOid,headRefOid,mergeCommit";
+  const result = run("gh", ["pr", "view", String(prNumber), "--json", modernFields], { cwd });
+  if (result.code === 0) {
+    let carryForward;
+    try {
+      carryForward = parseGhJson(result.stdout, `carry-forward PR ${prNumber}`);
+    } catch {
+      return unavailableCarryForwardPrView("gh-pr-view", "carry-forward PR view returned invalid JSON");
+    }
+    const modernPrNumber = positiveSafePrNumberOrNull(carryForward?.number);
+    if (modernPrNumber !== prNumber) {
+      return {
+        ...carryForward,
+        baseRefOid: null,
+        baseRefOidSource: "gh-pr-view",
+        baseRefOidError: "carry-forward PR view did not return the exact requested positive safe integer PR number",
+      };
+    }
+    return normalizeCarryForwardPrBaseRefOid(carryForward, "gh-pr-view");
+  }
+  if (!ghRejectedBaseRefOidField(result)) return null;
+
+  const legacyFields = "number,url,mergedAt,state,baseRefName,headRefOid,mergeCommit";
+  const legacyResult = run("gh", ["pr", "view", String(prNumber), "--json", legacyFields], { cwd });
+  if (legacyResult.code !== 0) return null;
+  let carryForward;
+  try {
+    carryForward = parseGhJson(legacyResult.stdout, `carry-forward PR ${prNumber}`);
+  } catch {
+    return unavailableCarryForwardPrView("gh-pr-view-legacy", "legacy carry-forward PR view returned invalid JSON");
+  }
+  const legacyPrNumber = positiveSafePrNumberOrNull(carryForward?.number);
+  if (legacyPrNumber !== prNumber) {
+    return {
+      ...carryForward,
+      baseRefOid: null,
+      baseRefOidSource: "gh-pr-view-legacy",
+      baseRefOidError: "legacy carry-forward PR view did not return the exact requested positive safe integer PR number",
+    };
+  }
+  const baseProof = carryForwardPrBaseRefOidFromGraphql(prNumber, cwd);
+  return {
+    ...carryForward,
+    baseRefOid: baseProof.baseRefOid,
+    baseRefOidSource: baseProof.source,
+    baseRefOidError: baseProof.error || null,
+  };
+}
+
+function unavailableCarryForwardPrView(baseRefOidSource, baseRefOidError) {
+  return {
+    number: null,
+    url: null,
+    mergedAt: null,
+    state: null,
+    baseRefName: null,
+    headRefOid: null,
+    mergeCommit: null,
+    baseRefOid: null,
+    baseRefOidSource,
+    baseRefOidError,
+  };
+}
+
+function ghRejectedBaseRefOidField(result) {
+  const message = `${result.stderr || ""}\n${result.stdout || ""}`;
+  return /\bbaseRefOid\b/i.test(message) && /\b(?:unknown|unsupported|invalid)\s+(?:JSON\s+)?field\b/i.test(message);
+}
+
+function normalizeCarryForwardPrBaseRefOid(carryForward, source) {
+  const baseRefOid = exactGitObjectIdOrNull(carryForward?.baseRefOid);
+  return {
+    ...carryForward,
+    baseRefOid,
+    baseRefOidSource: source,
+    baseRefOidError: baseRefOid ? null : "carry-forward PR base head is missing or is not an exact Git object id",
+  };
+}
+
+function positiveSafePrNumberOrNull(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function carryForwardPrBaseRefOidFromGraphql(prNumber, cwd) {
+  const repository = carryForwardGithubRepository(cwd);
+  if (!repository) {
+    return { baseRefOid: null, source: "gh-api-graphql", error: "GitHub repository identity is unavailable for carry-forward PR base lookup" };
+  }
+  const query = [
+    "query($owner:String!,$name:String!,$number:Int!){",
+    "repository(owner:$owner,name:$name){",
+    "pullRequest(number:$number){number baseRefOid}",
+    "}",
+    "}",
+  ].join("");
+  const result = run(
+    "gh",
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+      "-F",
+      `owner=${repository.owner}`,
+      "-F",
+      `name=${repository.name}`,
+      "-F",
+      `number=${prNumber}`,
+    ],
+    { cwd },
+  );
+  if (result.code !== 0) {
+    return { baseRefOid: null, source: "gh-api-graphql", error: "GitHub GraphQL carry-forward PR base lookup failed" };
+  }
+  let parsed;
+  try {
+    parsed = parseGhJson(result.stdout, "carry-forward PR base lookup");
+  } catch {
+    return { baseRefOid: null, source: "gh-api-graphql", error: "GitHub GraphQL carry-forward PR base lookup returned invalid JSON" };
+  }
+  if (parsed?.errors !== undefined && !Array.isArray(parsed.errors)) {
+    return { baseRefOid: null, source: "gh-api-graphql", error: "GitHub GraphQL carry-forward PR base lookup returned a malformed errors field" };
+  }
+  const errors = parsed?.errors || [];
+  const pullRequest = parsed?.data?.repository?.pullRequest;
+  if (errors.length > 0) {
+    return { baseRefOid: null, source: "gh-api-graphql", error: `GitHub GraphQL carry-forward PR base lookup returned ${errors.length} error(s)` };
+  }
+  if (!pullRequest || positiveSafePrNumberOrNull(pullRequest.number) !== prNumber) {
+    return { baseRefOid: null, source: "gh-api-graphql", error: "GitHub GraphQL carry-forward PR base lookup did not return the exact requested PR" };
+  }
+  const baseRefOid = exactGitObjectIdOrNull(pullRequest.baseRefOid);
+  if (!baseRefOid) {
+    return { baseRefOid: null, source: "gh-api-graphql", error: "GitHub GraphQL carry-forward PR base lookup omitted an exact Git object id" };
+  }
+  return { baseRefOid, source: "gh-api-graphql", error: null };
+}
+
+function carryForwardGithubRepository(cwd) {
+  const result = run("gh", ["repo", "view", "--json", "owner,name"], { cwd });
   if (result.code !== 0) return null;
-  return parseGhJson(result.stdout, `carry-forward PR ${prNumber}`);
+  try {
+    const parsed = parseGhJson(result.stdout, "carry-forward repository metadata");
+    const owner = typeof parsed?.owner === "string" ? parsed.owner : parsed?.owner?.login;
+    const name = typeof parsed?.name === "string" ? parsed.name : "";
+    return owner && name ? { owner, name } : null;
+  } catch {
+    return null;
+  }
+}
+
+function exactGitObjectIdOrNull(value) {
+  const normalized = String(value || "").trim();
+  return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(normalized) ? normalized.toLowerCase() : null;
 }
 
 function gitCommitExists(commit, cwd) {

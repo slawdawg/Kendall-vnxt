@@ -7526,6 +7526,7 @@ try {
       assert(summary.mode === "cleanup-superseded", `mode is ${summary.mode}`);
       assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
       assert(summary.remoteBranchPolicy.includes("retained"), summary.remoteBranchPolicy);
+      assert(summary.results[0].proof.carryForward.baseRefOidSource === "gh-pr-view", preview.stdout || preview.stderr);
       assert(summary.results[0].proof.scope.status === "matched", preview.stdout || preview.stderr);
       assert(existsSync(fixture.worktree), "preview unexpectedly removed source worktree");
       assert(branchExists(fixture.root, fixture.branch), "preview unexpectedly deleted source branch");
@@ -7551,6 +7552,123 @@ try {
       assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
     } finally {
       cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded falls back to a validated GraphQL base head only when gh rejects baseRefOid", () => {
+    const fixture = createSupersededCleanupFixture({ unsupportedBaseRefOid: true, fallbackBaseDriftOnSecondLookup: true });
+    const args = supersededCleanupArgs(fixture);
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const summary = JSON.parse(preview.stdout);
+      assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(summary.results[0].proof.carryForward.baseRefOidSource === "gh-api-graphql", preview.stdout || preview.stderr);
+      assert(existsSync(fixture.worktree), "GraphQL fallback preview unexpectedly removed source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "GraphQL fallback preview unexpectedly deleted source branch");
+      rmSync(join(fixture.root, "fallback-base-lookup-count"), { force: true });
+
+      const applied = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved source lane supersession cleanup",
+        "--reason",
+        "merged carry-forward proof reviewed and approved",
+      ], { env: fixture.env });
+      assert(applied.code !== 0, applied.stderr || applied.stdout);
+      assert(applied.stderr.includes("supersession proof changed under lock"), applied.stderr || applied.stdout);
+      assert(existsSync(fixture.worktree), "apply skipped GraphQL fallback re-proof before deleting source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "apply skipped GraphQL fallback re-proof before deleting source branch");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded denies missing, malformed, conflicting, and drifted GraphQL base proof before mutation", () => {
+    const cases = [
+      { name: "missing base oid", options: { unsupportedBaseRefOid: true, fallbackBaseRefOid: null }, expected: "omitted an exact Git object id" },
+      { name: "malformed base oid", options: { unsupportedBaseRefOid: true, fallbackBaseRefOid: "not-a-git-object" }, expected: "omitted an exact Git object id" },
+      { name: "GraphQL error", options: { unsupportedBaseRefOid: true, fallbackGraphqlErrors: [{ message: "ambiguous result" }] }, expected: "returned 1 error(s)" },
+      { name: "malformed GraphQL errors", options: { unsupportedBaseRefOid: true, fallbackGraphqlErrors: "ambiguous result" }, expected: "returned a malformed errors field" },
+      { name: "conflicting PR", options: { unsupportedBaseRefOid: true, fallbackPrNumber: 457 }, expected: "did not return the exact requested PR" },
+      { name: "numeric-string PR", options: { unsupportedBaseRefOid: true, fallbackPrNumber: "456" }, expected: "did not return the exact requested PR" },
+      { name: "coercible malformed PR", options: { unsupportedBaseRefOid: true, fallbackPrNumber: "0x1c8" }, expected: "did not return the exact requested PR" },
+      { name: "base drift", options: { unsupportedBaseRefOid: true, fallbackBaseRefOid: "SOURCE_HEAD" }, expected: "current canonical base head does not exactly match" },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture(scenario.options);
+      try {
+        const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const summary = JSON.parse(result.stdout);
+        assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became cleanup-ready: ${result.stdout}`);
+        assert(summary.results[0].reason.includes(scenario.expected), `${scenario.name}: ${summary.results[0].reason}`);
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source branch`);
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-superseded rejects a legacy PR view for a different PR before GraphQL fallback metadata is combined", () => {
+    const cases = [
+      {
+        name: "different PR",
+        options: { unsupportedBaseRefOid: true, legacyPrNumber: 457 },
+        expected: "legacy carry-forward PR view did not return the exact requested positive safe integer PR number",
+      },
+      {
+        name: "invalid JSON",
+        options: { unsupportedBaseRefOid: true, legacyInvalidJson: true },
+        expected: "legacy carry-forward PR view returned invalid JSON",
+      },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture(scenario.options);
+      try {
+        const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const summary = JSON.parse(result.stdout);
+        assert(summary.counts.cleanupReady === 0, `${scenario.name}: ${result.stdout}`);
+        assert(summary.results[0].reason.includes(scenario.expected), `${scenario.name}: ${summary.results[0].reason}`);
+        assert(summary.results[0].proof.carryForward.baseRefOid === undefined, `${scenario.name}: carry-forward summary unexpectedly exposed a base oid`);
+        assert(summary.results[0].proof.carryForward.baseRefOidError === scenario.expected, `${scenario.name}: ${result.stdout}`);
+        assert(!existsSync(join(fixture.root, "fallback-base-lookup-count")), `${scenario.name} still queried GraphQL fallback metadata`);
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source branch`);
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-superseded rejects malformed modern PR-view identities before accepting base metadata or mutation", () => {
+    const cases = [
+      { name: "mismatched number", modernPrNumber: 457 },
+      { name: "numeric string", modernPrNumber: "456" },
+      { name: "coercible hex", modernPrNumber: "0x1c8" },
+      { name: "invalid JSON", modernInvalidJson: true },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture(scenario);
+      try {
+        const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const summary = JSON.parse(result.stdout);
+        assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became cleanup-ready: ${result.stdout}`);
+        const expected = scenario.modernInvalidJson
+          ? "carry-forward PR view returned invalid JSON"
+          : "carry-forward PR view did not return the exact requested positive safe integer PR number";
+        assert(summary.results[0].reason.includes(expected), `${scenario.name}: ${summary.results[0].reason}`);
+        assert(summary.results[0].proof.carryForward.baseRefOidError === expected, `${scenario.name}: ${result.stdout}`);
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source branch`);
+        assert(remoteBranchExists(fixture.root, fixture.branch), `${scenario.name} deleted retained remote branch`);
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
     }
   });
 
@@ -8711,6 +8829,34 @@ function createSupersededCleanupFixture(options = {}) {
     }, null, 2)}\n`,
   );
   const fakeGh = join(fakeBin, "gh");
+  const fallbackBaseRefOid = options.fallbackBaseRefOid === "SOURCE_HEAD"
+    ? sourceHead
+    : options.fallbackBaseRefOid === undefined
+      ? currentBaseHead
+      : options.fallbackBaseRefOid;
+  const legacyPrNumberField = Object.hasOwn(options, "legacyPrNumber")
+    ? `number: ${JSON.stringify(options.legacyPrNumber)},`
+    : "number: 456,";
+  const modernPrNumberField = Object.hasOwn(options, "modernPrNumber")
+    ? `number: ${JSON.stringify(options.modernPrNumber)},`
+    : "number: 456,";
+  const fallbackGraphql = options.unsupportedBaseRefOid
+    ? [
+        `const fallbackInvocationPath = ${JSON.stringify(join(fixtureRoot, "fallback-base-lookup-count"))};`,
+        "let fallbackInvocationCount = 0;",
+        "try { fallbackInvocationCount = Number(fs.readFileSync(fallbackInvocationPath, 'utf8')) || 0; } catch {}",
+        "if (args[0] === 'api' && args[1] === 'graphql') {",
+        "  if (!args.includes('owner=fixture-owner') || !args.includes('name=fixture-repo') || !args.includes('number=456') || !args.some((argument) => argument.includes('pullRequest(number:$number){number baseRefOid}'))) { console.error('fallback must resolve the exact repository and PR base field'); process.exit(1); }",
+        "  fallbackInvocationCount += 1;",
+        "  fs.writeFileSync(fallbackInvocationPath, String(fallbackInvocationCount));",
+        `  const fallbackBaseRefOid = ${JSON.stringify(fallbackBaseRefOid)};`,
+        `  const baseRefOid = ${Boolean(options.fallbackBaseDriftOnSecondLookup)} && fallbackInvocationCount >= 2 ? ${JSON.stringify(sourceHead)} : fallbackBaseRefOid;`,
+        `  const errors = ${JSON.stringify(options.fallbackGraphqlErrors || [])};`,
+        `  console.log(JSON.stringify({ data: { repository: { pullRequest: { number: ${JSON.stringify(options.fallbackPrNumber ?? 456)}, baseRefOid } } }, ...(errors.length ? { errors } : {}) }));`,
+        "  process.exit(0);",
+        "}",
+      ]
+    : [];
   const lockedDrift = options.lockedAssignmentDrift
     ? [
         `const invocationPath = ${JSON.stringify(join(fixtureRoot, "locked-assignment-drift-count"))};`,
@@ -8742,9 +8888,16 @@ function createSupersededCleanupFixture(options = {}) {
       "  process.exit(0);",
       "}",
       "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '456') {",
-      `  console.log(JSON.stringify({ number: 456, url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || "main"}', baseRefOid: '${currentBaseHead}', headRefOid: '${carryForwardCommit}', mergeCommit: { oid: '${carryForwardCommit}' } }));`,
+      options.unsupportedBaseRefOid
+        ? "  if (args.some((argument) => argument.includes('baseRefOid'))) { console.error('unknown field \\\"baseRefOid\\\"'); process.exit(1); }"
+        : "",
+      options.legacyInvalidJson || options.modernInvalidJson
+        ? "  console.log('{invalid JSON');"
+        : `  console.log(JSON.stringify({ ${options.unsupportedBaseRefOid ? legacyPrNumberField : modernPrNumberField} url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || "main"}', ${options.unsupportedBaseRefOid ? "" : `baseRefOid: '${currentBaseHead}',`} headRefOid: '${carryForwardCommit}', mergeCommit: { oid: '${carryForwardCommit}' } }));`,
       "  process.exit(0);",
       "}",
+      "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: 'fixture-owner' }, name: 'fixture-repo' })); process.exit(0); }",
+      ...fallbackGraphql,
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
       "process.exit(1);",
       "",

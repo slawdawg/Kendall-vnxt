@@ -49,6 +49,12 @@ multiple source lanes, or a manifest that retains a previously required remote
 cleanup target. Scope paths are exact identifiers: surrounding whitespace is
 rejected rather than normalized.
 
+The proof packet records whether the carry-forward PR base head came directly
+from `gh pr view` or, only when that installed CLI explicitly rejects
+`baseRefOid`, from a repository-scoped GitHub GraphQL lookup. Both paths require
+one exact Git object ID for the requested PR; missing, malformed, conflicting,
+or drifted fallback evidence remains blocked and never authorizes cleanup.
+
 After reviewing the packet, apply only with explicit approval and a reason:
 
 ```bash
