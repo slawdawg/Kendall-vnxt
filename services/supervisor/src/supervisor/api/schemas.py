@@ -75,6 +75,59 @@ UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE = re.compile(
     r"(?:\b(?:raw[\s_-]*(?:prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|secrets?|credentials?|passwords?)\b|raw[\s_-]*provider[\s_-]*payloads?|provider\s*[:=]|(?:api|access|refresh)[\s_-]*tokens?|api[\s_-]*keys?|authorization\s*:\s*bearer|(?:request|response)[\s_-]*ids?)",
     re.IGNORECASE,
 )
+REVIEW_ROUTE_EVIDENCE_REF_RE = re.compile(r"^review-evidence:sha256:[a-f0-9]{64}$")
+REVIEW_ROUTE_PACKET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+MANAGER_SOURCE_PACKET_ID_RE = re.compile(r"^manager-source-[a-f0-9]{40}$")
+UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE = re.compile(r"^unavailable:packet:[a-f0-9]{64}$")
+REVIEW_ROUTE_TEXT_BY_REASON_CODE = {
+    "report_only": (
+        "A bounded report-only review is available.",
+        "Re-evaluate bounded review evidence before any later promotion.",
+    ),
+    "simulated_completed": (
+        "Simulation preparation is recorded without an execution action.",
+        "Re-evaluate bounded review evidence before any later promotion.",
+    ),
+    "immutable_identity_stale": (
+        "The reviewed exact identity no longer matches the current packet.",
+        "Re-evaluate and reissue bounded review evidence for the current exact identity.",
+    ),
+    "policy_vetoed": (
+        "A policy decision blocks this review preparation.",
+        "Resolve the policy decision and re-evaluate bounded review evidence.",
+    ),
+    "review_blocked": (
+        "A bounded review preparation is blocked.",
+        "Resolve the recorded block and re-evaluate bounded review evidence.",
+    ),
+    "issuance_expired": (
+        "Review evidence issuance has expired.",
+        "Reissue bounded review evidence before relying on it.",
+    ),
+    "issuance_revoked": (
+        "Review evidence issuance has been revoked.",
+        "Resolve the policy block and re-evaluate bounded review evidence.",
+    ),
+    "issuance_cancelled": (
+        "Review evidence issuance was cancelled.",
+        "Re-evaluate before issuing new bounded review evidence.",
+    ),
+    "review_evidence_unavailable": (
+        "Review evidence unavailable.",
+        "Re-evaluate and reissue bounded review evidence before relying on it.",
+    ),
+}
+REVIEW_ROUTE_COMPATIBILITY_BY_REASON_CODE = {
+    "report_only": ("available", frozenset({"report_only"}), "current", "active"),
+    "simulated_completed": ("available", frozenset({"simulated"}), "current", "active"),
+    "immutable_identity_stale": ("stale", frozenset({"report_only", "simulated", "blocked"}), "changed", "active"),
+    "policy_vetoed": ("unavailable", frozenset({"blocked"}), "current", "active"),
+    "review_blocked": ("unavailable", frozenset({"blocked"}), "current", "active"),
+    "issuance_expired": ("unavailable", frozenset({"blocked"}), "current", "expired"),
+    "issuance_revoked": ("unavailable", frozenset({"blocked"}), "current", "revoked"),
+    "issuance_cancelled": ("unavailable", frozenset({"blocked"}), "current", "cancelled"),
+    "review_evidence_unavailable": ("unavailable", frozenset({"unavailable"}), "unavailable", "unavailable"),
+}
 UNSAFE_METADATA_KEY_RE = re.compile(r"(secret|credential|password|token|raw.?payload|provider.?payload|prompt|completion|reasoning)", re.IGNORECASE)
 TOKEN_LIKE_METADATA_VALUE_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])"
@@ -102,6 +155,36 @@ PEM_OR_HIGH_ENTROPY_SECRET_RE = re.compile(
 def _is_safe_pipeline_evidence_ref(value: str) -> bool:
     ref = value.strip()
     return bool(ref) and len(ref) <= 255 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+
+
+def _is_safe_review_route_evidence_ref(value: str) -> bool:
+    """Allow only opaque, non-provider review evidence references in this projection."""
+    return bool(REVIEW_ROUTE_EVIDENCE_REF_RE.fullmatch(value))
+
+
+def _is_safe_review_route_packet_id(value: str) -> bool:
+    """Require a compact opaque packet identity before it enters review evidence."""
+    ref = value.strip()
+    manager_source_id = bool(MANAGER_SOURCE_PACKET_ID_RE.fullmatch(ref))
+    return (
+        ref == value
+        and bool(REVIEW_ROUTE_PACKET_ID_RE.fullmatch(ref))
+        and not ref.lower().startswith("unavailable:packet:")
+        and not UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE.fullmatch(ref)
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+        # The generic token heuristic sees ``source-<hex>`` as token-like.
+        # The private manager-source intake verifies actor and packet binding
+        # before it persists review evidence. Projection fallbacks retain this
+        # exact opaque identity without adding route or execution authority.
+        and (manager_source_id or not TOKEN_LIKE_METADATA_VALUE_RE.search(ref))
+        and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(ref)
+        and not re.search(r"(?:prompt|completion|transcript|reasoning|provider|secret|credential|token)", ref, re.IGNORECASE)
+    )
+
+
+def _is_safe_pipeline_projection_packet_id(value: str) -> bool:
+    """Allow the output-only unavailable identity in otherwise strict detail views."""
+    return bool(UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE.fullmatch(value)) or _is_safe_review_route_packet_id(value)
 
 
 def _is_safe_pipeline_control_text(value: str) -> bool:
@@ -2532,6 +2615,7 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
     lineageKind: Literal["root", "split", "rework", "remediation", "recombination", "delivery_failure"] = "root"
     readyToTest: "OperationalReadyToTestRequest | None" = None
     parallelWorkGraphEvidence: dict[str, Any] | None = None
+    reviewRouteEvidence: dict[str, Any] | None = None
     payloadSummary: str = Field(default="Metadata-only lifecycle creation.", min_length=1, max_length=500)
     evidenceRefs: list[str] = Field(default_factory=list, max_length=25)
 
@@ -2545,6 +2629,13 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
             raise ValueError("value must not be blank")
         return stripped
 
+    @field_validator("packetId")
+    @classmethod
+    def _packet_id_must_not_use_projection_unavailable_identity(cls, value: str | None) -> str | None:
+        if value is not None and UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE.fullmatch(value):
+            raise ValueError("Authoritative packetId cannot use the reserved unavailable projection identity.")
+        return value
+
     @field_validator("title")
     @classmethod
     def _packet_title_must_be_safe_metadata(cls, value: str) -> str:
@@ -2556,6 +2647,8 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
             raise ValueError("Canonical source provenance must match the authoritative packet sourceRef.")
         if self.parallelWorkGraphEvidence and self.packetId and self.parallelWorkGraphEvidence.get("packetId") != self.packetId:
             raise ValueError("Parallel work graph evidence must bind to the authoritative packetId.")
+        if self.reviewRouteEvidence and self.packetId and self.reviewRouteEvidence.get("packetId") != self.packetId:
+            raise ValueError("Review-route evidence must bind to the authoritative packetId.")
         return self
 
 
@@ -3817,6 +3910,97 @@ class PipelineWorkGraphEvidenceV0View(BaseModel):
         return refs
 
 
+class PipelineReviewRouteFindingSummaryV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    count: int = Field(ge=0, le=32)
+    highestSeverity: Literal["info", "low", "medium", "high"] | None = None
+    evidenceRefs: list[str] = Field(default_factory=list)
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if len(refs) > 20 or not all(_is_safe_review_route_evidence_ref(ref) for ref in refs):
+            raise ValueError("Review-route evidence refs must use the opaque allowlisted metadata reference grammar.")
+        return refs
+
+
+class PipelineReviewRouteEvidenceV0View(BaseModel):
+    """Strict, detail-only view of report-only/simulated review preparation."""
+
+    model_config = ConfigDict(extra="forbid")
+    schemaVersion: Literal["pipeline-review-route-evidence/v0"] = "pipeline-review-route-evidence/v0"
+    availability: Literal["available", "stale", "unavailable"]
+    packetId: str
+    routeState: Literal["report_only", "simulated", "blocked", "unavailable"]
+    reasonCode: str
+    reason: str
+    safeFallback: str
+    exactIdentity: Literal["current", "changed", "unavailable"]
+    issuanceState: Literal["active", "expired", "revoked", "cancelled", "unavailable"]
+    findingSummary: PipelineReviewRouteFindingSummaryV0View
+    dataClass: Literal["metadata_only"] = "metadata_only"
+    execution: Literal["none"] = "none"
+    deliveryEvidenceEligible: Literal[False] = False
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+    retention: Literal["metadata_only_evidence_references"] = "metadata_only_evidence_references"
+
+    @field_validator("packetId")
+    @classmethod
+    def packet_id_is_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_projection_packet_id(value):
+            raise ValueError("Review-route packet identity must use the opaque safe identifier grammar.")
+        return value
+
+    @field_validator("reasonCode")
+    @classmethod
+    def reason_code_is_safe(cls, value: str) -> str:
+        if value not in REVIEW_ROUTE_TEXT_BY_REASON_CODE:
+            raise ValueError("Review-route reason code must use the bounded allowlist.")
+        return value
+
+    @field_validator("reason", "safeFallback")
+    @classmethod
+    def text_is_safe(cls, value: str) -> str:
+        if (
+            not _is_safe_pipeline_control_text(value)
+            or UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE.search(value)
+            or re.search(r"\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|payload|transcript)\b", value, re.IGNORECASE)
+            or EPIC_25_EXECUTABLE_POLICY_TEXT_RE.search(value)
+            or re.search(r"(?:^|[\\s\"'])/(?:home|tmp|var|etc)/", value, re.IGNORECASE)
+        ):
+            raise ValueError("Review-route text must be redacted metadata-only text.")
+        return value
+
+    @model_validator(mode="after")
+    def state_is_honest(self):
+        expected_text = REVIEW_ROUTE_TEXT_BY_REASON_CODE.get(self.reasonCode)
+        if expected_text is None or (self.reason, self.safeFallback) != expected_text:
+            raise ValueError("Review-route text must use the fixed generic template for its reason code.")
+        expected = REVIEW_ROUTE_COMPATIBILITY_BY_REASON_CODE.get(self.reasonCode)
+        if expected is None:
+            raise ValueError("Review-route reason code must use the bounded compatibility matrix.")
+        availability, route_states, exact_identity, issuance_state = expected
+        if (
+            self.availability != availability
+            or self.routeState not in route_states
+            or self.exactIdentity != exact_identity
+            or self.issuanceState != issuance_state
+        ):
+            raise ValueError("Review-route state must match the reason-code compatibility matrix.")
+        if self.reasonCode == "review_evidence_unavailable" and (
+            self.findingSummary.count != 0
+            or self.findingSummary.highestSeverity is not None
+            or self.findingSummary.evidenceRefs
+        ):
+            raise ValueError("Unavailable review evidence must not carry route conclusions.")
+        if self.findingSummary.count == 0 and self.findingSummary.highestSeverity is not None:
+            raise ValueError("An empty finding summary cannot name a severity.")
+        if self.findingSummary.count > 0 and self.findingSummary.highestSeverity is None:
+            raise ValueError("A non-empty finding summary must name its highest severity.")
+        return self
+
+
 class PipelineSelectedPacketDetailV0View(BaseModel):
     packetId: str
     sourceRefs: list[AuthoritativePacketSourceRefView] = Field(default_factory=list)
@@ -3846,6 +4030,7 @@ class PipelineSelectedPacketDetailV0View(BaseModel):
     queueLease: PipelineQueueLeaseV0View | None = None
     executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
     correlationIds: list[str] = Field(default_factory=list)
+    reviewRoute: PipelineReviewRouteEvidenceV0View
     workGraph: PipelineWorkGraphEvidenceV0View
     metadataOnly: Literal[True] = True
 

@@ -47,6 +47,35 @@ the existing session-bound private-UDS mediator; never expose or copy the
 supervisor socket, bootstrap password, prompts, provider payloads, source/diff
 content, worktree paths, or host command output to the browser.
 
+## Packet Detail Review route
+
+Packet Detail can also show a **Review route** group when the supervisor has a
+validated, versioned metadata-only review projection from the existing private
+manager-to-supervisor UDS intake. The compact pipeline card remains limited to
+packet presence, name, and status.
+
+`Report only` and `Simulated` both mean **No provider received a live packet.**
+The group is read-only: it contains no retry, dispatch, provider, or delivery
+controls, and its finding view is a bounded count/severity summary plus safe
+evidence references only. It does not expose route or provider identifiers,
+exact heads/digests, prompts, completions, source/diff copies, reasoning,
+credentials, or provider material.
+
+`Stale — exact head changed` means the evidence is not current review evidence
+and cannot be used for delivery. Re-evaluate and reissue bounded review
+evidence for the current exact identity. Blocked, vetoed, expired, revoked, or
+cancelled evidence likewise names the supervisor-issued safe recovery. Missing
+or invalid input renders **Review evidence unavailable** rather than inferring
+provider activity.
+
+Only the existing private manager-source intake accepts this projection; public
+work-packet intake rejects it. The supervisor validates the complete projection
+and retains it only as a versioned wrapper alongside the existing manager graph
+metadata on the authoritative lifecycle event—no database migration, generic
+transport, or provider call is introduced. To diagnose a local change, run
+`pnpm run test:dashboard-pipeline-fixtures` and the focused supervisor command
+`uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -q -k review_route_evidence`.
+
 See the repository's [Authenticated LAN dashboard setup](../../docs/workflows/authenticated-lan-dashboard-setup.md)
 for first-time host configuration, private-file permissions, certificate setup,
 startup order, and failure diagnosis.
@@ -65,3 +94,12 @@ pnpm run lint:dashboard
 pnpm run build:dashboard
 pnpm run test:e2e:dashboard
 ```
+
+If a managed worktree reports a missing Playwright executable, install its test
+browsers into the same repository-local cache that the E2E configuration uses:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=.data/ms-playwright pnpm exec playwright install chromium webkit
+```
+
+The WebKit runs are Safari/iOS approximations, not physical-device coverage.

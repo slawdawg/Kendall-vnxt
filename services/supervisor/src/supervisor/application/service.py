@@ -194,6 +194,8 @@ from supervisor.api.schemas import (
     PipelineExecuteAdmissionV0View,
     PipelineExecutionAttemptLineageV0View,
     PipelineQueueLeaseV0View,
+    PipelineReviewRouteEvidenceV0View,
+    PipelineReviewRouteFindingSummaryV0View,
     PipelineSelectedPacketDetailV0View,
     PipelineWorkGraphCapacityV0View,
     PipelineWorkGraphEvidenceV0View,
@@ -285,6 +287,7 @@ from supervisor.api.schemas import (
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
+    _is_safe_review_route_packet_id,
     _validate_authoritative_metadata_text,
     _validate_metadata_tree,
     _validate_work_item_scalar_text,
@@ -712,6 +715,8 @@ class SupervisorService:
     ) -> AuthoritativeWorkPacketLifecycleView:
         _validate_authoritative_metadata_text(payload.title, path="title")
         parallel_work_graph = self._authoritative_parallel_work_graph_evidence(payload)
+        review_route = self._authoritative_review_route_evidence(payload)
+        manager_source_evidence = self._manager_source_evidence_storage(parallel_work_graph, review_route)
         source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
         payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
         evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
@@ -740,6 +745,7 @@ class SupervisorService:
                             payload_summary=payload_summary,
                             evidence_refs=evidence_refs,
                             parallel_work_graph=parallel_work_graph,
+                            manager_source_evidence=manager_source_evidence,
                         )
                         if existing_event.event_type == "packet.parallel_work_graph_refreshed"
                         else self._authoritative_create_event_matches(
@@ -749,6 +755,7 @@ class SupervisorService:
                             payload_summary=payload_summary,
                             evidence_refs=evidence_refs,
                             parallel_work_graph=parallel_work_graph,
+                            manager_source_evidence=manager_source_evidence,
                         )
                     )
                     if not matches:
@@ -766,6 +773,7 @@ class SupervisorService:
                 payload_summary=payload_summary,
                 evidence_refs=evidence_refs,
                 parallel_work_graph=parallel_work_graph,
+                manager_source_evidence=manager_source_evidence,
             )
 
         now = datetime.now(timezone.utc)
@@ -806,7 +814,7 @@ class SupervisorService:
             ready_to_test_json=packet.ready_to_test_json,
             operator_test_state=packet.operator_test_state,
             operator_test_note=packet.operator_test_note,
-            parallel_work_graph_json=parallel_work_graph,
+            parallel_work_graph_json=manager_source_evidence,
             payload_summary=payload_summary,
             evidence_refs_json=evidence_refs,
             occurred_at=now,
@@ -833,6 +841,7 @@ class SupervisorService:
                             payload_summary=payload_summary,
                             evidence_refs=evidence_refs,
                             parallel_work_graph=parallel_work_graph,
+                            manager_source_evidence=manager_source_evidence,
                         ):
                             raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
                         return await self.to_authoritative_work_packet_view(session, replay_packet)
@@ -3556,6 +3565,7 @@ class SupervisorService:
         payload_summary: str,
         evidence_refs: list[str],
         parallel_work_graph: dict[str, object] | None,
+        manager_source_evidence: dict[str, object] | None,
     ) -> AuthoritativeWorkPacketLifecycleView:
         """Refresh a packet graph with a row lock and compare-and-swap fallback.
 
@@ -3591,6 +3601,7 @@ class SupervisorService:
                             payload_summary=payload_summary,
                             evidence_refs=evidence_refs,
                             parallel_work_graph=parallel_work_graph,
+                            manager_source_evidence=manager_source_evidence,
                         )
                         if replay_event.event_type == "packet.parallel_work_graph_refreshed"
                         else self._authoritative_create_event_matches(
@@ -3600,6 +3611,7 @@ class SupervisorService:
                             payload_summary=payload_summary,
                             evidence_refs=evidence_refs,
                             parallel_work_graph=parallel_work_graph,
+                            manager_source_evidence=manager_source_evidence,
                         )
                     )
                     if not matches:
@@ -3611,15 +3623,21 @@ class SupervisorService:
                 parallel_work_graph is not None
                 and existing_event is not None
                 and self._authoritative_graph_packet_identity_matches(packet, payload)
-                and existing_event.parallel_work_graph_json != parallel_work_graph
+                and existing_event.parallel_work_graph_json != manager_source_evidence
             ):
-                previous_graph = latest_graph_event.parallel_work_graph_json if latest_graph_event else None
+                previous_graph, _ = self._manager_source_evidence_parts(
+                    latest_graph_event.parallel_work_graph_json if latest_graph_event else None
+                )
                 if isinstance(previous_graph, dict) and (
                     previous_graph.get("executionJobId") != parallel_work_graph.get("executionJobId")
                     or previous_graph.get("reportIdentity") != parallel_work_graph.get("reportIdentity")
                 ):
                     raise ValueError("Parallel work graph refresh conflicts with the authoritative report mapping.")
-                if isinstance(previous_graph, dict):
+                # A review-route reissue can change only the bounded review
+                # metadata while deliberately retaining the authoritative
+                # work graph. Freshness applies to graph replacement, not to
+                # that evidence-only update.
+                if isinstance(previous_graph, dict) and previous_graph != parallel_work_graph:
                     try:
                         previous_generated_at = self._ensure_aware(
                             datetime.fromisoformat(str(previous_graph["generatedAt"]).replace("Z", "+00:00"))
@@ -3652,6 +3670,7 @@ class SupervisorService:
                                 payload_summary=payload_summary,
                                 evidence_refs=evidence_refs,
                                 parallel_work_graph=parallel_work_graph,
+                                manager_source_evidence=manager_source_evidence,
                             ):
                                 return await self.to_authoritative_work_packet_view(session, replay_packet)
                         raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
@@ -3665,7 +3684,7 @@ class SupervisorService:
                     causation_id=expected_event_id, idempotency_key=payload.idempotencyKey,
                     packet_title=packet.title, parent_packet_id=packet.parent_packet_id, lineage_kind=packet.lineage_kind,
                     ready_to_test_json=packet.ready_to_test_json, operator_test_state=packet.operator_test_state,
-                    operator_test_note=packet.operator_test_note, parallel_work_graph_json=parallel_work_graph,
+                    operator_test_note=packet.operator_test_note, parallel_work_graph_json=manager_source_evidence,
                     payload_summary=payload_summary, evidence_refs_json=evidence_refs, occurred_at=datetime.now(timezone.utc),
                 )
                 session.add(refresh)
@@ -3700,6 +3719,7 @@ class SupervisorService:
                         payload_summary=payload_summary,
                         evidence_refs=evidence_refs,
                         parallel_work_graph=parallel_work_graph,
+                        manager_source_evidence=manager_source_evidence,
                     ):
                         return await self.to_authoritative_work_packet_view(session, replay_packet)
                     raise ValueError("Parallel work graph refresh conflicted with persisted lifecycle metadata.") from exc
@@ -3720,15 +3740,15 @@ class SupervisorService:
                 parallel_work_graph is not None
                 and existing_event is not None
                 and self._authoritative_graph_packet_identity_matches(packet, payload)
-                and existing_event.parallel_work_graph_json == parallel_work_graph
+                and existing_event.parallel_work_graph_json == manager_source_evidence
             ):
-                if latest_graph_event is not None and latest_graph_event.parallel_work_graph_json != parallel_work_graph:
+                if latest_graph_event is not None and latest_graph_event.parallel_work_graph_json != manager_source_evidence:
                     raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
                 return await self.to_authoritative_work_packet_view(session, packet)
             if (
                 not self._authoritative_create_matches(packet, payload)
                 or existing_event is None
-                or existing_event.parallel_work_graph_json != parallel_work_graph
+                or existing_event.parallel_work_graph_json != manager_source_evidence
             ):
                 raise ValueError("Authoritative WorkPacket already exists with different lifecycle metadata.")
             return await self.to_authoritative_work_packet_view(session, packet)
@@ -4015,6 +4035,7 @@ class SupervisorService:
         payload_summary: str,
         evidence_refs: list[str],
         parallel_work_graph: dict[str, object] | None,
+        manager_source_evidence: dict[str, object] | None,
     ) -> bool:
         return (
             event.event_type == "packet.created"
@@ -4028,7 +4049,7 @@ class SupervisorService:
             and event.causation_id == payload.causationId
             and event.payload_summary == payload_summary
             and list(event.evidence_refs_json or []) == evidence_refs
-            and event.parallel_work_graph_json == parallel_work_graph
+            and event.parallel_work_graph_json == manager_source_evidence
         )
 
     def _authoritative_graph_refresh_event_matches(
@@ -4040,6 +4061,7 @@ class SupervisorService:
         payload_summary: str,
         evidence_refs: list[str],
         parallel_work_graph: dict[str, object] | None,
+        manager_source_evidence: dict[str, object] | None,
     ) -> bool:
         return (
             event.event_type == "packet.parallel_work_graph_refreshed"
@@ -4052,7 +4074,7 @@ class SupervisorService:
             and event.idempotency_key == payload.idempotencyKey
             and event.payload_summary == payload_summary
             and list(event.evidence_refs_json or []) == evidence_refs
-            and event.parallel_work_graph_json == parallel_work_graph
+            and event.parallel_work_graph_json == manager_source_evidence
         )
 
     async def _authoritative_lifecycle_event_by_packet_created(
@@ -4112,6 +4134,26 @@ class SupervisorService:
         if generated_at > datetime.now(timezone.utc):
             raise ValueError("Parallel work graph evidence generatedAt is in the future.")
         return safe
+
+    def _authoritative_review_route_evidence(
+        self,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> dict[str, object] | None:
+        evidence = payload.reviewRouteEvidence
+        if evidence is None:
+            return None
+        if payload.actor.model_dump() != {
+            "actorType": "manager",
+            "actorId": "manager-source-intake",
+            "actorLabel": "Manager source intake adapter",
+        }:
+            raise ValueError("Review-route evidence is accepted only from the manager source-intake actor.")
+        if not payload.packetId:
+            raise ValueError("Review-route evidence requires an explicit authoritative packetId.")
+        projection = self._pipeline_review_route_from_metadata(evidence, expected_packet_id=payload.packetId)
+        if projection is None:
+            raise ValueError("Review-route evidence must be strict, metadata-only, and bound to its authoritative packetId.")
+        return projection.model_dump(mode="json")
 
     def _authoritative_transition_event_matches(
         self,
@@ -5733,6 +5775,10 @@ class SupervisorService:
                 generated_at=generated_at,
                 stale_after_seconds=stale_after_seconds,
             )
+            review_route_by_packet = await self._pipeline_review_route_by_packet(
+                session,
+                authoritative_packets,
+            )
             source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
             worker_summary_records = self._pipeline_projection_worker_summary_records(candidates)
             gated_controls = self._pipeline_projection_gated_controls(candidates)
@@ -5825,6 +5871,8 @@ class SupervisorService:
             evidence_refs.extend(control.evidenceRefs)
 
         for packet in authoritative_packets:
+            projection_packet_id = self._safe_pipeline_projection_packet_id(packet.packetId)
+            packet_identity_is_safe = projection_packet_id == packet.packetId
             packet_lineage = authoritative_lineage.get(packet.packetId, {})
             canonical_contract = packet.canonicalContract
             product_mode_mapping = self._product_mode_mapping(canonical_contract, generated_at)
@@ -5919,7 +5967,7 @@ class SupervisorService:
             stage_source_labels.setdefault(packet.currentStage, []).append(packet_source_label)
             dashboard_packets.append(
                 PipelineDashboardWorkPacketV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     title=packet.title,
                     currentStage=packet.currentStage,
                     status=packet.status,
@@ -5942,7 +5990,7 @@ class SupervisorService:
             )
             selected_packet_details.append(
                 PipelineSelectedPacketDetailV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     sourceRefs=[packet.sourceRef],
                     canonicalContract=canonical_contract,
                     productModeMapping=product_mode_mapping,
@@ -5958,7 +6006,7 @@ class SupervisorService:
                     recentTransitionEventRefs=recent_transition_event_refs,
                     latestMovementSummary=latest_movement_summary,
                     canSatisfyLiveMovementProof=can_satisfy_live_movement_proof,
-                    parentPacketId=packet.parentPacketId,
+                    parentPacketId=self._safe_pipeline_projection_packet_id(packet.parentPacketId) if packet.parentPacketId else None,
                     lineageKind=packet.lineageKind or "root",
                     operatorTestState=packet.operatorTestState or "not_ready",
                     operatorTestNote=packet.operatorTestNote,
@@ -5966,16 +6014,18 @@ class SupervisorService:
                     queueLease=packet_lineage.get("queueLease"),
                     executionAttempts=packet_lineage.get("executionAttempts", []),
                     correlationIds=packet_lineage.get("correlationIds", []),
-                    actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=mutation_access),
-                    actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]],
-                    actionCapabilitiesV1=v1_packet_capabilities_by_packet.get(packet.packetId, []),
-                    actionResultsV1=[self._operational_action_result_view_v1(item, replayed=False) for item in action_results_v1_by_packet.get(packet.packetId, [])[-12:]],
+                    actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=mutation_access) if packet_identity_is_safe else [],
+                    actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]] if packet_identity_is_safe else [],
+                    actionCapabilitiesV1=v1_packet_capabilities_by_packet.get(packet.packetId, []) if packet_identity_is_safe else [],
+                    actionResultsV1=[self._operational_action_result_view_v1(item, replayed=False) for item in action_results_v1_by_packet.get(packet.packetId, [])[-12:]] if packet_identity_is_safe else [],
+                    reviewRoute=review_route_by_packet.get(packet.packetId, self._unavailable_pipeline_review_route(packet.packetId)),
                     workGraph=work_graph_by_packet.get(packet.packetId, self._unavailable_pipeline_work_graph(packet.packetId)),
                     metadataOnly=True,
                 )
             )
 
         for packet in legacy_projection_packets:
+            projection_packet_id = self._safe_pipeline_projection_packet_id(packet.packetId)
             packet_lineage = legacy_lineage.get(packet.packetId, {})
             current_stage = self._legacy_pipeline_projection_stage(packet.currentStage)
             stage_counts[current_stage] = stage_counts.get(current_stage, 0) + 1
@@ -6077,7 +6127,7 @@ class SupervisorService:
             )
             dashboard_packets.append(
                 PipelineDashboardWorkPacketV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     title=packet.title,
                     currentStage=current_stage,
                     status=packet.status,
@@ -6098,7 +6148,7 @@ class SupervisorService:
             )
             selected_packet_details.append(
                 PipelineSelectedPacketDetailV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     sourceRefs=[],
                     evidenceRefs=packet_evidence,
                     currentStage=current_stage,
@@ -6116,6 +6166,7 @@ class SupervisorService:
                     queueLease=packet_lineage.get("queueLease"),
                     executionAttempts=packet_lineage.get("executionAttempts", []),
                     correlationIds=packet_lineage.get("correlationIds", []),
+                    reviewRoute=self._unavailable_pipeline_review_route(packet.packetId),
                     workGraph=work_graph_by_packet.get(packet.packetId, self._unavailable_pipeline_work_graph(packet.packetId)),
                     metadataOnly=True,
                 )
@@ -6876,11 +6927,12 @@ class SupervisorService:
         return source_states
 
     def _unavailable_pipeline_work_graph(self, packet_id: str) -> PipelineWorkGraphEvidenceV0View:
-        """Return a truthful detail-only fallback; it never grants an action."""
+        """Return a truthful fallback without reflecting unsafe persisted identities."""
+        safe_packet_id = self._safe_pipeline_projection_packet_id(packet_id)
         return PipelineWorkGraphEvidenceV0View(
             availability="unavailable",
             sourceSchemaVersion="parallel-execution-graph-reservation/v1",
-            packetId=packet_id,
+            packetId=safe_packet_id,
             executionJobId=None,
             generatedAt=None,
             freshnessState="unavailable",
@@ -6902,6 +6954,108 @@ class SupervisorService:
             rawPayloadRetained=False,
             retention="metadata_only_evidence_references",
         )
+
+    def _unavailable_pipeline_review_route(self, packet_id: str) -> PipelineReviewRouteEvidenceV0View:
+        """Return a truthful fallback without reflecting unsafe persisted identities."""
+        safe_packet_id = self._safe_pipeline_projection_packet_id(packet_id)
+        return PipelineReviewRouteEvidenceV0View(
+            availability="unavailable",
+            packetId=safe_packet_id,
+            routeState="unavailable",
+            reasonCode="review_evidence_unavailable",
+            reason="Review evidence unavailable.",
+            safeFallback="Re-evaluate and reissue bounded review evidence before relying on it.",
+            exactIdentity="unavailable",
+            issuanceState="unavailable",
+            findingSummary=PipelineReviewRouteFindingSummaryV0View(count=0, highestSeverity=None, evidenceRefs=[]),
+            dataClass="metadata_only",
+            execution="none",
+            deliveryEvidenceEligible=False,
+            metadataOnly=True,
+            rawPayloadRetained=False,
+            retention="metadata_only_evidence_references",
+        )
+
+    @staticmethod
+    def _safe_pipeline_projection_packet_id(packet_id: str) -> str:
+        """Return an opaque stable identity for any unsafe historical packet ID."""
+        if _is_safe_review_route_packet_id(packet_id):
+            return packet_id
+        return f"unavailable:packet:{hashlib.sha256(packet_id.encode('utf8')).hexdigest()}"
+
+    async def _pipeline_review_route_by_packet(
+        self,
+        session: AsyncSession,
+        authoritative_packets: list[AuthoritativeWorkPacketLifecycleView],
+    ) -> dict[str, PipelineReviewRouteEvidenceV0View]:
+        """Project only strict review-route metadata retained by private manager intake."""
+        projections: dict[str, PipelineReviewRouteEvidenceV0View] = {}
+        packet_ids = [packet.packetId for packet in authoritative_packets]
+        if not packet_ids:
+            return projections
+        event_result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent).where(
+                AuthoritativeWorkPacketLifecycleEvent.packet_id.in_(packet_ids),
+                AuthoritativeWorkPacketLifecycleEvent.event_type.in_(["packet.created", "packet.parallel_work_graph_refreshed"]),
+                AuthoritativeWorkPacketLifecycleEvent.parallel_work_graph_json.is_not(None),
+            ).order_by(AuthoritativeWorkPacketLifecycleEvent.packet_id.asc(), AuthoritativeWorkPacketLifecycleEvent.occurred_at.desc(), AuthoritativeWorkPacketLifecycleEvent.id.desc())
+        )
+        settled_packet_ids: set[str] = set()
+        for event in event_result.scalars():
+            if event.packet_id in settled_packet_ids:
+                continue
+            settled_packet_ids.add(event.packet_id)
+            if not self._is_manager_source_intake_actor(event.actor_json):
+                projections[event.packet_id] = self._unavailable_pipeline_review_route(event.packet_id)
+                continue
+            _, raw_review_route = self._manager_source_evidence_parts(event.parallel_work_graph_json)
+            projection = self._pipeline_review_route_from_metadata(raw_review_route, expected_packet_id=event.packet_id) if raw_review_route is not None else None
+            projections[event.packet_id] = projection or self._unavailable_pipeline_review_route(event.packet_id)
+        return projections
+
+    def _pipeline_review_route_from_metadata(
+        self,
+        raw_evidence: object,
+        *,
+        expected_packet_id: str,
+    ) -> PipelineReviewRouteEvidenceV0View | None:
+        try:
+            projection = PipelineReviewRouteEvidenceV0View.model_validate(raw_evidence)
+        except (TypeError, ValueError):
+            return None
+        if projection.packetId != expected_packet_id:
+            return None
+        return projection
+
+    @staticmethod
+    def _manager_source_evidence_storage(
+        parallel_work_graph: dict[str, object] | None,
+        review_route: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        if review_route is None:
+            return parallel_work_graph
+        if parallel_work_graph is None:
+            raise ValueError("Review-route evidence requires the existing private manager work-graph evidence.")
+        return {
+            "schemaVersion": "manager-source-packet-evidence/v1",
+            "workGraph": parallel_work_graph,
+            "reviewRoute": review_route,
+        }
+
+    @staticmethod
+    def _manager_source_evidence_parts(raw_evidence: object) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+        if not isinstance(raw_evidence, dict):
+            return None, None
+        if set(raw_evidence) == {"schemaVersion", "workGraph", "reviewRoute"}:
+            if raw_evidence.get("schemaVersion") != "manager-source-packet-evidence/v1":
+                return None, None
+            work_graph = raw_evidence.get("workGraph")
+            review_route = raw_evidence.get("reviewRoute")
+            return (
+                work_graph if isinstance(work_graph, dict) else None,
+                review_route if isinstance(review_route, dict) else None,
+            )
+        return raw_evidence, None
 
     async def _pipeline_work_graph_by_packet(
         self,
@@ -6931,8 +7085,8 @@ class SupervisorService:
             if not self._is_manager_source_intake_actor(event.actor_json):
                 projections[event.packet_id] = self._unavailable_pipeline_work_graph(event.packet_id)
                 continue
-            raw_evidence = event.parallel_work_graph_json
-            if not isinstance(raw_evidence, dict):
+            raw_evidence, _ = self._manager_source_evidence_parts(event.parallel_work_graph_json)
+            if raw_evidence is None:
                 continue
             projection = self._pipeline_work_graph_from_metadata(
                 raw_evidence,
@@ -6940,10 +7094,10 @@ class SupervisorService:
                 generated_at=generated_at,
                 stale_after_seconds=stale_after_seconds,
             )
-            if projection is None:
+            if projection is None or projection.packetId != self._safe_pipeline_projection_packet_id(event.packet_id):
                 projections[event.packet_id] = self._unavailable_pipeline_work_graph(event.packet_id)
                 continue
-            projections[projection.packetId] = projection
+            projections[event.packet_id] = projection
         return projections
 
     def _is_manager_source_intake_actor(self, actor: object) -> bool:

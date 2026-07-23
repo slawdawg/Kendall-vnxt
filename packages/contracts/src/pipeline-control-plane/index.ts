@@ -4567,9 +4567,48 @@ export interface PipelineSelectedPacketDetailV0 {
   queueLease?: PipelineQueueLeaseV0 | null;
   executionAttempts?: PipelineExecutionAttemptLineageV0[];
   correlationIds?: string[];
+  /** Supervisor-validated, detail-only review-route evidence. */
+  reviewRoute: PipelineReviewRouteEvidenceV0;
   /** Supervisor-owned redacted read model; never a dashboard planner or action. */
   workGraph: PipelineWorkGraphEvidenceV0;
   metadataOnly: true;
+}
+
+/**
+ * A bounded read model for review preparation. It is evidence only: neither
+ * its presence nor any state authorizes a provider, retry, dispatch, or
+ * delivery decision.
+ */
+export interface PipelineReviewRouteEvidenceV0 {
+  schemaVersion: "pipeline-review-route-evidence/v0";
+  availability: "available" | "stale" | "unavailable";
+  packetId: string;
+  routeState: "report_only" | "simulated" | "blocked" | "unavailable";
+  reasonCode:
+    | "report_only"
+    | "simulated_completed"
+    | "immutable_identity_stale"
+    | "policy_vetoed"
+    | "review_blocked"
+    | "issuance_expired"
+    | "issuance_revoked"
+    | "issuance_cancelled"
+    | "review_evidence_unavailable";
+  reason: string;
+  safeFallback: string;
+  exactIdentity: "current" | "changed" | "unavailable";
+  issuanceState: "active" | "expired" | "revoked" | "cancelled" | "unavailable";
+  findingSummary: {
+    count: number;
+    highestSeverity: "info" | "low" | "medium" | "high" | null;
+    evidenceRefs: string[];
+  };
+  dataClass: "metadata_only";
+  execution: "none";
+  deliveryEvidenceEligible: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
 }
 
 export interface PipelineWorkGraphEvidenceV0 {

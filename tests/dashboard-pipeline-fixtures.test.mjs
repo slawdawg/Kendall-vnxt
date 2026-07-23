@@ -153,6 +153,24 @@ function validDashboardProjection() {
     blocker: null,
     nextAction: packet.nextAction,
     unblocker: "operator",
+    reviewRoute: {
+      schemaVersion: "pipeline-review-route-evidence/v0",
+      availability: "available",
+      packetId: packet.packetId,
+      routeState: "report_only",
+      reasonCode: "report_only",
+      reason: "A bounded report-only review is available.",
+      safeFallback: "Re-evaluate bounded review evidence before any later promotion.",
+      exactIdentity: "current",
+      issuanceState: "active",
+      findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+      dataClass: "metadata_only",
+      execution: "none",
+      deliveryEvidenceEligible: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    },
     workGraph: {
       schemaVersion: "parallel-work-graph-evidence/v0",
       sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
@@ -647,6 +665,21 @@ test("selected projection details reject synthetic and blank nested references",
   assert.equal(normalizedLegacyProjection.selectedPacketDetails[0].workGraph.packetId, legacyProjection.selectedPacketDetails[0].packetId);
   assert.equal(projectionModule.isPipelineDashboardProjection(normalizedLegacyProjection), true);
 
+  const legacyReviewRouteProjection = structuredClone(cleanProjection);
+  delete legacyReviewRouteProjection.selectedPacketDetails[0].reviewRoute;
+  assert.equal(projectionModule.isPipelineDashboardProjection(legacyReviewRouteProjection), false);
+  const normalizedLegacyReviewRouteProjection = projectionModule.normalizePipelineDashboardProjection(legacyReviewRouteProjection);
+  assert.equal(normalizedLegacyReviewRouteProjection.selectedPacketDetails[0].reviewRoute.reasonCode, "review_evidence_unavailable");
+  assert.equal(normalizedLegacyReviewRouteProjection.selectedPacketDetails[0].reviewRoute.packetId, legacyReviewRouteProjection.selectedPacketDetails[0].packetId);
+  assert.equal(projectionModule.isPipelineDashboardProjection(normalizedLegacyReviewRouteProjection), true);
+
+  const malformedReviewRouteProjection = structuredClone(cleanProjection);
+  malformedReviewRouteProjection.selectedPacketDetails[0].reviewRoute.reason = "Mistral review material must never render";
+  assert.equal(projectionModule.isPipelineDashboardProjection(malformedReviewRouteProjection), false);
+  const normalizedMalformedReviewRouteProjection = projectionModule.normalizePipelineDashboardProjection(malformedReviewRouteProjection);
+  assert.equal(normalizedMalformedReviewRouteProjection.selectedPacketDetails[0].reviewRoute.reasonCode, "review_evidence_unavailable");
+  assert.equal(projectionModule.isPipelineDashboardProjection(normalizedMalformedReviewRouteProjection), true);
+
   const malformedLegacyProjection = structuredClone(cleanProjection);
   malformedLegacyProjection.selectedPacketDetails[0] = null;
   assert.doesNotThrow(() => projectionModule.normalizePipelineDashboardProjection(malformedLegacyProjection));
@@ -741,6 +774,79 @@ test("Work Graph remains a supervisor-backed Packet Detail group and never enter
   assert.match(mediatorSource, /\/internal\/dashboard\/packet-detail\//);
   assert.match(mediatorSource, /PACKET_DETAIL_MAX_BYTES/);
   assert.doesNotMatch(miniPacketSource, /workGraph|reservation|capacity|recovery/i);
+});
+
+test("Review route remains supervisor-backed Packet Detail evidence and rejects malformed or forbidden data", async () => {
+  const [cockpitSource, supervisorSource, projectionSource] = await Promise.all([
+    readFile(cockpitPath, "utf8"),
+    readFile(new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url), "utf8"),
+    readFile(pipelineSupervisorProjectionPath, "utf8"),
+  ]);
+  const projectionModule = loadPipelineSupervisorProjectionModule(projectionSource);
+  const miniPacketSource = extractFunctionSource(cockpitSource, "PacketMiniCard");
+  const cleanProjection = validDashboardProjection();
+  assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
+  assert.match(cockpitSource, /<ReviewRoutePanel route=\{packetDetailWhyDiagnostics\?\.reviewRoute \?\? projectionDetail\?\.reviewRoute \?\? null\}/);
+  assert.match(cockpitSource, /aria-label="Review route"/);
+  assert.match(cockpitSource, /No provider received a live packet\./);
+  assert.match(cockpitSource, /Stale — exact head changed/);
+  assert.match(cockpitSource, /Not eligible; this read-only group cannot establish delivery evidence\./);
+  assert.match(supervisorSource, /function isProjectionReviewRoute/);
+  assert.doesNotMatch(miniPacketSource, /reviewRoute|provider received|normalized finding|exact identity/i);
+
+  for (const [label, mutate] of [
+    ["raw provider field", (projection) => { projection.selectedPacketDetails[0].reviewRoute.providerPayload = "forbidden"; }],
+    ["unsafe reason", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reason = "prompt contents must never render"; }],
+    ["provider reason", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reason = "Claude review material must never render"; }],
+    ["route fallback", (projection) => { projection.selectedPacketDetails[0].reviewRoute.safeFallback = "Inspect the Ollama route before retrying"; }],
+    ["provider route code", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reasonCode = "claude_review_route"; }],
+    ["provider reference", (projection) => { projection.selectedPacketDetails[0].reviewRoute.findingSummary = { count: 1, highestSeverity: "info", evidenceRefs: ["provider:claude"] }; }],
+    ["unlisted provider reason", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reason = "Mistral review material must never render"; }],
+    ["unlisted provider fallback", (projection) => { projection.selectedPacketDetails[0].reviewRoute.safeFallback = "Inspect the Cohere configuration before retrying"; }],
+    ["unlisted provider text", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reason = "DeepSeek review material must never render"; }],
+    ["unlisted provider code", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reasonCode = "azure_openai_review"; }],
+    ["arbitrary route text", (projection) => { projection.selectedPacketDetails[0].reviewRoute.reason = "An arbitrary sentence is not a permitted review template."; }],
+    ["false delivery eligibility", (projection) => { projection.selectedPacketDetails[0].reviewRoute.deliveryEvidenceEligible = true; }],
+    ["changed head marked current", (projection) => { projection.selectedPacketDetails[0].reviewRoute.exactIdentity = "changed"; }],
+    ...["expired", "revoked", "cancelled", "unavailable"].map((issuanceState) => [
+      `available route with ${issuanceState} issuance`,
+      (projection) => { projection.selectedPacketDetails[0].reviewRoute.issuanceState = issuanceState; },
+    ]),
+    ["unavailable route conclusion", (projection) => { projection.selectedPacketDetails[0].reviewRoute = { ...projection.selectedPacketDetails[0].reviewRoute, availability: "unavailable", routeState: "report_only" }; }],
+  ]) {
+    const candidate = structuredClone(cleanProjection);
+    mutate(candidate);
+    assert.equal(projectionModule.isPipelineDashboardProjection(candidate), false, label);
+  }
+
+  const staleProjection = structuredClone(cleanProjection);
+  staleProjection.selectedPacketDetails[0].reviewRoute = {
+    ...staleProjection.selectedPacketDetails[0].reviewRoute,
+    availability: "stale",
+    exactIdentity: "changed",
+    routeState: "simulated",
+    reasonCode: "immutable_identity_stale",
+    reason: "The reviewed exact identity no longer matches the current packet.",
+    safeFallback: "Re-evaluate and reissue bounded review evidence for the current exact identity.",
+    findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(staleProjection), true);
+
+  const expiredProjection = structuredClone(cleanProjection);
+  expiredProjection.selectedPacketDetails[0].reviewRoute = {
+    ...expiredProjection.selectedPacketDetails[0].reviewRoute,
+    availability: "unavailable",
+    routeState: "blocked",
+    reasonCode: "issuance_expired",
+    reason: "Review evidence issuance has expired.",
+    safeFallback: "Reissue bounded review evidence before relying on it.",
+    exactIdentity: "current",
+    issuanceState: "expired",
+    findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(expiredProjection), true);
+  expiredProjection.selectedPacketDetails[0].reviewRoute.exactIdentity = "changed";
+  assert.equal(projectionModule.isPipelineDashboardProjection(expiredProjection), false, "expired issuance must retain its current identity posture");
 });
 
 test("projection counts reject contradictory active and empty states while preserving unknown counts", async () => {
