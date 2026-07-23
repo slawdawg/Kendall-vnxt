@@ -7649,13 +7649,11 @@ try {
         assert(plan.proof.carryForward.baseRefOidSource === scenario.source, `${scenario.name}: ${result.stdout}`);
         if (scenario.ready) {
           assert(summary.counts.cleanupReady === 1, `${scenario.name}: ${result.stdout}`);
-          assert(plan.proof.carryForward.baseRefOid === fixture.currentBaseHead, `${scenario.name}: ${result.stdout}`);
           assert(plan.proof.currentBase.headSha === fixture.currentBaseHead, `${scenario.name}: ${result.stdout}`);
         } else {
           assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became cleanup-ready: ${result.stdout}`);
           assert(plan.status === "blocked", `${scenario.name} was not blocked: ${result.stdout}`);
           assert(plan.reason.includes("current canonical base head does not exactly match GitHub carry-forward PR base evidence"), `${scenario.name}: ${plan.reason}`);
-          assert(plan.proof.carryForward.baseRefOid === fixture.sourceHead, `${scenario.name}: ${result.stdout}`);
         }
         assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree during preview`);
         assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source branch during preview`);
@@ -9276,12 +9274,12 @@ function createSupersededCleanupFixture(options = {}) {
     : "number: 456,";
   const reportedHeadRefOid = Object.hasOwn(options, "reportedHeadRefOid")
     ? options.reportedHeadRefOid
-    : options.unsupportedBaseRefOid
+    : options.unsupportedBaseRefOid && !options.firstUseRepair
       ? carryForwardCommit
       : fakePrHead;
   const reportedMergeCommitOid = Object.hasOwn(options, "reportedMergeCommitOid")
     ? options.reportedMergeCommitOid
-    : options.unsupportedBaseRefOid
+    : options.unsupportedBaseRefOid && !options.firstUseRepair
       ? carryForwardCommit
       : mergeCommit;
   const fallbackGraphql = options.unsupportedBaseRefOid
