@@ -77,6 +77,7 @@ UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE = re.compile(
 )
 REVIEW_ROUTE_EVIDENCE_REF_RE = re.compile(r"^review-evidence:sha256:[a-f0-9]{64}$")
 REVIEW_ROUTE_PACKET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+MANAGER_SOURCE_PACKET_ID_RE = re.compile(r"^manager-source-[a-f0-9]{40}$")
 REVIEW_ROUTE_TEXT_BY_REASON_CODE = {
     "report_only": (
         "A bounded report-only review is available.",
@@ -163,11 +164,16 @@ def _is_safe_review_route_evidence_ref(value: str) -> bool:
 def _is_safe_review_route_packet_id(value: str) -> bool:
     """Require a compact opaque packet identity before it enters review evidence."""
     ref = value.strip()
+    manager_source_id = bool(MANAGER_SOURCE_PACKET_ID_RE.fullmatch(ref))
     return (
         ref == value
         and bool(REVIEW_ROUTE_PACKET_ID_RE.fullmatch(ref))
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
-        and not TOKEN_LIKE_METADATA_VALUE_RE.search(ref)
+        # The generic token heuristic sees ``source-<hex>`` as token-like.
+        # The private manager-source intake verifies actor and packet binding
+        # before it persists review evidence. Projection fallbacks retain this
+        # exact opaque identity without adding route or execution authority.
+        and (manager_source_id or not TOKEN_LIKE_METADATA_VALUE_RE.search(ref))
         and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(ref)
         and not re.search(r"(?:prompt|completion|transcript|reasoning|provider|secret|credential|token)", ref, re.IGNORECASE)
     )

@@ -2959,10 +2959,13 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
                 "correlationId": f"manager-source:review-route-count-{type(invalid_count).__name__}",
             }
             assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=malformed_count).status_code == 400
-        for unsafe_packet_id in (
-            "manager-source:raw-prompt",
-            "manager-source:credential-token",
-            "manager-source:sk-proj-abcdefghijklmnopqrstuvwx",
+        for unsafe_packet_id, expected_status in (
+            ("manager-source:raw-prompt", 400),
+            ("manager-source:credential-token", 400),
+            ("manager-source:sk-proj-abcdefghijklmnopqrstuvwx", 400),
+            # The authoritative packet request itself has an 80-character
+            # boundary, which rejects this before review-route validation.
+            ("packet-" + "a" * 154, 422),
         ):
             unsafe_packet_identity = {
                 **request,
@@ -2972,7 +2975,18 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
                 "idempotencyKey": f"manager-source-intake:review-route-identity-{len(unsafe_packet_id)}",
                 "correlationId": f"manager-source:review-route-identity-{len(unsafe_packet_id)}",
             }
-            assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_packet_identity).status_code == 400
+            assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=unsafe_packet_identity).status_code == expected_status
+        manager_like_packet_id = "manager-source-" + "a" * 40
+        non_manager_manager_like = {
+            **request,
+            "packetId": manager_like_packet_id,
+            "parallelWorkGraphEvidence": {**graph, "packetId": manager_like_packet_id},
+            "reviewRouteEvidence": {**review_route, "packetId": manager_like_packet_id},
+            "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+            "idempotencyKey": "manager-source-intake:review-route-non-manager-like-id",
+            "correlationId": "manager-source:review-route-non-manager-like-id",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=non_manager_manager_like).status_code == 400
         for issuance_state in ("expired", "revoked", "cancelled", "unavailable"):
             non_active_issuance = {
                 **request,
