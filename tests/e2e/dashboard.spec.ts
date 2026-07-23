@@ -91,6 +91,7 @@ async function seedSupervisorPipelinePacket(
   title: string,
   status: "waiting" | "complete" = "waiting",
   parallelWorkGraphEvidence?: Record<string, unknown>,
+  reviewRouteEvidence?: Record<string, unknown>,
 ) {
   const sourcePath = "docs/workflows/latest-prd-autonomous-bmad-loop-goal.md";
   const sourceBytes = await fs.readFile(path.join(process.cwd(), sourcePath));
@@ -109,7 +110,7 @@ async function seedSupervisorPipelinePacket(
       status,
       truthLabel: "source_owned",
       sourceRef,
-      actor: parallelWorkGraphEvidence
+      actor: parallelWorkGraphEvidence || reviewRouteEvidence
         ? { actorType: "manager", actorId: "manager-source-intake", actorLabel: "Manager source intake adapter" }
         : { actorType: "manager", actorId: "story-4-6-playwright", actorLabel: "Story 4.6 Playwright" },
       idempotencyKey: `story-4-6-create-${packetId}`,
@@ -125,7 +126,13 @@ async function seedSupervisorPipelinePacket(
   // The browser fixture owns its isolated SQLite database. Runtime graph
   // authorization is covered by the private-UDS supervisor integration test;
   // this narrow setup only gives the renderer a persisted authoritative event.
-  if (parallelWorkGraphEvidence) attachSupervisorPipelineWorkGraph(packetId, parallelWorkGraphEvidence);
+  if (parallelWorkGraphEvidence || reviewRouteEvidence) attachSupervisorPipelineWorkGraph(packetId, parallelWorkGraphEvidence ?? {}, reviewRouteEvidence);
+  await expect.poll(async () => {
+    const projectionResponse = await request.get(`${supervisorUrl}/pipeline-control-plane/projection`);
+    if (!projectionResponse.ok()) return false;
+    const projection = (await projectionResponse.json()) as { data?: { workPackets?: Array<{ packetId?: string }> } };
+    return projection.data?.workPackets?.some((packet) => packet.packetId === packetId) ?? false;
+  }).toBe(true);
   return body.data;
 }
 
@@ -155,7 +162,7 @@ function readSupervisorPipelinePacket(packetId: string) {
   return JSON.parse(result) as SupervisorPipelinePacketSnapshot;
 }
 
-function attachSupervisorPipelineWorkGraph(packetId: string, graph: Record<string, unknown>) {
+function attachSupervisorPipelineWorkGraph(packetId: string, graph: Record<string, unknown>, reviewRoute?: Record<string, unknown>) {
   const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
   expect(dbPath).toBeTruthy();
   const script = [
@@ -163,13 +170,15 @@ function attachSupervisorPipelineWorkGraph(packetId: string, graph: Record<strin
     "db_path = sys.argv[1]",
     "packet_id = sys.argv[2]",
     "graph = json.loads(sys.argv[3])",
+    "review_route = json.loads(sys.argv[4]) if sys.argv[4] != 'null' else None",
+    "evidence = {'schemaVersion': 'manager-source-packet-evidence/v1', 'workGraph': graph, 'reviewRoute': review_route} if review_route is not None else graph",
     "conn = sqlite3.connect(db_path)",
-    "result = conn.execute(\"update authoritative_work_packet_lifecycle_events set parallel_work_graph_json = ? where packet_id = ? and event_type = 'packet.created'\", (json.dumps(graph), packet_id))",
+    "result = conn.execute(\"update authoritative_work_packet_lifecycle_events set parallel_work_graph_json = ? where packet_id = ? and event_type = 'packet.created'\", (json.dumps(evidence), packet_id))",
     "assert result.rowcount == 1",
     "conn.commit()",
     "conn.close()",
   ].join("; ");
-  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, JSON.stringify(graph)], { cwd: process.cwd(), encoding: "utf8" });
+  execFileSync(supervisorPythonCommand(), ["-c", script, dbPath!, packetId, JSON.stringify(graph), reviewRoute ? JSON.stringify(reviewRoute) : "null"], { cwd: process.cwd(), encoding: "utf8" });
 }
 
 function ageSupervisorPipelinePacket(packetId: string, snapshot: SupervisorPipelinePacketSnapshot) {
@@ -903,6 +912,128 @@ test.describe("dashboard workflow coverage", () => {
     await expect(graph).toBeVisible();
     await inspector.getByRole("button", { name: "Close Packet Detail", exact: true }).click();
     await expect(card).toBeFocused();
+  });
+
+  test("renders bounded stale Review route only after packet selection and returns focus", async ({ page, request }, testInfo) => {
+    const title = `Story 35.3 stale review evidence ${Date.now()}`;
+    const packetId = `manager-source-story-35-3-${Date.now()}`;
+    await seedSupervisorPipelinePacket(request, packetId, title, "waiting", {
+      schemaVersion: "parallel-work-graph-evidence/v0",
+      sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+      availability: "available",
+      packetId,
+      executionJobId: `execution-job:story-35-3-${testInfo.project.name}`,
+      reportIdentity: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      generatedAt: new Date().toISOString(),
+      freshnessState: "live",
+      waveMembership: "selected",
+      dependencyState: "clear",
+      reservation: { status: "advisory_reserved", owner: "operator", reasonCode: "independent_surface" },
+      capacity: { posture: "normal", reasonCode: "capacity_normal" },
+      reason: "The packet is selected in the advisory wave.",
+      nextSafeAction: "Inspect existing authority gates before any future action.",
+      evidenceRefs: ["evidence:story-35-3-browser"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    }, {
+      schemaVersion: "pipeline-review-route-evidence/v0",
+      availability: "stale",
+      packetId,
+      routeState: "simulated",
+      reasonCode: "immutable_identity_stale",
+      reason: "The reviewed exact identity no longer matches the current packet.",
+      safeFallback: "Re-evaluate and reissue bounded review evidence for the current exact identity.",
+      exactIdentity: "changed",
+      issuanceState: "active",
+      findingSummary: { count: 0, highestSeverity: null, evidenceRefs: ["review-evidence:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"] },
+      dataClass: "metadata_only",
+      execution: "none",
+      deliveryEvidenceEligible: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    });
+    await page.goto(`/pipeline?e2eReviewPacket=${encodeURIComponent(packetId)}`);
+    await page.reload();
+    await page.getByRole("searchbox", { name: "Packet search" }).fill(title);
+    const card = pipelinePacketButton(page, title);
+    await expect(card).toBeVisible();
+    await expect(card).not.toHaveAttribute("aria-label", /review route|normalized finding|exact identity|provider/i);
+    await expect(page.getByLabel("Review route")).toHaveCount(0);
+    await card.focus();
+    await page.keyboard.press("Enter");
+    const inspector = page.getByLabel("Packet inspection panel");
+    const route = inspector.getByLabel("Review route");
+    await expect(route).toBeVisible();
+    await expect(route.getByText("Stale — exact head changed", { exact: true })).toHaveCount(2);
+    await expect(route.getByText("No provider received a live packet.", { exact: true })).toBeVisible();
+    await expect(route).toContainText("not current review evidence");
+    await expect(route).toContainText("Not eligible; this read-only group cannot establish delivery evidence.");
+    await expect(route.getByRole("button")).toHaveCount(0);
+    await expect(route).not.toContainText(/prompt contents|provider payload contents|credential value|token value/i);
+    await page.setViewportSize(pipelineViewportForProject(testInfo.project.name));
+    await expect(route).toBeVisible();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect.poll(() => route.evaluate((element) => {
+      const panel = element.closest(".pipeline-inspection-panel");
+      return panel ? window.getComputedStyle(panel).transitionProperty : null;
+    })).toBe("none");
+    await inspector.getByRole("button", { name: "Close Packet Detail", exact: true }).click();
+    await expect(card).toBeFocused();
+  });
+
+  test("renders expired Review evidence as current identity with a blocked recovery", async ({ page, request }, testInfo) => {
+    const title = `Story 35.3 expired review evidence ${Date.now()}`;
+    const packetId = `manager-source-story-35-3-expired-${Date.now()}`;
+    await seedSupervisorPipelinePacket(request, packetId, title, "waiting", {
+      schemaVersion: "parallel-work-graph-evidence/v0",
+      sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+      availability: "available",
+      packetId,
+      executionJobId: `execution-job:story-35-3-expired-${testInfo.project.name}`,
+      reportIdentity: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      generatedAt: new Date().toISOString(),
+      freshnessState: "live",
+      waveMembership: "selected",
+      dependencyState: "clear",
+      reservation: { status: "advisory_reserved", owner: "operator", reasonCode: "independent_surface" },
+      capacity: { posture: "normal", reasonCode: "capacity_normal" },
+      reason: "The packet is selected in the advisory wave.",
+      nextSafeAction: "Inspect existing authority gates before any future action.",
+      evidenceRefs: ["evidence:story-35-3-expired-browser"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    }, {
+      schemaVersion: "pipeline-review-route-evidence/v0",
+      availability: "unavailable",
+      packetId,
+      routeState: "blocked",
+      reasonCode: "issuance_expired",
+      reason: "Review evidence issuance has expired.",
+      safeFallback: "Reissue bounded review evidence before relying on it.",
+      exactIdentity: "current",
+      issuanceState: "expired",
+      findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+      dataClass: "metadata_only",
+      execution: "none",
+      deliveryEvidenceEligible: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    });
+    await page.goto(`/pipeline?e2eReviewPacket=${encodeURIComponent(packetId)}`);
+    await page.getByRole("searchbox", { name: "Packet search" }).fill(title);
+    const card = pipelinePacketButton(page, title);
+    await card.focus();
+    await page.keyboard.press("Enter");
+    const route = page.getByLabel("Packet inspection panel").getByLabel("Review route");
+    await expect(route.getByText("Expired", { exact: true })).toHaveCount(2);
+    await expect(route).toContainText("current");
+    await expect(route).toContainText("Expired — reissue before relying on review evidence");
+    await expect(route).not.toContainText("Stale — exact head changed");
+    await expect(route.getByRole("button")).toHaveCount(0);
   });
 
   test("opens isolated demo pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {

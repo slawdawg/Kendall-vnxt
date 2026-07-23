@@ -4,7 +4,7 @@ import {
   isPipelineProductModeMappingV0,
   validatePipelineOperationalActionCapabilityV1,
 } from "@kendall/contracts";
-import type { PipelineDashboardProjectionV0, PipelineWorkGraphEvidenceV0 } from "@kendall/contracts";
+import type { PipelineDashboardProjectionV0, PipelineReviewRouteEvidenceV0, PipelineWorkGraphEvidenceV0 } from "@kendall/contracts";
 
 export function normalizePipelineDashboardProjection(projection: Partial<PipelineDashboardProjectionV0>): Partial<PipelineDashboardProjectionV0> {
   if (!projection || typeof projection !== "object") {
@@ -52,6 +52,11 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
   const selectedPacketWorkGraphsCurrent = !Array.isArray(projection.selectedPacketDetails) || Array.from(projection.selectedPacketDetails).every((detail) => (
     detail && typeof detail === "object" && "workGraph" in detail
   ));
+  const selectedPacketReviewRoutesCurrent = !Array.isArray(projection.selectedPacketDetails) || Array.from(projection.selectedPacketDetails).every((detail) => {
+    if (!detail || typeof detail !== "object") return false;
+    const candidate = detail as unknown as Record<string, unknown>;
+    return typeof candidate.packetId === "string" && "reviewRoute" in candidate && isProjectionReviewRoute(candidate.reviewRoute, candidate.packetId);
+  });
   if (
     sourceStatesCurrent &&
     queueSummaryCurrent &&
@@ -60,7 +65,8 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     reliabilityProblemsCurrent &&
     gatedControlsCurrent &&
     runtimeCapabilitiesCurrent &&
-    selectedPacketWorkGraphsCurrent
+    selectedPacketWorkGraphsCurrent &&
+    selectedPacketReviewRoutesCurrent
   ) {
     return projection;
   }
@@ -137,17 +143,23 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
           : "Worker runtime state is not connected to the supervisor projection.",
         metadataOnly: true,
       };
-  const selectedPacketDetails = Array.isArray(projection.selectedPacketDetails) && !selectedPacketWorkGraphsCurrent
+  const selectedPacketDetails = Array.isArray(projection.selectedPacketDetails) && (!selectedPacketWorkGraphsCurrent || !selectedPacketReviewRoutesCurrent)
     ? Array.from(projection.selectedPacketDetails, (detail) => {
         if (!detail || typeof detail !== "object") {
           return detail;
         }
         const legacyDetail = detail as unknown as Record<string, unknown>;
         const packetId = legacyDetail.packetId;
-        if ("workGraph" in legacyDetail || typeof packetId !== "string") {
+        if (typeof packetId !== "string") {
           return detail;
         }
-        return { ...detail, workGraph: unavailableProjectionWorkGraph(packetId) };
+        return {
+          ...detail,
+          ...("workGraph" in legacyDetail ? {} : { workGraph: unavailableProjectionWorkGraph(packetId) }),
+          ...("reviewRoute" in legacyDetail && isProjectionReviewRoute(legacyDetail.reviewRoute, packetId)
+            ? {}
+            : { reviewRoute: unavailableProjectionReviewRoute(packetId) }),
+        };
       })
     : projection.selectedPacketDetails;
   return {
@@ -162,6 +174,27 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     runtimeReadiness: projection.runtimeReadiness && !runtimeCapabilitiesCurrent
       ? { ...projection.runtimeReadiness, actionCapabilitiesV1: [] }
       : projection.runtimeReadiness,
+  };
+}
+
+function unavailableProjectionReviewRoute(packetId: string): PipelineReviewRouteEvidenceV0 {
+  return {
+    schemaVersion: "pipeline-review-route-evidence/v0",
+    availability: "unavailable",
+    packetId,
+    routeState: "unavailable",
+    reasonCode: "review_evidence_unavailable",
+    reason: "Review evidence unavailable.",
+    safeFallback: "Re-evaluate and reissue bounded review evidence before relying on it.",
+    exactIdentity: "unavailable",
+    issuanceState: "unavailable",
+    findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+    dataClass: "metadata_only",
+    execution: "none",
+    deliveryEvidenceEligible: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
   };
 }
 
@@ -1114,6 +1147,7 @@ function isProjectionSelectedPacketDetail(value: unknown) {
     detail.canSatisfyLiveMovementProof === undefined ||
     typeof detail.canSatisfyLiveMovementProof === "boolean";
   const hasValidWorkGraph = isProjectionWorkGraph(detail.workGraph, detail.packetId);
+  const hasValidReviewRoute = isProjectionReviewRoute(detail.reviewRoute, detail.packetId);
   const movementProofIsConsistent =
     detail.canSatisfyLiveMovementProof !== true ||
     (detail.truthLabel === "live" &&
@@ -1144,8 +1178,71 @@ function isProjectionSelectedPacketDetail(value: unknown) {
     hasValidLatestMovementSummary &&
     hasValidLiveMovementProof &&
     hasValidWorkGraph &&
+    hasValidReviewRoute &&
     movementProofIsConsistent &&
     detail.metadataOnly === true
+  );
+}
+
+function isProjectionReviewRoute(value: unknown, packetId: unknown): boolean {
+  if (!value || typeof value !== "object" || !isSafeWorkGraphIdentifier(packetId)) return false;
+  const route = value as NonNullable<PipelineDashboardProjectionV0["selectedPacketDetails"][number]["reviewRoute"]>;
+  const textByReasonCode: Record<string, readonly [string, string]> = {
+    report_only: ["A bounded report-only review is available.", "Re-evaluate bounded review evidence before any later promotion."],
+    simulated_completed: ["Simulation preparation is recorded without an execution action.", "Re-evaluate bounded review evidence before any later promotion."],
+    immutable_identity_stale: ["The reviewed exact identity no longer matches the current packet.", "Re-evaluate and reissue bounded review evidence for the current exact identity."],
+    policy_vetoed: ["A policy decision blocks this review preparation.", "Resolve the policy decision and re-evaluate bounded review evidence."],
+    review_blocked: ["A bounded review preparation is blocked.", "Resolve the recorded block and re-evaluate bounded review evidence."],
+    issuance_expired: ["Review evidence issuance has expired.", "Reissue bounded review evidence before relying on it."],
+    issuance_revoked: ["Review evidence issuance has been revoked.", "Resolve the policy block and re-evaluate bounded review evidence."],
+    issuance_cancelled: ["Review evidence issuance was cancelled.", "Re-evaluate before issuing new bounded review evidence."],
+    review_evidence_unavailable: ["Review evidence unavailable.", "Re-evaluate and reissue bounded review evidence before relying on it."],
+  };
+  const compatibilityByReasonCode: Record<string, readonly [string, readonly string[], string, string]> = {
+    report_only: ["available", ["report_only"], "current", "active"],
+    simulated_completed: ["available", ["simulated"], "current", "active"],
+    immutable_identity_stale: ["stale", ["report_only", "simulated", "blocked"], "changed", "active"],
+    policy_vetoed: ["unavailable", ["blocked"], "current", "active"],
+    review_blocked: ["unavailable", ["blocked"], "current", "active"],
+    issuance_expired: ["unavailable", ["blocked"], "current", "expired"],
+    issuance_revoked: ["unavailable", ["blocked"], "current", "revoked"],
+    issuance_cancelled: ["unavailable", ["blocked"], "current", "cancelled"],
+    review_evidence_unavailable: ["unavailable", ["unavailable"], "unavailable", "unavailable"],
+  };
+  const safeReviewEvidenceRef = (ref: unknown) => typeof ref === "string" && /^review-evidence:sha256:[a-f0-9]{64}$/.test(ref);
+  const safeRouteText = (text: unknown, maxLength = 500) => (
+    typeof text === "string" &&
+    isSafeProjectionText(text) &&
+    text.length <= maxLength &&
+    !/\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|payload|transcript)\b/i.test(text) &&
+    !/(?:^|[\s"'])\/(?:home|tmp|var|etc)\//i.test(text)
+  );
+  const reasonCode = (code: unknown) => typeof code === "string" && Object.hasOwn(textByReasonCode, code);
+  const compatibility = typeof route.reasonCode === "string" ? compatibilityByReasonCode[route.reasonCode] : undefined;
+  const validFindingSummary = route.findingSummary && Object.keys(route.findingSummary).length === 3 &&
+    Number.isInteger(route.findingSummary.count) && route.findingSummary.count >= 0 && route.findingSummary.count <= 32 &&
+    (route.findingSummary.highestSeverity === null || ["info", "low", "medium", "high"].includes(route.findingSummary.highestSeverity)) &&
+    Array.isArray(route.findingSummary.evidenceRefs) && route.findingSummary.evidenceRefs.length <= 20 && route.findingSummary.evidenceRefs.every(safeReviewEvidenceRef) &&
+    ((route.findingSummary.count === 0) === (route.findingSummary.highestSeverity === null));
+  return (
+    Object.keys(route).length === 16 &&
+    route.schemaVersion === "pipeline-review-route-evidence/v0" &&
+    ["available", "stale", "unavailable"].includes(route.availability) &&
+    route.packetId === packetId &&
+    ["report_only", "simulated", "blocked", "unavailable"].includes(route.routeState) &&
+    reasonCode(route.reasonCode) && safeRouteText(route.reason) && safeRouteText(route.safeFallback) &&
+    (route.reason === textByReasonCode[route.reasonCode]?.[0]) &&
+    (route.safeFallback === textByReasonCode[route.reasonCode]?.[1]) &&
+    ["current", "changed", "unavailable"].includes(route.exactIdentity) &&
+    ["active", "expired", "revoked", "cancelled", "unavailable"].includes(route.issuanceState) &&
+    validFindingSummary && route.dataClass === "metadata_only" && route.execution === "none" &&
+    route.deliveryEvidenceEligible === false && route.metadataOnly === true && route.rawPayloadRetained === false &&
+    route.retention === "metadata_only_evidence_references" &&
+    compatibility !== undefined &&
+    route.availability === compatibility[0] && compatibility[1].includes(route.routeState) &&
+    route.exactIdentity === compatibility[2] && route.issuanceState === compatibility[3] &&
+    (route.reasonCode !== "review_evidence_unavailable" ||
+      (route.findingSummary.count === 0 && route.findingSummary.highestSeverity === null && route.findingSummary.evidenceRefs.length === 0))
   );
 }
 

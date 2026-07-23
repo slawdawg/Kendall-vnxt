@@ -2712,6 +2712,7 @@ function PacketInspection({
           <InspectionRow label="Five whys" value={routeSourceContext} />
         </dl>
       </section>
+      <ReviewRoutePanel route={packetDetailWhyDiagnostics?.reviewRoute ?? projectionDetail?.reviewRoute ?? null} />
       <section aria-label="Testing and risk" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
         <h3 className="text-sm font-semibold">Testing and risk</h3>
         <dl className="grid gap-2 text-sm">
@@ -2768,6 +2769,72 @@ function PacketInspection({
         Open full packet
       </Link>
     </aside>
+  );
+}
+
+function ReviewRoutePanel({ route }: { route: ProjectionSelectedPacketDetail["reviewRoute"] | null }) {
+  const unavailable = !route || route.reasonCode === "review_evidence_unavailable";
+  const stale = route?.availability === "stale" || route?.exactIdentity === "changed";
+  const vetoed = route?.routeState === "blocked" && route.reasonCode === "policy_vetoed";
+  const expired = route?.reasonCode === "issuance_expired";
+  const revoked = route?.reasonCode === "issuance_revoked";
+  const cancelled = route?.reasonCode === "issuance_cancelled";
+  const stateLabel = unavailable
+    ? "Review evidence unavailable"
+    : stale
+      ? "Stale — exact head changed"
+      : vetoed
+        ? "Vetoed"
+        : expired
+          ? "Expired"
+          : revoked
+            ? "Revoked"
+            : cancelled
+              ? "Cancelled"
+              : route?.routeState === "report_only"
+                ? "Report only"
+                : route?.routeState === "simulated"
+                  ? "Simulated"
+                  : "Blocked";
+  const requiresAttention = unavailable || stale || vetoed || expired || revoked || cancelled || route?.routeState === "blocked";
+  const findingSummary = !route || route.findingSummary.count === 0
+    ? "No normalized findings are available."
+    : `${route.findingSummary.count} normalized finding${route.findingSummary.count === 1 ? "" : "s"}; highest severity ${route.findingSummary.highestSeverity}.`;
+  const issuance = unavailable
+    ? "unavailable"
+    : route?.issuanceState === "expired"
+      ? "Expired — reissue before relying on review evidence"
+      : route?.issuanceState === "revoked"
+        ? "Revoked — resolve the policy block before reissuing"
+        : route?.issuanceState === "cancelled"
+          ? "Cancelled — re-evaluate before issuing a new review"
+          : route?.issuanceState ?? "unavailable";
+  return (
+    <section aria-label="Review route" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Review route</h3>
+        <span className="rounded-full border border-[var(--line)] px-2 py-0.5 text-xs text-[var(--muted)]">{stateLabel}</span>
+      </div>
+      {requiresAttention ? (
+        <p aria-live="assertive" className="text-xs leading-5 text-[var(--muted)]">
+          {stateLabel}. {route?.safeFallback ?? "Re-evaluate and reissue bounded review evidence before relying on it."}
+        </p>
+      ) : null}
+      {route?.routeState === "report_only" || route?.routeState === "simulated" ? (
+        <p className="text-xs leading-5 text-[var(--muted)]">No provider received a live packet.</p>
+      ) : null}
+      <dl className="grid gap-2 text-sm">
+        <InspectionRow label="State" value={stateLabel} />
+        <InspectionRow label="Reason" value={route?.reason ?? "Review evidence unavailable."} />
+        <InspectionRow label="Recovery" value={route?.safeFallback ?? "Re-evaluate and reissue bounded review evidence before relying on it."} />
+        <InspectionRow label="Exact identity" value={stale ? "changed; not current review evidence" : route?.exactIdentity ?? "unavailable"} />
+        <InspectionRow label="Issuance" value={issuance} />
+        <InspectionRow label="Data boundary" value={route?.dataClass === "metadata_only" ? "metadata only; no source, diff, prompt, completion, reasoning, credentials, or provider material retained" : "unavailable"} />
+        <InspectionRow label="Findings" value={findingSummary} />
+        <InspectionRow label="Delivery evidence" value="Not eligible; this read-only group cannot establish delivery evidence." />
+      </dl>
+      <RefList title="Review evidence refs" values={route?.findingSummary.evidenceRefs ?? []} empty="No bounded review evidence refs are available." />
+    </section>
   );
 }
 

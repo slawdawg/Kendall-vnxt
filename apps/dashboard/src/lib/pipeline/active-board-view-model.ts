@@ -11,6 +11,7 @@ import type {
   PipelineProjectionSourceLabelV0,
   PipelineQualityGateNodeV0,
   PipelineQueueSummaryV0,
+  PipelineReviewRouteEvidenceV0,
 } from "@kendall/contracts";
 
 export type PipelinePacketBoardPlacement = "active_board" | "attention" | "stale_history" | "diagnostics" | "hidden";
@@ -197,6 +198,8 @@ export type PipelinePacketDetailWhyDiagnostics = {
     rawPayloadRetained: false;
   };
   canonical: PipelineCanonicalPacketDetail;
+  /** Backend-issued detail evidence only; the board never derives route state. */
+  reviewRoute: PipelineReviewRouteEvidenceV0 | null;
   metadataOnly: true;
 };
 
@@ -513,6 +516,7 @@ export function buildPacketDetailWhyDiagnosticsForPacket(
       detail ? detail.canonicalContract : packet.canonicalContract,
       detail ? detail.productModeMapping : packet.productModeMapping
     ),
+    reviewRoute: detail?.reviewRoute ?? null,
     metadataOnly: true,
   };
 }

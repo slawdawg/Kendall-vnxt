@@ -689,8 +689,8 @@ async def create_authoritative_work_packet(
     payload: AuthoritativeWorkPacketCreateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    if payload.parallelWorkGraphEvidence is not None:
-        raise HTTPException(status_code=403, detail=error_response("Parallel work graph intake requires the private manager supervisor transport.", "manager_graph_private_transport_required").model_dump())
+    if payload.parallelWorkGraphEvidence is not None or payload.reviewRouteEvidence is not None:
+        raise HTTPException(status_code=403, detail=error_response("Manager evidence intake requires the private manager supervisor transport.", "manager_graph_private_transport_required").model_dump())
     try:
         packet = await service.create_authoritative_work_packet(session, payload)
     except ValueError as exc:
