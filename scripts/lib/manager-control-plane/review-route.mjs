@@ -283,7 +283,9 @@ function validateEvidenceRefs(values, reasons) {
 
 function validateSubset(values, allowed, label, reasons) {
   const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : label === "adapter" ? ADAPTER_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
-  if (!isAllowedStringList(allowed, fixedValues) || !isSafePlainArray(values) || values.some((value) => !allowed.includes(value))) reasons.push(`${label}_not_allowed`);
+  const copiedValues = copySafePlainArray(values);
+  const copiedAllowed = copySafePlainArray(allowed);
+  if (!copiedValues || !copiedAllowed || !isAllowedStringList(copiedAllowed, fixedValues) || copiedValues.some((value) => !copiedAllowed.includes(value))) reasons.push(`${label}_not_allowed`);
 }
 
 function inspectObjectFields(value, fields, reasons) {
@@ -298,9 +300,11 @@ function inspectObjectFields(value, fields, reasons) {
 function containsForbiddenText(value, seen = new WeakSet()) {
   if (typeof value === "string") return FORBIDDEN_TEXT.test(value);
   if (Array.isArray(value)) {
+    const values = copySafePlainArray(value);
+    if (!values) return false;
     if (seen.has(value)) return true;
     seen.add(value);
-    return value.some((entry) => containsForbiddenText(entry, seen));
+    return values.some((entry) => containsForbiddenText(entry, seen));
   }
   if (isPlainObject(value)) {
     if (seen.has(value)) return true;
@@ -363,14 +367,16 @@ function validateDisclosureInput(value) {
 }
 
 function validateRouteAdapterPair(routeAllowlist, adapterAllowlist, reasons) {
-  if (!isSafePlainArray(routeAllowlist) || !isSafePlainArray(adapterAllowlist)) {
+  const routes = copySafePlainArray(routeAllowlist);
+  const adapters = copySafePlainArray(adapterAllowlist);
+  if (!routes || !adapters) {
     reasons.push("route_adapter_pair_invalid");
     return;
   }
-  if (routeAllowlist.includes("report_only") && !adapterAllowlist.includes("none")) reasons.push("route_adapter_pair_invalid");
-  if (routeAllowlist.includes("simulated") && !adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
-  if (adapterAllowlist.includes("none") && !routeAllowlist.includes("report_only")) reasons.push("route_adapter_pair_invalid");
-  if (adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID) && !routeAllowlist.includes("simulated")) reasons.push("route_adapter_pair_invalid");
+  if (routes.includes("report_only") && !adapters.includes("none")) reasons.push("route_adapter_pair_invalid");
+  if (routes.includes("simulated") && !adapters.includes(SIMULATED_REVIEW_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes("none") && !routes.includes("report_only")) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes(SIMULATED_REVIEW_ADAPTER_ID) && !routes.includes("simulated")) reasons.push("route_adapter_pair_invalid");
 }
 
 function validateInputObject(value, fields) {
@@ -427,35 +433,46 @@ function fallbackForPacketReason(reason) {
 }
 
 function stableList(value) {
-  return isSafePlainArray(value) ? [...new Set(value.map((entry) => String(entry)))].sort() : [];
+  const values = copySafePlainArray(value);
+  return values ? [...new Set(values.map((entry) => String(entry)))].sort() : [];
 }
 
 function validateConsumedDisclosurePacketIds(value) {
   if (value === undefined) return { ok: true, values: [] };
-  if (!isSafePlainArray(value) || value.length > 256 || value.some((entry) => !safeId(entry)) || new Set(value).size !== value.length) return { ok: false, values: [] };
-  return { ok: true, values: [...value] };
+  const values = copySafePlainArray(value);
+  if (!values || values.length > 256 || values.some((entry) => !safeId(entry)) || new Set(values).size !== values.length) return { ok: false, values: [] };
+  return { ok: true, values };
 }
 
 function isAllowedStringList(values, fixedValues) {
-  return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => safeId(value) && fixedValues.includes(value)) && new Set(values).size === values.length;
+  const copied = copySafePlainArray(values);
+  return Boolean(copied) && copied.length > 0 && copied.length <= 32 && copied.every((value) => safeId(value) && fixedValues.includes(value)) && new Set(copied).size === copied.length;
 }
 
 function isAllowedEvidenceRefs(values) {
-  return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => typeof value === "string" && SAFE_EVIDENCE_REF.test(value)) && new Set(values).size === values.length;
+  const copied = copySafePlainArray(values);
+  return Boolean(copied) && copied.length > 0 && copied.length <= 32 && copied.every((value) => typeof value === "string" && SAFE_EVIDENCE_REF.test(value)) && new Set(copied).size === copied.length;
 }
 
 function isSafePlainArray(value) {
+  return copySafePlainArray(value) !== null;
+}
+
+function copySafePlainArray(value) {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return false;
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null;
     const names = Object.getOwnPropertyNames(value);
-    if (names.length !== value.length + 1 || !names.includes("length")) return false;
-    for (let index = 0; index < value.length; index += 1) {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !Object.hasOwn(lengthDescriptor, "value") || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || names.length !== lengthDescriptor.value + 1 || !names.includes("length")) return null;
+    const copied = [];
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (!descriptor || !Object.hasOwn(descriptor, "value")) return false;
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return null;
+      copied.push(descriptor.value);
     }
-    return true;
+    return copied;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -464,22 +481,16 @@ function ownDataValue(value, key) {
   return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
 }
 
-function copySafePlainArray(value) {
-  if (!isSafePlainArray(value)) return null;
-  const normalized = [];
-  for (let index = 0; index < value.length; index += 1) normalized[index] = Object.getOwnPropertyDescriptor(value, String(index)).value;
-  return normalized;
-}
-
 function normalizeJsonForSerialization(value, seen = new WeakSet()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return { ok: true, value };
   if (typeof value === "number" && Number.isFinite(value)) return { ok: true, value };
-  if (isSafePlainArray(value)) {
+  const arrayValue = copySafePlainArray(value);
+  if (arrayValue) {
     if (seen.has(value)) return { ok: false };
     seen.add(value);
     const normalized = [];
-    for (let index = 0; index < value.length; index += 1) {
-      const item = normalizeJsonForSerialization(value[index], seen);
+    for (const entry of arrayValue) {
+      const item = normalizeJsonForSerialization(entry, seen);
       if (!item.ok) return item;
       normalized.push(item.value);
     }

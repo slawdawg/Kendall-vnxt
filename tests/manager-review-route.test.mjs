@@ -203,6 +203,38 @@ test("simulated adapter binds canonical simulated authority and supplied one-tim
   assert.equal(disclosurePacketCanonicalDigest(hookedPacket), null);
   assert.equal(digestHookCalled, false);
 
+  for (const field of ["consumedDisclosurePacketIds", "priorFindings"]) {
+    let arrayGetterCalled = false;
+    const accessorArray = [];
+    Object.defineProperty(accessorArray, "0", {
+      enumerable: true,
+      get() { arrayGetterCalled = true; return field === "priorFindings" ? first.findings[0] : "disclosure-packet:consumed"; },
+    });
+    const accessorResult = evaluateSimulatedReview(simulatedInput({ [field]: accessorArray }));
+    assert.equal(accessorResult.state, "blocked");
+    assert.equal(accessorResult.code, "decision_invalid");
+    assert.equal(arrayGetterCalled, false);
+  }
+
+  for (const [field, entries] of [["consumedDisclosurePacketIds", ["disclosure-packet:consumed"]], ["priorFindings", []]]) {
+    let proxyGetCalled = false;
+    const proxyArray = new Proxy(entries, {
+      get(target, key, receiver) { proxyGetCalled = true; return Reflect.get(target, key, receiver); },
+    });
+    const proxyResult = evaluateSimulatedReview(simulatedInput({ [field]: proxyArray }));
+    assert.equal(proxyResult.state, "completed");
+    assert.equal(proxyGetCalled, false);
+  }
+
+  let priorFindingGetCalled = false;
+  const proxyFinding = new Proxy(evaluateSimulatedReview(simulatedInput()).findings[0], {
+    get(target, key, receiver) { priorFindingGetCalled = true; return Reflect.get(target, key, receiver); },
+  });
+  const proxyFindingResult = evaluateSimulatedReview(simulatedInput({ priorFindings: [proxyFinding] }));
+  assert.equal(proxyFindingResult.state, "completed");
+  assert.equal(proxyFindingResult.code, "simulated_deduplicated");
+  assert.equal(priorFindingGetCalled, false);
+
   const consumed = evaluateSimulatedReview(simulatedInput({ consumedDisclosurePacketIds: [prepared.packet.disclosurePacketId] }));
   assert.equal(consumed.state, "blocked");
   assert.equal(consumed.code, "packet_already_used");
@@ -351,6 +383,15 @@ test("review route rejects serialization hooks and nonplain arrays before disclo
   assert.equal(disclosurePacketUtf8Bytes(hookedAllowlist), null);
   assert.equal(disclosurePacketUtf8Bytes(hookedObject), null);
   assert.equal(evaluateReviewRoute({ ...validInput(), disclosure: { ...validInput().disclosure, routeAllowlist: hookedAllowlist } }).decision.controllingReason.code, "packet_malformed");
+
+  const proxyGetKeys = [];
+  const proxyAllowlist = new Proxy(["report_only"], {
+    get(target, key, receiver) { proxyGetKeys.push(String(key)); return Reflect.get(target, key, receiver); },
+  });
+  const proxyResult = evaluateReviewRoute({ ...validInput(), disclosure: { ...validInput().disclosure, routeAllowlist: proxyAllowlist } });
+  assert.equal(proxyResult.ok, true);
+  assert.equal(proxyResult.decision.state, "report_only");
+  assert.deepEqual(proxyGetKeys, []);
 });
 
 test("review route fails closed instead of throwing for malformed or coercion-hostile input", () => {

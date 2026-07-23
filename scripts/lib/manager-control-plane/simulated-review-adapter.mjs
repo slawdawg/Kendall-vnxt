@@ -45,8 +45,9 @@ function evaluateSimulatedReviewUnsafe(input = {}) {
   const packetIdentityValue = normalizeIdentity(packetIdentity(packet));
   if (!packetIdentityValue || !sameIdentity(packetIdentityValue, currentIdentity)) return stale(currentIdentity);
   if (!isSimulatedDecision(decision, packet, currentIdentity)) return blocked("decision_invalid", currentIdentity.exactHead, currentIdentity.digest, "re_evaluate", "Prepare one canonical simulated route and re-evaluate.");
-  const consumed = ownDataValue(input, "consumedDisclosurePacketIds") === undefined ? [] : ownDataValue(input, "consumedDisclosurePacketIds");
-  if (!isSafeIdList(consumed)) return blocked("decision_invalid", currentIdentity.exactHead, currentIdentity.digest, "re_evaluate", "Correct bounded packet-consumption metadata and re-evaluate.");
+  const consumedInput = ownDataValue(input, "consumedDisclosurePacketIds") === undefined ? [] : ownDataValue(input, "consumedDisclosurePacketIds");
+  const consumed = normalizeSafeIdList(consumedInput);
+  if (!consumed) return blocked("decision_invalid", currentIdentity.exactHead, currentIdentity.digest, "re_evaluate", "Correct bounded packet-consumption metadata and re-evaluate.");
   if (consumed.includes(ownDataValue(packet, "disclosurePacketId"))) return blocked("packet_already_used", currentIdentity.exactHead, currentIdentity.digest, "reissue_disclosure_packet", "Reissue one current bounded disclosure packet.");
   const policyBlock = currentPolicyBlock(routePolicy);
   if (policyBlock) return fallbackResult(policyBlock, currentIdentity);
@@ -95,8 +96,8 @@ function fixtureFinding(identity) {
 
 function isSimulatedDecision(value, packet, identity) {
   if (!isStrictObject(value, ["schemaVersion", "decisionId", "state", "controllingReason", "safeFallback", "immutableReview", "authorityEvidence", "disclosurePacketId", "disclosurePacketDigest", "metadataOnly", "rawPayloadRetained", "execution"])) return false;
-  const routeAllowlist = ownDataValue(packet, "routeAllowlist");
-  const adapterAllowlist = ownDataValue(packet, "adapterAllowlist");
+  const routeAllowlist = copyStrictArray(ownDataValue(packet, "routeAllowlist"));
+  const adapterAllowlist = copyStrictArray(ownDataValue(packet, "adapterAllowlist"));
   const disclosurePacketId = ownDataValue(packet, "disclosurePacketId");
   const disclosurePacketDigest = disclosurePacketCanonicalDigest(packet);
   const expectedDecisionId = `review-route-decision:sha256:${createHash("sha256").update(`simulated:simulated_prepared:${identity.exactHead}:${identity.digest}:${disclosurePacketId}`).digest("hex")}`;
@@ -113,8 +114,8 @@ function isSimulatedDecision(value, packet, identity) {
     && ownDataValue(value, "disclosurePacketId") === disclosurePacketId
     && disclosurePacketDigest !== null
     && ownDataValue(value, "disclosurePacketDigest") === disclosurePacketDigest
-    && isStrictArray(routeAllowlist) && routeAllowlist.includes("simulated")
-    && isStrictArray(adapterAllowlist) && adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID)
+    && routeAllowlist !== null && routeAllowlist.includes("simulated")
+    && adapterAllowlist !== null && adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID)
     && isStrictObject(authority, ["issuerId", "authorityRef", "valid"])
     && isStrictObject(authorityEvidence, ["issuerId", "authorityRef", "status"])
     && ownDataValue(authorityEvidence, "issuerId") === ownDataValue(authority, "issuerId")
@@ -130,18 +131,20 @@ function isSimulatedDecision(value, packet, identity) {
 }
 
 function validatePriorFindings(value, identity) {
-  if (!isStrictArray(value) || value.length > 32) return { ok: false, stale: false, keys: new Set(), findings: [] };
+  const priorFindings = copyStrictArray(value);
+  if (!priorFindings || priorFindings.length > 32) return { ok: false, stale: false, keys: new Set(), findings: [] };
   const keys = new Set();
   const findings = [];
   const canonical = fixtureFinding(identity);
-  for (const finding of value) {
-    if (!isStrictObject(finding, FINDING_FIELDS) || !isNormalizedFinding(finding)) return { ok: false, stale: false, keys, findings };
-    if (ownDataValue(finding, "reviewedHead") !== identity.exactHead || ownDataValue(finding, "digest") !== identity.digest) return { ok: false, stale: true, keys, findings };
-    const key = findingKey(finding);
+  for (const finding of priorFindings) {
+    const copiedFinding = copyStrictObject(finding, FINDING_FIELDS);
+    if (!copiedFinding || !isNormalizedFinding(copiedFinding)) return { ok: false, stale: false, keys, findings };
+    if (ownDataValue(copiedFinding, "reviewedHead") !== identity.exactHead || ownDataValue(copiedFinding, "digest") !== identity.digest) return { ok: false, stale: true, keys, findings };
+    const key = findingKey(copiedFinding);
     if (keys.has(key)) return { ok: false, stale: false, keys, findings };
-    if (key === findingKey(canonical) && !sameFinding(finding, canonical)) return { ok: false, stale: false, keys, findings };
+    if (key === findingKey(canonical) && !sameFinding(copiedFinding, canonical)) return { ok: false, stale: false, keys, findings };
     keys.add(key);
-    findings.push(finding);
+    findings.push(copiedFinding);
   }
   if (serializedBytes(findings) > 12 * 1024) return { ok: false, stale: false, keys, findings };
   return { ok: true, stale: false, keys, findings };
@@ -169,7 +172,10 @@ function fallbackResult(fallback, identity) {
 
 function currentPolicyBlock(value) {
   if (!isStrictObject(value, ["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"])) return "policy_vetoed";
-  if (!ownDataValue(value, "routeAllowlist").includes("report_only") || !ownDataValue(value, "adapterAllowlist").includes("none")) return "policy_vetoed";
+  const routeAllowlist = copyStrictArray(ownDataValue(value, "routeAllowlist"));
+  const adapterAllowlist = copyStrictArray(ownDataValue(value, "adapterAllowlist"));
+  const toolAllowlist = copyStrictArray(ownDataValue(value, "toolAllowlist"));
+  if (!routeAllowlist || !adapterAllowlist || !toolAllowlist || !routeAllowlist.includes("report_only") || !adapterAllowlist.includes("none")) return "policy_vetoed";
   if (ownDataValue(value, "policyState") !== "ready") return "policy_vetoed";
   if (ownDataValue(value, "capabilityState") !== "supported") return "capability_unsupported";
   if (ownDataValue(value, "resourceState") !== "ready") return "resource_blocked";
@@ -228,8 +234,9 @@ function serializedBytes(value) {
   }
 }
 
-function isSafeIdList(value) {
-  return isStrictArray(value) && value.length <= 256 && value.every((entry) => safeId(entry)) && new Set(value).size === value.length;
+function normalizeSafeIdList(value) {
+  const ids = copyStrictArray(value);
+  return ids && ids.length <= 256 && ids.every((entry) => safeId(entry)) && new Set(ids).size === ids.length ? ids : null;
 }
 
 function packetIdentity(packet) {
@@ -273,13 +280,28 @@ function isStrictObjectWithAllowedFields(value, fields) {
   }
 }
 
-function isStrictArray(value) {
+function copyStrictObject(value, fields) {
+  if (!isStrictObject(value, fields)) return null;
+  const copied = {};
+  for (const field of fields) copied[field] = ownDataValue(value, field);
+  return copied;
+}
+
+function copyStrictArray(value) {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return false;
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null;
     const names = Object.getOwnPropertyNames(value);
-    return names.length === value.length + 1 && names.includes("length") && value.every((_, index) => Object.hasOwn(Object.getOwnPropertyDescriptor(value, String(index)), "value"));
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !Object.hasOwn(lengthDescriptor, "value") || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || names.length !== lengthDescriptor.value + 1 || !names.includes("length")) return null;
+    const copied = [];
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return null;
+      copied.push(descriptor.value);
+    }
+    return copied;
   } catch {
-    return false;
+    return null;
   }
 }
 
