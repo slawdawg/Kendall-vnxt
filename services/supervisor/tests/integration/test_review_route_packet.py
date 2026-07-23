@@ -81,6 +81,20 @@ def test_disclosure_packet_python_contract_fails_closed_for_unsafe_or_stale_inpu
         assert expected_reason in result["reasons"]
 
 
+def test_disclosure_packet_rejects_live_capable_policy_extras_and_list_subclasses() -> None:
+    policy_with_live_route = {**_policy(), "routeAllowlist": ["report_only", "simulated", "live-route"]}
+    policy_result = validate_disclosure_packet(_packet(), now=NOW, route_policy=policy_with_live_route)
+    assert policy_result["ok"] is False
+    assert "route_not_allowed" in policy_result["reasons"]
+
+    class HookedList(list):
+        pass
+
+    packet_result = validate_disclosure_packet({**_packet(), "routeAllowlist": HookedList(["report_only"])}, now=NOW, route_policy=_policy())
+    assert packet_result["ok"] is False
+    assert "route_allowlist_invalid" in packet_result["reasons"]
+
+
 def test_disclosure_packet_serialized_ceiling_accepts_exact_16kib_and_rejects_one_more_byte() -> None:
     base = {"padding": ""}
     exact = {"padding": "x" * (DISCLOSURE_PACKET_MAX_UTF8_BYTES - disclosure_packet_utf8_bytes(base))}

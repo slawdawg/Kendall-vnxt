@@ -6,7 +6,8 @@ export const DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024;
 
 export function disclosurePacketUtf8Bytes(value) {
   try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
+    const normalized = normalizeJsonForSerialization(value);
+    return normalized.ok ? Buffer.byteLength(JSON.stringify(normalized.value), "utf8") : null;
   } catch {
     return null;
   }
@@ -27,6 +28,10 @@ const ISSUANCE_FIELDS = Object.freeze(["issuedAt", "expiresAt", "revocationState
 const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs"]);
 const DISCLOSURE_INPUT_FIELDS = Object.freeze(["disclosurePacketId", "issuedAt", "expiresAt", "routeAllowlist", "adapterAllowlist", "toolAllowlist", "evidenceRefs", "revocationState", "cancellationState", "singleUse"]);
 const DISCLOSURE_INPUT_REQUIRED_FIELDS = DISCLOSURE_INPUT_FIELDS;
+const REVIEW_ROUTE_INPUT_FIELDS = Object.freeze(["now", "immutableReview", "authority", "routePolicy", "disclosure", "consumedDisclosurePacketIds", "requestedState"]);
+const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
+const ROUTE_ALLOWLIST_VALUES = Object.freeze(["report_only", "simulated"]);
+const NONE_ALLOWLIST_VALUES = Object.freeze(["none"]);
 const SAFE_ID = /^[A-Za-z][A-Za-z0-9._:/-]{1,180}$/;
 const SAFE_EVIDENCE_REF = /^evidence:sha256:[0-9a-f]{64}$/;
 const EXACT_HEAD = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -67,26 +72,30 @@ export function buildDisclosurePacket(input = {}) {
 }
 
 export function validateDisclosurePacket(packet, options = {}) {
-  const reasons = [];
-  if (!isPlainObject(packet)) return invalid("packet_malformed");
-  inspectObjectFields(packet, PACKET_FIELDS, reasons);
-  if (packet.schemaVersion !== DISCLOSURE_PACKET_SCHEMA_VERSION) reasons.push("schema_version_invalid");
-  if (!safeId(packet.disclosurePacketId)) reasons.push("packet_id_invalid");
-  validateImmutableReview(packet.immutableReview, reasons, options.immutableReview);
-  validateStringList(packet.routeAllowlist, "route", reasons, ["report_only", "simulated"]);
-  validateStringList(packet.adapterAllowlist, "adapter", reasons, ["none"]);
-  validateStringList(packet.toolAllowlist, "tool", reasons, ["none"]);
-  validateSubset(packet.routeAllowlist, options.routePolicy?.routeAllowlist, "route", reasons);
-  validateSubset(packet.adapterAllowlist, options.routePolicy?.adapterAllowlist, "adapter", reasons);
-  validateSubset(packet.toolAllowlist, options.routePolicy?.toolAllowlist, "tool", reasons);
-  validateAuthority(packet.authority, reasons);
-  validateIssuance(packet.issuance, options.now, reasons);
-  validateScope(packet.scope, reasons);
-  if (packet.metadataOnly !== true || packet.rawPayloadRetained !== false) reasons.push("metadata_boundary_invalid");
-  const serializedBytes = disclosurePacketUtf8Bytes(packet);
-  if (serializedBytes === null) reasons.push("packet_malformed");
-  else if (serializedBytes > DISCLOSURE_PACKET_MAX_UTF8_BYTES) reasons.push("packet_oversize");
-  return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
+  try {
+    const reasons = [];
+    if (!isPlainObject(packet)) return invalid("packet_malformed");
+    inspectObjectFields(packet, PACKET_FIELDS, reasons);
+    if (packet.schemaVersion !== DISCLOSURE_PACKET_SCHEMA_VERSION) reasons.push("schema_version_invalid");
+    if (!safeId(packet.disclosurePacketId)) reasons.push("packet_id_invalid");
+    validateImmutableReview(packet.immutableReview, reasons, options.immutableReview);
+    validateStringList(packet.routeAllowlist, "route", reasons, ROUTE_ALLOWLIST_VALUES);
+    validateStringList(packet.adapterAllowlist, "adapter", reasons, NONE_ALLOWLIST_VALUES);
+    validateStringList(packet.toolAllowlist, "tool", reasons, NONE_ALLOWLIST_VALUES);
+    validateSubset(packet.routeAllowlist, options.routePolicy?.routeAllowlist, "route", reasons);
+    validateSubset(packet.adapterAllowlist, options.routePolicy?.adapterAllowlist, "adapter", reasons);
+    validateSubset(packet.toolAllowlist, options.routePolicy?.toolAllowlist, "tool", reasons);
+    validateAuthority(packet.authority, reasons);
+    validateIssuance(packet.issuance, options.now, reasons);
+    validateScope(packet.scope, reasons);
+    if (packet.metadataOnly !== true || packet.rawPayloadRetained !== false) reasons.push("metadata_boundary_invalid");
+    const serializedBytes = disclosurePacketUtf8Bytes(packet);
+    if (serializedBytes === null) reasons.push("packet_malformed");
+    else if (serializedBytes > DISCLOSURE_PACKET_MAX_UTF8_BYTES) reasons.push("packet_oversize");
+    return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
+  } catch {
+    return invalid("packet_malformed");
+  }
 }
 
 export function evaluateReviewRoute(input = {}) {
@@ -95,17 +104,26 @@ export function evaluateReviewRoute(input = {}) {
     state: "blocked", code: "packet_malformed", summary: "Route evaluation input must be a plain metadata object.",
     fallback: "re_evaluate", fallbackSummary: "Correct bounded metadata and re-evaluate without execution.", immutableReview: null, authority: fallbackAuthority, packet: null,
   });
+  const inputEnvelope = validateInputEnvelope(input);
+  if (!inputEnvelope.ok) return routeResult({
+    state: "blocked", code: inputEnvelope.reasons[0], summary: "Route evaluation input is malformed or contains forbidden data.",
+    fallback: "re_evaluate", fallbackSummary: "Correct bounded metadata and re-evaluate without execution.", immutableReview: null, authority: fallbackAuthority, packet: null,
+  });
   let now;
   let inputIdentity;
   let inputAuthority;
   let immutableReview;
   let authority;
+  let requestedState;
+  let consumedDisclosurePacketIds;
   try {
     now = canonicalTime(input.now);
     inputIdentity = validateInputObject(input.immutableReview, IDENTITY_FIELDS);
     inputAuthority = validateInputObject(input.authority, AUTHORITY_FIELDS);
     immutableReview = inputIdentity.ok ? tryNormalizeImmutableReview(input.immutableReview) : null;
     authority = normalizeAuthority(input.authority);
+    requestedState = input.requestedState === undefined ? "report_only" : input.requestedState;
+    consumedDisclosurePacketIds = validateConsumedDisclosurePacketIds(input.consumedDisclosurePacketIds);
   } catch {
     return routeResult({
       state: "blocked", code: "packet_malformed", summary: "Route evaluation input cannot be read safely.",
@@ -128,6 +146,19 @@ export function evaluateReviewRoute(input = {}) {
     state: "blocked", code: inputAuthority.reasons[0], summary: "Authority input is malformed or contains forbidden data.",
     fallback: "re_evaluate", fallbackSummary: "Correct bounded authority metadata and re-evaluate without execution.", immutableReview, authority, packet: null,
   });
+  if (!consumedDisclosurePacketIds.ok) return routeResult({
+    state: "blocked", code: "consumed_packet_ids_invalid", summary: "Consumed disclosure packet IDs are malformed.",
+    fallback: "re_evaluate", fallbackSummary: "Correct bounded consumption metadata and re-evaluate without execution.", immutableReview, authority, packet: null,
+  });
+  if (!ROUTE_ALLOWLIST_VALUES.includes(requestedState)) return routeResult({
+    state: "blocked", code: "requested_state_invalid", summary: "Requested route state is not a supported non-executing state.",
+    fallback: "re_evaluate", fallbackSummary: "Request report-only or simulated preparation and re-evaluate without execution.", immutableReview, authority, packet: null,
+  });
+  const policy = normalizeRoutePolicy(input.routePolicy);
+  if (!policy) return routeResult({
+    state: "blocked", code: "route_policy_invalid", summary: "Route policy facts are missing or malformed.",
+    fallback: "re_evaluate", fallbackSummary: "Refresh bounded readiness and policy facts.", immutableReview, authority, packet: null,
+  });
   const inputValidation = validateDisclosureInput(input.disclosure);
   if (!inputValidation.ok) return routeResult({
     state: "blocked", code: inputValidation.reasons[0], summary: "Disclosure preparation input is malformed or contains forbidden data.",
@@ -142,19 +173,14 @@ export function evaluateReviewRoute(input = {}) {
       fallback: "re_evaluate", fallbackSummary: "Correct bounded metadata and re-evaluate without execution.", immutableReview, authority, packet: null,
     });
   }
-  const validation = validateDisclosurePacket(packet, { now, routePolicy: input.routePolicy, immutableReview });
+  const validation = validateDisclosurePacket(packet, { now, routePolicy: policy, immutableReview });
   if (!validation.ok) return routeResult({
     state: "blocked", code: validation.reasons[0], summary: "The disclosure packet failed closed before any route could be prepared.",
     fallback: fallbackForPacketReason(validation.reasons[0]), fallbackSummary: "Correct the bounded metadata and reissue or re-evaluate the packet.", immutableReview, authority, packet: null,
   });
-  if (Array.isArray(input.consumedDisclosurePacketIds) && input.consumedDisclosurePacketIds.includes(packet.disclosurePacketId)) return routeResult({
+  if (consumedDisclosurePacketIds.values.includes(packet.disclosurePacketId)) return routeResult({
     state: "blocked", code: "packet_already_used", summary: "The single-use disclosure packet is already consumed.",
     fallback: "reissue_disclosure_packet", fallbackSummary: "Issue a fresh metadata-only disclosure packet.", immutableReview, authority, packet: null,
-  });
-  const policy = normalizeRoutePolicy(input.routePolicy);
-  if (!policy) return routeResult({
-    state: "blocked", code: "route_policy_invalid", summary: "Route policy facts are missing or malformed.",
-    fallback: "re_evaluate", fallbackSummary: "Refresh bounded readiness and policy facts.", immutableReview, authority, packet: null,
   });
   for (const [field, code] of [["policyState", "policy_vetoed"], ["capabilityState", "capability_unsupported"], ["resourceState", "resource_blocked"]]) {
     if (!policy[field]) return routeResult({
@@ -162,7 +188,7 @@ export function evaluateReviewRoute(input = {}) {
       fallback: field === "policyState" ? "resolve_policy_block" : "re_evaluate", fallbackSummary: "Resolve the named block, then re-evaluate without execution.", immutableReview, authority, packet: null,
     });
   }
-  const state = input.requestedState === "simulated" ? "simulated" : "report_only";
+  const state = requestedState;
   if (!packet.routeAllowlist.includes(state)) return routeResult({
     state: "blocked", code: "requested_route_not_allowed", summary: "The requested non-executing state is not allowlisted by the packet.",
     fallback: "reissue_disclosure_packet", fallbackSummary: "Reissue a packet that explicitly allowlists the requested non-executing state.", immutableReview, authority, packet: null,
@@ -233,15 +259,16 @@ function validateScope(scope, reasons) {
 }
 
 function validateStringList(values, label, reasons, fixedValues) {
-  if (!Array.isArray(values) || values.length === 0 || values.length > 32 || values.some((value) => !safeId(value) || !fixedValues.includes(value)) || new Set(values).size !== values.length) reasons.push(`${label}_allowlist_invalid`);
+  if (!isAllowedStringList(values, fixedValues)) reasons.push(`${label}_allowlist_invalid`);
 }
 
 function validateEvidenceRefs(values, reasons) {
-  if (!Array.isArray(values) || values.length === 0 || values.length > 32 || values.some((value) => typeof value !== "string" || !SAFE_EVIDENCE_REF.test(value)) || new Set(values).size !== values.length) reasons.push("evidence_ref_allowlist_invalid");
+  if (!isSafePlainArray(values) || values.length === 0 || values.length > 32 || values.some((value) => typeof value !== "string" || !SAFE_EVIDENCE_REF.test(value)) || new Set(values).size !== values.length) reasons.push("evidence_ref_allowlist_invalid");
 }
 
 function validateSubset(values, allowed, label, reasons) {
-  if (!Array.isArray(allowed) || !Array.isArray(values) || values.some((value) => !allowed.includes(value))) reasons.push(`${label}_not_allowed`);
+  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
+  if (!isAllowedStringList(allowed, fixedValues) || !isSafePlainArray(values) || values.some((value) => !allowed.includes(value))) reasons.push(`${label}_not_allowed`);
 }
 
 function inspectObjectFields(value, fields, reasons) {
@@ -272,16 +299,31 @@ function containsForbiddenText(value, seen = new WeakSet()) {
 }
 
 function normalizeRoutePolicy(value) {
-  if (!isPlainObject(value)) return null;
-  const routeValid = Array.isArray(value.routeAllowlist) && value.routeAllowlist.includes("report_only");
-  const adapterValid = Array.isArray(value.adapterAllowlist) && value.adapterAllowlist.includes("none");
-  const toolValid = Array.isArray(value.toolAllowlist) && value.toolAllowlist.includes("none");
-  if (!routeValid || !adapterValid || !toolValid) return null;
-  return {
-    policyState: value.policyState === "ready",
-    capabilityState: value.capabilityState === "supported",
-    resourceState: value.resourceState === "ready",
-  };
+  try {
+    if (!isPlainObject(value)) return null;
+    const reasons = [];
+    inspectObjectKeys(value, ROUTE_POLICY_FIELDS, reasons);
+    const routeAllowlist = copySafePlainArray(ownDataValue(value, "routeAllowlist"));
+    const adapterAllowlist = copySafePlainArray(ownDataValue(value, "adapterAllowlist"));
+    const toolAllowlist = copySafePlainArray(ownDataValue(value, "toolAllowlist"));
+    const policyState = ownDataValue(value, "policyState");
+    const capabilityState = ownDataValue(value, "capabilityState");
+    const resourceState = ownDataValue(value, "resourceState");
+    const routeValid = isAllowedStringList(routeAllowlist, ROUTE_ALLOWLIST_VALUES) && routeAllowlist.includes("report_only");
+    const adapterValid = isAllowedStringList(adapterAllowlist, NONE_ALLOWLIST_VALUES) && adapterAllowlist.includes("none");
+    const toolValid = isAllowedStringList(toolAllowlist, NONE_ALLOWLIST_VALUES) && toolAllowlist.includes("none");
+    if (reasons.length > 0 || !routeValid || !adapterValid || !toolValid) return null;
+    return {
+      routeAllowlist,
+      adapterAllowlist,
+      toolAllowlist,
+      policyState: policyState === "ready",
+      capabilityState: capabilityState === "supported",
+      resourceState: resourceState === "ready",
+    };
+  } catch {
+    return null;
+  }
 }
 
 function validateDisclosureInput(value) {
@@ -294,7 +336,7 @@ function validateDisclosureInput(value) {
       if (typeof value[field] !== "string") reasons.push("packet_malformed");
     }
     for (const field of ["routeAllowlist", "adapterAllowlist", "toolAllowlist", "evidenceRefs"]) {
-      if (!Array.isArray(value[field]) || value[field].some((entry) => typeof entry !== "string")) reasons.push("packet_malformed");
+      if (!isSafePlainArray(value[field]) || value[field].some((entry) => typeof entry !== "string")) reasons.push("packet_malformed");
     }
     if (value.singleUse !== true) reasons.push("single_use_required");
     return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
@@ -311,6 +353,23 @@ function validateInputObject(value, fields) {
     return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
   } catch {
     return invalid("packet_malformed");
+  }
+}
+
+function validateInputEnvelope(value) {
+  try {
+    if (!isPlainObject(value)) return invalid("packet_malformed");
+    const reasons = [];
+    inspectObjectKeys(value, REVIEW_ROUTE_INPUT_FIELDS, reasons);
+    return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
+  } catch {
+    return invalid("packet_malformed");
+  }
+}
+
+function inspectObjectKeys(value, fields, reasons) {
+  for (const key of Object.keys(value)) {
+    if (!fields.includes(key)) reasons.push(FORBIDDEN_NAME.test(key) ? "forbidden_field" : "unknown_field");
   }
 }
 
@@ -340,7 +399,72 @@ function fallbackForPacketReason(reason) {
 }
 
 function stableList(value) {
-  return Array.isArray(value) ? [...new Set(value.map((entry) => String(entry)))].sort() : [];
+  return isSafePlainArray(value) ? [...new Set(value.map((entry) => String(entry)))].sort() : [];
+}
+
+function validateConsumedDisclosurePacketIds(value) {
+  if (value === undefined) return { ok: true, values: [] };
+  if (!isSafePlainArray(value) || value.length > 256 || value.some((entry) => !safeId(entry)) || new Set(value).size !== value.length) return { ok: false, values: [] };
+  return { ok: true, values: [...value] };
+}
+
+function isAllowedStringList(values, fixedValues) {
+  return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => safeId(value) && fixedValues.includes(value)) && new Set(values).size === values.length;
+}
+
+function isSafePlainArray(value) {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return false;
+    const names = Object.getOwnPropertyNames(value);
+    if (names.length !== value.length + 1 || !names.includes("length")) return false;
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ownDataValue(value, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+}
+
+function copySafePlainArray(value) {
+  if (!isSafePlainArray(value)) return null;
+  const normalized = [];
+  for (let index = 0; index < value.length; index += 1) normalized[index] = Object.getOwnPropertyDescriptor(value, String(index)).value;
+  return normalized;
+}
+
+function normalizeJsonForSerialization(value, seen = new WeakSet()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return { ok: true, value };
+  if (typeof value === "number" && Number.isFinite(value)) return { ok: true, value };
+  if (isSafePlainArray(value)) {
+    if (seen.has(value)) return { ok: false };
+    seen.add(value);
+    const normalized = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const item = normalizeJsonForSerialization(value[index], seen);
+      if (!item.ok) return item;
+      normalized.push(item.value);
+    }
+    Object.setPrototypeOf(normalized, null);
+    return { ok: true, value: normalized };
+  }
+  if (!isPlainObject(value) || seen.has(value) || Object.getOwnPropertySymbols(value).length > 0) return { ok: false };
+  seen.add(value);
+  const normalized = Object.create(null);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (key === "toJSON" || !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return { ok: false };
+    const item = normalizeJsonForSerialization(descriptor.value, seen);
+    if (!item.ok) return item;
+    normalized[key] = item.value;
+  }
+  return { ok: true, value: normalized };
 }
 
 function canonicalTime(value) {
@@ -360,7 +484,11 @@ function isDigest(value) {
 }
 
 function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  try {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  } catch {
+    return false;
+  }
 }
 
 function invalid(reasons) {

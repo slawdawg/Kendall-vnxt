@@ -70,6 +70,7 @@ function readyReconciliationSignals({
 const failures = [];
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const checkScript = readWorkspaceFile("scripts/check-manager-control-plane.mjs");
+const supervisorTestRunner = readWorkspaceFile("scripts/run-supervisor-tests.mjs");
 const requiredFiles = [
   ".agents/skills/kendall-manager-control-plane/SKILL.md",
   "packages/contracts/src/manager-control-plane/review-route.ts",
@@ -110,6 +111,7 @@ const requiredFiles = [
   "scripts/manager-ledger.mjs",
   "scripts/run-manager-control-plane-fast-tests.mjs",
   "scripts/run-manager-control-plane-shards.mjs",
+  "scripts/run-supervisor-tests.mjs",
   "scripts/lib/manager-control-plane-verification.mjs",
   "scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs",
   "tests/manager-control-plane.test.mjs",
@@ -166,8 +168,10 @@ for (const [name, command] of [
   ["test:manager-control-plane", "pnpm run test:manager-control-plane:preflight && pnpm run test:manager-control-plane:full"],
   ["test:manager-control-plane:preflight", "pnpm run test:manager-control-plane:contracts && pnpm run test:manager-control-plane:focused && pnpm run test:manager-control-plane:verification"],
   ["test:manager-control-plane:contracts", "node ./scripts/run-manager-control-plane-fast-tests.mjs contracts"],
-  ["test:manager-control-plane:focused", "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_review_route_packet.py -q"],
+  ["test:manager-control-plane:focused", "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs"],
   ["test:manager-control-plane:verification", "node --test tests/manager-control-plane-verification.test.mjs"],
+  ["test:supervisor", "node ./scripts/run-supervisor-tests.mjs"],
+  ["test:supervisor:review-route", "node ./scripts/run-supervisor-tests.mjs tests/integration/test_review_route_packet.py -q"],
   ["test:manager-source-intake", "node --test tests/manager-continuous-source-intake.test.mjs tests/manager-default-bmad-source-resolution.test.mjs tests/manager-source-intake-cycle.test.mjs tests/manager-supervisor-source-intake.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_manager_source_intake_adapter.py -q"],
   ["test:manager-control-plane:full", "node ./scripts/run-manager-control-plane-shards.mjs all --jobs 1"],
   ["test:manager-control-plane:shard:refill-source", "node ./scripts/run-manager-control-plane-shards.mjs refill-source"],
@@ -197,6 +201,12 @@ for (const [name, command] of [
   assertCondition(packageJson.scripts?.[name] === command, `package.json must define ${name} as ${command}`, failures);
 }
 
+assertCondition(
+  supervisorTestRunner.includes('options.pytestArgs.length > 0 ? options.pytestArgs : ["tests"]'),
+  "Supervisor test runner must retain the default full Python test root for review-route parity.",
+  failures,
+);
+
 for (const aggregateScript of ["check:static", "check"]) {
   assertAggregateIncludes(aggregateScript, "pnpm run test:manager-control-plane", failures);
   assertAggregateIncludes(aggregateScript, "pnpm run test:manager-control-plane-contract", failures);
@@ -205,6 +215,7 @@ for (const aggregateScript of ["check:static", "check"]) {
   assertAggregateIncludes(aggregateScript, "pnpm run test:manager-control-plane-run-contract", failures);
   assertAggregateIncludes(aggregateScript, "pnpm run check:manager-control-plane", failures);
 }
+assertAggregateIncludes("check", "pnpm run test:supervisor:review-route", failures);
 
 const gitignore = readWorkspaceFile(".gitignore");
 assertCondition(gitignore.includes("/skills/"), ".gitignore must ignore only root /skills/ generated output", failures);

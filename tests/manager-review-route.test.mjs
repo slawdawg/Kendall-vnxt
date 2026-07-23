@@ -143,6 +143,38 @@ test("review route rejects unsafe preparation input, live-capable allowlists, se
   }
 });
 
+test("review route rejects top-level private fields, unsupported requested states, live policy extras, and malformed consumption metadata", () => {
+  const base = validInput();
+  const cases = [
+    [{ ...base, prompt: "private input" }, "forbidden_field"],
+    [{ ...base, requestedState: "live" }, "requested_state_invalid"],
+    [{ ...base, routePolicy: { ...base.routePolicy, routeAllowlist: ["report_only", "live-route"] } }, "route_policy_invalid"],
+    [{ ...base, routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "live-adapter"] } }, "route_policy_invalid"],
+    [{ ...base, routePolicy: { ...base.routePolicy, toolAllowlist: ["none", "live-tool"] } }, "route_policy_invalid"],
+    [{ ...base, consumedDisclosurePacketIds: "disclosure-packet:review-35-1" }, "consumed_packet_ids_invalid"],
+    [{ ...base, consumedDisclosurePacketIds: ["disclosure-packet:review-35-1", 42] }, "consumed_packet_ids_invalid"],
+  ];
+  for (const [input, expectedReason] of cases) {
+    const result = evaluateReviewRoute(input);
+    assert.equal(result.ok, false, expectedReason);
+    assert.equal(result.decision.state, "blocked", expectedReason);
+    assert.equal(result.decision.controllingReason.code, expectedReason);
+  }
+});
+
+test("review route rejects serialization hooks and nonplain arrays before disclosure sizing", () => {
+  const packet = buildDisclosurePacket(validInput());
+  const hookedAllowlist = ["report_only"];
+  hookedAllowlist.toJSON = () => ["report_only", "raw prompt text"];
+  const hookedObject = { padding: "safe", toJSON() { return "raw prompt text"; } };
+  const validation = validateDisclosurePacket({ ...packet, routeAllowlist: hookedAllowlist }, { now: NOW, routePolicy: validInput().routePolicy });
+  assert.equal(validation.ok, false);
+  assert.ok(validation.reasons.includes("route_allowlist_invalid"));
+  assert.equal(disclosurePacketUtf8Bytes(hookedAllowlist), null);
+  assert.equal(disclosurePacketUtf8Bytes(hookedObject), null);
+  assert.equal(evaluateReviewRoute({ ...validInput(), disclosure: { ...validInput().disclosure, routeAllowlist: hookedAllowlist } }).decision.controllingReason.code, "packet_malformed");
+});
+
 test("review route fails closed instead of throwing for malformed or coercion-hostile input", () => {
   const hostileIdentity = {
     executionJobId: { toString() { throw new Error("no coercion"); } },
@@ -156,6 +188,31 @@ test("review route fails closed instead of throwing for malformed or coercion-ho
     assert.equal(result.decision.state, "blocked");
     assert.equal(result.decision.controllingReason.code, "packet_malformed");
   }
+});
+
+test("review route fails closed for throwing top-level and route-policy traps", () => {
+  const throwingInput = new Proxy({}, { getPrototypeOf() { throw new Error("no prototype access"); } });
+  const routePolicy = { ...validInput().routePolicy };
+  Object.defineProperty(routePolicy, "routeAllowlist", { enumerable: true, get() { throw new Error("no policy getter"); } });
+  for (const [input, expectedReason] of [[throwingInput, "packet_malformed"], [{ ...validInput(), routePolicy }, "route_policy_invalid"]]) {
+    let result;
+    assert.doesNotThrow(() => { result = evaluateReviewRoute(input); });
+    assert.equal(result.ok, false);
+    assert.equal(result.decision.state, "blocked");
+    assert.equal(result.decision.controllingReason.code, expectedReason);
+  }
+});
+
+test("direct disclosure validation fails closed for throwing packet traps", () => {
+  const trappedPacket = new Proxy(buildDisclosurePacket(validInput()), {
+    get(target, property, receiver) {
+      if (property === "schemaVersion") throw new Error("no packet getter");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  let result;
+  assert.doesNotThrow(() => { result = validateDisclosurePacket(trappedPacket, { now: NOW, routePolicy: validInput().routePolicy }); });
+  assert.deepEqual(result, { ok: false, reasons: ["packet_malformed"] });
 });
 
 test("disclosure validation rejects timezone-ambiguous and non-serializable packets without throwing", () => {
@@ -189,7 +246,14 @@ test("review-route evaluator has no live adapter, child-process, network, or raw
 test("manager control-plane drift check requires the report-only route test as a focused test segment", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const checker = await readFile(new URL("../scripts/check-manager-control-plane.mjs", import.meta.url), "utf8");
-  const focused = "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs && uv run --directory services/supervisor pytest tests/integration/test_review_route_packet.py -q";
+  const focused = "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs";
   assert.equal(packageJson.scripts["test:manager-control-plane:focused"], focused);
-  assert.match(checker, /\["test:manager-control-plane:focused", "node \.\/scripts\/run-manager-control-plane-fast-tests\.mjs focused && node --test tests\/manager-review-route\.test\.mjs && uv run --directory services\/supervisor pytest tests\/integration\/test_review_route_packet\.py -q"\]/);
+  assert.match(checker, /\["test:manager-control-plane:focused", "node \.\/scripts\/run-manager-control-plane-fast-tests\.mjs focused && node --test tests\/manager-review-route\.test\.mjs"\]/);
+  assert.match(checker, /\["test:supervisor", "node \.\/scripts\/run-supervisor-tests\.mjs"\]/);
+  assert.equal(packageJson.scripts["test:supervisor:review-route"], "node ./scripts/run-supervisor-tests.mjs tests/integration/test_review_route_packet.py -q");
+  assert.match(checker, /\["test:supervisor:review-route", "node \.\/scripts\/run-supervisor-tests\.mjs tests\/integration\/test_review_route_packet\.py -q"\]/);
+  assert.match(checker, /assertAggregateIncludes\("check", "pnpm run test:supervisor:review-route", failures\)/);
+  assert.match(checker, /options\.pytestArgs\.length > 0 \? options\.pytestArgs : \["tests"\]/);
+  assert.match(checker, /"services\/supervisor\/src\/supervisor\/domain\/review_route\.py"/);
+  assert.match(checker, /"services\/supervisor\/tests\/integration\/test_review_route_packet\.py"/);
 });

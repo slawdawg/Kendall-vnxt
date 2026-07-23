@@ -62,7 +62,7 @@ def validate_disclosure_packet(
     immutable_review: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Validate the canonical packet and return only compact failure codes."""
-    if not isinstance(packet, dict):
+    if type(packet) is not dict:
         return _invalid("packet_malformed")
     reasons: list[str] = []
     _inspect_fields(packet, _PACKET_FIELDS, reasons)
@@ -152,26 +152,30 @@ def _validate_scope(value: object, reasons: list[str]) -> None:
     _validate_evidence_refs(value.get("evidenceRefs"), reasons)
 
 
-def _validate_string_list(value: object, label: str, reasons: list[str], fixed_values: set[str]) -> None:
+def _valid_string_list(value: object, fixed_values: set[str]) -> bool:
     unique_values: set[object] | None
     try:
-        unique_values = set(value) if isinstance(value, list) else None
+        unique_values = set(value) if type(value) is list else None
     except TypeError:
         unique_values = None
-    if (
-        not isinstance(value, list)
-        or not value
-        or len(value) > 32
-        or unique_values is None
-        or len(unique_values) != len(value)
-        or any(not _safe_id(entry) or entry not in fixed_values for entry in value)
-    ):
+    return bool(
+        type(value) is list
+        and value
+        and len(value) <= 32
+        and unique_values is not None
+        and len(unique_values) == len(value)
+        and all(_safe_id(entry) and entry in fixed_values for entry in value)
+    )
+
+
+def _validate_string_list(value: object, label: str, reasons: list[str], fixed_values: set[str]) -> None:
+    if not _valid_string_list(value, fixed_values):
         reasons.append(f"{label}_allowlist_invalid")
 
 
 def _validate_evidence_refs(value: object, reasons: list[str]) -> None:
     if (
-        not isinstance(value, list)
+        type(value) is not list
         or not value
         or len(value) > 32
         or any(not isinstance(entry, str) or not _SAFE_EVIDENCE_REF.fullmatch(entry) for entry in value)
@@ -181,7 +185,8 @@ def _validate_evidence_refs(value: object, reasons: list[str]) -> None:
 
 
 def _validate_subset(values: object, allowed: object, label: str, reasons: list[str]) -> None:
-    if not isinstance(values, list) or not isinstance(allowed, list) or any(value not in allowed for value in values):
+    fixed_values = {"report_only", "simulated"} if label == "route" else {"none"}
+    if type(values) is not list or not _valid_string_list(allowed, fixed_values) or any(value not in allowed for value in values):
         reasons.append(f"{label}_not_allowed")
 
 
@@ -215,7 +220,7 @@ def _contains_forbidden_text(value: object, seen: set[int] | None = None) -> boo
 
 
 def _policy_list(policy: dict[str, object] | None, field: str) -> object:
-    return policy.get(field) if isinstance(policy, dict) else None
+    return policy.get(field) if type(policy) is dict else None
 
 
 def _safe_id(value: object) -> bool:
