@@ -1,6 +1,7 @@
 import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
 import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";
+import { requestPipelineSupervisorViaUds } from "./pipeline-supervisor-uds";
 import {
   projectSupervisorWorkPacketsToCockpitPackets,
   type PipelineRuntimePacket,
@@ -27,6 +28,23 @@ export type PipelineRuntimeSourceState = {
   canSatisfyLiveProof: boolean;
 };
 
+const lanAuthEnabled = process.env.KENDALL_LAN_AUTH_ENABLED === "true";
+
+async function readWorkPackets() {
+  if (lanAuthEnabled) return requestPipelineSupervisorViaUds<PipelineRuntimePacket[]>("/work-packets");
+  return getWorkPackets();
+}
+
+async function readWorkPacket(packetId: CanonicalRuntimePacketId) {
+  if (lanAuthEnabled) return requestPipelineSupervisorViaUds<PipelineRuntimePacket>(`/work-packets/${encodeURIComponent(packetId)}`);
+  return getWorkPacket(packetId);
+}
+
+async function readPipelineDashboardProjection() {
+  if (lanAuthEnabled) return requestPipelineSupervisorViaUds<PipelineDashboardProjectionV0>("/pipeline-control-plane/projection");
+  return getPipelineDashboardProjection();
+}
+
 export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacketLoad> {
   const projectionResult = await loadPipelineDashboardProjection();
   if (projectionResult.error) {
@@ -50,8 +68,17 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       projectionError: projectionRuntimeError.summary,
     };
   }
+  const verifiedProjection = projectionResult.projection;
+  if (!verifiedProjection) {
+    return {
+      fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", "Supervisor projection is missing after runtime validation; no runtime or demo packets are shown."),
+      packets: [],
+      projection: null,
+      projectionError: "Supervisor projection is missing after runtime validation.",
+    };
+  }
   try {
-    const projection = projectSupervisorWorkPacketsToCockpitPackets(await getWorkPackets());
+    const projection = projectSupervisorWorkPacketsToCockpitPackets(await readWorkPackets());
     if (projection.kind === "empty") {
       const emptyContradiction = emptyRuntimeContradiction(projectionResult.projection);
       if (emptyContradiction) {
@@ -77,7 +104,9 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         projectionError: projection.error,
       };
     }
-    const packetContradiction = populatedRuntimeContradiction(projectionResult.projection, projection.packets.map((packet) => packet.packetId));
+    const packetContradiction = canonicalStaleProjectionTruth(verifiedProjection)
+      ? staleRuntimeContradiction(verifiedProjection)
+      : populatedRuntimeContradiction(verifiedProjection, projection.packets.map((packet) => packet.packetId));
     if (packetContradiction) {
       return {
         fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${packetContradiction} No runtime or demo packets are shown.`),
@@ -87,7 +116,13 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       };
     }
     return {
-      fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "Persisted supervisor WorkPacketV0 rows only. No provider, worker, GitHub, or Obsidian calls are made by this route."),
+      fixtureMode: runtimeSourceState(
+        "runtime",
+        canonicalStaleProjectionTruth(verifiedProjection) ? "Supervisor stale read-only" : "Supervisor runtime",
+        canonicalStaleProjectionTruth(verifiedProjection)
+          ? "Persisted supervisor WorkPacketV0 rows are stale and read-only; no provider, worker, GitHub, or Obsidian calls are made by this route."
+          : "Persisted supervisor WorkPacketV0 rows only. No provider, worker, GitHub, or Obsidian calls are made by this route.",
+      ),
       packets: projection.packets,
       projection: projectionResult.projection,
       projectionError: projectionResult.error,
@@ -131,7 +166,7 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
     };
   }
   try {
-    const projection = projectSupervisorWorkPacketsToCockpitPackets([await getWorkPacket(canonicalPacketId)]);
+    const projection = projectSupervisorWorkPacketsToCockpitPackets([await readWorkPacket(canonicalPacketId)]);
     if (projection.kind === "invalid") {
       return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", projection.error + " No demo packet was substituted."), packet: null, workGraph: null };
     }
@@ -144,7 +179,13 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
       return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), packet: null, workGraph: null };
     }
     return {
-      fixtureMode: runtimeSourceState("runtime", "Supervisor runtime", "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity."),
+      fixtureMode: runtimeSourceState(
+        "runtime",
+        projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection) ? "Supervisor stale read-only" : "Supervisor runtime",
+        projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection)
+          ? "This detail is a stale, read-only supervisor WorkPacketV0 projection resolved by packet identity."
+          : "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity.",
+      ),
       packet: supervisorPacket,
       workGraph: projectionResult.projection?.selectedPacketDetails.find((detail) => detail.packetId === canonicalPacketId)?.workGraph ?? null,
     };
@@ -198,15 +239,18 @@ function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null
   if (!projection) {
     return { kind: "invalid", summary: "Supervisor projection is missing or malformed; no runtime or demo packets are shown." };
   }
-  const freshnessError = projectionFreshnessError(projection);
-  if (freshnessError) {
-    return { kind: "invalid", summary: freshnessError };
+  const freshness = projectionFreshnessState(projection);
+  if (freshness?.kind === "invalid") {
+    return { kind: "invalid", summary: freshness.summary };
+  }
+  if (freshness?.kind === "stale" && !canonicalStaleProjectionTruth(projection)) {
+    return { kind: "invalid", summary: freshness.summary };
+  }
+  if (canonicalStaleProjectionTruth(projection) && freshness?.kind !== "stale") {
+    return { kind: "invalid", summary: "Supervisor projection stale flags contradict fresh timestamps; no packets are shown." };
   }
   if (projection.fixtureMode?.enabled === true || projection.truthSummary?.fixtureBacked === true || projection.sourceLabel === "fixture") {
     return { kind: "invalid", summary: "Supervisor projection is fixture-backed; normal runtime mode refuses fixture truth." };
-  }
-  if (projection.truthSummary?.stale === true || projection.freshnessState === "stale" || projection.sourceLabel === "stale") {
-    return { kind: "invalid", summary: "Supervisor projection is stale; normal runtime mode refuses stale packet truth." };
   }
   if (projection.backendReachability?.state === "unavailable" || projection.truthSummary?.backendUnavailable === true) {
     return { kind: "unavailable", summary: "Supervisor projection reports unavailable runtime state; no packets are shown." };
@@ -217,32 +261,58 @@ function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null
   if (mode === "detail" && projection.truthSummary?.backendEmpty === true) {
     return { kind: "invalid", summary: "Supervisor detail projection claims the backend is empty; no detail packet is trusted." };
   }
-  if (mode === "detail" && !canonicalLiveProjectionTruth(projection)) {
-    return { kind: "invalid", summary: "Supervisor detail requires canonical live projection truth and proven reachability." };
+  if (mode === "detail" && !canonicalLiveProjectionTruth(projection) && !canonicalStaleProjectionTruth(projection)) {
+    return { kind: "invalid", summary: "Supervisor detail requires canonical live or stale projection truth and proven reachability." };
   }
   return null;
 }
 
-function projectionFreshnessError(projection: PipelineDashboardProjectionV0): string | null {
+function staleRuntimeContradiction(projection: PipelineDashboardProjectionV0): string | null {
+  if (!canonicalStaleProjectionTruth(projection)) {
+    return "Supervisor projection stale state is contradictory.";
+  }
+  if (projection.fixtureMode?.enabled === true || projection.truthSummary?.fixtureBacked === true || projection.sourceLabel === "fixture") {
+    return "Supervisor projection is both stale and fixture-backed; no packets are shown.";
+  }
+  if (projection.backendReachability?.state !== "reachable" || projection.truthSummary?.backendUnavailable === true) {
+    return "Supervisor stale projection does not prove backend reachability; no packets are shown.";
+  }
+  return null;
+}
+
+function projectionFreshnessState(projection: PipelineDashboardProjectionV0): { kind: "invalid" | "stale"; summary: string } | null {
   const generatedAt = Date.parse(projection.generatedAt);
   const sourceUpdatedAt = Date.parse(projection.sourceUpdatedAt);
   if (!Number.isFinite(generatedAt) || !Number.isFinite(sourceUpdatedAt) || !Number.isFinite(projection.staleAfterSeconds) || projection.staleAfterSeconds <= 0) {
-    return "Supervisor projection freshness timestamps are malformed; normal runtime mode refuses stale packet truth.";
+    return { kind: "invalid", summary: "Supervisor projection freshness timestamps are malformed; normal runtime mode refuses stale packet truth." };
   }
   if (projection.staleAfterSeconds > Number.MAX_SAFE_INTEGER / 1000) {
-    return "Supervisor projection freshness window is overflowed; normal runtime mode refuses stale packet truth.";
+    return { kind: "invalid", summary: "Supervisor projection freshness window is overflowed; normal runtime mode refuses stale packet truth." };
   }
   const now = Date.now();
   if (generatedAt - now > 1000 || sourceUpdatedAt - now > 1000) {
-    return "Supervisor projection freshness timestamps are future-dated; normal runtime mode refuses contradictory packet truth.";
+    return { kind: "invalid", summary: "Supervisor projection freshness timestamps are future-dated; normal runtime mode refuses contradictory packet truth." };
   }
   if (sourceUpdatedAt - generatedAt > 1000) {
-    return "Supervisor projection source timestamp is newer than the projection timestamp; normal runtime mode refuses contradictory packet truth.";
+    return { kind: "invalid", summary: "Supervisor projection source timestamp is newer than the projection timestamp; normal runtime mode refuses contradictory packet truth." };
   }
   if (now - sourceUpdatedAt > projection.staleAfterSeconds * 1000) {
-    return "Supervisor projection timestamps are stale; normal runtime mode refuses stale packet truth even when flags claim live.";
+    return { kind: "stale", summary: "Supervisor projection timestamps are stale; normal runtime mode refuses stale packet truth unless canonical stale flags agree." };
   }
   return null;
+}
+
+function canonicalStaleProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
+  return projection.sourceLabel === "stale" &&
+    projection.freshnessState === "stale" &&
+    projection.truthSummary.label === "stale" &&
+    projection.truthSummary.stale === true &&
+    projection.truthSummary.backendEmpty === false &&
+    projection.truthSummary.fixtureBacked === false &&
+    projection.truthSummary.backendUnavailable === false &&
+    projection.backendReachability.state === "reachable" &&
+    projection.fixtureMode.enabled === false &&
+    projection.fixtureMode.canSatisfyLiveProof === false;
 }
 
 function canonicalLiveProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
@@ -440,7 +510,7 @@ function detailProjectionContradiction(
 
 async function loadPipelineDashboardProjection(): Promise<{ projection: PipelineDashboardProjectionV0 | null; error: string | null }> {
   try {
-    const projection = await getPipelineDashboardProjection();
+    const projection = await readPipelineDashboardProjection();
     if (!projection) {
       return {
         projection: null,
