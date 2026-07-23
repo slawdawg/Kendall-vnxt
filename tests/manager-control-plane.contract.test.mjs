@@ -679,7 +679,12 @@ test("Review route contracts keep disclosure preparation metadata-only and non-e
     ["schema_version", "adapter_id", "state", "code", "findings", "disclosure_packet_id", "disclosure_packet_digest", "decision_id", "reviewed_head", "digest", "delivery_evidence_eligible", "safe_fallback", "execution"],
     extractConstArray(schemaSource, "SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS"),
   );
-  assert.match(routeSource, /state: "stale" \| "blocked";[\s\S]*?findings: readonly \[\];/, "stale and blocked simulated results must be statically no-finding states");
+  assert.match(routeSource, /state: "completed";[\s\S]*?code: "simulated_deduplicated";[\s\S]*?findings: readonly \[\];/, "deduplicated simulated results must be statically no-finding states");
+  assert.match(routeSource, /state: "stale";[\s\S]*?code: "immutable_identity_stale";[\s\S]*?findings: readonly \[\];/, "stale simulated results must carry only their validator-backed code and no findings");
+  assert.match(routeSource, /state: "blocked";[\s\S]*?findings: readonly \[\];/, "blocked simulated results must be statically no-finding states");
+  assert.match(routeSource, /state: "completed";[\s\S]*?disclosurePacketId: string;[\s\S]*?decisionId: string;[\s\S]*?reviewedHead: string;[\s\S]*?digest: string;/, "completed simulated results must carry non-null packet and identity evidence");
+  assert.match(routeSource, /state: "stale";[\s\S]*?disclosurePacketId: null;[\s\S]*?decisionId: null;[\s\S]*?reviewedHead: string;[\s\S]*?digest: string;/, "stale simulated results must retain only their current identity evidence");
+  assert.match(routeSource, /state: "blocked";[\s\S]*?reviewedHead: string;[\s\S]*?digest: string;[\s\S]*?state: "blocked";[\s\S]*?reviewedHead: null;[\s\S]*?digest: null;/, "blocked simulated results must preserve paired nullable identity evidence");
   assertRequiredFields(
     "DisclosurePacket serialized fields",
     ["schema_version", "disclosure_packet_id", "immutable_review", "route_allowlist", "adapter_allowlist", "tool_allowlist", "authority", "issuance", "scope", "metadata_only", "raw_payload_retained"],

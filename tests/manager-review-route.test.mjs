@@ -203,6 +203,28 @@ test("simulated adapter binds canonical simulated authority and supplied one-tim
   assert.equal(disclosurePacketCanonicalDigest(hookedPacket), null);
   assert.equal(digestHookCalled, false);
 
+  let nestedGetterCalled = false;
+  const nestedPacket = { ...prepared.packet, scope: { ...prepared.packet.scope } };
+  Object.defineProperty(nestedPacket.scope, "evidenceRefs", {
+    enumerable: true,
+    get() { nestedGetterCalled = true; return prepared.packet.scope.evidenceRefs; },
+  });
+  const nestedResult = evaluateSimulatedReview({ ...prepared, packet: nestedPacket });
+  assert.equal(nestedResult.state, "blocked");
+  assert.equal(nestedResult.code, "decision_invalid");
+  assert.equal(nestedGetterCalled, false);
+
+  let policyGetterCalled = false;
+  const nestedPolicy = { ...prepared.routePolicy };
+  Object.defineProperty(nestedPolicy, "routeAllowlist", {
+    enumerable: true,
+    get() { policyGetterCalled = true; return prepared.routePolicy.routeAllowlist; },
+  });
+  const policyResult = evaluateSimulatedReview({ ...prepared, routePolicy: nestedPolicy });
+  assert.equal(policyResult.state, "blocked");
+  assert.equal(policyResult.code, "decision_invalid");
+  assert.equal(policyGetterCalled, false);
+
   for (const field of ["consumedDisclosurePacketIds", "priorFindings"]) {
     let arrayGetterCalled = false;
     const accessorArray = [];

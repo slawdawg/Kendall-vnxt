@@ -112,11 +112,6 @@ interface SimulatedReviewResultBase {
   schemaVersion: typeof SIMULATED_REVIEW_RESULT_SCHEMA_VERSION;
   adapterId: typeof SIMULATED_REVIEW_ADAPTER_ID;
   code: SimulatedReviewResultCode;
-  disclosurePacketId: string | null;
-  disclosurePacketDigest: string | null;
-  decisionId: string | null;
-  reviewedHead: string | null;
-  digest: string | null;
   deliveryEvidenceEligible: false;
   safeFallback: ReviewRouteFallback;
   execution: "none";
@@ -126,11 +121,51 @@ interface SimulatedReviewResultBase {
 export type SimulatedReviewResult =
   | (SimulatedReviewResultBase & {
     state: "completed";
-    code: "simulated_completed" | "simulated_deduplicated";
-    findings: readonly NormalizedFinding[];
+    code: "simulated_completed";
+    findings: readonly [NormalizedFinding];
+    disclosurePacketId: string;
+    disclosurePacketDigest: string;
+    decisionId: string;
+    reviewedHead: string;
+    digest: string;
   })
   | (SimulatedReviewResultBase & {
-    state: "stale" | "blocked";
-    code: Exclude<SimulatedReviewResultCode, "simulated_completed" | "simulated_deduplicated">;
+    state: "completed";
+    code: "simulated_deduplicated";
     findings: readonly [];
+    disclosurePacketId: string;
+    disclosurePacketDigest: string;
+    decisionId: string;
+    reviewedHead: string;
+    digest: string;
+  })
+  | (SimulatedReviewResultBase & {
+    state: "stale";
+    code: "immutable_identity_stale";
+    findings: readonly [];
+    disclosurePacketId: null;
+    disclosurePacketDigest: null;
+    decisionId: null;
+    reviewedHead: string;
+    digest: string;
+  })
+  | (SimulatedReviewResultBase & {
+    state: "blocked";
+    code: Exclude<SimulatedReviewResultCode, "simulated_completed" | "simulated_deduplicated" | "immutable_identity_stale">;
+    findings: readonly [];
+    disclosurePacketId: null;
+    disclosurePacketDigest: null;
+    decisionId: null;
+    reviewedHead: string;
+    digest: string;
+  })
+  | (SimulatedReviewResultBase & {
+    state: "blocked";
+    code: Exclude<SimulatedReviewResultCode, "simulated_completed" | "simulated_deduplicated" | "immutable_identity_stale">;
+    findings: readonly [];
+    disclosurePacketId: null;
+    disclosurePacketDigest: null;
+    decisionId: null;
+    reviewedHead: null;
+    digest: null;
   });

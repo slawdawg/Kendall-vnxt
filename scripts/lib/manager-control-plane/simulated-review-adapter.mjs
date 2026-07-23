@@ -12,6 +12,11 @@ export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v
 
 const INPUT_FIELDS = Object.freeze(["packet", "decision", "now", "routePolicy", "currentImmutableReview", "priorFindings", "consumedDisclosurePacketIds", "fallback"]);
 const IDENTITY_FIELDS = Object.freeze(["executionJobId", "exactHead", "digest"]);
+const PACKET_FIELDS = Object.freeze(["schemaVersion", "disclosurePacketId", "immutableReview", "routeAllowlist", "adapterAllowlist", "toolAllowlist", "authority", "issuance", "scope", "metadataOnly", "rawPayloadRetained"]);
+const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
+const AUTHORITY_FIELDS = Object.freeze(["issuerId", "authorityRef", "valid"]);
+const ISSUANCE_FIELDS = Object.freeze(["issuedAt", "expiresAt", "revocationState", "cancellationState", "singleUse"]);
+const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs"]);
 const FINDING_FIELDS = Object.freeze(["schemaVersion", "findingId", "rule", "severity", "pathOrRef", "lineOrRange", "summary", "remediation", "reviewedHead", "digest"]);
 const SEVERITIES = Object.freeze(["info", "low", "medium", "high"]);
 const FALLBACKS = Object.freeze(["none", "timeout"]);
@@ -32,13 +37,13 @@ export function evaluateSimulatedReview(input = {}) {
 
 function evaluateSimulatedReviewUnsafe(input = {}) {
   if (!isStrictObjectWithAllowedFields(input, INPUT_FIELDS)) return blocked("decision_invalid", null, null, "re_evaluate", "Correct bounded simulation metadata and re-evaluate.");
-  const packet = ownDataValue(input, "packet");
+  const packet = copyDisclosurePacket(ownDataValue(input, "packet"));
   const decision = ownDataValue(input, "decision");
   const now = ownDataValue(input, "now");
-  const routePolicy = ownDataValue(input, "routePolicy");
+  const routePolicy = copyRoutePolicy(ownDataValue(input, "routePolicy"));
   const currentIdentity = normalizeIdentity(ownDataValue(input, "currentImmutableReview"));
   const fallback = ownDataValue(input, "fallback") === undefined ? "none" : ownDataValue(input, "fallback");
-  if (!currentIdentity) return blocked("decision_invalid", null, null, "re_evaluate", "Supply one canonical current review identity and re-evaluate.");
+  if (!currentIdentity || !packet || !routePolicy) return blocked("decision_invalid", null, null, "re_evaluate", "Supply one canonical current review identity and re-evaluate.");
   if (!FALLBACKS.includes(fallback)) return blocked("decision_invalid", currentIdentity.exactHead, currentIdentity.digest, "re_evaluate", "Correct the bounded simulation state and re-evaluate.");
   const packetValidation = validateDisclosurePacket(packet, { now, routePolicy, immutableReview: packetIdentity(packet) });
   if (!packetValidation.ok) return blocked("packet_invalid", currentIdentity.exactHead, currentIdentity.digest, "reissue_disclosure_packet", "Reissue one current bounded disclosure packet.");
@@ -240,7 +245,7 @@ function normalizeSafeIdList(value) {
 }
 
 function packetIdentity(packet) {
-  return isStrictObject(packet, ["schemaVersion", "disclosurePacketId", "immutableReview", "routeAllowlist", "adapterAllowlist", "toolAllowlist", "authority", "issuance", "scope", "metadataOnly", "rawPayloadRetained"])
+  return isStrictObject(packet, PACKET_FIELDS)
     ? ownDataValue(packet, "immutableReview")
     : null;
 }
@@ -285,6 +290,33 @@ function copyStrictObject(value, fields) {
   const copied = {};
   for (const field of fields) copied[field] = ownDataValue(value, field);
   return copied;
+}
+
+function copyDisclosurePacket(value) {
+  const packet = copyStrictObject(value, PACKET_FIELDS);
+  if (!packet) return null;
+  const immutableReview = copyStrictObject(packet.immutableReview, IDENTITY_FIELDS);
+  const authority = copyStrictObject(packet.authority, AUTHORITY_FIELDS);
+  const issuance = copyStrictObject(packet.issuance, ISSUANCE_FIELDS);
+  const scope = copyStrictObject(packet.scope, SCOPE_FIELDS);
+  const routeAllowlist = copyStrictArray(packet.routeAllowlist);
+  const adapterAllowlist = copyStrictArray(packet.adapterAllowlist);
+  const toolAllowlist = copyStrictArray(packet.toolAllowlist);
+  const evidenceRefs = scope ? copyStrictArray(scope.evidenceRefs) : null;
+  return immutableReview && authority && issuance && scope && routeAllowlist && adapterAllowlist && toolAllowlist && evidenceRefs
+    ? { ...packet, immutableReview, authority, issuance, scope: { ...scope, evidenceRefs }, routeAllowlist, adapterAllowlist, toolAllowlist }
+    : null;
+}
+
+function copyRoutePolicy(value) {
+  const policy = copyStrictObject(value, ROUTE_POLICY_FIELDS);
+  if (!policy) return null;
+  const routeAllowlist = copyStrictArray(policy.routeAllowlist);
+  const adapterAllowlist = copyStrictArray(policy.adapterAllowlist);
+  const toolAllowlist = copyStrictArray(policy.toolAllowlist);
+  return routeAllowlist && adapterAllowlist && toolAllowlist
+    ? { ...policy, routeAllowlist, adapterAllowlist, toolAllowlist }
+    : null;
 }
 
 function copyStrictArray(value) {

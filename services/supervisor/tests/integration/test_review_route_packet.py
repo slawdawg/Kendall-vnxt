@@ -3,6 +3,7 @@ import hashlib
 from supervisor.domain.review_route import (
     DISCLOSURE_PACKET_MAX_UTF8_BYTES,
     SIMULATED_REVIEW_ADAPTER_ID,
+    disclosure_packet_canonical_digest,
     disclosure_packet_utf8_bytes,
     is_disclosure_packet_size_allowed,
     validate_disclosure_packet,
@@ -15,7 +16,6 @@ NOW = "2026-07-22T12:00:00.000Z"
 EXACT_HEAD = "a" * 40
 DIGEST = f"sha256:{'b' * 64}"
 EVIDENCE_REF = f"evidence:sha256:{'c' * 64}"
-DISCLOSURE_PACKET_DIGEST = f"sha256:{'d' * 64}"
 
 
 def _policy() -> dict:
@@ -88,16 +88,39 @@ def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
     assert validate_normalized_finding(reversed_range)["ok"] is False
     fixture_key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:1:simulated-metadata-boundary/v1"
     fixture = {"schemaVersion": "normalized-finding/v1", "findingId": f"normalized-finding:sha256:{hashlib.sha256(fixture_key.encode()).hexdigest()}", "rule": "simulated-metadata-boundary/v1", "severity": "info", "pathOrRef": "metadata:review-route", "lineOrRange": "1", "summary": "Simulated metadata review is complete without an external adapter action.", "remediation": "Reissue and re-evaluate after the exact review identity changes.", "reviewedHead": EXACT_HEAD, "digest": DIGEST}
+    policy = {**_policy(), "adapterAllowlist": ["none", SIMULATED_REVIEW_ADAPTER_ID]}
+    packet = {**_packet(), "routeAllowlist": ["simulated"], "adapterAllowlist": [SIMULATED_REVIEW_ADAPTER_ID]}
+    packet_digest = disclosure_packet_canonical_digest(packet)
+    assert packet_digest is not None
+    context = {"canonical_packet": packet, "now": NOW, "route_policy": policy}
     decision_key = f"simulated:simulated_prepared:{EXACT_HEAD}:{DIGEST}:disclosure-packet:review-35-1"
-    result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [fixture], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": DISCLOSURE_PACKET_DIGEST, "decisionId": f"review-route-decision:sha256:{hashlib.sha256(decision_key.encode()).hexdigest()}", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
-    assert validate_simulated_review_result(result)["ok"] is True
-    assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]})["ok"] is False
-    assert validate_simulated_review_result({**result, "deliveryEvidenceEligible": True})["ok"] is False
-    assert validate_simulated_review_result({**result, "disclosurePacketDigest": None})["ok"] is False
-    assert validate_simulated_review_result({**result, "decisionId": "review-route-decision:forged"})["ok"] is False
+    result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [fixture], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": packet_digest, "decisionId": f"review-route-decision:sha256:{hashlib.sha256(decision_key.encode()).hexdigest()}", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
+    assert validate_simulated_review_result(result, **context)["ok"] is True
+    assert validate_simulated_review_result(result, canonical_packet=None, now=NOW, route_policy=policy)["ok"] is False
+    assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]}, **context)["ok"] is False
+    assert validate_simulated_review_result({**result, "deliveryEvidenceEligible": True}, **context)["ok"] is False
+    assert validate_simulated_review_result({**result, "disclosurePacketDigest": None}, **context)["ok"] is False
+    assert validate_simulated_review_result({**result, "disclosurePacketDigest": f"sha256:{'e' * 64}"}, **context)["ok"] is False
+    assert validate_simulated_review_result({**result, "decisionId": "review-route-decision:forged"}, **context)["ok"] is False
     forged_fixture = {**fixture, "severity": "high"}
-    assert validate_simulated_review_result({**result, "findings": [forged_fixture]})["ok"] is False
-    assert validate_simulated_review_result({**result, "code": "simulated_deduplicated", "findings": [finding]})["ok"] is False
+    assert validate_simulated_review_result({**result, "findings": [forged_fixture]}, **context)["ok"] is False
+    assert validate_simulated_review_result({**result, "code": "simulated_deduplicated", "findings": [finding]}, **context)["ok"] is False
+    forged_scope_packet = {**packet, "scope": {**packet["scope"], "evidenceRefs": [f"evidence:sha256:{'e' * 64}"]}}
+    assert validate_simulated_review_result(result, canonical_packet=forged_scope_packet, now=NOW, route_policy=policy)["ok"] is False
+    forged_authority_packet = {**packet, "authority": {**packet["authority"], "authorityRef": "authority:forged"}}
+    assert validate_simulated_review_result(result, canonical_packet=forged_authority_packet, now=NOW, route_policy=policy)["ok"] is False
+    forged_identity_packet = {**packet, "immutableReview": {**packet["immutableReview"], "exactHead": "f" * 40}}
+    assert validate_simulated_review_result(result, canonical_packet=forged_identity_packet, now=NOW, route_policy=policy)["ok"] is False
+    forged_issuance_packet = {**packet, "issuance": {**packet["issuance"], "issuedAt": "2026-07-22T11:56:00.000Z"}}
+    assert validate_simulated_review_result(result, canonical_packet=forged_issuance_packet, now=NOW, route_policy=policy)["ok"] is False
+    report_only_packet = _packet()
+    report_only_result = {**result, "disclosurePacketDigest": disclosure_packet_canonical_digest(report_only_packet)}
+    assert validate_simulated_review_result(report_only_result, canonical_packet=report_only_packet, now=NOW, route_policy=_policy())["ok"] is False
+    stale = {**result, "state": "stale", "code": "immutable_identity_stale", "findings": [], "disclosurePacketId": None, "disclosurePacketDigest": None, "decisionId": None, "safeFallback": {"action": "reissue_disclosure_packet", "summary": "bounded"}}
+    assert validate_simulated_review_result(stale, **context)["ok"] is True
+    blocked = {**stale, "state": "blocked", "code": "decision_invalid", "reviewedHead": None, "digest": None, "safeFallback": {"action": "re_evaluate", "summary": "bounded"}}
+    assert validate_simulated_review_result(blocked, **context)["ok"] is True
+    assert validate_simulated_review_result({**blocked, "reviewedHead": EXACT_HEAD}, **context)["ok"] is False
 
 
 def test_disclosure_packet_python_contract_fails_closed_for_unsafe_or_stale_inputs() -> None:

@@ -32,6 +32,16 @@ def is_disclosure_packet_size_allowed(value: object) -> bool:
     return encoded_size is not None and encoded_size <= DISCLOSURE_PACKET_MAX_UTF8_BYTES
 
 
+def disclosure_packet_canonical_digest(value: object) -> str | None:
+    try:
+        if type(value) is not dict:
+            return None
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8")
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+
+
 def _line_or_range(value: object) -> bool:
     if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?", value):
         return False
@@ -81,7 +91,7 @@ def _simulated_decision_id(disclosure_packet_id: str, reviewed_head: str, digest
     return f"review-route-decision:sha256:{hashlib.sha256(key.encode()).hexdigest()}"
 
 
-def validate_simulated_review_result(value: object) -> dict[str, object]:
+def validate_simulated_review_result(value: object, *, canonical_packet: object, now: str, route_policy: dict[str, object] | None) -> dict[str, object]:
     fields = {"schemaVersion", "adapterId", "state", "code", "findings", "disclosurePacketId", "disclosurePacketDigest", "decisionId", "reviewedHead", "digest", "deliveryEvidenceEligible", "safeFallback", "execution"}
     if type(value) is not dict or set(value) != fields or value.get("schemaVersion") != SIMULATED_REVIEW_RESULT_SCHEMA_VERSION or value.get("adapterId") != SIMULATED_REVIEW_ADAPTER_ID or value.get("execution") != "none":
         return _invalid("result_malformed")
@@ -97,6 +107,21 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
         return _invalid("result_malformed")
     if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _digest(value.get("disclosurePacketDigest")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
         return _invalid("result_malformed")
+    canonical_identity = canonical_packet.get("immutableReview") if type(canonical_packet) is dict else None
+    packet_validation = validate_disclosure_packet(canonical_packet, now=now, route_policy=route_policy, immutable_review=canonical_identity)
+    canonical_packet_digest = disclosure_packet_canonical_digest(canonical_packet)
+    if value["state"] == "completed" and (
+        not packet_validation["ok"]
+        or not _digest(canonical_packet_digest)
+        or value.get("disclosurePacketDigest") != canonical_packet_digest
+        or value.get("disclosurePacketId") != canonical_packet.get("disclosurePacketId")
+        or type(canonical_identity) is not dict
+        or value.get("reviewedHead") != canonical_identity.get("exactHead")
+        or value.get("digest") != canonical_identity.get("digest")
+        or "simulated" not in canonical_packet.get("routeAllowlist", [])
+        or SIMULATED_REVIEW_ADAPTER_ID not in canonical_packet.get("adapterAllowlist", [])
+    ):
+        return _invalid("result_malformed")
     if value["state"] == "completed" and value.get("decisionId") != _simulated_decision_id(value["disclosurePacketId"], value["reviewedHead"], value["digest"]):
         return _invalid("result_malformed")
     if value["state"] == "completed" and ((value["code"] == "simulated_completed") != bool(value["findings"])):
@@ -106,6 +131,8 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
     if value["code"] == "simulated_deduplicated" and value["findings"]:
         return _invalid("result_malformed")
     if value["state"] == "stale" and (not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
+        return _invalid("result_malformed")
+    if value["state"] == "blocked" and ((value.get("reviewedHead") is None) != (value.get("digest") is None)):
         return _invalid("result_malformed")
     if value["state"] != "completed" and (value.get("disclosurePacketId") is not None or value.get("disclosurePacketDigest") is not None or value.get("decisionId") is not None):
         return _invalid("result_malformed")
