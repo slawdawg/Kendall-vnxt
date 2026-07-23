@@ -5838,10 +5838,7 @@ class SupervisorService:
             and candidate.status not in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}
         )
         source_updated_at = max(source_timestamps, default=generated_at)
-        projected_stage_statuses = [(packet.currentStage, packet.status) for packet in authoritative_packets]
-        projected_stage_statuses.extend((packet.currentStage, packet.status) for packet in legacy_projection_packets)
-        has_open_packet = any(status in {"active", "waiting", "blocked", "failed"} for _stage, status in projected_stage_statuses)
-        is_stale = (generated_at - source_updated_at).total_seconds() > stale_after_seconds and not has_open_packet
+        is_stale = (generated_at - source_updated_at).total_seconds() > stale_after_seconds
         freshness_state = "stale" if is_stale else "live"
         source_label = "stale" if is_stale else "live"
         projected_packet_count = len(authoritative_packets) + len(legacy_projection_packets)
@@ -29742,6 +29739,7 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.OPERATOR_OWNED_EXIT and current in {
+            WorkflowState.IMPLEMENTING,
             WorkflowState.NEEDS_REWORK,
             WorkflowState.BLOCKED,
             WorkflowState.REVIEWING,

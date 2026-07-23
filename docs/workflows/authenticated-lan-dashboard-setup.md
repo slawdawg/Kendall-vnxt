@@ -31,6 +31,17 @@ Use the address following `src` (for example, `192.168.1.8`) as `LAN_IP` in
 the commands below. If the host has several interfaces, choose the address
 that the client device can reach and use that same value everywhere.
 
+For Tailnet-only access, use the host's Tailscale IPv4 instead:
+
+```bash
+tailscale ip -4
+```
+
+Use that numeric result in place of `LAN_IP` throughout this guide, including
+the certificate SAN, dashboard bind, allowed host/origin, and supervisor CORS
+origin. Open the resulting HTTPS numeric URL from a Tailnet device; this
+runtime intentionally does not bind a wildcard address or start plain HTTP.
+
 ```bash
 export LAN_IP="192.168.1.8" # replace with the address from the command above
 ```
@@ -193,6 +204,12 @@ cards remain name/status-only; packet detail is available after authentication.
 - **Certificate warning or failure**: the self-signed certificate must include
   the numeric address in its SAN. Install the certificate in the client trust
   store or replace it with a trusted certificate/key pair.
+- **`Projection is stale` backpressure**: the dashboard can read the
+  supervisor, but its persisted packet truth is older than the configured
+  freshness window. This is intentionally read-only for LAN, Tailscale, and
+  local dashboard views; inspect or refresh the actual supervisor sources
+  before dispatching work. Do not reset timestamps or suppress the warning to
+  make a stale packet appear live.
 - **Stop**: press `Ctrl-C` in the dashboard terminal, then the supervisor
   terminal. The socket is removed/reused safely on the next supervisor start.
 - **Restart**: export the same variables again in each terminal and start the
@@ -251,3 +268,33 @@ If a stale socket remains after an unclean stop, stop the LAN target first and
 remove only the user-owned `$AUTH_DIR/supervisor.sock`, then run
 `pnpm run lan-auth:restart`. Never remove an unknown socket or terminate a
 process by a broad name match.
+
+## 6. Persistent Tailnet startup
+
+For Tailnet-only operation, install the dedicated authenticated units rather
+than the local `cockpit:install` units. The LAN launcher derives `tailscale ip
+-4` at each service start, checks that the dashboard certificate SAN matches
+that address, and then starts the private-UDS supervisor and HTTPS dashboard.
+It fails closed if Tailscale is not authenticated or its address changed before
+the certificate was renewed.
+
+First stop the manual LAN-auth processes and disable the legacy local cockpit
+target so no TCP supervisor or wildcard dashboard can reclaim port 3000:
+
+```bash
+systemctl --user disable --now kendall-cockpit.target
+pnpm run lan-cockpit:install
+pnpm run lan-cockpit:status
+```
+
+The installer writes `kendall-lan-cockpit.target`,
+`kendall-lan-supervisor.service`, and `kendall-lan-dashboard.service` under
+`~/.config/systemd/user/`. It stores no password or key in the unit files; both
+services reference the existing private `~/kendall-lan-auth/` directory.
+
+If a Tailnet address changes, issue a new certificate with that address in its
+SAN using the procedure above, then restart the dedicated target:
+
+```bash
+pnpm run lan-cockpit:restart
+```
