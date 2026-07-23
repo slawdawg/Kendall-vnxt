@@ -351,12 +351,14 @@ function validateDisclosureInput(value) {
 }
 
 function validateRouteAdapterPair(routeAllowlist, adapterAllowlist, reasons) {
-  if (!isSafePlainArray(routeAllowlist) || !isSafePlainArray(adapterAllowlist) || routeAllowlist.length !== 1 || adapterAllowlist.length !== 1) {
+  if (!isSafePlainArray(routeAllowlist) || !isSafePlainArray(adapterAllowlist)) {
     reasons.push("route_adapter_pair_invalid");
     return;
   }
-  const expected = routeAllowlist[0] === "report_only" ? "none" : SIMULATED_REVIEW_ADAPTER_ID;
-  if (adapterAllowlist[0] !== expected) reasons.push("route_adapter_pair_invalid");
+  if (routeAllowlist.includes("report_only") && !adapterAllowlist.includes("none")) reasons.push("route_adapter_pair_invalid");
+  if (routeAllowlist.includes("simulated") && !adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
+  if (adapterAllowlist.includes("none") && !routeAllowlist.includes("report_only")) reasons.push("route_adapter_pair_invalid");
+  if (adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID) && !routeAllowlist.includes("simulated")) reasons.push("route_adapter_pair_invalid");
 }
 
 function validateInputObject(value, fields) {

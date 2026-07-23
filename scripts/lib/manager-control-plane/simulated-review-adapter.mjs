@@ -108,8 +108,8 @@ function isSimulatedDecision(value, packet, identity) {
     && ownDataValue(value, "metadataOnly") === true
     && ownDataValue(value, "rawPayloadRetained") === false
     && ownDataValue(value, "disclosurePacketId") === disclosurePacketId
-    && isStrictArray(routeAllowlist) && routeAllowlist.length === 1 && routeAllowlist[0] === "simulated"
-    && isStrictArray(adapterAllowlist) && adapterAllowlist.length === 1 && adapterAllowlist[0] === SIMULATED_REVIEW_ADAPTER_ID
+    && isStrictArray(routeAllowlist) && routeAllowlist.includes("simulated")
+    && isStrictArray(adapterAllowlist) && adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID)
     && isStrictObject(authority, ["issuerId", "authorityRef", "valid"])
     && isStrictObject(authorityEvidence, ["issuerId", "authorityRef", "status"])
     && ownDataValue(authorityEvidence, "issuerId") === ownDataValue(authority, "issuerId")

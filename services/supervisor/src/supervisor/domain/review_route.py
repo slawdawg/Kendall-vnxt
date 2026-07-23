@@ -251,11 +251,16 @@ def _validate_subset(values: object, allowed: object, label: str, reasons: list[
 
 
 def _validate_route_adapter_pair(route_allowlist: object, adapter_allowlist: object, reasons: list[str]) -> None:
-    if type(route_allowlist) is not list or type(adapter_allowlist) is not list or len(route_allowlist) != 1 or len(adapter_allowlist) != 1:
+    if type(route_allowlist) is not list or type(adapter_allowlist) is not list:
         reasons.append("route_adapter_pair_invalid")
         return
-    expected = "none" if route_allowlist[0] == "report_only" else SIMULATED_REVIEW_ADAPTER_ID
-    if adapter_allowlist[0] != expected:
+    if "report_only" in route_allowlist and "none" not in adapter_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if "simulated" in route_allowlist and SIMULATED_REVIEW_ADAPTER_ID not in adapter_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if "none" in adapter_allowlist and "report_only" not in route_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if SIMULATED_REVIEW_ADAPTER_ID in adapter_allowlist and "simulated" not in route_allowlist:
         reasons.append("route_adapter_pair_invalid")
 
 

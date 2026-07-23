@@ -70,6 +70,11 @@ def test_disclosure_packet_python_contract_matches_simulated_adapter_pair() -> N
     assert mismatch["ok"] is False
     assert "route_adapter_pair_invalid" in mismatch["reasons"]
 
+    multi = {**_packet(), "routeAllowlist": ["report_only", "simulated"], "adapterAllowlist": ["none", SIMULATED_REVIEW_ADAPTER_ID]}
+    assert validate_disclosure_packet(multi, now=NOW, route_policy=policy)["ok"] is True
+    asymmetric = validate_disclosure_packet({**multi, "adapterAllowlist": ["none"]}, now=NOW, route_policy=policy)
+    assert "route_adapter_pair_invalid" in asymmetric["reasons"]
+
 
 def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
     key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:1:simulated-metadata-boundary/v1"
