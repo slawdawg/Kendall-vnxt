@@ -82,6 +82,54 @@ at the exact source SHA; otherwise repair the exact local target first, then
 rerun the same proof with the same arguments. The rollback record names the
 source SHA needed to recreate the local branch and worktree.
 
+### Restricted legacy first-use repair
+
+`cleanup-superseded` normally requires a current source remote, matching
+assignment, and manifest base. The `--first-use-repair` bridge exists only for
+one audited historical shape: a clean no-PR source still exists locally, its
+remote was successfully observed as absent, its manifest has no assignment and
+names a deleted predecessor base, and a named commit was carried inside a named
+merged PR before a bounded review-hardening sequence.
+
+It is an explicit migration contract, not a fallback. All fields below are
+required, including metadata-only provenance and hardening rationale:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-superseded <source-task> \
+  --source-head <exact-source-sha> \
+  --carry-forward-pr <merged-pr-number> \
+  --carry-forward-commit <commit-contained-by-that-pr> \
+  --scope path/one,path/two,path/hardened \
+  --first-use-repair \
+  --canonical-base dev \
+  --supersession-provenance "audited migration/supersession reference" \
+  --source-remote absent \
+  --legacy-unassigned \
+  --successor-hardening-commits <sha1,sha2> \
+  --successor-hardening-scope path/hardened \
+  --successor-hardening-evidence "bounded review-hardening rationale" \
+  --summary-json
+```
+
+The preview proves the carried commit is in the merged PR lineage and its head
+is integrated into that merge, the complete post-carry PR lineage is declared,
+and the declared hardening paths exactly equal every carried-to-merge path
+difference. It also proves the recorded predecessor `origin/<branch>` ref is
+absent both locally and at origin, and the current `origin/dev` scoped tree
+still equals that merged PR. It separately queries the source remote: an empty
+successful result proves `absent`; a lookup failure, a present branch, an
+unknown or matching active unlinked assignment, a dangling assignment id, a
+non-`dev` canonical base, or any unlisted path/commit blocks cleanup. The
+source branch remote remains untouched whether it is present or absent.
+
+Do not use this bridge on a real legacy workspace until a separate independent
+audit has reviewed its exact JSON proof packet. `--apply` retains the standard
+approval/reason requirement, manifest lock, source no-PR check, clean-worktree
+check, journal, locked re-proof, and rollback record. For an absent source
+remote it records absence and rechecks absence during apply and partial resume;
+it never creates, deletes, or assumes a remote branch. A partial resume must
+repeat the identical repair inputs and retain the same verified absence.
+
 After merged workspace cleanup, local `codex/*` branches may remain. Run the
 branch cleanup preview before deleting anything:
 
