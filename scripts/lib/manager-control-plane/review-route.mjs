@@ -50,6 +50,8 @@ const EXACT_HEAD = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const FORBIDDEN_NAME = /(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)/i;
 const FORBIDDEN_TEXT = /(?:\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const FORBIDDEN_IDENTIFIER_TEXT = /(?:\b(?:diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const IDENTIFIER_VALUE_FIELDS = new Set(["executionJobId", "disclosurePacketId", "issuerId", "authorityRef", "decisionId", "findingId", "rule", "pathOrRef", "reviewedHead", "digest", "disclosurePacketDigest"]);
 
 export function buildDisclosurePacket(input = {}) {
   const immutableReview = normalizeImmutableReview(input.immutableReview);
@@ -70,9 +72,9 @@ export function buildDisclosurePacket(input = {}) {
     issuance: {
       issuedAt: String(disclosure.issuedAt || ""),
       expiresAt: String(disclosure.expiresAt || ""),
-      revocationState: disclosure.revocationState || "active",
-      cancellationState: disclosure.cancellationState || "active",
-      singleUse: disclosure.singleUse !== false,
+      revocationState: disclosure.revocationState,
+      cancellationState: disclosure.cancellationState,
+      singleUse: disclosure.singleUse,
     },
     scope: {
       dataClass: "metadata_only",
@@ -293,12 +295,12 @@ function inspectObjectFields(value, fields, reasons) {
     if (!fields.includes(key)) reasons.push(FORBIDDEN_NAME.test(key) ? "forbidden_field" : "unknown_field");
   }
   for (const [key, nested] of Object.entries(value)) {
-    if (fields.includes(key) && containsForbiddenText(nested)) reasons.push("forbidden_content");
+    if (fields.includes(key) && containsForbiddenText(nested, new WeakSet(), IDENTIFIER_VALUE_FIELDS.has(key))) reasons.push("forbidden_content");
   }
 }
 
-function containsForbiddenText(value, seen = new WeakSet()) {
-  if (typeof value === "string") return FORBIDDEN_TEXT.test(value);
+function containsForbiddenText(value, seen = new WeakSet(), identifierValue = false) {
+  if (typeof value === "string") return (identifierValue ? FORBIDDEN_IDENTIFIER_TEXT : FORBIDDEN_TEXT).test(value);
   if (Array.isArray(value)) {
     const values = copySafePlainArray(value);
     if (!values) return false;
@@ -311,7 +313,7 @@ function containsForbiddenText(value, seen = new WeakSet()) {
     seen.add(value);
     return Object.entries(value).some(([key, nested]) => {
     if (key === "rawPayloadRetained") return false;
-    return FORBIDDEN_NAME.test(key) || containsForbiddenText(nested, seen);
+    return FORBIDDEN_NAME.test(key) || containsForbiddenText(nested, seen, IDENTIFIER_VALUE_FIELDS.has(key));
     });
   }
   return false;
@@ -514,8 +516,12 @@ function canonicalTime(value) {
   return typeof value === "string" && /\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value ? value : null;
 }
 
+export function isSafeReviewRouteIdentifier(value) {
+  return typeof value === "string" && SAFE_ID.test(value) && !FORBIDDEN_IDENTIFIER_TEXT.test(value);
+}
+
 function safeId(value) {
-  return typeof value === "string" && SAFE_ID.test(value) && !FORBIDDEN_TEXT.test(value);
+  return isSafeReviewRouteIdentifier(value);
 }
 
 function isExactHead(value) {

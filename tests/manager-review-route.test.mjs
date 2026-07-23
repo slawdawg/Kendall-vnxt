@@ -67,6 +67,82 @@ test("review route produces canonical report-only decision and metadata-only dis
   assert.deepEqual(validateDisclosurePacket(result.packet, { now: NOW, routePolicy: validInput().routePolicy }), { ok: true, reasons: [] });
 });
 
+test("review route accepts bounded source-bearing metadata IDs while still rejecting credential-like IDs", () => {
+  const base = validInput();
+  const sourceMetadata = validInput({
+    immutableReview: { ...base.immutableReview, executionJobId: "execution-job:source-work-eligible" },
+    authority: { ...base.authority, authorityRef: "authority:source-work-eligible" },
+    disclosure: { ...base.disclosure, disclosurePacketId: "disclosure-packet:source-work-eligible" },
+  });
+  const result = evaluateReviewRoute(sourceMetadata);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.packet.disclosurePacketId, "disclosure-packet:source-work-eligible");
+  assert.deepEqual(validateDisclosurePacket(result.packet, { now: NOW, routePolicy: sourceMetadata.routePolicy }), { ok: true, reasons: [] });
+
+  const credentialLike = evaluateReviewRoute(validInput({
+    immutableReview: { ...base.immutableReview, executionJobId: "execution-job:ghp-abcdefghijklmnop" },
+  }));
+  assert.equal(credentialLike.ok, false);
+  assert.equal(credentialLike.decision.controllingReason.code, "forbidden_content");
+
+  for (const sensitiveMetadata of [
+    validInput({ immutableReview: { ...base.immutableReview, executionJobId: "execution-job:prompt-work-eligible" } }),
+    validInput({ authority: { ...base.authority, authorityRef: "authority:secret-work-eligible" } }),
+    validInput({ disclosure: { ...base.disclosure, disclosurePacketId: "disclosure-packet:customer-work-eligible" } }),
+  ]) {
+    const sensitiveResult = evaluateReviewRoute(sensitiveMetadata);
+    assert.equal(sensitiveResult.ok, false);
+    assert.equal(sensitiveResult.decision.controllingReason.code, "forbidden_content");
+  }
+});
+
+test("simulated route preserves the same narrow source metadata identifier contract", () => {
+  const base = validInput();
+  const sourceMetadata = validInput({
+    requestedState: "simulated",
+    immutableReview: { ...base.immutableReview, executionJobId: "execution-job:source-work-eligible" },
+    authority: { ...base.authority, authorityRef: "authority:source-work-eligible" },
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-fixture/v1"] },
+    disclosure: {
+      ...base.disclosure,
+      disclosurePacketId: "disclosure-packet:source-work-eligible",
+      routeAllowlist: ["simulated"],
+      adapterAllowlist: ["simulated-review-fixture/v1"],
+    },
+  });
+  const preparation = evaluateReviewRoute(sourceMetadata);
+  assert.equal(preparation.ok, true);
+
+  const result = evaluateSimulatedReview({
+    packet: preparation.packet,
+    decision: preparation.decision,
+    now: NOW,
+    routePolicy: sourceMetadata.routePolicy,
+    currentImmutableReview: sourceMetadata.immutableReview,
+  });
+  assert.equal(result.state, "completed");
+  assert.equal(result.reviewedHead, EXACT_HEAD);
+  assert.equal(result.execution, "none");
+});
+
+test("direct packet builder requires explicit issuance state before validation", () => {
+  const base = validInput();
+  const incompleteDisclosure = { ...base.disclosure };
+  delete incompleteDisclosure.revocationState;
+  delete incompleteDisclosure.cancellationState;
+  delete incompleteDisclosure.singleUse;
+
+  const packet = buildDisclosurePacket({ ...base, disclosure: incompleteDisclosure });
+  assert.equal(packet.issuance.revocationState, undefined);
+  assert.equal(packet.issuance.cancellationState, undefined);
+  assert.equal(packet.issuance.singleUse, undefined);
+  const validation = validateDisclosurePacket(packet, { now: NOW, routePolicy: base.routePolicy });
+  assert.equal(validation.ok, false);
+  assert.ok(validation.reasons.includes("issuance_invalid"));
+  assert.ok(validation.reasons.includes("single_use_required"));
+});
+
 test("review route is deterministic and simulated stays non-executing", () => {
   const base = validInput();
   const input = {

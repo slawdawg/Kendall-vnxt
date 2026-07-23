@@ -23,6 +23,8 @@ _MISSING = object()
 
 def disclosure_packet_utf8_bytes(value: object) -> int | None:
     try:
+        if _contains_non_plain_container(value):
+            return None
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
     except (TypeError, ValueError, UnicodeEncodeError):
         return None
@@ -35,7 +37,7 @@ def is_disclosure_packet_size_allowed(value: object) -> bool:
 
 def disclosure_packet_canonical_digest(value: object) -> str | None:
     try:
-        if type(value) is not dict:
+        if type(value) is not dict or _contains_non_plain_container(value):
             return None
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8")
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
@@ -56,7 +58,7 @@ def validate_normalized_finding(value: object) -> dict[str, object]:
         return _invalid("finding_malformed")
     if value.get("schemaVersion") != NORMALIZED_FINDING_SCHEMA_VERSION or not _safe_id(value.get("findingId")) or not _safe_id(value.get("rule")) or not _safe_id(value.get("pathOrRef")):
         return _invalid("finding_malformed")
-    if value.get("severity") not in {"info", "low", "medium", "high"} or not _line_or_range(value.get("lineOrRange")):
+    if type(value.get("severity")) is not str or value.get("severity") not in {"info", "low", "medium", "high"} or not _line_or_range(value.get("lineOrRange")):
         return _invalid("finding_malformed")
     if any(not isinstance(value.get(key), str) or not value[key] or len(value[key]) > 280 or _FORBIDDEN_TEXT.search(value[key]) for key in {"summary", "remediation"}):
         return _invalid("finding_malformed")
@@ -107,15 +109,30 @@ def validate_simulated_review_result(
     fields = {"schemaVersion", "adapterId", "state", "code", "findings", "disclosurePacketId", "disclosurePacketDigest", "decisionId", "reviewedHead", "digest", "deliveryEvidenceEligible", "safeFallback", "execution"}
     if type(value) is not dict or set(value) != fields or value.get("schemaVersion") != SIMULATED_REVIEW_RESULT_SCHEMA_VERSION or value.get("adapterId") != SIMULATED_REVIEW_ADAPTER_ID or value.get("execution") != "none":
         return _invalid("result_malformed")
-    if value.get("state") not in {"completed", "stale", "blocked"} or type(value.get("findings")) is not list or len(value["findings"]) > 32 or value.get("deliveryEvidenceEligible") is not False:
+    state = value.get("state")
+    findings = value.get("findings")
+    if type(state) is not str or state not in {"completed", "stale", "blocked"} or type(findings) is not list or len(findings) > 32 or value.get("deliveryEvidenceEligible") is not False:
         return _invalid("result_malformed")
-    if value["state"] != "completed" and (value["findings"] or value["deliveryEvidenceEligible"]):
+    if state != "completed" and (findings or value["deliveryEvidenceEligible"]):
         return _invalid("result_malformed")
     allowed_codes = {"completed": {"simulated_completed", "simulated_deduplicated"}, "stale": {"immutable_identity_stale"}, "blocked": {"packet_invalid", "packet_already_used", "decision_invalid", "simulation_timeout", "policy_vetoed", "capability_unsupported", "resource_blocked"}}
-    if value.get("code") not in allowed_codes[value["state"]] or type(value.get("safeFallback")) is not dict or set(value["safeFallback"]) != {"action", "summary"} or value["safeFallback"].get("action") not in {"retain_report_only", "re_evaluate", "reissue_disclosure_packet", "resolve_policy_block"} or not isinstance(value["safeFallback"].get("summary"), str) or not value["safeFallback"]["summary"] or len(value["safeFallback"]["summary"]) > 280 or _FORBIDDEN_TEXT.search(value["safeFallback"]["summary"]):
+    code = value.get("code")
+    safe_fallback = value.get("safeFallback")
+    if (
+        type(code) is not str
+        or code not in allowed_codes[state]
+        or type(safe_fallback) is not dict
+        or set(safe_fallback) != {"action", "summary"}
+        or type(safe_fallback.get("action")) is not str
+        or safe_fallback["action"] not in {"retain_report_only", "re_evaluate", "reissue_disclosure_packet", "resolve_policy_block"}
+        or not isinstance(safe_fallback.get("summary"), str)
+        or not safe_fallback["summary"]
+        or len(safe_fallback["summary"]) > 280
+        or _FORBIDDEN_TEXT.search(safe_fallback["summary"])
+    ):
         return _invalid("result_malformed")
-    expected_actions = {"completed": "retain_report_only", "stale": "reissue_disclosure_packet", "blocked": "resolve_policy_block" if value["code"] == "policy_vetoed" else "reissue_disclosure_packet" if value["code"] in {"packet_invalid", "packet_already_used"} else "re_evaluate"}
-    if value["safeFallback"]["action"] != expected_actions[value["state"]]:
+    expected_actions = {"completed": "retain_report_only", "stale": "reissue_disclosure_packet", "blocked": "resolve_policy_block" if code == "policy_vetoed" else "reissue_disclosure_packet" if code in {"packet_invalid", "packet_already_used"} else "re_evaluate"}
+    if safe_fallback["action"] != expected_actions[state]:
         return _invalid("result_malformed")
     if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _digest(value.get("disclosurePacketDigest")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
         return _invalid("result_malformed")
@@ -124,7 +141,7 @@ def validate_simulated_review_result(
     current_identity = _review_identity(current_immutable_review)
     if current_identity is None or packet is None or policy is None:
         return _valid_early_decision_invalid(value)
-    fallback_invalid = not isinstance(fallback, str) or fallback not in {"none", "timeout"}
+    fallback_invalid = type(fallback) is not str or fallback not in {"none", "timeout"}
     if fallback_invalid:
         if value.get("state") != "blocked" or value.get("code") != "decision_invalid" or value.get("reviewedHead") != current_identity["exactHead"] or value.get("digest") != current_identity["digest"]:
             return _invalid("result_malformed")
@@ -436,6 +453,8 @@ _EXACT_HEAD = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FORBIDDEN_NAME = re.compile(r"(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)", re.IGNORECASE)
 _FORBIDDEN_TEXT = re.compile(r"(?:\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)", re.IGNORECASE)
+_FORBIDDEN_IDENTIFIER_TEXT = re.compile(r"(?:\b(?:diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)", re.IGNORECASE)
+_IDENTIFIER_VALUE_FIELDS = frozenset({"executionJobId", "disclosurePacketId", "issuerId", "authorityRef", "decisionId", "findingId", "rule", "pathOrRef", "reviewedHead", "digest", "disclosurePacketDigest"})
 
 
 def validate_disclosure_packet(
@@ -447,6 +466,8 @@ def validate_disclosure_packet(
 ) -> dict[str, object]:
     """Validate the canonical packet and return only compact failure codes."""
     if type(packet) is not dict:
+        return _invalid("packet_malformed")
+    if _contains_non_plain_container(packet):
         return _invalid("packet_malformed")
     reasons: list[str] = []
     _inspect_fields(packet, _PACKET_FIELDS, reasons)
@@ -476,7 +497,7 @@ def validate_disclosure_packet(
 
 
 def _validate_identity(value: object, reasons: list[str], expected: dict[str, str] | None) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         reasons.append("immutable_identity_invalid")
         return
     _inspect_fields(value, _IDENTITY_FIELDS, reasons)
@@ -493,7 +514,7 @@ def _validate_identity(value: object, reasons: list[str], expected: dict[str, st
 
 
 def _validate_authority(value: object, reasons: list[str]) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         reasons.append("authority_invalid")
         return
     _inspect_fields(value, _AUTHORITY_FIELDS, reasons)
@@ -502,7 +523,7 @@ def _validate_authority(value: object, reasons: list[str]) -> None:
 
 
 def _validate_issuance(value: object, now_value: str, reasons: list[str]) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         reasons.append("issuance_invalid")
         return
     _inspect_fields(value, _ISSUANCE_FIELDS, reasons)
@@ -528,7 +549,7 @@ def _validate_issuance(value: object, now_value: str, reasons: list[str]) -> Non
 
 
 def _validate_scope(value: object, reasons: list[str]) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         reasons.append("scope_invalid")
         return
     _inspect_fields(value, _SCOPE_FIELDS, reasons)
@@ -597,25 +618,42 @@ def _inspect_fields(value: dict[str, object], allowed: frozenset[str], reasons: 
         if key not in allowed:
             reasons.append("forbidden_field" if _FORBIDDEN_NAME.search(key) else "unknown_field")
     for key, nested in value.items():
-        if isinstance(key, str) and key in allowed and _contains_forbidden_text(nested):
+        if isinstance(key, str) and key in allowed and _contains_forbidden_text(nested, identifier_value=key in _IDENTIFIER_VALUE_FIELDS):
             reasons.append("forbidden_content")
 
 
-def _contains_forbidden_text(value: object, seen: set[int] | None = None) -> bool:
+def _contains_forbidden_text(value: object, seen: set[int] | None = None, identifier_value: bool = False) -> bool:
     seen = seen if seen is not None else set()
     if isinstance(value, str):
-        return bool(_FORBIDDEN_TEXT.search(value))
-    if isinstance(value, list):
+        return bool((_FORBIDDEN_IDENTIFIER_TEXT if identifier_value else _FORBIDDEN_TEXT).search(value))
+    if type(value) is list:
         if id(value) in seen:
             return True
         seen.add(id(value))
         return any(_contains_forbidden_text(item, seen) for item in value)
-    if isinstance(value, dict):
+    if type(value) is dict:
         if id(value) in seen:
             return True
         seen.add(id(value))
-        return any(not isinstance(key, str) or (key != "rawPayloadRetained" and (_FORBIDDEN_NAME.search(key) or _contains_forbidden_text(item, seen))) for key, item in value.items())
+        return any(not isinstance(key, str) or (key != "rawPayloadRetained" and (_FORBIDDEN_NAME.search(key) or _contains_forbidden_text(item, seen, key in _IDENTIFIER_VALUE_FIELDS))) for key, item in value.items())
+    if isinstance(value, (list, dict)):
+        return True
     return False
+
+
+def _contains_non_plain_container(value: object, seen: set[int] | None = None) -> bool:
+    seen = seen if seen is not None else set()
+    if type(value) is list:
+        if id(value) in seen:
+            return True
+        seen.add(id(value))
+        return any(_contains_non_plain_container(item, seen) for item in value)
+    if type(value) is dict:
+        if id(value) in seen:
+            return True
+        seen.add(id(value))
+        return any(_contains_non_plain_container(key, seen) or _contains_non_plain_container(item, seen) for key, item in value.items())
+    return type(value) not in {type(None), bool, int, float, str}
 
 
 def _policy_list(policy: dict[str, object] | None, field: str) -> object:
@@ -623,7 +661,7 @@ def _policy_list(policy: dict[str, object] | None, field: str) -> object:
 
 
 def _safe_id(value: object) -> bool:
-    return isinstance(value, str) and bool(_SAFE_ID.fullmatch(value)) and not _FORBIDDEN_TEXT.search(value)
+    return isinstance(value, str) and bool(_SAFE_ID.fullmatch(value)) and not _FORBIDDEN_IDENTIFIER_TEXT.search(value)
 
 
 def _exact_head(value: object) -> bool:

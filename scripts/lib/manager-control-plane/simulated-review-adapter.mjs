@@ -4,6 +4,7 @@ import {
   REVIEW_ROUTE_DECISION_SCHEMA_VERSION,
   SIMULATED_REVIEW_ADAPTER_ID,
   disclosurePacketCanonicalDigest,
+  isSafeReviewRouteIdentifier,
   validateDisclosurePacket,
 } from "./review-route.mjs";
 
@@ -20,7 +21,6 @@ const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs"]);
 const FINDING_FIELDS = Object.freeze(["schemaVersion", "findingId", "rule", "severity", "pathOrRef", "lineOrRange", "summary", "remediation", "reviewedHead", "digest"]);
 const SEVERITIES = Object.freeze(["info", "low", "medium", "high"]);
 const FALLBACKS = Object.freeze(["none", "timeout"]);
-const SAFE_ID = /^[A-Za-z][A-Za-z0-9._:/-]{1,180}$/;
 const EXACT_HEAD = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const LINE_OR_RANGE = /^[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?$/;
@@ -343,7 +343,7 @@ function ownDataValue(value, key) {
 }
 
 function safeId(value) {
-  return typeof value === "string" && SAFE_ID.test(value) && !FORBIDDEN_TEXT.test(value);
+  return isSafeReviewRouteIdentifier(value);
 }
 
 function safeText(value) {
