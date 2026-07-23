@@ -117,7 +117,8 @@ and the declared hardening paths exactly equal every carried-to-merge path
 difference. It also proves the recorded predecessor `origin/<branch>` ref is
 absent both locally and at origin, and the current `origin/dev` scoped tree
 still equals that merged PR. The named carry-forward PR base object ID must
-also exactly equal the current canonical `origin/dev` head. It separately queries the source remote: an empty
+also exactly equal the current canonical `origin/dev` head; a ready proof records
+that normalized exact ID for audit. It separately queries the source remote: an empty
 successful result proves `absent`; a lookup failure, a present branch, an
 unknown or matching active unlinked assignment, a dangling assignment id, a
 non-`dev` canonical base, or any unlisted path/commit blocks cleanup. The

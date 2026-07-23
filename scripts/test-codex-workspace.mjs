@@ -7636,8 +7636,11 @@ try {
     const scenarios = [
       { name: "direct exact base OID", options: { firstUseRepair: true }, source: "gh-pr-view", ready: true },
       { name: "direct mismatched base OID", options: { firstUseRepair: true, reportedBaseRefOid: "SOURCE_HEAD" }, source: "gh-pr-view", ready: false },
+      { name: "direct unsafe base OID", options: { firstUseRepair: true, reportedBaseRefOid: "--no-verify" }, source: "gh-pr-view", ready: false, reason: "base head is missing or is not an exact Git object id", unsafeId: "--no-verify" },
+      { name: "direct incomplete source scope", options: { firstUseRepair: true, extraSourceDelta: true }, source: "gh-pr-view", ready: false, reason: "bounded scope does not cover every source-lane tree delta" },
       { name: "GraphQL fallback exact base OID", options: { firstUseRepair: true, unsupportedBaseRefOid: true }, source: "gh-api-graphql", ready: true },
       { name: "GraphQL fallback mismatched base OID", options: { firstUseRepair: true, unsupportedBaseRefOid: true, fallbackBaseRefOid: "SOURCE_HEAD" }, source: "gh-api-graphql", ready: false },
+      { name: "GraphQL fallback unsafe base OID", options: { firstUseRepair: true, unsupportedBaseRefOid: true, fallbackBaseRefOid: "--no-verify" }, source: "gh-api-graphql", ready: false, reason: "omitted an exact Git object id", unsafeId: "--no-verify" },
     ];
     for (const scenario of scenarios) {
       const fixture = createSupersededCleanupFixture(scenario.options);
@@ -7650,10 +7653,13 @@ try {
         if (scenario.ready) {
           assert(summary.counts.cleanupReady === 1, `${scenario.name}: ${result.stdout}`);
           assert(plan.proof.currentBase.headSha === fixture.currentBaseHead, `${scenario.name}: ${result.stdout}`);
+          assert(plan.proof.carryForward.baseRefOid === fixture.currentBaseHead, `${scenario.name}: ${result.stdout}`);
         } else {
           assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became cleanup-ready: ${result.stdout}`);
           assert(plan.status === "blocked", `${scenario.name} was not blocked: ${result.stdout}`);
-          assert(plan.reason.includes("current canonical base head does not exactly match GitHub carry-forward PR base evidence"), `${scenario.name}: ${plan.reason}`);
+          assert(plan.proof.carryForward.baseRefOid === undefined, `${scenario.name}: blocked proof retained a base OID`);
+          assert(plan.reason.includes(scenario.reason || "current canonical base head does not exactly match GitHub carry-forward PR base evidence"), `${scenario.name}: ${plan.reason}`);
+          if (scenario.unsafeId) assert(!result.stdout.includes(scenario.unsafeId), `${scenario.name}: unsafe base OID leaked into proof output`);
         }
         assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree during preview`);
         assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source branch during preview`);

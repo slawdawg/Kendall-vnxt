@@ -4729,9 +4729,14 @@ function cleanupSupersededPlan(record, state, context) {
   base.proof.currentBase.scopeStatus = currentBaseScope.status;
   base.proof.currentBase.scopeEntries = currentBaseScope.carryForwardEntries || currentBaseScope.canonicalEntries || [];
   if (currentBaseScope.status !== "matched") return { ...base, cleanupCwd, reason: proofInput.repair ? currentBaseScope.reason : "scoped source content is not exactly retained in the current canonical base" };
-  if (proofInput.repair) base.proof.repair = { ...base.proof.repair, status: "matched", hardeningProof: currentBaseScope };
   if (!scopeCoversSourceDelta(currentBase.canonicalRef, proofInput.sourceHead, proofInput.scope, cleanupCwd)) {
     return { ...base, cleanupCwd, reason: "bounded scope does not cover every source-lane tree delta" };
+  }
+  if (proofInput.repair) {
+    // The value was normalized as an exact Git object ID and matched against
+    // the canonical head above; retain it only in a fully ready repair proof.
+    base.proof.carryForward.baseRefOid = carryForward.baseRefOid;
+    base.proof.repair = { ...base.proof.repair, status: "matched", hardeningProof: currentBaseScope };
   }
 
   return { ...base, status: "ready", cleanupCwd, expectedHeadSha: proofInput.sourceHead, localBranchSha: localBranchHead, remoteBranchSha: remoteBranchHead, partialResume, reason: partialResume ? "same-proof supersession partial is safe to resume" : proofInput.repair ? "explicit legacy first-use repair proof is safe to apply locally" : "clean no-PR source is exactly carried by the named merged successor scope" };
