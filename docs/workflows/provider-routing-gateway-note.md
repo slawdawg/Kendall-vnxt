@@ -49,6 +49,28 @@ The first implementation should be report-only:
 4. Defer any tenant-policy exception until the dry-run packet, approval model,
    and evidence retention contract exist.
 
+## Report-Only Disclosure Packet Contract
+
+The initial implementation now produces a versioned `ReviewRouteDecision` and
+`DisclosurePacket` for preparation only. `report_only`, `simulated`, and
+`blocked` are all non-executing states: no live packet is sent to any provider,
+adapter, endpoint, CLI, or tool.
+
+The packet is deliberately bounded to metadata-only evidence. It binds one
+immutable exact head and digest, an issuer and authority reference, explicit
+route/adapter/tool allowlists, a single-use packet ID, and expiry, revocation,
+and cancellation state. It has a 16 KiB UTF-8 serialized limit. Unknown fields
+and source, diff, prompt, completion, raw payload, reasoning, secret,
+credential, token, excluded-vault, customer/production, and broad-dump content
+are rejected rather than redacted into a packet.
+
+Static readiness or existing configuration can supply route facts, but cannot
+authorize execution. If a packet is stale, revoked, cancelled, expired, used,
+or blocked by policy/capability/resources, the recovery action is to reissue or
+re-evaluate the metadata-only packet. Live use or promotion involving a private
+diff remains a separately governed high-risk change with its own authority,
+data-boundary, and retention review.
+
 ## Non-Goals
 
 - Do not allow raw `claude`, `codex`, `ollama`, or future provider calls from

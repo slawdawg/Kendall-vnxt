@@ -142,6 +142,7 @@ GitHub state.
 - `pnpm run check:fast` runs the fast workflow gate for workspace, sandbox, dashboard, and CI drift before broader static or full verification
 - `pnpm run test:check-plan` verifies changed-file check routing, fail-closed Git diff collection, quick-fail command coverage, and aggregate wiring for CI acceleration
 - `pnpm run test:supervisor-runner` verifies supervisor test runner phase selection, conflicting flag rejection, and hard timeout diagnostics
+- `pnpm run test:supervisor:review-route` runs focused supervisor Disclosure Packet parity tests for the report-only route; it makes no provider call and invokes no adapter or execution authority
 - `pnpm run test:static-bundles` verifies static bundle coverage stays aligned with the monolithic static gate before CI reports bundle timing
 - `pnpm run test:review-gated-low-risk-automation`, `pnpm run test:review-gated-low-risk-fake-adapter`, `pnpm run test:review-gated-low-risk-dry-run-adapter`, `pnpm run test:review-gated-low-risk-read-only-review`, `pnpm run test:review-gated-low-risk-bounded-write`, `pnpm run test:review-gated-low-risk-pilot-admission`, `pnpm run test:review-gated-low-risk-policy-eligibility`, `pnpm run test:review-gated-low-risk-route-policy`, `pnpm run test:metadata-only-provider-result`, and `pnpm run test:private-evidence-packet-policy` verify the metadata-only review-gated automation, ordered routes, private-evidence external-processing boundary, and provider-result redaction contracts
 - `pnpm run test:static-bundle-summary` verifies static bundle timing reports, same-head summary evidence, and reporting-only promotion guardrails
@@ -216,6 +217,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Product requirements boundary: [docs/workflows/product-requirements-boundary.md](docs/workflows/product-requirements-boundary.md)
 - Implementation evidence boundary: [docs/workflows/implementation-evidence-boundary.md](docs/workflows/implementation-evidence-boundary.md)
 - Bounded-write plan runbook: [docs/workflows/bounded-write-plan-runbook.md](docs/workflows/bounded-write-plan-runbook.md)
+- Provider-routing gateway note: [docs/workflows/provider-routing-gateway-note.md](docs/workflows/provider-routing-gateway-note.md) — report-only disclosure packets only; it does not execute provider calls.
 - Manager terminal-event dogfood runbook: [docs/workflows/manager-terminal-event-dogfood.md](docs/workflows/manager-terminal-event-dogfood.md)
 - Legacy dashboard fixture/fallback audit: [docs/workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md](docs/workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md)
 - Adaptive scoring decision preparation: [docs/workflows/adaptive-scoring-decision-prep.md](docs/workflows/adaptive-scoring-decision-prep.md)

@@ -2240,6 +2240,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-dashboard-e2e-runner",
         "dashboard-build",
         "supervisor-tests",
+        "test-supervisor-review-route",
         "full-check",
     }
     assert {command["commandId"] for command in report["optionalCommands"]} == {
@@ -2343,6 +2344,11 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "dashboard-controls-e2e" in dashboard_group["commandIds"]
     assert "dashboard-provider-raw-output-e2e" in dashboard_group["commandIds"]
     assert "dashboard-build" in dashboard_group["commandIds"]
+    supervisor_group = next(group for group in report["commandGroups"] if group["groupId"] == "supervisor-behavior-tests")
+    assert supervisor_group["commandIds"] == ["supervisor-tests", "test-supervisor-review-route"]
+    review_route_command = next(command for command in report["requiredCommands"] if command["commandId"] == "test-supervisor-review-route")
+    assert review_route_command["command"] == "pnpm run test:supervisor:review-route"
+    assert "without provider calls" in review_route_command["evidence"][1]
     full_gate = next(group for group in report["commandGroups"] if group["groupId"] == "full-local-gate")
     assert full_gate["commandIds"] == ["full-check"]
     assert {checkpoint["checkpointId"] for checkpoint in report["handoffCheckpoints"]} == {

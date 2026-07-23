@@ -9076,6 +9076,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-supervisor-review-route",
+                label="Report-only review-route parity tests",
+                command="pnpm run test:supervisor:review-route",
+                status="required",
+                requiredFor=["report-only review-route contract changes", "disclosure packet validation changes", "supervisor parity evidence"],
+                evidence=[
+                    "Runs the focused supervisor disclosure-packet parity test through the source-owned supervisor runner.",
+                    "Confirms report-only route validation without provider calls, adapter invocation, or execution authority.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="full-check",
                 label="Full local verification",
                 command="pnpm run check",
@@ -9324,8 +9335,8 @@ class SupervisorService:
                 groupId="supervisor-behavior-tests",
                 label="Supervisor behavior tests",
                 status="required",
-                summary="Run focused supervisor tests for changed behavior, then the full supervisor integration suite through the local wrapper.",
-                commandIds=["supervisor-tests"],
+                summary="Run report-only review-route parity and other focused supervisor tests for changed behavior, then the full supervisor integration suite through the local wrapper.",
+                commandIds=["supervisor-tests", "test-supervisor-review-route"],
                 requiredBefore="service/API delivery",
                 nextAction="Use `pnpm run test:supervisor -- ... -k ...` for focused checks before `pnpm run check`.",
             ),

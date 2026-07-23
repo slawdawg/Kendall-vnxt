@@ -40,6 +40,14 @@ import {
   PIPELINE_OPERATIONAL_HARDENING_SCHEMA_VERSION,
   PIPELINE_PRODUCTION_READINESS_DECISION_SCHEMA_VERSION,
 } from "./operational-readiness.mjs";
+export {
+  buildDisclosurePacket,
+  evaluateReviewRoute,
+  validateDisclosurePacket,
+  DISCLOSURE_PACKET_MAX_UTF8_BYTES,
+  disclosurePacketUtf8Bytes,
+  isDisclosurePacketSizeAllowed,
+} from "./review-route.mjs";
 
 export {
   buildOperationalReadinessContract,
