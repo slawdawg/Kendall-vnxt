@@ -57,6 +57,30 @@ def validate_normalized_finding(value: object) -> dict[str, object]:
     return {"ok": True, "reasons": []}
 
 
+def _fixture_finding(reviewed_head: str, digest: str) -> dict[str, str]:
+    rule = "simulated-metadata-boundary/v1"
+    path_or_ref = "metadata:review-route"
+    line_or_range = "1"
+    key = f"{reviewed_head}:{digest}:{path_or_ref}:{line_or_range}:{rule}"
+    return {
+        "schemaVersion": NORMALIZED_FINDING_SCHEMA_VERSION,
+        "findingId": f"normalized-finding:sha256:{hashlib.sha256(key.encode()).hexdigest()}",
+        "rule": rule,
+        "severity": "info",
+        "pathOrRef": path_or_ref,
+        "lineOrRange": line_or_range,
+        "summary": "Simulated metadata review is complete without an external adapter action.",
+        "remediation": "Reissue and re-evaluate after the exact review identity changes.",
+        "reviewedHead": reviewed_head,
+        "digest": digest,
+    }
+
+
+def _simulated_decision_id(disclosure_packet_id: str, reviewed_head: str, digest: str) -> str:
+    key = f"simulated:simulated_prepared:{reviewed_head}:{digest}:{disclosure_packet_id}"
+    return f"review-route-decision:sha256:{hashlib.sha256(key.encode()).hexdigest()}"
+
+
 def validate_simulated_review_result(value: object) -> dict[str, object]:
     fields = {"schemaVersion", "adapterId", "state", "code", "findings", "disclosurePacketId", "disclosurePacketDigest", "decisionId", "reviewedHead", "digest", "deliveryEvidenceEligible", "safeFallback", "execution"}
     if type(value) is not dict or set(value) != fields or value.get("schemaVersion") != SIMULATED_REVIEW_RESULT_SCHEMA_VERSION or value.get("adapterId") != SIMULATED_REVIEW_ADAPTER_ID or value.get("execution") != "none":
@@ -71,7 +95,9 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
     expected_actions = {"completed": "retain_report_only", "stale": "reissue_disclosure_packet", "blocked": "resolve_policy_block" if value["code"] == "policy_vetoed" else "reissue_disclosure_packet" if value["code"] in {"packet_invalid", "packet_already_used"} else "re_evaluate"}
     if value["safeFallback"]["action"] != expected_actions[value["state"]]:
         return _invalid("result_malformed")
-    if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _digest(value.get("disclosurePacketDigest")) or not _safe_id(value.get("decisionId")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
+    if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _digest(value.get("disclosurePacketDigest")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
+        return _invalid("result_malformed")
+    if value["state"] == "completed" and value.get("decisionId") != _simulated_decision_id(value["disclosurePacketId"], value["reviewedHead"], value["digest"]):
         return _invalid("result_malformed")
     if value["state"] == "completed" and ((value["code"] == "simulated_completed") != bool(value["findings"])):
         return _invalid("result_malformed")
@@ -90,6 +116,8 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
     if any(not validate_normalized_finding(item)["ok"] for item in value["findings"]):
         return _invalid("result_malformed")
     if any(item["reviewedHead"] != value.get("reviewedHead") or item["digest"] != value.get("digest") for item in value["findings"]):
+        return _invalid("result_malformed")
+    if value["code"] == "simulated_completed" and value["findings"] != [_fixture_finding(value["reviewedHead"], value["digest"])]:
         return _invalid("result_malformed")
     return {"ok": True, "reasons": []}
 

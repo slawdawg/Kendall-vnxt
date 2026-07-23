@@ -663,7 +663,7 @@ test("Parallel suitability contracts keep graph and reservations metadata-only a
 test("Review route contracts keep disclosure preparation metadata-only and non-executing", async () => {
   const routeSource = await readFile(new URL("review-route.ts", managerRoot), "utf8");
   const schemaSource = await readFile(new URL("schema-json.ts", managerRoot), "utf8");
-  for (const exportedName of ["ImmutableReviewIdentity", "ReviewRouteDecision", "DisclosurePacket"]) {
+  for (const exportedName of ["ImmutableReviewIdentity", "ReviewRouteDecision", "DisclosurePacket", "SimulatedReviewResult"]) {
     assert.match(routeSource, new RegExp(`export (type|interface) ${exportedName}\\b`), `missing ${exportedName}`);
   }
   for (const literal of ["review-route-decision/v2", "disclosure-packet/v1", "report_only", "simulated", "blocked", "metadata_only", "execution: \"none\""]) {
@@ -679,6 +679,7 @@ test("Review route contracts keep disclosure preparation metadata-only and non-e
     ["schema_version", "adapter_id", "state", "code", "findings", "disclosure_packet_id", "disclosure_packet_digest", "decision_id", "reviewed_head", "digest", "delivery_evidence_eligible", "safe_fallback", "execution"],
     extractConstArray(schemaSource, "SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS"),
   );
+  assert.match(routeSource, /state: "stale" \| "blocked";[\s\S]*?findings: readonly \[\];/, "stale and blocked simulated results must be statically no-finding states");
   assertRequiredFields(
     "DisclosurePacket serialized fields",
     ["schema_version", "disclosure_packet_id", "immutable_review", "route_allowlist", "adapter_allowlist", "tool_allowlist", "authority", "issuance", "scope", "metadata_only", "raw_payload_retained"],

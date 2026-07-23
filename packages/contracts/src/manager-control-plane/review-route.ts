@@ -108,13 +108,10 @@ export interface NormalizedFinding {
   digest: string;
 }
 
-/** Pure simulation outcome. `blocked` and `stale` never carry findings. */
-export interface SimulatedReviewResult {
+interface SimulatedReviewResultBase {
   schemaVersion: typeof SIMULATED_REVIEW_RESULT_SCHEMA_VERSION;
   adapterId: typeof SIMULATED_REVIEW_ADAPTER_ID;
-  state: SimulatedReviewResultState;
   code: SimulatedReviewResultCode;
-  findings: readonly NormalizedFinding[];
   disclosurePacketId: string | null;
   disclosurePacketDigest: string | null;
   decisionId: string | null;
@@ -124,3 +121,16 @@ export interface SimulatedReviewResult {
   safeFallback: ReviewRouteFallback;
   execution: "none";
 }
+
+/** Pure simulation outcome. `blocked` and `stale` never carry findings. */
+export type SimulatedReviewResult =
+  | (SimulatedReviewResultBase & {
+    state: "completed";
+    code: "simulated_completed" | "simulated_deduplicated";
+    findings: readonly NormalizedFinding[];
+  })
+  | (SimulatedReviewResultBase & {
+    state: "stale" | "blocked";
+    code: Exclude<SimulatedReviewResultCode, "simulated_completed" | "simulated_deduplicated">;
+    findings: readonly [];
+  });

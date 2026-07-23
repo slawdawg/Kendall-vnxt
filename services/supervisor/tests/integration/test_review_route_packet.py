@@ -86,11 +86,17 @@ def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
     reversed_key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:10-2:simulated-metadata-boundary/v1"
     reversed_range["findingId"] = f"normalized-finding:sha256:{hashlib.sha256(reversed_key.encode()).hexdigest()}"
     assert validate_normalized_finding(reversed_range)["ok"] is False
-    result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [finding], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": DISCLOSURE_PACKET_DIGEST, "decisionId": "review-route-decision:fixture", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
+    fixture_key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:1:simulated-metadata-boundary/v1"
+    fixture = {"schemaVersion": "normalized-finding/v1", "findingId": f"normalized-finding:sha256:{hashlib.sha256(fixture_key.encode()).hexdigest()}", "rule": "simulated-metadata-boundary/v1", "severity": "info", "pathOrRef": "metadata:review-route", "lineOrRange": "1", "summary": "Simulated metadata review is complete without an external adapter action.", "remediation": "Reissue and re-evaluate after the exact review identity changes.", "reviewedHead": EXACT_HEAD, "digest": DIGEST}
+    decision_key = f"simulated:simulated_prepared:{EXACT_HEAD}:{DIGEST}:disclosure-packet:review-35-1"
+    result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [fixture], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": DISCLOSURE_PACKET_DIGEST, "decisionId": f"review-route-decision:sha256:{hashlib.sha256(decision_key.encode()).hexdigest()}", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
     assert validate_simulated_review_result(result)["ok"] is True
     assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]})["ok"] is False
     assert validate_simulated_review_result({**result, "deliveryEvidenceEligible": True})["ok"] is False
     assert validate_simulated_review_result({**result, "disclosurePacketDigest": None})["ok"] is False
+    assert validate_simulated_review_result({**result, "decisionId": "review-route-decision:forged"})["ok"] is False
+    forged_fixture = {**fixture, "severity": "high"}
+    assert validate_simulated_review_result({**result, "findings": [forged_fixture]})["ok"] is False
     assert validate_simulated_review_result({**result, "code": "simulated_deduplicated", "findings": [finding]})["ok"] is False
 
 
