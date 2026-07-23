@@ -12,6 +12,70 @@ The cleanup path removes generated Python artifacts before removing a disposable
 worktree. This prevents stale cache and temporary-file residue from blocking
 `git worktree remove`.
 
+## No-PR supersession cleanup
+
+Use `cleanup-superseded` only for one clean, no-PR source lane whose exact
+scoped tree content was carried forward by a named merged PR. It is not a
+replacement for `cleanup-integrated`: it does not infer equivalence from the
+current base, ancestry, filename overlap, or patch IDs.
+
+First create a metadata-only proof packet. Supply the original source branch
+head, the merged carry-forward PR, its exact integrated commit, and a bounded
+comma-separated repository-relative scope:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-superseded <source-task> \
+  --source-head <exact-source-sha> \
+  --carry-forward-pr <merged-pr-number> \
+  --carry-forward-commit <exact-integrated-sha> \
+  --scope path/one,path/two \
+  --summary-json
+```
+
+The preview proves all of the following without mutation: source manifest has
+no PR evidence, GitHub reports no PR for the exact source branch, and the lane
+is not held; the registered source worktree is clean; lane
+owner and linked assignment have unambiguous matching identities (or an
+explicit recorded takeover); local and remote source branch heads both equal
+`--source-head`; the named PR is merged at the named commit; that commit and
+the exact scoped content remain in the current canonical `origin/<base_branch>`
+head; and every scoped tree entry matches exactly, including entry existence,
+modes, object types, object IDs, additions, deletions, and renames.
+
+Stop if any field is absent, changes, is ambiguous, or reports `blocked` or
+`mismatch`. Do not broaden the scope or substitute a current-base comparison.
+Do not use this command on a held workspace, a source lane with any PR record,
+multiple source lanes, or a manifest that retains a previously required remote
+cleanup target. Scope paths are exact identifiers: surrounding whitespace is
+rejected rather than normalized.
+
+After reviewing the packet, apply only with explicit approval and a reason:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-superseded <source-task> \
+  --source-head <exact-source-sha> \
+  --carry-forward-pr <merged-pr-number> \
+  --carry-forward-commit <exact-integrated-sha> \
+  --scope path/one,path/two \
+  --apply \
+  --approval "<operator approval evidence>" \
+  --reason "<reviewed supersession rationale>"
+```
+
+Apply reacquires the source manifest and assignment locks and repeats the
+complete proof before deleting anything. It persists a `cleanup_partial`
+journal before each local deletion and after each completed target. It removes
+only the named source worktree and local branch, then closes the matching
+assignment and manifest with metadata-only proof and rollback records. The
+source remote branch is deliberately retained; remote deletion, PR
+comments/closure, and held-workspace deletion are outside this command. If
+apply records `cleanup_partial`, inspect the recorded target and
+supersession evidence. Resume only when the same proof shows the local source
+worktree and branch are both absent while the retained remote branch is still
+at the exact source SHA; otherwise repair the exact local target first, then
+rerun the same proof with the same arguments. The rollback record names the
+source SHA needed to recreate the local branch and worktree.
+
 After merged workspace cleanup, local `codex/*` branches may remain. Run the
 branch cleanup preview before deleting anything:
 

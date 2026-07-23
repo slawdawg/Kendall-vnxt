@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
 const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
+const testFilter = String(process.env.CODEX_WORKSPACE_TEST_FILTER || "").trim().toLowerCase();
+let executedTestCount = 0;
 
 const nestedNodeProbe = spawnSync(process.execPath, ["-e", ""], {
   cwd: rootDir,
@@ -52,6 +54,17 @@ try {
     assert(guarded.stderr.includes("fixture stderr with space"), guarded.stderr);
     assert(guarded.stderr.includes("'value with space'"), guarded.stderr);
     assert(guarded.stderr.includes(fixtureScript), guarded.stderr);
+  });
+
+  test("focused test filter fails closed when it matches no tests", () => {
+    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: "pipe",
+      env: { ...process.env, CODEX_WORKSPACE_TEST_FILTER: "definitely-no-codex-workspace-test-name" },
+    });
+    assert((result.status ?? 0) !== 0, "unknown focused test filter unexpectedly succeeded");
+    assert((result.stderr || "").includes("matched no tests"), result.stderr || result.stdout);
   });
 
   test("doctor accepts an empty state root", () => {
@@ -7467,6 +7480,439 @@ try {
     }
   });
 
+  test("cleanup-superseded source keeps a separate, fail-closed supersession proof path", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function cleanupSuperseded[\s\S]*?function cleanupRepositoryRoot/);
+    assert(match, "cleanupSuperseded source not found");
+    for (const expected of [
+      "sourceHead",
+      "carryForwardPr",
+      "carryForwardCommit",
+      "compareScopedTreeEntries",
+      "withManifestLock",
+      "const freshPlan = cleanupSupersededPlan",
+      "supersession proof changed under lock",
+      "removeWorktreeIfPresent",
+      "deleteLocalBranchIfPresent",
+      "remote branches are retained",
+    ]) {
+      assert(match[0].includes(expected), `cleanup-superseded missing ${expected}`);
+    }
+    assert(!match[0].includes("deleteRemoteBranchIfPresent"), "cleanup-superseded must retain remote branches");
+  });
+
+  test("cleanup-superseded previews and applies only an exact merged carry-forward tree proof", () => {
+    const fixture = createSupersededCleanupFixture();
+    const args = [
+      "cleanup-superseded",
+      "superseded-task",
+      "--source-head",
+      fixture.sourceHead,
+      "--carry-forward-pr",
+      "456",
+      "--carry-forward-commit",
+      fixture.carryForwardCommit,
+      "--scope",
+      "carried.txt",
+      "--owner",
+      "runner-a",
+      "--state-root",
+      fixture.stateRoot,
+    ];
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const summary = JSON.parse(preview.stdout);
+      assert(summary.mode === "cleanup-superseded", `mode is ${summary.mode}`);
+      assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(summary.remoteBranchPolicy.includes("retained"), summary.remoteBranchPolicy);
+      assert(summary.results[0].proof.scope.status === "matched", preview.stdout || preview.stderr);
+      assert(existsSync(fixture.worktree), "preview unexpectedly removed source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "preview unexpectedly deleted source branch");
+
+      const applied = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved source lane supersession cleanup",
+        "--reason",
+        "merged carry-forward proof reviewed and approved",
+      ], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      assert(!existsSync(fixture.worktree), "apply did not remove source worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "apply did not delete source local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "apply deleted retained source remote branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "superseded-assignment.json"));
+      assert(manifest.status === "closed", `manifest status is ${manifest.status}`);
+      assert(manifest.cleanup_supersession_evidence?.proof?.scope?.status === "matched", "manifest missing scoped proof");
+      assert(manifest.cleanup_remote_branch_policy === "retained-superseded-cleanup", "manifest missing remote retention policy");
+      assert(manifest.cleanup_supersession_rollback?.includes(fixture.sourceHead), "manifest missing rollback source head");
+      assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded blocks mismatched scoped content before mutation", () => {
+    assertSupersededBlockedScenario("content");
+  });
+
+  test("cleanup-superseded refuses held workspaces before mutation", () => {
+    assertSupersededBlockedScenario("held");
+  });
+
+  test("cleanup-superseded rejects a source-head mismatch before mutation", () => {
+    assertSupersededBlockedScenario("source-head");
+  });
+
+  test("cleanup-superseded rejects source lanes with persisted PR delivery evidence", () => {
+    assertSupersededBlockedScenario("pr-evidence");
+  });
+
+  test("cleanup-superseded rejects pathspec magic in the bounded scope", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      const result = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.carryForwardCommit, "--scope", ":(exclude)carried.txt", "--summary-json", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code !== 0, "pathspec-magic scope was accepted");
+      assert(result.stderr.includes("unsafe repository-relative path"), result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded rejects carry-forward PR numbers outside safe integer precision", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      const result = runFixtureScript(fixture, [
+        "cleanup-superseded",
+        "superseded-task",
+        "--source-head",
+        fixture.sourceHead,
+        "--carry-forward-pr",
+        "9007199254740993",
+        "--carry-forward-commit",
+        fixture.carryForwardCommit,
+        "--scope",
+        "carried.txt",
+        "--summary-json",
+        "--state-root",
+        fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code !== 0, "unsafe carry-forward PR number was accepted");
+      assert(result.stderr.includes("positive safe integer"), result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded proves a directory scope containing a newline filename", () => {
+    const fixture = createSupersededCleanupFixture({ newlineNestedPath: true });
+    try {
+      const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture, "carried"), "--summary-json"], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 1, result.stdout || result.stderr);
+      assert(summary.results[0].proof.scope.sourceEntries[0]?.path.includes("\n"), result.stdout || result.stderr);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded rejects successor-base mismatch and uncovered source delta", () => {
+    for (const options of [{ successorBase: "other" }, { extraSourceDelta: true }]) {
+      const fixture = createSupersededCleanupFixture(options);
+      try {
+        const result = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.carryForwardCommit, "--scope", "carried.txt", "--summary-json", "--state-root", fixture.stateRoot], { env: fixture.env });
+        assert(result.code === 0, result.stderr || result.stdout);
+        assert(JSON.parse(result.stdout).counts.cleanupReady === 0, result.stdout || result.stderr);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("cleanup-superseded rejects current-base, owner, assignment, and prior-remote ambiguity", () => {
+    const cases = [
+      { name: "reverted current base", options: { revertedCurrentBase: true } },
+      { name: "masked manifest base ref", options: { baseRef: "origin/masked" } },
+      { name: "unowned source lane", options: { manifestOwner: null } },
+      { name: "unowned source assignment", options: { assignmentOwner: null } },
+      { name: "different assignment task", options: { assignmentTaskId: "other-task" } },
+      { name: "GitHub source branch PR evidence", options: { sourcePrRecord: true } },
+      { name: "prior required remote target", options: {}, mutate: (fixture) => {
+        const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.cleanup_target_evidence = { remoteBranch: { required: true, state: "present", branch: fixture.branch } };
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      } },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture(scenario.options);
+      try {
+        scenario.mutate?.(fixture);
+        const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const summary = JSON.parse(result.stdout);
+        assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became cleanup-ready: ${result.stdout}`);
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} deleted source local branch`);
+        assert(remoteBranchExists(fixture.root, fixture.branch), `${scenario.name} deleted retained remote branch`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("cleanup-superseded rejects surrounding whitespace instead of normalizing its scope identity", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture, " carried.txt"), "--summary-json"], { env: fixture.env });
+      assert(result.code !== 0, "whitespace-normalized scope was accepted");
+      assert(result.stderr.includes("unsafe repository-relative path"), result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded requires an explicit scope value", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      const result = runFixtureScript(fixture, [
+        "cleanup-superseded",
+        "superseded-task",
+        "--source-head",
+        fixture.sourceHead,
+        "--carry-forward-pr",
+        "456",
+        "--carry-forward-commit",
+        fixture.carryForwardCommit,
+        "--scope",
+        "--summary-json",
+        "--state-root",
+        fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code !== 0, "bare --scope unexpectedly selected a path");
+      assert(result.stderr.includes("--scope requires a value"), result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded requires a rename scope to cover both old and new paths", () => {
+    const fixture = createSupersededCleanupFixture({ renameOnly: true });
+    try {
+      const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture, "rename/new.txt"), "--summary-json"], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 0, `rename source deletion was not required in scope: ${result.stdout}`);
+      assert(existsSync(fixture.worktree), "rename scope hold removed source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "rename scope hold deleted source branch");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded permits only an explicit recorded ownership takeover", () => {
+    const fixture = createSupersededCleanupFixture({ manifestOwner: "runner-a", assignmentOwner: "runner-a" });
+    try {
+      const args = [
+        ...supersededCleanupArgs(fixture, "carried.txt", "runner-b"),
+        "--take-ownership",
+        "--takeover-reason",
+        "prior runner completed and delegated this exact source cleanup",
+      ];
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      const applied = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved source lane supersession cleanup",
+        "--reason",
+        "merged carry-forward proof reviewed and approved",
+      ], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "superseded-assignment.json"));
+      assert(manifest.owner === "runner-b", `takeover manifest owner is ${manifest.owner}`);
+      assert(assignment.owner === "runner-b", `takeover assignment owner is ${assignment.owner}`);
+      assert(manifest.ownership_takeovers?.some((takeover) => takeover.previous_owner === "runner-a" && takeover.new_owner === "runner-b"), "takeover evidence was not recorded");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded journals a partial before and after local target mutations", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      const fakeGit = installFixtureGitProxy(
+        fixture,
+        `args[0] === 'update-ref' && args[1] === '-d' && args[2] === 'refs/heads/${fixture.branch}'`,
+        "simulated local branch deletion interruption",
+      );
+      const result = runFixtureScript(fixture, [
+        ...supersededCleanupArgs(fixture),
+        "--apply",
+        "--approval",
+        "operator approved source lane supersession cleanup",
+        "--reason",
+        "merged carry-forward proof reviewed and approved",
+      ], { env: fixture.env });
+      assert(result.code !== 0, "simulated local branch deletion interruption unexpectedly closed cleanup");
+      assert(!existsSync(fixture.worktree), "journal fixture did not remove source worktree before branch interruption");
+      assert(branchExists(fixture.root, fixture.branch), "journal fixture deleted branch despite simulated interruption");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.status === "cleanup_partial", `journal fixture status is ${manifest.status}`);
+      assert(manifest.cleanup_supersession_evidence?.proof?.source?.requestedHead === fixture.sourceHead, "partial journal lost exact source proof");
+      assert(manifest.worktree_removed_at, "partial journal did not persist completed worktree removal");
+      assert(manifest.events.some((event) => event.type === "cleanup_journal_started"), "partial journal start event was not persisted");
+      rmSync(fakeGit, { force: true });
+      const preview = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).counts.cleanupReady === 0, "mixed partial resource state unexpectedly resumed");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded keeps a partial when the retained remote advances during local cleanup", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      const fakeGit = installFixtureGitPostSuccessHook(
+        fixture,
+        `args[0] === 'update-ref' && args[1] === '-d' && args[2] === 'refs/heads/${fixture.branch}'`,
+        ["push", "-q", "--force", "origin", `${fixture.currentBaseHead}:refs/heads/${fixture.branch}`],
+      );
+      const result = runFixtureScript(fixture, [
+        ...supersededCleanupArgs(fixture),
+        "--apply",
+        "--approval",
+        "operator approved source lane supersession cleanup",
+        "--reason",
+        "merged carry-forward proof reviewed and approved",
+      ], { env: fixture.env });
+      assert(result.code !== 0, "advanced retained remote unexpectedly allowed cleanup closure");
+      assert(!existsSync(fixture.worktree), "advanced remote fixture did not remove source worktree before drift");
+      assert(!branchExists(fixture.root, fixture.branch), "advanced remote fixture did not delete local branch before drift");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.status === "cleanup_partial", `advanced remote fixture status is ${manifest.status}`);
+      assert(manifest.cleanup_error.includes("does not match proven source head"), manifest.cleanup_error);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "advanced remote fixture removed retained remote branch");
+      rmSync(fakeGit, { force: true });
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded re-proves the linked assignment while both cleanup locks are held", () => {
+    const fixture = createSupersededCleanupFixture({ lockedAssignmentDrift: true });
+    const args = supersededCleanupArgs(fixture);
+    try {
+      const result = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved source lane supersession cleanup",
+        "--reason",
+        "merged carry-forward proof reviewed and approved",
+      ], { env: fixture.env });
+      assert(result.code !== 0, "locked assignment drift unexpectedly allowed cleanup");
+      assert(
+        result.stderr.includes("supersession proof changed under lock") || result.stderr.includes("does not match cleaned branch"),
+        result.stderr || result.stdout,
+      );
+      assert(existsSync(fixture.worktree), "locked assignment drift removed source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "locked assignment drift deleted source local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "locked assignment drift deleted retained remote branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "superseded-assignment.json"));
+      assert(manifest.status === "active", `locked re-proof unexpectedly changed manifest status to ${manifest.status}`);
+      assert(assignment.branch === "codex/drifted-assignment", "fixture did not introduce the locked assignment drift");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded resumes only the exact recorded cleanup_partial proof", () => {
+    const fixture = createSupersededCleanupFixture();
+    const args = supersededCleanupArgs(fixture);
+    try {
+      markSupersededCleanupPartial(fixture, { removeWorktree: true, deleteLocalBranch: true });
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const summary = JSON.parse(preview.stdout);
+      assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(summary.results[0].partialResume === true, preview.stdout || preview.stderr);
+      assert(!existsSync(fixture.worktree), "exact partial resume unexpectedly restored source worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "exact partial resume unexpectedly restored local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "exact partial resume lost retained remote branch");
+
+      const applied = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved exact partial supersession resume",
+        "--reason",
+        "same-proof partial cleanup was reviewed and approved",
+      ], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "superseded-assignment.json"));
+      assert(manifest.status === "closed", `exact partial resume status is ${manifest.status}`);
+      assert(manifest.cleanup_error === null, `exact partial resume did not clear cleanup error: ${manifest.cleanup_error}`);
+      assert(assignment.status === "closed", `exact partial resume assignment status is ${assignment.status}`);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "exact partial resume deleted retained remote branch");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded refuses persisted PR evidence even for an otherwise exact cleanup_partial resume", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      markSupersededCleanupPartial(fixture, { removeWorktree: true, deleteLocalBranch: true });
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_number = 789;
+      manifest.pr_url = "https://example.test/pull/789";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(JSON.parse(result.stdout).counts.cleanupReady === 0, "partial resume accepted persisted source PR evidence");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "PR-evidence partial hold deleted retained remote branch");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded rejects mixed cleanup_partial resource states", () => {
+    for (const state of [
+      { name: "registered worktree remains", removeWorktree: false, deleteLocalBranch: false },
+      { name: "local branch remains", removeWorktree: true, deleteLocalBranch: false },
+    ]) {
+      const fixture = createSupersededCleanupFixture();
+      try {
+        markSupersededCleanupPartial(fixture, state);
+        const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, result.stderr || result.stdout);
+        const summary = JSON.parse(result.stdout);
+        assert(summary.counts.cleanupReady === 0, `${state.name} unexpectedly became cleanup-ready: ${result.stdout}`);
+        assert(summary.results[0].status === "blocked", `${state.name} was not blocked: ${result.stdout}`);
+        assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).status === "cleanup_partial", `${state.name} changed partial manifest state`);
+        assert(remoteBranchExists(fixture.root, fixture.branch), `${state.name} deleted retained remote branch`);
+        if (state.removeWorktree) {
+          assert(branchExists(fixture.root, fixture.branch), `${state.name} unexpectedly removed local branch`);
+        } else {
+          assert(existsSync(fixture.worktree), `${state.name} unexpectedly removed source worktree`);
+        }
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-merged retains ordinary assignment PR-evidence closeout behavior", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+      const assignment = readJson(assignmentPath);
+      assignment.pr_url = "https://example.test/pull/123";
+      assignment.pr_number = 123;
+      writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "cleanup-current",
+        "--apply",
+        "--delete-remote",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readJson(assignmentPath).status === "closed", "ordinary merged cleanup did not close assignment with its normal PR evidence");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-orphans lists orphan directories without deleting by default", () => {
     const orphanPath = join(stateRoot, "worktrees", "orphan-story");
     mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
@@ -7528,6 +7974,9 @@ try {
     assert(result.stdout.includes("Removed orphan directory"));
     assert(!existsSync(orphanPath), "cleanup-orphans did not remove targeted orphan directory");
   });
+  if (testFilter && executedTestCount === 0) {
+    throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
+  }
 } finally {
   rmSync(stateRoot, { recursive: true, force: true });
 }
@@ -7914,6 +8363,30 @@ function installFixtureGitProxy(fixture, failureCondition, failureMessage) {
   return fakeGit;
 }
 
+function installFixtureGitPostSuccessHook(fixture, successCondition, hookArgs) {
+  const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+  const fakeGit = join(fixture.fakeBin, "git");
+  writeFileSync(
+    fakeGit,
+    [
+      "#!/usr/bin/env node",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      `const env = { ...process.env, PATH: ${JSON.stringify(realPath)} };`,
+      "const result = spawnSync('git', args, { cwd: process.cwd(), env, stdio: 'inherit' });",
+      "if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);",
+      `if (${successCondition}) {`,
+      `  const hook = spawnSync('git', ${JSON.stringify(hookArgs)}, { cwd: process.cwd(), env, stdio: 'inherit' });`,
+      "  if ((hook.status ?? 1) !== 0) process.exit(hook.status ?? 1);",
+      "}",
+      "process.exit(0);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGit, 0o755);
+  return fakeGit;
+}
+
 function writeFixtureGhPrView(fixture, headRefOid) {
   const fakeGh = join(fixture.fakeBin, "gh");
   writeFileSync(
@@ -8055,6 +8528,236 @@ function cleanupIntegratedCleanupFixture(fixture) {
     encoding: "utf8",
     stdio: "pipe",
   });
+  rmSync(fixture.worktree, { recursive: true, force: true });
+  rmSync(fixture.remoteRoot, { recursive: true, force: true });
+  rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function assertSupersededBlockedScenario(mutation) {
+  const fixture = createSupersededCleanupFixture(mutation === "source-head" ? {} : { mutation });
+  if (mutation === "held") {
+    assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).status === "held", "held fixture must persist held manifest status");
+  }
+  const args = [
+    "cleanup-superseded",
+    "superseded-task",
+    "--source-head",
+    mutation === "source-head" ? fixture.carryForwardCommit : fixture.sourceHead,
+    "--carry-forward-pr",
+    "456",
+    "--carry-forward-commit",
+    fixture.carryForwardCommit,
+    "--scope",
+    "carried.txt",
+    "--owner",
+    "runner-a",
+    "--state-root",
+    fixture.stateRoot,
+  ];
+  try {
+    const result = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+    assert(result.code === 0, result.stderr || result.stdout);
+    const summary = JSON.parse(result.stdout);
+    assert(summary.requestedProof.sourceHead === args[3], `${mutation} fixture did not pass the requested source head`);
+    assert(summary.counts.cleanupReady === 0, result.stdout || result.stderr);
+    assert(summary.results[0].status === "blocked", result.stdout || result.stderr);
+    assert(existsSync(fixture.worktree), `${mutation} blocker removed source worktree`);
+    assert(branchExists(fixture.root, fixture.branch), `${mutation} blocker deleted source branch`);
+  } finally {
+    cleanupSupersededCleanupFixture(fixture);
+  }
+}
+
+function supersededCleanupArgs(fixture, scope = "carried.txt", owner = "runner-a") {
+  return [
+    "cleanup-superseded",
+    "superseded-task",
+    "--source-head",
+    fixture.sourceHead,
+    "--carry-forward-pr",
+    "456",
+    "--carry-forward-commit",
+    fixture.carryForwardCommit,
+    "--scope",
+    scope,
+    "--owner",
+    owner,
+    "--state-root",
+    fixture.stateRoot,
+  ];
+}
+
+function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBranch }) {
+  if (removeWorktree) {
+    runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+  }
+  if (deleteLocalBranch) {
+    assert(!existsSync(fixture.worktree), "partial fixture must remove the source worktree before deleting its checked-out branch");
+    runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
+  }
+  const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+  const manifest = readJson(manifestPath);
+  manifest.status = "cleanup_partial";
+  manifest.cleanup_error = "simulated interruption after exact supersession resource cleanup";
+  manifest.cleanup_supersession_evidence = {
+    schemaVersion: 1,
+    remoteBranchPolicy: "retained",
+    proof: {
+      source: { requestedHead: fixture.sourceHead },
+      carryForward: { prNumber: 456, requestedCommit: fixture.carryForwardCommit },
+      scope: { paths: ["carried.txt"] },
+    },
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function createSupersededCleanupFixture(options = {}) {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-superseded-cleanup-"));
+  const remoteRoot = `${fixtureRoot}-remote.git`;
+  const stateRootFixture = join(fixtureRoot, "state");
+  const fakeBin = join(fixtureRoot, "bin");
+  const branch = "codex/superseded-cleanup";
+  const worktree = join(stateRootFixture, "worktrees", "superseded-task");
+  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
+
+  copyWorkspaceScriptFixture(fixtureRoot);
+  mkdirSync(fakeBin, { recursive: true });
+  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  runGit(fixtureRoot, ["branch", "-M", "main"]);
+  mkdirSync(remoteRoot, { recursive: true });
+  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
+  runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
+  if (options.renameOnly) {
+    commitFile(fixtureRoot, "rename/old.txt", "rename source\n", "base rename source");
+    runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
+  }
+
+  runGit(fixtureRoot, ["switch", "-q", "-c", branch]);
+  const carriedPath = options.newlineNestedPath ? "carried/new\nline.txt" : "carried.txt";
+  if (options.renameOnly) {
+    runGit(fixtureRoot, ["mv", "rename/old.txt", "rename/new.txt"]);
+    runGit(fixtureRoot, ["commit", "-q", "-m", "source rename"]);
+  } else {
+    commitFile(fixtureRoot, carriedPath, "carried forward\n", "source work");
+  }
+  if (options.extraSourceDelta) commitFile(fixtureRoot, "uncovered.txt", "must be scoped\n", "uncovered source delta");
+  const sourceHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+  runGit(fixtureRoot, ["push", "-q", "-u", "origin", branch]);
+  runGit(fixtureRoot, ["switch", "-q", "main"]);
+  if (options.renameOnly) {
+    commitFile(fixtureRoot, "rename/new.txt", "rename source\n", "carry renamed content without deleting old path");
+  } else {
+    commitFile(fixtureRoot, carriedPath, options.mutation === "content" ? "different content\n" : "carried forward\n", "carry source content forward");
+  }
+  const carryForwardCommit = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+  if (options.mutation === "content") {
+    assert(
+      runGit(fixtureRoot, ["rev-parse", `${sourceHead}:${carriedPath}`]).stdout !== runGit(fixtureRoot, ["rev-parse", `${carryForwardCommit}:${carriedPath}`]).stdout,
+      "content mismatch fixture must have distinct scoped blobs",
+    );
+  }
+  runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
+  if (options.revertedCurrentBase) {
+    commitFile(fixtureRoot, carriedPath, "reverted after merge\n", "revert carried source content");
+    runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
+  }
+  const currentBaseHead = runGit(fixtureRoot, ["rev-parse", "origin/main"]).stdout;
+  runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
+
+  mkdirSync(join(stateRootFixture, "tasks"), { recursive: true });
+  writeFileSync(
+    join(stateRootFixture, "tasks", "superseded-task.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      task_id: "superseded-task",
+      title: "Superseded task",
+      description: "no-PR source lane carried forward by merged successor",
+      repo_name: "fixture",
+      repo_root: worktree,
+      state_root: stateRootFixture,
+      base_branch: "main",
+      base_ref: options.baseRef || "origin/main",
+      branch,
+      worktree_path: worktree,
+      status: options.mutation === "held" ? "held" : "active",
+      pr_delivery_head_sha: options.mutation === "pr-evidence" ? sourceHead : null,
+      mode: "pr",
+      source_assignment_id: "superseded-assignment",
+      owner: options.manifestOwner === undefined ? "runner-a" : options.manifestOwner,
+      events: [],
+    }, null, 2)}\n`,
+  );
+  mkdirSync(join(stateRootFixture, "assignments"), { recursive: true });
+  const assignmentPath = join(stateRootFixture, "assignments", "superseded-assignment.json");
+  writeFileSync(
+    assignmentPath,
+    `${JSON.stringify({
+      schema_version: 1,
+      assignment_id: "superseded-assignment",
+      task_id: options.assignmentTaskId || "superseded-task",
+      lane_slug: "superseded-task",
+      branch,
+      worktree_path: worktree,
+      status: "claimed",
+      owner: options.assignmentOwner === undefined ? "runner-a" : options.assignmentOwner,
+      phase: "handoff",
+      runner_kind: "codex-cli",
+      events: [],
+      source_backlog_item: { item_id: "superseded-task", branch_name: branch },
+    }, null, 2)}\n`,
+  );
+  const fakeGh = join(fakeBin, "gh");
+  const lockedDrift = options.lockedAssignmentDrift
+    ? [
+        `const invocationPath = ${JSON.stringify(join(fixtureRoot, "locked-assignment-drift-count"))};`,
+        "let invocationCount = 0;",
+        "try { invocationCount = Number(fs.readFileSync(invocationPath, 'utf8')) || 0; } catch {}",
+        "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '456') {",
+        "  invocationCount += 1;",
+        "  fs.writeFileSync(invocationPath, String(invocationCount));",
+        "  if (invocationCount === 2) {",
+        `    const assignmentPath = ${JSON.stringify(assignmentPath)};`,
+        "    const assignment = JSON.parse(fs.readFileSync(assignmentPath, 'utf8'));",
+        "    assignment.branch = 'codex/drifted-assignment';",
+        "    fs.writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\\n`);",
+        "  }",
+        "}",
+      ]
+    : [];
+  writeFileSync(
+    fakeGh,
+    [
+      "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      ...lockedDrift,
+      "if (args[0] === 'pr' && args[1] === 'list' && args[2] === '--head') {",
+      "  if (args[args.indexOf('--limit') + 1] !== '1') { console.error('source PR existence proof must request one record'); process.exit(1); }",
+      `  console.log(JSON.stringify(${options.sourcePrRecord ? "[{ number: 789 }]" : "[]"}));`,
+      "  process.exit(0);",
+      "}",
+      "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '456') {",
+      `  console.log(JSON.stringify({ number: 456, url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || "main"}', baseRefOid: '${currentBaseHead}', headRefOid: '${carryForwardCommit}', mergeCommit: { oid: '${carryForwardCommit}' } }));`,
+      "  process.exit(0);",
+      "}",
+      "console.error(`unexpected gh args: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGh, 0o755);
+
+  return { root: fixtureRoot, remoteRoot, stateRoot: stateRootFixture, fakeBin, branch, worktree, sourceHead, carryForwardCommit, currentBaseHead, carriedPath, script: join(fixtureRoot, "scripts", "codex-workspace.mjs"), env };
+}
+
+function cleanupSupersededCleanupFixture(fixture) {
+  if (!fixture) return;
+  spawnSync("git", ["worktree", "remove", "--force", fixture.worktree], { cwd: fixture.root, encoding: "utf8", stdio: "pipe" });
   rmSync(fixture.worktree, { recursive: true, force: true });
   rmSync(fixture.remoteRoot, { recursive: true, force: true });
   rmSync(fixture.root, { recursive: true, force: true });
@@ -8581,6 +9284,10 @@ function readJson(path) {
 }
 
 function test(name, fn) {
+  if (testFilter && !name.toLowerCase().includes(testFilter)) {
+    return;
+  }
+  executedTestCount += 1;
   fn();
   console.log(`OK: ${name}`);
 }

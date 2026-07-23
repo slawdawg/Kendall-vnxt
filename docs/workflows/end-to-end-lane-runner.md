@@ -185,6 +185,13 @@ cannot be completed without expanded party-mode authority.
    registered a remote branch through `--delete-remote`, preserve that flag on
    resume: the runner refuses to downgrade a still-present registered remote
    target and close the manifest while that branch remains.
+   A no-PR lane that is not ancestral but was carried forward by a later merged
+   PR must use `cleanup-superseded <task>` rather than `cleanup-integrated`.
+   First review its `--summary-json` proof with the exact source head, merged
+   carry-forward PR and integrated commit, and bounded scope. It compares full
+   scoped tree entries, then repeats that proof under lock before a local-only
+   apply. This path never deletes the remote source branch and never applies to
+   a held workspace or a source lane with PR evidence.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface. Use
    `cleanup-orphans --summary-json` to inspect matched orphan directories before
