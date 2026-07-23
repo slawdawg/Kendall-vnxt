@@ -15,6 +15,7 @@ NOW = "2026-07-22T12:00:00.000Z"
 EXACT_HEAD = "a" * 40
 DIGEST = f"sha256:{'b' * 64}"
 EVIDENCE_REF = f"evidence:sha256:{'c' * 64}"
+DISCLOSURE_PACKET_DIGEST = f"sha256:{'d' * 64}"
 
 
 def _policy() -> dict:
@@ -81,10 +82,11 @@ def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
     finding = {"schemaVersion": "normalized-finding/v1", "findingId": f"normalized-finding:sha256:{hashlib.sha256(key.encode()).hexdigest()}", "rule": "simulated-metadata-boundary/v1", "severity": "info", "pathOrRef": "metadata:review-route", "lineOrRange": "1", "summary": "Bounded fixture finding.", "remediation": "Re-evaluate the bounded fixture.", "reviewedHead": EXACT_HEAD, "digest": DIGEST}
     assert validate_normalized_finding(finding)["ok"] is True
     assert validate_normalized_finding({**finding, "prompt": "no"})["ok"] is False
-    result = {"schemaVersion": "simulated-review-result/v1", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [finding], "disclosurePacketId": "disclosure-packet:review-35-1", "decisionId": "review-route-decision:fixture", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
+    result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [finding], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": DISCLOSURE_PACKET_DIGEST, "decisionId": "review-route-decision:fixture", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
     assert validate_simulated_review_result(result)["ok"] is True
     assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]})["ok"] is False
     assert validate_simulated_review_result({**result, "deliveryEvidenceEligible": True})["ok"] is False
+    assert validate_simulated_review_result({**result, "disclosurePacketDigest": None})["ok"] is False
     assert validate_simulated_review_result({**result, "code": "simulated_deduplicated", "findings": [finding]})["ok"] is False
 
 

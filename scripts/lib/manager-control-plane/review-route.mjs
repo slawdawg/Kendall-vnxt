@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1";
+export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v2";
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1";
 export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1";
 export const DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024;
@@ -9,6 +9,16 @@ export function disclosurePacketUtf8Bytes(value) {
   try {
     const normalized = normalizeJsonForSerialization(value);
     return normalized.ok ? Buffer.byteLength(JSON.stringify(normalized.value), "utf8") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Return a hook-free, canonical digest of strictly serializable packet metadata. */
+export function disclosurePacketCanonicalDigest(value) {
+  try {
+    const normalized = normalizeJsonForSerialization(value);
+    return normalized.ok ? `sha256:${createHash("sha256").update(JSON.stringify(normalized.value)).digest("hex")}` : null;
   } catch {
     return null;
   }
@@ -205,6 +215,7 @@ export function evaluateReviewRoute(input = {}) {
 
 function routeResult({ state, code, summary, fallback, fallbackSummary, immutableReview, authority, packet }) {
   const disclosurePacketId = packet?.disclosurePacketId || null;
+  const disclosurePacketDigest = packet ? disclosurePacketCanonicalDigest(packet) : null;
   const identity = immutableReview ? `${immutableReview.exactHead}:${immutableReview.digest}` : "invalid";
   return {
     ok: state !== "blocked",
@@ -217,6 +228,7 @@ function routeResult({ state, code, summary, fallback, fallbackSummary, immutabl
       immutableReview,
       authorityEvidence: { issuerId: authority.issuerId, authorityRef: authority.authorityRef, status: authority.valid ? "valid" : "invalid" },
       disclosurePacketId,
+      disclosurePacketDigest,
       metadataOnly: true,
       rawPayloadRetained: false,
       execution: "none",
@@ -477,7 +489,7 @@ function normalizeJsonForSerialization(value, seen = new WeakSet()) {
   if (!isPlainObject(value) || seen.has(value) || Object.getOwnPropertySymbols(value).length > 0) return { ok: false };
   seen.add(value);
   const normalized = Object.create(null);
-  for (const key of Object.getOwnPropertyNames(value)) {
+  for (const key of Object.getOwnPropertyNames(value).sort()) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (key === "toJSON" || !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return { ok: false };
     const item = normalizeJsonForSerialization(descriptor.value, seen);

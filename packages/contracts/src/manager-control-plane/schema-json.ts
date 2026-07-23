@@ -356,6 +356,7 @@ export const REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS = [
   "immutable_review",
   "authority_evidence",
   "disclosure_packet_id",
+  "disclosure_packet_digest",
   "metadata_only",
   "raw_payload_retained",
   "execution"
@@ -395,6 +396,7 @@ export const SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS = [
   "code",
   "findings",
   "disclosure_packet_id",
+  "disclosure_packet_digest",
   "decision_id",
   "reviewed_head",
   "digest",

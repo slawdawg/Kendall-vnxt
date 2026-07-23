@@ -17,7 +17,7 @@ DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1"
 DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024
 SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1"
 NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1"
-SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1"
+SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v2"
 
 
 def disclosure_packet_utf8_bytes(value: object) -> int | None:
@@ -51,7 +51,7 @@ def validate_normalized_finding(value: object) -> dict[str, object]:
 
 
 def validate_simulated_review_result(value: object) -> dict[str, object]:
-    fields = {"schemaVersion", "adapterId", "state", "code", "findings", "disclosurePacketId", "decisionId", "reviewedHead", "digest", "deliveryEvidenceEligible", "safeFallback", "execution"}
+    fields = {"schemaVersion", "adapterId", "state", "code", "findings", "disclosurePacketId", "disclosurePacketDigest", "decisionId", "reviewedHead", "digest", "deliveryEvidenceEligible", "safeFallback", "execution"}
     if type(value) is not dict or set(value) != fields or value.get("schemaVersion") != SIMULATED_REVIEW_RESULT_SCHEMA_VERSION or value.get("adapterId") != SIMULATED_REVIEW_ADAPTER_ID or value.get("execution") != "none":
         return _invalid("result_malformed")
     if value.get("state") not in {"completed", "stale", "blocked"} or type(value.get("findings")) is not list or len(value["findings"]) > 32 or value.get("deliveryEvidenceEligible") is not False:
@@ -64,7 +64,7 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
     expected_actions = {"completed": "retain_report_only", "stale": "reissue_disclosure_packet", "blocked": "resolve_policy_block" if value["code"] == "policy_vetoed" else "reissue_disclosure_packet" if value["code"] in {"packet_invalid", "packet_already_used"} else "re_evaluate"}
     if value["safeFallback"]["action"] != expected_actions[value["state"]]:
         return _invalid("result_malformed")
-    if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _safe_id(value.get("decisionId")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
+    if value["state"] == "completed" and (not _safe_id(value.get("disclosurePacketId")) or not _digest(value.get("disclosurePacketDigest")) or not _safe_id(value.get("decisionId")) or not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
         return _invalid("result_malformed")
     if value["state"] == "completed" and ((value["code"] == "simulated_completed") != bool(value["findings"])):
         return _invalid("result_malformed")
@@ -74,7 +74,7 @@ def validate_simulated_review_result(value: object) -> dict[str, object]:
         return _invalid("result_malformed")
     if value["state"] == "stale" and (not _exact_head(value.get("reviewedHead")) or not _digest(value.get("digest"))):
         return _invalid("result_malformed")
-    if value["state"] != "completed" and (value.get("disclosurePacketId") is not None or value.get("decisionId") is not None):
+    if value["state"] != "completed" and (value.get("disclosurePacketId") is not None or value.get("disclosurePacketDigest") is not None or value.get("decisionId") is not None):
         return _invalid("result_malformed")
     if value.get("reviewedHead") is not None and not _exact_head(value.get("reviewedHead")):
         return _invalid("result_malformed")

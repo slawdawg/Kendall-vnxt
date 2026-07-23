@@ -666,13 +666,18 @@ test("Review route contracts keep disclosure preparation metadata-only and non-e
   for (const exportedName of ["ImmutableReviewIdentity", "ReviewRouteDecision", "DisclosurePacket"]) {
     assert.match(routeSource, new RegExp(`export (type|interface) ${exportedName}\\b`), `missing ${exportedName}`);
   }
-  for (const literal of ["review-route-decision/v1", "disclosure-packet/v1", "report_only", "simulated", "blocked", "metadata_only", "execution: \"none\""]) {
+  for (const literal of ["review-route-decision/v2", "disclosure-packet/v1", "report_only", "simulated", "blocked", "metadata_only", "execution: \"none\""]) {
     assert.match(routeSource, new RegExp(literal), `missing review-route contract literal ${literal}`);
   }
   assertRequiredFields(
     "ReviewRouteDecision serialized fields",
-    ["schema_version", "decision_id", "state", "controlling_reason", "safe_fallback", "immutable_review", "authority_evidence", "disclosure_packet_id", "metadata_only", "raw_payload_retained", "execution"],
+    ["schema_version", "decision_id", "state", "controlling_reason", "safe_fallback", "immutable_review", "authority_evidence", "disclosure_packet_id", "disclosure_packet_digest", "metadata_only", "raw_payload_retained", "execution"],
     extractConstArray(schemaSource, "REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS"),
+  );
+  assertRequiredFields(
+    "SimulatedReviewResult serialized fields",
+    ["schema_version", "adapter_id", "state", "code", "findings", "disclosure_packet_id", "disclosure_packet_digest", "decision_id", "reviewed_head", "digest", "delivery_evidence_eligible", "safe_fallback", "execution"],
+    extractConstArray(schemaSource, "SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS"),
   );
   assertRequiredFields(
     "DisclosurePacket serialized fields",

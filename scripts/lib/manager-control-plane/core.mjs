@@ -45,6 +45,7 @@ export {
   evaluateReviewRoute,
   validateDisclosurePacket,
   DISCLOSURE_PACKET_MAX_UTF8_BYTES,
+  disclosurePacketCanonicalDigest,
   disclosurePacketUtf8Bytes,
   isDisclosurePacketSizeAllowed,
 } from "./review-route.mjs";

@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   buildDisclosurePacket,
   DISCLOSURE_PACKET_MAX_UTF8_BYTES,
+  disclosurePacketCanonicalDigest,
   disclosurePacketUtf8Bytes,
   evaluateReviewRoute,
   evaluateSimulatedReview,
@@ -51,7 +52,7 @@ test("review route produces canonical report-only decision and metadata-only dis
   const result = evaluateReviewRoute(validInput());
 
   assert.equal(result.ok, true);
-  assert.equal(result.decision.schemaVersion, "review-route-decision/v1");
+  assert.equal(result.decision.schemaVersion, "review-route-decision/v2");
   assert.equal(result.decision.state, "report_only");
   assert.equal(result.decision.execution, "none");
   assert.equal(result.decision.immutableReview.exactHead, EXACT_HEAD);
@@ -113,6 +114,9 @@ test("simulated adapter returns a deterministic metadata-only normalized finding
   assert.equal(first.findings.length, 1);
   assert.equal(first.disclosurePacketId, "disclosure-packet:review-35-1");
   assert.match(first.decisionId, /^review-route-decision:sha256:/);
+  const prepared = simulatedInput();
+  assert.equal(prepared.decision.disclosurePacketDigest, disclosurePacketCanonicalDigest(prepared.packet));
+  assert.equal(first.disclosurePacketDigest, prepared.decision.disclosurePacketDigest);
   assert.deepEqual(Object.keys(first.findings[0]).sort(), ["digest", "findingId", "lineOrRange", "pathOrRef", "remediation", "reviewedHead", "rule", "schemaVersion", "severity", "summary"].sort());
   assert.equal(first.findings[0].reviewedHead, EXACT_HEAD);
   assert.equal(first.findings[0].digest, DIGEST);
@@ -185,6 +189,19 @@ test("simulated adapter binds canonical simulated authority and supplied one-tim
   const forged = evaluateSimulatedReview({ ...prepared, packet: reportOnly.packet, decision: { ...prepared.decision, disclosurePacketId: reportOnly.packet.disclosurePacketId } });
   assert.equal(forged.state, "blocked");
   assert.equal(forged.code, "decision_invalid");
+
+  const forgedScopePacket = {
+    ...prepared.packet,
+    scope: { ...prepared.packet.scope, evidenceRefs: [`evidence:sha256:${"e".repeat(64)}`] },
+  };
+  const forgedScope = evaluateSimulatedReview({ ...prepared, packet: forgedScopePacket });
+  assert.equal(forgedScope.state, "blocked");
+  assert.equal(forgedScope.code, "decision_invalid");
+
+  let digestHookCalled = false;
+  const hookedPacket = { ...prepared.packet, toJSON() { digestHookCalled = true; return {}; } };
+  assert.equal(disclosurePacketCanonicalDigest(hookedPacket), null);
+  assert.equal(digestHookCalled, false);
 
   const consumed = evaluateSimulatedReview(simulatedInput({ consumedDisclosurePacketIds: [prepared.packet.disclosurePacketId] }));
   assert.equal(consumed.state, "blocked");

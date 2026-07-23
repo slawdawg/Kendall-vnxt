@@ -1,10 +1,10 @@
 /** Report-only route state. None of these values permit execution. */
 export type ReviewRouteState = "report_only" | "simulated" | "blocked";
 
-export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v1" as const;
+export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v2" as const;
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1" as const;
 export const NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1" as const;
-export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1" as const;
+export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v2" as const;
 export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1" as const;
 
 /** The only adapter identifier accepted for simulated review. It has no tools. */
@@ -56,6 +56,7 @@ export interface ReviewRouteDecision {
   immutableReview: ImmutableReviewIdentity | null;
   authorityEvidence: ReviewRouteAuthorityEvidence;
   disclosurePacketId: string | null;
+  disclosurePacketDigest: string | null;
   metadataOnly: true;
   rawPayloadRetained: false;
   execution: "none";
@@ -115,6 +116,7 @@ export interface SimulatedReviewResult {
   code: SimulatedReviewResultCode;
   findings: readonly NormalizedFinding[];
   disclosurePacketId: string | null;
+  disclosurePacketDigest: string | null;
   decisionId: string | null;
   reviewedHead: string | null;
   digest: string | null;

@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 import {
   REVIEW_ROUTE_DECISION_SCHEMA_VERSION,
   SIMULATED_REVIEW_ADAPTER_ID,
+  disclosurePacketCanonicalDigest,
   validateDisclosurePacket,
 } from "./review-route.mjs";
 
 export const NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1";
-export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v1";
+export const SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v2";
 
 const INPUT_FIELDS = Object.freeze(["packet", "decision", "now", "routePolicy", "currentImmutableReview", "priorFindings", "consumedDisclosurePacketIds", "fallback"]);
 const IDENTITY_FIELDS = Object.freeze(["executionJobId", "exactHead", "digest"]);
@@ -63,6 +64,7 @@ function evaluateSimulatedReviewUnsafe(input = {}) {
     code: deduplicated ? "simulated_deduplicated" : "simulated_completed",
     findings: deduplicated ? [] : [finding],
     disclosurePacketId: ownDataValue(packet, "disclosurePacketId"),
+    disclosurePacketDigest: ownDataValue(decision, "disclosurePacketDigest"),
     decisionId: ownDataValue(decision, "decisionId"),
     reviewedHead: currentIdentity.exactHead,
     digest: currentIdentity.digest,
@@ -92,10 +94,11 @@ function fixtureFinding(identity) {
 }
 
 function isSimulatedDecision(value, packet, identity) {
-  if (!isStrictObject(value, ["schemaVersion", "decisionId", "state", "controllingReason", "safeFallback", "immutableReview", "authorityEvidence", "disclosurePacketId", "metadataOnly", "rawPayloadRetained", "execution"])) return false;
+  if (!isStrictObject(value, ["schemaVersion", "decisionId", "state", "controllingReason", "safeFallback", "immutableReview", "authorityEvidence", "disclosurePacketId", "disclosurePacketDigest", "metadataOnly", "rawPayloadRetained", "execution"])) return false;
   const routeAllowlist = ownDataValue(packet, "routeAllowlist");
   const adapterAllowlist = ownDataValue(packet, "adapterAllowlist");
   const disclosurePacketId = ownDataValue(packet, "disclosurePacketId");
+  const disclosurePacketDigest = disclosurePacketCanonicalDigest(packet);
   const expectedDecisionId = `review-route-decision:sha256:${createHash("sha256").update(`simulated:simulated_prepared:${identity.exactHead}:${identity.digest}:${disclosurePacketId}`).digest("hex")}`;
   const authority = ownDataValue(packet, "authority");
   const authorityEvidence = ownDataValue(value, "authorityEvidence");
@@ -108,6 +111,8 @@ function isSimulatedDecision(value, packet, identity) {
     && ownDataValue(value, "metadataOnly") === true
     && ownDataValue(value, "rawPayloadRetained") === false
     && ownDataValue(value, "disclosurePacketId") === disclosurePacketId
+    && disclosurePacketDigest !== null
+    && ownDataValue(value, "disclosurePacketDigest") === disclosurePacketDigest
     && isStrictArray(routeAllowlist) && routeAllowlist.includes("simulated")
     && isStrictArray(adapterAllowlist) && adapterAllowlist.includes(SIMULATED_REVIEW_ADAPTER_ID)
     && isStrictObject(authority, ["issuerId", "authorityRef", "valid"])
@@ -179,6 +184,7 @@ function stale(identity) {
     code: "immutable_identity_stale",
     findings: [],
     disclosurePacketId: null,
+    disclosurePacketDigest: null,
     decisionId: null,
     reviewedHead: identity.exactHead,
     digest: identity.digest,
@@ -196,6 +202,7 @@ function blocked(code, reviewedHead, digest, action, summary) {
     code,
     findings: [],
     disclosurePacketId: null,
+    disclosurePacketDigest: null,
     decisionId: null,
     reviewedHead,
     digest,
