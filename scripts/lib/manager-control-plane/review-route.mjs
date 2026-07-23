@@ -263,7 +263,7 @@ function validateStringList(values, label, reasons, fixedValues) {
 }
 
 function validateEvidenceRefs(values, reasons) {
-  if (!isSafePlainArray(values) || values.length === 0 || values.length > 32 || values.some((value) => typeof value !== "string" || !SAFE_EVIDENCE_REF.test(value)) || new Set(values).size !== values.length) reasons.push("evidence_ref_allowlist_invalid");
+  if (!isAllowedEvidenceRefs(values)) reasons.push("evidence_ref_allowlist_invalid");
 }
 
 function validateSubset(values, allowed, label, reasons) {
@@ -335,9 +335,10 @@ function validateDisclosureInput(value) {
     for (const field of ["disclosurePacketId", "issuedAt", "expiresAt", "revocationState", "cancellationState"]) {
       if (typeof value[field] !== "string") reasons.push("packet_malformed");
     }
-    for (const field of ["routeAllowlist", "adapterAllowlist", "toolAllowlist", "evidenceRefs"]) {
-      if (!isSafePlainArray(value[field]) || value[field].some((entry) => typeof entry !== "string")) reasons.push("packet_malformed");
-    }
+    if (!isAllowedStringList(value.routeAllowlist, ROUTE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
+    if (!isAllowedStringList(value.adapterAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
+    if (!isAllowedStringList(value.toolAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
+    if (!isAllowedEvidenceRefs(value.evidenceRefs)) reasons.push("packet_malformed");
     if (value.singleUse !== true) reasons.push("single_use_required");
     return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
   } catch {
@@ -410,6 +411,10 @@ function validateConsumedDisclosurePacketIds(value) {
 
 function isAllowedStringList(values, fixedValues) {
   return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => safeId(value) && fixedValues.includes(value)) && new Set(values).size === values.length;
+}
+
+function isAllowedEvidenceRefs(values) {
+  return isSafePlainArray(values) && values.length > 0 && values.length <= 32 && values.every((value) => typeof value === "string" && SAFE_EVIDENCE_REF.test(value)) && new Set(values).size === values.length;
 }
 
 function isSafePlainArray(value) {

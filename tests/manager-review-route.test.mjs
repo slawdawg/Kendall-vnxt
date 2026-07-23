@@ -129,9 +129,9 @@ test("review route rejects unsafe preparation input, live-capable allowlists, se
     [{ ...base, immutableReview: { ...base.immutableReview, prompt: "no" } }, "forbidden_field"],
     [{ ...base, authority: { ...base.authority, token: "no" } }, "forbidden_field"],
     [{ ...base, disclosure: { ...base.disclosure, revocationState: undefined } }, "packet_malformed"],
-    [{ ...base, disclosure: { ...base.disclosure, routeAllowlist: ["live-route"] } }, "route_allowlist_invalid"],
-    [{ ...base, disclosure: { ...base.disclosure, adapterAllowlist: ["live-adapter"] } }, "adapter_allowlist_invalid"],
-    [{ ...base, disclosure: { ...base.disclosure, toolAllowlist: ["live-tool"] } }, "tool_allowlist_invalid"],
+    [{ ...base, disclosure: { ...base.disclosure, routeAllowlist: ["live-route"] } }, "packet_malformed"],
+    [{ ...base, disclosure: { ...base.disclosure, adapterAllowlist: ["live-adapter"] } }, "packet_malformed"],
+    [{ ...base, disclosure: { ...base.disclosure, toolAllowlist: ["live-tool"] } }, "packet_malformed"],
     [{ ...base, disclosure: { ...base.disclosure, evidenceRefs: ["evidence:sk-proj-abcdefghijklmnop"] } }, "forbidden_content"],
     [{ ...base, requestedState: "simulated" }, "requested_route_not_allowed"],
   ];
@@ -140,6 +140,25 @@ test("review route rejects unsafe preparation input, live-capable allowlists, se
     assert.equal(result.ok, false, expectedReason);
     assert.equal(result.decision.state, "blocked", expectedReason);
     assert.equal(result.decision.controllingReason.code, expectedReason);
+  }
+});
+
+test("review route rejects duplicate and oversized disclosure arrays before normalization", () => {
+  const base = validInput();
+  const tooManyEvidenceRefs = Array.from({ length: 33 }, (_, index) => `evidence:sha256:${index.toString(16).padStart(64, "0")}`);
+  const cases = [
+    { ...base, disclosure: { ...base.disclosure, routeAllowlist: ["report_only", "report_only"] } },
+    { ...base, disclosure: { ...base.disclosure, adapterAllowlist: ["none", "none"] } },
+    { ...base, disclosure: { ...base.disclosure, toolAllowlist: ["none", "none"] } },
+    { ...base, disclosure: { ...base.disclosure, evidenceRefs: [EVIDENCE_REF, EVIDENCE_REF] } },
+    { ...base, disclosure: { ...base.disclosure, evidenceRefs: tooManyEvidenceRefs } },
+  ];
+  for (const input of cases) {
+    const result = evaluateReviewRoute(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.decision.state, "blocked");
+    assert.equal(result.decision.controllingReason.code, "packet_malformed");
+    assert.equal(result.packet, null);
   }
 });
 
