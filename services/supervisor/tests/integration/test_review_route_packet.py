@@ -77,6 +77,45 @@ def test_disclosure_packet_python_contract_matches_report_only_shape() -> None:
     ) == {"ok": True, "reasons": []}
 
 
+def test_disclosure_packet_accepts_source_bearing_metadata_ids_but_rejects_credential_like_ids() -> None:
+    packet = {
+        **_packet(),
+        "disclosurePacketId": "disclosure-packet:source-work-eligible",
+        "immutableReview": {**_packet()["immutableReview"], "executionJobId": "execution-job:source-work-eligible"},
+        "authority": {**_packet()["authority"], "authorityRef": "authority:source-work-eligible"},
+    }
+    assert validate_disclosure_packet(
+        packet,
+        now=NOW,
+        route_policy=_policy(),
+        immutable_review=packet["immutableReview"],
+    ) == {"ok": True, "reasons": []}
+
+    credential_like = {**packet, "immutableReview": {**packet["immutableReview"], "executionJobId": "execution-job:ghp-abcdefghijklmnop"}}
+    result = validate_disclosure_packet(credential_like, now=NOW, route_policy=_policy(), immutable_review=credential_like["immutableReview"])
+    assert result["ok"] is False
+    assert "forbidden_content" in result["reasons"]
+
+
+def test_disclosure_packet_fails_closed_for_hostile_nested_containers() -> None:
+    class ThrowingDict(dict):
+        def items(self):  # type: ignore[override]
+            raise AssertionError("nested mapping must not be inspected")
+
+    class ThrowingList(list):
+        def __iter__(self):  # type: ignore[override]
+            raise AssertionError("nested list must not be iterated")
+
+    packet = _packet()
+    hostile_packets = [
+        {**packet, "scope": ThrowingDict(packet["scope"])},
+        {**packet, "scope": {**packet["scope"], "evidenceRefs": ThrowingList(packet["scope"]["evidenceRefs"])}},
+    ]
+    for candidate in hostile_packets:
+        result = validate_disclosure_packet(candidate, now=NOW, route_policy=_policy(), immutable_review=packet["immutableReview"])
+        assert result == {"ok": False, "reasons": ["packet_malformed"]}
+
+
 def test_disclosure_packet_python_contract_matches_simulated_adapter_pair() -> None:
     policy = {**_policy(), "adapterAllowlist": ["none", SIMULATED_REVIEW_ADAPTER_ID]}
     packet = {**_packet(), "routeAllowlist": ["simulated"], "adapterAllowlist": [SIMULATED_REVIEW_ADAPTER_ID]}
@@ -93,10 +132,15 @@ def test_disclosure_packet_python_contract_matches_simulated_adapter_pair() -> N
 
 
 def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
+    class UnhashableString(str):
+        __hash__ = None  # type: ignore[assignment]
+
     key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:1:simulated-metadata-boundary/v1"
     finding = {"schemaVersion": "normalized-finding/v1", "findingId": f"normalized-finding:sha256:{hashlib.sha256(key.encode()).hexdigest()}", "rule": "simulated-metadata-boundary/v1", "severity": "info", "pathOrRef": "metadata:review-route", "lineOrRange": "1", "summary": "Bounded fixture finding.", "remediation": "Re-evaluate the bounded fixture.", "reviewedHead": EXACT_HEAD, "digest": DIGEST}
     assert validate_normalized_finding(finding)["ok"] is True
     assert validate_normalized_finding({**finding, "prompt": "no"})["ok"] is False
+    for severity in ([], UnhashableString("info")):
+        assert validate_normalized_finding({**finding, "severity": severity}) == {"ok": False, "reasons": ["finding_malformed"]}
     reversed_range = {**finding, "lineOrRange": "10-2"}
     reversed_key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:10-2:simulated-metadata-boundary/v1"
     reversed_range["findingId"] = f"normalized-finding:sha256:{hashlib.sha256(reversed_key.encode()).hexdigest()}"
@@ -111,6 +155,16 @@ def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
     decision_key = f"simulated:simulated_prepared:{EXACT_HEAD}:{DIGEST}:disclosure-packet:review-35-1"
     result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [fixture], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": packet_digest, "decisionId": f"review-route-decision:sha256:{hashlib.sha256(decision_key.encode()).hexdigest()}", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
     assert validate_simulated_review_result(result, **context)["ok"] is True
+    for field, value in [
+        ("state", []),
+        ("code", []),
+        ("safeFallback", {"action": [], "summary": "bounded"}),
+        ("state", UnhashableString("completed")),
+        ("code", UnhashableString("simulated_completed")),
+        ("safeFallback", {"action": UnhashableString("retain_report_only"), "summary": "bounded"}),
+    ]:
+        assert validate_simulated_review_result({**result, field: value}, **context) == {"ok": False, "reasons": ["result_malformed"]}
+    assert validate_simulated_review_result(result, **{**context, "fallback": UnhashableString("none")}) == {"ok": False, "reasons": ["result_malformed"]}
     assert validate_simulated_review_result(result, canonical_packet=None, now=NOW, route_policy=policy, prior_findings=[])["ok"] is False
     assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]}, **context)["ok"] is False
     assert validate_simulated_review_result({**result, "deliveryEvidenceEligible": True}, **context)["ok"] is False
@@ -330,7 +384,7 @@ def test_disclosure_packet_rejects_live_capable_policy_extras_and_list_subclasse
 
     packet_result = validate_disclosure_packet({**_packet(), "routeAllowlist": HookedList(["report_only"])}, now=NOW, route_policy=_policy())
     assert packet_result["ok"] is False
-    assert "route_allowlist_invalid" in packet_result["reasons"]
+    assert packet_result["reasons"] == ["packet_malformed"]
 
 
 def test_disclosure_packet_serialized_ceiling_accepts_exact_16kib_and_rejects_one_more_byte() -> None:
