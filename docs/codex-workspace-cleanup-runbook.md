@@ -91,6 +91,12 @@ remote was successfully observed as absent, its manifest has no assignment and
 names a deleted predecessor base, and a named commit was carried inside a named
 merged PR before a bounded review-hardening sequence.
 
+If an interrupted first-use cleanup has already removed its local worktree and
+branch, resumption requires the journal's recorded normalized carry-forward PR
+base OID and canonical base head to match the newly checked current evidence
+exactly. A changed base proof leaves the partial journal and all remaining
+targets untouched; inspect and restart from fresh evidence instead.
+
 It is an explicit migration contract, not a fallback. All fields below are
 required, including metadata-only provenance and hardening rationale:
 

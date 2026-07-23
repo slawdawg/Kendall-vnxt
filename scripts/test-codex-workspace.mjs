@@ -7898,6 +7898,8 @@ try {
       const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
       assert(preview.code === 0, preview.stderr || preview.stdout);
       const plan = JSON.parse(preview.stdout).results[0];
+      assert(plan.proof.carryForward.baseRefOid === fixture.currentBaseHead, preview.stdout || preview.stderr);
+      assert(plan.proof.currentBase.headSha === fixture.currentBaseHead, preview.stdout || preview.stderr);
       runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
       runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
       const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
@@ -7925,6 +7927,44 @@ try {
       assert(closed.status === "closed", `first-use partial resume status is ${closed.status}`);
       assert(closed.cleanup_source_remote_absent === "absent", closed.cleanup_source_remote_absent);
       assert(!remoteBranchExists(fixture.root, fixture.branch), "first-use partial resume created or mutated source remote");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded first-use partial resume blocks changed canonical base evidence without mutation", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+    const args = legacyFirstUseSupersededArgs(fixture);
+    try {
+      const initial = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(initial.code === 0, initial.stderr || initial.stdout);
+      const initialPlan = JSON.parse(initial.stdout).results[0];
+      assert(initialPlan.proof.carryForward.baseRefOid === fixture.currentBaseHead, initial.stdout || initial.stderr);
+
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_supersession_evidence = { schemaVersion: 1, remoteBranchPolicy: "absent", proof: initialPlan.proof };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      commitFile(fixture.root, "after-cleanup-base-advance.txt", "advance after local targets were removed\n", "advance canonical base after cleanup interruption");
+      const advancedBaseHead = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["push", "-q", "origin", fixture.baseBranch]);
+      const fakeGh = join(fixture.fakeBin, "gh");
+      writeFileSync(fakeGh, readFileSync(fakeGh, "utf8").replaceAll(fixture.currentBaseHead, advancedBaseHead));
+
+      const resumed = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const summary = JSON.parse(resumed.stdout);
+      assert(summary.counts.cleanupReady === 0, resumed.stdout || resumed.stderr);
+      assert(summary.results[0].status === "blocked", resumed.stdout || resumed.stderr);
+      assert(summary.results[0].reason.includes("recorded first-use canonical base proof"), summary.results[0].reason);
+      assert(!existsSync(fixture.worktree), "blocked partial resume recreated or mutated source worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "blocked partial resume recreated or mutated local branch");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "blocked partial resume mutated absent source remote");
+      assert(readJson(manifestPath).status === "cleanup_partial", "blocked partial resume changed its journal state");
     } finally {
       cleanupSupersededCleanupFixture(fixture);
     }
