@@ -4812,7 +4812,7 @@ function supersededCurrentBaseProof(manifest, carryForward, proofInput, cwd) {
     }
     base.remoteHeadSha = remoteHeadSha;
   }
-  if (!proofInput.repair && (!carryForward.baseRefOid || carryForward.baseRefOid !== headSha)) {
+  if (!carryForward.baseRefOid || carryForward.baseRefOid !== headSha) {
     return { ...base, headSha, status: "mismatch", reason: "current canonical base head does not exactly match GitHub carry-forward PR base evidence" };
   }
   if (!gitCommitIsAncestor(proofInput.carryForwardCommit, canonicalRef, cwd) || (proofInput.repair && !carryForward.mergeCommit?.oid) || (proofInput.repair && !gitCommitIsAncestor(carryForward.mergeCommit.oid, canonicalRef, cwd))) {
