@@ -23,6 +23,8 @@ _MISSING = object()
 
 def disclosure_packet_utf8_bytes(value: object) -> int | None:
     try:
+        if _contains_non_plain_container(value):
+            return None
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
     except (TypeError, ValueError, UnicodeEncodeError):
         return None
@@ -35,7 +37,7 @@ def is_disclosure_packet_size_allowed(value: object) -> bool:
 
 def disclosure_packet_canonical_digest(value: object) -> str | None:
     try:
-        if type(value) is not dict:
+        if type(value) is not dict or _contains_non_plain_container(value):
             return None
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8")
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
@@ -451,7 +453,7 @@ _EXACT_HEAD = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FORBIDDEN_NAME = re.compile(r"(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)", re.IGNORECASE)
 _FORBIDDEN_TEXT = re.compile(r"(?:\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)", re.IGNORECASE)
-_FORBIDDEN_IDENTIFIER_TEXT = re.compile(r"(?:(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)", re.IGNORECASE)
+_FORBIDDEN_IDENTIFIER_TEXT = re.compile(r"(?:\b(?:diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)", re.IGNORECASE)
 _IDENTIFIER_VALUE_FIELDS = frozenset({"executionJobId", "disclosurePacketId", "issuerId", "authorityRef", "decisionId", "findingId", "rule", "pathOrRef", "reviewedHead", "digest", "disclosurePacketDigest"})
 
 
@@ -651,7 +653,7 @@ def _contains_non_plain_container(value: object, seen: set[int] | None = None) -
             return True
         seen.add(id(value))
         return any(_contains_non_plain_container(key, seen) or _contains_non_plain_container(item, seen) for key, item in value.items())
-    return isinstance(value, (list, dict))
+    return type(value) not in {type(None), bool, int, float, str}
 
 
 def _policy_list(policy: dict[str, object] | None, field: str) -> object:

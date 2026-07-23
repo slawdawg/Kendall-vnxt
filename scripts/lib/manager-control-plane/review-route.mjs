@@ -50,7 +50,7 @@ const EXACT_HEAD = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const FORBIDDEN_NAME = /(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)/i;
 const FORBIDDEN_TEXT = /(?:\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
-const FORBIDDEN_IDENTIFIER_TEXT = /(?:(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const FORBIDDEN_IDENTIFIER_TEXT = /(?:\b(?:diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)\b|(?:sk(?:[-_](?:proj|ant(?:[-_]api)?))?|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
 const IDENTIFIER_VALUE_FIELDS = new Set(["executionJobId", "disclosurePacketId", "issuerId", "authorityRef", "decisionId", "findingId", "rule", "pathOrRef", "reviewedHead", "digest", "disclosurePacketDigest"]);
 
 export function buildDisclosurePacket(input = {}) {
@@ -516,8 +516,12 @@ function canonicalTime(value) {
   return typeof value === "string" && /\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value ? value : null;
 }
 
-function safeId(value) {
+export function isSafeReviewRouteIdentifier(value) {
   return typeof value === "string" && SAFE_ID.test(value) && !FORBIDDEN_IDENTIFIER_TEXT.test(value);
+}
+
+function safeId(value) {
+  return isSafeReviewRouteIdentifier(value);
 }
 
 function isExactHead(value) {

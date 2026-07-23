@@ -91,10 +91,11 @@ def test_disclosure_packet_accepts_source_bearing_metadata_ids_but_rejects_crede
         immutable_review=packet["immutableReview"],
     ) == {"ok": True, "reasons": []}
 
-    credential_like = {**packet, "immutableReview": {**packet["immutableReview"], "executionJobId": "execution-job:ghp-abcdefghijklmnop"}}
-    result = validate_disclosure_packet(credential_like, now=NOW, route_policy=_policy(), immutable_review=credential_like["immutableReview"])
-    assert result["ok"] is False
-    assert "forbidden_content" in result["reasons"]
+    for identifier in ("execution-job:ghp-abcdefghijklmnop", "execution-job:prompt-work-eligible"):
+        invalid_identifier = {**packet, "immutableReview": {**packet["immutableReview"], "executionJobId": identifier}}
+        result = validate_disclosure_packet(invalid_identifier, now=NOW, route_policy=_policy(), immutable_review=invalid_identifier["immutableReview"])
+        assert result["ok"] is False
+        assert "forbidden_content" in result["reasons"]
 
 
 def test_disclosure_packet_fails_closed_for_hostile_nested_containers() -> None:
@@ -110,10 +111,14 @@ def test_disclosure_packet_fails_closed_for_hostile_nested_containers() -> None:
     hostile_packets = [
         {**packet, "scope": ThrowingDict(packet["scope"])},
         {**packet, "scope": {**packet["scope"], "evidenceRefs": ThrowingList(packet["scope"]["evidenceRefs"])}},
+        {**packet, "scope": {**packet["scope"], "evidenceRefs": (ThrowingList(packet["scope"]["evidenceRefs"]),)}},
     ]
     for candidate in hostile_packets:
         result = validate_disclosure_packet(candidate, now=NOW, route_policy=_policy(), immutable_review=packet["immutableReview"])
         assert result == {"ok": False, "reasons": ["packet_malformed"]}
+        assert disclosure_packet_utf8_bytes(candidate) is None
+        assert is_disclosure_packet_size_allowed(candidate) is False
+        assert disclosure_packet_canonical_digest(candidate) is None
 
 
 def test_disclosure_packet_python_contract_matches_simulated_adapter_pair() -> None:
