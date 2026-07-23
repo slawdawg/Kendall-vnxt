@@ -156,7 +156,7 @@ function isNormalizedFinding(value) {
     && safeId(ownDataValue(value, "rule"))
     && SEVERITIES.includes(ownDataValue(value, "severity"))
     && safeId(ownDataValue(value, "pathOrRef"))
-    && typeof ownDataValue(value, "lineOrRange") === "string" && LINE_OR_RANGE.test(ownDataValue(value, "lineOrRange"))
+    && isLineOrRange(ownDataValue(value, "lineOrRange"))
     && safeText(ownDataValue(value, "summary"))
     && safeText(ownDataValue(value, "remediation"))
     && isExactHead(ownDataValue(value, "reviewedHead"))
@@ -320,6 +320,12 @@ function safeText(value) {
 
 function isExactHead(value) {
   return typeof value === "string" && EXACT_HEAD.test(value);
+}
+
+function isLineOrRange(value) {
+  if (typeof value !== "string" || !LINE_OR_RANGE.test(value)) return false;
+  const [start, end] = value.split("-").map(Number);
+  return end === undefined || start <= end;
 }
 
 function isDigest(value) {

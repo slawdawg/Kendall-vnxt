@@ -246,6 +246,10 @@ test("simulated adapter binds canonical simulated authority and supplied one-tim
   assert.equal(result.state, "blocked");
   assert.equal(result.findings.length, 0);
 
+  const reversedRange = { ...first.findings[0], lineOrRange: "10-2" };
+  reversedRange.findingId = `normalized-finding:sha256:${createHash("sha256").update(`${reversedRange.reviewedHead}:${reversedRange.digest}:${reversedRange.pathOrRef}:${reversedRange.lineOrRange}:${reversedRange.rule}`).digest("hex")}`;
+  assert.equal(evaluateSimulatedReview(simulatedInput({ priorFindings: [reversedRange] })).state, "blocked");
+
   const forgedAuthority = evaluateSimulatedReview(simulatedInput({ decision: { ...prepared.decision, authorityEvidence: { ...prepared.decision.authorityEvidence, authorityRef: "authority:forged" } } }));
   assert.equal(forgedAuthority.state, "blocked");
 

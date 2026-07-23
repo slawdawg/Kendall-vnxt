@@ -82,6 +82,10 @@ def test_python_validates_normalized_simulation_shapes_fail_closed() -> None:
     finding = {"schemaVersion": "normalized-finding/v1", "findingId": f"normalized-finding:sha256:{hashlib.sha256(key.encode()).hexdigest()}", "rule": "simulated-metadata-boundary/v1", "severity": "info", "pathOrRef": "metadata:review-route", "lineOrRange": "1", "summary": "Bounded fixture finding.", "remediation": "Re-evaluate the bounded fixture.", "reviewedHead": EXACT_HEAD, "digest": DIGEST}
     assert validate_normalized_finding(finding)["ok"] is True
     assert validate_normalized_finding({**finding, "prompt": "no"})["ok"] is False
+    reversed_range = {**finding, "lineOrRange": "10-2"}
+    reversed_key = f"{EXACT_HEAD}:{DIGEST}:metadata:review-route:10-2:simulated-metadata-boundary/v1"
+    reversed_range["findingId"] = f"normalized-finding:sha256:{hashlib.sha256(reversed_key.encode()).hexdigest()}"
+    assert validate_normalized_finding(reversed_range)["ok"] is False
     result = {"schemaVersion": "simulated-review-result/v2", "adapterId": SIMULATED_REVIEW_ADAPTER_ID, "state": "completed", "code": "simulated_completed", "findings": [finding], "disclosurePacketId": "disclosure-packet:review-35-1", "disclosurePacketDigest": DISCLOSURE_PACKET_DIGEST, "decisionId": "review-route-decision:fixture", "reviewedHead": EXACT_HEAD, "digest": DIGEST, "deliveryEvidenceEligible": False, "safeFallback": {"action": "retain_report_only", "summary": "bounded"}, "execution": "none"}
     assert validate_simulated_review_result(result)["ok"] is True
     assert validate_simulated_review_result({**result, "state": "stale", "findings": [finding]})["ok"] is False

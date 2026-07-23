@@ -621,6 +621,8 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
   ImmutableReviewIdentity: IMMUTABLE_REVIEW_IDENTITY_SERIALIZED_FIELDS,
   ReviewRouteDecision: REVIEW_ROUTE_DECISION_SERIALIZED_FIELDS,
   DisclosurePacket: DISCLOSURE_PACKET_SERIALIZED_FIELDS,
+  NormalizedFinding: NORMALIZED_FINDING_SERIALIZED_FIELDS,
+  SimulatedReviewResult: SIMULATED_REVIEW_RESULT_SERIALIZED_FIELDS,
   CandidateWorkPacket: [
     "candidate_work_packet_id",
     "run_id",

@@ -32,13 +32,20 @@ def is_disclosure_packet_size_allowed(value: object) -> bool:
     return encoded_size is not None and encoded_size <= DISCLOSURE_PACKET_MAX_UTF8_BYTES
 
 
+def _line_or_range(value: object) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?", value):
+        return False
+    start, _, end = value.partition("-")
+    return not end or int(start) <= int(end)
+
+
 def validate_normalized_finding(value: object) -> dict[str, object]:
     fields = {"schemaVersion", "findingId", "rule", "severity", "pathOrRef", "lineOrRange", "summary", "remediation", "reviewedHead", "digest"}
     if type(value) is not dict or set(value) != fields:
         return _invalid("finding_malformed")
     if value.get("schemaVersion") != NORMALIZED_FINDING_SCHEMA_VERSION or not _safe_id(value.get("findingId")) or not _safe_id(value.get("rule")) or not _safe_id(value.get("pathOrRef")):
         return _invalid("finding_malformed")
-    if value.get("severity") not in {"info", "low", "medium", "high"} or not isinstance(value.get("lineOrRange"), str) or not re.fullmatch(r"[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?", value["lineOrRange"]):
+    if value.get("severity") not in {"info", "low", "medium", "high"} or not _line_or_range(value.get("lineOrRange")):
         return _invalid("finding_malformed")
     if any(not isinstance(value.get(key), str) or not value[key] or len(value[key]) > 280 or _FORBIDDEN_TEXT.search(value[key]) for key in {"summary", "remediation"}):
         return _invalid("finding_malformed")
