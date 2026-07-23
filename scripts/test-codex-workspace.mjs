@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -7489,6 +7489,7 @@ try {
       "carryForwardPr",
       "carryForwardCommit",
       "compareScopedTreeEntries",
+      "withAssignmentsIndexLock",
       "withManifestLock",
       "const freshPlan = cleanupSupersededPlan",
       "supersession proof changed under lock",
@@ -7550,6 +7551,217 @@ try {
       assert(manifest.cleanup_supersession_rollback?.includes(fixture.sourceHead), "manifest missing rollback source head");
       assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
     } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded admits only the explicit first-use legacy repair proof", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+    const args = legacyFirstUseSupersededArgs(fixture);
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const summary = JSON.parse(preview.stdout);
+      const plan = summary.results[0];
+      assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(plan.proof.source.remoteBranchHead === null, preview.stdout || preview.stderr);
+      assert(plan.proof.source.expectedRemoteState === "absent", preview.stdout || preview.stderr);
+      assert(plan.proof.assignment.mode === "legacy-unassigned", preview.stdout || preview.stderr);
+      assert(plan.proof.repair.status === "matched", preview.stdout || preview.stderr);
+      assert(plan.proof.currentBase.canonicalRef === "origin/dev", preview.stdout || preview.stderr);
+      assert(plan.proof.repair.hardeningProof.changedPaths.join(",") === "hardened.txt", preview.stdout || preview.stderr);
+      assert(existsSync(fixture.worktree), "preview removed legacy source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "preview removed legacy source branch");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "fixture source remote must remain absent");
+
+      const humanPreview = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(humanPreview.code === 0, humanPreview.stderr || humanPreview.stdout);
+      assert(humanPreview.stdout.includes("was verified absent; do not create or mutate it"), humanPreview.stdout);
+      assert(humanPreview.stdout.includes("no source assignment exists to close"), humanPreview.stdout);
+
+      const applied = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved audited first-use legacy cleanup",
+        "--reason",
+        "bounded merged successor and hardening proof reviewed",
+      ], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.status === "closed", `legacy first-use manifest status is ${manifest.status}`);
+      assert(manifest.cleanup_remote_branch_policy === "absent-first-use-superseded-cleanup", manifest.cleanup_remote_branch_policy);
+      assert(manifest.cleanup_source_remote_absent === "absent", manifest.cleanup_source_remote_absent);
+      assert(manifest.cleanup_supersession_rollback.includes("was verified absent and remains untouched"), manifest.cleanup_supersession_rollback);
+      assert(!existsSync(fixture.worktree), "apply retained legacy source worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "apply retained legacy source local branch");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "apply created or mutated absent source remote");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded first-use repair blocks missing declarations, remote uncertainty, and unbounded hardening", () => {
+    const cases = [
+      {
+        name: "missing explicit legacy declaration",
+        args: (fixture) => supersededCleanupArgs(fixture, `${fixture.carriedPath},hardened.txt`),
+      },
+      {
+        name: "missing legacy-unassigned flag",
+        args: (fixture) => legacyFirstUseSupersededArgs(fixture).filter((value) => value !== "--legacy-unassigned"),
+      },
+      {
+        name: "unbounded successor hardening path",
+        args: (fixture) => replaceOption(legacyFirstUseSupersededArgs(fixture), "--successor-hardening-scope", fixture.carriedPath),
+      },
+      {
+        name: "unproven successor hardening commit",
+        args: (fixture) => replaceOption(legacyFirstUseSupersededArgs(fixture), "--successor-hardening-commits", fixture.carryForwardCommit),
+      },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+      try {
+        const result = runFixtureScript(fixture, [...scenario.args(fixture), "--summary-json"], { env: fixture.env });
+        if (result.code === 0) {
+          const summary = JSON.parse(result.stdout);
+          assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became ready: ${result.stdout}`);
+        }
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} removed source branch`);
+        assert(!remoteBranchExists(fixture.root, fixture.branch), `${scenario.name} mutated absent source remote`);
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
+    }
+
+    const unavailableRemote = createSupersededCleanupFixture({ firstUseRepair: true });
+    try {
+      runGit(unavailableRemote.root, ["remote", "set-url", "origin", join(unavailableRemote.root, "missing-remote.git")]);
+      const result = runFixtureScript(unavailableRemote, [...legacyFirstUseSupersededArgs(unavailableRemote), "--summary-json"], { env: unavailableRemote.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 0, "remote lookup failure was treated as absent");
+      assert(summary.results[0].reason.includes("remote branch evidence is unavailable"), summary.results[0].reason);
+      assert(existsSync(unavailableRemote.worktree), "remote lookup failure removed source worktree");
+      assert(branchExists(unavailableRemote.root, unavailableRemote.branch), "remote lookup failure removed source branch");
+    } finally {
+      cleanupSupersededCleanupFixture(unavailableRemote);
+    }
+  });
+
+  test("cleanup-superseded first-use repair proves the deleted predecessor and merged PR head ancestry", () => {
+    const scenarios = [
+      { name: "live legacy predecessor ref", options: { firstUseRepair: true, legacyManifestBasePresent: true } },
+      { name: "PR head not integrated into merge commit", options: { firstUseRepair: true, unmergedPrHead: true } },
+      { name: "unlinked active assignment", options: { firstUseRepair: true, unlinkedAssignment: true } },
+      { name: "manifest still links an assignment", options: { firstUseRepair: true, linkedLegacyAssignment: true } },
+      { name: "legacy base branch/ref mismatch", options: { firstUseRepair: true, legacyManifestBaseMismatch: true } },
+      { name: "unlinked active source backlog assignment", options: { firstUseRepair: true, unlinkedBacklogAssignment: true } },
+      { name: "merge result changes an already-declared hardening path", options: { firstUseRepair: true, mergeChangesAfterHead: true } },
+      { name: "stale reported PR head with reverted merge-side tail", options: { firstUseRepair: true, stalePrHeadWithRevertedTail: true } },
+      { name: "stale local canonical tracking ref", options: { firstUseRepair: true, staleCanonicalRemote: true } },
+      {
+        name: "unlisted carried-to-merge PR path",
+        options: { firstUseRepair: true, unlistedSuccessorDiff: true },
+        args: (fixture) => replaceOption(legacyFirstUseSupersededArgs(fixture), "--successor-hardening-commits", `${fixture.firstHardeningCommit},${fixture.successorHead}`),
+      },
+      {
+        name: "transient unlisted successor path",
+        options: { firstUseRepair: true, transientUnlistedSuccessorDiff: true },
+        args: (fixture) => replaceOption(legacyFirstUseSupersededArgs(fixture), "--successor-hardening-commits", fixture.hardeningLineageCommits.join(",")),
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createSupersededCleanupFixture(scenario.options);
+      try {
+        const result = runFixtureScript(fixture, [...(scenario.args ? scenario.args(fixture) : legacyFirstUseSupersededArgs(fixture)), "--summary-json"], { env: fixture.env });
+        assert(result.code === 0, result.stderr || result.stdout);
+        const summary = JSON.parse(result.stdout);
+        assert(summary.counts.cleanupReady === 0, `${scenario.name} unexpectedly became ready: ${result.stdout}`);
+        assert(existsSync(fixture.worktree), `${scenario.name} removed source worktree`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name} removed source branch`);
+        assert(!remoteBranchExists(fixture.root, fixture.branch), `${scenario.name} mutated absent source remote`);
+      } finally {
+        cleanupSupersededCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-superseded first-use repair resumes only an identical recorded absent-remote proof", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+    const args = legacyFirstUseSupersededArgs(fixture);
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const plan = JSON.parse(preview.stdout).results[0];
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_supersession_evidence = { schemaVersion: 1, remoteBranchPolicy: "absent", proof: plan.proof };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const resumed = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const summary = JSON.parse(resumed.stdout);
+      assert(summary.counts.cleanupReady === 1, resumed.stdout || resumed.stderr);
+      assert(summary.results[0].partialResume === true, resumed.stdout || resumed.stderr);
+
+      const applied = runFixtureScript(fixture, [
+        ...args,
+        "--apply",
+        "--approval",
+        "operator approved exact first-use partial resume",
+        "--reason",
+        "same-proof absent-remote recovery was reviewed and approved",
+      ], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const closed = readJson(manifestPath);
+      assert(closed.status === "closed", `first-use partial resume status is ${closed.status}`);
+      assert(closed.cleanup_source_remote_absent === "absent", closed.cleanup_source_remote_absent);
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "first-use partial resume created or mutated source remote");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded first-use repair accepts a complete hardening commit set in either input order", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true, twoHardeningCommits: true });
+    try {
+      const args = replaceOption(legacyFirstUseSupersededArgs(fixture), "--successor-hardening-commits", `${fixture.successorHead},${fixture.firstHardeningCommit}`);
+      const result = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(JSON.parse(result.stdout).counts.cleanupReady === 1, result.stdout || result.stderr);
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded first-use apply holds the assignment index before the locked re-proof", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+    const lockPath = join(fixture.stateRoot, "assignments", ".assignment-index.lock");
+    let fd;
+    try {
+      fd = openSync(lockPath, "wx");
+      const result = runFixtureScript(fixture, [
+        ...legacyFirstUseSupersededArgs(fixture),
+        "--apply",
+        "--approval",
+        "operator approved assignment-index lock proof",
+        "--reason",
+        "legacy assignment inventory must remain stable before deletion",
+      ], { env: fixture.env });
+      assert(result.code !== 0, "first-use apply ignored a held assignment index lock");
+      assert(result.stderr.includes("Assignment index is locked"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "locked assignment index removed source worktree");
+      assert(branchExists(fixture.root, fixture.branch), "locked assignment index removed source branch");
+      assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).status === "active", "locked assignment index changed manifest state");
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      rmSync(lockPath, { force: true });
       cleanupSupersededCleanupFixture(fixture);
     }
   });
@@ -8587,6 +8799,47 @@ function supersededCleanupArgs(fixture, scope = "carried.txt", owner = "runner-a
   ];
 }
 
+function legacyFirstUseSupersededArgs(fixture) {
+  return [
+    "cleanup-superseded",
+    "superseded-task",
+    "--source-head",
+    fixture.sourceHead,
+    "--carry-forward-pr",
+    "456",
+    "--carry-forward-commit",
+    fixture.carryForwardCommit,
+    "--scope",
+    `${fixture.carriedPath},hardened.txt`,
+    "--first-use-repair",
+    "--canonical-base",
+    "dev",
+    "--supersession-provenance",
+    "audited migration from deleted predecessor base via PR 456",
+    "--source-remote",
+    "absent",
+    "--legacy-unassigned",
+    "--successor-hardening-commits",
+    fixture.successorHead,
+    "--successor-hardening-scope",
+    "hardened.txt",
+    "--successor-hardening-evidence",
+    "review hardening bounded to the named successor PR lineage",
+    "--owner",
+    "runner-a",
+    "--state-root",
+    fixture.stateRoot,
+  ];
+}
+
+function replaceOption(args, option, value) {
+  const index = args.indexOf(option);
+  assert(index >= 0, `missing option ${option}`);
+  const replaced = [...args];
+  replaced[index + 1] = value;
+  return replaced;
+}
+
 function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBranch }) {
   if (removeWorktree) {
     runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
@@ -8626,17 +8879,23 @@ function createSupersededCleanupFixture(options = {}) {
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  if (options.firstUseRepair) commitFile(fixtureRoot, "hardened.txt", "original hardening surface\n", "add hardening surface");
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
   runGit(remoteRoot, ["init", "--bare", "-q"]);
   runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
   runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
+  const baseBranch = options.firstUseRepair ? "dev" : "main";
+  if (options.firstUseRepair) {
+    runGit(fixtureRoot, ["branch", "dev", "main"]);
+    runGit(fixtureRoot, ["push", "-q", "-u", "origin", "dev"]);
+  }
   if (options.renameOnly) {
     commitFile(fixtureRoot, "rename/old.txt", "rename source\n", "base rename source");
     runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
   }
 
-  runGit(fixtureRoot, ["switch", "-q", "-c", branch]);
+  runGit(fixtureRoot, ["switch", "-q", "-c", branch, baseBranch]);
   const carriedPath = options.newlineNestedPath ? "carried/new\nline.txt" : "carried.txt";
   if (options.renameOnly) {
     runGit(fixtureRoot, ["mv", "rename/old.txt", "rename/new.txt"]);
@@ -8647,7 +8906,8 @@ function createSupersededCleanupFixture(options = {}) {
   if (options.extraSourceDelta) commitFile(fixtureRoot, "uncovered.txt", "must be scoped\n", "uncovered source delta");
   const sourceHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
   runGit(fixtureRoot, ["push", "-q", "-u", "origin", branch]);
-  runGit(fixtureRoot, ["switch", "-q", "main"]);
+  if (options.firstUseRepair) runGit(fixtureRoot, ["push", "-q", "origin", "--delete", branch]);
+  runGit(fixtureRoot, ["switch", "-q", baseBranch]);
   if (options.renameOnly) {
     commitFile(fixtureRoot, "rename/new.txt", "rename source\n", "carry renamed content without deleting old path");
   } else {
@@ -8660,12 +8920,67 @@ function createSupersededCleanupFixture(options = {}) {
       "content mismatch fixture must have distinct scoped blobs",
     );
   }
-  runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
+  let successorHead = carryForwardCommit;
+  let firstHardeningCommit = null;
+  const hardeningLineageCommits = [];
+  if (options.firstUseRepair) {
+    commitFile(fixtureRoot, "hardened.txt", options.unexpectedHardening ? "unexpected hardening\n" : "review hardening\n", "fix: bounded successor hardening");
+    successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+    firstHardeningCommit = successorHead;
+    hardeningLineageCommits.push(successorHead);
+    if (options.twoHardeningCommits) {
+      commitFile(fixtureRoot, "hardened.txt", "second review hardening\n", "fix: second bounded successor hardening");
+      successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+      hardeningLineageCommits.push(successorHead);
+    }
+    if (options.unlistedSuccessorDiff) {
+      commitFile(fixtureRoot, "unlisted-successor.txt", "must be declared\n", "fixture unlisted successor diff");
+      successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+      hardeningLineageCommits.push(successorHead);
+    }
+    if (options.transientUnlistedSuccessorDiff) {
+      commitFile(fixtureRoot, "transient-unlisted-successor.txt", "must be declared\n", "fixture transient unlisted successor diff");
+      successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+      hardeningLineageCommits.push(successorHead);
+      runGit(fixtureRoot, ["rm", "-q", "transient-unlisted-successor.txt"]);
+      runGit(fixtureRoot, ["commit", "-q", "-m", "revert fixture transient successor diff"]);
+      successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+      hardeningLineageCommits.push(successorHead);
+    }
+    if (options.stalePrHeadWithRevertedTail) {
+      commitFile(fixtureRoot, "stale-head-tail.txt", "must be declared\n", "fixture stale head tail mutation");
+      successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixtureRoot, ["rm", "-q", "stale-head-tail.txt"]);
+      runGit(fixtureRoot, ["commit", "-q", "-m", "revert fixture stale head tail mutation"]);
+      successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+    }
+  }
+  let mergeCommit = successorHead;
+  if (options.mergeChangesAfterHead) {
+    commitFile(fixtureRoot, "hardened.txt", "merge result changed after head\n", "fixture merge result mutation");
+    mergeCommit = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+  }
+  runGit(fixtureRoot, ["push", "-q", "origin", baseBranch]);
+  let fakePrHead = options.stalePrHeadWithRevertedTail ? firstHardeningCommit : successorHead;
+  if (options.unmergedPrHead) {
+    runGit(fixtureRoot, ["switch", "-q", "-c", "fixture-unmerged-pr-head", carryForwardCommit]);
+    commitFile(fixtureRoot, "sibling-pr-head.txt", "not merged\n", "fixture unmerged PR head");
+    fakePrHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+    runGit(fixtureRoot, ["switch", "-q", baseBranch]);
+  }
   if (options.revertedCurrentBase) {
     commitFile(fixtureRoot, carriedPath, "reverted after merge\n", "revert carried source content");
     runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
   }
-  const currentBaseHead = runGit(fixtureRoot, ["rev-parse", "origin/main"]).stdout;
+  const currentBaseHead = runGit(fixtureRoot, ["rev-parse", `origin/${baseBranch}`]).stdout;
+  if (options.staleCanonicalRemote) {
+    runGit(fixtureRoot, ["switch", "-q", "-c", "fixture-canonical-remote-advance", baseBranch]);
+    commitFile(fixtureRoot, "canonical-remote-advance.txt", "remote canonical advance\n", "fixture canonical remote advance");
+    const remoteAdvance = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+    runGit(fixtureRoot, ["push", "-q", "origin", `${remoteAdvance}:refs/heads/fixture-canonical-remote-advance`]);
+    runGit(remoteRoot, ["update-ref", `refs/heads/${baseBranch}`, remoteAdvance]);
+    runGit(fixtureRoot, ["switch", "-q", baseBranch]);
+  }
   runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
 
   mkdirSync(join(stateRootFixture, "tasks"), { recursive: true });
@@ -8679,21 +8994,21 @@ function createSupersededCleanupFixture(options = {}) {
       repo_name: "fixture",
       repo_root: worktree,
       state_root: stateRootFixture,
-      base_branch: "main",
-      base_ref: options.baseRef || "origin/main",
+      base_branch: options.firstUseRepair ? (options.legacyManifestBaseMismatch ? "declared-predecessor" : "deleted-predecessor") : "main",
+      base_ref: options.baseRef || (options.firstUseRepair ? (options.legacyManifestBasePresent ? "origin/main" : "origin/deleted-predecessor") : "origin/main"),
       branch,
       worktree_path: worktree,
       status: options.mutation === "held" ? "held" : "active",
       pr_delivery_head_sha: options.mutation === "pr-evidence" ? sourceHead : null,
       mode: "pr",
-      source_assignment_id: "superseded-assignment",
+      source_assignment_id: options.firstUseRepair ? (options.linkedLegacyAssignment ? "legacy-assignment" : null) : "superseded-assignment",
       owner: options.manifestOwner === undefined ? "runner-a" : options.manifestOwner,
       events: [],
     }, null, 2)}\n`,
   );
   mkdirSync(join(stateRootFixture, "assignments"), { recursive: true });
   const assignmentPath = join(stateRootFixture, "assignments", "superseded-assignment.json");
-  writeFileSync(
+  if (!options.firstUseRepair) writeFileSync(
     assignmentPath,
     `${JSON.stringify({
       schema_version: 1,
@@ -8708,6 +9023,40 @@ function createSupersededCleanupFixture(options = {}) {
       runner_kind: "codex-cli",
       events: [],
       source_backlog_item: { item_id: "superseded-task", branch_name: branch },
+    }, null, 2)}\n`,
+  );
+  if (options.firstUseRepair && options.unlinkedAssignment) writeFileSync(
+    join(stateRootFixture, "assignments", "unlinked-superseded-assignment.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      assignment_id: "unlinked-superseded-assignment",
+      task_id: "superseded-task",
+      lane_slug: "superseded-task",
+      branch,
+      worktree_path: worktree,
+      status: "claimed",
+      owner: "runner-a",
+      phase: "handoff",
+      runner_kind: "codex-cli",
+      events: [],
+      source_backlog_item: { item_id: "superseded-task", branch_name: branch },
+    }, null, 2)}\n`,
+  );
+  if (options.firstUseRepair && options.unlinkedBacklogAssignment) writeFileSync(
+    join(stateRootFixture, "assignments", "unlinked-source-backlog-assignment.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      assignment_id: "unlinked-source-backlog-assignment",
+      task_id: "different-task",
+      lane_slug: "different-task",
+      branch: "codex/different-branch",
+      worktree_path: join(stateRootFixture, "worktrees", "different-task"),
+      status: "claimed",
+      owner: "runner-a",
+      phase: "handoff",
+      runner_kind: "codex-cli",
+      events: [],
+      source_backlog_item: { item_id: "superseded-task", branch_name: "codex/different-branch" },
     }, null, 2)}\n`,
   );
   const fakeGh = join(fakeBin, "gh");
@@ -8742,7 +9091,7 @@ function createSupersededCleanupFixture(options = {}) {
       "  process.exit(0);",
       "}",
       "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '456') {",
-      `  console.log(JSON.stringify({ number: 456, url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || "main"}', baseRefOid: '${currentBaseHead}', headRefOid: '${carryForwardCommit}', mergeCommit: { oid: '${carryForwardCommit}' } }));`,
+      `  console.log(JSON.stringify({ number: 456, url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || baseBranch}', baseRefOid: '${currentBaseHead}', headRefOid: '${fakePrHead}', mergeCommit: { oid: '${mergeCommit}' } }));`,
       "  process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
@@ -8752,7 +9101,7 @@ function createSupersededCleanupFixture(options = {}) {
   );
   chmodSync(fakeGh, 0o755);
 
-  return { root: fixtureRoot, remoteRoot, stateRoot: stateRootFixture, fakeBin, branch, worktree, sourceHead, carryForwardCommit, currentBaseHead, carriedPath, script: join(fixtureRoot, "scripts", "codex-workspace.mjs"), env };
+  return { root: fixtureRoot, remoteRoot, stateRoot: stateRootFixture, fakeBin, branch, worktree, sourceHead, carryForwardCommit, successorHead, mergeCommit, firstHardeningCommit, hardeningLineageCommits, currentBaseHead, carriedPath, baseBranch, script: join(fixtureRoot, "scripts", "codex-workspace.mjs"), env };
 }
 
 function cleanupSupersededCleanupFixture(fixture) {
